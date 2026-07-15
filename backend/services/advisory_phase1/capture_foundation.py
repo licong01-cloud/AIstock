@@ -15,7 +15,6 @@ import psycopg2
 import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.db.pg_pool import get_conn
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.label_capture import (
     LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
@@ -23,7 +22,10 @@ from backend.services.advisory_phase1.label_capture import (
     LabelCaptureBatchRequestV2,
 )
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
-from backend.services.advisory_phase1.stage_trace import StageTraceEnvelope, TraceCaptureBinding
+from backend.services.advisory_phase1.stage_trace import (
+    StageTraceEnvelope,
+    TraceCaptureBinding,
+)
 from backend.services.advisory_phase1.trace_outbox import (
     LegacyExpectedTraceIdentityV1,
     REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
@@ -37,8 +39,12 @@ REASON_CAPTURE_BATCH_CONFLICT = "ADVISORY_PHASE1_CAPTURE_BATCH_CONFLICT"
 REASON_CAPTURE_BATCH_STATE_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_STATE_INVALID"
 REASON_CAPTURE_BATCH_LEASE_EXPIRED = "ADVISORY_PHASE1_CAPTURE_BATCH_LEASE_EXPIRED"
 REASON_CAPTURE_BATCH_FENCING_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_FENCING_INVALID"
-REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_MEMBERSHIP_INVALID"
-REASON_TRACE_ADMISSION_BINDING_INVALID = "ADVISORY_PHASE1_TRACE_ADMISSION_BINDING_INVALID"
+REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID = (
+    "ADVISORY_PHASE1_CAPTURE_BATCH_MEMBERSHIP_INVALID"
+)
+REASON_TRACE_ADMISSION_BINDING_INVALID = (
+    "ADVISORY_PHASE1_TRACE_ADMISSION_BINDING_INVALID"
+)
 REASON_TRACE_ADMISSION_BATCH_INVALID = "ADVISORY_PHASE1_TRACE_ADMISSION_BATCH_INVALID"
 REASON_TRACE_GAP_CONFLICT = "ADVISORY_PHASE1_TRACE_GAP_CONFLICT"
 REASON_PHASE1F2_SCHEMA_NOT_READY = "ADVISORY_PHASE1F2_SCHEMA_NOT_READY"
@@ -122,7 +128,9 @@ class CapturePlan(BaseModel):
     program_id: str = Field(min_length=1, max_length=160)
     binding_version_id: str = Field(min_length=1, max_length=160)
     source_run_id: str = Field(min_length=1, max_length=160)
-    lineage_source_type: str = Field(pattern="^(PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY)$")
+    lineage_source_type: str = Field(
+        pattern="^(PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY)$"
+    )
     review_run_id: str | None = Field(default=None, max_length=160)
     list_version_id: str | None = Field(default=None, max_length=160)
     plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -174,14 +182,26 @@ class CapturePlan(BaseModel):
             target_date = date.fromisoformat(self.target_trade_date)
             effective_cutoff_date = date.fromisoformat(self.effective_cutoff_date)
         except ValueError as exc:
-            raise ValueError("capture plan trade dates must be ISO calendar dates") from exc
-        if selection_date != decision_date or target_date <= decision_date or effective_cutoff_date != decision_date:
-            raise ValueError("capture plan dates do not satisfy the frozen decision/selection/target contract")
+            raise ValueError(
+                "capture plan trade dates must be ISO calendar dates"
+            ) from exc
+        if (
+            selection_date != decision_date
+            or target_date <= decision_date
+            or effective_cutoff_date != decision_date
+        ):
+            raise ValueError(
+                "capture plan dates do not satisfy the frozen decision/selection/target contract"
+            )
         if self.hmm_snapshot_status == "NOT_APPLICABLE":
             if self.hmm_snapshot_id is not None or self.hmm_snapshot_hash is not None:
-                raise ValueError("NOT_APPLICABLE HMM state cannot carry a snapshot reference")
+                raise ValueError(
+                    "NOT_APPLICABLE HMM state cannot carry a snapshot reference"
+                )
         elif not self.hmm_snapshot_id or not self.hmm_snapshot_hash:
-            raise ValueError("applicable HMM state requires an immutable snapshot reference")
+            raise ValueError(
+                "applicable HMM state requires an immutable snapshot reference"
+            )
         digest = canonical_json_sha256(self.canonical_payload())
         if self.plan_hash is not None and self.plan_hash != digest:
             raise ValueError("plan_hash does not match capture plan")
@@ -206,17 +226,29 @@ class CaptureBatchRequest(BaseModel):
     @field_validator("capture_request_hash")
     @classmethod
     def _hash(cls, value: str | None) -> str | None:
-        return _require_sha256(value, field_name="capture_request_hash") if value is not None else None
+        return (
+            _require_sha256(value, field_name="capture_request_hash")
+            if value is not None
+            else None
+        )
 
     def canonical_payload(self) -> dict[str, Any]:
         binding_payload = self.binding.model_dump(
             mode="json",
-            exclude={"control_binding_event_hash", "capture_batch_id", "capture_fencing_token", "binding_hash"},
+            exclude={
+                "control_binding_event_hash",
+                "capture_batch_id",
+                "capture_fencing_token",
+                "binding_hash",
+            },
         )
         return {
             "schema_version": CAPTURE_BATCH_SCHEMA_VERSION,
             "binding": binding_payload,
-            "plans": [plan.model_dump(mode="json") for plan in sorted(self.plans, key=lambda item: str(item.plan_hash))],
+            "plans": [
+                plan.model_dump(mode="json")
+                for plan in sorted(self.plans, key=lambda item: str(item.plan_hash))
+            ],
             "data_source": self.data_source,
             "execution_origin": self.execution_origin,
             "research_scope": self.research_scope,
@@ -231,12 +263,24 @@ class CaptureBatchRequest(BaseModel):
             or self.research_scope != "HISTORICAL_RESEARCH_ONLY"
             or self.execution_prohibited is not True
         ):
-            raise ValueError("Phase 1 capture requests are restricted to historical advisory research")
-        if self.binding.capture_batch_id != self.capture_batch_id or self.binding.capture_fencing_token != 1:
-            raise ValueError("new capture batch binding must reference this batch with fencing token one")
-        plan_keys = {(plan.selection_run_id, plan.package_id, plan.manifest_sha256) for plan in self.plans}
+            raise ValueError(
+                "Phase 1 capture requests are restricted to historical advisory research"
+            )
+        if (
+            self.binding.capture_batch_id != self.capture_batch_id
+            or self.binding.capture_fencing_token != 1
+        ):
+            raise ValueError(
+                "new capture batch binding must reference this batch with fencing token one"
+            )
+        plan_keys = {
+            (plan.selection_run_id, plan.package_id, plan.manifest_sha256)
+            for plan in self.plans
+        }
         if len(plan_keys) != len(self.plans):
-            raise ValueError("capture batch plans must have unique selection/package/manifest identities")
+            raise ValueError(
+                "capture batch plans must have unique selection/package/manifest identities"
+            )
         for plan in self.plans:
             if (
                 plan.handoff_readiness_hash != self.binding.handoff_readiness_hash
@@ -245,7 +289,10 @@ class CaptureBatchRequest(BaseModel):
             ):
                 raise ValueError("capture plan does not match capture binding scope")
         digest = canonical_json_sha256(self.canonical_payload())
-        if self.capture_request_hash is not None and self.capture_request_hash != digest:
+        if (
+            self.capture_request_hash is not None
+            and self.capture_request_hash != digest
+        ):
             raise ValueError("capture_request_hash does not match capture request")
         object.__setattr__(self, "capture_request_hash", digest)
         return self
@@ -306,7 +353,9 @@ def _capture_admission_scope_hash(request: CaptureBatchRequestLike) -> str:
     return request.binding.admission_scope_hash
 
 
-def parse_capture_batch_request_payload(payload: Mapping[str, Any]) -> CaptureBatchRequestLike:
+def parse_capture_batch_request_payload(
+    payload: Mapping[str, Any],
+) -> CaptureBatchRequestLike:
     """Parse one explicitly tagged raw payload without a schema fallback path.
 
     v1 intentionally has no serialized purpose field, because adding one would
@@ -325,7 +374,9 @@ def parse_capture_batch_request_payload(payload: Mapping[str, Any]) -> CaptureBa
         return CaptureBatchRequest.model_validate(model_payload)
     if schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION:
         if purpose != LABEL_CAPTURE_PURPOSE:
-            raise ValueError("v2 label capture request requires LABEL_CAPTURE_V1 purpose")
+            raise ValueError(
+                "v2 label capture request requires LABEL_CAPTURE_V1 purpose"
+            )
         return LabelCaptureBatchRequestV2.model_validate(payload)
     raise ValueError("unsupported capture request schema or purpose")
 
@@ -367,12 +418,20 @@ class CaptureBatch(BaseModel):
     @field_validator("created_at", "updated_at", "lease_expires_at")
     @classmethod
     def _aware(cls, value: datetime | None, info) -> datetime | None:  # type: ignore[no-untyped-def]
-        return _require_aware(value, field_name=info.field_name) if value is not None else None
+        return (
+            _require_aware(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
 
     @field_validator("membership_hash", "capture_receipt_hash")
     @classmethod
     def _hash(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
-        return _require_sha256(value, field_name=info.field_name) if value is not None else None
+        return (
+            _require_sha256(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
 
     @model_validator(mode="after")
     def _validate_state(self) -> "CaptureBatch":
@@ -382,9 +441,22 @@ class CaptureBatch(BaseModel):
         elif self.lease_expires_at is not None:
             raise ValueError("non-RUNNING capture batch cannot retain a lease")
         if self.status is CaptureBatchStatus.COMPLETE:
-            if self.membership_count is None or self.membership_hash is None or self.capture_receipt_hash is None:
-                raise ValueError("COMPLETE capture batch requires sealed membership and receipt")
-        elif any(value is not None for value in (self.membership_count, self.membership_hash, self.capture_receipt_hash)):
+            if (
+                self.membership_count is None
+                or self.membership_hash is None
+                or self.capture_receipt_hash is None
+            ):
+                raise ValueError(
+                    "COMPLETE capture batch requires sealed membership and receipt"
+                )
+        elif any(
+            value is not None
+            for value in (
+                self.membership_count,
+                self.membership_hash,
+                self.capture_receipt_hash,
+            )
+        ):
             raise ValueError("only COMPLETE capture batch can expose a sealed receipt")
         return self
 
@@ -399,12 +471,19 @@ class TraceCaptureGap(BaseModel):
     @field_validator("gap_content_hash")
     @classmethod
     def _hash(cls, value: str | None) -> str | None:
-        return _require_sha256(value, field_name="gap_content_hash") if value is not None else None
+        return (
+            _require_sha256(value, field_name="gap_content_hash")
+            if value is not None
+            else None
+        )
 
     @model_validator(mode="after")
     def _validate_gap(self) -> "TraceCaptureGap":
         digest = canonical_json_sha256(
-            {"identity": self.identity.model_dump(mode="json"), "reason_code": self.reason_code}
+            {
+                "identity": self.identity.model_dump(mode="json"),
+                "reason_code": self.reason_code,
+            }
         )
         if self.gap_content_hash is not None and self.gap_content_hash != digest:
             raise ValueError("gap_content_hash does not match trace gap")
@@ -415,7 +494,9 @@ class TraceCaptureGap(BaseModel):
 class CaptureBatchRepository(Protocol):
     def create(self, request: CaptureBatchRequestLike) -> CaptureBatch: ...
 
-    def acquire(self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int) -> CaptureBatch: ...
+    def acquire(
+        self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int
+    ) -> CaptureBatch: ...
 
     def add_membership(
         self,
@@ -426,9 +507,13 @@ class CaptureBatchRepository(Protocol):
         membership: CaptureMembership,
     ) -> CaptureBatch: ...
 
-    def complete(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch: ...
+    def complete(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch: ...
 
-    def expire(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch: ...
+    def expire(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch: ...
 
     def fail(
         self,
@@ -466,10 +551,16 @@ class InMemoryCaptureBatchRepository:
         if existing_by_id is not None:
             if existing_by_id.request == request:
                 return existing_by_id
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture batch id has different content")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "same capture batch id has different content",
+            )
         existing_ids = self._by_request_hash.get(request_hash, [])
         if existing_ids:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture retry requires explicit recovery from its predecessor")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture retry requires explicit recovery from its predecessor",
+            )
         now = _require_aware(self._now_provider(), field_name="now_provider")
         batch = CaptureBatch(
             request=request,
@@ -481,7 +572,9 @@ class InMemoryCaptureBatchRepository:
             updated_at=now,
         )
         self._batches[request.capture_batch_id] = batch
-        self._by_request_hash.setdefault(request_hash, []).append(request.capture_batch_id)
+        self._by_request_hash.setdefault(request_hash, []).append(
+            request.capture_batch_id
+        )
         self._memberships[request.capture_batch_id] = {}
         return batch
 
@@ -495,37 +588,67 @@ class InMemoryCaptureBatchRepository:
     ) -> CaptureBatch:
         predecessor = self._get(predecessor_capture_batch_id)
         if predecessor.row_version != expected_predecessor_row_version:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture predecessor row version is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture predecessor row version is stale",
+            )
         if predecessor.fencing_token != predecessor_fencing_token:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture predecessor fencing token is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_FENCING_INVALID,
+                "capture predecessor fencing token is stale",
+            )
         if predecessor.status not in {
             CaptureBatchStatus.FAILED,
             CaptureBatchStatus.EXPIRED,
             CaptureBatchStatus.ABORTED,
         }:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture recovery requires a terminal predecessor")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID,
+                "capture recovery requires a terminal predecessor",
+            )
         if capture_request_hash(predecessor.request) != capture_request_hash(request):
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor semantics")
-        if (
-            capture_request_schema(predecessor.request) != capture_request_schema(request)
-            or capture_request_purpose(predecessor.request) != capture_request_purpose(request)
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture recovery request does not match predecessor semantics",
+            )
+        if capture_request_schema(predecessor.request) != capture_request_schema(
+            request
+        ) or capture_request_purpose(predecessor.request) != capture_request_purpose(
+            request
         ):
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor schema")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture recovery request does not match predecessor schema",
+            )
         if request.capture_batch_id in self._batches:
             existing = self._batches[request.capture_batch_id]
-            if existing.predecessor_capture_batch_id == predecessor_capture_batch_id and existing.request == request:
+            if (
+                existing.predecessor_capture_batch_id == predecessor_capture_batch_id
+                and existing.request == request
+            ):
                 return existing
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "recovery capture batch id already exists")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "recovery capture batch id already exists",
+            )
         if any(
-            self._batches[batch_id].status in {CaptureBatchStatus.PLANNED, CaptureBatchStatus.RUNNING}
+            self._batches[batch_id].status
+            in {CaptureBatchStatus.PLANNED, CaptureBatchStatus.RUNNING}
             for batch_id in self._by_request_hash.get(capture_request_hash(request), [])
         ):
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture request already has an active batch")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "same capture request already has an active batch",
+            )
         if any(
-            self._batches[batch_id].predecessor_capture_batch_id == predecessor_capture_batch_id
+            self._batches[batch_id].predecessor_capture_batch_id
+            == predecessor_capture_batch_id
             for batch_id in self._by_request_hash.get(capture_request_hash(request), [])
         ):
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture predecessor already has a recovery successor")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture predecessor already has a recovery successor",
+            )
         now = _require_aware(self._now_provider(), field_name="now_provider")
         batch = CaptureBatch(
             request=request,
@@ -538,19 +661,28 @@ class InMemoryCaptureBatchRepository:
             updated_at=now,
         )
         self._batches[request.capture_batch_id] = batch
-        self._by_request_hash.setdefault(capture_request_hash(request), []).append(request.capture_batch_id)
+        self._by_request_hash.setdefault(capture_request_hash(request), []).append(
+            request.capture_batch_id
+        )
         self._memberships[request.capture_batch_id] = {}
         return batch
 
-    def acquire(self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int) -> CaptureBatch:
+    def acquire(
+        self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int
+    ) -> CaptureBatch:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         batch = self._get(capture_batch_id)
         now = _require_aware(self._now_provider(), field_name="now_provider")
         if batch.row_version != expected_row_version:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale"
+            )
         if batch.status is not CaptureBatchStatus.PLANNED:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "only PLANNED capture batch can be acquired")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID,
+                "only PLANNED capture batch can be acquired",
+            )
         updated = batch.model_copy(
             update={
                 "status": CaptureBatchStatus.RUNNING,
@@ -580,14 +712,21 @@ class InMemoryCaptureBatchRepository:
         if existing is not None:
             if existing == membership:
                 return batch
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID, "membership identity has conflicting content")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID,
+                "membership identity has conflicting content",
+            )
         members[membership.content_key] = membership
         now = _require_aware(self._now_provider(), field_name="now_provider")
-        updated = batch.model_copy(update={"row_version": batch.row_version + 1, "updated_at": now})
+        updated = batch.model_copy(
+            update={"row_version": batch.row_version + 1, "updated_at": now}
+        )
         self._batches[capture_batch_id] = updated
         return updated
 
-    def complete(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch:
+    def complete(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch:
         batch = self._require_active(
             capture_batch_id=capture_batch_id,
             expected_row_version=expected_row_version,
@@ -650,17 +789,29 @@ class InMemoryCaptureBatchRepository:
         self._batches[capture_batch_id] = updated
         return updated
 
-    def expire(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch:
+    def expire(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch:
         batch = self._get(capture_batch_id)
         now = _require_aware(self._now_provider(), field_name="now_provider")
         if batch.row_version != expected_row_version:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale"
+            )
         if batch.status is not CaptureBatchStatus.RUNNING:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "only RUNNING capture batch can expire")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID,
+                "only RUNNING capture batch can expire",
+            )
         if batch.fencing_token != fencing_token:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture batch fencing token is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_FENCING_INVALID,
+                "capture batch fencing token is stale",
+            )
         if batch.lease_expires_at is None or batch.lease_expires_at > now:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch lease is not expired")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch lease is not expired"
+            )
         updated = batch.model_copy(
             update={
                 "status": CaptureBatchStatus.EXPIRED,
@@ -689,19 +840,32 @@ class InMemoryCaptureBatchRepository:
         try:
             return self._batches[capture_batch_id]
         except KeyError as exc:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch does not exist") from exc
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch does not exist"
+            ) from exc
 
-    def _require_active(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch:
+    def _require_active(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch:
         batch = self._get(capture_batch_id)
         now = _require_aware(self._now_provider(), field_name="now_provider")
         if batch.row_version != expected_row_version:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale"
+            )
         if batch.status is not CaptureBatchStatus.RUNNING:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch is not RUNNING")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch is not RUNNING"
+            )
         if batch.fencing_token != fencing_token:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture batch fencing token is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_FENCING_INVALID,
+                "capture batch fencing token is stale",
+            )
         if batch.lease_expires_at is None or batch.lease_expires_at <= now:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_LEASE_EXPIRED, "capture batch lease has expired")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_LEASE_EXPIRED, "capture batch lease has expired"
+            )
         return batch
 
 
@@ -711,25 +875,49 @@ class InMemoryTraceAdmissionValidator:
     def __init__(self, *, batches: InMemoryCaptureBatchRepository) -> None:
         self._batches = batches
 
-    def validate(self, *, envelope: StageTraceEnvelope, binding: TraceCaptureBinding, conn: Any | None = None) -> None:
+    def validate(
+        self,
+        *,
+        envelope: StageTraceEnvelope,
+        binding: TraceCaptureBinding,
+        conn: Any | None = None,
+    ) -> None:
         del conn
         _require_historical_trace_identity(envelope)
-        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(envelope, binding=binding)
+        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(
+            envelope, binding=binding
+        )
         batch = self._batches.get(binding.capture_batch_id)
         if batch.request.binding != binding:
-            raise SourceLedgerError(REASON_TRACE_ADMISSION_BINDING_INVALID, "capture binding does not match batch request")
+            raise SourceLedgerError(
+                REASON_TRACE_ADMISSION_BINDING_INVALID,
+                "capture binding does not match batch request",
+            )
         if batch.status is not CaptureBatchStatus.RUNNING:
-            raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch is not RUNNING")
+            raise SourceLedgerError(
+                REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch is not RUNNING"
+            )
         if batch.fencing_token != binding.capture_fencing_token:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture binding fencing token is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_FENCING_INVALID,
+                "capture binding fencing token is stale",
+            )
         matching = [
             plan
             for plan in batch.request.plans
-            if (plan.selection_run_id, plan.package_id, plan.manifest_sha256, plan.decision_as_of_trade_date)
+            if (
+                plan.selection_run_id,
+                plan.package_id,
+                plan.manifest_sha256,
+                plan.decision_as_of_trade_date,
+            )
             == identity.selection_lookup_key
         ]
         if len(matching) != 1:
-            raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch has no matching frozen plan")
+            raise SourceLedgerError(
+                REASON_TRACE_ADMISSION_BATCH_INVALID,
+                "capture batch has no matching frozen plan",
+            )
         self._batches._require_active(
             capture_batch_id=binding.capture_batch_id,
             expected_row_version=batch.row_version,
@@ -741,18 +929,24 @@ class InMemoryTraceCaptureGapRepository:
     def __init__(self) -> None:
         self._gaps: dict[str, TraceCaptureGap] = {}
 
-    def record(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> TraceCaptureGap:
+    def record(
+        self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str
+    ) -> TraceCaptureGap:
         _require_scope_aware_gap_write_identity(identity)
         gap = TraceCaptureGap(identity=identity, reason_code=reason_code)
         existing = self._gaps.get(str(gap.gap_content_hash))
         if existing is not None:
             if existing == gap:
                 return existing
-            raise SourceLedgerError(REASON_TRACE_GAP_CONFLICT, "same trace gap hash has different content")
+            raise SourceLedgerError(
+                REASON_TRACE_GAP_CONFLICT, "same trace gap hash has different content"
+            )
         self._gaps[str(gap.gap_content_hash)] = gap
         return gap
 
-    def __call__(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> None:
+    def __call__(
+        self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str
+    ) -> None:
         self.record(identity=identity, reason_code=reason_code)
 
     def list(self) -> tuple[TraceCaptureGap, ...]:
@@ -763,7 +957,19 @@ ConnFactory = Callable[[], Iterator[Any]]
 
 
 def _transactional_conn_factory() -> Iterator[Any]:
+    from backend.db.pg_pool import get_conn
+
     return get_conn(autocommit=False, manage_transaction=True)
+
+
+_CAPTURE_BATCH_COLUMNS = """
+capture_batch_id, capture_request_hash, request_payload_jsonb, binding_jsonb,
+control_binding_event_hash, handoff_readiness_hash, admission_scope_id,
+admission_scope_hash, capture_request_schema_version, capture_purpose,
+capture_status, row_version, fencing_token, lease_expires_at, capture_attempt_no,
+predecessor_capture_batch_id, membership_count, membership_hash,
+capture_receipt_hash, reason_codes, created_at, updated_at
+"""
 
 
 class PostgresCaptureBatchRepository:
@@ -784,13 +990,19 @@ class PostgresCaptureBatchRepository:
                     batch = self._load_locked(cur, dict(existing))
                     if batch.request == request:
                         return batch
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture batch id has different content")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "same capture batch id has different content",
+                    )
                 cur.execute(
                     "SELECT 1 FROM app.advisory_capture_batch WHERE capture_request_hash = %s FOR UPDATE",
                     (capture_request_hash(request),),
                 )
                 if cur.fetchone() is not None:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture retry requires explicit recovery from its predecessor")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "capture retry requires explicit recovery from its predecessor",
+                    )
                 try:
                     cur.execute(
                         """
@@ -805,8 +1017,12 @@ class PostgresCaptureBatchRepository:
                         (
                             request.capture_batch_id,
                             capture_request_hash(request),
-                            psycopg2.extras.Json(canonicalize(request.canonical_payload())),
-                            psycopg2.extras.Json(canonicalize(_capture_binding_payload(request))),
+                            psycopg2.extras.Json(
+                                canonicalize(request.canonical_payload())
+                            ),
+                            psycopg2.extras.Json(
+                                canonicalize(_capture_binding_payload(request))
+                            ),
                             _capture_control_binding_event_hash(request),
                             _capture_handoff_readiness_hash(request),
                             _capture_admission_scope_id(request),
@@ -819,10 +1035,15 @@ class PostgresCaptureBatchRepository:
                     if isinstance(request, CaptureBatchRequest):
                         self._insert_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "database rejected capture batch identity") from exc
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "database rejected capture batch identity",
+                    ) from exc
                 return self._load_locked(cur, row)
 
-    def acquire(self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int) -> CaptureBatch:
+    def acquire(
+        self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int
+    ) -> CaptureBatch:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         with self._conn_factory() as conn:
@@ -830,7 +1051,10 @@ class PostgresCaptureBatchRepository:
                 row = self._select_batch_locked(cur, capture_batch_id)
                 self._require_row_version(row, expected_row_version)
                 if str(row["capture_status"]) != CaptureBatchStatus.PLANNED.value:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "only PLANNED capture batch can be acquired")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_STATE_INVALID,
+                        "only PLANNED capture batch can be acquired",
+                    )
                 cur.execute(
                     """
                     UPDATE app.advisory_capture_batch
@@ -853,89 +1077,25 @@ class PostgresCaptureBatchRepository:
     ) -> CaptureBatch:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                row = self._select_batch_locked(cur, capture_batch_id)
-                self._require_active_row(row, expected_row_version=expected_row_version, fencing_token=fencing_token, cur=cur)
-                cur.execute(
-                    """
-                    SELECT evidence_content_hash FROM app.advisory_capture_batch_evidence_membership
-                    WHERE capture_batch_id = %s AND evidence_role = %s AND evidence_id = %s
-                    FOR UPDATE
-                    """,
-                    (capture_batch_id, membership.evidence_role, membership.evidence_id),
+                return self.add_membership_in_transaction(
+                    cur,
+                    capture_batch_id=capture_batch_id,
+                    expected_row_version=expected_row_version,
+                    fencing_token=fencing_token,
+                    membership=membership,
                 )
-                existing = cur.fetchone()
-                if existing is not None:
-                    if str(existing["evidence_content_hash"]) == membership.evidence_content_hash:
-                        return self._load_locked(cur, row)
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID, "membership identity has conflicting content")
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO app.advisory_capture_batch_evidence_membership (
-                            capture_batch_id, evidence_role, evidence_id, evidence_content_hash, fencing_token
-                        ) VALUES (%s, %s, %s, %s, %s)
-                        """,
-                        (
-                            capture_batch_id,
-                            membership.evidence_role,
-                            membership.evidence_id,
-                            membership.evidence_content_hash,
-                            fencing_token,
-                        ),
-                    )
-                    cur.execute(
-                        """
-                        UPDATE app.advisory_capture_batch SET row_version = row_version + 1
-                        WHERE capture_batch_id = %s RETURNING *
-                        """,
-                        (capture_batch_id,),
-                    )
-                except psycopg2.IntegrityError as exc:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID, "database rejected capture membership") from exc
-                return self._load_locked(cur, dict(cur.fetchone()))
 
-    def complete(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch:
+    def complete(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                row = self._select_batch_locked(cur, capture_batch_id)
-                self._require_active_row(row, expected_row_version=expected_row_version, fencing_token=fencing_token, cur=cur)
-                cur.execute(
-                    """
-                    SELECT evidence_role, evidence_id, evidence_content_hash
-                    FROM app.advisory_capture_batch_evidence_membership
-                    WHERE capture_batch_id = %s ORDER BY evidence_role, evidence_id
-                    """,
-                    (capture_batch_id,),
+                return self.complete_in_transaction(
+                    cur,
+                    capture_batch_id=capture_batch_id,
+                    expected_row_version=expected_row_version,
+                    fencing_token=fencing_token,
                 )
-                memberships = [
-                    {
-                        "evidence_role": str(item["evidence_role"]),
-                        "evidence_id": str(item["evidence_id"]),
-                        "evidence_content_hash": str(item["evidence_content_hash"]),
-                    }
-                    for item in cur.fetchall()
-                ]
-                membership_hash = canonical_json_sha256(memberships)
-                receipt_hash = canonical_json_sha256(
-                    {
-                        "capture_request_hash": str(row["capture_request_hash"]),
-                        "capture_batch_id": capture_batch_id,
-                        "membership_count": len(memberships),
-                        "membership_hash": membership_hash,
-                    }
-                )
-                cur.execute(
-                    """
-                    UPDATE app.advisory_capture_batch
-                    SET capture_status = 'COMPLETE', row_version = row_version + 1,
-                        lease_expires_at = NULL, membership_count = %s, membership_hash = %s,
-                        capture_receipt_hash = %s
-                    WHERE capture_batch_id = %s
-                    RETURNING *
-                    """,
-                    (len(memberships), membership_hash, receipt_hash, capture_batch_id),
-                )
-                return self._load_locked(cur, dict(cur.fetchone()))
 
     def fail(
         self,
@@ -950,7 +1110,12 @@ class PostgresCaptureBatchRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 row = self._select_batch_locked(cur, capture_batch_id)
-                self._require_active_row(row, expected_row_version=expected_row_version, fencing_token=fencing_token, cur=cur)
+                self._require_active_row(
+                    row,
+                    expected_row_version=expected_row_version,
+                    fencing_token=fencing_token,
+                    cur=cur,
+                )
                 cur.execute(
                     """
                     UPDATE app.advisory_capture_batch
@@ -963,18 +1128,32 @@ class PostgresCaptureBatchRepository:
                 )
                 return self._load_locked(cur, dict(cur.fetchone()))
 
-    def expire(self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int) -> CaptureBatch:
+    def expire(
+        self, *, capture_batch_id: str, expected_row_version: int, fencing_token: int
+    ) -> CaptureBatch:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 row = self._select_batch_locked(cur, capture_batch_id)
                 self._require_row_version(row, expected_row_version)
                 if str(row["capture_status"]) != CaptureBatchStatus.RUNNING.value:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "only RUNNING capture batch can expire")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_STATE_INVALID,
+                        "only RUNNING capture batch can expire",
+                    )
                 if int(row["fencing_token"]) != fencing_token:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture batch fencing token is stale")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_FENCING_INVALID,
+                        "capture batch fencing token is stale",
+                    )
                 cur.execute("SELECT clock_timestamp() AS database_now")
-                if row["lease_expires_at"] is None or row["lease_expires_at"] > cur.fetchone()["database_now"]:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch lease is not expired")
+                if (
+                    row["lease_expires_at"] is None
+                    or row["lease_expires_at"] > cur.fetchone()["database_now"]
+                ):
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_STATE_INVALID,
+                        "capture batch lease is not expired",
+                    )
                 cur.execute(
                     """
                     UPDATE app.advisory_capture_batch
@@ -983,7 +1162,10 @@ class PostgresCaptureBatchRepository:
                     WHERE capture_batch_id = %s
                     RETURNING *
                     """,
-                    (psycopg2.extras.Json([REASON_CAPTURE_BATCH_LEASE_EXPIRED]), capture_batch_id),
+                    (
+                        psycopg2.extras.Json([REASON_CAPTURE_BATCH_LEASE_EXPIRED]),
+                        capture_batch_id,
+                    ),
                 )
                 return self._load_locked(cur, dict(cur.fetchone()))
 
@@ -997,23 +1179,42 @@ class PostgresCaptureBatchRepository:
     ) -> CaptureBatch:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                predecessor = self._select_batch_locked(cur, predecessor_capture_batch_id)
+                predecessor = self._select_batch_locked(
+                    cur, predecessor_capture_batch_id
+                )
                 self._require_row_version(predecessor, expected_predecessor_row_version)
                 if int(predecessor["fencing_token"]) != predecessor_fencing_token:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture predecessor fencing token is stale")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_FENCING_INVALID,
+                        "capture predecessor fencing token is stale",
+                    )
                 if str(predecessor["capture_status"]) not in {
                     CaptureBatchStatus.FAILED.value,
                     CaptureBatchStatus.EXPIRED.value,
                     CaptureBatchStatus.ABORTED.value,
                 }:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture recovery requires a terminal predecessor")
-                if str(predecessor["capture_request_hash"]) != capture_request_hash(request):
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor semantics")
-                if (
-                    str(predecessor["capture_request_schema_version"]) != capture_request_schema(request)
-                    or str(predecessor["capture_purpose"]) != capture_request_purpose(request)
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_STATE_INVALID,
+                        "capture recovery requires a terminal predecessor",
+                    )
+                if str(predecessor["capture_request_hash"]) != capture_request_hash(
+                    request
                 ):
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor schema")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "capture recovery request does not match predecessor semantics",
+                    )
+                if str(
+                    predecessor["capture_request_schema_version"]
+                ) != capture_request_schema(request) or str(
+                    predecessor["capture_purpose"]
+                ) != capture_request_purpose(
+                    request
+                ):
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "capture recovery request does not match predecessor schema",
+                    )
                 cur.execute(
                     """
                     SELECT 1 FROM app.advisory_capture_batch
@@ -1022,13 +1223,19 @@ class PostgresCaptureBatchRepository:
                     (capture_request_hash(request),),
                 )
                 if cur.fetchone() is not None:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture request already has an active batch")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "same capture request already has an active batch",
+                    )
                 cur.execute(
                     "SELECT 1 FROM app.advisory_capture_batch WHERE predecessor_capture_batch_id = %s FOR UPDATE",
                     (predecessor_capture_batch_id,),
                 )
                 if cur.fetchone() is not None:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture predecessor already has a recovery successor")
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "capture predecessor already has a recovery successor",
+                    )
                 next_attempt = int(predecessor["capture_attempt_no"]) + 1
                 try:
                     cur.execute(
@@ -1045,8 +1252,12 @@ class PostgresCaptureBatchRepository:
                         (
                             request.capture_batch_id,
                             capture_request_hash(request),
-                            psycopg2.extras.Json(canonicalize(request.canonical_payload())),
-                            psycopg2.extras.Json(canonicalize(_capture_binding_payload(request))),
+                            psycopg2.extras.Json(
+                                canonicalize(request.canonical_payload())
+                            ),
+                            psycopg2.extras.Json(
+                                canonicalize(_capture_binding_payload(request))
+                            ),
                             _capture_control_binding_event_hash(request),
                             _capture_handoff_readiness_hash(request),
                             _capture_admission_scope_id(request),
@@ -1061,7 +1272,10 @@ class PostgresCaptureBatchRepository:
                     if isinstance(request, CaptureBatchRequest):
                         self._insert_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
-                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "database rejected capture recovery") from exc
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "database rejected capture recovery",
+                    ) from exc
                 return self._load_locked(cur, row)
 
     def get(self, capture_batch_id: str) -> CaptureBatch:
@@ -1069,6 +1283,211 @@ class PostgresCaptureBatchRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 row = self._select_batch_locked(cur, capture_batch_id)
                 return self._load_locked(cur, row)
+
+    def lock_running_in_transaction(
+        self,
+        cur: Any,
+        *,
+        capture_batch_id: str,
+        capture_request_hash: str,
+        expected_row_version: int,
+        fencing_token: int,
+    ) -> CaptureBatch:
+        row = self._select_batch_locked(cur, capture_batch_id)
+        if str(row["capture_request_hash"]) != capture_request_hash:
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture batch request hash differs from writer request",
+                context={"conflict_kind": "REQUEST_HASH"},
+            )
+        self._require_active_row(
+            row,
+            expected_row_version=expected_row_version,
+            fencing_token=fencing_token,
+            cur=cur,
+        )
+        return self._load_locked(cur, row)
+
+    @staticmethod
+    def read_plan_exact_in_transaction(
+        cur: Any, *, capture_batch_id: str, plan_hash: str
+    ) -> CapturePlan:
+        cur.execute(
+            """
+            SELECT plan_payload_jsonb, plan_hash
+            FROM app.advisory_capture_plan
+            WHERE capture_batch_id = %s AND plan_hash = %s
+            FOR KEY SHARE
+            """,
+            (capture_batch_id, plan_hash),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture plan does not exist",
+                context={"conflict_kind": "CAPTURE_PLAN"},
+            )
+        plan = CapturePlan.model_validate(canonicalize(dict(row["plan_payload_jsonb"])))
+        if plan.plan_hash != str(row["plan_hash"]) or plan.plan_hash != plan_hash:
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "persisted capture plan hash is invalid",
+                context={"conflict_kind": "CAPTURE_PLAN"},
+            )
+        return plan
+
+    @staticmethod
+    def read_memberships_exact_in_transaction(
+        cur: Any, capture_batch_id: str
+    ) -> tuple[CaptureMembership, ...]:
+        cur.execute(
+            """
+            SELECT evidence_role, evidence_id, evidence_content_hash
+            FROM app.advisory_capture_batch_evidence_membership
+            WHERE capture_batch_id = %s
+            ORDER BY evidence_role, evidence_id
+            FOR KEY SHARE
+            """,
+            (capture_batch_id,),
+        )
+        return tuple(
+            CaptureMembership(
+                evidence_role=str(row["evidence_role"]),
+                evidence_id=str(row["evidence_id"]),
+                evidence_content_hash=str(row["evidence_content_hash"]),
+            )
+            for row in cur.fetchall()
+        )
+
+    @staticmethod
+    def read_memberships_exact_readonly(
+        cur: Any, capture_batch_id: str
+    ) -> tuple[CaptureMembership, ...]:
+        cur.execute(
+            """
+            SELECT evidence_role, evidence_id, evidence_content_hash
+            FROM app.advisory_capture_batch_evidence_membership
+            WHERE capture_batch_id = %s
+            ORDER BY evidence_role, evidence_id
+            """,
+            (capture_batch_id,),
+        )
+        return tuple(
+            CaptureMembership(
+                evidence_role=str(row["evidence_role"]),
+                evidence_id=str(row["evidence_id"]),
+                evidence_content_hash=str(row["evidence_content_hash"]),
+            )
+            for row in cur.fetchall()
+        )
+
+    def add_membership_in_transaction(
+        self,
+        cur: Any,
+        *,
+        capture_batch_id: str,
+        expected_row_version: int,
+        fencing_token: int,
+        membership: CaptureMembership,
+    ) -> CaptureBatch:
+        row = self._select_batch_locked(cur, capture_batch_id)
+        self._require_active_row(
+            row,
+            expected_row_version=expected_row_version,
+            fencing_token=fencing_token,
+            cur=cur,
+        )
+        cur.execute(
+            """
+            SELECT evidence_content_hash FROM app.advisory_capture_batch_evidence_membership
+            WHERE capture_batch_id = %s AND evidence_role = %s AND evidence_id = %s
+            FOR UPDATE
+            """,
+            (capture_batch_id, membership.evidence_role, membership.evidence_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if (
+                str(existing["evidence_content_hash"])
+                == membership.evidence_content_hash
+            ):
+                return self._load_locked(cur, row)
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID,
+                "membership identity has conflicting content",
+            )
+        try:
+            cur.execute(
+                """
+                INSERT INTO app.advisory_capture_batch_evidence_membership (
+                    capture_batch_id, evidence_role, evidence_id, evidence_content_hash, fencing_token
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    capture_batch_id,
+                    membership.evidence_role,
+                    membership.evidence_id,
+                    membership.evidence_content_hash,
+                    fencing_token,
+                ),
+            )
+            cur.execute(
+                f"""
+                UPDATE app.advisory_capture_batch SET row_version = row_version + 1
+                WHERE capture_batch_id = %s RETURNING {_CAPTURE_BATCH_COLUMNS}
+                """,
+                (capture_batch_id,),
+            )
+        except psycopg2.IntegrityError as exc:
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID,
+                "database rejected capture membership",
+            ) from exc
+        return self._load_locked(cur, dict(cur.fetchone()))
+
+    def complete_in_transaction(
+        self,
+        cur: Any,
+        *,
+        capture_batch_id: str,
+        expected_row_version: int,
+        fencing_token: int,
+    ) -> CaptureBatch:
+        row = self._select_batch_locked(cur, capture_batch_id)
+        self._require_active_row(
+            row,
+            expected_row_version=expected_row_version,
+            fencing_token=fencing_token,
+            cur=cur,
+        )
+        memberships = [
+            item.model_dump(mode="json")
+            for item in self.read_memberships_exact_in_transaction(
+                cur, capture_batch_id
+            )
+        ]
+        membership_hash = canonical_json_sha256(memberships)
+        receipt_hash = canonical_json_sha256(
+            {
+                "capture_request_hash": str(row["capture_request_hash"]),
+                "capture_batch_id": capture_batch_id,
+                "membership_count": len(memberships),
+                "membership_hash": membership_hash,
+            }
+        )
+        cur.execute(
+            f"""
+            UPDATE app.advisory_capture_batch
+            SET capture_status = 'COMPLETE', row_version = row_version + 1,
+                lease_expires_at = NULL, membership_count = %s, membership_hash = %s,
+                capture_receipt_hash = %s
+            WHERE capture_batch_id = %s
+            RETURNING {_CAPTURE_BATCH_COLUMNS}
+            """,
+            (len(memberships), membership_hash, receipt_hash, capture_batch_id),
+        )
+        return self._load_locked(cur, dict(cur.fetchone()))
 
     @staticmethod
     def _insert_plans(cur: Any, request: CaptureBatchRequest) -> None:
@@ -1109,7 +1528,11 @@ class PostgresCaptureBatchRepository:
     @staticmethod
     def _require_row_version(row: Mapping[str, Any], expected_row_version: int) -> None:
         if int(row["row_version"]) != expected_row_version:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture batch row version is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture batch row version is stale",
+                context={"conflict_kind": "ROW_VERSION"},
+            )
 
     def _require_active_row(
         self,
@@ -1121,19 +1544,34 @@ class PostgresCaptureBatchRepository:
     ) -> None:
         self._require_row_version(row, expected_row_version)
         if str(row["capture_status"]) != CaptureBatchStatus.RUNNING.value:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch is not RUNNING")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch is not RUNNING"
+            )
         if int(row["fencing_token"]) != fencing_token:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_FENCING_INVALID, "capture batch fencing token is stale")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_FENCING_INVALID,
+                "capture batch fencing token is stale",
+            )
         cur.execute("SELECT clock_timestamp() AS database_now")
-        if row["lease_expires_at"] is None or row["lease_expires_at"] <= cur.fetchone()["database_now"]:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_LEASE_EXPIRED, "capture batch lease has expired")
+        if (
+            row["lease_expires_at"] is None
+            or row["lease_expires_at"] <= cur.fetchone()["database_now"]
+        ):
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_LEASE_EXPIRED, "capture batch lease has expired"
+            )
 
     @staticmethod
     def _select_batch_locked(cur: Any, capture_batch_id: str) -> dict[str, Any]:
-        cur.execute("SELECT * FROM app.advisory_capture_batch WHERE capture_batch_id = %s FOR UPDATE", (capture_batch_id,))
+        cur.execute(
+            f"SELECT {_CAPTURE_BATCH_COLUMNS} FROM app.advisory_capture_batch WHERE capture_batch_id = %s FOR UPDATE",
+            (capture_batch_id,),
+        )
         row = cur.fetchone()
         if row is None:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch does not exist")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_STATE_INVALID, "capture batch does not exist"
+            )
         return dict(row)
 
     @staticmethod
@@ -1142,38 +1580,61 @@ class PostgresCaptureBatchRepository:
         purpose = str(row["capture_purpose"])
         payload = canonicalize(dict(row["request_payload_jsonb"]))
         binding_payload = canonicalize(dict(row["binding_jsonb"]))
-        if schema_version == CAPTURE_BATCH_SCHEMA_VERSION and purpose == OBSERVATION_CAPTURE_PURPOSE:
+        if (
+            schema_version == CAPTURE_BATCH_SCHEMA_VERSION
+            and purpose == OBSERVATION_CAPTURE_PURPOSE
+        ):
             cur.execute(
-                "SELECT * FROM app.advisory_capture_plan WHERE capture_batch_id = %s ORDER BY plan_hash FOR KEY SHARE",
+                """
+                SELECT plan_payload_jsonb FROM app.advisory_capture_plan
+                WHERE capture_batch_id = %s ORDER BY plan_hash FOR KEY SHARE
+                """,
                 (row["capture_batch_id"],),
             )
             plans = tuple(
-                CapturePlan.model_validate(canonicalize(dict(item["plan_payload_jsonb"])))
+                CapturePlan.model_validate(
+                    canonicalize(dict(item["plan_payload_jsonb"]))
+                )
                 for item in cur.fetchall()
             )
             if not plans:
-                raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "v1 capture batch is missing capture plans")
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "v1 capture batch is missing capture plans",
+                )
             request = CaptureBatchRequest(
                 capture_batch_id=str(row["capture_batch_id"]),
                 binding=TraceCaptureBinding.model_validate(binding_payload),
                 plans=plans,
                 capture_request_hash=str(row["capture_request_hash"]),
             )
-        elif schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION and purpose == LABEL_CAPTURE_PURPOSE:
+        elif (
+            schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+            and purpose == LABEL_CAPTURE_PURPOSE
+        ):
             cur.execute(
                 "SELECT 1 FROM app.advisory_capture_plan WHERE capture_batch_id = %s FOR KEY SHARE",
                 (row["capture_batch_id"],),
             )
             if cur.fetchone() is not None:
-                raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "v2 label capture batch cannot contain capture plans")
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "v2 label capture batch cannot contain capture plans",
+                )
             payload["binding"] = binding_payload
             payload["capture_batch_id"] = str(row["capture_batch_id"])
             payload["capture_request_hash"] = str(row["capture_request_hash"])
             request = LabelCaptureBatchRequestV2.model_validate(payload)
         else:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "unsupported persisted capture schema or purpose")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "unsupported persisted capture schema or purpose",
+            )
         if capture_request_hash(request) != str(row["capture_request_hash"]):
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "persisted capture request hash does not match payload")
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "persisted capture request hash does not match payload",
+            )
         return CaptureBatch(
             request=request,
             status=CaptureBatchStatus(str(row["capture_status"])),
@@ -1182,11 +1643,23 @@ class PostgresCaptureBatchRepository:
             lease_expires_at=row["lease_expires_at"],
             capture_attempt_no=int(row["capture_attempt_no"]),
             predecessor_capture_batch_id=(
-                str(row["predecessor_capture_batch_id"]) if row["predecessor_capture_batch_id"] else None
+                str(row["predecessor_capture_batch_id"])
+                if row["predecessor_capture_batch_id"]
+                else None
             ),
-            membership_count=int(row["membership_count"]) if row["membership_count"] is not None else None,
-            membership_hash=str(row["membership_hash"]) if row["membership_hash"] else None,
-            capture_receipt_hash=str(row["capture_receipt_hash"]) if row["capture_receipt_hash"] else None,
+            membership_count=(
+                int(row["membership_count"])
+                if row["membership_count"] is not None
+                else None
+            ),
+            membership_hash=(
+                str(row["membership_hash"]) if row["membership_hash"] else None
+            ),
+            capture_receipt_hash=(
+                str(row["capture_receipt_hash"])
+                if row["capture_receipt_hash"]
+                else None
+            ),
             reason_codes=tuple(str(item) for item in (row["reason_codes"] or [])),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -1196,11 +1669,22 @@ class PostgresCaptureBatchRepository:
 class PostgresTraceAdmissionValidator:
     """Validate persisted binding/batch state inside the trace INSERT transaction."""
 
-    def validate(self, *, envelope: StageTraceEnvelope, binding: TraceCaptureBinding, conn: Any | None = None) -> None:
+    def validate(
+        self,
+        *,
+        envelope: StageTraceEnvelope,
+        binding: TraceCaptureBinding,
+        conn: Any | None = None,
+    ) -> None:
         if conn is None:
-            raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "PostgreSQL admission requires an active transaction")
+            raise SourceLedgerError(
+                REASON_TRACE_ADMISSION_BATCH_INVALID,
+                "PostgreSQL admission requires an active transaction",
+            )
         _require_historical_trace_identity(envelope)
-        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(envelope, binding=binding)
+        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(
+            envelope, binding=binding
+        )
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT * FROM app.advisory_phase1_control_binding_event WHERE binding_event_hash = %s FOR KEY SHARE",
@@ -1208,33 +1692,56 @@ class PostgresTraceAdmissionValidator:
             )
             control = cur.fetchone()
             if control is None:
-                raise SourceLedgerError(REASON_TRACE_ADMISSION_BINDING_INVALID, "trace control binding does not exist")
-            expected_config = binding.model_dump(mode="json", exclude={"control_binding_event_hash"})
+                raise SourceLedgerError(
+                    REASON_TRACE_ADMISSION_BINDING_INVALID,
+                    "trace control binding does not exist",
+                )
+            expected_config = binding.model_dump(
+                mode="json", exclude={"control_binding_event_hash"}
+            )
             if (
                 str(control["control_type"]) != "TRACE_CAPTURE"
                 or not bool(control["enabled"])
-                or str(control["admission_scope_set_hash"] or "") != binding.admission_scope_hash
-                or canonicalize(dict(control["config_payload_jsonb"])) != canonicalize(expected_config)
+                or str(control["admission_scope_set_hash"] or "")
+                != binding.admission_scope_hash
+                or canonicalize(dict(control["config_payload_jsonb"]))
+                != canonicalize(expected_config)
             ):
-                raise SourceLedgerError(REASON_TRACE_ADMISSION_BINDING_INVALID, "trace control binding is disabled or divergent")
+                raise SourceLedgerError(
+                    REASON_TRACE_ADMISSION_BINDING_INVALID,
+                    "trace control binding is disabled or divergent",
+                )
             cur.execute(
                 "SELECT *, clock_timestamp() AS database_now FROM app.advisory_capture_batch WHERE capture_batch_id = %s FOR UPDATE",
                 (binding.capture_batch_id,),
             )
             batch = cur.fetchone()
             if batch is None:
-                raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch does not exist")
+                raise SourceLedgerError(
+                    REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch does not exist"
+                )
             if (
                 str(batch["capture_status"]) != CaptureBatchStatus.RUNNING.value
                 or int(batch["fencing_token"]) != binding.capture_fencing_token
-                or str(batch["control_binding_event_hash"]) != binding.control_binding_event_hash
-                or str(batch["handoff_readiness_hash"]) != binding.handoff_readiness_hash
+                or str(batch["control_binding_event_hash"])
+                != binding.control_binding_event_hash
+                or str(batch["handoff_readiness_hash"])
+                != binding.handoff_readiness_hash
                 or str(batch["admission_scope_id"]) != binding.admission_scope_id
                 or str(batch["admission_scope_hash"]) != binding.admission_scope_hash
             ):
-                raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch identity does not match trace binding")
-            if batch["lease_expires_at"] is None or batch["lease_expires_at"] <= batch["database_now"]:
-                raise SourceLedgerError(REASON_CAPTURE_BATCH_LEASE_EXPIRED, "capture batch lease has expired")
+                raise SourceLedgerError(
+                    REASON_TRACE_ADMISSION_BATCH_INVALID,
+                    "capture batch identity does not match trace binding",
+                )
+            if (
+                batch["lease_expires_at"] is None
+                or batch["lease_expires_at"] <= batch["database_now"]
+            ):
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_LEASE_EXPIRED,
+                    "capture batch lease has expired",
+                )
             cur.execute(
                 """
                 SELECT 1 FROM app.advisory_capture_plan
@@ -1245,19 +1752,28 @@ class PostgresTraceAdmissionValidator:
                 (binding.capture_batch_id, *identity.selection_lookup_key),
             )
             if cur.fetchone() is None:
-                raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch has no matching frozen plan")
+                raise SourceLedgerError(
+                    REASON_TRACE_ADMISSION_BATCH_INVALID,
+                    "capture batch has no matching frozen plan",
+                )
 
 
 class PostgresTraceCaptureGapRepository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or _transactional_conn_factory
 
-    def record(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> TraceCaptureGap:
+    def record(
+        self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str
+    ) -> TraceCaptureGap:
         try:
             return self._record_scope_aware(identity=identity, reason_code=reason_code)
         except SourceLedgerError:
             raise
-        except (psycopg2.errors.UndefinedColumn, psycopg2.errors.UndefinedObject, psycopg2.errors.UndefinedTable) as exc:
+        except (
+            psycopg2.errors.UndefinedColumn,
+            psycopg2.errors.UndefinedObject,
+            psycopg2.errors.UndefinedTable,
+        ) as exc:
             raise SourceLedgerError(
                 REASON_PHASE1F2_SCHEMA_NOT_READY,
                 "scope-aware trace gap schema is incomplete",
@@ -1283,7 +1799,10 @@ class PostgresTraceCaptureGapRepository:
                     persisted = _gap_from_row(dict(existing))
                     if persisted == gap:
                         return persisted
-                    raise SourceLedgerError(REASON_TRACE_GAP_CONFLICT, "same trace gap hash has different content")
+                    raise SourceLedgerError(
+                        REASON_TRACE_GAP_CONFLICT,
+                        "same trace gap hash has different content",
+                    )
                 try:
                     cur.execute(
                         """
@@ -1308,10 +1827,15 @@ class PostgresTraceCaptureGapRepository:
                         ),
                     )
                 except psycopg2.IntegrityError as exc:
-                    raise SourceLedgerError(REASON_TRACE_GAP_CONFLICT, "database rejected trace gap identity") from exc
+                    raise SourceLedgerError(
+                        REASON_TRACE_GAP_CONFLICT,
+                        "database rejected trace gap identity",
+                    ) from exc
                 return _gap_from_row(dict(cur.fetchone()))
 
-    def __call__(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> None:
+    def __call__(
+        self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str
+    ) -> None:
         self.record(identity=identity, reason_code=reason_code)
 
 
@@ -1337,9 +1861,9 @@ def _gap_from_row(row: Mapping[str, Any]) -> TraceCaptureGap:
     )
     try:
         if scope_id is None:
-            identity: LegacyExpectedTraceIdentityV1 | ScopeAwareExpectedTraceIdentityV2 = (
-                LegacyExpectedTraceIdentityV1(**identity_fields)
-            )
+            identity: (
+                LegacyExpectedTraceIdentityV1 | ScopeAwareExpectedTraceIdentityV2
+            ) = LegacyExpectedTraceIdentityV1(**identity_fields)
         else:
             identity = ScopeAwareExpectedTraceIdentityV2(
                 **identity_fields,
@@ -1352,10 +1876,14 @@ def _gap_from_row(row: Mapping[str, Any]) -> TraceCaptureGap:
             gap_content_hash=str(row["gap_content_hash"]),
         )
     except ValueError as exc:
-        raise SourceLedgerError(mismatch_reason, "persisted trace gap hash does not match its identity") from exc
+        raise SourceLedgerError(
+            mismatch_reason, "persisted trace gap hash does not match its identity"
+        ) from exc
 
 
-def _require_scope_aware_gap_write_identity(identity: Any) -> ScopeAwareExpectedTraceIdentityV2:
+def _require_scope_aware_gap_write_identity(
+    identity: Any,
+) -> ScopeAwareExpectedTraceIdentityV2:
     if not isinstance(identity, ScopeAwareExpectedTraceIdentityV2):
         raise SourceLedgerError(
             REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
@@ -1402,7 +1930,8 @@ def _require_scope_aware_gap_schema(cur: Any) -> None:
     )
     readiness = cur.fetchone()
     if readiness is None or not all(
-        bool(readiness[key]) for key in ("scope_columns_ready", "scope_pair_ready", "scope_indexes_ready")
+        bool(readiness[key])
+        for key in ("scope_columns_ready", "scope_pair_ready", "scope_indexes_ready")
     ):
         raise SourceLedgerError(
             REASON_PHASE1F2_SCHEMA_NOT_READY,
@@ -1413,11 +1942,16 @@ def _require_scope_aware_gap_schema(cur: Any) -> None:
 def _require_historical_trace_identity(envelope: StageTraceEnvelope) -> None:
     identity = envelope.trace_content.get("selection_identity")
     if not isinstance(identity, Mapping):
-        raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "trace selection identity is missing")
+        raise SourceLedgerError(
+            REASON_TRACE_ADMISSION_BATCH_INVALID, "trace selection identity is missing"
+        )
     if (
         identity.get("data_source") != "DB_HISTORICAL"
         or identity.get("execution_origin") != "ADVISORY_RUN"
         or identity.get("research_scope") != "HISTORICAL_RESEARCH_ONLY"
         or identity.get("execution_prohibited") is not True
     ):
-        raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "trace is outside the historical research boundary")
+        raise SourceLedgerError(
+            REASON_TRACE_ADMISSION_BATCH_INVALID,
+            "trace is outside the historical research boundary",
+        )

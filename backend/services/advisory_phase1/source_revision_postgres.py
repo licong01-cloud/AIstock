@@ -6,7 +6,6 @@ from typing import Any, Callable, Iterator
 
 import psycopg2.extras
 
-from backend.db.pg_pool import get_conn
 from backend.services.advisory_phase0a.policy import canonicalize
 from backend.services.advisory_phase1.source_ledger import (
     SourceAvailabilityEvent,
@@ -92,6 +91,8 @@ SOURCE_REVISION_MEMBER_SELECT_EXACT_SQL = """
 
 
 def _transactional_conn_factory() -> Iterator[Any]:
+    from backend.db.pg_pool import get_conn
+
     return get_conn(autocommit=False, manage_transaction=True)
 
 
@@ -182,6 +183,33 @@ class PostgresSourceRevisionRepository:
         )
         rows = list(cur.fetchall())
         return _reconstruct_source_revision_set(header, rows)
+
+    @staticmethod
+    def read_exact_readonly(
+        cur: Any, source_revision_set_hash: str
+    ) -> SourceRevisionSet:
+        """Read the same complete set without row locks on a read-only connection."""
+
+        cur.execute(
+            """
+            SELECT source_revision_set_id, source_revision_set_hash, query_registry_hash,
+                   schema_version, requested_source_cutoff, label_as_of_ts, research_only, member_count
+            FROM app.advisory_source_revision_set
+            WHERE source_revision_set_hash = %s
+            """,
+            (source_revision_set_hash,),
+        )
+        header = cur.fetchone()
+        if header is None:
+            raise SourceLedgerError(
+                REASON_PHASE1G_SOURCE_REVISION_CONFLICT,
+                "source revision set is missing during exact read",
+                context={"source_revision_set_hash": source_revision_set_hash},
+            )
+        cur.execute(
+            SOURCE_REVISION_MEMBER_SELECT_EXACT_SQL, (header["source_revision_set_id"],)
+        )
+        return _reconstruct_source_revision_set(header, list(cur.fetchall()))
 
 
 def _matches_set_row(row: Any, revision_set: SourceRevisionSet) -> bool:
