@@ -60,8 +60,8 @@
   "expected": "所有产品下单、撤单、replace、reconcile 仅经 SimulationLifecycleScheduler -> MiniQMTExecutionRuntime -> OMS/Gateway；LEGACY_B0 仅历史读取及既有 active parent 原 revision drain；非法旁路 fail loud，迁移幂等且可独立 readback。",
   "first_seen_at": "2026-07-15T16:17:40.159948Z",
   "fix_branch": "bug/BUG-662-miniqmt-b0-quote-v2-tick-broker-20260715",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9208b65c0c44818f2040bdba6b1a4461569d26d0",
+  "fixed_at": "2026-07-15T18:57:00.897714Z",
   "github_issue_number": 2190,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2190",
   "last_seen_at": "2026-07-15T16:17:40.159948Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2195",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -79,7 +80,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -88,6 +89,9 @@
     "fingerprint": "3ae8e02e959dc21c43cb802a",
     "source_event_id": "FE-20260715-3ae8e02e959d"
   },
+  "validation_evidence": [
+    "PR #2195 required CI: 11 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
