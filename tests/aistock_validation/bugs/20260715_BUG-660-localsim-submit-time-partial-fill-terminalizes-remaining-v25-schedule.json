@@ -37,7 +37,7 @@
   "first_seen_at": "2026-07-15T10:40:43.993035Z",
   "fix_branch": null,
   "fix_commit": "02cc8bded4644646581c455b7db10e0ae7f2e168",
-  "fixed_at": "2026-07-15T12:37:56.330211Z",
+  "fixed_at": "2026-07-15T12:41:56.857037Z",
   "github_issue_number": 2170,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2170",
   "last_seen_at": "2026-07-15T10:40:43.993035Z",
@@ -67,7 +67,7 @@
     "source_event_id": "FE-20260715-be8c6114879b"
   },
   "validation_evidence": [
-    "tmp/validation/guardrails/verify_skill_l0_paths.json"
+    "F:\\Dev\\AIstock_worktrees\\BUG-660-localsim-submit-time-partial-fill-terminalizes-r-20260715\\tmp\\validation\\guardrails\\verify_skill_l0_paths.json"
   ],
   "verification_budget": {
     "budget": "standard",
