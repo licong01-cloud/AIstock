@@ -8727,12 +8727,108 @@ def test_production_context_provider_loads_authoritative_manifest_for_verified_l
         "package_id": source_release.package_id,
         "manifest_sha256": authoritative_manifest.manifest_sha256,
         "source_release_manifest_sha256": first_successor_manifest_sha256,
+        "manifest_identity_changed": True,
         "extends_binding_id": first_successor_binding.binding_id,
         "extends_release_id": first_successor_release.release_id,
         "source_binding_readback_id": first_successor_binding.binding_id,
         "source_release_readback_id": first_successor_release.release_id,
         "strategy_package_revalidation_performed": False,
     }
+
+
+def test_production_context_provider_accepts_verified_localsim_successor_when_manifest_is_unchanged():
+    """Daily immutable lineage remains valid without revalidating or changing the admitted package."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    authoritative_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, successor_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256=source_release.manifest_sha256,
+    )
+    portfolio_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256="older_portfolio_manifest",
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=portfolio_manifest)
+    package_manifest_loads: list[str] = []
+
+    def load_package_manifest(package_id: str) -> StrategyPackageManifest:
+        package_manifest_loads.append(package_id)
+        return authoritative_manifest
+
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=load_package_manifest,
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    ctx = provider.load_context(
+        runtime_release=successor_release,
+        binding=successor_binding,
+        trade_date=TRADE_DATE,
+    )
+
+    assert package_manifest_loads == [source_release.package_id]
+    assert ctx.manifest is authoritative_manifest
+    assert ctx.local_broker is not None
+    assert ctx.local_broker._manifest is authoritative_manifest
+    assert ctx.context_diagnostics["manifest_identity"] == {
+        "schema_version": "localsim_manifest_identity_resolution_v1",
+        "source": "strategy_package_current_manifest",
+        "package_id": source_release.package_id,
+        "manifest_sha256": source_release.manifest_sha256,
+        "source_release_manifest_sha256": source_release.manifest_sha256,
+        "manifest_identity_changed": False,
+        "extends_binding_id": source_binding.binding_id,
+        "extends_release_id": source_release.release_id,
+        "source_binding_readback_id": source_binding.binding_id,
+        "source_release_readback_id": source_release.release_id,
+        "strategy_package_revalidation_performed": False,
+    }
+
+
+def test_production_context_provider_rejects_false_manifest_change_claim_for_unchanged_successor():
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    authoritative_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, successor_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256=source_release.manifest_sha256,
+        binding_metadata_patch={"manifest_identity_changed": True},
+    )
+    portfolio_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256="older_portfolio_manifest",
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=portfolio_manifest)
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=lambda _package_id: authoritative_manifest,
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="successor lineage is invalid") as exc_info:
+        provider.load_context(
+            runtime_release=successor_release,
+            binding=successor_binding,
+            trade_date=TRADE_DATE,
+        )
+
+    assert "binding.metadata.manifest_identity_changed" in exc_info.value.context["violations"]
 
 
 def test_production_context_provider_does_not_substitute_package_manifest_for_unmarked_localsim_mismatch():

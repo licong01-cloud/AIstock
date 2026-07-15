@@ -1602,6 +1602,7 @@ class ProductionSimulationRunContextProvider:
             "package_id": manifest.package_id,
             "manifest_sha256": manifest.manifest_sha256,
             "source_release_manifest_sha256": lineage["source_release_manifest_sha256"],
+            "manifest_identity_changed": lineage["manifest_identity_changed"],
             "extends_binding_id": lineage["extends_binding_id"],
             "extends_release_id": lineage["extends_release_id"],
             "source_binding_readback_id": lineage["source_binding_readback_id"],
@@ -1616,7 +1617,7 @@ class ProductionSimulationRunContextProvider:
         runtime_release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
         trade_date: date,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         binding_config = binding.binding_config_json if isinstance(binding.binding_config_json, dict) else {}
         binding_metadata = binding_config.get("metadata") if isinstance(binding_config.get("metadata"), dict) else {}
         release_config = (
@@ -1637,11 +1638,16 @@ class ProductionSimulationRunContextProvider:
         extends_binding_id = str(binding_metadata.get("extends_binding_id") or "").strip()
         source_manifest_sha256 = str(binding_metadata.get("source_release_manifest_sha256") or "").strip()
         authoritative_manifest_sha256 = str(binding_metadata.get("authoritative_manifest_sha256") or "").strip()
+        manifest_identity_changed = source_manifest_sha256 != authoritative_manifest_sha256
 
         violations: list[str] = []
 
         def require_equal(name: str, actual: Any, expected: Any) -> None:
             if actual != expected:
+                violations.append(name)
+
+        def require_bool_equal(name: str, actual: Any, expected: bool) -> None:
+            if not isinstance(actual, bool) or actual is not expected:
                 violations.append(name)
 
         require_equal("broker_backend", binding.broker_backend, SimulationBrokerBackend.LOCAL_SIM)
@@ -1664,8 +1670,16 @@ class ProductionSimulationRunContextProvider:
             release_metadata.get("manifest_identity_source"),
             "strategy_package_current_manifest",
         )
-        require_equal("binding.metadata.manifest_identity_changed", binding_metadata.get("manifest_identity_changed"), True)
-        require_equal("release.metadata.manifest_identity_changed", release_metadata.get("manifest_identity_changed"), True)
+        require_bool_equal(
+            "binding.metadata.manifest_identity_changed",
+            binding_metadata.get("manifest_identity_changed"),
+            manifest_identity_changed,
+        )
+        require_bool_equal(
+            "release.metadata.manifest_identity_changed",
+            release_metadata.get("manifest_identity_changed"),
+            manifest_identity_changed,
+        )
         require_equal("binding.metadata.new_release_id", binding_metadata.get("new_release_id"), runtime_release.release_id)
         require_equal("binding.metadata.extends_release_id", extends_release_id, runtime_release.base_release_id)
         require_equal("release.metadata.extends_release_id", release_metadata.get("extends_release_id"), extends_release_id)
@@ -1695,7 +1709,11 @@ class ProductionSimulationRunContextProvider:
             manifest_evidence.get("authoritative_manifest_sha256"),
             authoritative_manifest_sha256,
         )
-        require_equal("validation_evidence.manifest_identity.identity_changed", manifest_evidence.get("identity_changed"), True)
+        require_bool_equal(
+            "validation_evidence.manifest_identity.identity_changed",
+            manifest_evidence.get("identity_changed"),
+            manifest_identity_changed,
+        )
         require_equal(
             "validation_evidence.manifest_identity.strategy_package_revalidation_performed",
             manifest_evidence.get("strategy_package_revalidation_performed"),
@@ -1706,8 +1724,8 @@ class ProductionSimulationRunContextProvider:
             violations.append("binding.metadata.extends_release_id.required")
         if not extends_binding_id or extends_binding_id == binding.binding_id:
             violations.append("binding.metadata.extends_binding_id.invalid")
-        if not source_manifest_sha256 or source_manifest_sha256 == authoritative_manifest_sha256:
-            violations.append("binding.metadata.source_release_manifest_sha256.invalid")
+        if not source_manifest_sha256:
+            violations.append("binding.metadata.source_release_manifest_sha256.required")
         if portfolio_manifest is None:
             violations.append("portfolio.frozen_manifest.required")
         else:
@@ -1742,6 +1760,7 @@ class ProductionSimulationRunContextProvider:
             "extends_release_id": extends_release_id,
             "source_release_manifest_sha256": source_manifest_sha256,
             "authoritative_manifest_sha256": authoritative_manifest_sha256,
+            "manifest_identity_changed": manifest_identity_changed,
             "source_release_readback_id": source_readback["source_release_id"],
             "source_binding_readback_id": source_readback["source_binding_id"],
         }
