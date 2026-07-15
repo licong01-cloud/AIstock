@@ -105,6 +105,7 @@ class RecordingConnection:
         self.fail_on_sql: str | None = None
         self.connection_ids: list[int] = []
         self.fetchone_queue: list[tuple | dict] = []
+        self.fetchall_queue: list[list[tuple | dict]] = []
         self.factory_calls: list[dict[str, bool]] = []
 
     def cursor(self, *args, **kwargs):
@@ -146,6 +147,11 @@ class RecordingCursor:
         if self.conn.fetchone_queue:
             return self.conn.fetchone_queue.pop(0)
         return (True,)
+
+    def fetchall(self):
+        if self.conn.fetchall_queue:
+            return self.conn.fetchall_queue.pop(0)
+        return []
 
 
 def recording_conn_factory(conn: RecordingConnection):
@@ -1143,6 +1149,101 @@ def test_session_tick_lock_rolls_back_cash_and_cursor_on_failure() -> None:
     assert "SELECT pg_advisory_unlock(2402, hashtext(%s))" in [sql for sql, _ in conn.executed]
     assert any("INSERT INTO paper_v2.cash_ledger" in sql for sql, _ in conn.executed)
     assert any("INSERT INTO paper_v2.session_day" in sql for sql, _ in conn.executed)
+
+
+def test_local_sim_economic_transaction_reuses_one_connection() -> None:
+    conn = RecordingConnection()
+    conn.fetchone_queue.append((True,))
+    repo = PaperTradingV2Repository(conn_factory=recording_conn_factory(conn), symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})())
+    run = PaperRun(
+        run_id="run_economic_atomic",
+        portfolio_id="paper_economic_atomic",
+        trade_date=date(2024, 1, 2),
+        status=RunStatus.RUNNING,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    with repo.local_sim_economic_transaction("run_economic_atomic") as transaction:
+        assert transaction is conn
+        repo.create_run(run)
+        repo.save_cash_entry("run_economic_atomic", CashLedgerEntry(fill_id="fill_economic_atomic", portfolio_id="paper_economic_atomic", trade_date=date(2024, 1, 2), symbol="000001.SZ", side=OrderSide.BUY, notional=1000.0, fee=5.0, cash_delta=-1005.0, cash_after=98_995.0))
+        repo.save_positions(
+            run_id=run.run_id,
+            trade_date=run.trade_date,
+            positions=[],
+            prices={},
+        )
+        repo.save_daily_snapshot(
+            run_id=run.run_id,
+            trade_date=run.trade_date,
+            snapshot=AccountSnapshot(
+                portfolio_id=run.portfolio_id,
+                cash=98_995.0,
+                market_value=0.0,
+                nav=98_995.0,
+                snapshot_time=datetime(2024, 1, 2, 15, 0),
+            ),
+            metadata={"local_sim_generation": 1, "local_sim_outbox_id": "outbox_atomic"},
+        )
+        repo.save_run_event(
+            run_id=run.run_id,
+            event_type="RUN_ECONOMIC_COMMITTED",
+            message="atomic test event",
+        )
+        repo.update_run_status(run, RunStatus.SUCCEEDED)
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+    assert conn.factory_calls == [{"autocommit": True, "manage_transaction": False}, {"autocommit": False, "manage_transaction": True}]
+    assert "SELECT pg_try_advisory_lock(2403, hashtext(%s))" in [sql for sql, _ in conn.executed]
+    assert "SELECT pg_advisory_unlock(2403, hashtext(%s))" in [sql for sql, _ in conn.executed]
+    assert all(connection_id == id(conn) for connection_id in conn.connection_ids)
+    assert any("INSERT INTO paper_v2.run_events" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO paper_v2.daily_snapshots" in sql for sql, _ in conn.executed)
+    assert any("UPDATE paper_v2.run SET status" in sql for sql, _ in conn.executed)
+
+
+def test_local_sim_economic_transaction_rolls_back_all_writes() -> None:
+    conn = RecordingConnection()
+    conn.fetchone_queue.append((True,))
+    repo = PaperTradingV2Repository(conn_factory=recording_conn_factory(conn), symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})())
+    with pytest.raises(RuntimeError, match="forced economic failure"):
+        with repo.local_sim_economic_transaction("run_economic_rollback"):
+            repo.save_cash_entry("run_economic_rollback", CashLedgerEntry(fill_id="fill_economic_rollback", portfolio_id="paper_economic_rollback", trade_date=date(2024, 1, 2), symbol="000001.SZ", side=OrderSide.BUY, notional=1000.0, fee=5.0, cash_delta=-1005.0, cash_after=98_995.0))
+            raise RuntimeError("forced economic failure")
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+    assert "SELECT pg_advisory_unlock(2403, hashtext(%s))" in [sql for sql, _ in conn.executed]
+
+
+def test_local_sim_postgres_readbacks_validate_fact_ids_and_projection_generation() -> None:
+    facts_conn = RecordingConnection()
+    facts_conn.fetchall_queue.extend([
+        [("order_1",)], [("fill_1",)], [("event_1",)], [("fill_1",)],
+    ])
+    facts_repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(facts_conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
+    counts = facts_repo.readback_local_sim_economic_facts(
+        run_id="run_readback", order_ids={"order_1"}, fill_ids={"fill_1"},
+        order_event_ids={"event_1"}, cash_fill_ids={"fill_1"},
+    )
+    assert counts == {"order_ids": 1, "fill_ids": 1, "order_event_ids": 1, "cash_fill_ids": 1}
+
+    projection_conn = RecordingConnection()
+    projection_conn.fetchone_queue.extend([
+        {"count": 1},
+        {"run_id": "run_readback", "metadata": {"local_sim_outbox_id": "outbox_1", "local_sim_generation": 3}},
+    ])
+    projection_repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(projection_conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
+    result = projection_repo.readback_local_sim_projection(
+        run_id="run_readback", portfolio_id="portfolio_readback",
+        trade_date=date(2024, 1, 2), outbox_id="outbox_1", generation=3,
+        expected_position_count=1,
+    )
+    assert result["position_count"] == 1
 
 
 def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_equity() -> None:

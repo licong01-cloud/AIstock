@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import time as time_module
+from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import psycopg2
 import backend.services.simulation_runtime.bridges as simulation_bridges
 
 from backend.execution_algos.adaptive_is.reasons import (
@@ -17,7 +20,12 @@ from backend.execution_algos.adaptive_is.reasons import (
     quote_contract_error,
 )
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import DailyStStatus, MinuteDataSource, MinuteExecutionMarketInput
+from backend.services.paper_trading_v2.market_data import (
+    DailyStStatus,
+    MinuteDataSource,
+    MinuteExecutionMarketInput,
+    PreviousClose,
+)
 from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.broker.base import OrderHandle
@@ -65,7 +73,27 @@ from backend.services.simulation_runtime.lifecycle import (
     MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
     compute_schedule_windows,
 )
-from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_runtime.models import (
+    LocalSimEconomicReceiptV1,
+    LocalSimMarketMarkProvenance,
+    LocalSimMarketMarkV1,
+    LocalSimProjectionOutboxV1,
+    LocalSimProjectionReceiptV1,
+    canonical_json_sha256,
+)
+from backend.services.simulation_runtime.repository import (
+    LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY,
+    LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+    SimulationRuntimeRepository,
+    _local_sim_economic_receipt_map,
+    _local_sim_projection_outbox,
+    _local_sim_projection_receipt_map,
+    _merge_local_sim_economic_event,
+    _merge_local_sim_projection_retryable,
+    _merge_local_sim_projection_success,
+)
 from backend.services.simulation_runtime.decision import TradingRuleService
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
@@ -1539,6 +1567,15 @@ class FakePaperRepository:
 class FakeLocalSimMarketDataProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.previous_close_provider = SimpleNamespace(
+            get_previous_close=lambda symbol, trade_date: PreviousClose(
+                symbol=symbol,
+                trade_date=trade_date,
+                previous_trade_date=trade_date - timedelta(days=1),
+                pre_close=10.0,
+                source="test.previous_close",
+            )
+        )
 
     def load_symbol_input(
         self,
@@ -7213,6 +7250,672 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
     assert restarted.reused_count == 2
 
 
+def test_local_sim_economic_models_reject_identity_and_hash_tampering() -> None:
+    mark = LocalSimMarketMarkV1(
+        symbol="000001.SZ",
+        price=10.5,
+        as_of_time=datetime(2026, 5, 21, 9, 31),
+        source="TDX_REALTIME",
+        provenance="REALTIME_MINUTE_CLOSE",
+    )
+    with pytest.raises(ValueError, match="symbol and source"):
+        LocalSimMarketMarkV1(
+            symbol=" ",
+            price=10.5,
+            as_of_time=datetime(2026, 5, 21, 9, 31),
+            source="TDX_REALTIME",
+            provenance="REALTIME_MINUTE_CLOSE",
+        )
+    with pytest.raises(ValueError, match="finite and positive"):
+        LocalSimMarketMarkV1(
+            symbol="000001.SZ",
+            price=0,
+            as_of_time=datetime(2026, 5, 21, 9, 31),
+            source="TDX_REALTIME",
+            provenance="REALTIME_MINUTE_CLOSE",
+        )
+
+    receipt = LocalSimEconomicReceiptV1(
+        run_id="run_schema",
+        binding_id="binding_schema",
+        trade_date=TRADE_DATE,
+        plan_id="plan_schema",
+        generation=1,
+        economic_facts={"fills": ["fill_1"]},
+    )
+    outbox = LocalSimProjectionOutboxV1(
+        receipt_id=receipt.receipt_id,
+        run_id=receipt.run_id,
+        plan_id=receipt.plan_id,
+        generation=receipt.generation,
+        economic_hash=receipt.economic_hash,
+        projection_payload={"positions": []},
+    )
+    projection = LocalSimProjectionReceiptV1(
+        outbox_id=outbox.outbox_id,
+        run_id=outbox.run_id,
+        generation=outbox.generation,
+        economic_hash=outbox.economic_hash,
+        projection_payload_hash=outbox.projection_payload_hash,
+        projection_hash=canonical_json_sha256({"status": "projected"}),
+    )
+
+    def assert_tamper_rejected(model: Any, field: str) -> None:
+        payload = model.model_dump(mode="json")
+        payload[field] = "0" * 64
+        with pytest.raises(ValueError):
+            type(model).model_validate(payload)
+
+    assert_tamper_rejected(mark, "mark_hash")
+    for field in ("economic_hash", "idempotency_key", "receipt_id", "receipt_hash"):
+        assert_tamper_rejected(receipt, field)
+    for field in ("projection_payload_hash", "outbox_id", "outbox_hash"):
+        assert_tamper_rejected(outbox, field)
+    for field in ("projection_receipt_id", "receipt_hash"):
+        assert_tamper_rejected(projection, field)
+
+
+def test_local_sim_economic_payload_helpers_fail_loud_on_corruption() -> None:
+    receipt = LocalSimEconomicReceiptV1(
+        run_id="run_payload",
+        binding_id="binding_payload",
+        trade_date=TRADE_DATE,
+        plan_id="plan_payload",
+        generation=1,
+        economic_facts={"fills": []},
+    )
+    outbox = LocalSimProjectionOutboxV1(
+        receipt_id=receipt.receipt_id,
+        run_id=receipt.run_id,
+        plan_id=receipt.plan_id,
+        generation=receipt.generation,
+        economic_hash=receipt.economic_hash,
+        projection_payload={"positions": []},
+    )
+    projection = LocalSimProjectionReceiptV1(
+        outbox_id=outbox.outbox_id,
+        run_id=outbox.run_id,
+        generation=outbox.generation,
+        economic_hash=outbox.economic_hash,
+        projection_payload_hash=outbox.projection_payload_hash,
+        projection_hash=canonical_json_sha256({"status": "projected"}),
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_economic_receipt_map({LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: [{}]})
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_ECONOMIC_RECEIPT_PAYLOAD_INVALID"
+    invalid_receipt = receipt.model_dump(mode="json")
+    invalid_receipt["receipt_hash"] = "0" * 64
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_economic_receipt_map(
+            {LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: {receipt.receipt_id: invalid_receipt}}
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_ECONOMIC_RECEIPT_SCHEMA_INVALID"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_economic_receipt_map(
+            {LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: {"wrong_receipt": receipt.model_dump(mode="json")}}
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_ECONOMIC_RECEIPT_IDENTITY_CONFLICT"
+
+    invalid_outbox = outbox.model_dump(mode="json")
+    invalid_outbox["outbox_hash"] = "0" * 64
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_projection_outbox({LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY: invalid_outbox})
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_projection_receipt_map({LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY: [{}]})
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RECEIPT_PAYLOAD_INVALID"
+    invalid_projection = projection.model_dump(mode="json")
+    invalid_projection["receipt_hash"] = "0" * 64
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_projection_receipt_map(
+            {LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY: {projection.projection_receipt_id: invalid_projection}}
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RECEIPT_SCHEMA_INVALID"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _local_sim_projection_receipt_map(
+            {LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY: {"wrong_projection": projection.model_dump(mode="json")}}
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RECEIPT_IDENTITY_CONFLICT"
+
+
+def test_local_sim_economic_merge_is_idempotent_and_cas_guarded() -> None:
+    event = {
+        "run_id": "run_merge",
+        "binding_id": "binding_merge",
+        "trade_date": TRADE_DATE,
+        "plan_id": "plan_merge",
+        "states": (),
+        "expected_versions": {},
+        "economic_facts": {"fills": ["fill_1"]},
+        "projection_payload": {"positions": []},
+    }
+    payload, receipt, outbox, created = _merge_local_sim_economic_event(payload={}, **event)
+    assert created is True
+    replayed, replay_receipt, replay_outbox, replay_created = _merge_local_sim_economic_event(
+        payload=payload, **event
+    )
+    assert replayed == payload
+    assert replay_receipt == receipt
+    assert replay_outbox == outbox
+    assert replay_created is False
+
+    missing_outbox = dict(payload)
+    missing_outbox.pop(LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY)
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_economic_event(payload=missing_outbox, **event)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_MISSING"
+
+    next_event = dict(event)
+    next_event["economic_facts"] = {"fills": ["fill_2"]}
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_economic_event(payload=payload, **next_event)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_PENDING"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_economic_event(
+            payload={LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY: True}, **event
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_ECONOMIC_GENERATION_INVALID"
+
+    retryable = _merge_local_sim_projection_retryable(
+        run_id=event["run_id"],
+        payload=payload,
+        outbox_id=outbox.outbox_id,
+        error={"reason_code": "TEST_RETRY"},
+    )
+    assert retryable[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY]["status"] == "PROJECTION_RETRYABLE"
+    projected, projection_receipt = _merge_local_sim_projection_success(
+        run_id=event["run_id"],
+        payload=retryable,
+        outbox_id=outbox.outbox_id,
+        generation=outbox.generation,
+        projection_result={"status": "projected"},
+    )
+    projected_replay, replay_projection_receipt = _merge_local_sim_projection_success(
+        run_id=event["run_id"],
+        payload=projected,
+        outbox_id=outbox.outbox_id,
+        generation=outbox.generation,
+        projection_result={"status": "projected"},
+    )
+    assert projected_replay == projected
+    assert replay_projection_receipt == projection_receipt
+
+    missing_projection_receipt = dict(projected)
+    missing_projection_receipt.pop(LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY)
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_projection_success(
+            run_id=event["run_id"],
+            payload=missing_projection_receipt,
+            outbox_id=outbox.outbox_id,
+            generation=outbox.generation,
+            projection_result={"status": "projected"},
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RECEIPT_MISSING"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_projection_success(
+            run_id=event["run_id"],
+            payload=payload,
+            outbox_id="wrong_outbox",
+            generation=outbox.generation,
+            projection_result={"status": "projected"},
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT"
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        _merge_local_sim_projection_retryable(
+            run_id=event["run_id"],
+            payload=projected,
+            outbox_id=outbox.outbox_id,
+            error={"reason_code": "TEST_RETRY"},
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT"
+
+
+class _AtomicSimulationCursor:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        self.connection.executed.append((normalized, params))
+        if normalized.startswith("UPDATE paper_v2.simulation_daily_run"):
+            self.connection.status = params[0]
+            self.connection.payload = deepcopy(params[1].adapted)
+
+    def fetchone(self):
+        return {"run_payload_json": deepcopy(self.connection.payload)}
+
+
+class _AtomicSimulationConnection:
+    def __init__(self):
+        self.autocommit = True
+        self.payload = {}
+        self.status = None
+        self.executed = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self, *args, **kwargs):
+        return _AtomicSimulationCursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _atomic_simulation_repository(connection):
+    @contextmanager
+    def factory():
+        yield connection
+
+    repository = SimulationRuntimeRepository(conn_factory=factory)
+    repository.get_simulation_daily_run = lambda run_id: SimpleNamespace(
+        run_payload_json=deepcopy(connection.payload), status=connection.status
+    )
+    repository.list_local_sim_execution_states = lambda run_id: []
+    return repository
+
+
+def test_postgres_simulation_repository_stages_economic_and_projection_receipts_on_owner_connection() -> None:
+    connection = _AtomicSimulationConnection()
+    repository = _atomic_simulation_repository(connection)
+    economic_facts = {"schema_version": "test_economic_v1", "state_hashes": {}}
+    receipt, outbox, created = repository.stage_local_sim_economic_commit(
+        connection=connection, run_id="run_atomic", binding_id="binding_atomic",
+        trade_date=TRADE_DATE, plan_id="plan_atomic", states=(), expected_versions={},
+        economic_facts=economic_facts,
+        projection_payload={"schema_version": "test_projection_payload_v1"},
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={"last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED"},
+    )
+    assert created is True
+    repository.readback_local_sim_economic_commit(
+        run_id="run_atomic", receipt=receipt, outbox=outbox
+    )
+
+    projection_receipt = repository.stage_local_sim_projection_commit(
+        connection=connection, run_id="run_atomic", outbox_id=outbox.outbox_id,
+        generation=outbox.generation, final_status=SimulationDailyRunStatus.SUCCEEDED,
+        projection_result={"schema_version": "test_projection_result_v1"},
+        payload_patch={"local_sim_projection_generation": {"generation": outbox.generation}},
+    )
+    repository.readback_local_sim_projection_commit(
+        run_id="run_atomic", receipt=projection_receipt
+    )
+    assert connection.payload["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
+    assert connection.payload["local_sim_projection_generation"]["projection_receipt_id"] == projection_receipt.projection_receipt_id
+
+
+def test_postgres_simulation_repository_persists_projection_retry_and_readback_recovery_cas() -> None:
+    connection = _AtomicSimulationConnection()
+    repository = _atomic_simulation_repository(connection)
+    _, pending, _ = repository.stage_local_sim_economic_commit(
+        connection=connection, run_id="run_retry", binding_id="binding_retry",
+        trade_date=TRADE_DATE, plan_id="plan_retry", states=(), expected_versions={},
+        economic_facts={"schema_version": "test_economic_v1", "state_hashes": {}},
+        projection_payload={"schema_version": "test_projection_payload_v1"},
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING, payload_patch={},
+    )
+    repository.mark_local_sim_projection_retryable(
+        run_id="run_retry", outbox_id=pending.outbox_id,
+        error={"reason_code": "TEST_RETRY"},
+    )
+    assert connection.payload["local_sim_projection_outbox_v1"]["status"] == "PROJECTION_RETRYABLE"
+    projected = repository.stage_local_sim_projection_commit(
+        connection=connection, run_id="run_retry", outbox_id=pending.outbox_id,
+        generation=pending.generation, final_status=SimulationDailyRunStatus.SUCCEEDED,
+        projection_result={"schema_version": "test_projection_result_v1"},
+        payload_patch={"local_sim_projection_generation": {"generation": pending.generation}},
+    )
+    repository.mark_local_sim_projection_readback_retryable(
+        run_id="run_retry", outbox_id=pending.outbox_id,
+        error={"reason_code": "TEST_READBACK"},
+    )
+    assert "local_sim_projection_readback_failure" in connection.payload
+    repository.clear_local_sim_projection_readback_failure(
+        run_id="run_retry", outbox_id=pending.outbox_id,
+        final_status=SimulationDailyRunStatus.SUCCEEDED,
+    )
+    assert "local_sim_projection_readback_failure" not in connection.payload
+    repository.readback_local_sim_projection_commit(run_id="run_retry", receipt=projected)
+    assert connection.commits == 3
+    assert connection.rollbacks == 0
+
+    terminal_connection = _AtomicSimulationConnection()
+    terminal_repository = _atomic_simulation_repository(terminal_connection)
+    _, terminal_outbox, _ = terminal_repository.stage_local_sim_economic_commit(
+        connection=terminal_connection,
+        run_id="run_terminal",
+        binding_id="binding_terminal",
+        trade_date=TRADE_DATE,
+        plan_id="plan_terminal",
+        states=(),
+        expected_versions={},
+        economic_facts={"schema_version": "test_economic_v1", "state_hashes": {}},
+        projection_payload={"schema_version": "test_projection_payload_v1"},
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={},
+    )
+    terminal_repository.mark_local_sim_projection_terminal(
+        run_id="run_terminal",
+        outbox_id=terminal_outbox.outbox_id,
+        error={"reason_code": "LOCALSIM_PROJECTION_NON_RETRYABLE"},
+    )
+    assert terminal_connection.status == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert terminal_connection.payload["local_sim_projection_terminal_failure"]["attempt_count"] == 1
+
+
+def test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices() -> None:
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    positions = {"000001.SZ": PositionLot(portfolio_id="p", symbol="000001.SZ", quantity=100, available_quantity=100, avg_cost=9.5, trade_date=TRADE_DATE - timedelta(days=1))}
+    context = _local_sim_context_with_real_broker(portfolio_id="p", release=release, positions=positions)
+    scheduler = SimulationLifecycleScheduler(repository=repo, selection_service=FakeSelectionService(release, candidates=_candidate_rows()), context_provider=StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: context}))
+    planned = scheduler.run_once(trade_date=TRADE_DATE, data_source=MinuteDataSource.DB_HISTORICAL.value, broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=False, as_of_time=datetime(2026, 5, 21, 9, 22))
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler._local_sim_position_marks(
+            positions=positions,
+            context=replace(
+                context,
+                current_prices={"000001.SZ": 99.0},
+                price_by_symbol={"000001.SZ": 88.0},
+                local_broker=SimpleNamespace(),
+            ),
+            execution=SimpleNamespace(
+                run=planned.results[0].run,
+                execution_plan=planned.results[0].execution_plan,
+            ),
+            snapshot_time=datetime(2026, 5, 21, 9, 31),
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_MARK_PROVIDER_UNAVAILABLE"
+
+
+def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance() -> None:
+    release, _, _, _ = _release_and_bindings(qmt_only=False)
+    position = PositionLot(
+        portfolio_id="p_marks",
+        symbol="000001.SZ",
+        quantity=100,
+        available_quantity=100,
+        avg_cost=9.5,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_marks",
+        release=release,
+        paper_repository=InMemoryPaperTradingV2Repository(),
+        cash=100_000,
+        positions={position.symbol: position},
+    )
+    broker = context.local_broker
+    assert isinstance(broker, LocalSimBackend)
+    as_of_time = datetime(2026, 5, 21, 9, 33)
+
+    realtime = broker.load_authoritative_position_marks(
+        symbols=(position.symbol,),
+        trade_date=TRADE_DATE,
+        as_of_time=as_of_time,
+        pre_trade_tradability={},
+    )[position.symbol]
+    assert realtime.price == 10.1
+    assert realtime.as_of_time == datetime(2026, 5, 21, 9, 33)
+    assert realtime.source == MinuteDataSource.TDX_REALTIME.value
+    assert realtime.provenance == LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
+
+    historical_context = _local_sim_context_with_real_broker(
+        portfolio_id="p_marks",
+        release=release,
+        positions={position.symbol: position},
+    )
+    historical_broker = historical_context.local_broker
+    assert isinstance(historical_broker, LocalSimBackend)
+    historical = historical_broker.load_authoritative_position_marks(
+        symbols=(position.symbol,),
+        trade_date=TRADE_DATE,
+        as_of_time=as_of_time,
+        pre_trade_tradability={},
+    )[position.symbol]
+    assert historical.price == 10.1
+    assert historical.as_of_time == datetime(2026, 5, 21, 9, 31)
+    assert historical.source == MinuteDataSource.DB_HISTORICAL.value
+    assert historical.provenance == LocalSimMarketMarkProvenance.HISTORICAL_MINUTE_CLOSE
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        broker.load_authoritative_position_marks(
+            symbols=(position.symbol,),
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2026, 5, 22, 9, 31),
+            pre_trade_tradability={},
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_MARK_AS_OF_DATE_CONFLICT"
+    with pytest.raises(DataUnavailableError) as exc_info:
+        broker.load_authoritative_position_marks(
+            symbols=(position.symbol,),
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2026, 5, 21, 9, 30),
+            pre_trade_tradability={},
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_MARK_PRICE_MISSING"
+
+    suspended = broker.load_authoritative_position_marks(
+        symbols=(position.symbol,),
+        trade_date=TRADE_DATE,
+        as_of_time=as_of_time,
+        pre_trade_tradability={
+            position.symbol: {"suspend_status": {"is_suspended": True}}
+        },
+    )[position.symbol]
+    assert suspended.price == 10.0
+    assert suspended.as_of_time == datetime(2026, 5, 20, 15, 0)
+    assert suspended.source == "test.previous_close"
+    assert suspended.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+
+
+def test_scheduler_localsim_economic_transaction_rolls_back_both_repositories() -> None:
+    class FailingPaperRepository(InMemoryPaperTradingV2Repository):
+        def save_fill(self, run_id, fill, **kwargs):
+            raise RuntimeError("forced LocalSIM economic write failure")
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = FailingPaperRepository()
+    context = _local_sim_realtime_context_with_real_broker(portfolio_id="p_rollback", release=release, paper_repository=paper_repo, cash=100_000, positions={})
+    scheduler = SimulationLifecycleScheduler(repository=repo, selection_service=FakeSelectionService(release, candidates=_candidate_rows()), context_provider=StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: context}))
+    scheduler.run_once(trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value, broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=False, as_of_time=datetime(2026, 5, 21, 9, 22))
+    failed = scheduler.run_once(trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value, broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True, as_of_time=datetime(2026, 5, 21, 9, 32))
+    latest = repo.get_simulation_daily_run(failed.results[0].run.run_id)
+    assert failed.results[0].status == "FAILED_RETRYABLE"
+    assert paper_repo.runs == {} and paper_repo.orders == {} and paper_repo.fills == {}
+    assert "local_sim_economic_receipts_v1" not in latest.run_payload_json
+    assert "local_sim_projection_outbox_v1" not in latest.run_payload_json
+
+
+def test_scheduler_localsim_projection_readback_failure_recovers_without_rewrite() -> None:
+    class OneShotReadbackFailureRepository(InMemoryPaperTradingV2Repository):
+        fail_readback = True
+        def readback_local_sim_projection(self, **kwargs):
+            if self.fail_readback:
+                self.fail_readback = False
+                raise InvalidStateTransitionError("forced projection readback failure", context={"reason_code": "LOCALSIM_PROJECTION_READBACK_FAILED"})
+            return super().readback_local_sim_projection(**kwargs)
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = OneShotReadbackFailureRepository()
+    context = _local_sim_realtime_context_with_real_broker(portfolio_id="p_readback", release=release, paper_repository=paper_repo, cash=100_000, positions={})
+    scheduler = SimulationLifecycleScheduler(repository=repo, selection_service=FakeSelectionService(release, candidates=_candidate_rows()), context_provider=StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: context}))
+    planned = scheduler.run_once(trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value, broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=False, as_of_time=datetime(2026, 5, 21, 9, 22))
+    failed = scheduler.run_once(trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value, broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True, as_of_time=datetime(2026, 5, 21, 9, 32))
+    run_id = planned.results[0].run.run_id
+    failed_run = repo.get_simulation_daily_run(run_id)
+    event_count = len(paper_repo.run_events)
+    assert failed.results[0].status == "FAILED_RETRYABLE"
+    assert failed_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
+    assert failed_run.run_payload_json["local_sim_projection_readback_failure"]
+    assert failed_run.run_payload_json["local_sim_projection_readback_failure"]["attempt_count"] == 1
+    scheduler._replay_pending_local_sim_projection(run_id=run_id, paper_repository=paper_repo)
+    recovered = repo.get_simulation_daily_run(run_id)
+    assert recovered.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert "local_sim_projection_readback_failure" not in recovered.run_payload_json
+    assert "submit_failure" not in recovered.run_payload_json
+    assert len(paper_repo.run_events) == event_count
+
+
+def test_scheduler_localsim_projection_business_conflict_is_terminal_not_retryable() -> None:
+    projection_attempts: list[bool] = []
+
+    class BusinessConflictPaperRepository(InMemoryPaperTradingV2Repository):
+        def save_positions(self, **kwargs):
+            projection_attempts.append(True)
+            raise InvalidStateTransitionError(
+                "forced business conflict",
+                context={"reason_code": "TEST_BUSINESS_CONFLICT"},
+            )
+
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = BusinessConflictPaperRepository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_projection_terminal",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={binding.binding_id: context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = planned.results[0].run.run_id
+    latest = repo.get_simulation_daily_run(run_id)
+    terminal = latest.run_payload_json["local_sim_projection_terminal_failure"]
+    assert latest.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert terminal["error"]["reason_code"] == "LOCALSIM_PROJECTION_NON_RETRYABLE"
+    assert terminal["attempt_count"] == 1
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler._replay_pending_local_sim_projection(
+            run_id=run_id,
+            paper_repository=paper_repo,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_NON_RETRYABLE"
+    assert len(projection_attempts) == 1
+
+
+def test_scheduler_localsim_projection_connection_retry_is_bounded() -> None:
+    projection_attempts: list[bool] = []
+
+    class ConnectionFailurePaperRepository(InMemoryPaperTradingV2Repository):
+        def save_positions(self, **kwargs):
+            projection_attempts.append(True)
+            raise psycopg2.OperationalError("forced connection interruption")
+
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = ConnectionFailurePaperRepository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_projection_bounded",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={binding.binding_id: context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = planned.results[0].run.run_id
+    first = repo.get_simulation_daily_run(run_id)
+    assert first.run_payload_json["local_sim_projection_outbox_v1"]["attempt_count"] == 1
+    assert "local_sim_projection_terminal_failure" not in first.run_payload_json
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repo)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RETRYABLE"
+    second = repo.get_simulation_daily_run(run_id)
+    assert second.run_payload_json["local_sim_projection_outbox_v1"]["attempt_count"] == 2
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repo)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_RETRY_EXHAUSTED"
+    terminal = repo.get_simulation_daily_run(run_id)
+    assert terminal.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert terminal.run_payload_json["local_sim_projection_outbox_v1"]["attempt_count"] == 3
+    assert terminal.run_payload_json["local_sim_projection_terminal_failure"]["attempt_count"] == 3
+    assert len(projection_attempts) == 3
+
+
+def test_scheduler_localsim_projection_outbox_tamper_fails_loud() -> None:
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_outbox_tamper", release=release,
+        paper_repository=paper_repo, cash=100_000, positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = planned.results[0].run.run_id
+    latest = repo.get_simulation_daily_run(run_id)
+    outbox = deepcopy(latest.run_payload_json["local_sim_projection_outbox_v1"])
+    outbox["projection_payload"]["economic_hash"] = "0" * 64
+    repo.update_simulation_daily_run(
+        run_id, payload_patch={"local_sim_projection_outbox_v1": outbox}
+    )
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repo)
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"
+
+
 def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_terminal() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
@@ -7247,8 +7950,31 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     first_states = repo.list_local_sim_execution_states(run_id)
     assert first_states
     assert all(not state.is_terminal and state.remaining_quantity > 0 for state in first_states)
+    first_payload = repo.get_simulation_daily_run(run_id).run_payload_json
+    assert first_payload["local_sim_economic_generation"] == 1
+    assert first_payload["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
     first_fill_ids = {row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)}
     assert first_fill_ids
+    first_event_count = len(paper_repo.run_events)
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    replay_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id, release=release, paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash), positions=first_broker.query_positions(),
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: replay_context}
+    )
+    replayed = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    replay_payload = repo.get_simulation_daily_run(run_id).run_payload_json
+    assert replayed.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
+    assert replay_payload["local_sim_economic_generation"] == 1
+    assert {row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)} == first_fill_ids
+    assert len(paper_repo.run_events) == first_event_count
     with pytest.raises(InvalidStateTransitionError) as cas_error:
         repo.commit_local_sim_execution_states(
             run_id=run_id,
@@ -7257,7 +7983,7 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
         )
     assert cas_error.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_CAS_CONFLICT"
 
-    first_broker = first_context.local_broker
+    first_broker = replay_context.local_broker
     assert first_broker is not None
     second_context = _local_sim_realtime_context_with_real_broker(
         portfolio_id=portfolio_id, release=release, paper_repository=paper_repo,
@@ -7276,6 +8002,7 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     second_states = repo.list_local_sim_execution_states(run_id)
     assert all(state.sequence == prior.sequence + 1 for state, prior in zip(second_states, first_states))
     assert all(state.filled_quantity > prior.filled_quantity for state, prior in zip(second_states, first_states))
+    assert repo.get_simulation_daily_run(run_id).run_payload_json["local_sim_economic_generation"] == 2
     second_fill_ids = {row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)}
     assert first_fill_ids < second_fill_ids
 
@@ -7296,6 +8023,7 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     third_states = repo.list_local_sim_execution_states(run_id)
     assert all(state.runtime_status.value == "FILLED" and state.remaining_quantity == 0 for state in third_states)
     assert third.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert repo.get_simulation_daily_run(run_id).run_payload_json["local_sim_economic_generation"] == 3
     terminal_fill_ids = [row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)]
     assert len(terminal_fill_ids) == len(set(terminal_fill_ids))
 
