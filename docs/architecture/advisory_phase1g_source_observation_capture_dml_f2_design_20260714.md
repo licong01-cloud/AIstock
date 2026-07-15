@@ -27,8 +27,8 @@ Phase 1 自有表和仓库外制品目录。
 当前状态：
 
 ```text
-design_status = implementation_ready_after_phase1f2_dev_and_production_release_2026_07_15
-implementation_status = g1_merged_pr_2158_g2_on_main_g3_local_verified_pending_review
+design_status = g4_detailed_design_ready_after_g3_merge_2026_07_15
+implementation_status = g1_merged_pr_2158_g2_merged_pr_2167_g3_merged_pr_2178_g4_not_started
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
@@ -37,7 +37,7 @@ phase1f2_standalone_f2_design = validated_and_merged_2026_07_15
 phase1f2_dev_apply_receipt = 0770cc350efc5740e563b59601be54328228dce364e7a316f5c8399415ac5fe4
 phase1f2_production_apply_receipt = c9191c4c28becae8cc4424c7bdb825fc61b2480c297fc944a8d84cd02a032a7e
 phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
-phase1g_code_start_state = ready_for_g2_implementation
+phase1g_code_start_state = ready_for_g4_implementation_after_design_acceptance
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 dev_advisory_program_count = 0_as_of_2026_07_14
 phase1g_dev_dml = not_executed
@@ -499,8 +499,12 @@ Phase1GExecutionBatchPlan
 `observed_at`不进入semantic target request，但进入本次plan事实和`target_plan_hash`。`capture --plan`
 执行DML前必须在同一exact target数据库重新读取并逐项复核database identity、catalog fingerprint、input
 refs、source events、DSE/artifact/package identities、control-binding head、capture batch state和outbox
-identity。任一变化返回`ADVISORY_PHASE1G_PLAN_STALE`且当前target零DML；不得静默重新plan、采用latest、
-继续使用过时数据或只比较request hash。调用方应重新运行只读`plan`。
+identity。database/catalog/input/source/DSE/artifact/package/capture-plan/policy等immutable事实任一变化返回
+`ADVISORY_PHASE1G_PLAN_STALE`且当前target零DML。control binding、capture batch和outbox属于mutable lifecycle：
+只能保持plan baseline，或演进为同一frozen plan/capture_request_hash证明的唯一合法后继；不同semantic config、
+错误scope/content、断链或fork仍返回PLAN_STALE/conflict。已有exact request chain时以链内persisted binding为权威，
+后来current binding head的合法变化不得阻断COMPLETE readback或terminal recovery。不得静默重新plan、采用latest、
+继续使用过时immutable数据或只比较request hash。调用方只在immutable drift或非法state drift时重新运行只读`plan`。
 `expected_source_events[]`按event identity唯一；同一identity即使携带不同content hash也属于冲突，不能
 被当成两个合法事件。
 
@@ -838,6 +842,12 @@ operation disposition：
 每 target的 rows/bytes必须在 Phase 1E workload和 capture policy两者上界内。超限明确失败，不截断、
 不采样、不减少候选、不丢 stage、不把 PARTIAL改成 success。
 
+G4必须同时消费capture policy registry冻结的`absolute_max_capture_ms`、`statement_timeout_ms`和
+`lock_timeout_ms`：每个service-owned/G3/read-only数据库阶段在业务SQL前设置typed timeout，每个target在invocation
+开始时建立monotonic deadline并在immutable preflight、chain read及后续全部DB阶段使用remaining budget。
+timeout后不启动新数据库操作；RUNNING batch按exact
+row version/fencing尝试一次FAILED transition，不循环、不sleep、不把transition失败假称terminal。
+
 ## 14. Errors And Logging
 
 至少冻结以下 reason codes：
@@ -862,10 +872,12 @@ ADVISORY_PHASE1G_BATCH_IN_PROGRESS
 ADVISORY_PHASE1G_BATCH_STATE_CONFLICT
 ADVISORY_PHASE1G_FENCING_INVALID
 ADVISORY_PHASE1G_LEASE_EXPIRED
+ADVISORY_PHASE1G_CAPTURE_TIMEOUT
 ADVISORY_PHASE1G_OBSERVATION_CONFLICT
 ADVISORY_PHASE1G_POST_COMMIT_VERIFY_FAILED
 ADVISORY_PHASE1G_RESULT_STORE_FAILED
 ADVISORY_PHASE1G_ATTEMPT_RECEIPT_STORE_FAILED
+ADVISORY_PHASE1G_BATCH_RECEIPT_STORE_FAILED
 ADVISORY_PHASE1G_UNEXPECTED_ERROR
 ```
 
@@ -950,13 +962,13 @@ verify-result
 
 verify-attempt
   --attempt <json>
-  [--db-readback --env-file <path> --target-db dev|production]
+  [--db-readback --result-root <repo-external-path> --env-file <path> --target-db dev|production]
 ```
 
 `plan`只读并输出§7.3 typed batch plan；`capture`只接受该plan并先执行stale revalidation，之后才执行
 Advisory DML。plan冻结的target label必须与capture CLI一致。`verify-result`和默认`verify-attempt`只做
-离线canonical/file验证；只有显式`--db-readback`才连接数据库，而且必须同时提供env file与target，
-禁止可选参数导致半验证或默认连接。
+离线canonical/file验证；只有显式`--db-readback`才连接数据库，而且必须同时提供result root、env file与target，
+以加载batch引用的target attempts/results并完成DB full readback；禁止可选参数导致半验证或默认连接。
 CLI无 `--force`、`--skip-target`、`--ignore-hash`、`--allow-latest`、`--run-selection`、任意 SQL或
 approval参数。生产 `capture` 只在用户对该次生产 DML明确授权后由执行代理调用；程序内部不创建审批。
 
@@ -1161,17 +1173,28 @@ PR/merge commit 和合入后报告为准；`ddl_pending=none`，`dml_pending=non
 - observation/version/lineage/stage/candidate/membership/delivery atomic writer；
 - 新连接full readback处理commit response loss；compatibility view只读，identity/payload基表为写入权威。
 
-G3代码已于2026-07-15在独立工作树完成本地实现和逐项设计核对：single/native multi Alpha、raw-empty、
-filtered-empty、多候选、exact retry、非latest retry、合法successor、recovery immutable reuse、two-writer CAS、
-commit-response-loss三态和逐写节点rollback zero-residue均使用production migration链的disposable PostgreSQL验证。
-共享回归和import boundary通过；未增加migration、DEV/production DML、runtime activation、角色、审批、授权或备份
-门禁。提交、PR、合入和合入后状态仍以对应独立步骤为准；该状态不代表G4-G5完成。
+G3代码已于2026-07-15通过PR #2178合入，merge commit为`71d3486d1b7460262932f4f4f209e695c2b56dda`。
+single/native multi Alpha、raw-empty、filtered-empty、多候选、exact retry、非latest retry、合法successor、
+recovery immutable reuse、two-writer CAS、commit-response-loss三态和逐写节点rollback zero-residue均使用
+production migration链的disposable PostgreSQL验证。最终G3专项矩阵为30 passed；共享
+control/capture/outbox/stage/G2回归为59 passed、1 skipped；F-768至F-799共32项全部通过，GitHub CI、
+CodeQL和Semgrep通过。该批次未增加migration、DEV/production DML、runtime activation、角色、审批、授权或
+备份门禁。G3合入只证明transaction primitives和single-target writer完成，不代表G4-G5、persistent DEV
+evidence或Phase 1G整体完成。
 
 ### G4：Service, CLI And Recovery
 
+- 唯一实施级详细设计：`advisory_phase1g_g4_service_cli_recovery_f2_design_20260715.md`；
 - per-target service、multi-target batch、plan stale revalidation、state transitions、normal rerun recovery；
 - CLI、structured logging、reason/exit contract；
 - disposable PostgreSQL full matrix。
+
+G4详细设计已于2026-07-15完成缺陷修订并通过一致性复查，冻结F-800至F-840共41项设计验收：immutable stale
+必须exact，binding/batch/outbox mutable state只接受同一frozen plan的唯一合法后继；多target继续执行但状态链和
+结果完全独立；existing chain复用persisted binding且零额外binding DML；不同时间生成的合法release receipts按
+distinct hash独立验证，不设置batch-wide相等门禁；capture duration/statement/lock bounds全部消费；DB COMPLETE、
+result/attempt/batch store failure均按真实事实恢复，不引入hidden retry、global pool、角色、审批、授权或备份
+门禁。当前仅为`design_ready / implementation_not_started`，未执行G4 DML或runtime activation。
 
 ### G5：DEV Evidence
 
