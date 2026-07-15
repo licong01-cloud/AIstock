@@ -28,7 +28,7 @@ Phase 1 自有表和仓库外制品目录。
 
 ```text
 design_status = implementation_ready_after_phase1f2_dev_and_production_release_2026_07_15
-implementation_status = g1_merged_pr_2158_g2_code_not_started
+implementation_status = g1_merged_pr_2158_g2_on_main_g3_local_verified_pending_review
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
@@ -1161,8 +1161,11 @@ PR/merge commit 和合入后报告为准；`ddl_pending=none`，`dml_pending=non
 - observation/version/lineage/stage/candidate/membership/delivery atomic writer；
 - 新连接full readback处理commit response loss；compatibility view只读，identity/payload基表为写入权威。
 
-G3详细设计已完成前后一致性复查，代码尚未开始。它不增加migration、DEV/production DML、runtime activation、
-角色、审批、授权或备份门禁；实现状态必须以未来独立代码PR和验收结果为准。
+G3代码已于2026-07-15在独立工作树完成本地实现和逐项设计核对：single/native multi Alpha、raw-empty、
+filtered-empty、多候选、exact retry、非latest retry、合法successor、recovery immutable reuse、two-writer CAS、
+commit-response-loss三态和逐写节点rollback zero-residue均使用production migration链的disposable PostgreSQL验证。
+共享回归和import boundary通过；未增加migration、DEV/production DML、runtime activation、角色、审批、授权或备份
+门禁。提交、PR、合入和合入后状态仍以对应独立步骤为准；该状态不代表G4-G5完成。
 
 ### G4：Service, CLI And Recovery
 
