@@ -35,8 +35,8 @@
   "expected": "B0 runtime context must use a proven lot-size and tradability authority, publish atomically before submit, and reject unsupported authority data loudly without inventing defaults. Any context/pre-submit failure after status transition must persist the new typed error and leave a durable retryable state. Restart recovery must drive eligible persisted pending event-loop work from authoritative runtime facts, including RECONCILING where safe, without duplicate child submission. Other LocalSIM/MiniQMT bindings must continue independently.",
   "first_seen_at": "2026-07-15T05:26:10.403091Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f4392711ebc03724ae42290ef96bb62962f24c74",
+  "fixed_at": "2026-07-15T06:39:35.515603Z",
   "github_issue_number": 2154,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2154",
   "last_seen_at": "2026-07-15T05:26:10.403091Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2156",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "a915635220955d41da2aae35",
     "source_event_id": "FE-20260715-a91563522095"
   },
+  "validation_evidence": [
+    "PR #2156 required CI checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
