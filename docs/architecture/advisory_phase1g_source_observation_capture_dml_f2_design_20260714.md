@@ -28,7 +28,7 @@ Phase 1 自有表和仓库外制品目录。
 
 ```text
 design_status = implementation_ready_after_phase1f2_dev_and_production_release_2026_07_15
-implementation_status = g1_not_started
+implementation_status = g1_merged_pr_2158_g2_code_not_started
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
@@ -37,7 +37,7 @@ phase1f2_standalone_f2_design = validated_and_merged_2026_07_15
 phase1f2_dev_apply_receipt = 0770cc350efc5740e563b59601be54328228dce364e7a316f5c8399415ac5fe4
 phase1f2_production_apply_receipt = c9191c4c28becae8cc4424c7bdb825fc61b2480c297fc944a8d84cd02a032a7e
 phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
-phase1g_code_start_state = ready_for_g1_g4
+phase1g_code_start_state = ready_for_g2_implementation
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 dev_advisory_program_count = 0_as_of_2026_07_14
 phase1g_dev_dml = not_executed
@@ -414,8 +414,13 @@ replayed resolution_receipt_hash == Phase 1E hash
 replayed source_revision_set_id/hash == CapturePlan ids/hashes
 ```
 
-任一不一致返回 conflict，零 DML。成功后调用 `PostgresSourceRevisionRepository.freeze()`；exact retry
-返回同一 set。Phase 1G 不追加 source availability event；没有 exact event 时保持 unavailable。
+任一不一致返回 conflict，零 DML。G2 的 `plan` 路径只返回经过完整校验的
+`Phase1GSourceRevisionFreezeIntent`，不得调用 `PostgresSourceRevisionRepository.freeze()`、不得独立提交，
+也不得从 global pool 取得写连接。G3 在单 target caller-owned transaction 中先调用
+`freeze_in_transaction(conn, revision_set)`，exact retry 必须完整读取 header 与全部 members；随后校验已经
+提交且被 RUNNING capture batch 外键引用的 control binding，再写入 outbox、observation 和 membership。
+Phase 1G 不追加 source availability event；没有 exact event 时保持 unavailable。详细契约见
+`advisory_phase1g_g2_source_replay_historical_trace_projection_f2_design_20260715.md`。
 
 ## 7. Typed Execution Contracts / 强类型执行契约
 
@@ -708,6 +713,7 @@ DSE v2 stage receipts
 为避免现有repository各自commit破坏原子性，Phase 1G新增并只在writer内部使用caller-owned cursor原语：
 
 ```text
+PostgresSourceRevisionRepository.freeze_in_transaction/read_exact_in_transaction
 PostgresTraceOutboxRepository.append_in_tx/read_exact_in_tx/append_delivery_in_tx
 PostgresCaptureRepository.add_membership_in_tx/advance_row_version_in_tx
 PostgresObservationCaptureRepository.append_or_read_exact_in_tx
@@ -718,24 +724,27 @@ PostgresObservationCaptureRepository.append_or_read_exact_in_tx
 connection factory取得一个连接，每个 plan使用一个短事务：
 
 1. `FOR UPDATE` 锁定 RUNNING capture batch，核对 row version、fencing token、lease和 request hash。
-2. `FOR KEY SHARE` 核对 capture plan、source revision set和control binding；按包含
+2. 重放 G2 frozen intent 并逐项 stale revalidate；同事务调用 `freeze_in_transaction()` 写入或完整读取
+   exact source revision set。若 header/member 任一冲突则当前 target 事务全部回滚。
+3. `FOR KEY SHARE` 核对 capture plan、source revision set和control binding；按包含
    `admission_scope_hash`的natural key读取exact predecessor outbox，不存在时准备当前envelope。
-3. 数据库交易日历复核 decision/selection/target adjacency。
-4. 对 `canonical_signal_id` 获取 transaction advisory lock。
-5. pure builder生成 header、semantic payload、stage bundle和 candidate hashes。
-6. exact header insert/readback；相同 scope不同 header为 conflict。
-7. 检查现有 observation revision链：相同 semantic content完整 readback后复用；不同合法 evidence创建
+4. 数据库交易日历复核 decision/selection/target adjacency。
+5. 对 `canonical_signal_id` 获取 transaction advisory lock。
+6. pure builder生成 header、semantic payload、stage bundle和 candidate hashes。
+7. exact header insert/readback；相同 scope不同 header为 conflict。
+8. 检查现有 observation revision链：相同 semantic content完整 readback后复用；不同合法 evidence创建
    下一 revision并绑定 exact predecessor。
-8. 不存在outbox时同事务exact append当前envelope；存在时完整readback并验证predecessor recovery关系。
-9. 原子插入或复用version、lineage、stage evidence、stage candidates。
-10. 同事务追加当前 batch 的 TRACE_OUTBOX、SOURCE_REVISION_SET、OBSERVATION_VERSION memberships。
-11. 同事务追加/复用 `OBSERVATION_WRITTEN` delivery event并递增 batch row version。
-12. commit后新连接完整 readback；不一致返回 post-commit verification failure，保留已提交事实。
+9. 不存在outbox时同事务exact append当前envelope；存在时完整readback并验证predecessor recovery关系。
+10. 原子插入或复用version、lineage、stage evidence、stage candidates。
+11. 同事务追加当前 batch 的 TRACE_OUTBOX、SOURCE_REVISION_SET、OBSERVATION_VERSION memberships。
+12. 同事务追加/复用 `OBSERVATION_WRITTEN` delivery event并递增 batch row version。
+13. commit后新连接完整 readback；不一致返回 post-commit verification failure，保留已提交事实。
 
 任一步在 commit前失败，当前 plan事务全部回滚。不得仅写 header、跳过 candidate或吞掉 child insert错误。
-source revision freeze、control binding get-or-append、capture batch create/acquire可能在首个plan事务前已经
-分别提交；它们是可重用的append/state facts，不与observation行伪装成同一全局事务。attempt receipt必须
-逐项记录这些`committed_phases`，失败后正常重跑按exact identity收敛。
+source revision freeze不得在首个plan事务前独立提交；它与该target的outbox、observation、membership共同受
+caller-owned transaction约束。control binding必须先自动get-or-append并提交，capture batch才能通过数据库外键
+创建和acquire；二者是该事务之前可独立存在的状态事实。attempt receipt必须如实记录已提交阶段；失败后正常
+重跑按exact identity收敛。
 
 `semantic_observation_key` 必须在child hash之前由plan/source set/evidence bundle/trace content/policy
 确定性形成；它进入stage/candidate hash domain，避免不同observation作用域被错误当成同一row，同时不与
@@ -1111,30 +1120,32 @@ G0是已经完成的开发/数据库identity技术前置，不是运行审批；
 - immutable input ref resolver与external CAS no-replace result store；
 - L0/L1。
 
-G1已在`feature/advisory-phase1g-g1-foundation-20260715`实现并完成本批L0/L1、覆盖率与相邻回归；该状态不
+G1已通过PR #2158（merge commit `a13b2604`）合入并完成本批L0/L1、覆盖率与相邻回归；该状态不
 代表G2-G5或整个Phase 1G完成。Phase 1G采用分批合入：当前G批次的acceptance matrix无缺口即可独立
 请求代码合入，整项功能完成和production/runtime readiness仍必须等待G0-G4及G5真实DEV证据。
 
 | G1 design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| G1-001 typed contracts/policy/hash | `phase1g_contract.py` | `test_phase1g_contract.py` | implemented_verified_in_branch | none |
-| G1-002 Phase 1E-derived target request | `phase1g_phase1e_projection.py`、`build_phase1g_target_execution_request()` | exact program/date/package/manifest/scope/policy/operation hash closure tests | implemented_verified_in_branch | none |
-| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale/unexpected-error mapping tests | implemented_verified_in_branch | none |
-| G1-004 immutable input refs | `phase1g_artifact_ref.py` | containment/latest/hash/policy/reparse tests | implemented_verified_in_branch | none |
-| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper/non-silent temp-cleanup tests | implemented_verified_in_branch | none |
-| G1-006 module isolation | five G1 `phase1g_*.py` modules | static transitive + isolated runtime import denylist tests | implemented_verified_in_branch | none |
-| G1-007 result/attempt/batch closure | `phase1g_contract.py` | source-set lineage、redacted context、result policy、target-attempt order tests | implemented_verified_in_branch | none |
-| G1-008 local quality | G1 test suite | 41 passed, 1 environment skip; statements 88.30%, branches 70.88% | implemented_verified_in_branch | none |
+| G1-001 typed contracts/policy/hash | `phase1g_contract.py` | `test_phase1g_contract.py` | merged_verified_pr_2158 | none |
+| G1-002 Phase 1E-derived target request | `phase1g_phase1e_projection.py`、`build_phase1g_target_execution_request()` | exact program/date/package/manifest/scope/policy/operation hash closure tests | merged_verified_pr_2158 | none |
+| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale/unexpected-error mapping tests | merged_verified_pr_2158 | none |
+| G1-004 immutable input refs | `phase1g_artifact_ref.py` | containment/latest/hash/policy/reparse tests | merged_verified_pr_2158 | none |
+| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper/non-silent temp-cleanup tests | merged_verified_pr_2158 | none |
+| G1-006 module isolation | five G1 `phase1g_*.py` modules | static transitive + isolated runtime import denylist tests | merged_verified_pr_2158 | none |
+| G1-007 result/attempt/batch closure | `phase1g_contract.py` | source-set lineage、redacted context、result policy、target-attempt order tests | merged_verified_pr_2158 | none |
+| G1-008 local quality | G1 test suite | 41 passed, 1 environment skip; statements 88.30%, branches 70.88% | merged_verified_pr_2158 | none |
 
 ### G2：Source Replay And Historical Trace Projection
 
-- Phase 1E source operation/parser；
-- same-cutoff source replay + revision freeze；
-- immutable DSE/stage/artifact/package projection；
-- single/multi Alpha parity tests。
+- 详细设计：`advisory_phase1g_g2_source_replay_historical_trace_projection_f2_design_20260715.md`；
+- Phase 1E source operation严格解析与same-cutoff纯重放；
+- source revision freeze intent与caller-owned `freeze_in_transaction()`原语；G2只读plan路径零DML；
+- immutable DSE/stage/artifact/package exact projection；
+- single/multi Alpha、valid-no-candidate、不可用和完整hash parity测试。
 
 ### G3：Transactional PostgreSQL Writer
 
+- 在单target transaction内消费G2 freeze intent并完成source set exact freeze/readback；
 - control binding get-or-append；
 - trace outbox exact read/recovery；
 - caller-owned outbox/capture/observation transaction primitives；
