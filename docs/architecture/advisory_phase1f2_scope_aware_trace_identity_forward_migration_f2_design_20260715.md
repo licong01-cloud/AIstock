@@ -341,12 +341,25 @@ app.advisory_selection_stage_trace_outbox
 6. 错误文本不硬编码v1/v2。
 
 `verify_catalog()`同时移除`has_cutover_predecessor`对table->view形态的专用限制：只要current contract声明
-predecessor，就在exact relation scope内验证前驱；只有前驱scope完全兼容时才启用
-`repairable_unexpected_objects`。验证v3时形成有界链v3 -> v2 -> v1；每层registry content hash锁定下一层，
+predecessor，就递归验证冻结前驱。前驱无difference，或全部difference都由非空`repairable_by_orders`精确
+归属时，才启用`repairable_unexpected_objects`和cutover repair；任一未知或无owner difference都会阻断整条
+forward chain。验证v3时形成有界链v3 -> v2 -> v1；每层registry content hash锁定下一层，
 不拼接、不修改历史registry。v2 -> v1行为保持原测试；v3 -> v2新增正向和
 tamper/escape/wrong-hash/wrong-relation/unknown-drift反例。
 
-### 8.3 Default and compatibility classification
+### 8.3 Resumable predecessor chain and default classification
+
+`predecessor_contract`不仅识别完全稳定的前驱版本，还必须支持release executor在已提交早期migration后精确恢复。
+因此`_predecessor_chain_is_compatible()`按以下统一规则判断：
+
+1. 递归加载并验证冻结的直接前驱contract；
+2. 前驱catalog无差异时兼容；
+3. 前驱catalog处于部分发布状态时，只有全部difference均携带非空`repairable_by_orders`才兼容；
+4. 任一unknown、unowned或空repair order difference都会阻断整条forward chain；
+5. 该结论同时控制`repairable_unexpected_objects`和table-to-view cutover repair，不允许下游版本掩盖上游未知漂移。
+
+这使order 10/20/30等已提交中间态可以从剩余migration精确恢复，同时保证v1任一未知child drift会经
+v2传播到v3并继续fail-fast。它不是silent retry、force或人工门禁；每次resume仍重新构建并校验plan。
 
 `DEFAULT_RELEASE_SCHEMA_REGISTRY`切换到v3。对exact v2 catalog：
 
@@ -667,7 +680,7 @@ Phase 1E真实DSE、capacity MEASURED、Parquet或模型状态。
 | 只改outbox不改gap | 失败证据跨Program串线 | success/failure identity同批修正 |
 | 回填legacy scope | 伪造历史证据、旧hash失真 | NULL保留、零UPDATE |
 | 新写允许NULL scope | 继续生成v1缺陷数据 | write API只接受v2 |
-| v3 loader继续硬编码v1 | v3无法消费v2前驱 | generic exact predecessor closure |
+| v3 loader继续硬编码v1 | v3无法消费v2前驱或恢复已提交中间态 | generic resumable predecessor chain |
 | verifier只识别table->view cutover | constraint-only v2 baseline被误判drift | predecessor声明驱动exact-scope验证 |
 | old constraint被当unknown drift | v2无法forward plan | repairable unexpected order 90 |
 | `IF NOT EXISTS`隐藏漂移 | 错误catalog假成功 | exact predecessor + no silent DDL |
@@ -711,6 +724,7 @@ in-memory-only测试冒充完成。
 
 ```text
 code_merge = not_started
+implementation = local_verified_commits_pending_pr
 phase1f2_dev_ddl = not_executed
 phase1f2_production_ddl = not_executed
 phase1g_business_dml = not_executed
@@ -736,7 +750,7 @@ production DDL只在用户对该次操作明确要求后执行，且不隐含额
 - F-658：capture plan查询使用显式selection lookup key，不切片natural key。
 - F-659：v3 registry复用contract schema v2并冻结完整catalog inventory，不复制无意义plan/receipt DTO。
 - F-660：v3 predecessor精确指向v2 hash和两个受影响relations。
-- F-661：predecessor loader/verifier泛化到constraint-only forward且v2->v1历史行为保持。
+- F-661：predecessor loader/verifier泛化到constraint-only及可恢复partial forward，且v2->v1未知漂移阻断语义保持。
 - F-662：exact v2 catalog被分类为只需order 90的PARTIAL_ADDITIVE。
 - F-663：unknown drift和不受管同名对象继续fail-fast。
 - F-664：order 90 SHA、dependency、transaction mode和final object唯一declaring-order完整冻结。
@@ -760,36 +774,36 @@ production DDL只在用户对该次操作明确要求后执行，且不隐含额
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-650 | §3、§5、§17 | changed-path/import oracle | design_ready | none |
-| F-651 | §6.1、§7.2 | constraint/natural-key tests | design_ready | none |
-| F-652 | §6.1、§15.3 | dual/same-scope PostgreSQL tests | design_ready | none |
-| F-653 | §6.2、§7.1、§9.3 | legacy preservation evidence | design_ready | none |
-| F-654 | §6.2、§9 | predicate/index catalog tests | design_ready | none |
-| F-655 | §7.1、§15.2 | legacy golden hash | design_ready | none |
-| F-656 | §7.2、§7.4、§11 | type/public-alias/write rejection tests | design_ready | none |
-| F-657 | §7.2 | DTO/hash validation tests | design_ready | none |
-| F-658 | §7.3、§11.2 | explicit lookup-key tests | design_ready | none |
-| F-659 | §8.1 | registry/DTO schema/inventory assertions | design_ready | none |
-| F-660 | §8.2 | predecessor file/hash/relation tests | design_ready | none |
-| F-661 | §8.2、§15.2-15.3 | v2->v1/v3->v2/cutover-independent matrix | design_ready | none |
-| F-662 | §8.3、§15.3 | v2 baseline plan receipt | design_ready | none |
-| F-663 | §8.3、§15.3 | drift/unexpected-object negatives | design_ready | none |
-| F-664 | §8.4、§9.1、§15.1 | SHA/order/unique declared-object checks | design_ready | none |
-| F-665 | §9.2-9.3、§10.1 | fault-injection rollback | design_ready | none |
-| F-666 | §9.2、§15.1 | migration static scan | design_ready | none |
-| F-667 | §6.2、§9.3 | before/after row hash parity | design_ready | none |
-| F-668 | §6.3、§15.1 | trigger/role/RLS catalog scan | design_ready | none |
-| F-669 | §10.3 | rollback precondition tests/design review | design_ready | none |
-| F-670 | §12 | CLI/env/fallback tests | design_ready | none |
-| F-671 | §12、§20 | separated-state receipt report | design_ready | none |
-| F-672 | §3.2、§10.4、§20 | approval/backup scan | design_ready | none |
-| F-673 | §15.2 | pure identity/predecessor suite | design_ready | none |
-| F-674 | §15.3 | disposable PostgreSQL full matrix | design_ready | none |
-| F-675 | §15.3、§16 | positive dual-scope E2E | design_ready | none |
-| F-676 | §4.3、§11.5、§14-15 | transitive import/query/pre-DDL spy | design_ready | none |
-| F-677 | §15.4-15.5 | DEV zero-residue/persistent receipts | design_ready | none |
-| F-678 | §12、§20、§24 | state transition review | design_ready | none |
-| F-679 | §1、§24 | parent/child status reference check | design_ready | none |
+| F-650 | §3、§5、§17 | changed-path/import oracle | implemented_local_verified | none |
+| F-651 | §6.1、§7.2 | constraint/natural-key tests | implemented_local_verified | none |
+| F-652 | §6.1、§15.3 | dual/same-scope PostgreSQL tests | implemented_local_verified | none |
+| F-653 | §6.2、§7.1、§9.3 | legacy preservation evidence | implemented_local_verified | none |
+| F-654 | §6.2、§9 | predicate/index catalog tests | implemented_local_verified | none |
+| F-655 | §7.1、§15.2 | legacy golden hash | implemented_local_verified | none |
+| F-656 | §7.2、§7.4、§11 | type/public-alias/write rejection tests | implemented_local_verified | none |
+| F-657 | §7.2 | DTO/hash validation tests | implemented_local_verified | none |
+| F-658 | §7.3、§11.2 | explicit lookup-key tests | implemented_local_verified | none |
+| F-659 | §8.1 | registry/DTO schema/inventory assertions | implemented_local_verified | none |
+| F-660 | §8.2 | predecessor file/hash/relation tests | implemented_local_verified | none |
+| F-661 | §8.2-8.3、§15.2-15.3 | v2->v1/v3->v2/partial-resume/cutover-independent matrix | implemented_local_verified | none |
+| F-662 | §8.3、§15.3 | v2 baseline plan receipt | implemented_local_verified | none |
+| F-663 | §8.3、§15.3 | drift/unexpected-object negatives | implemented_local_verified | none |
+| F-664 | §8.4、§9.1、§15.1 | SHA/order/unique declared-object checks | implemented_local_verified | none |
+| F-665 | §9.2-9.3、§10.1 | fault-injection rollback | implemented_local_verified | none |
+| F-666 | §9.2、§15.1 | migration static scan | implemented_local_verified | none |
+| F-667 | §6.2、§9.3 | before/after row hash parity | implemented_local_verified | none |
+| F-668 | §6.3、§15.1 | trigger/role/RLS catalog scan | implemented_local_verified | none |
+| F-669 | §10.3 | rollback precondition tests/design review | implemented_local_verified | none |
+| F-670 | §12 | CLI/env/fallback tests | implemented_local_verified | none |
+| F-671 | §12、§20 | separated-state receipt report | implemented_local_verified | none |
+| F-672 | §3.2、§10.4、§20 | approval/backup scan | implemented_local_verified | none |
+| F-673 | §15.2 | pure identity/predecessor suite | implemented_local_verified | none |
+| F-674 | §15.3 | disposable PostgreSQL full matrix | implemented_local_verified | none |
+| F-675 | §15.3、§16 | positive dual-scope E2E | implemented_local_verified | none |
+| F-676 | §4.3、§11.5、§14-15 | transitive import/query/pre-DDL spy | implemented_local_verified | none |
+| F-677 | §15.4-15.5、§20 | disposable/rollback-only DEV contract; persistent DEV tracked separately | verified_current_stage | none |
+| F-678 | §12、§20、§24 | state transition review; Phase 1G remains inactive | ready_after_phase1f2_dev | none |
+| F-679 | §1、§24 | parent/child status reference check | implemented_local_verified | none |
 
 ## 23. DESIGN-COMPLIANCE-001
 
