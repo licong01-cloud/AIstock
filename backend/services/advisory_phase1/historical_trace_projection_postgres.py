@@ -96,14 +96,42 @@ class Phase1GPostgresReadOnlyError(Phase1GSourceReplayError):
 class Phase1GPostgresHistoricalProjection:
     """Open one caller-selected database snapshot; never resolves a connection itself."""
 
-    def __init__(self, conn_factory: ConnFactory) -> None:
+    def __init__(
+        self,
+        conn_factory: ConnFactory,
+        *,
+        statement_timeout_ms: int | None = None,
+        lock_timeout_ms: int | None = None,
+    ) -> None:
+        if statement_timeout_ms is not None and statement_timeout_ms < 1:
+            raise ValueError("statement_timeout_ms must be positive")
+        if lock_timeout_ms is not None and lock_timeout_ms < 1:
+            raise ValueError("lock_timeout_ms must be positive")
+        if (
+            statement_timeout_ms is not None
+            and lock_timeout_ms is not None
+            and lock_timeout_ms > statement_timeout_ms
+        ):
+            raise ValueError("lock_timeout_ms cannot exceed statement_timeout_ms")
         self._conn_factory = conn_factory
+        self._statement_timeout_ms = statement_timeout_ms
+        self._lock_timeout_ms = lock_timeout_ms
 
     @contextmanager
     def snapshot(self) -> Iterator["Phase1GPostgresHistoricalSnapshot"]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                if self._statement_timeout_ms is not None:
+                    cur.execute(
+                        "SELECT set_config('statement_timeout', %s, true)",
+                        (str(self._statement_timeout_ms),),
+                    )
+                if self._lock_timeout_ms is not None:
+                    cur.execute(
+                        "SELECT set_config('lock_timeout', %s, true)",
+                        (str(self._lock_timeout_ms),),
+                    )
                 cur.execute(TRANSACTION_STATE_SELECT_SQL)
                 state = cur.fetchone()
                 if state is None or str(state["transaction_read_only"]).lower() not in {
@@ -184,6 +212,8 @@ def project_phase1g_target_snapshot(
     conn_factory: ConnFactory,
     phase1e_plan: Phase1EExecutionPlanProjection,
     target_request: Phase1GTargetExecutionRequest,
+    statement_timeout_ms: int | None = None,
+    lock_timeout_ms: int | None = None,
 ) -> Phase1GTargetProjectionSnapshot:
     """Project one target atomically from one read-only PostgreSQL snapshot."""
 
@@ -192,7 +222,11 @@ def project_phase1g_target_snapshot(
         target_request=target_request,
     )
     try:
-        with Phase1GPostgresHistoricalProjection(conn_factory).snapshot() as snapshot:
+        with Phase1GPostgresHistoricalProjection(
+            conn_factory,
+            statement_timeout_ms=statement_timeout_ms,
+            lock_timeout_ms=lock_timeout_ms,
+        ).snapshot() as snapshot:
             events = snapshot.source_events.load_events(
                 source_operation.requirement_set
             )

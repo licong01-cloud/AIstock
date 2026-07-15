@@ -129,8 +129,6 @@ class Phase1EEvidenceBindingProjection(_StrictProjection):
             raise ValueError("manifest alpha component identities must be non-empty and unique")
         if self.alpha_mode == "single_alpha" and component_ids:
             raise ValueError("single Alpha evidence binding cannot carry parent-leg identities")
-        if self.admission_scope_id is None or self.admission_scope_hash is None:
-            raise ValueError("Phase 1G requires an admission scope id/hash")
         object.__setattr__(self, "manifest_alpha_component_ids", component_ids)
         payload = self.model_dump(mode="python", exclude={"evidence_binding_hash"})
         if canonical_json_sha256(payload) != self.evidence_binding_hash:
@@ -274,18 +272,29 @@ class Phase1EExecutionPlanProjection(_StrictProjection):
             or not self.execution_prohibited
         ):
             raise ValueError("Phase 1E projection requires the research-only execution-prohibited contract")
-        if (
-            self.plan_unit_kind is not Phase1EPlanUnitKind.ADMISSION_SCOPE
-            or self.scope_key is None
-            or self.target_key is not None
-        ):
-            raise ValueError("Phase 1G accepts only one Phase 1E admission-scope plan")
+        if self.plan_unit_kind is Phase1EPlanUnitKind.ADMISSION_SCOPE:
+            if (
+                self.scope_key is None
+                or self.target_key is not None
+                or self.evidence_binding.admission_scope_id is None
+                or self.evidence_binding.admission_scope_hash is None
+            ):
+                raise ValueError(
+                    "Phase 1G admission-scope projection requires one exact scope binding"
+                )
+        elif self.scope_key is not None or self.target_key is None:
+            raise ValueError(
+                "Phase 1G target-diagnostic projection requires one exact target key"
+            )
         operations = tuple(sorted(self.planned_operations, key=lambda item: item.operation_type.value))
         operation_types = tuple(item.operation_type for item in operations)
         if len(operation_types) != len(set(operation_types)):
             raise ValueError("Phase 1E projection operations must have unique types")
         object.__setattr__(self, "planned_operations", operations)
-        object.__setattr__(self, "scope_key", canonicalize(self.scope_key))
+        if self.scope_key is not None:
+            object.__setattr__(self, "scope_key", canonicalize(self.scope_key))
+        if self.target_key is not None:
+            object.__setattr__(self, "target_key", canonicalize(self.target_key))
         for field_name in (
             "workload_projection",
             "resource_budget_by_role",
@@ -314,5 +323,6 @@ class Phase1EExecutionPlanProjection(_StrictProjection):
 
     @property
     def decision_trade_date(self) -> date:
-        raw = self.scope_key.get("decision_trade_date") if self.scope_key else None
+        identity = self.scope_key if self.scope_key is not None else self.target_key
+        raw = identity.get("decision_trade_date") if identity else None
         return raw if isinstance(raw, date) else date.fromisoformat(str(raw))

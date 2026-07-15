@@ -29,11 +29,11 @@ Phase 1G result root。
 ~~~text
 design_tier = F2
 design_status = design_ready_after_defect_remediation_2026_07_15
-implementation_status = not_started
+implementation_status = implementation_complete_pending_user_merge_confirmation
 g3_dependency = merged_pr_2178_merge_commit_71d3486d
 ddl_pending = none
 dml_pending = none_for_design
-dev_validation = not_run_for_g4
+dev_validation = disposable_postgresql_only_no_dev_database_dml
 production_dml = not_executed
 runtime_activation = none
 role_or_approval_gate = none
@@ -214,6 +214,7 @@ batch_plan_hash
 target_outcomes[] sorted by target_request_hash
 succeeded_count/failed_count
 batch_status = SUCCESS | PARTIAL_FAILURE | FAILED
+reason_codes[]
 batch_attempt_receipt_ref/hash optional
 exit_class
 ~~~
@@ -312,11 +313,15 @@ plan命令严格只读：
 1. 加载并typed validate batch request。
 2. 解析exact target config并执行schema guard。
 3. 对target_request_hash稳定排序。
-4. 通过phase1g_phase1e_projection加载exact Phase1E plan，禁止import compiler/runtime。
+4. 通过phase1g_phase1e_projection加载exact Phase1E plan，禁止import compiler/runtime；projection必须同时完整
+   校验ADMISSION_SCOPE和TARGET_DIAGNOSTIC两类冻结plan，不能因诊断plan没有admission scope而在disposition
+   classifier前降级成generic input error。
 5. 在加载DSE/artifact或产生任何计划输出前分类Phase 1E plan/operation disposition：
    - TARGET_DIAGNOSTIC：返回ADVISORY_PHASE1G_TARGET_DIAGNOSTIC；
    - OBSERVATION_CAPTURE=DEFERRED：返回ADVISORY_PHASE1G_OPERATION_DEFERRED及冻结的capacity/source reasons；
-   - capacity INSUFFICIENT、scope超界或workload未覆盖：返回ADVISORY_PHASE1G_OPERATION_DEFERRED；
+   - capacity INSUFFICIENT、scope超界或workload未覆盖且Phase 1E已明确输出DEFERRED：返回
+     ADVISORY_PHASE1G_OPERATION_DEFERRED；Phase 1E按冻结资源值明确输出SEMANTIC_TEMPLATE的bounded staging
+     正向路径不得被G4用`capacity_workload_covered=false`重复阻断；
    - 只有ADMISSION_SCOPE、SOURCE_RESOLUTION=COMPLETE_REQUEST、
      OBSERVATION_CAPTURE=SEMANTIC_TEMPLATE且workload可执行时继续；
    - 其他组合返回ADVISORY_PHASE1G_PLAN_INVALID。
@@ -446,6 +451,13 @@ control binding event由无链首跑提交或从existing chain验证确定后，
 - capture_request_hash必须等于Phase1E expected final request hash（若plan声明）。
 - actual typed request的canonical payload/hash必须与pre-DML semantic preview完全一致。
 - 不增加、删除、默认或修改任何semantic field。
+
+`CapturePlan.evidence_bundle_hash`继续保持Phase 1E已冻结的Phase 0A handoff bundle hash，G4不得把它
+重解释为包含本次`control_binding_event_hash/capture_batch_id/fencing token`的trace hash。后者分别由
+`trace_content_hash`、`stage_evidence_bundle_hash`和最终`observation_content_hash`闭合。否则batch id由
+request hash派生、request hash又包含plan hash，会形成不可达的循环identity。G4在零DML preflight中
+exact校验capture plan字段与`Phase1E.evidence_binding.phase1_handoff_bundle_hash`一致，G3不再用运行期trace
+反向改写或重算该冻结字段。
 
 capture_batch_id不进入semantic request hash：
 
@@ -770,8 +782,15 @@ G4代码阶段限定为：
 
 ~~~text
 backend/services/advisory_phase1/phase1g_service.py                         # new
+backend/services/advisory_phase1/phase1g_artifact_ref.py                    # preserve exact diagnostic/deferred disposition after envelope validation
+backend/services/advisory_phase1/phase1g_phase1e_projection.py              # additive typed target-diagnostic projection
 backend/services/advisory_phase1/phase1g_transactional_writer.py           # additive public full readback
 backend/services/advisory_phase1/capture_foundation.py                     # additive exact request-chain readonly primitive
+backend/services/advisory_phase1/control_binding.py                         # additive exact readonly binding primitives
+backend/services/advisory_phase1/historical_trace_projection_postgres.py   # additive policy timeout inputs
+backend/services/advisory_phase1/trace_outbox.py                            # additive exact natural-key readonly primitive
+backend/services/advisory_phase1/observation_capture.py                     # align frozen handoff/trace hash ownership
+backend/services/advisory_phase1/observation_capture_postgres.py            # additive exact DB-row readback without synthetic semantic identity
 backend/services/advisory_phase1/phase1g_contract.py                       # only stable reason/typed helper additions if required
 backend/services/advisory_phase1/phase1g_result_store.py                   # additive batch-receipt reason/load mapping
 scripts/advisory_phase1g_capture_observations.py                            # new CLI
@@ -779,8 +798,14 @@ backend/tests/advisory_phase1/test_phase1g_service.py
 backend/tests/advisory_phase1/test_phase1g_service_postgres.py
 backend/tests/advisory_phase1/test_phase1g_cli.py
 backend/tests/advisory_phase1/test_phase1g_g4_import_boundary.py
+backend/tests/advisory_phase1/test_phase1g_artifact_ref.py
+backend/tests/advisory_phase1/test_phase1g_contract.py
+backend/tests/advisory_phase1/test_phase1g_g3_transactional_writer.py
+backend/tests/advisory_phase1/test_phase1g_result_store.py
+backend/tests/advisory_phase1/test_readiness_plan.py
 docs/architecture/advisory_phase1g_g4_service_cli_recovery_f2_design_20260715.md
 docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md
+docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md
 ~~~
 
 如果实现发现必须修改其他文件，应先证明父契约无法通过上述additive surface满足并更新设计范围；不得静默扩大到

@@ -236,7 +236,7 @@ def test_stable_result_attempt_and_batch_receipts_preserve_distinct_identities()
         finished_at=datetime(2026, 7, 15, 2, 1, tzinfo=UTC),
         operation_status=Phase1GAttemptStatus.SUCCESS,
         dml_executed=True,
-        committed_phases=("OBSERVATION", "CAPTURE_BATCH"),
+        committed_phases=("TARGET_EVIDENCE", "BATCH_CREATED"),
         capture_batch_id=result.capture_batch_id,
         capture_attempt_no=result.capture_attempt_no,
         capture_batch_status=result.capture_status,
@@ -253,7 +253,15 @@ def test_stable_result_attempt_and_batch_receipts_preserve_distinct_identities()
 
     assert first.capture_result_hash == second.capture_result_hash == result.capture_result_hash
     assert first.attempt_receipt_hash != second.attempt_receipt_hash
-    assert first.committed_phases == ("CAPTURE_BATCH", "OBSERVATION")
+    assert first.committed_phases == ("BATCH_CREATED", "TARGET_EVIDENCE")
+
+    with pytest.raises(ValidationError, match="unregistered phase"):
+        Phase1GAttemptReceipt.model_validate(
+            {
+                **first.model_dump(mode="python", exclude={"attempt_receipt_hash"}),
+                "committed_phases": ("SIMPLIFIED_WRITE",),
+            }
+        )
 
     batch = Phase1GBatchAttemptReceipt(
         batch_request_hash=h("2"),

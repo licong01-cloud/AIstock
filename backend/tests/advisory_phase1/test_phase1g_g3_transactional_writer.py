@@ -17,6 +17,7 @@ from backend.services.advisory_phase1.observation_capture import (
 from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GTargetCommitProjection,
     Phase1GTransactionalWriteRequest,
+    REASON_CAPTURE_TIMEOUT,
     REASON_G3_CAPACITY_EXCEEDED,
     REASON_G3_INPUT_INVALID,
 )
@@ -181,6 +182,19 @@ def test_transactional_request_and_projection_revalidate_hashes() -> None:
     tampered["candidate_count"] = 1
     with pytest.raises(ValueError, match="target_commit_projection_hash"):
         Phase1GTargetCommitProjection.model_validate(tampered)
+
+
+@pytest.mark.parametrize("pgcode", ("57014", "55P03"))
+def test_writer_maps_postgres_statement_and_lock_timeout_to_capture_timeout(
+    pgcode: str,
+) -> None:
+    error = RuntimeError("database timeout")
+    error.pgcode = pgcode  # type: ignore[attr-defined]
+
+    mapped = Phase1GTransactionalWriter._map_error(error)
+
+    assert mapped.reason_code == REASON_CAPTURE_TIMEOUT
+    assert mapped.context["exception_type"] == "RuntimeError"
 
 
 def test_writer_input_closure_accepts_only_complete_typed_identity_graph() -> None:

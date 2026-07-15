@@ -626,7 +626,15 @@ def _stages_from_draft(draft: Phase1GObservationSemanticDraft) -> list[dict[str,
 
 
 def expected_evidence_bundle_hash(*, plan: CapturePlan, trace_content_hash: str) -> str:
-    """Hash only explicit immutable evidence referenced by a captured version."""
+    """Build the legacy combined-evidence digest used by pre-Phase 1E callers.
+
+    Phase 1E freezes ``CapturePlan.evidence_bundle_hash`` as the authoritative
+    Phase 0A handoff bundle hash before a G4 batch identity exists.  New G4
+    observation identity closes the trace independently through
+    ``trace_content_hash`` and ``stage_evidence_bundle_hash``.  Keeping this
+    helper preserves old artifact readers without reinterpreting the frozen
+    Phase 1E field during observation capture.
+    """
 
     return canonical_json_sha256(
         {
@@ -673,16 +681,6 @@ def _validate_plan_trace(
         raise SourceLedgerError(
             REASON_OBSERVATION_PLAN_MISMATCH,
             "frozen capture plan does not match trace identity",
-        )
-    if (
-        expected_evidence_bundle_hash(
-            plan=plan, trace_content_hash=envelope.trace_content_hash
-        )
-        != plan.evidence_bundle_hash
-    ):
-        raise SourceLedgerError(
-            REASON_OBSERVATION_PLAN_MISMATCH,
-            "capture plan evidence bundle does not match immutable trace",
         )
 
 

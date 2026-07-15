@@ -509,6 +509,23 @@ class PostgresTraceOutboxRepository:
         return _record_from_row(dict(row))
 
     @staticmethod
+    def read_exact_by_natural_key_readonly(
+        cur: Any, natural_key: tuple[str, str, str, str, str, str]
+    ) -> TraceOutboxRecord | None:
+        cur.execute(
+            f"""
+            SELECT {_TRACE_OUTBOX_COLUMNS}
+            FROM app.advisory_selection_stage_trace_outbox
+            WHERE selection_run_id = %s AND package_id = %s AND manifest_sha256 = %s
+              AND decision_as_of_trade_date = %s AND capture_policy_hash = %s
+              AND admission_scope_hash = %s
+            """,
+            natural_key,
+        )
+        row = cur.fetchone()
+        return _record_from_row(dict(row)) if row is not None else None
+
+    @staticmethod
     def append_in_transaction(
         cur: Any,
         *,

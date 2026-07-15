@@ -286,6 +286,26 @@ class PostgresControlBindingRepository:
         return _event_from_row(dict(row))
 
     @staticmethod
+    def current_readonly(cur: Any, binding_chain_key: str) -> ControlBindingEvent:
+        cur.execute(
+            f"""
+            SELECT {_CONTROL_BINDING_COLUMNS}
+            FROM app.advisory_phase1_control_binding_event
+            WHERE binding_chain_key = %s
+            ORDER BY binding_event_revision_no DESC
+            LIMIT 1
+            """,
+            (binding_chain_key,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise SourceLedgerError(
+                REASON_CONTROL_BINDING_UNAVAILABLE,
+                "control binding chain is not configured",
+            )
+        return _event_from_row(dict(row))
+
+    @staticmethod
     def read_exact_in_transaction(
         cur: Any, binding_event_hash: str
     ) -> ControlBindingEvent:
@@ -295,6 +315,24 @@ class PostgresControlBindingRepository:
             FROM app.advisory_phase1_control_binding_event
             WHERE binding_event_hash = %s
             FOR KEY SHARE
+            """,
+            (binding_event_hash,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise SourceLedgerError(
+                REASON_CONTROL_BINDING_UNAVAILABLE,
+                "control binding event does not exist",
+            )
+        return _event_from_row(dict(row))
+
+    @staticmethod
+    def read_exact_readonly(cur: Any, binding_event_hash: str) -> ControlBindingEvent:
+        cur.execute(
+            f"""
+            SELECT {_CONTROL_BINDING_COLUMNS}
+            FROM app.advisory_phase1_control_binding_event
+            WHERE binding_event_hash = %s
             """,
             (binding_event_hash,),
         )

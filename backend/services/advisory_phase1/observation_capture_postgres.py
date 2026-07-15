@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping
 
@@ -82,6 +83,19 @@ score_decimal, input_rank, input_score_decimal, exclusion_reason_code,
 component_capability, component_evidence_schema_version, component_evidence_json,
 component_evidence_hash, component_reason_codes, candidate_content_hash
 """
+
+
+@dataclass(frozen=True)
+class Phase1GObservationDatabaseReadback:
+    """Exact persisted observation rows without a non-persisted semantic key."""
+
+    canonical_signal_header: dict[str, Any]
+    observation_version: dict[str, Any]
+    lineage_identity: dict[str, Any]
+    lineage_payload: dict[str, Any]
+    stage_evidence_rows: tuple[dict[str, Any], ...]
+    candidate_identity_rows: tuple[dict[str, Any], ...]
+    candidate_payload_rows: tuple[dict[str, Any], ...]
 
 
 class PostgresObservationCaptureRepository:
@@ -424,6 +438,30 @@ class PostgresObservationCaptureRepository:
             observation_version_id=observation_version_id,
             semantic_observation_key=semantic_observation_key,
             lock=False,
+        )
+
+    @classmethod
+    def read_observation_rows_exact_readonly(
+        cls, cur: Any, *, observation_version_id: str
+    ) -> Phase1GObservationDatabaseReadback:
+        # semantic_observation_key is intentionally not persisted.  The existing
+        # full-row reader does not use it in SQL; a private valid hash lets us
+        # reuse that single query implementation without exposing a fabricated
+        # semantic identity in the public readback contract.
+        bundle = cls.read_observation_bundle_exact_in_transaction(
+            cur,
+            observation_version_id=observation_version_id,
+            semantic_observation_key="0" * 64,
+            lock=False,
+        )
+        return Phase1GObservationDatabaseReadback(
+            canonical_signal_header=bundle.canonical_signal_header,
+            observation_version=bundle.observation_version,
+            lineage_identity=bundle.lineage_identity,
+            lineage_payload=bundle.lineage_payload,
+            stage_evidence_rows=bundle.stage_evidence_rows,
+            candidate_identity_rows=bundle.candidate_identity_rows,
+            candidate_payload_rows=bundle.candidate_payload_rows,
         )
 
     @staticmethod

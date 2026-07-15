@@ -149,14 +149,19 @@ class Phase1GImmutableArtifactResolver:
             plan = Phase1EExecutionPlanProjection.model_validate(raw_payload)
         except ValueError as exc:
             raise Phase1GArtifactRefError("Phase 1E execution plan contract is invalid") from exc
-        if plan.plan_unit_kind is not Phase1EPlanUnitKind.ADMISSION_SCOPE:
-            raise Phase1GArtifactRefError("Phase 1G only accepts Phase 1E ADMISSION_SCOPE plans")
         if plan.plan_hash != ref.semantic_content_hash or document.get("identity") != plan.plan_hash:
             raise Phase1GArtifactRefError("Phase 1E execution plan hash does not match its envelope")
-        try:
-            _phase1e_semantic_closure(plan=plan, expected_store_policy_hash=ref.store_policy_hash)
-        except ValueError as exc:
-            raise Phase1GArtifactRefError("Phase 1E plan semantic closure is invalid") from exc
+        if plan.plan_unit_kind is Phase1EPlanUnitKind.ADMISSION_SCOPE:
+            try:
+                _phase1e_semantic_closure(
+                    plan=plan,
+                    expected_store_policy_hash=ref.store_policy_hash,
+                    allow_deferred_observation=True,
+                )
+            except ValueError as exc:
+                raise Phase1GArtifactRefError(
+                    "Phase 1E plan semantic closure is invalid"
+                ) from exc
         return plan
 
 
@@ -218,6 +223,7 @@ def _phase1e_semantic_closure(
     *,
     plan: Phase1EExecutionPlanProjection,
     expected_store_policy_hash: str,
+    allow_deferred_observation: bool = False,
 ) -> _Phase1ESemanticClosure:
     operations = {item.operation_type: item for item in plan.planned_operations}
     source = operations.get(Phase1EPlannedOperationType.SOURCE_RESOLUTION)
@@ -227,7 +233,15 @@ def _phase1e_semantic_closure(
         or source.operation_disposition is not Phase1EOperationDisposition.COMPLETE_REQUEST
         or source.complete_request_hash is None
         or observation is None
-        or observation.operation_disposition is not Phase1EOperationDisposition.SEMANTIC_TEMPLATE
+        or observation.operation_disposition
+        not in (
+            {Phase1EOperationDisposition.SEMANTIC_TEMPLATE}
+            | (
+                {Phase1EOperationDisposition.DEFERRED}
+                if allow_deferred_observation
+                else set()
+            )
+        )
         or observation.request_template_hash is None
     ):
         raise ValueError("required Phase 1E operations are absent or not executable")
