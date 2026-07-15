@@ -8,11 +8,8 @@ never imports LocalSim or the in-process minute execution engine.
 
 from __future__ import annotations
 
-import json
 import threading
-from copy import deepcopy
-from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Callable
 from uuid import uuid4
@@ -25,10 +22,9 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
-    BrokerRejectedError,
     BrokerSubmitError,
 )
-from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot
+from backend.services.trading_core.models import OrderIntent, PositionLot
 
 from .base import (
     BackendId,
@@ -97,14 +93,6 @@ class _OrderRecord:
         self.status = status
 
 
-@dataclass(frozen=True)
-class _OrderAttribution:
-    strategy_name: str
-    order_remark: str
-    account_group_id: str | None = None
-    strategy_slot_id: str | None = None
-
-
 class MiniQMTSimBackend(BrokerBackend):
     """BrokerBackend implementation for one MiniQMT simulation account.
 
@@ -153,8 +141,6 @@ class MiniQMTSimBackend(BrokerBackend):
         self._lock = threading.RLock()
         self._closed = False
         self._connected = False
-        self._disconnect_freeze: dict[str, Any] | None = None
-        self._last_disconnect_recovery: dict[str, Any] | None = None
         if auto_connect:
             self.ensure_connected()
 
@@ -230,166 +216,30 @@ class MiniQMTSimBackend(BrokerBackend):
             ) from exc
 
     def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
-        attribution = self._ensure_ready_for_order(intent)
-        with self._lock:
-            if intent.intent_id in self._intent_index:
-                raise BrokerSubmitError(
-                    "OrderIntent already submitted to this MiniQMTSim instance",
-                    context={"intent_id": intent.intent_id, "backend_id": self.backend_id},
-                )
-            native_order_type = _native_order_type(intent.side)
-            native_price_type, native_price = _native_price(intent)
-            strategy_name = attribution.strategy_name
-            order_remark = attribution.order_remark
-            submitted_at = datetime.now(UTC)
-            _enforce_submit_deadline(intent, submitted_at)
-            try:
-                order_id, message = self._qmt_client.place_order(
-                    stock_code=intent.symbol,
-                    order_type=native_order_type,
-                    order_volume=int(intent.quantity),
-                    price_type=native_price_type,
-                    price=native_price,
-                    strategy_name=strategy_name,
-                    order_remark=order_remark,
-                )
-                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
-            except QMTNotAvailableError as exc:
-                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
-                native_probe = _probe_native_order_after_submit_error(
-                    qmt_client=self._qmt_client,
-                    miniqmt_order_id=None,
-                    order_remark=order_remark,
-                )
-                freeze = self._freeze_disconnect(
-                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
-                    stage="ORDER_SUBMIT",
-                    message="MiniQMT broker disconnected during order submit; new submits are frozen until reconnect reconcile succeeds",
-                    context={
-                        "intent_id": intent.intent_id,
-                        "symbol": intent.symbol,
-                        "strategy_name": strategy_name,
-                        "order_remark": order_remark,
-                        "reason": str(exc),
-                        "native_reconcile": native_probe,
-                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
-                    },
-                )
-                raise BrokerConnectivityError(
-                    "MiniQMT order submit failed because client is unavailable",
-                    context={
-                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
-                        "intent_id": intent.intent_id,
-                        "portfolio_id": self._portfolio_id,
-                        "package_id": self._package_id,
-                        "symbol": intent.symbol,
-                        "strategy_name": strategy_name,
-                        "order_remark": order_remark,
-                        "reason": str(exc),
-                        "native_reconcile": native_probe,
-                        "disconnect_freeze": freeze,
-                        "alert": _disconnect_freeze_alert(freeze),
-                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
-                    },
-                ) from exc
-            except Exception as exc:
-                raise BrokerSubmitError(
-                    "MiniQMT order submit call failed",
-                    context={
-                        "intent_id": intent.intent_id,
-                        "portfolio_id": self._portfolio_id,
-                        "package_id": self._package_id,
-                        "symbol": intent.symbol,
-                        "reason": f"{type(exc).__name__}: {exc}",
-                    },
-                ) from exc
-            if int(order_id or -1) <= 0:
-                status = self._rejected_status(
-                    handle_id=f"mqh_{uuid4().hex}",
-                    reason=str(message or "MiniQMT rejected the order"),
-                    event_at=submitted_at,
-                    diagnostic=submit_diagnostic,
-                )
-                handle = OrderHandle(
-                    handle_id=status.handle_id,
-                    backend_id=self.backend_id,
-                    submitted_at=submitted_at,
-                    intent_id=intent.intent_id,
-                )
-                self._records[handle.handle_id] = _OrderRecord(
-                    handle=handle,
-                    intent=intent,
-                    miniqmt_order_id=str(order_id),
-                    strategy_name=strategy_name,
-                    order_remark=order_remark,
-                    status=status,
-                )
-                self._intent_index[intent.intent_id] = handle.handle_id
-                raise BrokerRejectedError(
-                    "MiniQMT rejected the order",
-                    context={
-                        "intent_id": intent.intent_id,
-                        "handle_id": handle.handle_id,
-                        "miniqmt_order_id": str(order_id),
-                        "message": str(message or ""),
-                        "symbol": intent.symbol,
-                        "side": intent.side.value,
-                        "quantity": intent.quantity,
-                    },
-                )
-
-            handle = OrderHandle(
-                handle_id=f"mqh_{uuid4().hex}",
-                backend_id=self.backend_id,
-                submitted_at=submitted_at,
-                intent_id=intent.intent_id,
-            )
-            status = OrderHandleStatus(
-                handle_id=handle.handle_id,
-                state="pending",
-                filled_quantity=0,
-                avg_fill_price=None,
-                last_event_at=submitted_at,
-                rejection_reason=None,
-                raw_status="submitted",
-                status_msg=None,
-                raw={
-                    "miniqmt_order_id": str(order_id),
-                    "message": str(message or ""),
-                    **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
-                },
-            )
-            self._records[handle.handle_id] = _OrderRecord(
-                handle=handle,
-                intent=intent,
-                miniqmt_order_id=str(order_id),
-                strategy_name=strategy_name,
-                order_remark=order_remark,
-                status=status,
-            )
-            self._intent_index[intent.intent_id] = handle.handle_id
-            return handle
+        raise BrokerSubmitError(
+            "MiniQMTSimBackend broker writes are retired; use MiniQMTExecutionRuntime",
+            context={
+                "reason_code": "MINIQMT_PAPER_BROKER_SIDE_EFFECT_RETIRED",
+                "intent_id": intent.intent_id,
+                "backend_id": self.backend_id,
+                "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
+                "broker_called": False,
+                "legacy_fallback": False,
+            },
+        )
 
     def cancel(self, handle: OrderHandle) -> CancelAck:
-        self._ensure_alive()
-        record = self._record_for(handle)
-        try:
-            accepted, reason = self._qmt_client.cancel_order(record.miniqmt_order_id)
-        except QMTNotAvailableError as exc:
-            raise BrokerConnectivityError(
-                "MiniQMT cancel failed because client is unavailable",
-                context={"handle_id": handle.handle_id, "miniqmt_order_id": record.miniqmt_order_id},
-            ) from exc
-        except Exception as exc:
-            raise BrokerSubmitError(
-                "MiniQMT cancel call failed",
-                context={
-                    "handle_id": handle.handle_id,
-                    "miniqmt_order_id": record.miniqmt_order_id,
-                    "reason": f"{type(exc).__name__}: {exc}",
-                },
-            ) from exc
-        return CancelAck(handle_id=handle.handle_id, accepted=bool(accepted), reason=str(reason or ""))
+        raise BrokerSubmitError(
+            "MiniQMTSimBackend broker writes are retired; cancel through MiniQMTExecutionRuntime",
+            context={
+                "reason_code": "MINIQMT_PAPER_BROKER_SIDE_EFFECT_RETIRED",
+                "handle_id": handle.handle_id,
+                "backend_id": self.backend_id,
+                "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
+                "broker_called": False,
+                "legacy_fallback": False,
+            },
+        )
 
     def query_status(self, handle: OrderHandle) -> OrderHandleStatus:
         self._ensure_alive()
@@ -523,24 +373,6 @@ class MiniQMTSimBackend(BrokerBackend):
             ),
         )
         return self._find_qmt_trades(record)
-
-    def disconnect_freeze_status(self) -> dict[str, Any]:
-        """Return MiniQMT disconnect freeze telemetry for monitors/API layers."""
-
-        with self._lock:
-            freeze = deepcopy(self._disconnect_freeze)
-            recovery = deepcopy(self._last_disconnect_recovery)
-        return {
-            "schema_version": "miniqmt_disconnect_freeze_status_v1",
-            "backend_id": self.backend_id,
-            "portfolio_id": self._portfolio_id,
-            "package_id": self._package_id,
-            "account_group_id": self._account_group_id,
-            "strategy_slot_id": self._strategy_slot_id,
-            "frozen": freeze is not None,
-            "freeze": freeze,
-            "last_recovery": recovery,
-        }
 
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._ensure_alive()
@@ -710,250 +542,6 @@ class MiniQMTSimBackend(BrokerBackend):
                 context={"backend_id": self.backend_id, "portfolio_id": self._portfolio_id},
             )
 
-    def _ensure_ready_for_order(self, intent: OrderIntent) -> _OrderAttribution:
-        self._ensure_alive()
-        self._ensure_disconnect_freeze_recovered_or_raise(intent=intent)
-        if not self._connected:
-            try:
-                self.ensure_connected()
-            except BrokerConnectivityError as exc:
-                freeze = self._freeze_disconnect(
-                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
-                    stage="SUBMIT_PREFLIGHT_CONNECT",
-                    message="MiniQMT broker disconnected before order submit; new submits are frozen until reconnect reconcile succeeds",
-                    context={
-                        "intent_id": intent.intent_id,
-                        "symbol": intent.symbol,
-                        "reason": str(exc),
-                        "broker_error": exc.to_dict() if hasattr(exc, "to_dict") else None,
-                    },
-                )
-                raise BrokerConnectivityError(
-                    "MiniQMT broker submit is frozen because pre-submit connection probe failed",
-                    context={
-                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
-                        "backend_id": self.backend_id,
-                        "portfolio_id": self._portfolio_id,
-                        "package_id": self._package_id,
-                        "intent_id": intent.intent_id,
-                        "disconnect_freeze": freeze,
-                        "alert": _disconnect_freeze_alert(freeze),
-                    },
-                ) from exc
-        if not self._is_legacy_account_mode:
-            return self._account_group_attribution(intent)
-        _reject_legacy_product_order_intent(intent, portfolio_id=self._portfolio_id, package_id=self._package_id)
-        if intent.portfolio_id != self._portfolio_id:
-            raise BrokerSubmitError(
-                "OrderIntent.portfolio_id does not match MiniQMTSim binding",
-                context={
-                    "intent_id": intent.intent_id,
-                    "intent_portfolio_id": intent.portfolio_id,
-                    "backend_portfolio_id": self._portfolio_id,
-                },
-            )
-        if intent.package_id != self._package_id:
-            raise BrokerSubmitError(
-                "OrderIntent.package_id does not match MiniQMTSim binding",
-                context={
-                    "intent_id": intent.intent_id,
-                    "intent_package_id": intent.package_id,
-                    "backend_package_id": self._package_id,
-                },
-            )
-        return _OrderAttribution(
-            strategy_name=_safe_strategy_name(self._strategy_slot_id or self._portfolio_id),
-            order_remark=_order_remark(
-                portfolio_id=self._portfolio_id,
-                package_id=self._package_id,
-                intent_id=intent.intent_id,
-            ),
-        )
-
-    def _account_group_attribution(self, intent: OrderIntent) -> _OrderAttribution:
-        metadata = intent.metadata or {}
-        account_group_id = _required_metadata_text(metadata, "account_group_id")
-        strategy_slot_id = _required_metadata_text(metadata, "strategy_slot_id")
-        strategy_name = _required_metadata_text(metadata, "strategy_name")
-        order_remark = _required_metadata_text(metadata, "order_remark")
-        _enforce_runtime_owned_account_group_intent(intent)
-        if self._account_group_id is not None and account_group_id != self._account_group_id:
-            raise BrokerSubmitError(
-                "OrderIntent.account_group_id does not match MiniQMTSim account group",
-                context={
-                    "intent_id": intent.intent_id,
-                    "intent_account_group_id": account_group_id,
-                    "backend_account_group_id": self._account_group_id,
-                },
-            )
-        if self._strategy_slot_id is not None and strategy_slot_id != self._strategy_slot_id:
-            raise BrokerSubmitError(
-                "OrderIntent.strategy_slot_id does not match MiniQMTSim strategy slot",
-                context={
-                    "intent_id": intent.intent_id,
-                    "intent_strategy_slot_id": strategy_slot_id,
-                    "backend_strategy_slot_id": self._strategy_slot_id,
-                },
-            )
-        order_remark_prefix = str(metadata.get("order_remark_prefix") or "").strip()
-        if order_remark_prefix and not order_remark.startswith(order_remark_prefix):
-            raise BrokerSubmitError(
-                "OrderIntent.order_remark does not match MiniQMT strategy slot prefix",
-                context={
-                    "intent_id": intent.intent_id,
-                    "strategy_slot_id": strategy_slot_id,
-                    "order_remark_prefix": order_remark_prefix,
-                    "order_remark": order_remark,
-                },
-            )
-        return _OrderAttribution(
-            strategy_name=_safe_strategy_name(strategy_name),
-            order_remark=order_remark,
-            account_group_id=account_group_id,
-            strategy_slot_id=strategy_slot_id,
-        )
-
-    def _ensure_disconnect_freeze_recovered_or_raise(self, *, intent: OrderIntent | None = None) -> None:
-        with self._lock:
-            freeze = deepcopy(self._disconnect_freeze)
-        if freeze is None:
-            return
-        recovery = self._attempt_disconnect_recovery(trigger="submit_preflight", intent=intent)
-        if recovery.get("recovered") is True:
-            return
-        active_freeze = self.disconnect_freeze_status()["freeze"] or freeze
-        raise BrokerConnectivityError(
-            "MiniQMT broker submit is frozen after disconnect until reconnect reconcile succeeds",
-            context={
-                "reason_code": str(recovery.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
-                "backend_id": self.backend_id,
-                "portfolio_id": self._portfolio_id,
-                "package_id": self._package_id,
-                "account_group_id": self._account_group_id,
-                "strategy_slot_id": self._strategy_slot_id,
-                "intent_id": intent.intent_id if intent is not None else None,
-                "disconnect_freeze": active_freeze,
-                "recovery": recovery,
-                "alert": _disconnect_freeze_alert(active_freeze),
-                "next_action": (
-                    "restore MiniQMT connectivity, then rerun submit; the adapter will query broker "
-                    "orders and trades before clearing the freeze"
-                ),
-            },
-        )
-
-    def _freeze_disconnect(
-        self,
-        *,
-        reason_code: str,
-        stage: str,
-        message: str,
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        freeze = {
-            "schema_version": "miniqmt_disconnect_freeze_v1",
-            "reason_code": reason_code,
-            "stage": stage,
-            "message": message,
-            "backend_id": self.backend_id,
-            "portfolio_id": self._portfolio_id,
-            "package_id": self._package_id,
-            "account_group_id": self._account_group_id,
-            "strategy_slot_id": self._strategy_slot_id,
-            "observed_at": datetime.now(UTC).isoformat(),
-            "context": deepcopy(context),
-            "recovered": False,
-        }
-        with self._lock:
-            self._connected = False
-            self._disconnect_freeze = freeze
-        return deepcopy(freeze)
-
-    def _attempt_disconnect_recovery(self, *, trigger: str, intent: OrderIntent | None = None) -> dict[str, Any]:
-        attempted_at = datetime.now(UTC).isoformat()
-        try:
-            status = self._qmt_client.status()
-            status_payload = _status_to_dict(status)
-            if not bool(getattr(status, "connected", False)):
-                connector = getattr(self._qmt_client, "connect", None)
-                connect_payload: dict[str, Any] | None = None
-                if callable(connector):
-                    ok, message = connector()
-                    connect_payload = {"ok": bool(ok), "message": str(message or "")}
-                    status = self._qmt_client.status()
-                    status_payload = _status_to_dict(status)
-                if not bool(getattr(status, "connected", False)):
-                    return self._record_disconnect_recovery(
-                        {
-                            "schema_version": "miniqmt_disconnect_recovery_v1",
-                            "recovered": False,
-                            "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
-                            "stage": "BROKER_STILL_DISCONNECTED",
-                            "trigger": trigger,
-                            "intent_id": intent.intent_id if intent is not None else None,
-                            "attempted_at": attempted_at,
-                            "status": status_payload,
-                            "connect_attempt": connect_payload,
-                            "next_action": "restart or reconnect MiniQMT before retrying submit",
-                        }
-                    )
-            mode = str(getattr(status, "mode", "") or "").upper()
-            if mode != "SIM":
-                return self._record_disconnect_recovery(
-                    {
-                        "schema_version": "miniqmt_disconnect_recovery_v1",
-                        "recovered": False,
-                        "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
-                        "stage": "BROKER_MODE_INVALID",
-                        "trigger": trigger,
-                        "intent_id": intent.intent_id if intent is not None else None,
-                        "attempted_at": attempted_at,
-                        "status": status_payload,
-                        "mode": mode,
-                    }
-                )
-            orders = self._qmt_client.get_orders(cancelable_only=False) or []
-            trades = self._qmt_client.get_trades() or []
-        except Exception as exc:  # noqa: BLE001 - recovery failure is returned loudly to the caller.
-            return self._record_disconnect_recovery(
-                {
-                    "schema_version": "miniqmt_disconnect_recovery_v1",
-                    "recovered": False,
-                    "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
-                    "stage": "RECONNECT_RECONCILE_FAILED",
-                    "trigger": trigger,
-                    "intent_id": intent.intent_id if intent is not None else None,
-                    "attempted_at": attempted_at,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                    "next_action": "fix broker order/trade query connectivity before retrying submit",
-                }
-            )
-        recovery = {
-            "schema_version": "miniqmt_disconnect_recovery_v1",
-            "recovered": True,
-            "reason_code": _RECONNECTED_RECONCILED_REASON_CODE,
-            "stage": "RECONNECTED_RECONCILED",
-            "trigger": trigger,
-            "intent_id": intent.intent_id if intent is not None else None,
-            "attempted_at": attempted_at,
-            "status": status_payload,
-            "orders_snapshot_count": len(orders),
-            "trades_snapshot_count": len(trades),
-            "cleared_at": datetime.now(UTC).isoformat(),
-        }
-        with self._lock:
-            self._connected = True
-            self._disconnect_freeze = None
-            self._last_disconnect_recovery = recovery
-        return deepcopy(recovery)
-
-    def _record_disconnect_recovery(self, recovery: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            self._connected = False
-            self._last_disconnect_recovery = deepcopy(recovery)
-        return deepcopy(recovery)
-
     def _record_for(self, handle: OrderHandle) -> _OrderRecord:
         if handle.backend_id != self.backend_id:
             raise BrokerSubmitError(
@@ -1045,118 +633,11 @@ class MiniQMTSimBackend(BrokerBackend):
             raw=dict(raw),
         )
 
-    @staticmethod
-    def _rejected_status(
-        *, handle_id: str, reason: str, event_at: datetime, diagnostic: dict[str, Any] | None = None
-    ) -> OrderHandleStatus:
-        raw: dict[str, object] = {"message": reason}
-        if diagnostic:
-            raw["submit_diagnostic"] = diagnostic
-            raw["raw_return_code"] = diagnostic.get("raw_return_code")
-            raw["diagnostic_gap"] = True
-            raw["diagnostic_gap_reason"] = diagnostic.get("classification") or "miniqmt_submit_rejected"
-        return OrderHandleStatus(
-            handle_id=handle_id,
-            state="rejected",
-            filled_quantity=0,
-            avg_fill_price=None,
-            last_event_at=event_at,
-            rejection_reason=reason,
-            raw_status="submit_rejected",
-            status_msg=reason,
-            raw=raw,
-        )
-
     def _safe_status(self) -> Any | None:
         try:
             return self._qmt_client.status()
         except Exception as exc:  # noqa: BLE001
             return {"status_error": f"{type(exc).__name__}: {exc}"}
-
-
-def _native_order_type(side: OrderSide) -> int:
-    if side == OrderSide.BUY:
-        return _STOCK_BUY
-    if side == OrderSide.SELL:
-        return _STOCK_SELL
-    raise BrokerSubmitError("unsupported order side for MiniQMT", context={"side": str(side)})
-
-
-def _native_price(intent: OrderIntent) -> tuple[int, float]:
-    if intent.order_type == OrderType.MARKET:
-        return _LATEST_PRICE, 0.0
-    if intent.order_type == OrderType.LIMIT:
-        if intent.limit_price is None:
-            raise BrokerSubmitError("limit order requires limit_price", context={"intent_id": intent.intent_id})
-        return _FIX_PRICE, float(intent.limit_price)
-    raise BrokerSubmitError(
-        "unsupported order type for MiniQMT",
-        context={"intent_id": intent.intent_id, "order_type": str(intent.order_type)},
-    )
-
-
-def _safe_last_order_diagnostic(qmt_client: Any) -> dict[str, Any] | None:
-    getter = getattr(qmt_client, "get_last_order_diagnostic", None)
-    if not callable(getter):
-        return None
-    try:
-        diagnostic = getter()
-    except Exception:  # noqa: BLE001
-        return None
-    return dict(diagnostic) if isinstance(diagnostic, dict) else None
-
-
-def _probe_native_order_after_submit_error(
-    *,
-    qmt_client: Any,
-    miniqmt_order_id: str | None,
-    order_remark: str,
-) -> dict[str, Any]:
-    probe: dict[str, Any] = {
-        "schema_version": "miniqmt_submit_error_native_probe_v1",
-        "matched": False,
-        "match_key": None,
-        "order_remark": order_remark,
-        "miniqmt_order_id": miniqmt_order_id,
-        "orders_query_ok": False,
-        "trades_query_ok": False,
-        "matched_order": None,
-        "matched_trades": [],
-        "query_errors": [],
-    }
-    try:
-        orders = qmt_client.get_orders(cancelable_only=False) or []
-        probe["orders_query_ok"] = True
-        for order in orders:
-            if miniqmt_order_id is not None and str(order.get("order_id") or "") == str(miniqmt_order_id):
-                probe["matched"] = True
-                probe["match_key"] = "order_id"
-                probe["matched_order"] = dict(order)
-                break
-            if str(order.get("order_remark") or "") == str(order_remark):
-                probe["matched"] = True
-                probe["match_key"] = "order_remark"
-                probe["matched_order"] = dict(order)
-                break
-    except Exception as exc:  # noqa: BLE001 - diagnostic probe must not hide the original submit error.
-        probe["query_errors"].append({"source": "orders", "reason": f"{type(exc).__name__}: {exc}"})
-    try:
-        trades = qmt_client.get_trades() or []
-        probe["trades_query_ok"] = True
-        matched_trades = []
-        for trade in trades:
-            if miniqmt_order_id is not None and str(trade.get("order_id") or "") == str(miniqmt_order_id):
-                matched_trades.append(dict(trade))
-                continue
-            if str(trade.get("order_remark") or "") == str(order_remark):
-                matched_trades.append(dict(trade))
-        probe["matched_trades"] = matched_trades
-        if matched_trades and not probe["matched"]:
-            probe["matched"] = True
-            probe["match_key"] = "trade_order_remark"
-    except Exception as exc:  # noqa: BLE001
-        probe["query_errors"].append({"source": "trades", "reason": f"{type(exc).__name__}: {exc}"})
-    return probe
 
 
 def _safe_strategy_name(value: str) -> str:
@@ -1173,122 +654,6 @@ def _normalize_account_mode(value: str | None) -> str:
     return raw
 
 
-def _required_metadata_text(metadata: dict[str, Any], key: str) -> str:
-    value = str(metadata.get(key) or "").strip()
-    if value:
-        return value
-    raise BrokerSubmitError(
-        "MiniQMTSim account-group order intent is missing required slot attribution",
-        context={"missing_metadata_key": key, "required_metadata_keys": ["account_group_id", "strategy_slot_id", "strategy_name", "order_remark"]},
-    )
-
-
-def _enforce_runtime_owned_account_group_intent(intent: OrderIntent) -> None:
-    """Keep account-group MiniQMT orders behind the canonical runtime boundary."""
-
-    metadata = intent.metadata or {}
-    owner = str(metadata.get("runtime_owner") or "").strip()
-    runtime_id = str(metadata.get("runtime_id") or "").strip()
-    algo_instance_id = str(
-        metadata.get("runtime_algo_instance_id")
-        or metadata.get("algo_instance_id")
-        or ""
-    ).strip()
-    child_order_id = str(
-        metadata.get("runtime_child_order_id")
-        or metadata.get("child_order_id")
-        or ""
-    ).strip()
-    missing = [
-        key
-        for key, value in {
-            "runtime_id": runtime_id,
-            "runtime_algo_instance_id": algo_instance_id,
-            "runtime_child_order_id": child_order_id,
-        }.items()
-        if not value
-    ]
-    if owner == _CANONICAL_RUNTIME_OWNER and not missing:
-        return
-    raise BrokerSubmitError(
-        "MiniQMTSim account-group order intent must be emitted by MiniQMTExecutionRuntime",
-        context={
-            "intent_id": intent.intent_id,
-            "runtime_owner": owner,
-            "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
-            "missing_runtime_metadata_keys": missing,
-            "required_runtime_metadata_keys": [
-                "runtime_owner",
-                "runtime_id",
-                "runtime_algo_instance_id",
-                "runtime_child_order_id",
-            ],
-        },
-    )
-
-
-def _reject_legacy_product_order_intent(intent: OrderIntent, *, portfolio_id: str, package_id: str) -> None:
-    metadata = intent.metadata or {}
-    if metadata.get("legacy_minqmt_diagnostic_order") is True:
-        return
-    raise BrokerSubmitError(
-        "MiniQMTSim exclusive_account order submission is not a canonical Paper v2 MiniQMT product path",
-        context={
-            "intent_id": intent.intent_id,
-            "intent_portfolio_id": intent.portfolio_id,
-            "backend_portfolio_id": portfolio_id,
-            "intent_package_id": intent.package_id,
-            "backend_package_id": package_id,
-            "account_mode": _EXCLUSIVE_ACCOUNT,
-            "required_account_mode": _ACCOUNT_GROUP_SLOTS,
-            "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
-            "error_code": "EXECUTION_PATH_NOT_CANONICAL",
-        },
-    )
-
-
-def _order_remark(*, portfolio_id: str, package_id: str, intent_id: str) -> str:
-    payload = {"portfolio_id": portfolio_id, "package_id": package_id, "intent_id": intent_id}
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if len(raw) <= 240:
-        return raw
-    return f"aistock:{portfolio_id[:32]}:{package_id[:32]}:{intent_id[:48]}"
-
-
-def _enforce_submit_deadline(intent: OrderIntent, submit_started_at: datetime) -> None:
-    raw_scheduled = intent.metadata.get("scheduled_submit_at")
-    if raw_scheduled in (None, ""):
-        return
-    try:
-        scheduled = datetime.fromisoformat(str(raw_scheduled).replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise BrokerSubmitError(
-            "scheduled_submit_at must be an ISO datetime",
-            context={"intent_id": intent.intent_id, "scheduled_submit_at": raw_scheduled},
-        ) from exc
-    if scheduled.tzinfo is None:
-        scheduled = scheduled.replace(tzinfo=UTC)
-    try:
-        max_lag = float(intent.metadata.get("max_submit_lag_seconds", 0) or 0)
-    except (TypeError, ValueError) as exc:
-        raise BrokerSubmitError(
-            "max_submit_lag_seconds must be numeric",
-            context={"intent_id": intent.intent_id, "max_submit_lag_seconds": intent.metadata.get("max_submit_lag_seconds")},
-        ) from exc
-    deadline = scheduled + timedelta(seconds=max(0.0, max_lag))
-    if submit_started_at > deadline:
-        raise BrokerSubmitError(
-            "MiniQMT order missed scheduled submit deadline",
-            context={
-                "intent_id": intent.intent_id,
-                "scheduled_submit_at": scheduled.isoformat(),
-                "submit_started_at": submit_started_at.isoformat(),
-                "max_submit_lag_seconds": max_lag,
-                "broker_backend": _BACKEND_ID,
-            },
-        )
-
-
 def _status_to_dict(value: Any | None) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -1297,22 +662,6 @@ def _status_to_dict(value: Any | None) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return dict(value)
     return {"repr": repr(value)}
-
-
-def _disconnect_freeze_alert(freeze: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "schema_version": "simulation_runtime_alert_v1",
-        "reason_code": str(freeze.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
-        "severity": "P1",
-        "message": "MiniQMT broker submit is frozen after disconnect; reconnect reconcile is required before new submits",
-        "source": "MiniQMTSimBackend",
-        "backend_id": freeze.get("backend_id"),
-        "portfolio_id": freeze.get("portfolio_id"),
-        "package_id": freeze.get("package_id"),
-        "account_group_id": freeze.get("account_group_id"),
-        "strategy_slot_id": freeze.get("strategy_slot_id"),
-        "observed_at": freeze.get("observed_at"),
-    }
 
 
 def _int_or_none(value: Any) -> int | None:

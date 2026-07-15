@@ -171,6 +171,10 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
 
     def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]: ...
 
+    def list_runtimes_for_account(
+        self, *, account_group_id: str, limit: int
+    ) -> list[MiniQMTExecutionRuntimeRecord]: ...
+
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent: ...
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt: ...
@@ -280,6 +284,27 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
 
     def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
         return sorted(self._runtimes.values(), key=lambda item: item.updated_at, reverse=True)
+
+    def list_runtimes_for_account(
+        self, *, account_group_id: str, limit: int
+    ) -> list[MiniQMTExecutionRuntimeRecord]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        exact_account_group_id = str(account_group_id or "").strip()
+        if not exact_account_group_id:
+            raise ValueError("account_group_id is required")
+        rows = [
+            runtime
+            for runtime in self._runtimes.values()
+            if runtime.account_group_id == exact_account_group_id
+            and runtime.event_loop_state
+            not in {
+                MiniQMTExecutionRuntimeState.STOPPED,
+                MiniQMTExecutionRuntimeState.FAILED,
+            }
+        ]
+        rows.sort(key=lambda item: (item.updated_at, item.runtime_id), reverse=True)
+        return rows[:limit]
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
         existing = self._events.setdefault(event.runtime_id, [])
@@ -535,6 +560,24 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             "MINIQMT_RUNTIME_DB_LIST_RUNTIMES_FAILED",
             {},
             self._list_runtime_rows,
+        )
+
+    def list_runtimes_for_account(
+        self, *, account_group_id: str, limit: int
+    ) -> list[MiniQMTExecutionRuntimeRecord]:
+        exact_account_group_id = str(account_group_id or "").strip()
+        if not exact_account_group_id:
+            raise ValueError("account_group_id is required")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        return self._with_runtime_db_error(
+            "list_runtimes_for_account",
+            "MINIQMT_RUNTIME_DB_LIST_ACCOUNT_RUNTIMES_FAILED",
+            {"account_group_id": exact_account_group_id, "limit": limit},
+            lambda: self._list_runtime_rows_for_account(
+                account_group_id=exact_account_group_id,
+                limit=limit,
+            ),
         )
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
@@ -923,6 +966,26 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     WHERE archived_at IS NULL
                     ORDER BY updated_at DESC, runtime_id
                     """
+                )
+                rows = cur.fetchall()
+        return [_row_to_runtime(row) for row in rows]
+
+    def _list_runtime_rows_for_account(
+        self, *, account_group_id: str, limit: int
+    ) -> list[MiniQMTExecutionRuntimeRecord]:
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.execution_runtime
+                    WHERE archived_at IS NULL
+                      AND account_group_id = %s
+                      AND event_loop_state NOT IN ('STOPPED', 'FAILED')
+                    ORDER BY updated_at DESC, runtime_id
+                    LIMIT %s
+                    """,
+                    (account_group_id, limit),
                 )
                 rows = cur.fetchall()
         return [_row_to_runtime(row) for row in rows]

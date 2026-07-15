@@ -197,18 +197,41 @@ class StrategyRuntimeReleaseService:
             "approval_state": approval_state.value,
             "metadata": metadata,
         }
-        if miniqmt_quote_control is not None:
-            if backend != SimulationBrokerBackend.MINIQMT_SIM:
-                raise RuntimeConfigInvalidError(
-                    "miniqmt_quote_control is valid only for MiniQMT SIM bindings",
-                    context={"broker_backend": backend.value, "strategy_id": strategy_id},
-                )
+        if backend == SimulationBrokerBackend.MINIQMT_SIM:
             from backend.services.miniqmt_execution_runtime.b0_quote_v2 import QuoteControlBindingV1
+            from backend.execution_algos.adaptive_is.contracts import ControlRevision
 
+            if miniqmt_quote_control is None:
+                raise RuntimeConfigInvalidError(
+                    "new MiniQMT SIM bindings require an explicit B0_QUOTE_V2 quote-control revision",
+                    context={
+                        "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                        "broker_backend": backend.value,
+                        "strategy_id": strategy_id,
+                        "legacy_fallback": False,
+                    },
+                )
             parsed_quote_control = QuoteControlBindingV1.from_binding_config(
                 {"miniqmt_quote_control": miniqmt_quote_control}
             )
+            if parsed_quote_control.control_revision is not ControlRevision.B0_QUOTE_V2:
+                raise RuntimeConfigInvalidError(
+                    "new MiniQMT SIM bindings cannot select LEGACY_B0",
+                    context={
+                        "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                        "broker_backend": backend.value,
+                        "strategy_id": strategy_id,
+                        "control_revision": parsed_quote_control.control_revision.value,
+                        "required_control_revision": ControlRevision.B0_QUOTE_V2.value,
+                        "legacy_fallback": False,
+                    },
+                )
             binding_config["miniqmt_quote_control"] = parsed_quote_control.canonical_payload()
+        elif miniqmt_quote_control is not None:
+            raise RuntimeConfigInvalidError(
+                "miniqmt_quote_control is valid only for MiniQMT SIM bindings",
+                context={"broker_backend": backend.value, "strategy_id": strategy_id},
+            )
         if normalized_account_group_id is not None:
             binding_config["account_group_id"] = normalized_account_group_id
         if normalized_strategy_slot_id is not None:

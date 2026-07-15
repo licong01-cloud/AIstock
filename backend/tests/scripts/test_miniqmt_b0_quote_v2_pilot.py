@@ -12,6 +12,7 @@ from backend.services.simulation_runtime.models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
+    SimulationReleaseBinding,
     canonical_json_sha256,
 )
 from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
@@ -87,19 +88,44 @@ def _source_repo():  # type: ignore[no-untyped-def]
         effective_from=date(2026, 7, 13),
         effective_to=date(2026, 7, 13),
     )
-    binding = service.create_binding(
-        strategy_id="ma_8ec5e389_sim_20260703",
-        release=release,
-        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-        broker_account_id="62266303",
-        account_group_id="ag_minqmt_62266303_sim",
-        strategy_slot_id="ma_8ec5e389_sim_20260703",
-        capital_allocation=10_000_000,
-        strategy_name="ma_8ec5e389_sim_20260703",
-        order_remark_prefix="MA8EC5",
-        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
-        effective_from=date(2026, 7, 13),
-        effective_to=date(2026, 7, 13),
+    historical_config = {
+        "schema_version": "simulation_release_binding_v1",
+        "strategy_id": "ma_8ec5e389_sim_20260703",
+        "release_id": release.release_id,
+        "release_hash": release.release_hash,
+        "package_id": release.package_id,
+        "manifest_sha256": release.manifest_sha256,
+        "broker_backend": "minqmt_sim",
+        "broker_account_id": "62266303",
+        "account_group_id": "ag_minqmt_62266303_sim",
+        "strategy_slot_id": "ma_8ec5e389_sim_20260703",
+        "capital_allocation": 10_000_000.0,
+        "strategy_name": "ma_8ec5e389_sim_20260703",
+        "order_remark_prefix": "MA8EC5",
+        "approval_state": "SIM_VALIDATING",
+        "metadata": {"historical_fixture": True},
+    }
+    binding = repo.save_simulation_release_binding(
+        SimulationReleaseBinding(
+            binding_id="simbind-source-ma",
+            strategy_id="ma_8ec5e389_sim_20260703",
+            release_id=release.release_id,
+            release_hash=release.release_hash or "",
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            broker_account_id="62266303",
+            account_group_id="ag_minqmt_62266303_sim",
+            strategy_slot_id="ma_8ec5e389_sim_20260703",
+            capital_allocation=10_000_000,
+            strategy_name="ma_8ec5e389_sim_20260703",
+            order_remark_prefix="MA8EC5",
+            approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+            effective_from=date(2026, 7, 13),
+            effective_to=date(2026, 7, 13),
+            binding_config_json=historical_config,
+            binding_hash=canonical_json_sha256(historical_config),
+        )
     )
     return repo, binding
 
@@ -322,6 +348,7 @@ def test_dry_run_reports_conflicts_without_writes(monkeypatch: pytest.MonkeyPatc
         strategy_slot_id=source_binding.strategy_slot_id,
         capital_allocation=source_binding.capital_allocation,
         approval_state=source_binding.approval_state,
+        miniqmt_quote_control=pilot.QUOTE_CONTROL,
         binding_metadata={"conflict": True},
         effective_from=args.trade_date,
         effective_to=args.trade_date,

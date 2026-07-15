@@ -335,6 +335,7 @@ class SimulationLifecycleOrchestrator:
             trade_date=selection_evidence.target_trade_date,
             current_positions=current_positions or {},
             target_positions=targets,
+            current_prices=current_prices or {},
             pre_trade_tradability=pre_trade_tradability,
         )
         self.repository.update_simulation_daily_run(

@@ -28,6 +28,49 @@ from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 TRADE_DATE = date(2026, 5, 21)
+MINIQMT_B0_QUOTE_CONTROL = {
+    "schema_version": "miniqmt_quote_control_binding_v1",
+    "control_revision": "B0_QUOTE_V2",
+}
+
+
+def _b0_quote_policy() -> dict[str, Any]:
+    benchmark_policy = {
+        "benchmark_max_age_ms": 10_000,
+        "arrival_forward_window_ms": 2_000,
+        "clock_skew_tolerance_ms": 1_000,
+        "benchmark_max_transport_latency_ms": 3_000,
+        "policy_version": "miniqmt_execution_tca_benchmark_v1",
+    }
+    return {
+        "algo_code": "SNIPER_MINIQMT",
+        "algo_config": {"tca": {"benchmark_policy": benchmark_policy}},
+        "quote_contract": {
+            "schema_version": "miniqmt_quote_contract_policy_v2",
+            "control_revision": "B0_QUOTE_V2",
+            "required_capabilities": [
+                "CALENDAR",
+                "DEPTH_UNIT_SHARES",
+                "EXCHANGE_TIMESTAMP",
+                "FIVE_LEVEL_DEPTH",
+                "RAW_PRICE_BASIS",
+                "TRADABILITY",
+            ],
+            "max_receive_age_ms": 20_000,
+            "max_source_lag_ms": 20_000,
+            "max_exchange_age_ms": 20_000,
+            "max_negative_skew_ms": 1_000,
+            "max_clock_age_divergence_ms": 1_000,
+            "max_dependency_group_skew_ms": 20_000,
+            "auction_mode": "OBSERVE_ONLY",
+        },
+        "quote_evidence": {
+            "schema_version": "miniqmt_quote_evidence_policy_v1",
+            "benchmark_policy_version": benchmark_policy["policy_version"],
+            "mark_policy_version": "miniqmt_execution_tca_mark_selector_v1",
+            "markout_max_lag_ms": 10_000,
+        },
+    }
 
 
 def _candidate_rows() -> list[SelectionCandidate]:
@@ -369,6 +412,7 @@ def test_runs_api_surfaces_miniqmt_succeeded_with_capacity_residual(
         strategy_slot_id="slot_ops",
         strategy_name="OpsQmtCapacityResidual",
         order_remark_prefix="ops-qmt-capacity-residual",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
         approval_state=SimulationBindingApprovalState.SIM_PASSED,
         created_by="unit-test",
         created_reason="ops api capacity residual test",
@@ -492,6 +536,7 @@ def test_invalid_filter_values_are_rejected(client: TestClient) -> None:
 def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> None:
     repo = InMemorySimulationRuntimeRepository()
     release_service = StrategyRuntimeReleaseService(repository=repo)
+    execution_policy = _b0_quote_policy()
     release = release_service.create_release(
         package_id="pkg_live_admission",
         manifest_sha256="manifest_live_admission",
@@ -499,8 +544,9 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
         runtime_profile_version_id="runtime_profile_live_admission_v1",
         runtime_profile_sha256="runtime_profile_live_admission_hash",
         daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-        execution_policy_version_id="exec_policy_v25_1_small_cap",
-        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256=canonical_json_sha256(execution_policy),
+        execution_policy_json=execution_policy,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
         created_by="unit-test",
@@ -525,6 +571,7 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
         strategy_slot_id="slot_live_admission_qmt",
         strategy_name="LiveAdmissionQMT",
         order_remark_prefix="live-admission-qmt",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
         approval_state=SimulationBindingApprovalState.SIM_PASSED,
         created_by="unit-test",
         created_reason="live admission miniqmt evidence",
@@ -611,6 +658,7 @@ def test_live_admission_evidence_api_returns_actionable_payload(client: TestClie
 def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(client: TestClient) -> None:
     repo = InMemorySimulationRuntimeRepository()
     release_service = StrategyRuntimeReleaseService(repository=repo)
+    execution_policy = _b0_quote_policy()
     release = release_service.create_release(
         package_id="pkg_ops_api_live",
         manifest_sha256="manifest_ops_api_live",
@@ -618,8 +666,9 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
         runtime_profile_version_id="runtime_profile_ops_api_live_v1",
         runtime_profile_sha256="runtime_profile_ops_api_live_hash",
         daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-        execution_policy_version_id="exec_policy_v25_1_small_cap",
-        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256=canonical_json_sha256(execution_policy),
+        execution_policy_json=execution_policy,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
         created_by="unit-test",
@@ -644,6 +693,7 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
         strategy_slot_id="slot_ops_api_qmt",
         strategy_name="OpsApiLiveQmt",
         order_remark_prefix="ops-api-live-qmt",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
         approval_state=SimulationBindingApprovalState.SIM_PASSED,
         created_by="unit-test",
         created_reason="ops api live admission qmt",

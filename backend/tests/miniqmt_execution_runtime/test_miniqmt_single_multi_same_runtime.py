@@ -9,8 +9,6 @@ import pytest
 
 from backend.services.miniqmt_execution_runtime import (
     InMemoryMiniQMTExecutionRuntimeRepository,
-    MiniQMTChildOrderStatus,
-    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeClient,
 )
 from backend.services.paper_trading_v2.broker import (
@@ -259,8 +257,8 @@ def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_p
     paper_repo = _SnapshotOnlyRepository(portfolio)
     paper_broker = RecordingPaperMiniQMTBroker()
 
-    with pytest.raises(BrokerSubmitError, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS") as exc_info:
-        PaperTradingDayRunner(repository=paper_repo, minqmt_runtime_client=runtime_client)._run_minqmt_sim_orders(
+    with pytest.raises(ExecutionPathNotCanonicalError, match="day-runner broker execution is retired") as exc_info:
+        PaperTradingDayRunner(repository=paper_repo)._run_minqmt_sim_orders(
             portfolio=portfolio,
             run=_paper_run(portfolio),
             manifest=manifest,
@@ -269,7 +267,8 @@ def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_p
             broker=paper_broker,  # type: ignore[arg-type]
             execution_policy_context=_vnpy_execution_policy_context(),
         )
-    assert exc_info.value.context["operation"] == "execute_paper_vnpy_intent"
+    assert exc_info.value.context["reason_code"] == "MINIQMT_PAPER_DAY_RUNNER_ROUTE_RETIRED"
+    assert exc_info.value.context["broker_called"] is False
     assert paper_broker.submitted == []
 
     _release, binding, plan = _compiled_plan_for_bridge(
@@ -287,34 +286,17 @@ def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_p
         binding_strategy_name=binding.strategy_name or binding.strategy_id,
         account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
     )
-    simulation_result = MiniQMTExecutionBridge(
-        managed_order_service=service,
-        runtime_client=runtime_client,
-    ).submit_event_loop_plan(
-        plan=plan,
-        binding=binding,
-    )
-
-    simulation_evidence = simulation_result.runtime_evidence.to_dict()
-
-    assert simulation_result.success is True
-    assert simulation_evidence["runtime_owner"] == RUNTIME_OWNER
-    assert simulation_evidence["source"] == "simulation_runtime_event_loop_submit"
-    assert simulation_evidence["submitted_child_count"] == 2
-    assert len(simulation_evidence["algo_instance_ids"]) == 2
-    assert len(simulation_evidence["child_order_ids"]) == 2
-    assert len(managed_broker.calls) == 2
-    simulation_events = runtime_client.repository.list_events(simulation_evidence["runtime_id"])
-    child_submit_events = [
-        event for event in simulation_events if event.event_type == MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED
-    ]
-    assert all(event.source == "gateway" and event.payload["accepted"] is True for event in child_submit_events)
-    assert len(child_submit_events) == len(managed_broker.calls)
-    simulation_children = runtime_client.repository.list_child_orders(
-        simulation_evidence["runtime_id"], active_only=False
-    )
-    assert {child.status for child in simulation_children} == {MiniQMTChildOrderStatus.SUBMITTED}
-    assert all(child.broker_order_id for child in simulation_children)
+    with pytest.raises(BrokerSubmitError) as controller_missing:
+        MiniQMTExecutionBridge(
+            managed_order_service=service,
+            runtime_client=runtime_client,
+        ).submit_event_loop_plan(
+            plan=plan,
+            binding=binding,
+        )
+    assert controller_missing.value.context["reason_code"] == "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT"
+    assert controller_missing.value.context["broker_called"] is False
+    assert managed_broker.calls == []
 
 
 def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls() -> None:
@@ -341,7 +323,10 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
         text = path.read_text(encoding="utf-8")
         for forbidden in forbidden_by_file[path.name]:
             assert forbidden not in text, f"{path.name} still owns MiniQMT broker submit path via {forbidden}"
-        assert "MiniQMTExecutionRuntimeClient" in text or "MiniQMTExecutionBridge" in text
+        if path.name == "day_runner.py":
+            assert "MINIQMT_PAPER_DAY_RUNNER_ROUTE_RETIRED" in text
+        else:
+            assert "MiniQMTExecutionRuntimeClient" in text or "MiniQMTExecutionBridge" in text
 
     runtime_client = (root / "backend/services/miniqmt_execution_runtime/client.py").read_text(encoding="utf-8")
     direct_submit_batch_hits = [
@@ -354,7 +339,8 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
     ], direct_submit_batch_hits
     assert "gateway.submit_managed_batch(" in runtime_client
     assert "managed_order_service.submit_batch(" not in runtime_client
-    assert "self.broker.submit_order_intent(child_intent)" in runtime_client
+    assert "self.broker.submit_order_intent(child_intent)" not in runtime_client
+    assert "PaperV2MiniQMTRuntimeGateway" not in runtime_client
 
 
 def test_legacy_paper_v2_miniqmt_live_adapter_is_removed() -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -97,3 +99,38 @@ def test_fixed_strategy_count_product_gate_is_rejected_at_runtime_contract_bound
         )
 
     assert exc_info.value.context["allowed_gate"] == "funds_and_trading_rules_only"
+
+
+def test_product_route_has_no_paper_or_raw_qmt_broker_write_owner() -> None:
+    retired_product_modules = (
+        Path("backend/routers/qmt.py"),
+        Path("backend/services/paper_trading_v2/broker/minqmtsim.py"),
+        Path("backend/services/paper_trading_v2/day_runner.py"),
+    )
+    forbidden_attribute_calls = {"place_order", "cancel_order"}
+    violations: list[str] = []
+    for path in retired_product_modules:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in forbidden_attribute_calls
+            ):
+                receiver = ast.unparse(node.func.value)
+                if "qmt" in receiver.lower() or "_get_client" in receiver:
+                    violations.append(
+                        f"{path}:{node.lineno}:{receiver}.{node.func.attr}"
+                    )
+    assert violations == []
+
+    day_runner_source = retired_product_modules[2].read_text(encoding="utf-8")
+    assert "execute_paper_vnpy_intent" not in day_runner_source
+    assert "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED" not in day_runner_source
+
+    gateway_source = Path(
+        "backend/services/miniqmt_execution_runtime/gateway.py"
+    ).read_text(encoding="utf-8")
+    assert 'getattr(self.qmt_client, "place_order", None)' in gateway_source
+    assert 'getattr(self.qmt_client, "cancel_order", None)' in gateway_source

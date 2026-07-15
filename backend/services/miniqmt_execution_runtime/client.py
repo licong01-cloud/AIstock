@@ -12,8 +12,8 @@ from decimal import Decimal
 from typing import Any, Callable, Mapping
 
 from backend.execution_algos.board_lot import board_lot_rule
-from backend.execution_algos.vnpy_style import get_vnpy_style_asset, is_vnpy_style_algo
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle, OrderHandleStatus
+from backend.execution_algos.vnpy_style import is_vnpy_style_algo
+from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandleStatus
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     IntentPreflightStatus,
@@ -46,12 +46,9 @@ from backend.services.qmt_strategy_ledger.order_service import (
     QmtManagedOrderService,
 )
 from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRepository
-from backend.services.trading_core.errors import BrokerSubmitError, DataUnavailableError, TradingCoreError
+from backend.services.trading_core.errors import BrokerSubmitError, DataUnavailableError
 from backend.services.trading_core.miniqmt_vnpy_execution import (
-    MiniQMTAlgoChildOrder,
     MiniQMTAlgoExecutionResult,
-    MiniQMTChildOrderHandle,
-    MiniQMTOrderStatus,
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
@@ -214,25 +211,6 @@ class MiniQMTRuntimeManagedVnpyBuildResult:
     requests: tuple[ManagedOrderRequest, ...]
     runtime_evidence: MiniQMTRuntimeEvidence
     child_order_id_by_order_remark: dict[str, str]
-
-
-@dataclass(frozen=True)
-class PaperMiniQMTRuntimeChildResult:
-    parent_intent: OrderIntent
-    child_intent: OrderIntent
-    child_order: MiniQMTChildOrder
-    handle: OrderHandle | None
-    status: OrderHandleStatus | None
-    trades: tuple[dict[str, Any], ...]
-    native_context: dict[str, Any]
-    submit_error: dict[str, Any] | None = None
-    submit_exception: BaseException | None = None
-
-
-@dataclass(frozen=True)
-class PaperMiniQMTRuntimeSubmitResult:
-    runtime_evidence: MiniQMTRuntimeEvidence
-    child_results: tuple[PaperMiniQMTRuntimeChildResult, ...]
 
 
 @dataclass(frozen=True)
@@ -711,6 +689,41 @@ class MiniQMTExecutionRuntimeClient:
         if quote_revision is not None:
             assert self.b0_quote_v2_controller_factory is not None
             controller = self.b0_quote_v2_controller_factory.get(runtime.config.runtime_id)
+            if controller is not None:
+                existing_assignments = {
+                    parent_id: assignment.canonical_payload()
+                    for parent_id, assignment in controller.assignments.items()
+                }
+                incoming_assignments = {
+                    parent_id: assignment.canonical_payload()
+                    for parent_id, assignment in quote_assignments.items()
+                }
+                if existing_assignments != incoming_assignments:
+                    active_algos = self.repository.list_algo_instances(
+                        runtime.config.runtime_id,
+                        active_only=True,
+                    )
+                    child_orders = self.repository.list_child_orders(
+                        runtime.config.runtime_id,
+                        active_only=False,
+                    )
+                    if active_algos or child_orders:
+                        raise BrokerSubmitError(
+                            "B0_QUOTE_V2 assignment revision cannot replace non-empty durable runtime state",
+                            context={
+                                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                                "stage": "ADAPTER",
+                                "runtime_id": runtime.config.runtime_id,
+                                "existing_parent_intent_ids": sorted(existing_assignments),
+                                "incoming_parent_intent_ids": sorted(incoming_assignments),
+                                "active_algo_count": len(active_algos),
+                                "child_order_count": len(child_orders),
+                                "broker_called": False,
+                                "legacy_fallback": False,
+                            },
+                        )
+                    controller.close()
+                    controller = None
             if controller is None:
                 controller = self.b0_quote_v2_controller_factory.create(
                     runtime=runtime,
@@ -1851,102 +1864,6 @@ class MiniQMTExecutionRuntimeClient:
         source: str = "paper_v2_vnpy_miniqmt",
     ) -> MiniQMTAlgoExecutionResult:
         self._reject_event_loop_compiler_lifecycle(source=source, operation="execute_paper_vnpy_intent")
-        policy_json = (
-            execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
-        )
-        if not isinstance(policy_json, dict):
-            raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py client requires policy_json")
-        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
-        if not is_vnpy_style_algo(algo_code):
-            raise BrokerSubmitError(
-                "MiniQMTExecutionRuntime vn.py client requires approved MiniQMT algo",
-                context={"algo_code": algo_code},
-            )
-        spec = get_vnpy_style_asset(algo_code)
-        gateway = PaperV2MiniQMTRuntimeGateway(broker=broker)
-        runtime = self._runtime(
-            account_group_id=account_group_id,
-            trade_date=trade_date,
-            runtime_config_hash=runtime_config_hash,
-            runtime_id=_paper_runtime_id(run),
-            gateway=gateway,
-            metadata={"portfolio_id": portfolio.portfolio_id, "run_id": run.run_id, "source": source},
-        )
-        runtime.start()
-        runtime.create_vnpy_algo_instance(
-            parent_intent_id=intent.intent_id,
-            strategy_slot_id=strategy_slot_id,
-            symbol=intent.symbol,
-            side=intent.side,
-            target_quantity=int(intent.quantity),
-            algo_code=algo_code,
-            limit_price=_limit_price_for_runtime(
-                intent=intent,
-                quote_provider=quote_provider,
-                algo_config=dict(policy_json.get("algo_config") or {}),
-            ),
-            algo_config=dict(policy_json.get("algo_config") or {}),
-            metadata={
-                "source": source,
-                "runtime_child_context": _paper_child_metadata(intent=intent, trade_date=trade_date, source=source),
-                "execution_policy_id": execution_policy_context.get("validated_execution_policy_id"),
-                "execution_policy_sha256": execution_policy_context.get("policy_sha256"),
-            },
-        )
-        tick_payload = _tick_payload_for_runtime(intent=intent, quote_provider=quote_provider)
-        runtime.on_tick(symbol=intent.symbol, price=float(tick_payload["price"]), payload=tick_payload)
-        for index in range(_timer_iterations(algo_code, dict(policy_json.get("algo_config") or {}))):
-            runtime.on_timer(timer_name=f"paper_v2_{algo_code.lower()}_{index + 1}")
-        latest_algo = self.repository.list_algo_instances(runtime.config.runtime_id, active_only=False)[-1]
-        child_results = tuple(gateway.results_for_parent_intent(intent.intent_id))
-        child_by_id = {result.child_order.child_order_id: result for result in child_results}
-        for child in self.repository.list_child_orders(runtime.config.runtime_id, active_only=False):
-            result = child_by_id.get(child.child_order_id)
-            if result is None:
-                continue
-            updated_child = self._sync_paper_child_status(
-                runtime,
-                child,
-                result,
-                preserve_gateway_rejection=result.submit_error is not None,
-            )
-            child_by_id[child.child_order_id] = replace(result, child_order=updated_child)
-        child_results = tuple(child_by_id[child_id] for child_id in child_by_id)
-        children = [
-            MiniQMTAlgoChildOrder(
-                vt_orderid=str(result.child_order.metadata.get("vnpy_vt_orderid") or result.child_order.child_order_id),
-                handle=_shared_handle(result),
-                intent=result.child_intent,
-                submitted_at=result.child_order.submitted_at or datetime.now(UTC),
-                native_context=dict(result.native_context),
-                status=_shared_status(result.status),
-                trades=[dict(row) for row in result.trades],
-                submit_error=result.submit_error,
-            )
-            for result in child_results
-        ]
-        diagnostic = _vnpy_runtime_diagnostic(
-            algo_code=algo_code,
-            spec_metadata=spec.metadata(),
-            intent=intent,
-            execution_policy_context=execution_policy_context,
-            tick_payload=tick_payload,
-            child_results=child_results,
-            runtime_evidence=self._evidence(runtime, source=source),
-            algo_state=dict(latest_algo.metadata.get("vnpy_algo_state") or {}),
-        )
-        return MiniQMTAlgoExecutionResult(
-            parent_intent=intent,
-            algo_code=algo_code,
-            policy_context=dict(execution_policy_context),
-            policy_sha256=str(execution_policy_context.get("policy_sha256") or "") or None,
-            asset_metadata=spec.metadata(),
-            actions=[],
-            child_orders=children,
-            algo_state=dict(latest_algo.metadata.get("vnpy_algo_state") or {}),
-            terminal_state=_terminal_state(child_results),
-            diagnostic=diagnostic,
-        )
 
     def _runtime(
         self,
@@ -2079,34 +1996,6 @@ class MiniQMTExecutionRuntimeClient:
             source=source,
         )
 
-    def _sync_paper_child_status(
-        self,
-        runtime: MiniQMTExecutionRuntime,
-        child: MiniQMTChildOrder,
-        result: PaperMiniQMTRuntimeChildResult,
-        *,
-        preserve_gateway_rejection: bool = False,
-    ) -> MiniQMTChildOrder:
-        status = _runtime_status_from_paper_result(result)
-        metadata = dict(child.metadata)
-        if preserve_gateway_rejection and result.submit_error:
-            metadata.update(
-                {
-                    "gateway_rejection_raw": result.submit_error,
-                    "gateway_message": _submit_error_message(result.submit_error),
-                }
-            )
-        updated_child = child.model_copy(
-            update={
-                "status": status,
-                "broker_order_id": result.native_context.get("miniqmt_order_id")
-                or result.native_context.get("qmt_order_id")
-                or child.broker_order_id,
-                "metadata": metadata,
-            }
-        )
-        return self.repository.upsert_child_order(updated_child)
-
     def _sync_managed_child_result(
         self,
         *,
@@ -2177,116 +2066,6 @@ class MiniQMTExecutionRuntimeClient:
                 },
             )
         )
-
-
-class PaperV2MiniQMTRuntimeGateway:
-    """Gateway boundary that adapts runtime child orders to Paper v2 brokers."""
-
-    def __init__(self, *, broker: BrokerBackend) -> None:
-        self.broker = broker
-        self.connected_runtime_ids: list[str] = []
-        self.submitted_orders: list[MiniQMTChildOrder] = []
-        self.cancelled_orders: list[MiniQMTChildOrder] = []
-        self._results_by_child_id: dict[str, PaperMiniQMTRuntimeChildResult] = {}
-
-    def connect(self, *, runtime_id: str) -> None:
-        self.connected_runtime_ids.append(runtime_id)
-
-    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        return []
-
-    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        return []
-
-    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        return []
-
-    def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
-        self.submitted_orders.append(order)
-        child_intent = _paper_intent_from_runtime_child(order)
-        try:
-            handle = self.broker.submit_order_intent(child_intent)
-            native = _safe_order_context(self.broker, handle)
-            status = self.broker.query_status(handle)
-            trades = tuple(dict(row) for row in self.broker.query_trades(handle))
-        except TradingCoreError as exc:
-            native = _native_from_exception(exc, child_intent=child_intent)
-            status = _rejected_status_from_exception(exc, child_order_id=order.child_order_id)
-            self._results_by_child_id[order.child_order_id] = PaperMiniQMTRuntimeChildResult(
-                parent_intent=child_intent,
-                child_intent=child_intent,
-                child_order=order,
-                handle=None,
-                status=status,
-                trades=(),
-                native_context=native,
-                submit_error=exc.to_dict(),
-                submit_exception=exc,
-            )
-            return MiniQMTGatewayOrderAck(
-                accepted=False,
-                broker_order_id=str(native.get("miniqmt_order_id") or "") or None,
-                message=exc.message,
-                raw=exc.to_dict(),
-            )
-        except Exception as exc:  # noqa: BLE001
-            submit_error = {
-                "error_code": "PAPER_MINIQMT_RUNTIME_GATEWAY_SUBMIT_FAILED",
-                "message": "Paper v2 MiniQMT runtime gateway submit failed",
-                "context": {"reason": f"{type(exc).__name__}: {exc}"},
-            }
-            native = {"handle_id": order.child_order_id, "intent_id": child_intent.intent_id}
-            status = _rejected_status_from_error(submit_error, child_order_id=order.child_order_id)
-            wrapped = BrokerSubmitError(submit_error["message"], context=submit_error["context"])
-            self._results_by_child_id[order.child_order_id] = PaperMiniQMTRuntimeChildResult(
-                parent_intent=child_intent,
-                child_intent=child_intent,
-                child_order=order,
-                handle=None,
-                status=status,
-                trades=(),
-                native_context=native,
-                submit_error=submit_error,
-                submit_exception=wrapped,
-            )
-            return MiniQMTGatewayOrderAck(accepted=False, broker_order_id=None, message=str(exc), raw=submit_error)
-
-        self._results_by_child_id[order.child_order_id] = PaperMiniQMTRuntimeChildResult(
-            parent_intent=child_intent,
-            child_intent=child_intent,
-            child_order=order,
-            handle=handle,
-            status=status,
-            trades=trades,
-            native_context=native,
-        )
-        return MiniQMTGatewayOrderAck(
-            accepted=True,
-            broker_order_id=str(native.get("miniqmt_order_id") or native.get("qmt_order_id") or handle.handle_id),
-            message=str(status.status_msg or "paper v2 MiniQMT runtime gateway accepted child order"),
-            raw={"native_context": dict(native), "status": status.model_dump(mode="json")},
-        )
-
-    def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
-        self.cancelled_orders.append(order)
-        result = self._results_by_child_id.get(order.child_order_id)
-        if result is None or result.handle is None:
-            return MiniQMTGatewayCancelAck(False, order.broker_order_id, "child order has no paper handle")
-        ack = self.broker.cancel(result.handle)
-        return MiniQMTGatewayCancelAck(
-            bool(ack.accepted), order.broker_order_id, ack.reason, ack.model_dump(mode="json")
-        )
-
-    def require_result(self, child_order_id: str) -> PaperMiniQMTRuntimeChildResult:
-        return self._results_by_child_id[child_order_id]
-
-    def results_for_parent_intent(self, intent_id: str) -> list[PaperMiniQMTRuntimeChildResult]:
-        return [
-            result
-            for result in self._results_by_child_id.values()
-            if result.child_intent.metadata.get("parent_intent_id") == intent_id
-            or result.child_intent.intent_id == intent_id
-        ]
 
 
 class _PreviewOnlyRuntimeGateway:
@@ -2367,24 +2146,6 @@ class _ManagedOrderRequestRuntimeGateway:
         )
 
 
-def _paper_runtime_id(run: Any) -> str:
-    return f"mqrt_paper_{_short_hash([getattr(run, 'run_id', ''), getattr(run, 'trade_date', '')])}"
-
-
-def _paper_child_metadata(*, intent: OrderIntent, trade_date: date, source: str) -> dict[str, Any]:
-    return {
-        "source": source,
-        "paper_parent_intent_id": intent.intent_id,
-        "paper_intent_id": intent.intent_id,
-        "package_id": intent.package_id,
-        "portfolio_id": intent.portfolio_id,
-        "order_type": intent.order_type.value,
-        "limit_price": intent.limit_price,
-        "target_trade_date": trade_date.isoformat(),
-        "parent_intent_metadata": dict(intent.metadata or {}),
-    }
-
-
 def _managed_vnpy_child_metadata(
     *,
     intent: OrderIntent,
@@ -2451,60 +2212,6 @@ def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
     }
 
 
-def _paper_intent_from_runtime_child(order: MiniQMTChildOrder) -> OrderIntent:
-    metadata = dict(order.metadata or {})
-    parent_metadata = dict(metadata.get("parent_intent_metadata") or {})
-    order_type = OrderType(
-        str(metadata.get("order_type") or (OrderType.LIMIT.value if order.price > 0 else OrderType.MARKET.value))
-    )
-    limit_price = float(order.price) if order_type == OrderType.LIMIT else None
-    trade_date_raw = metadata.get("target_trade_date")
-    trade_date = date.fromisoformat(str(trade_date_raw)) if trade_date_raw else datetime.now(UTC).date()
-    return OrderIntent(
-        intent_id=str(metadata.get("paper_child_intent_id") or metadata.get("paper_intent_id") or order.child_order_id),
-        package_id=str(metadata.get("package_id") or parent_metadata.get("package_id") or "miniqmt_runtime"),
-        portfolio_id=str(metadata.get("portfolio_id") or parent_metadata.get("portfolio_id") or order.strategy_slot_id),
-        symbol=order.symbol,
-        side=order.side,
-        quantity=int(order.quantity),
-        order_type=order_type,
-        limit_price=limit_price,
-        target_trade_date=trade_date,
-        metadata={
-            **parent_metadata,
-            "parent_intent_id": metadata.get("paper_parent_intent_id") or order.parent_intent_id,
-            "runtime_owner": RUNTIME_OWNER,
-            "runtime_id": order.runtime_id,
-            "algo_instance_id": order.algo_instance_id,
-            "child_order_id": order.child_order_id,
-            **{key: value for key, value in metadata.items() if key not in {"parent_intent_metadata"}},
-        },
-    )
-
-
-def _safe_order_context(broker: BrokerBackend, handle: OrderHandle) -> dict[str, Any]:
-    if hasattr(broker, "order_context"):
-        try:
-            return dict(broker.order_context(handle))  # type: ignore[attr-defined]
-        except Exception as exc:  # noqa: BLE001
-            return {"handle_id": handle.handle_id, "intent_id": handle.intent_id, "order_context_error": str(exc)}
-    return {"handle_id": handle.handle_id, "intent_id": handle.intent_id}
-
-
-def _native_from_exception(exc: TradingCoreError, *, child_intent: OrderIntent) -> dict[str, Any]:
-    context = exc.context if isinstance(exc.context, dict) else {}
-    native = {
-        key: context.get(key)
-        for key in ("handle_id", "miniqmt_order_id", "strategy_name", "order_remark")
-        if context.get(key) is not None
-    }
-    native.setdefault("handle_id", context.get("handle_id") or f"rejected_{child_intent.intent_id}")
-    native.setdefault("intent_id", child_intent.intent_id)
-    if context.get("message") is not None:
-        native["broker_submit_message"] = context.get("message")
-    return native
-
-
 def _submit_error_message(error: dict[str, Any]) -> str:
     context = error.get("context") if isinstance(error, dict) else None
     if isinstance(context, dict):
@@ -2513,20 +2220,6 @@ def _submit_error_message(error: dict[str, Any]) -> str:
             if value:
                 return str(value)
     return str(error.get("message") or "MiniQMT child order submit failed")
-
-
-def _rejected_status_from_exception(exc: TradingCoreError, *, child_order_id: str) -> OrderHandleStatus:
-    return OrderHandleStatus(
-        handle_id=str(exc.context.get("handle_id") if isinstance(exc.context, dict) else None) or child_order_id,
-        state="rejected",
-        filled_quantity=0,
-        avg_fill_price=None,
-        last_event_at=datetime.now(UTC),
-        rejection_reason=exc.message,
-        raw_status="submit_error",
-        status_msg=exc.message,
-        raw=exc.to_dict(),
-    )
 
 
 def _rejected_status_from_error(error: dict[str, Any], *, child_order_id: str) -> OrderHandleStatus:
@@ -2540,36 +2233,6 @@ def _rejected_status_from_error(error: dict[str, Any], *, child_order_id: str) -
         raw_status="submit_error",
         status_msg=str(error.get("message") or "MiniQMT submit failed"),
         raw=dict(error),
-    )
-
-
-def _shared_handle(result: PaperMiniQMTRuntimeChildResult) -> MiniQMTChildOrderHandle | None:
-    if result.handle is None:
-        return None
-    return MiniQMTChildOrderHandle(
-        handle_id=result.handle.handle_id,
-        intent_id=result.handle.intent_id,
-        native_order_id=str(
-            result.native_context.get("miniqmt_order_id") or result.native_context.get("qmt_order_id") or ""
-        )
-        or None,
-        native_context=dict(result.native_context),
-    )
-
-
-def _shared_status(status: OrderHandleStatus | None) -> MiniQMTOrderStatus | None:
-    if status is None:
-        return None
-    return MiniQMTOrderStatus(
-        handle_id=status.handle_id,
-        state=status.state,
-        filled_quantity=int(status.filled_quantity),
-        avg_fill_price=status.avg_fill_price,
-        last_event_at=status.last_event_at,
-        rejection_reason=status.rejection_reason,
-        raw_status=status.raw_status,
-        status_msg=status.status_msg,
-        raw=dict(status.raw),
     )
 
 
@@ -4059,39 +3722,6 @@ def _board_lot_for_runtime(symbol: str) -> tuple[int, int]:
         ) from exc
 
 
-def _terminal_state(results: tuple[PaperMiniQMTRuntimeChildResult, ...]) -> str:
-    if not results:
-        return "NO_ACTION"
-    if any(result.submit_error for result in results):
-        return "SUBMIT_REJECTED"
-    states = {result.status.state for result in results if result.status is not None}
-    if "rejected" in states:
-        return "REJECTED"
-    if "cancelled" in states:
-        return "CANCELLED"
-    if "filled" in states:
-        return "FILLED"
-    if "partial_filled" in states:
-        return "PARTIAL"
-    return "PENDING"
-
-
-def _runtime_status_from_paper_result(result: PaperMiniQMTRuntimeChildResult) -> MiniQMTChildOrderStatus:
-    if result.submit_error:
-        return MiniQMTChildOrderStatus.REJECTED
-    if result.status is None:
-        return MiniQMTChildOrderStatus.SUBMITTED if result.handle is not None else MiniQMTChildOrderStatus.REJECTED
-    if result.status.state == "rejected":
-        return MiniQMTChildOrderStatus.REJECTED
-    if result.status.state == "cancelled":
-        return MiniQMTChildOrderStatus.CANCELLED
-    if result.status.state == "filled":
-        return MiniQMTChildOrderStatus.FILLED
-    if result.status.state == "partial_filled":
-        return MiniQMTChildOrderStatus.PARTIALLY_FILLED
-    return MiniQMTChildOrderStatus.SUBMITTED if result.handle is not None else MiniQMTChildOrderStatus.REJECTED
-
-
 def _runtime_status_from_managed_result(
     result: ManagedOrderSubmitResult,
     *,
@@ -4208,58 +3838,6 @@ def _result_preview_only(result: ManagedOrderSubmitResult) -> bool:
     return broker_message.startswith("preview-only")
 
 
-def _vnpy_runtime_diagnostic(
-    *,
-    algo_code: str,
-    spec_metadata: dict[str, Any],
-    intent: OrderIntent,
-    execution_policy_context: dict[str, Any],
-    tick_payload: dict[str, Any],
-    child_results: tuple[PaperMiniQMTRuntimeChildResult, ...],
-    runtime_evidence: MiniQMTRuntimeEvidence,
-    algo_state: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "schema_version": "miniqmt_vnpy_execution_diagnostic_v1",
-        "adapter": "MiniQMTExecutionRuntimeClient",
-        "runtime_owner": RUNTIME_OWNER,
-        "runtime_evidence": runtime_evidence.to_dict(),
-        "execution_algo_code": algo_code,
-        "execution_asset_version": spec_metadata.get("asset_version"),
-        "execution_policy_id": execution_policy_context.get("validated_execution_policy_id"),
-        "execution_policy_sha256": execution_policy_context.get("policy_sha256"),
-        "source_attribution": spec_metadata.get("source_attribution"),
-        "parent_intent_id": intent.intent_id,
-        "symbol": intent.symbol,
-        "side": intent.side.value,
-        "quantity": intent.quantity,
-        "terminal_state": _terminal_state(child_results),
-        "quote": dict(tick_payload),
-        "actions": [],
-        "child_orders": [_runtime_child_payload(result) for result in child_results],
-        "algo_state": algo_state,
-    }
-
-
-def _runtime_child_payload(result: PaperMiniQMTRuntimeChildResult) -> dict[str, Any]:
-    return {
-        "vt_orderid": result.child_order.metadata.get("vnpy_vt_orderid"),
-        "handle_id": result.handle.handle_id if result.handle else None,
-        "intent_id": result.child_intent.intent_id,
-        "symbol": result.child_intent.symbol,
-        "side": result.child_intent.side.value,
-        "quantity": result.child_intent.quantity,
-        "limit_price": result.child_intent.limit_price,
-        "submitted_at": result.child_order.submitted_at.isoformat() if result.child_order.submitted_at else None,
-        "native_context": dict(result.native_context),
-        "status": result.status.model_dump(mode="json") if result.status else None,
-        "trades": [dict(row) for row in result.trades],
-        "submit_error": result.submit_error,
-        "runtime_child_order_id": result.child_order.child_order_id,
-        "runtime_algo_instance_id": result.child_order.algo_instance_id,
-    }
-
-
 def _find_child_order(
     repository: MiniQMTExecutionRuntimeRepository,
     *,
@@ -4288,7 +3866,4 @@ __all__ = [
     "MiniQMTRuntimeEvidence",
     "MiniQMTRuntimeManagedBatchSubmitResult",
     "MiniQMTRuntimeManagedVnpyBuildResult",
-    "PaperMiniQMTRuntimeChildResult",
-    "PaperMiniQMTRuntimeSubmitResult",
-    "PaperV2MiniQMTRuntimeGateway",
 ]

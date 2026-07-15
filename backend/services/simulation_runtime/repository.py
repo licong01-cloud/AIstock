@@ -479,6 +479,190 @@ class SimulationRuntimeRepository:
                     ) from exc
         return binding
 
+    def migrate_miniqmt_binding_route(
+        self,
+        *,
+        source_binding_id: str,
+        expected_source_binding_hash: str,
+        source_effective_to: date,
+        target_binding: SimulationReleaseBinding,
+    ) -> tuple[SimulationReleaseBinding, SimulationReleaseBinding]:
+        """Atomically close one immutable LEGACY window and insert its B0 successor."""
+
+        self.get_strategy_runtime_release(target_binding.release_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_id = %s FOR UPDATE",
+                    (source_binding_id,),
+                )
+                source_row = cur.fetchone()
+                if source_row is None:
+                    raise DataUnavailableError(
+                        "MiniQMT route migration source binding does not exist",
+                        context={"source_binding_id": source_binding_id},
+                    )
+                source = self._binding_from_row(dict(source_row))
+                if source.binding_hash != expected_source_binding_hash:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration source binding hash changed",
+                        context={
+                            "reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_CAS_CONFLICT",
+                            "source_binding_id": source_binding_id,
+                            "expected_binding_hash": expected_source_binding_hash,
+                            "actual_binding_hash": source.binding_hash,
+                        },
+                    )
+                if source.effective_to not in {None, source_effective_to}:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration source effective window conflicts with requested cutover",
+                        context={
+                            "reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_WINDOW_CONFLICT",
+                            "source_binding_id": source_binding_id,
+                            "expected_effective_to": source_effective_to.isoformat(),
+                            "actual_effective_to": source.effective_to.isoformat() if source.effective_to else None,
+                        },
+                    )
+
+                marker = (
+                    target_binding.binding_config_json.get("metadata", {}).get("miniqmt_route_migration")
+                    if isinstance(target_binding.binding_config_json.get("metadata"), dict)
+                    else None
+                )
+                if not isinstance(marker, dict):
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration target binding is missing its durable marker",
+                        context={"reason_code": "MINIQMT_ROUTE_MIGRATION_MARKER_MISSING"},
+                    )
+                cur.execute(
+                    """
+                    SELECT binding_id, binding_hash
+                    FROM paper_v2.simulation_release_binding
+                    WHERE strategy_id = %s
+                      AND broker_backend = 'minqmt_sim'
+                      AND binding_config_json->'metadata'->'miniqmt_route_migration'->>'source_binding_id' = %s
+                      AND binding_config_json->'metadata'->'miniqmt_route_migration'->>'effective_trade_date' = %s
+                      AND binding_hash <> %s
+                    LIMIT 1
+                    """,
+                    (
+                        source.strategy_id,
+                        source_binding_id,
+                        str(marker.get("effective_trade_date") or ""),
+                        target_binding.binding_hash,
+                    ),
+                )
+                conflicting_target = cur.fetchone()
+                if conflicting_target is not None:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration already has a different target for this source/date",
+                        context={
+                            "reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_CONFLICT",
+                            "source_binding_id": source_binding_id,
+                            "conflicting_binding_id": conflicting_target["binding_id"],
+                            "conflicting_binding_hash": conflicting_target["binding_hash"],
+                        },
+                    )
+
+                cur.execute(
+                    "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_hash = %s",
+                    (target_binding.binding_hash,),
+                )
+                target_row = cur.fetchone()
+                if target_row is None:
+                    cur.execute(
+                        """
+                        INSERT INTO paper_v2.simulation_release_binding (
+                            binding_id, strategy_id, release_id, release_hash, package_id, manifest_sha256,
+                            broker_backend, broker_account_id, account_group_id, strategy_slot_id,
+                            capital_allocation, strategy_name, order_remark_prefix, effective_from, effective_to,
+                            approval_state, binding_config_json, binding_hash, created_by, created_reason,
+                            created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s
+                        )
+                        """,
+                        (
+                            target_binding.binding_id,
+                            target_binding.strategy_id,
+                            target_binding.release_id,
+                            target_binding.release_hash,
+                            target_binding.package_id,
+                            target_binding.manifest_sha256,
+                            target_binding.broker_backend.value,
+                            target_binding.broker_account_id,
+                            target_binding.account_group_id,
+                            target_binding.strategy_slot_id,
+                            target_binding.capital_allocation,
+                            target_binding.strategy_name,
+                            target_binding.order_remark_prefix,
+                            target_binding.effective_from,
+                            target_binding.effective_to,
+                            target_binding.approval_state.value,
+                            psycopg2.extras.Json(target_binding.binding_config_json),
+                            target_binding.binding_hash,
+                            target_binding.created_by,
+                            target_binding.created_reason,
+                            target_binding.created_at,
+                            target_binding.updated_at,
+                        ),
+                    )
+                else:
+                    persisted_target = self._binding_from_row(dict(target_row))
+                    if persisted_target.model_dump(mode="json") != target_binding.model_dump(mode="json"):
+                        raise InvalidStateTransitionError(
+                            "MiniQMT route migration target hash readback differs from the requested binding",
+                            context={
+                                "reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_HASH_CONFLICT",
+                                "target_binding_id": persisted_target.binding_id,
+                                "target_binding_hash": persisted_target.binding_hash,
+                            },
+                        )
+
+                if source.effective_to is None:
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_release_binding
+                        SET effective_to = %s, updated_at = NOW()
+                        WHERE binding_id = %s AND binding_hash = %s AND effective_to IS NULL
+                        """,
+                        (source_effective_to, source_binding_id, expected_source_binding_hash),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "MiniQMT route migration source window CAS update failed",
+                            context={
+                                "reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_CAS_CONFLICT",
+                                "source_binding_id": source_binding_id,
+                            },
+                        )
+
+                cur.execute(
+                    "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                    (source_binding_id,),
+                )
+                persisted_source_row = cur.fetchone()
+                cur.execute(
+                    "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_hash = %s",
+                    (target_binding.binding_hash,),
+                )
+                persisted_target_row = cur.fetchone()
+                if persisted_source_row is None or persisted_target_row is None:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration transaction readback is incomplete",
+                        context={"reason_code": "MINIQMT_ROUTE_MIGRATION_TRANSACTION_READBACK_MISSING"},
+                    )
+                persisted_source = self._binding_from_row(dict(persisted_source_row))
+                persisted_target = self._binding_from_row(dict(persisted_target_row))
+                if persisted_source.effective_to != source_effective_to:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration source window transaction readback differs",
+                        context={"reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_WINDOW_READBACK_MISMATCH"},
+                    )
+        return persisted_source, persisted_target
+
     def get_simulation_release_binding(self, binding_id: str) -> SimulationReleaseBinding:
         rows = self._fetch_rows(
             "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
@@ -495,6 +679,36 @@ class SimulationRuntimeRepository:
             "SELECT * FROM paper_v2.simulation_release_binding WHERE binding_hash = %s",
             (binding_hash,),
         )
+        return self._binding_from_row(rows[0]) if rows else None
+
+    def find_miniqmt_route_migration_target(
+        self,
+        *,
+        source_binding_id: str,
+        effective_trade_date: date,
+    ) -> SimulationReleaseBinding | None:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.simulation_release_binding
+            WHERE broker_backend = 'minqmt_sim'
+              AND binding_config_json->'metadata'->'miniqmt_route_migration'->>'source_binding_id' = %s
+              AND binding_config_json->'metadata'->'miniqmt_route_migration'->>'effective_trade_date' = %s
+            ORDER BY created_at DESC, binding_id DESC
+            LIMIT 2
+            """,
+            (source_binding_id, effective_trade_date.isoformat()),
+        )
+        if len(rows) > 1:
+            raise InvalidStateTransitionError(
+                "MiniQMT route migration has multiple durable targets for one source/date",
+                context={
+                    "reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_CONFLICT",
+                    "source_binding_id": source_binding_id,
+                    "effective_trade_date": effective_trade_date.isoformat(),
+                    "target_binding_ids": [str(row["binding_id"]) for row in rows],
+                },
+            )
         return self._binding_from_row(rows[0]) if rows else None
 
     def list_simulation_release_bindings(
@@ -1603,6 +1817,86 @@ class InMemorySimulationRuntimeRepository:
         self.binding_hash_index[binding.binding_hash or ""] = binding.binding_id
         return binding
 
+    def migrate_miniqmt_binding_route(
+        self,
+        *,
+        source_binding_id: str,
+        expected_source_binding_hash: str,
+        source_effective_to: date,
+        target_binding: SimulationReleaseBinding,
+    ) -> tuple[SimulationReleaseBinding, SimulationReleaseBinding]:
+        bindings_snapshot = dict(self.bindings)
+        binding_hash_index_snapshot = dict(self.binding_hash_index)
+        try:
+            source = self.get_simulation_release_binding(source_binding_id)
+            if source.binding_hash != expected_source_binding_hash:
+                raise InvalidStateTransitionError(
+                    "MiniQMT route migration source binding hash changed",
+                    context={
+                        "reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_CAS_CONFLICT",
+                        "source_binding_id": source_binding_id,
+                    },
+                )
+            if source.effective_to not in {None, source_effective_to}:
+                raise InvalidStateTransitionError(
+                    "MiniQMT route migration source effective window conflicts with requested cutover",
+                    context={
+                        "reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_WINDOW_CONFLICT",
+                        "source_binding_id": source_binding_id,
+                        "expected_effective_to": source_effective_to.isoformat(),
+                        "actual_effective_to": source.effective_to.isoformat() if source.effective_to else None,
+                    },
+                )
+            marker = (
+                target_binding.binding_config_json.get("metadata", {}).get("miniqmt_route_migration")
+                if isinstance(target_binding.binding_config_json.get("metadata"), dict)
+                else None
+            )
+            if not isinstance(marker, dict):
+                raise InvalidStateTransitionError(
+                    "MiniQMT route migration target binding is missing its durable marker",
+                    context={"reason_code": "MINIQMT_ROUTE_MIGRATION_MARKER_MISSING"},
+                )
+            for existing in self.bindings.values():
+                metadata = existing.binding_config_json.get("metadata")
+                existing_marker = metadata.get("miniqmt_route_migration") if isinstance(metadata, dict) else None
+                if not isinstance(existing_marker, dict):
+                    continue
+                if (
+                    existing_marker.get("source_binding_id") == source_binding_id
+                    and existing_marker.get("effective_trade_date") == marker.get("effective_trade_date")
+                    and existing.binding_hash != target_binding.binding_hash
+                ):
+                    raise InvalidStateTransitionError(
+                        "MiniQMT route migration already has a different target for this source/date",
+                        context={
+                            "reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_CONFLICT",
+                            "source_binding_id": source_binding_id,
+                            "conflicting_binding_id": existing.binding_id,
+                            "conflicting_binding_hash": existing.binding_hash,
+                        },
+                    )
+            persisted_target = self.save_simulation_release_binding(target_binding)
+            if persisted_target.model_dump(mode="json") != target_binding.model_dump(mode="json"):
+                raise InvalidStateTransitionError(
+                    "MiniQMT route migration target hash readback differs from the requested binding",
+                    context={"reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_HASH_CONFLICT"},
+                )
+            persisted_source = source.model_copy(
+                update={"effective_to": source_effective_to, "updated_at": datetime.now(UTC)}
+            )
+            self.bindings[source_binding_id] = persisted_source
+            if self.get_simulation_release_binding(source_binding_id).effective_to != source_effective_to:
+                raise InvalidStateTransitionError(
+                    "MiniQMT route migration source window transaction readback differs",
+                    context={"reason_code": "MINIQMT_ROUTE_MIGRATION_SOURCE_WINDOW_READBACK_MISMATCH"},
+                )
+            return persisted_source, persisted_target
+        except Exception:
+            self.bindings = bindings_snapshot
+            self.binding_hash_index = binding_hash_index_snapshot
+            raise
+
     def get_simulation_release_binding(self, binding_id: str) -> SimulationReleaseBinding:
         try:
             return self.bindings[binding_id]
@@ -1612,6 +1906,35 @@ class InMemorySimulationRuntimeRepository:
     def get_simulation_release_binding_by_hash(self, binding_hash: str) -> SimulationReleaseBinding | None:
         binding_id = self.binding_hash_index.get(binding_hash)
         return self.bindings[binding_id] if binding_id else None
+
+    def find_miniqmt_route_migration_target(
+        self,
+        *,
+        source_binding_id: str,
+        effective_trade_date: date,
+    ) -> SimulationReleaseBinding | None:
+        matches: list[SimulationReleaseBinding] = []
+        for binding in self.bindings.values():
+            metadata = binding.binding_config_json.get("metadata")
+            marker = metadata.get("miniqmt_route_migration") if isinstance(metadata, dict) else None
+            if not isinstance(marker, dict):
+                continue
+            if (
+                marker.get("source_binding_id") == source_binding_id
+                and marker.get("effective_trade_date") == effective_trade_date.isoformat()
+            ):
+                matches.append(binding)
+        if len(matches) > 1:
+            raise InvalidStateTransitionError(
+                "MiniQMT route migration has multiple durable targets for one source/date",
+                context={
+                    "reason_code": "MINIQMT_ROUTE_MIGRATION_TARGET_CONFLICT",
+                    "source_binding_id": source_binding_id,
+                    "effective_trade_date": effective_trade_date.isoformat(),
+                    "target_binding_ids": sorted(item.binding_id for item in matches),
+                },
+            )
+        return matches[0] if matches else None
 
     def list_simulation_release_bindings(
         self,

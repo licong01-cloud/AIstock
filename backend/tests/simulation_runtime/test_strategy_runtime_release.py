@@ -131,6 +131,10 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
         capital_allocation=10_000_000,
         strategy_name="strategy_a",
         order_remark_prefix="aistock_a",
+        miniqmt_quote_control={
+            "schema_version": "miniqmt_quote_control_binding_v1",
+            "control_revision": "B0_QUOTE_V2",
+        },
     )
     binding_b = service.create_binding(
         strategy_id="strategy_a",
@@ -142,6 +146,10 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
         capital_allocation=20_000_000,
         strategy_name="strategy_a_v2",
         order_remark_prefix="aistock_a_v2",
+        miniqmt_quote_control={
+            "schema_version": "miniqmt_quote_control_binding_v1",
+            "control_revision": "B0_QUOTE_V2",
+        },
     )
 
     assert changed_execution.release_hash != baseline.release_hash

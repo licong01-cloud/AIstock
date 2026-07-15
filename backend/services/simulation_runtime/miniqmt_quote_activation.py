@@ -21,6 +21,7 @@ from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngr
 from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
     B0QuoteV2RevisionV1,
     B0QuoteV2ControllerFactory,
+    ParentQuoteControlAssignmentV1,
     QuoteControlBindingV1,
     quote_ingress_config_sha256,
 )
@@ -449,6 +450,33 @@ class MiniQMTQuoteIngressActivation:
                     "legacy_fallback": False,
                 },
             )
+        assignment_payloads = quote_control.get("assignments")
+        if not isinstance(assignment_payloads, list) or not assignment_payloads:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 context publication requires exact parent assignments",
+                context={"plan_id": plan.plan_id, "runtime_id": runtime_id, "legacy_fallback": False},
+            )
+        assignments = {
+            assignment.parent_intent_id: assignment
+            for payload in assignment_payloads
+            if isinstance(payload, Mapping)
+            for assignment in (ParentQuoteControlAssignmentV1.from_plan_payload(payload, revision=revision),)
+        }
+        if len(assignments) != len(assignment_payloads):
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 context publication assignments are malformed or duplicated",
+                context={"plan_id": plan.plan_id, "runtime_id": runtime_id, "legacy_fallback": False},
+            )
+        prepare_transition = getattr(self.controller_factory, "prepare_assignment_transition", None)
+        if not callable(prepare_transition):
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 controller factory lacks the assignment transition contract",
+                context={"plan_id": plan.plan_id, "runtime_id": runtime_id, "legacy_fallback": False},
+            )
+        prepare_transition(runtime_id=runtime_id, assignments=assignments)
         context = adapter.prepare_runtime_context(
             runtime_id=runtime_id,
             symbols=(intent.symbol for intent in plan.intents),

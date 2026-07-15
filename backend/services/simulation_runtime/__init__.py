@@ -10,6 +10,14 @@ from .decision import (
     TradingRuleService,
 )
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
+from .miniqmt_route_migration import (
+    MiniQMTRouteMigrationError,
+    MiniQMTRouteMigrationInventoryV1,
+    MiniQMTRouteMigrationMarkerV1,
+    MiniQMTRouteMigrationPlanV1,
+    MiniQMTRouteMigrationReceiptV1,
+    MiniQMTRouteMigrationService,
+)
 from .models import (
     ALPHA_SIGNAL_FORBIDDEN_KEYS,
     CANONICAL_MINIQMT_RUNTIME_OWNER,
@@ -82,6 +90,12 @@ __all__ = [
     "MiniQMTExecutionBridge",
     "MiniQMTExecutionRuntimeRequest",
     "MiniQMTPlanPreviewResult",
+    "MiniQMTRouteMigrationError",
+    "MiniQMTRouteMigrationInventoryV1",
+    "MiniQMTRouteMigrationMarkerV1",
+    "MiniQMTRouteMigrationPlanV1",
+    "MiniQMTRouteMigrationReceiptV1",
+    "MiniQMTRouteMigrationService",
     "MiniQMTUnsupportedExecutionAlgoError",
     "MergedPositionReconciliation",
     "OperatorCommand",
