@@ -736,19 +736,19 @@ Phase 1–5 是依赖顺序，不要求所有开发串行。实际实施拆为�
 
 A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 research-ready 或研究许可状态。A 中任一指标族形成可复算 receipt 后即可用于科研分析；B/C 的 CAS、DB、API/MCP/UI 和历史补算状态不改变该结果，只决定持久化、查询和展示能力。调用方不得把 `NOT_COMPUTABLE/NOT_VERIFIABLE` 伪装为已计算，但可以继续运行所有不依赖缺失项的实验与分析。
 
-### 12.2 v1.5 当前实施进度（2026-07-15）
+### 12.2 v1.5 当前实施进度（2026-07-16）
 
 | 子项 | 状态 | 实现 / 证据 | 未完成边界 |
 |---|---|---|---|
 | versioned profile、reason、family status、identity | `CORE_VERIFIED` | `long_trend_evaluation_contract.py`；不可变注册 profile、显式 null 输入、稳定 `qelt_` identity、六族独立状态、完整 overlap receipt 与 feature/outcome 一致性 oracle | repository/task identity 绑定在 Phase 2–3 接入 |
-| QE 严格数据读取与双快照 parity | `CORE_VERIFIED` | `long_trend_data_reader.py`；仅允许 `daily_pv.h5/sector_data.h5`，校验文件内容 hash、QE dataset/workspace samefile 绑定、same/strict-extension full-overlap qfq OHLC 精确一致 | 计算节点 wrapper 与实际 Recorder snapshot resolver 在 Phase 2 接入 |
-| signal path | `CORE_VERIFIED` | `long_trend_evaluation.py`；T+1→T+h+1、feature 截止日隔离、entry-day path 排除、20–180D 宽 schema、maturity/right censor、ordered stage/survival、稳定排名、RankIC、TopK、barrier、time-to-hit、MFE/MAE、AUCPR | 实际 R8 制品只读 smoke 和 CAS Parquet 写出尚未执行 |
-| statistics / slices / sector | `CORE_IMPLEMENTED` | signal-day Newey-West、moving-block bootstrap、BH-FDR；全期/126/252 交易日位置切片；signal-date PIT L2 与逐板块指标 | 大样本资源 receipt、真实板块 Parquet 和 Archive readback 尚未执行 |
-| position episode | `CORE_VERIFIED_NORMALIZED_INPUT` | 0↔持仓转换、re-entry/open/right censor、首段 left censor、position 自身 as-of、outcome extended path、capture/post-exit/false early-exit；不从 TopK 猜仓位 | Qlib Position object resolver 和真实 trade/fee reconciliation 在 Phase 2 继续 |
-| order fill / execution cause | `CORE_VERIFIED_ENTRY_EXIT_BRIDGE` | entry/exit 对称解析 Qlib indicator `amount/deal_amount/ffr`、trade、order intent、position transition；一笔 trade 只归属一个信号；数量/时点/原因矛盾 fail-fast；直接阻断损失可量化，日线只作 diagnostic | 真实 Recorder/Archive/CAS artifact resolver 与 child-order/queue 证据在 Phase 2 继续；无原因证据时只将 cause 标 `NOT_VERIFIABLE` |
-| portfolio result | `CORE_VERIFIED_AUTHORITATIVE_REPORT` | Qlib portfolio report 独立校验并计算累计/年化收益、波动、Sharpe、最大回撤、成本和换手；不以 signal/episode close return 冒充组合成本后收益 | 真实 Recorder report resolver 在 Phase 2 接入 |
+| QE 严格数据读取与双快照 parity | `REAL_SNAPSHOT_VERIFIED` | `long_trend_data_reader.py`；仅允许 `daily_pv.h5/sector_data.h5`，校验文件内容 hash、QE dataset/workspace samefile 绑定、same/strict-extension full-overlap qfq OHLC 精确一致；R8B 六个真实 Loop 固定到 2026-06-30 snapshot | 计算节点自动 wrapper、CAS/DB identity readback 在 Phase 2–3 接入 |
+| signal path | `REAL_R8B_6_OF_6_COMPUTED` | `long_trend_evaluation.py`；T+1→T+h+1、feature 截止日隔离、entry-day path 排除、20–180D 宽 schema、maturity/right censor、ordered stage/survival、稳定排名、RankIC、TopK、barrier、time-to-hit、MFE/MAE、AUCPR；每腿约 220.7 万行 | CAS/DB 自动发布仍在 Phase 2–3；本地 immutable Parquet/summary 已生成 |
+| statistics / slices / sector | `REAL_R8B_6_OF_6_COMPUTED` | signal-day Newey-West、moving-block bootstrap、BH-FDR；全期/126/252 交易日位置切片；signal-date PIT L2 与逐板块指标；真实 sector coverage 约 99.99% | Archive/API readback 与更深 Recall@100 profile 继续追加 |
+| position episode | `REAL_R8B_6_OF_6_COMPUTED_WITH_LIMITATIONS` | 0↔持仓转换、re-entry/open/right censor、首段 left censor、position 自身 as-of、outcome extended path、capture/post-exit/false early-exit；真实每腿约 2,187–2,420 episodes | 少量路径/日历 reconciliation limitation 保留在 family status；更早 position 与费用制品可历史补充 |
+| order fill / execution cause | `REAL_ARTIFACT_REPLAYING_AFTER_QLIB_OVERFILL_FIX` | entry/exit 对称解析 Qlib indicator `amount/inner_amount/deal_amount/ffr`、trade、order intent、position transition；合法 `ffr>1` overfill 完整保存；一笔 trade 只归属一个信号；真实数量/时点/原因矛盾 fail-fast | 初次 R8B replay 暴露旧 overfill 误判，修复后使用新 source hash 重放；child-order/queue 原因证据仍可补充，cause 局部 `NOT_VERIFIABLE` |
+| portfolio result | `REAL_R8B_6_OF_6_COMPUTED_WITH_LIMITATIONS` | 真实 Qlib portfolio report 独立校验并计算累计/年化收益、波动、Sharpe、最大回撤、成本和换手；不以 signal/episode close return 冒充组合成本后收益 | 原 report 中成本/换手诊断存在零值/缺失冲突时显式 limitation；权威收益仍保留 |
 | family-local failure | `CORE_IMPLEMENTED` | prediction/sector/label/position/execution 可选输入独立定级；一个族异常不丢弃其他已计算族 | worker/CAS/DB/API/UI 对同一状态的贯通在 Phase 2–4 继续 |
-| core tests | `VERIFIED` | `test_qe_long_trend_contract_reader.py`、`test_qe_long_trend_evaluation_core.py`：51 passed；三核心模块 line coverage `87.53%`、branch coverage `73.01%`；ruff、py_compile、diff 与 ownership scan 随本 changeset validation receipt 固化 | 真实 Recorder、DEV DB、API/MCP/UI、重启恢复不属于本阶段已完成证据 |
+| core tests | `VERIFIED` | 三个 F-014 test 文件 `61 passed`；三核心模块 line coverage `87.59%`、branch coverage `72.62%`；含 entry/exit overfill、真实冲突、source-change、strict-root oracle；ruff、py_compile、diff 与 ownership scan 通过 | DEV DB、API/MCP/UI、自动 worker 和重启恢复不属于本阶段已完成证据 |
 | platform B/C | `PENDING_BY_DESIGN` | 设计与 acceptance id 保留 | CAS、资源、三表、migration、API、MCP、UI、历史补算、真实 E2E 未实现；不得宣称 F-014 整体完成 |
 
 ## 13. Verification Plan / 验证方案
