@@ -32,8 +32,8 @@
   "expected": "AgentTeamsRunView, MemoryTreeView, and external-agents page visible labels/titles are Chinese.",
   "first_seen_at": "2026-06-22T08:32:26.239813Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "42c3c11e92e667ae6f4f79564d6ae1f3429a358a",
+  "fixed_at": "2026-07-15T10:42:26.947291Z",
   "github_issue_number": 1471,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1471",
   "last_seen_at": "2026-06-22T08:32:26.239813Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1473",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -93,6 +94,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "Local frontend next lint passed; GitHub PR #1473 head 12c836d6a2e30845c20386ea88dd9eb28dde44e0: AIstock CI, Static gate, CodeQL, Semgrep, AIstock PR Quality, and Issue Auto Link all successful; mergeable=true; mergeStateStatus=CLEAN"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
