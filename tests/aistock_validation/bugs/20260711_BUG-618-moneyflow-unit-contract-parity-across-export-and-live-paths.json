@@ -30,7 +30,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-618",
-  "closed_at": null,
+  "closed_at": "2026-07-11T17:07:54Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -50,8 +50,8 @@
   "expected": "Keep existing mf_total_net_* names while every offline export, static factor, QE, factor-library and live inference path emits the same shares/yuan moneyflow contract and derives total net flow from Tushare net_mf_*.",
   "first_seen_at": "2026-07-11T16:20:34.979794Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7b313451ea865a515e332f8387a6a1c0df46b24c",
+  "fixed_at": "2026-07-15T13:45:28.976840Z",
   "github_issue_number": 1977,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1977",
   "last_seen_at": "2026-07-11T16:20:34.979794Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1979",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -78,6 +79,9 @@
     "fingerprint": "ee095c45955c85a8cb5faf6d",
     "source_event_id": "FE-20260711-ee095c45955c"
   },
+  "validation_evidence": [
+    "Source PR #1979 is MERGED (7b313451ea865a515e332f8387a6a1c0df46b24c); canonical BUG-618 remained open; metadata-only aftercare. Issue #1977 already closed prior to aftercare."
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
