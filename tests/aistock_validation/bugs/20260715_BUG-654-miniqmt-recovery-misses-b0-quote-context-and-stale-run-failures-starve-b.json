@@ -41,8 +41,8 @@
   "expected": "For each new or durable-active B0_QUOTE_V2 runtime, the scheduler must atomically publish an authoritative quote evaluation context into the exact store used by the production ingress writer before any controller tick or broker submit. The frozen plan policy, exact parent symbols, instrument tick/lot/depth-unit evidence, calendar and tradability authorities must be used without defaults or LEGACY fallback. A stale or post-close recovery failure must remain explicit at stage/run granularity while other historical runs and all current eligible LocalSIM/MiniQMT bindings continue processing.",
   "first_seen_at": "2026-07-15T02:58:24.923848Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "02e73de6b67db9a64f869ef62bcd310c604d0cdc",
+  "fixed_at": "2026-07-15T04:36:51.016357Z",
   "github_issue_number": 2143,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2143",
   "last_seen_at": "2026-07-15T02:58:24.923848Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2148",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -70,6 +71,9 @@
     "fingerprint": "ae031ae5aa6805b078717cf6",
     "source_event_id": "FE-20260715-ae031ae5aa68"
   },
+  "validation_evidence": [
+    "targeted matrix: 33 passed, 1 unrelated DB-backed test deselected; direct follow-ups: 3 passed; ruff/py_compile/diff-check passed; nox l0 passed; nox validation_module_registry_l0 passed; PR #2148 all required CI checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
