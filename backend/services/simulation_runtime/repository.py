@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
+from contextlib import contextmanager
+from copy import deepcopy
+from datetime import UTC, date, datetime
 from typing import Any, Callable, Iterable, Iterator
 
 import psycopg2.extras
@@ -21,7 +23,11 @@ from .models import (
     DailySelectionEvidence,
     ExecutionPlan,
     ExecutionPlanIntent,
+    LocalSimEconomicReceiptV1,
     LocalSimExecutionStateV1,
+    LocalSimProjectionOutboxStatus,
+    LocalSimProjectionOutboxV1,
+    LocalSimProjectionReceiptV1,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -30,10 +36,58 @@ from .models import (
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     TradingRuleDecision,
+    canonical_json_sha256,
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
 LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY = "local_sim_execution_states_v1"
+LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY = "local_sim_economic_receipts_v1"
+LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY = "local_sim_projection_outbox_v1"
+LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY = "local_sim_projection_receipts_v1"
+LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY = "local_sim_economic_generation"
+LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_terminal_failure"
+
+
+def _local_sim_economic_receipt_map(payload: dict[str, Any]) -> dict[str, LocalSimEconomicReceiptV1]:
+    raw = payload.get(LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY) or {}
+    if not isinstance(raw, dict):
+        raise InvalidStateTransitionError("LocalSIM economic receipt payload must be an object", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_PAYLOAD_INVALID"})
+    receipts: dict[str, LocalSimEconomicReceiptV1] = {}
+    for receipt_id, receipt_payload in raw.items():
+        try:
+            receipt = LocalSimEconomicReceiptV1.model_validate(receipt_payload)
+        except Exception as exc:
+            raise InvalidStateTransitionError("LocalSIM economic receipt failed schema or hash validation", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)}) from exc
+        if receipt.receipt_id != receipt_id:
+            raise InvalidStateTransitionError("LocalSIM economic receipt map key does not match identity", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)})
+        receipts[receipt_id] = receipt
+    return receipts
+
+
+def _local_sim_projection_outbox(payload: dict[str, Any]) -> LocalSimProjectionOutboxV1 | None:
+    raw = payload.get(LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY)
+    if raw is None:
+        return None
+    try:
+        return LocalSimProjectionOutboxV1.model_validate(raw)
+    except Exception as exc:
+        raise InvalidStateTransitionError("LocalSIM projection outbox failed schema or hash validation", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"}) from exc
+
+
+def _local_sim_projection_receipt_map(payload: dict[str, Any]) -> dict[str, LocalSimProjectionReceiptV1]:
+    raw = payload.get(LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY) or {}
+    if not isinstance(raw, dict):
+        raise InvalidStateTransitionError("LocalSIM projection receipt payload must be an object", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_PAYLOAD_INVALID"})
+    receipts: dict[str, LocalSimProjectionReceiptV1] = {}
+    for receipt_id, receipt_payload in raw.items():
+        try:
+            receipt = LocalSimProjectionReceiptV1.model_validate(receipt_payload)
+        except Exception as exc:
+            raise InvalidStateTransitionError("LocalSIM projection receipt failed schema or hash validation", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)}) from exc
+        if receipt.projection_receipt_id != receipt_id:
+            raise InvalidStateTransitionError("LocalSIM projection receipt map key does not match identity", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)})
+        receipts[receipt_id] = receipt
+    return receipts
 
 
 def _local_sim_state_map(payload: dict[str, Any]) -> dict[str, LocalSimExecutionStateV1]:
@@ -159,6 +213,128 @@ def _merge_local_sim_state_batch(
     return merged
 
 
+def _merge_local_sim_economic_event(
+    *, run_id: str, binding_id: str, trade_date: date, plan_id: str,
+    payload: dict[str, Any], states: Iterable[LocalSimExecutionStateV1],
+    expected_versions: dict[str, tuple[int, str] | None],
+    economic_facts: dict[str, Any], projection_payload: dict[str, Any],
+) -> tuple[dict[str, Any], LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
+    incoming = list(states)
+    economic_hash = canonical_json_sha256(economic_facts)
+    idempotency_key = canonical_json_sha256(["local_sim_economic_event_v1", run_id, plan_id, economic_hash])
+    receipts = _local_sim_economic_receipt_map(payload)
+    existing_receipt = next((item for item in receipts.values() if item.idempotency_key == idempotency_key), None)
+    existing_outbox = _local_sim_projection_outbox(payload)
+    def merge_states() -> dict[str, Any]:
+        if not incoming:
+            return dict(payload)
+        return _merge_local_sim_state_batch(
+            run_id=run_id,
+            payload=payload,
+            states=incoming,
+            expected_versions=expected_versions,
+        )
+    if existing_receipt is not None:
+        if existing_outbox is None or existing_outbox.receipt_id != existing_receipt.receipt_id:
+            raise InvalidStateTransitionError("LocalSIM economic receipt is missing its projection outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_MISSING", "run_id": run_id})
+        return merge_states(), existing_receipt, existing_outbox, False
+    if existing_outbox is not None and existing_outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+        raise InvalidStateTransitionError("LocalSIM cannot commit a new economic event while projection outbox is pending", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_PENDING", "run_id": run_id, "outbox_id": existing_outbox.outbox_id})
+    raw_generation = payload.get(LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY, 0)
+    if isinstance(raw_generation, bool) or not isinstance(raw_generation, int) or raw_generation < 0:
+        raise InvalidStateTransitionError("LocalSIM economic generation is invalid", context={"reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID", "run_id": run_id})
+    receipt = LocalSimEconomicReceiptV1(
+        run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
+        generation=raw_generation + 1, economic_facts=economic_facts,
+    )
+    outbox = LocalSimProjectionOutboxV1(
+        receipt_id=receipt.receipt_id, run_id=run_id, plan_id=plan_id,
+        generation=receipt.generation, economic_hash=receipt.economic_hash,
+        projection_payload=projection_payload,
+    )
+    merged = merge_states()
+    receipts[receipt.receipt_id] = receipt
+    merged[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)}
+    merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = outbox.model_dump(mode="json")
+    merged[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = receipt.generation
+    return merged, receipt, outbox, True
+
+
+def _merge_local_sim_projection_success(
+    *, run_id: str, payload: dict[str, Any], outbox_id: str,
+    generation: int, projection_result: dict[str, Any],
+) -> tuple[dict[str, Any], LocalSimProjectionReceiptV1]:
+    outbox = _local_sim_projection_outbox(payload)
+    if outbox is None or outbox.outbox_id != outbox_id or outbox.generation != generation:
+        raise InvalidStateTransitionError("LocalSIM projection outbox identity changed before projection commit", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+    if outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
+        existing = next((item for item in _local_sim_projection_receipt_map(payload).values() if item.outbox_id == outbox_id), None)
+        if existing is None:
+            raise InvalidStateTransitionError("LocalSIM projected outbox is missing its projection receipt", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_MISSING", "run_id": run_id})
+        return dict(payload), existing
+    receipt = LocalSimProjectionReceiptV1(
+        outbox_id=outbox.outbox_id, run_id=run_id, generation=outbox.generation,
+        economic_hash=outbox.economic_hash, projection_payload_hash=outbox.projection_payload_hash,
+        projection_hash=canonical_json_sha256(projection_result),
+    )
+    updated = outbox.model_copy(update={"status": LocalSimProjectionOutboxStatus.PROJECTED, "attempt_count": outbox.attempt_count + 1, "last_error": None, "updated_at": datetime.now(UTC)})
+    receipts = _local_sim_projection_receipt_map(payload)
+    receipts[receipt.projection_receipt_id] = receipt
+    merged = dict(payload)
+    merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = updated.model_dump(mode="json")
+    merged[LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY] = {key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)}
+    return merged, receipt
+
+
+def _merge_local_sim_projection_retryable(*, run_id: str, payload: dict[str, Any], outbox_id: str, error: dict[str, Any]) -> dict[str, Any]:
+    outbox = _local_sim_projection_outbox(payload)
+    if outbox is None or outbox.outbox_id != outbox_id or outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
+        raise InvalidStateTransitionError("LocalSIM projection retry state CAS failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+    updated = outbox.model_copy(update={"status": LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE, "attempt_count": outbox.attempt_count + 1, "last_error": error, "updated_at": datetime.now(UTC)})
+    merged = dict(payload)
+    merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = updated.model_dump(mode="json")
+    return merged
+
+
+def _merge_local_sim_projection_terminal(
+    *, run_id: str, payload: dict[str, Any], outbox_id: str, error: dict[str, Any]
+) -> dict[str, Any]:
+    outbox = _local_sim_projection_outbox(payload)
+    if (
+        outbox is None
+        or outbox.outbox_id != outbox_id
+        or outbox.status == LocalSimProjectionOutboxStatus.PROJECTED
+    ):
+        raise InvalidStateTransitionError(
+            "LocalSIM projection terminal state CAS failed",
+            context={
+                "reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT",
+                "run_id": run_id,
+            },
+        )
+    attempt_count = outbox.attempt_count + 1
+    updated = outbox.model_copy(
+        update={
+            "status": LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE,
+            "attempt_count": attempt_count,
+            "last_error": error,
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    merged = dict(payload)
+    merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = updated.model_dump(mode="json")
+    merged[LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY] = {
+        "schema_version": "local_sim_projection_terminal_failure_v1",
+        "run_id": run_id,
+        "outbox_id": outbox.outbox_id,
+        "generation": outbox.generation,
+        "attempt_count": attempt_count,
+        "error": error,
+        "failed_at": datetime.now(UTC).isoformat(),
+    }
+    return merged
+
+
 def _is_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> bool:
     return (evidence.evidence_payload_json or {}).get("schema_version") == "daily_selection_evidence_v2"
 
@@ -173,6 +349,10 @@ def _validate_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> N
 class SimulationRuntimeRepository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
+
+    @contextmanager
+    def local_sim_economic_transaction_scope(self) -> Iterator[None]:
+        yield
 
     def save_strategy_runtime_release(self, release: StrategyRuntimeRelease) -> StrategyRuntimeRelease:
         existing_by_hash = self.get_strategy_runtime_release_by_hash(release.release_hash or "")
@@ -881,6 +1061,182 @@ class SimulationRuntimeRepository:
                 )
         return [readback[state.state_id] for state in incoming]
 
+    def stage_local_sim_economic_commit(
+        self, *, connection: Any, run_id: str, binding_id: str, trade_date: date,
+        plan_id: str, states: Iterable[LocalSimExecutionStateV1],
+        expected_versions: dict[str, tuple[int, str] | None],
+        economic_facts: dict[str, Any], projection_payload: dict[str, Any],
+        status: SimulationDailyRunStatus, payload_patch: dict[str, Any],
+        payload_unset: Iterable[str] = (),
+    ) -> tuple[LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
+        if connection is None:
+            raise RuntimeError("PostgreSQL LocalSIM economic commit requires the owning transaction connection")
+        with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+            current_payload = dict(row.get("run_payload_json") or {})
+            merged, receipt, outbox, created = _merge_local_sim_economic_event(
+                run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
+                payload=current_payload, states=states, expected_versions=expected_versions,
+                economic_facts=economic_facts, projection_payload=projection_payload,
+            )
+            if created:
+                merged.update(payload_patch)
+                for key in payload_unset:
+                    merged.pop(str(key), None)
+                merged = preserve_tca_sidecar(current_payload, merged)
+                cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (status.value, psycopg2.extras.Json(merged), run_id))
+        return receipt, outbox, created
+
+    def readback_local_sim_economic_commit(self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1) -> SimulationDailyRun:
+        run = self.get_simulation_daily_run(run_id)
+        persisted_receipt = _local_sim_economic_receipt_map(run.run_payload_json).get(receipt.receipt_id)
+        persisted_outbox = _local_sim_projection_outbox(run.run_payload_json)
+        if persisted_receipt is None or persisted_receipt.receipt_hash != receipt.receipt_hash:
+            raise InvalidStateTransitionError("LocalSIM economic receipt independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_READBACK_FAILED", "run_id": run_id})
+        if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
+            raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
+        persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
+        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
+            raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
+        return run
+
+    def stage_local_sim_projection_commit(
+        self, *, connection: Any, run_id: str, outbox_id: str, generation: int,
+        final_status: SimulationDailyRunStatus, projection_result: dict[str, Any],
+        payload_patch: dict[str, Any], payload_unset: Iterable[str] = (),
+    ) -> LocalSimProjectionReceiptV1:
+        if connection is None:
+            raise RuntimeError("PostgreSQL LocalSIM projection commit requires the owning transaction connection")
+        with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+            current_payload = dict(row.get("run_payload_json") or {})
+            merged, receipt = _merge_local_sim_projection_success(run_id=run_id, payload=current_payload, outbox_id=outbox_id, generation=generation, projection_result=projection_result)
+            merged.update(payload_patch)
+            merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = receipt.projection_receipt_id
+            for key in payload_unset:
+                merged.pop(str(key), None)
+            merged = preserve_tca_sidecar(current_payload, merged)
+            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (final_status.value, psycopg2.extras.Json(merged), run_id))
+        return receipt
+
+    def mark_local_sim_projection_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                    merged = _merge_local_sim_projection_retryable(run_id=run_id, payload=dict(row.get("run_payload_json") or {}), outbox_id=outbox_id, error=error)
+                    merged["last_stage"] = SimulationDailyRunStatus.FAILED_RETRYABLE.value
+                    cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (SimulationDailyRunStatus.FAILED_RETRYABLE.value, psycopg2.extras.Json(merged), run_id))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
+        return self.get_simulation_daily_run(run_id)
+
+    def mark_local_sim_projection_terminal(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT run_payload_json FROM paper_v2.simulation_daily_run "
+                        "WHERE run_id = %s FOR UPDATE",
+                        (run_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError(
+                            "simulation daily run does not exist",
+                            context={"run_id": run_id},
+                        )
+                    merged = _merge_local_sim_projection_terminal(
+                        run_id=run_id,
+                        payload=dict(row.get("run_payload_json") or {}),
+                        outbox_id=outbox_id,
+                        error=error,
+                    )
+                    merged["last_stage"] = SimulationDailyRunStatus.FAILED_TERMINAL.value
+                    cur.execute(
+                        "UPDATE paper_v2.simulation_daily_run SET status = %s, "
+                        "run_payload_json = %s, updated_at = now() WHERE run_id = %s",
+                        (
+                            SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                            psycopg2.extras.Json(merged),
+                            run_id,
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
+        return self.get_simulation_daily_run(run_id)
+
+    def readback_local_sim_projection_commit(self, *, run_id: str, receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+        run = self.get_simulation_daily_run(run_id)
+        outbox = _local_sim_projection_outbox(run.run_payload_json)
+        persisted = _local_sim_projection_receipt_map(run.run_payload_json).get(receipt.projection_receipt_id)
+        if outbox is None or outbox.outbox_id != receipt.outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+            raise InvalidStateTransitionError("LocalSIM projection outbox status independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id})
+        if persisted is None or persisted.receipt_hash != receipt.receipt_hash:
+            raise InvalidStateTransitionError("LocalSIM projection receipt independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id})
+        return run
+
+    def _update_local_sim_projection_readback_state(self, *, run_id: str, outbox_id: str, status: SimulationDailyRunStatus, patch: dict[str, Any], unset: Iterable[str] = ()) -> SimulationDailyRun:
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                    payload = dict(row.get("run_payload_json") or {})
+                    outbox = _local_sim_projection_outbox(payload)
+                    if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+                        raise InvalidStateTransitionError("LocalSIM projection readback state CAS failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+                    payload.update(patch)
+                    for key in unset:
+                        payload.pop(str(key), None)
+                    cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (status.value, psycopg2.extras.Json(payload), run_id))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
+        return self.get_simulation_daily_run(run_id)
+
+    def mark_local_sim_projection_readback_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+        return self._update_local_sim_projection_readback_state(run_id=run_id, outbox_id=outbox_id, status=SimulationDailyRunStatus.FAILED_RETRYABLE, patch={"local_sim_projection_readback_failure": error, "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value})
+
+    def clear_local_sim_projection_readback_failure(self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus) -> SimulationDailyRun:
+        return self._update_local_sim_projection_readback_state(run_id=run_id, outbox_id=outbox_id, status=final_status, patch={"last_stage": final_status.value}, unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"))
+
     def merge_run_tca_capture_sidecar(
         self,
         *,
@@ -1196,6 +1552,15 @@ class InMemorySimulationRuntimeRepository:
         self.execution_plan_hash_index: dict[str, str] = {}
         self.daily_runs: dict[str, SimulationDailyRun] = {}
         self.daily_run_key_index: dict[tuple[str, str, Any], str] = {}
+
+    @contextmanager
+    def local_sim_economic_transaction_scope(self) -> Iterator[None]:
+        snapshot = deepcopy(self.daily_runs)
+        try:
+            yield
+        except Exception:
+            self.daily_runs = snapshot
+            raise
 
     def save_strategy_runtime_release(self, release: StrategyRuntimeRelease) -> StrategyRuntimeRelease:
         if release.release_hash in self.release_hash_index:
@@ -1520,6 +1885,105 @@ class InMemorySimulationRuntimeRepository:
                     },
                 )
         return [readback[state.state_id] for state in incoming]
+
+    def stage_local_sim_economic_commit(
+        self, *, connection: Any, run_id: str, binding_id: str, trade_date: date,
+        plan_id: str, states: Iterable[LocalSimExecutionStateV1],
+        expected_versions: dict[str, tuple[int, str] | None],
+        economic_facts: dict[str, Any], projection_payload: dict[str, Any],
+        status: SimulationDailyRunStatus, payload_patch: dict[str, Any],
+        payload_unset: Iterable[str] = (),
+    ) -> tuple[LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
+        current = self.get_simulation_daily_run(run_id)
+        merged, receipt, outbox, created = _merge_local_sim_economic_event(
+            run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
+            payload=current.run_payload_json, states=states, expected_versions=expected_versions,
+            economic_facts=economic_facts, projection_payload=projection_payload,
+        )
+        if created:
+            merged.update(payload_patch)
+            for key in payload_unset:
+                merged.pop(str(key), None)
+            merged = preserve_tca_sidecar(current.run_payload_json, merged)
+        self.daily_runs[run_id] = current.model_copy(update={"status": status if created else current.status, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        return receipt, outbox, created
+
+    def readback_local_sim_economic_commit(self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1) -> SimulationDailyRun:
+        run = self.get_simulation_daily_run(run_id)
+        persisted_receipt = _local_sim_economic_receipt_map(run.run_payload_json).get(receipt.receipt_id)
+        persisted_outbox = _local_sim_projection_outbox(run.run_payload_json)
+        if persisted_receipt is None or persisted_receipt.receipt_hash != receipt.receipt_hash:
+            raise InvalidStateTransitionError("LocalSIM economic receipt independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_READBACK_FAILED", "run_id": run_id})
+        if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
+            raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
+        persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
+        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
+            raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
+        return run
+
+    def stage_local_sim_projection_commit(self, *, connection: Any, run_id: str, outbox_id: str, generation: int, final_status: SimulationDailyRunStatus, projection_result: dict[str, Any], payload_patch: dict[str, Any], payload_unset: Iterable[str] = ()) -> LocalSimProjectionReceiptV1:
+        current = self.get_simulation_daily_run(run_id)
+        merged, receipt = _merge_local_sim_projection_success(run_id=run_id, payload=current.run_payload_json, outbox_id=outbox_id, generation=generation, projection_result=projection_result)
+        merged.update(payload_patch)
+        merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = receipt.projection_receipt_id
+        for key in payload_unset:
+            merged.pop(str(key), None)
+        merged = preserve_tca_sidecar(current.run_payload_json, merged)
+        self.daily_runs[run_id] = current.model_copy(update={"status": final_status, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        return receipt
+
+    def mark_local_sim_projection_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        merged = _merge_local_sim_projection_retryable(run_id=run_id, payload=current.run_payload_json, outbox_id=outbox_id, error=error)
+        merged["last_stage"] = SimulationDailyRunStatus.FAILED_RETRYABLE.value
+        updated = current.model_copy(update={"status": SimulationDailyRunStatus.FAILED_RETRYABLE, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        self.daily_runs[run_id] = updated
+        return updated
+
+    def mark_local_sim_projection_terminal(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        merged = _merge_local_sim_projection_terminal(
+            run_id=run_id,
+            payload=current.run_payload_json,
+            outbox_id=outbox_id,
+            error=error,
+        )
+        merged["last_stage"] = SimulationDailyRunStatus.FAILED_TERMINAL.value
+        updated = current.model_copy(
+            update={
+                "status": SimulationDailyRunStatus.FAILED_TERMINAL,
+                "run_payload_json": merged,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.daily_runs[run_id] = updated
+        return updated
+
+    def readback_local_sim_projection_commit(self, *, run_id: str, receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+        run = self.get_simulation_daily_run(run_id)
+        outbox = _local_sim_projection_outbox(run.run_payload_json)
+        persisted = _local_sim_projection_receipt_map(run.run_payload_json).get(receipt.projection_receipt_id)
+        if outbox is None or outbox.outbox_id != receipt.outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+            raise InvalidStateTransitionError("LocalSIM projection outbox status independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id})
+        if persisted is None or persisted.receipt_hash != receipt.receipt_hash:
+            raise InvalidStateTransitionError("LocalSIM projection receipt independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id})
+        return run
+
+    def mark_local_sim_projection_readback_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        outbox = _local_sim_projection_outbox(current.run_payload_json)
+        if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+            raise InvalidStateTransitionError("LocalSIM projection readback failure targets a non-projected outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+        return self.update_simulation_daily_run(run_id, status=SimulationDailyRunStatus.FAILED_RETRYABLE, payload_patch={"local_sim_projection_readback_failure": error, "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value})
+
+    def clear_local_sim_projection_readback_failure(self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        outbox = _local_sim_projection_outbox(current.run_payload_json)
+        if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+            raise InvalidStateTransitionError("LocalSIM projection readback recovery targets a non-projected outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+        return self.update_simulation_daily_run(run_id, status=final_status, payload_patch={"last_stage": final_status.value}, payload_unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"))
 
     def merge_run_tca_capture_sidecar(
         self,

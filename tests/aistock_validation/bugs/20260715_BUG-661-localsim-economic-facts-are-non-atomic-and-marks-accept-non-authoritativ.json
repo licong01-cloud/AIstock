@@ -1,9 +1,12 @@
 {
   "actual": "Scheduler performs multiple repository writes sequentially and can derive marks from non-market plan/reference/limit prices, so partial commits, false-green projections and non-authoritative valuation remain possible.",
   "allowed_write_scope": [
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/paper_trading_v2/repository.py",
     "backend/services/simulation_runtime/models.py",
     "backend/services/simulation_runtime/repository.py",
     "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260715_BUG-661-localsim-economic-facts-are-non-atomic-and-marks-accept-non-authoritativ.json",

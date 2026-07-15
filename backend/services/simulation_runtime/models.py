@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -1095,6 +1096,147 @@ class LocalSimExecutionRuntimeStatus(str, Enum):
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     EXPIRED_WITH_RESIDUAL = "EXPIRED_WITH_RESIDUAL"
+
+
+class LocalSimMarketMarkProvenance(str, Enum):
+    REALTIME_MINUTE_CLOSE = "REALTIME_MINUTE_CLOSE"
+    HISTORICAL_MINUTE_CLOSE = "HISTORICAL_MINUTE_CLOSE"
+    SUSPENDED_PREV_CLOSE = "SUSPENDED_PREV_CLOSE"
+
+
+class LocalSimProjectionOutboxStatus(str, Enum):
+    PENDING = "PENDING"
+    PROJECTION_RETRYABLE = "PROJECTION_RETRYABLE"
+    PROJECTED = "PROJECTED"
+
+
+class LocalSimMarketMarkV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["local_sim_market_mark_v1"] = "local_sim_market_mark_v1"
+    symbol: str
+    price: float
+    as_of_time: datetime
+    source: str
+    provenance: LocalSimMarketMarkProvenance
+    mark_hash: str = ""
+
+    @model_validator(mode="after")
+    def _validate_identity_and_hash(self) -> "LocalSimMarketMarkV1":
+        symbol = str(self.symbol or "").strip()
+        source = str(self.source or "").strip()
+        if not symbol or not source:
+            raise ValueError("LocalSIM market mark symbol and source are required")
+        if not math.isfinite(float(self.price)) or float(self.price) <= 0:
+            raise ValueError("LocalSIM market mark price must be finite and positive")
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "source", source)
+        expected = canonical_json_sha256(self.model_dump(mode="json", exclude={"mark_hash"}))
+        if self.mark_hash and self.mark_hash != expected:
+            raise ValueError("mark_hash does not match LocalSimMarketMarkV1 payload")
+        object.__setattr__(self, "mark_hash", expected)
+        return self
+
+
+class LocalSimEconomicReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["local_sim_economic_receipt_v1"] = "local_sim_economic_receipt_v1"
+    receipt_id: str = ""
+    run_id: str
+    binding_id: str
+    trade_date: date
+    plan_id: str
+    generation: int = Field(gt=0)
+    economic_facts: dict[str, Any]
+    economic_hash: str = ""
+    idempotency_key: str = ""
+    receipt_hash: str = ""
+    committed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def _validate_identity_and_hashes(self) -> "LocalSimEconomicReceiptV1":
+        economic_hash = canonical_json_sha256(self.economic_facts)
+        if self.economic_hash and self.economic_hash != economic_hash:
+            raise ValueError("economic_hash does not match LocalSIM economic facts")
+        object.__setattr__(self, "economic_hash", economic_hash)
+        idempotency_key = canonical_json_sha256(["local_sim_economic_event_v1", self.run_id, self.plan_id, economic_hash])
+        if self.idempotency_key and self.idempotency_key != idempotency_key:
+            raise ValueError("idempotency_key does not match LocalSIM economic event")
+        object.__setattr__(self, "idempotency_key", idempotency_key)
+        receipt_id = "lsec_" + canonical_json_sha256([self.run_id, self.generation, idempotency_key])
+        if self.receipt_id and self.receipt_id != receipt_id:
+            raise ValueError("receipt_id does not match LocalSIM economic receipt identity")
+        object.__setattr__(self, "receipt_id", receipt_id)
+        receipt_hash = canonical_json_sha256(self.model_dump(mode="json", exclude={"receipt_hash", "committed_at"}))
+        if self.receipt_hash and self.receipt_hash != receipt_hash:
+            raise ValueError("receipt_hash does not match LocalSIM economic receipt")
+        object.__setattr__(self, "receipt_hash", receipt_hash)
+        return self
+
+
+class LocalSimProjectionOutboxV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["local_sim_projection_outbox_v1"] = "local_sim_projection_outbox_v1"
+    outbox_id: str = ""
+    receipt_id: str
+    run_id: str
+    plan_id: str
+    generation: int = Field(gt=0)
+    economic_hash: str
+    projection_payload: dict[str, Any]
+    projection_payload_hash: str = ""
+    status: LocalSimProjectionOutboxStatus = LocalSimProjectionOutboxStatus.PENDING
+    attempt_count: int = Field(default=0, ge=0)
+    last_error: dict[str, Any] | None = None
+    outbox_hash: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def _validate_identity_and_hashes(self) -> "LocalSimProjectionOutboxV1":
+        payload_hash = canonical_json_sha256(self.projection_payload)
+        if self.projection_payload_hash and self.projection_payload_hash != payload_hash:
+            raise ValueError("projection_payload_hash does not match LocalSIM outbox payload")
+        object.__setattr__(self, "projection_payload_hash", payload_hash)
+        outbox_id = "lsout_" + canonical_json_sha256([self.run_id, self.generation, self.receipt_id, self.economic_hash, payload_hash])
+        if self.outbox_id and self.outbox_id != outbox_id:
+            raise ValueError("outbox_id does not match LocalSIM projection outbox identity")
+        object.__setattr__(self, "outbox_id", outbox_id)
+        outbox_hash = canonical_json_sha256({
+            "schema_version": self.schema_version, "outbox_id": outbox_id,
+            "receipt_id": self.receipt_id, "run_id": self.run_id,
+            "plan_id": self.plan_id, "generation": self.generation,
+            "economic_hash": self.economic_hash, "projection_payload_hash": payload_hash,
+        })
+        if self.outbox_hash and self.outbox_hash != outbox_hash:
+            raise ValueError("outbox_hash does not match LocalSIM projection outbox")
+        object.__setattr__(self, "outbox_hash", outbox_hash)
+        return self
+
+
+class LocalSimProjectionReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["local_sim_projection_receipt_v1"] = "local_sim_projection_receipt_v1"
+    projection_receipt_id: str = ""
+    outbox_id: str
+    run_id: str
+    generation: int = Field(gt=0)
+    economic_hash: str
+    projection_payload_hash: str
+    projection_hash: str
+    projected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    receipt_hash: str = ""
+
+    @model_validator(mode="after")
+    def _validate_identity_and_hashes(self) -> "LocalSimProjectionReceiptV1":
+        receipt_id = "lsproj_" + canonical_json_sha256([self.run_id, self.generation, self.outbox_id, self.projection_hash])
+        if self.projection_receipt_id and self.projection_receipt_id != receipt_id:
+            raise ValueError("projection_receipt_id does not match LocalSIM projection identity")
+        object.__setattr__(self, "projection_receipt_id", receipt_id)
+        receipt_hash = canonical_json_sha256(self.model_dump(mode="json", exclude={"receipt_hash", "projected_at"}))
+        if self.receipt_hash and self.receipt_hash != receipt_hash:
+            raise ValueError("receipt_hash does not match LocalSIM projection receipt")
+        object.__setattr__(self, "receipt_hash", receipt_hash)
+        return self
 
 
 LOCAL_SIM_TERMINAL_RUNTIME_STATUSES = frozenset(

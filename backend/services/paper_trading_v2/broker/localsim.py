@@ -25,7 +25,7 @@ from __future__ import annotations
 import threading
 from copy import deepcopy
 from dataclasses import replace
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
@@ -40,6 +40,8 @@ from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
+    LocalSimMarketMarkProvenance,
+    LocalSimMarketMarkV1,
     canonical_json_sha256,
 )
 from backend.services.trading_core.errors import (
@@ -199,6 +201,10 @@ class LocalSimBackend(BrokerBackend):
     @property
     def data_source(self) -> MinuteDataSource:
         return self._data_source
+
+    @property
+    def scheduler_as_of_time(self) -> datetime | None:
+        return self._scheduler_as_of_time
 
     def configure_execution_runtime(self, *, run_id: str, binding_id: str) -> None:
         """Bind the immutable scheduler/run identity used by durable state."""
@@ -806,6 +812,146 @@ class LocalSimBackend(BrokerBackend):
                     record.execution_state for record in records if record.execution_state is not None
                 ),
             }
+
+    def load_authoritative_position_marks(
+        self,
+        *,
+        symbols: Iterable[str],
+        trade_date: date,
+        as_of_time: datetime,
+        pre_trade_tradability: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, LocalSimMarketMarkV1]:
+        """Load position marks from the same explicit minute source used by execution."""
+
+        self._ensure_alive()
+        if as_of_time.date() != trade_date:
+            raise DataUnavailableError(
+                "LocalSim position mark as-of time does not match the run trade date",
+                context={
+                    "reason_code": "LOCALSIM_MARK_AS_OF_DATE_CONFLICT",
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat(),
+                },
+            )
+        records: dict[str, LocalSimMarketMarkV1] = {}
+        for symbol in sorted({str(item or "").strip() for item in symbols if str(item or "").strip()}):
+            tradability = dict(pre_trade_tradability.get(symbol) or {})
+            suspend_payload = dict(tradability.get("suspend_status") or {})
+            suspended = bool(
+                tradability.get("is_suspended")
+                or tradability.get("suspended")
+                or tradability.get("suspend_d")
+                or suspend_payload.get("is_suspended")
+            )
+            if suspended:
+                previous_close_provider = getattr(self._market_data_provider, "previous_close_provider", None)
+                loader = getattr(previous_close_provider, "get_previous_close", None)
+                if not callable(loader):
+                    raise DataUnavailableError(
+                        "LocalSim suspended position mark has no authoritative previous-close provider",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_PROVIDER_MISSING",
+                            "symbol": symbol,
+                            "trade_date": trade_date.isoformat(),
+                        },
+                    )
+                previous = loader(symbol, trade_date)
+                if (
+                    str(getattr(previous, "symbol", "")) != symbol
+                    or getattr(previous, "trade_date", None) != trade_date
+                    or getattr(previous, "previous_trade_date", trade_date) >= trade_date
+                ):
+                    raise DataUnavailableError(
+                        "LocalSim suspended previous-close identity does not match the requested position",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_IDENTITY_CONFLICT",
+                            "symbol": symbol,
+                            "trade_date": trade_date.isoformat(),
+                        },
+                    )
+                records[symbol] = LocalSimMarketMarkV1(
+                    symbol=symbol,
+                    price=float(getattr(previous, "pre_close")),
+                    as_of_time=datetime.combine(getattr(previous, "previous_trade_date"), time(15, 0)),
+                    source=str(getattr(previous, "source", "") or ""),
+                    provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
+                )
+                continue
+
+            if self._data_source == MinuteDataSource.TDX_REALTIME:
+                market_input = self._market_data_provider.load_observed_intraday(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    source=self._data_source,
+                    until_time=as_of_time,
+                )
+                provenance = LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
+            elif self._data_source == MinuteDataSource.DB_HISTORICAL:
+                market_input = self._market_data_provider.load_symbol_input(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    source=self._data_source,
+                    min_bars=1,
+                    require_suspend_status=True,
+                )
+                provenance = LocalSimMarketMarkProvenance.HISTORICAL_MINUTE_CLOSE
+            else:
+                raise DataUnavailableError(
+                    "LocalSim position mark source is unsupported",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_SOURCE_INVALID",
+                        "source": self._data_source.value,
+                    },
+                )
+            if (
+                market_input.symbol != symbol
+                or market_input.trade_date != trade_date
+                or market_input.source != self._data_source
+            ):
+                raise DataUnavailableError(
+                    "LocalSim position mark input identity conflicts with the requested stream",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_INPUT_IDENTITY_CONFLICT",
+                        "symbol": symbol,
+                        "trade_date": trade_date.isoformat(),
+                        "source": self._data_source.value,
+                    },
+                )
+            cutoff = self._naive_for_compare(as_of_time)
+            observed = [
+                bar
+                for bar in market_input.minute_bars
+                if self._naive_for_compare(bar.bar_time) <= cutoff
+            ]
+            if not observed:
+                raise DataUnavailableError(
+                    "LocalSim position mark source has no observed minute close at the snapshot time",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_PRICE_MISSING",
+                        "symbol": symbol,
+                        "trade_date": trade_date.isoformat(),
+                        "source": self._data_source.value,
+                        "as_of_time": as_of_time.isoformat(),
+                    },
+                )
+            latest = max(observed, key=lambda item: self._naive_for_compare(item.bar_time))
+            if bool(latest.is_suspended):
+                raise DataUnavailableError(
+                    "LocalSim minute mark reports suspension without authoritative previous-close provenance",
+                    context={
+                        "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN",
+                        "symbol": symbol,
+                        "bar_time": latest.bar_time.isoformat(),
+                    },
+                )
+            records[symbol] = LocalSimMarketMarkV1(
+                symbol=symbol,
+                price=float(latest.close),
+                as_of_time=latest.bar_time,
+                source=self._data_source.value,
+                provenance=provenance,
+            )
+        return records
 
     def market_data_channel(self) -> MarketDataChannel:
         return MarketDataChannel(

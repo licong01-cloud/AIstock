@@ -291,7 +291,17 @@ state_id = sha256(
 
 Paper v2 日快照、TCA/performance 等可派生投影由 transactional outbox 重放。投影失败不能回滚已经提交的经济事实，但必须保持 `PROJECTION_RETRYABLE` 并自动重试，不能把 run 报为完全成功。
 
-只允许注册的连接中断、serialization/deadlock/lock timeout 做有界重试。schema/hash/CAS/idempotency/business conflict 不重试，直接 typed failure。
+只允许注册的连接中断、serialization/deadlock/lock timeout 做有界重试，单个 outbox 最多执行 3 次 projection attempt（首次 + 2 次自动重试）；第 3 次失败写 `local_sim_projection_terminal_failure_v1` 并进入 `FAILED_TERMINAL`。schema/hash/CAS/idempotency/business conflict 第一次即写同一 terminal failure receipt，不重试。projection 已提交后的独立 readback 使用单独的 `attempt_count`，最多自动复核 3 次；耗尽后保留 `PROJECTED` 事实、写 `local_sim_projection_readback_terminal_failure` 并 fail loud，不得重放 projection side effects。
+
+P0-B 的现行持久化 schema 固定为：
+
+- `local_sim_economic_receipts_v1`：按 generation 保存 `LocalSimEconomicReceiptV1`，其 `economic_hash` 覆盖 order/fill/order-event/cash/state/position/mark/account snapshot 的 canonical hash；
+- `local_sim_projection_outbox_v1`：当前 generation 的 `LocalSimProjectionOutboxV1`，状态仅允许 `PENDING`、`PROJECTION_RETRYABLE`、`PROJECTED`，payload/hash/identity 不因重试改写；
+- `local_sim_projection_receipts_v1`：成功重放后的 `LocalSimProjectionReceiptV1`，与 outbox、economic hash 和 projection hash 一一关联；
+- `local_sim_projection_terminal_failure`：非重试错误或第 3 次 projection attempt 失败的 durable typed terminal receipt；保留 outbox/economic facts，不允许 scheduler 再自动执行 projection；
+- `local_sim_economic_generation` 与 `local_sim_projection_generation`：run、Paper snapshot、performance/TCA 的共同单调 generation。
+
+生命周期 scheduler 通过 `PaperTradingV2Repository.local_sim_economic_transaction` 取得 single-writer advisory lock 和唯一写连接，Paper facts 与 `SimulationRuntimeRepository.stage_local_sim_economic_commit` 共享该连接。事务提交后必须分别 readback economic receipt/state/outbox 和 Paper facts。projection 在第二个 single-writer 事务中重放；若 projection 已提交而独立 readback 失败，保持 `PROJECTED` 事实并写 `local_sim_projection_readback_failure`，下一次自动复核 readback，禁止重写经济事实或重复 run event。
 
 ### 5.6 Market mark contract
 
@@ -303,6 +313,8 @@ Paper v2 日快照、TCA/performance 等可派生投影由 transactional outbox 
 - 缺失：`LOCALSIM_MARK_PRICE_MISSING`，不得生成成功快照。
 
 `reference_price`、`limit_price`、order price、fill-independent plan price 不能作为 position mark fallback。
+
+持久化 mark 使用 `LocalSimMarketMarkV1`，必须带 `source`、实际行情 `as_of_time`、`provenance` 和 `mark_hash`。支持的 provenance 为 `REALTIME_MINUTE_CLOSE`、`HISTORICAL_MINUTE_CLOSE`、`SUSPENDED_PREV_CLOSE`；非有限值、非正值、未知 source、晚于 account snapshot 的 mark 或无法由上一交易日 close 证明的停牌价格均 typed failure。scheduler 只能调用 LocalSIM broker 的 `load_authoritative_position_marks`，由 broker 从本次执行使用的同一 `PaperV2MinuteMarketDataProvider` 读取截至 snapshot time 的最后一个真实分钟 close；停牌时必须调用 authoritative `PreviousCloseProvider`。通用 `current_prices`、`price_by_symbol` 仅用于 target/order 构建，不得转译成 position mark 或伪造 provenance。
 
 ### 5.7 MiniQMT control assignment contract
 
@@ -471,7 +483,7 @@ runbook 固定顺序：process → lifecycle → binding → data/backend → du
 `BUG-660` 实现回执（本变更）：
 
 - `LocalSimExecutionStateV1` 按 `binding + trade_date + plan + intent + algo instance` 生成 canonical identity，包含冻结 schedule/plan hash、next slice、causality cursor、last bar identity、数量闭合、sequence、idempotency key 和 state hash；
-- `simulation_daily_run.run_payload_json.local_sim_execution_states_v1` 是 P0-A durable state plane，repository 使用行锁和 batch CAS，独立 readback 校验 schema/hash；P0-B 仍负责把 economic facts、state、outbox 收敛为同一事务，不能因本项完成而把 `F-013..015` 标记完成；
+- `simulation_daily_run.run_payload_json.local_sim_execution_states_v1` 是 P0-A durable state plane，repository 使用行锁和 batch CAS，独立 readback 校验 schema/hash；P0-B/BUG-661 已进一步把 economic facts、state、outbox 收敛为同一事务，并完成 `F-013..015` 的 source implementation 与直接验证；
 - 当日 TDX LocalSIM 只调用 `execute_order_incremental`，当前无 bar 时持久化 `WAITING_FOR_CAUSAL_BAR`，partial 保持 `ACTIVE/INTRADAY_RUNNING`，restart 从 Paper order + durable state 恢复且只消费严格晚于 cursor 的 bar；历史闭市日仍使用完整权威分钟集同步执行；
 - 同一 cursor bar readback payload 改写、duplicate/out-of-order bar、CAS/hash/identity drift、收盘 bar 缺失均 typed failure；完整收盘 bar 后剩余数量进入 `EXPIRED_WITH_RESIDUAL`，不得冒充成功；
 - direct tests 覆盖 waiting、partial continuation、相同 tick replay、restart、不同 payload 冲突、CAS conflict、close residual、close bar missing，以及 scheduler 从计划到多 tick 终态的真实 `MinuteExecutionEngine` 路径；
@@ -480,6 +492,15 @@ runbook 固定顺序：process → lifecycle → binding → data/backend → du
 ### P0-B：LocalSIM 原子事实与权威估值
 
 承接 `F-013` 至 `F-015`：repository transaction/CAS/outbox/readback；移除 reference/limit mark fallback；保证 run/Paper projection/account snapshot/TCA generation 闭合。
+
+`BUG-661` 实现回执（本变更）：
+
+- Paper order/fill/order-event/cash 与 LocalSIM state、economic receipt、run intermediate status、projection outbox 通过同一个 PostgreSQL transaction/connection 提交；InMemory repository 具有等价 rollback snapshot；
+- canonical economic receipt/outbox/projection receipt 均执行 schema、identity、hash、generation、CAS 和独立 readback；同 state、同 causal bar 且无新经济 delta 的恢复重放复用原 generation，不重复 fill、run event 或 projection；仅 PostgreSQL connection/serialization/deadlock/lock 错误进入最多 3 次 projection attempt，business/schema/CAS 冲突立即 terminal，readback 具有独立 3 次复核预算；
+- position/daily snapshot/performance/TCA generation 由 durable outbox 自动重放；projection 失败进入 retryable，projection 已提交但 readback 失败时只重试 readback，不反向改写经济事实；
+- `reference_price`、`limit_price`、`current_prices`、`price_by_symbol` 的估值 fallback 已删除；账户只接受 LocalSIM broker 从同一执行行情 provider 读取、带真实 as-of/provenance/hash 的 realtime/historical/suspended-prev-close market mark；缺失或非法 mark 使用 `LOCALSIM_MARK_*` typed failure；
+- direct tests 覆盖 PostgreSQL 单连接 commit/rollback、跨 repository 回滚、通用价格拒绝、realtime/historical/suspended mark provenance、projection readback 恢复、same-bar restart dedupe 和多分钟 partial-to-terminal generation；
+- 本项不新增 DB object，不执行生产 DDL/DML/config，不调用生产 broker，不重启服务；source merge 与正常交易日 runtime evidence 继续分开记录。
 
 ### P0-C：MiniQMT B0_V2 单一路径和旧路径退役
 
@@ -620,9 +641,9 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-010` | §5.3 | historical/current-day/lunch/non-session freshness tests | design_ready | none |
 | `F-011` | §5.3、§10.1 | V25 market-state/lot/T+1/limit/suspend regression tests | design_ready | none |
 | `F-012` | §5.4 terminal contract | unclosed intent/residual negative tests | design_ready | none |
-| `F-013` | §5.5 transaction/outbox contract | per-write fault injection and atomicity tests | design_ready | none |
-| `F-014` | §5.2、§5.5 | CAS/retry/dedupe/readback/outbox replay tests | design_ready | none |
-| `F-015` | §5.6 market mark contract | reference/limit/default-price rejection tests | design_ready | none |
+| `F-013` | §5.5；`PaperTradingV2Repository.local_sim_economic_transaction`；`SimulationRuntimeRepository.stage_local_sim_economic_commit` | PostgreSQL single-connection commit/rollback、InMemory cross-repository rollback、economic receipt/state/outbox readback tests | implemented_verified | none |
+| `F-014` | §5.2、§5.5；`LocalSimEconomicReceiptV1`、`LocalSimProjectionOutboxV1`、`LocalSimProjectionReceiptV1` | same-bar restart dedupe、CAS、connection retry max-3、business-conflict terminal、projection readback recovery、tamper/schema fail-loud tests | implemented_verified | none |
+| `F-015` | §5.6；`LocalSimMarketMarkV1`；`LocalSimBackend.load_authoritative_position_marks`；`_local_sim_position_marks` | generic price/plan fallback rejection、realtime/historical/suspended as-of/source/provenance/hash validation tests | implemented_verified | none |
 | `F-016` | §4.4、§5.8 | XtQuant callback source and route owner tests | design_ready | none |
 | `F-017` | §5.7 | B0_V2 frozen assignment and no LEGACY fallback tests | design_ready | none |
 | `F-018` | §6.2 migration sequence | active/open-order migration and historical readback tests | design_ready | none |
@@ -638,14 +659,14 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 
 状态枚举：`IMPLEMENTED_VERIFIED`、`REPAIR_REQUIRED`、`EVIDENCE_REFRESH_REQUIRED`、`DESIGN_ONLY`、`HISTORICAL_RETIRED`。本表记录当前摘要；详细历史以 Git/PR/BUG/CI 为准。
 
-| Progress ID | Acceptance IDs | Current state at `main@954e7ac6` | Evidence | Status | Next implementation slice |
+| Progress ID | Acceptance IDs | Current state at `main@0a264b99` | Evidence | Status | Next implementation slice |
 | --- | --- | --- | --- | --- | --- |
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
 | `SIM-P-003` | `F-005` | BUG-658 已允许 unchanged authoritative manifest roll-forward 且拒绝虚假变更 | commit `43ce19de`；本设计核对 2 direct tests passed | IMPLEMENTED_VERIFIED | 保持 frozen identity contract |
-| `SIM-P-004` | `F-007..012` | BUG-660 已实现 durable per-intent state、batch CAS/readback、realtime incremental minute loop、partial continuation、restart cursor/bar-hash 去重和 close residual；历史闭市日同步路径保持不变 | `paper_trading_v2/broker/localsim.py`、`simulation_runtime/models.py`、`simulation_runtime/repository.py`、`simulation_runtime/scheduler.py`；direct LocalSIM/scheduler tests | IMPLEMENTED_VERIFIED（source pending merge） | P0-B 完成 economic facts/state/outbox 同事务后，用户重启并补正常交易日 runtime evidence |
-| `SIM-P-005` | `F-013,014` | LocalSIM Paper facts 仍为多个 repository 方法顺序写入，无覆盖全链事务/outbox | `simulation_runtime/scheduler.py:7273-7465` | REPAIR_REQUIRED | P0-B |
-| `SIM-P-006` | `F-015` | position marks 仍可从 plan reference/limit price 补值 | `simulation_runtime/scheduler.py:7606-7627` | REPAIR_REQUIRED | P0-B |
+| `SIM-P-004` | `F-007..012` | BUG-660 已实现 durable per-intent state、batch CAS/readback、realtime incremental minute loop、partial continuation、restart cursor/bar-hash 去重和 close residual；历史闭市日同步路径保持不变 | PR #2174、merge `02cc8bde`；direct LocalSIM/scheduler tests | IMPLEMENTED_VERIFIED | P0-B source merge 后由用户重启并补正常交易日 runtime evidence |
+| `SIM-P-005` | `F-013,014` | BUG-661 已实现 Paper facts/state/run/outbox 同连接事务、single-writer、canonical receipt/hash、projection replay、same-bar dedupe、commit/readback 分离恢复；仅连接类错误执行最多 3 次 projection attempt，business/schema/CAS 冲突立即 terminal，readback 独立有界复核 | `paper_trading_v2/repository.py`、`simulation_runtime/models.py/repository.py/scheduler.py`；direct transaction/restart/retry-exhaustion/nonretryable/readback tests | IMPLEMENTED_VERIFIED（source pending merge） | 完成 BUG-661 PR/CI/merge 后补正常交易日 runtime evidence |
+| `SIM-P-006` | `F-015` | BUG-661 已删除计划价和通用 price map 的 mark fallback；broker 从执行使用的同一 minute provider 读取最后一个 causal close，`LocalSimMarketMarkV1` 强制真实 source/as-of/provenance/hash 与 authoritative previous-close 停牌证明 | generic-price negative test、realtime/historical/suspended provenance test、LocalSIM partial/restart test | IMPLEMENTED_VERIFIED（source pending merge） | source merge 后核对真实历史日/当日 mark provenance |
 | `SIM-P-007` | `F-016` | MiniQMT canonical runtime 已有真实 tick callback、bootstrap、durable event loop | Phase 1 design/PR #2019、BUG-604/614 tests | IMPLEMENTED_VERIFIED | 唯一路径静态与真实 SIM 持续验证 |
 | `SIM-P-008` | `F-017..019` | LEGACY_B0、Paper `MiniQMTSimBackend`、raw QMT direct order/batch 仍存在 | `paper_trading_v2/broker/minqmtsim.py:247`、`routers/qmt.py:220-466` | REPAIR_REQUIRED | P0-C |
 | `SIM-P-009` | `F-020,021` | MiniQMT recovery/pending/submitted 解析仍有 pass/归零；raw batch 顶层恒真 | `scheduler.py:7776-7794,7897-7914`、`routers/qmt.py:458-464` | REPAIR_REQUIRED | P0-D |
@@ -668,6 +689,15 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_unrequested_gate_or_approval` | pass | §0.3 区分技术条件与审批；禁止 RBAC/ack/confirm-run，自动恢复 |
 | design-to-implementation traceability | pass | §13 稳定索引、§14 验收矩阵、§15 当前进度和 same-PR 更新契约 |
 | production state separation | pass | §10.5、§11、§12、`F-024` 分离 merge/DDL/config/restart/binding/runtime evidence |
+
+`BUG-661` source implementation 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass | 经济事实与 projection 使用两个完整 single-writer transaction；包含 canonical receipt/outbox、CAS/readback、连接类 max-3 retry、non-retryable terminal receipt 和真实 market provider mark，不以顺序写或通用 price map 代替 |
+| `no_silent_error` | pass | schema/hash/identity/CAS/readback/mark/retry exhaustion 均抛 typed reason code；失败状态写回，未增加 `pass`、空集合成功或异常吞噬 |
+| `no_business_semantic_drift` | pass | 仅改变 LocalSIM persistence/projection/mark authority；Selection、target、V25/T+1/limit/suspend 决策和 MiniQMT broker route 未改写 |
+| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、人工 ack、审批、confirm-run 或业务开关；恢复由 outbox 自动执行并受技术性 retry budget 约束 |
 
 ## 17. Definition of Done
 

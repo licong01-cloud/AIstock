@@ -18,9 +18,10 @@ import time as monotonic_time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Mapping, Protocol
 import psycopg2.extras
 
@@ -64,6 +65,7 @@ from backend.services.trading_core.errors import (
     BrokerRejectedError,
     DataUnavailableError,
     RuntimeConfigInvalidError,
+    SessionLockTimeoutError,
 )
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
@@ -89,6 +91,11 @@ from .models import (
     ExecutionPlan,
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
+    LocalSimMarketMarkProvenance,
+    LocalSimMarketMarkV1,
+    LocalSimProjectionOutboxStatus,
+    LocalSimProjectionOutboxV1,
+    LocalSimProjectionReceiptV1,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
     SimulationDailyRun,
@@ -242,6 +249,8 @@ _LOCALSIM_CASH_FIT_SELL_PROCEEDS_BUFFER_RATIO = 0.98
 _LOCALSIM_DEFAULT_OPEN_COST = 0.000095
 _LOCALSIM_DEFAULT_CLOSE_COST = 0.000595
 _LOCALSIM_DEFAULT_MIN_FEE = 5.0
+_LOCALSIM_PROJECTION_MAX_ATTEMPTS = 3
+_LOCALSIM_PROJECTION_RETRYABLE_PG_CODES = frozenset({"40001", "40P01", "55P03"})
 
 
 @dataclass(frozen=True)
@@ -280,6 +289,10 @@ class LocalSimPersistenceResult:
     positions: dict[str, PositionLot]
     marks: dict[str, float]
     cash: float
+    economic_receipt_id: str
+    outbox_id: str
+    generation: int
+    performance_payload: dict[str, Any]
 
 
 class SimulationRunContextProvider(Protocol):
@@ -7263,6 +7276,12 @@ class SimulationLifecycleScheduler:
         context: SimulationRunContext,
         local_persistence: LocalSimPersistenceResult | None = None,
     ) -> dict[str, Any]:
+        if local_persistence is not None:
+            latest = self.repository.get_simulation_daily_run(run.run_id)
+            payload = latest.run_payload_json.get("strategy_performance")
+            if not isinstance(payload, dict) or int(payload.get("local_sim_generation") or 0) != local_persistence.generation:
+                raise DataUnavailableError("LocalSim performance projection generation does not match economic facts", context={"reason_code": "LOCALSIM_PERFORMANCE_GENERATION_CONFLICT", "run_id": run.run_id, "expected_generation": local_persistence.generation})
+            return payload
         marks = self._performance_marks(context)
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and (
             context.qmt_ledger_repository is None
@@ -7283,17 +7302,6 @@ class SimulationLifecycleScheduler:
                 strategy_id=binding.strategy_id,
                 repository=context.qmt_ledger_repository,
                 marks=marks,
-            )
-        elif local_persistence is not None:
-            projection = self.performance_service.project_strategy(
-                strategy_id=binding.strategy_id,
-                broker_backend=binding.broker_backend,
-                initial_capital=float(binding.capital_allocation),
-                cash=float(local_persistence.cash),
-                frozen_cash=0.0,
-                realized_pnl=float(context.realized_pnl),
-                positions=local_persistence.positions,
-                marks=local_persistence.marks,
             )
         else:
             projection = self.performance_service.project_strategy(
@@ -7340,276 +7348,637 @@ class SimulationLifecycleScheduler:
         execution: SimulationExecutionResult,
         context: SimulationRunContext,
     ) -> LocalSimPersistenceResult | None:
-        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
-            return None
-        if execution.status != "SUBMITTED":
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or execution.status != "SUBMITTED":
             return None
         try:
-            broker_result = execution.broker_result
-            snapshot = getattr(broker_result, "execution_snapshot", None)
+            snapshot = getattr(execution.broker_result, "execution_snapshot", None)
             if snapshot is None:
                 raise DataUnavailableError(
                     "LocalSim submit returned no execution snapshot for durable persistence",
-                    context={
-                        "run_id": run.run_id,
-                        "strategy_id": binding.strategy_id,
-                        "binding_id": binding.binding_id,
-                        "plan_id": execution.execution_plan.plan_id,
-                    },
+                    context={"run_id": run.run_id, "strategy_id": binding.strategy_id, "binding_id": binding.binding_id, "plan_id": execution.execution_plan.plan_id},
                 )
-            orders = tuple(getattr(snapshot, "orders", ()) or ())
-            fills = tuple(getattr(snapshot, "fills", ()) or ())
-            events = tuple(getattr(snapshot, "events", ()) or ())
-            snapshot_cash_entries = tuple(getattr(snapshot, "cash_entries", ()) or ())
             orders, fills, events, cash_entries = self._filter_local_sim_snapshot_by_plan(
                 execution=execution,
-                orders=orders,
-                fills=fills,
-                events=events,
-                cash_entries=snapshot_cash_entries,
+                orders=tuple(getattr(snapshot, "orders", ()) or ()),
+                fills=tuple(getattr(snapshot, "fills", ()) or ()),
+                events=tuple(getattr(snapshot, "events", ()) or ()),
+                cash_entries=tuple(getattr(snapshot, "cash_entries", ()) or ()),
             )
             positions = dict(getattr(snapshot, "positions", {}) or {})
             account = getattr(snapshot, "account", None)
             execution_states: tuple[LocalSimExecutionStateV1, ...] = ()
             if context.market_data_source == MinuteDataSource.TDX_REALTIME.value:
                 exporter = getattr(context.local_broker, "export_execution_snapshot", None)
-                handles = tuple(getattr(broker_result, "handles", ()) or ())
                 if not callable(exporter):
-                    raise DataUnavailableError(
-                        "LocalSim realtime broker cannot export durable execution states",
-                        context={"reason_code": "LOCALSIM_DURABLE_STATE_EXPORT_UNSUPPORTED",
-                                 "run_id": run.run_id, "plan_id": execution.execution_plan.plan_id},
-                    )
-                raw_snapshot = exporter(handles=handles)
+                    raise DataUnavailableError("LocalSim realtime broker cannot export durable execution states", context={"reason_code": "LOCALSIM_DURABLE_STATE_EXPORT_UNSUPPORTED", "run_id": run.run_id, "plan_id": execution.execution_plan.plan_id})
+                raw_snapshot = exporter(handles=tuple(getattr(execution.broker_result, "handles", ()) or ()))
                 execution_states = tuple(raw_snapshot.get("execution_states") or ())
-                self._validate_local_sim_execution_states(
-                    binding=binding, run=run, execution=execution, states=execution_states
-                )
-                self._validate_local_sim_snapshot_for_progress(
-                    run=run, execution=execution, orders=orders
-                )
+                self._validate_local_sim_execution_states(binding=binding, run=run, execution=execution, states=execution_states)
+                self._validate_local_sim_snapshot_for_progress(run=run, execution=execution, orders=orders)
             else:
-                self._validate_local_sim_snapshot_for_success(
-                    run=run, execution=execution, orders=orders, fills=fills, cash_entries=cash_entries
+                self._validate_local_sim_snapshot_for_success(run=run, execution=execution, orders=orders, fills=fills, cash_entries=cash_entries)
+
+            paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
+            self._replay_pending_local_sim_projection(run_id=run.run_id, paper_repository=paper_repository)
+            current_states = {state.state_id: state for state in self.repository.list_local_sim_execution_states(run.run_id)}
+            if (
+                execution_states
+                and not fills
+                and not events
+                and not cash_entries
+                and all(
+                    state.state_id in current_states
+                    and current_states[state.state_id].sequence == state.sequence
+                    and current_states[state.state_id].state_hash == state.state_hash
+                    for state in execution_states
                 )
-            marks = self._local_sim_position_marks(
-                positions=positions,
-                context=context,
-                execution=execution,
+            ):
+                return self._local_sim_existing_projection_result(run_id=run.run_id)
+            snapshot_time = self._local_sim_snapshot_time(
+                fills=fills,
+                events=events,
+                run=run,
+                local_broker=context.local_broker,
+                market_data_source=context.market_data_source,
+            )
+            marks, mark_records = self._local_sim_position_marks(
+                positions=positions, context=context, execution=execution, snapshot_time=snapshot_time
             )
             cash = float(getattr(account, "cash")) if account is not None else self._cash_after_local_sim(cash_entries, context)
-            snapshot_time = self._local_sim_snapshot_time(fills=fills, events=events, run=run)
             market_value = sum(int(position.quantity) * marks[position.symbol] for position in positions.values())
             account_snapshot = AccountSnapshot(
                 portfolio_id=str(context.portfolio_id or execution.execution_plan.portfolio_id),
-                cash=cash,
-                market_value=market_value,
-                nav=cash + market_value,
-                snapshot_time=snapshot_time,
-            )
-            paper_repository = self._paper_repository_for_local_sim(
-                binding=binding,
-                run=run,
-                context=context,
-            )
-            self._ensure_local_sim_paper_run(
-                repository=paper_repository,
-                run=run,
-                context=context,
-            )
-            for order in orders:
-                paper_repository.save_order(run.run_id, order)
-            for fill in fills:
-                paper_repository.save_fill(run.run_id, fill)
-            for event in events:
-                paper_repository.save_order_event(run.run_id, event)
-            for entry in cash_entries:
-                paper_repository.save_cash_entry(run.run_id, entry)
-            if execution_states:
-                current_states = {
-                    state.state_id: state for state in self.repository.list_local_sim_execution_states(run.run_id)
-                }
-                expected_versions = {
-                    state.state_id: (
-                        (current_states[state.state_id].sequence, current_states[state.state_id].state_hash)
-                        if state.state_id in current_states else None
-                    )
-                    for state in execution_states
-                }
-                self.repository.commit_local_sim_execution_states(
-                    run_id=run.run_id, states=execution_states, expected_versions=expected_versions
-                )
-            paper_repository.save_positions(
-                run_id=run.run_id,
-                trade_date=run.trade_date,
-                positions=list(positions.values()),
-                prices=marks,
-            )
-            paper_repository.save_daily_snapshot(
-                run_id=run.run_id,
-                trade_date=run.trade_date,
-                snapshot=account_snapshot,
-                metadata={
-                    "source": "simulation_runtime_local_sim",
-                    "simulation_run_id": run.run_id,
-                    "execution_plan_id": execution.execution_plan.plan_id,
-                    "order_count": len(orders),
-                    "fill_count": len(fills),
-                    "cash_ledger_count": len(cash_entries),
-                    "position_count": len(positions),
-                    "terminal": not any(not state.is_terminal for state in execution_states),
-                },
+                cash=cash, market_value=market_value, nav=cash + market_value, snapshot_time=snapshot_time,
             )
             cash_fit_residual = self._local_sim_cash_fit_residual_payload(run)
             active_states = tuple(state for state in execution_states if not state.is_terminal)
-            residual_states = tuple(
-                state for state in execution_states
-                if state.runtime_status == LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL
-            )
-            nonfilled_terminal_states = tuple(
-                state for state in execution_states
-                if state.is_terminal and state.runtime_status != LocalSimExecutionRuntimeStatus.FILLED
-            )
+            residual_states = tuple(state for state in execution_states if state.runtime_status == LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL)
+            nonfilled_terminal_states = tuple(state for state in execution_states if state.is_terminal and state.runtime_status != LocalSimExecutionRuntimeStatus.FILLED)
             terminal = not active_states
             terminal_failure = bool(cash_fit_residual or residual_states or nonfilled_terminal_states)
             if active_states:
-                run_event_type = "RUN_INTRADAY_PROGRESS"
-                run_event_message = "simulation runtime LocalSim minute progress persisted"
-                paper_status = RunStatus.RUNNING
-                next_status = SimulationDailyRunStatus.INTRADAY_RUNNING
+                final_event_type, final_event_message = "RUN_INTRADAY_PROGRESS", "simulation runtime LocalSim minute progress projected"
+                final_paper_status, final_status, persistence_status = RunStatus.RUNNING, SimulationDailyRunStatus.INTRADAY_RUNNING, "INTRADAY_PERSISTED"
             elif terminal_failure:
-                run_event_type = "RUN_TERMINATED_WITH_RESIDUAL"
-                run_event_message = "simulation runtime LocalSim execution terminalized with explicit residual"
-                paper_status = RunStatus.FAILED
-                next_status = SimulationDailyRunStatus.FAILED_TERMINAL
+                final_event_type, final_event_message = "RUN_TERMINATED_WITH_RESIDUAL", "simulation runtime LocalSim execution terminalized with explicit residual"
+                final_paper_status, final_status = RunStatus.FAILED, SimulationDailyRunStatus.FAILED_TERMINAL
+                persistence_status = "PERSISTED_WITH_CAPACITY_RESIDUAL" if cash_fit_residual else "PERSISTED_WITH_RESIDUAL"
             else:
-                run_event_type = "RUN_SUCCEEDED"
-                run_event_message = "simulation runtime LocalSim terminal execution persisted to Paper v2"
-                paper_status = RunStatus.SUCCEEDED
-                next_status = SimulationDailyRunStatus.SUCCEEDED
-            paper_repository.save_run_event(
-                run_id=run.run_id,
-                event_type=run_event_type,
-                message=run_event_message,
-                context={
-                    "source": "simulation_runtime_local_sim",
-                    "simulation_run_id": run.run_id,
-                    "execution_plan_id": execution.execution_plan.plan_id,
-                    "order_count": len(orders),
-                    "fill_count": len(fills),
-                    "cash_ledger_count": len(cash_entries),
-                    "position_count": len(positions),
-                    "snapshot_time": snapshot_time.isoformat(),
-                    "local_sim_cash_fit": cash_fit_residual,
-                    "terminal": terminal,
-                    "active_state_ids": [state.state_id for state in active_states],
-                    "residual_state_ids": [state.state_id for state in residual_states],
-                },
-            )
-            paper_repository.update_run_status(
-                paper_repository.get_run(run.run_id),
-                paper_status,
-                error={
-                    "code": (
-                        "LOCALSIM_CAPACITY_RESIDUAL_SKIPPED" if cash_fit_residual
-                        else "LOCALSIM_EXECUTION_TERMINATED_WITH_RESIDUAL"
-                    ),
-                    "message": (
-                        "LocalSim skipped non-executable BUY residual after cash-fit planning" if cash_fit_residual
-                        else "LocalSim closed with explicit unfilled execution residual"
-                    ),
-                    "context": {
-                        "local_sim_cash_fit": cash_fit_residual,
-                        "states": [state.model_dump(mode="json") for state in nonfilled_terminal_states],
-                    },
-                }
-                if terminal_failure
-                else None,
-            )
-            local_sim_persistence_payload = {
-                "schema_version": "local_sim_persistence_v1",
-                "status": (
-                    "INTRADAY_PERSISTED" if active_states else
-                    "PERSISTED_WITH_RESIDUAL" if terminal_failure else "PERSISTED_TERMINAL"
-                ),
-                "paper_v2_run_id": run.run_id,
-                "order_count": len(orders),
-                "fill_count": len(fills),
-                "order_event_count": len(events),
-                "cash_ledger_count": len(cash_entries),
-                "position_count": len(positions),
-                "snapshot_time": snapshot_time.isoformat(),
-                "cash": cash,
-                "nav": account_snapshot.nav,
-                "terminal": terminal,
-                "execution_state_count": len(execution_states),
-                "active_state_count": len(active_states),
+                final_event_type, final_event_message = "RUN_SUCCEEDED", "simulation runtime LocalSim terminal execution projected to Paper v2"
+                final_paper_status, final_status, persistence_status = RunStatus.SUCCEEDED, SimulationDailyRunStatus.SUCCEEDED, "PERSISTED"
+
+            final_persistence_payload = {
+                "schema_version": "local_sim_persistence_v2", "status": persistence_status,
+                "paper_v2_run_id": run.run_id, "order_count": len(orders), "fill_count": len(fills),
+                "order_event_count": len(events), "cash_ledger_count": len(cash_entries),
+                "position_count": len(positions), "snapshot_time": snapshot_time.isoformat(),
+                "cash": cash, "nav": account_snapshot.nav, "terminal": terminal,
+                "execution_state_count": len(execution_states), "active_state_count": len(active_states),
                 "residual_state_count": len(residual_states),
             }
-            payload_patch = {
-                "local_sim_persistence": local_sim_persistence_payload,
-                "last_stage": next_status.value,
+            payload_patch: dict[str, Any] = {
+                "local_sim_persistence": {**final_persistence_payload, "status": "PROJECTION_PENDING"},
+                "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED",
             }
             if execution_states:
                 payload_patch["local_sim_durable_minute_loop"] = {
-                    "schema_version": "local_sim_durable_minute_loop_v1",
-                    "state_count": len(execution_states),
-                    "active_state_count": len(active_states),
-                    "terminal": terminal,
+                    "schema_version": "local_sim_durable_minute_loop_v1", "state_count": len(execution_states),
+                    "active_state_count": len(active_states), "terminal": terminal,
                 }
             if terminal_failure:
                 payload_patch["local_sim_capacity_residual_terminalization"] = {
                     "schema_version": "localsim_capacity_residual_terminalization_v1",
-                    "reason": (
-                        "cash_fit_skipped_non_executable_buy_residual" if cash_fit_residual
-                        else "execution_schedule_residual_at_close"
-                    ),
-                    "status": next_status.value,
+                    "reason": "cash_fit_skipped_non_executable_buy_residual" if cash_fit_residual else "execution_schedule_residual_at_close",
+                    "status": final_status.value,
                     "skipped_buy_count": int((cash_fit_residual or {}).get("skipped_buy_count") or 0),
                     "prepared_intent_count": int((cash_fit_residual or {}).get("prepared_intent_count") or 0),
                     "residual_state_ids": [state.state_id for state in residual_states],
                     "terminalized_at": datetime.now(UTC).isoformat(),
                 }
-            self.repository.update_simulation_daily_run(
-                run.run_id,
-                status=next_status,
-                payload_patch=payload_patch,
-                payload_unset=(
-                    "submit_failure", "local_sim_retry_diagnostics",
-                    *(("local_sim_synchronous_terminal",) if execution_states else ()),
-                ),
+            economic_facts = self._local_sim_economic_facts(
+                run=run, execution=execution, orders=orders, fills=fills, events=events,
+                cash_entries=cash_entries, states=execution_states, positions=positions,
+                marks=mark_records, account_snapshot=account_snapshot,
             )
+            economic_hash = canonical_json_sha256(economic_facts)
+            projection_payload = self._local_sim_projection_payload(
+                binding=binding, run=run, execution=execution, context=context,
+                positions=positions, marks=mark_records, account_snapshot=account_snapshot,
+                orders=orders, fills=fills, cash_entries=cash_entries,
+                active_states=active_states, residual_states=residual_states,
+                nonfilled_terminal_states=nonfilled_terminal_states, cash_fit_residual=cash_fit_residual,
+                terminal=terminal, terminal_failure=terminal_failure, final_status=final_status,
+                final_paper_status=final_paper_status, final_event_type=final_event_type,
+                final_event_message=final_event_message, final_persistence_payload=final_persistence_payload,
+                economic_hash=economic_hash,
+            )
+            expected_versions = {
+                state.state_id: ((current_states[state.state_id].sequence, current_states[state.state_id].state_hash) if state.state_id in current_states else None)
+                for state in execution_states
+            }
+            with self.repository.local_sim_economic_transaction_scope():
+                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
+                    self._ensure_local_sim_paper_run(repository=paper_repository, run=run, context=context)
+                    for order in orders:
+                        paper_repository.save_order(run.run_id, order)
+                    for fill in fills:
+                        paper_repository.save_fill(run.run_id, fill)
+                    for event in events:
+                        paper_repository.save_order_event(run.run_id, event)
+                    for entry in cash_entries:
+                        paper_repository.save_cash_entry(run.run_id, entry)
+                    receipt, outbox, created = self.repository.stage_local_sim_economic_commit(
+                        connection=connection, run_id=run.run_id, binding_id=binding.binding_id,
+                        trade_date=run.trade_date, plan_id=execution.execution_plan.plan_id,
+                        states=execution_states, expected_versions=expected_versions,
+                        economic_facts=economic_facts, projection_payload=projection_payload,
+                        status=SimulationDailyRunStatus.INTRADAY_RUNNING, payload_patch=payload_patch,
+                        payload_unset=("submit_failure", "local_sim_retry_diagnostics", *(("local_sim_synchronous_terminal",) if execution_states else ())),
+                    )
+                    if created:
+                        paper_repository.save_run_event(
+                            run_id=run.run_id, event_type="RUN_ECONOMIC_COMMITTED",
+                            message="simulation runtime LocalSim economic facts committed; projection outbox pending",
+                            context={"source": "simulation_runtime_local_sim", "simulation_run_id": run.run_id,
+                                     "execution_plan_id": execution.execution_plan.plan_id, "receipt_id": receipt.receipt_id,
+                                     "outbox_id": outbox.outbox_id, "generation": receipt.generation,
+                                     "economic_hash": receipt.economic_hash},
+                        )
+            self.repository.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
+            paper_repository.readback_local_sim_economic_facts(
+                run_id=run.run_id, order_ids={str(item.order_id) for item in orders},
+                fill_ids={str(item.fill_id) for item in fills},
+                order_event_ids={str(item.event_id) for item in events},
+                cash_fill_ids={str(item.fill_id) for item in cash_entries},
+            )
+            projected_run, performance_payload = self._project_local_sim_outbox(run_id=run.run_id, paper_repository=paper_repository)
+            if not isinstance(projected_run.run_payload_json.get("local_sim_persistence"), dict):
+                raise DataUnavailableError("LocalSim projected persistence receipt is missing", context={"reason_code": "LOCALSIM_PERSISTENCE_RECEIPT_MISSING", "run_id": run.run_id})
             return LocalSimPersistenceResult(
-                payload={
-                    "order_count": len(orders),
-                    "fill_count": len(fills),
-                    "cash_ledger_count": len(cash_entries),
-                    "position_count": len(positions),
-                    "cash": cash,
-                    "nav": account_snapshot.nav,
-                    "terminal": terminal,
-                    "active_state_count": len(active_states),
-                    "residual_state_count": len(residual_states),
-                },
-                positions=positions,
-                marks=marks,
-                cash=cash,
+                payload={"order_count": len(orders), "fill_count": len(fills), "cash_ledger_count": len(cash_entries),
+                         "position_count": len(positions), "cash": cash, "nav": account_snapshot.nav,
+                         "terminal": terminal, "active_state_count": len(active_states),
+                         "residual_state_count": len(residual_states)},
+                positions=positions, marks=marks, cash=cash, economic_receipt_id=receipt.receipt_id,
+                outbox_id=outbox.outbox_id, generation=receipt.generation, performance_payload=performance_payload,
             )
         except Exception as exc:
             if not isinstance(exc, DataUnavailableError):
                 exc = DataUnavailableError(
                     "LocalSim execution side effects could not be persisted durably",
-                    context={
-                        "run_id": run.run_id,
-                        "strategy_id": binding.strategy_id,
-                        "binding_id": binding.binding_id,
-                        "plan_id": execution.execution_plan.plan_id,
-                        "cause": str(exc),
+                    context={"run_id": run.run_id, "strategy_id": binding.strategy_id, "binding_id": binding.binding_id,
+                             "plan_id": execution.execution_plan.plan_id, "cause": str(exc)},
+                )
+            failure_context = dict(getattr(exc, "context", None) or {})
+            reason_code = str(failure_context.get("reason_code") or "")
+            failure_stage = self._local_sim_persistence_failure_stage(exc)
+            if reason_code in {
+                "LOCALSIM_PROJECTION_NON_RETRYABLE",
+                "LOCALSIM_PROJECTION_RETRY_EXHAUSTED",
+                "LOCALSIM_PROJECTION_READBACK_RETRY_EXHAUSTED",
+            }:
+                self.repository.update_simulation_daily_run(
+                    run.run_id,
+                    status=SimulationDailyRunStatus.FAILED_TERMINAL,
+                    payload_patch={
+                        "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                        "submit_failure": {
+                            "stage": failure_stage,
+                            "outer_stage": failure_stage,
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                            "context": failure_context,
+                        },
                     },
                 )
-            stage = self._local_sim_persistence_failure_stage(exc)
-            self.orchestrator.mark_submit_failure(run=run, stage=stage, exc=exc)
+            else:
+                self.orchestrator.mark_submit_failure(
+                    run=run,
+                    stage=failure_stage,
+                    exc=exc,
+                )
             raise exc
+    @staticmethod
+    def _local_sim_json_value(value: Any) -> Any:
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, Enum):
+            return value.value
+        if isinstance(value, Mapping):
+            return {str(key): SimulationLifecycleScheduler._local_sim_json_value(item) for key, item in sorted(value.items(), key=lambda row: str(row[0]))}
+        if isinstance(value, (list, tuple)):
+            return [SimulationLifecycleScheduler._local_sim_json_value(item) for item in value]
+        return value
+
+    @staticmethod
+    def _local_sim_fact_payload(item: Any, *, fact_type: str) -> dict[str, Any]:
+        dump = getattr(item, "model_dump", None)
+        if callable(dump):
+            raw = dump(mode="json", exclude={"created_at", "updated_at"})
+        elif is_dataclass(item):
+            raw = asdict(item)
+        else:
+            raise DataUnavailableError("LocalSim economic fact cannot be serialized canonically", context={"reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID", "fact_type": fact_type, "python_type": type(item).__name__})
+        payload = SimulationLifecycleScheduler._local_sim_json_value(raw)
+        if not isinstance(payload, dict):
+            raise DataUnavailableError("LocalSim economic fact canonical payload must be an object", context={"reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID", "fact_type": fact_type})
+        return payload
+
+    @classmethod
+    def _local_sim_hashed_fact_map(cls, items: tuple[Any, ...], *, identity_field: str, fact_type: str) -> dict[str, str]:
+        hashed: dict[str, str] = {}
+        for item in items:
+            identity = str(getattr(item, identity_field, "") or "").strip()
+            if not identity or identity in hashed:
+                raise DataUnavailableError("LocalSim economic fact identity is missing or duplicated", context={"reason_code": "LOCALSIM_ECONOMIC_FACT_IDENTITY_INVALID", "fact_type": fact_type, "identity": identity or None})
+            hashed[identity] = canonical_json_sha256(cls._local_sim_fact_payload(item, fact_type=fact_type))
+        return dict(sorted(hashed.items()))
+
+    @classmethod
+    def _local_sim_economic_facts(cls, *, run: SimulationDailyRun, execution: SimulationExecutionResult, orders: tuple[Any, ...], fills: tuple[Any, ...], events: tuple[Any, ...], cash_entries: tuple[Any, ...], states: tuple[LocalSimExecutionStateV1, ...], positions: dict[str, PositionLot], marks: dict[str, LocalSimMarketMarkV1], account_snapshot: AccountSnapshot) -> dict[str, Any]:
+        return {
+            "schema_version": "local_sim_economic_facts_v1", "run_id": run.run_id,
+            "binding_id": run.binding_id, "trade_date": run.trade_date.isoformat(),
+            "plan_id": execution.execution_plan.plan_id,
+            "order_hashes": cls._local_sim_hashed_fact_map(orders, identity_field="order_id", fact_type="order"),
+            "fill_hashes": cls._local_sim_hashed_fact_map(fills, identity_field="fill_id", fact_type="fill"),
+            "order_event_hashes": cls._local_sim_hashed_fact_map(events, identity_field="event_id", fact_type="order_event"),
+            "cash_entry_hashes": cls._local_sim_hashed_fact_map(cash_entries, identity_field="fill_id", fact_type="cash_entry"),
+            "state_hashes": {state.state_id: state.state_hash for state in sorted(states, key=lambda item: item.state_id)},
+            "position_hashes": {symbol: canonical_json_sha256(cls._local_sim_fact_payload(position, fact_type="position")) for symbol, position in sorted(positions.items())},
+            "mark_hashes": {symbol: mark.mark_hash for symbol, mark in sorted(marks.items())},
+            "account_snapshot_hash": canonical_json_sha256(cls._local_sim_fact_payload(account_snapshot, fact_type="account_snapshot")),
+        }
+
+    @staticmethod
+    def _local_sim_projection_payload(
+        *, binding: SimulationReleaseBinding, run: SimulationDailyRun,
+        execution: SimulationExecutionResult, context: SimulationRunContext,
+        positions: dict[str, PositionLot], marks: dict[str, LocalSimMarketMarkV1],
+        account_snapshot: AccountSnapshot, orders: tuple[Any, ...], fills: tuple[Any, ...],
+        cash_entries: tuple[Any, ...], active_states: tuple[LocalSimExecutionStateV1, ...],
+        residual_states: tuple[LocalSimExecutionStateV1, ...],
+        nonfilled_terminal_states: tuple[LocalSimExecutionStateV1, ...],
+        cash_fit_residual: dict[str, Any] | None, terminal: bool, terminal_failure: bool,
+        final_status: SimulationDailyRunStatus, final_paper_status: RunStatus,
+        final_event_type: str, final_event_message: str,
+        final_persistence_payload: dict[str, Any], economic_hash: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "local_sim_projection_payload_v1", "run_id": run.run_id,
+            "binding_id": binding.binding_id, "strategy_id": binding.strategy_id,
+            "plan_id": execution.execution_plan.plan_id, "trade_date": run.trade_date.isoformat(),
+            "portfolio_id": account_snapshot.portfolio_id, "initial_capital": float(binding.capital_allocation),
+            "realized_pnl": float(context.realized_pnl),
+            "positions": [item.model_dump(mode="json") for _, item in sorted(positions.items())],
+            "marks": [item.model_dump(mode="json") for _, item in sorted(marks.items())],
+            "account_snapshot": account_snapshot.model_dump(mode="json"),
+            "snapshot_metadata": {"source": "simulation_runtime_local_sim", "simulation_run_id": run.run_id,
+                                  "execution_plan_id": execution.execution_plan.plan_id, "order_count": len(orders),
+                                  "fill_count": len(fills), "cash_ledger_count": len(cash_entries),
+                                  "position_count": len(positions), "terminal": terminal},
+            "final_simulation_status": final_status.value, "final_paper_status": final_paper_status.value,
+            "final_event_type": final_event_type, "final_event_message": final_event_message,
+            "final_event_context": {"source": "simulation_runtime_local_sim", "simulation_run_id": run.run_id,
+                                    "execution_plan_id": execution.execution_plan.plan_id, "order_count": len(orders),
+                                    "fill_count": len(fills), "cash_ledger_count": len(cash_entries),
+                                    "position_count": len(positions), "snapshot_time": account_snapshot.snapshot_time.isoformat(),
+                                    "local_sim_cash_fit": cash_fit_residual, "terminal": terminal,
+                                    "active_state_ids": [item.state_id for item in active_states],
+                                    "residual_state_ids": [item.state_id for item in residual_states]},
+            "paper_error": ({"code": "LOCALSIM_CAPACITY_RESIDUAL_SKIPPED" if cash_fit_residual else "LOCALSIM_EXECUTION_TERMINATED_WITH_RESIDUAL",
+                             "message": "LocalSim skipped non-executable BUY residual after cash-fit planning" if cash_fit_residual else "LocalSim closed with explicit unfilled execution residual",
+                             "context": {"local_sim_cash_fit": cash_fit_residual, "states": [item.model_dump(mode="json") for item in nonfilled_terminal_states]}} if terminal_failure else None),
+            "local_sim_persistence": final_persistence_payload, "economic_hash": economic_hash,
+            "tca_generation": {"schema_version": "local_sim_tca_generation_v1",
+                               "execution_plan_id": execution.execution_plan.plan_id,
+                               "execution_plan_hash": execution.execution_plan.plan_hash,
+                               "economic_hash": economic_hash},
+        }
+
+    def _local_sim_existing_projection_result(self, *, run_id: str) -> LocalSimPersistenceResult:
+        run = self.repository.get_simulation_daily_run(run_id)
+        try:
+            outbox = LocalSimProjectionOutboxV1.model_validate(run.run_payload_json.get("local_sim_projection_outbox_v1"))
+            if outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
+                raise ValueError("projection outbox is not projected")
+            payload = outbox.projection_payload
+            positions = {item.symbol: item for item in (PositionLot.model_validate(raw) for raw in payload.get("positions") or [])}
+            marks = {item.symbol: item.price for item in (LocalSimMarketMarkV1.model_validate(raw) for raw in payload.get("marks") or [])}
+            account = AccountSnapshot.model_validate(payload.get("account_snapshot"))
+            performance = run.run_payload_json["strategy_performance"]
+            persistence = run.run_payload_json["local_sim_persistence"]
+        except Exception as exc:
+            raise DataUnavailableError("LocalSim duplicate event cannot rebuild the projected generation", context={"reason_code": "LOCALSIM_DUPLICATE_PROJECTION_READBACK_FAILED", "run_id": run_id}) from exc
+        if not isinstance(performance, dict) or not isinstance(persistence, dict):
+            raise DataUnavailableError("LocalSim duplicate event is missing projected receipts", context={"reason_code": "LOCALSIM_DUPLICATE_PROJECTION_READBACK_FAILED", "run_id": run_id})
+        required_counts = (
+            "order_count", "fill_count", "cash_ledger_count", "position_count",
+            "active_state_count", "residual_state_count", "terminal",
+        )
+        missing = [key for key in required_counts if key not in persistence]
+        if missing:
+            raise DataUnavailableError("LocalSim duplicate projection receipt is incomplete", context={"reason_code": "LOCALSIM_DUPLICATE_PROJECTION_READBACK_FAILED", "run_id": run_id, "missing_fields": missing})
+        return LocalSimPersistenceResult(
+            payload={
+                "order_count": int(persistence["order_count"]),
+                "fill_count": int(persistence["fill_count"]),
+                "cash_ledger_count": int(persistence["cash_ledger_count"]),
+                "position_count": int(persistence["position_count"]),
+                "cash": float(account.cash), "nav": float(account.nav),
+                "terminal": bool(persistence["terminal"]),
+                "active_state_count": int(persistence["active_state_count"]),
+                "residual_state_count": int(persistence["residual_state_count"]),
+            },
+            positions=positions, marks=marks, cash=float(account.cash),
+            economic_receipt_id=outbox.receipt_id, outbox_id=outbox.outbox_id,
+            generation=outbox.generation, performance_payload=performance,
+        )
+
+    def _replay_pending_local_sim_projection(self, *, run_id: str, paper_repository: Any) -> None:
+        run = self.repository.get_simulation_daily_run(run_id)
+        raw = run.run_payload_json.get("local_sim_projection_outbox_v1")
+        if raw is None:
+            return
+        try:
+            outbox = LocalSimProjectionOutboxV1.model_validate(raw)
+        except Exception as exc:
+            raise DataUnavailableError("LocalSim projection outbox cannot be recovered", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID", "run_id": run_id}) from exc
+        if outbox.status in {LocalSimProjectionOutboxStatus.PENDING, LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE} or run.run_payload_json.get("local_sim_projection_readback_failure"):
+            self._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repository)
+
+    def _project_local_sim_outbox(self, *, run_id: str, paper_repository: Any) -> tuple[SimulationDailyRun, dict[str, Any]]:
+        run = self.repository.get_simulation_daily_run(run_id)
+        terminal_failure = run.run_payload_json.get("local_sim_projection_terminal_failure")
+        if isinstance(terminal_failure, dict):
+            terminal_error = dict(terminal_failure.get("error") or {})
+            raise DataUnavailableError(
+                "LocalSim projection is terminal and cannot be retried automatically",
+                context={
+                    "reason_code": str(
+                        terminal_error.get("reason_code")
+                        or "LOCALSIM_PROJECTION_NON_RETRYABLE"
+                    ),
+                    "run_id": run_id,
+                    "outbox_id": terminal_failure.get("outbox_id"),
+                    "attempt_count": terminal_failure.get("attempt_count"),
+                    "cause": terminal_error.get("message"),
+                },
+            )
+        raw = run.run_payload_json.get("local_sim_projection_outbox_v1")
+        if raw is None:
+            raise DataUnavailableError("LocalSim economic commit has no projection outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_MISSING", "run_id": run_id})
+        try:
+            outbox = LocalSimProjectionOutboxV1.model_validate(raw)
+        except Exception as exc:
+            raise DataUnavailableError("LocalSim projection outbox cannot be read", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID", "run_id": run_id}) from exc
+        performance = run.run_payload_json.get("strategy_performance")
+        if outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
+            if not isinstance(performance, dict) or int(performance.get("local_sim_generation") or 0) != outbox.generation:
+                raise DataUnavailableError("LocalSim projected outbox has no matching performance generation", context={"reason_code": "LOCALSIM_PERFORMANCE_GENERATION_CONFLICT", "run_id": run_id})
+            readback_failure = run.run_payload_json.get("local_sim_projection_readback_failure")
+            if readback_failure:
+                if not isinstance(readback_failure, dict):
+                    raise DataUnavailableError(
+                        "LocalSim projection readback failure receipt is invalid",
+                        context={
+                            "reason_code": "LOCALSIM_PROJECTION_READBACK_SCHEMA_INVALID",
+                            "run_id": run_id,
+                        },
+                    )
+                previous_attempts = int(readback_failure.get("attempt_count") or 0)
+                if previous_attempts >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS:
+                    raise DataUnavailableError(
+                        "LocalSim projection readback exhausted its automatic retry budget",
+                        context={
+                            "reason_code": "LOCALSIM_PROJECTION_READBACK_RETRY_EXHAUSTED",
+                            "run_id": run_id,
+                            "outbox_id": outbox.outbox_id,
+                            "attempt_count": previous_attempts,
+                        },
+                    )
+                raw_receipts = run.run_payload_json.get("local_sim_projection_receipts_v1")
+                if not isinstance(raw_receipts, dict):
+                    raise DataUnavailableError("LocalSim projection readback recovery has no receipt map", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_MISSING", "run_id": run_id})
+                receipt = next((LocalSimProjectionReceiptV1.model_validate(item) for item in raw_receipts.values() if item.get("outbox_id") == outbox.outbox_id), None)
+                if receipt is None:
+                    raise DataUnavailableError("LocalSim projection readback recovery has no matching receipt", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_MISSING", "run_id": run_id})
+                payload = outbox.projection_payload
+                snapshot = AccountSnapshot.model_validate(payload.get("account_snapshot"))
+                trade_date_value = date.fromisoformat(str(payload.get("trade_date")))
+                final_status = SimulationDailyRunStatus(str(payload.get("final_simulation_status")))
+                try:
+                    self.repository.readback_local_sim_projection_commit(run_id=run_id, receipt=receipt)
+                    paper_repository.readback_local_sim_projection(
+                        run_id=run_id, portfolio_id=snapshot.portfolio_id, trade_date=trade_date_value,
+                        outbox_id=outbox.outbox_id, generation=outbox.generation,
+                        expected_position_count=len(payload.get("positions") or []),
+                    )
+                except Exception as exc:
+                    attempt_count = previous_attempts + 1
+                    error = {
+                        "reason_code": "LOCALSIM_PROJECTION_READBACK_RETRYABLE",
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "outbox_id": outbox.outbox_id,
+                        "generation": outbox.generation,
+                        "attempt_count": attempt_count,
+                    }
+                    self.repository.mark_local_sim_projection_readback_retryable(
+                        run_id=run_id,
+                        outbox_id=outbox.outbox_id,
+                        error=error,
+                    )
+                    if attempt_count >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS:
+                        self.repository.update_simulation_daily_run(
+                            run_id,
+                            status=SimulationDailyRunStatus.FAILED_TERMINAL,
+                            payload_patch={
+                                "local_sim_projection_readback_terminal_failure": error,
+                                "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                            },
+                        )
+                    reason_code = (
+                        "LOCALSIM_PROJECTION_READBACK_RETRY_EXHAUSTED"
+                        if attempt_count >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS
+                        else "LOCALSIM_PROJECTION_READBACK_RETRYABLE"
+                    )
+                    raise DataUnavailableError(
+                        "LocalSim projection readback must be retried",
+                        context={
+                            "reason_code": reason_code,
+                            "run_id": run_id,
+                            "outbox_id": outbox.outbox_id,
+                            "attempt_count": attempt_count,
+                            "cause": str(exc),
+                        },
+                    ) from exc
+                run = self.repository.clear_local_sim_projection_readback_failure(run_id=run_id, outbox_id=outbox.outbox_id, final_status=final_status)
+            return run, performance
+
+        payload = outbox.projection_payload
+        try:
+            positions = {item.symbol: item for item in (PositionLot.model_validate(raw_item) for raw_item in payload.get("positions") or [])}
+            mark_records = {item.symbol: item for item in (LocalSimMarketMarkV1.model_validate(raw_item) for raw_item in payload.get("marks") or [])}
+            account_snapshot = AccountSnapshot.model_validate(payload.get("account_snapshot"))
+            final_status = SimulationDailyRunStatus(str(payload.get("final_simulation_status")))
+            final_paper_status = RunStatus(str(payload.get("final_paper_status")))
+            projection_trade_date = date.fromisoformat(str(payload.get("trade_date")))
+        except Exception as exc:
+            raise DataUnavailableError("LocalSim projection payload failed schema validation", context={"reason_code": "LOCALSIM_PROJECTION_PAYLOAD_SCHEMA_INVALID", "run_id": run_id}) from exc
+        if payload.get("economic_hash") != outbox.economic_hash:
+            raise DataUnavailableError("LocalSim projection payload economic hash does not match outbox", context={"reason_code": "LOCALSIM_PROJECTION_ECONOMIC_HASH_CONFLICT", "run_id": run_id})
+        strategy_id = str(payload.get("strategy_id") or "").strip()
+        if not strategy_id or "initial_capital" not in payload or "realized_pnl" not in payload:
+            raise DataUnavailableError("LocalSim projection payload is missing performance identity", context={"reason_code": "LOCALSIM_PROJECTION_PAYLOAD_SCHEMA_INVALID", "run_id": run_id})
+        marks = {symbol: mark.price for symbol, mark in mark_records.items()}
+        performance = self.performance_service.project_strategy(
+            strategy_id=strategy_id, broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            initial_capital=float(payload["initial_capital"]), cash=float(account_snapshot.cash),
+            frozen_cash=0.0, realized_pnl=float(payload["realized_pnl"]),
+            positions=positions, marks=marks,
+        ).to_dict()
+        performance.update({"local_sim_generation": outbox.generation, "local_sim_outbox_id": outbox.outbox_id,
+                            "local_sim_economic_hash": outbox.economic_hash,
+                            "tca_generation": {**dict(payload.get("tca_generation") or {}), "generation": outbox.generation}})
+        snapshot_metadata = {**dict(payload.get("snapshot_metadata") or {}), "local_sim_generation": outbox.generation,
+                             "local_sim_outbox_id": outbox.outbox_id, "local_sim_economic_hash": outbox.economic_hash,
+                             "projection_payload_hash": outbox.projection_payload_hash}
+        projection_result = {
+            "schema_version": "local_sim_projection_result_v1", "outbox_id": outbox.outbox_id,
+            "generation": outbox.generation, "economic_hash": outbox.economic_hash,
+            "position_hashes": {symbol: canonical_json_sha256(self._local_sim_fact_payload(item, fact_type="position")) for symbol, item in sorted(positions.items())},
+            "mark_hashes": {symbol: item.mark_hash for symbol, item in sorted(mark_records.items())},
+            "account_snapshot_hash": canonical_json_sha256(self._local_sim_fact_payload(account_snapshot, fact_type="account_snapshot")),
+            "performance_hash": canonical_json_sha256(performance),
+        }
+        projection_committed = False
+        try:
+            with self.repository.local_sim_economic_transaction_scope():
+                with paper_repository.local_sim_economic_transaction(run_id) as connection:
+                    paper_repository.save_positions(run_id=run_id, trade_date=projection_trade_date, positions=list(positions.values()), prices=marks)
+                    paper_repository.save_daily_snapshot(run_id=run_id, trade_date=projection_trade_date, snapshot=account_snapshot, metadata=snapshot_metadata)
+                    paper_repository.save_run_event(run_id=run_id, event_type=str(payload.get("final_event_type")), message=str(payload.get("final_event_message")), context={**dict(payload.get("final_event_context") or {}), "local_sim_generation": outbox.generation, "local_sim_outbox_id": outbox.outbox_id, "local_sim_economic_hash": outbox.economic_hash})
+                    paper_repository.update_run_status(paper_repository.get_run(run_id), final_paper_status, error=payload.get("paper_error"))
+                    receipt = self.repository.stage_local_sim_projection_commit(
+                        connection=connection, run_id=run_id, outbox_id=outbox.outbox_id,
+                        generation=outbox.generation, final_status=final_status, projection_result=projection_result,
+                        payload_patch={"strategy_performance": performance, "performance_projection": performance,
+                                       "local_sim_persistence": dict(payload.get("local_sim_persistence") or {}),
+                                       "local_sim_projection_generation": {"schema_version": "local_sim_projection_generation_v1", "generation": outbox.generation, "outbox_id": outbox.outbox_id, "economic_hash": outbox.economic_hash},
+                                       "last_stage": final_status.value},
+                        payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
+                    )
+            projection_committed = True
+            projected = self.repository.readback_local_sim_projection_commit(run_id=run_id, receipt=receipt)
+            paper_repository.readback_local_sim_projection(
+                run_id=run_id, portfolio_id=account_snapshot.portfolio_id, trade_date=projection_trade_date,
+                outbox_id=outbox.outbox_id, generation=outbox.generation, expected_position_count=len(positions),
+            )
+            return projected, performance
+        except Exception as exc:
+            previous_readback_failure = run.run_payload_json.get(
+                "local_sim_projection_readback_failure"
+            )
+            previous_readback_attempts = (
+                int(previous_readback_failure.get("attempt_count") or 0)
+                if isinstance(previous_readback_failure, dict)
+                else 0
+            )
+            attempt_count = (
+                previous_readback_attempts + 1
+                if projection_committed
+                else outbox.attempt_count + 1
+            )
+            retryable = self._local_sim_projection_error_is_retryable(exc)
+            if projection_committed:
+                reason_code = "LOCALSIM_PROJECTION_READBACK_RETRYABLE"
+            elif not retryable:
+                reason_code = "LOCALSIM_PROJECTION_NON_RETRYABLE"
+            elif attempt_count >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS:
+                reason_code = "LOCALSIM_PROJECTION_RETRY_EXHAUSTED"
+            else:
+                reason_code = "LOCALSIM_PROJECTION_RETRYABLE"
+            error = {
+                "reason_code": reason_code,
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "outbox_id": outbox.outbox_id,
+                "generation": outbox.generation,
+                "attempt_count": attempt_count,
+                "max_attempts": _LOCALSIM_PROJECTION_MAX_ATTEMPTS,
+            }
+            try:
+                if projection_committed:
+                    self.repository.mark_local_sim_projection_readback_retryable(run_id=run_id, outbox_id=outbox.outbox_id, error=error)
+                    if attempt_count >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS:
+                        self.repository.update_simulation_daily_run(
+                            run_id,
+                            status=SimulationDailyRunStatus.FAILED_TERMINAL,
+                            payload_patch={
+                                "local_sim_projection_readback_terminal_failure": error,
+                                "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                            },
+                        )
+                elif reason_code in {
+                    "LOCALSIM_PROJECTION_NON_RETRYABLE",
+                    "LOCALSIM_PROJECTION_RETRY_EXHAUSTED",
+                }:
+                    self.repository.mark_local_sim_projection_terminal(
+                        run_id=run_id,
+                        outbox_id=outbox.outbox_id,
+                        error=error,
+                    )
+                else:
+                    self.repository.mark_local_sim_projection_retryable(run_id=run_id, outbox_id=outbox.outbox_id, error=error)
+            except Exception as persistence_exc:
+                raise DataUnavailableError("LocalSim projection failed and retry state could not be persisted", context={"reason_code": "LOCALSIM_PROJECTION_FAILURE_PERSISTENCE_FAILED", "run_id": run_id, "outbox_id": outbox.outbox_id, "projection_error": str(exc), "persistence_error": str(persistence_exc)}) from persistence_exc
+            if projection_committed and attempt_count >= _LOCALSIM_PROJECTION_MAX_ATTEMPTS:
+                reason_code = "LOCALSIM_PROJECTION_READBACK_RETRY_EXHAUSTED"
+            message = (
+                "LocalSim economic facts committed but projection cannot be retried"
+                if reason_code == "LOCALSIM_PROJECTION_NON_RETRYABLE"
+                else "LocalSim economic facts committed but projection retry budget is exhausted"
+                if reason_code in {
+                    "LOCALSIM_PROJECTION_RETRY_EXHAUSTED",
+                    "LOCALSIM_PROJECTION_READBACK_RETRY_EXHAUSTED",
+                }
+                else "LocalSim economic facts committed but projection must be retried"
+            )
+            raise DataUnavailableError(
+                message,
+                context={
+                    "reason_code": reason_code,
+                    "run_id": run_id,
+                    "outbox_id": outbox.outbox_id,
+                    "generation": outbox.generation,
+                    "attempt_count": attempt_count,
+                    "max_attempts": _LOCALSIM_PROJECTION_MAX_ATTEMPTS,
+                    "cause": str(exc),
+                },
+            ) from exc
+
+    @staticmethod
+    def _local_sim_projection_error_is_retryable(exc: BaseException) -> bool:
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(
+                current,
+                (
+                    SessionLockTimeoutError,
+                    psycopg2.OperationalError,
+                    psycopg2.InterfaceError,
+                ),
+            ):
+                return True
+            if str(getattr(current, "pgcode", "") or "") in _LOCALSIM_PROJECTION_RETRYABLE_PG_CODES:
+                return True
+            current = current.__cause__ or current.__context__
+        return False
 
     @staticmethod
     def _filter_local_sim_snapshot_by_plan(
@@ -7753,8 +8122,16 @@ class SimulationLifecycleScheduler:
     @staticmethod
     def _local_sim_persistence_failure_stage(exc: BaseException) -> str:
         context = getattr(exc, "context", None)
-        if isinstance(context, dict) and context.get("reason_code") == "LOCALSIM_PERSISTENCE_CASH_CONTEXT_MISSING":
-            return "LOCAL_SIM_PERSISTENCE_CASH_CONTEXT_MISSING"
+        if isinstance(context, dict):
+            reason_code = str(context.get("reason_code") or "")
+            if reason_code == "LOCALSIM_PERSISTENCE_CASH_CONTEXT_MISSING":
+                return "LOCAL_SIM_PERSISTENCE_CASH_CONTEXT_MISSING"
+            if reason_code.startswith("LOCALSIM_MARK_") or reason_code.startswith("LOCALSIM_SUSPENDED_"):
+                return "LOCAL_SIM_MARK_VALIDATION_FAILED"
+            if reason_code.startswith("LOCALSIM_PROJECTION_"):
+                return "LOCAL_SIM_PROJECTION_FAILED"
+            if reason_code.startswith("LOCALSIM_ECONOMIC_"):
+                return "LOCAL_SIM_ECONOMIC_COMMIT_FAILED"
         message = str(exc)
         if "no execution snapshot" in message:
             return "LOCAL_SIM_PERSISTENCE_SNAPSHOT_MISSING"
@@ -7809,24 +8186,126 @@ class SimulationLifecycleScheduler:
         positions: dict[str, PositionLot],
         context: SimulationRunContext,
         execution: SimulationExecutionResult,
-    ) -> dict[str, float]:
-        marks = SimulationLifecycleScheduler._performance_marks(context)
-        for intent in execution.execution_plan.intents:
-            if intent.symbol not in marks and intent.price_policy.get("reference_price") is not None:
-                marks[intent.symbol] = float(intent.price_policy["reference_price"])
-            if intent.symbol not in marks and intent.price_policy.get("limit_price") is not None:
-                marks[intent.symbol] = float(intent.price_policy["limit_price"])
-        missing = sorted(symbol for symbol in positions if symbol not in marks)
-        if missing:
+        snapshot_time: datetime,
+    ) -> tuple[dict[str, float], dict[str, LocalSimMarketMarkV1]]:
+        source = str(context.market_data_source or "").strip()
+        if positions and source not in {MinuteDataSource.TDX_REALTIME.value, MinuteDataSource.DB_HISTORICAL.value}:
+            raise DataUnavailableError("LocalSim market mark source is missing or unsupported", context={"reason_code": "LOCALSIM_MARK_SOURCE_INVALID", "source": source or None, "plan_id": execution.execution_plan.plan_id})
+        loader = getattr(context.local_broker, "load_authoritative_position_marks", None)
+        if positions and not callable(loader):
             raise DataUnavailableError(
-                "LocalSim persistence requires mark prices for all persisted positions",
+                "LocalSim account generation requires an authoritative market-mark provider",
                 context={
-                    "reason_code": "LOCALSIM_PERSISTENCE_MARK_PRICE_MISSING",
-                    "symbols": missing,
+                    "reason_code": "LOCALSIM_MARK_PROVIDER_UNAVAILABLE",
                     "plan_id": execution.execution_plan.plan_id,
                 },
             )
-        return {symbol: float(marks[symbol]) for symbol in positions}
+        raw_records = (
+            loader(
+                symbols=tuple(positions),
+                trade_date=execution.run.trade_date,
+                as_of_time=snapshot_time,
+                pre_trade_tradability=context.pre_trade_tradability,
+            )
+            if positions
+            else {}
+        )
+        if not isinstance(raw_records, Mapping):
+            raise DataUnavailableError(
+                "LocalSim authoritative market-mark provider returned an invalid payload",
+                context={
+                    "reason_code": "LOCALSIM_MARK_SCHEMA_INVALID",
+                    "plan_id": execution.execution_plan.plan_id,
+                },
+            )
+        missing = sorted(symbol for symbol in positions if symbol not in raw_records)
+        unexpected = sorted(symbol for symbol in raw_records if symbol not in positions)
+        if missing or unexpected:
+            raise DataUnavailableError(
+                "LocalSim authoritative market-mark identities do not match persisted positions",
+                context={
+                    "reason_code": "LOCALSIM_MARK_IDENTITY_CONFLICT",
+                    "missing_symbols": missing,
+                    "unexpected_symbols": unexpected,
+                    "plan_id": execution.execution_plan.plan_id,
+                },
+            )
+        accepted: dict[str, float] = {}
+        records: dict[str, LocalSimMarketMarkV1] = {}
+        for symbol in sorted(positions):
+            try:
+                record = LocalSimMarketMarkV1.model_validate(raw_records[symbol])
+            except Exception as exc:
+                raise DataUnavailableError(
+                    "LocalSim authoritative market mark failed schema or hash validation",
+                    context={"reason_code": "LOCALSIM_MARK_SCHEMA_INVALID", "symbol": symbol},
+                ) from exc
+            if record.symbol != symbol:
+                raise DataUnavailableError(
+                    "LocalSim authoritative market mark symbol conflicts with the persisted position",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_IDENTITY_CONFLICT",
+                        "symbol": symbol,
+                        "mark_symbol": record.symbol,
+                    },
+                )
+            if record.as_of_time.replace(tzinfo=None) > snapshot_time.replace(tzinfo=None):
+                raise DataUnavailableError(
+                    "LocalSim authoritative market mark is later than the account snapshot",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_AS_OF_CONFLICT",
+                        "symbol": symbol,
+                        "mark_as_of_time": record.as_of_time.isoformat(),
+                        "snapshot_time": snapshot_time.isoformat(),
+                    },
+                )
+            tradability = dict(context.pre_trade_tradability.get(symbol) or {})
+            suspend_payload = dict(tradability.get("suspend_status") or {})
+            suspended = bool(
+                tradability.get("is_suspended")
+                or tradability.get("suspended")
+                or tradability.get("suspend_d")
+                or suspend_payload.get("is_suspended")
+            )
+            if suspended:
+                if (
+                    record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+                    or record.as_of_time.date() >= execution.run.trade_date
+                ):
+                    raise DataUnavailableError(
+                        "LocalSim suspended mark is not proven by the previous trading-day close",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN",
+                            "symbol": symbol,
+                            "mark_as_of_time": record.as_of_time.isoformat(),
+                            "source": record.source,
+                        },
+                    )
+            else:
+                expected_provenance = (
+                    LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
+                    if source == MinuteDataSource.TDX_REALTIME.value
+                    else LocalSimMarketMarkProvenance.HISTORICAL_MINUTE_CLOSE
+                )
+                if (
+                    record.provenance != expected_provenance
+                    or record.source != source
+                    or record.as_of_time.date() != execution.run.trade_date
+                ):
+                    raise DataUnavailableError(
+                        "LocalSim market mark provenance does not match the selected execution source",
+                        context={
+                            "reason_code": "LOCALSIM_MARK_PROVENANCE_CONFLICT",
+                            "symbol": symbol,
+                            "expected_source": source,
+                            "actual_source": record.source,
+                            "expected_provenance": expected_provenance.value,
+                            "actual_provenance": record.provenance.value,
+                        },
+                    )
+            accepted[symbol] = float(record.price)
+            records[symbol] = record
+        return accepted, records
 
     @staticmethod
     def _cash_after_local_sim(cash_entries: tuple[Any, ...], context: SimulationRunContext) -> float:
@@ -7847,11 +8326,39 @@ class SimulationLifecycleScheduler:
         )
 
     @staticmethod
-    def _local_sim_snapshot_time(*, fills: tuple[Any, ...], events: tuple[Any, ...], run: SimulationDailyRun) -> datetime:
+    def _local_sim_snapshot_time(
+        *,
+        fills: tuple[Any, ...],
+        events: tuple[Any, ...],
+        run: SimulationDailyRun,
+        local_broker: Any,
+        market_data_source: str | None,
+    ) -> datetime:
         if fills:
             return max(getattr(fill, "trade_time") for fill in fills)
         if events:
             return max(getattr(event, "event_time") for event in events)
+        broker_as_of_time = getattr(local_broker, "scheduler_as_of_time", None)
+        if isinstance(broker_as_of_time, datetime):
+            if broker_as_of_time.date() != run.trade_date:
+                raise DataUnavailableError(
+                    "LocalSim broker as-of time does not match the run trade date",
+                    context={
+                        "reason_code": "LOCALSIM_MARK_AS_OF_DATE_CONFLICT",
+                        "run_id": run.run_id,
+                        "trade_date": run.trade_date.isoformat(),
+                        "as_of_time": broker_as_of_time.isoformat(),
+                    },
+                )
+            return broker_as_of_time
+        if market_data_source == MinuteDataSource.TDX_REALTIME.value:
+            raise DataUnavailableError(
+                "LocalSim realtime account snapshot has no authoritative as-of time",
+                context={
+                    "reason_code": "LOCALSIM_MARK_AS_OF_TIME_MISSING",
+                    "run_id": run.run_id,
+                },
+            )
         return datetime.combine(run.trade_date, _POST_CLOSE_RECONCILE_TIME, tzinfo=SCHEDULER_TZ)
 
     @staticmethod

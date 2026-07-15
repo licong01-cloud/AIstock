@@ -6,6 +6,7 @@ import inspect
 import logging
 import sys
 import threading
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
@@ -418,6 +419,44 @@ class PaperTradingV2Repository:
                     ):
                         if hasattr(self._transaction_local, attr):
                             delattr(self._transaction_local, attr)
+                if complete_error is not None:
+                    raise complete_error
+
+    @contextmanager
+    def local_sim_economic_transaction(self, run_id: str) -> Iterator[Any]:
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "LocalSim economic transaction cannot start inside an existing repository transaction",
+                context={"run_id": run_id, "reason_code": "PAPER_V2_LOCAL_SIM_ECONOMIC_TRANSACTION_CONFLICT"},
+            )
+        with self._conn(autocommit=True, manage_transaction=False) as lock_conn:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2403, hashtext(%s))", (run_id,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                raise SessionLockTimeoutError(
+                    "LocalSim economic event is already being committed by another process",
+                    context={"run_id": run_id, "lock_scope": "postgres_advisory_lock", "reason_code": "PAPER_V2_LOCAL_SIM_ECONOMIC_LOCK_BUSY"},
+                )
+            complete_error: BaseException | None = None
+            try:
+                with self._conn(autocommit=False, manage_transaction=True) as txn_conn:
+                    self._set_transaction_conn(txn_conn)
+                    self._transaction_local.transaction_scope = "local_sim_economic_event"
+                    yield txn_conn
+            finally:
+                try:
+                    with lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (run_id,))
+                except Exception as exc:
+                    complete_error = RuntimeError(
+                        "LocalSim economic advisory lock release failed; reason_code=PAPER_V2_LOCAL_SIM_ECONOMIC_ADVISORY_UNLOCK_FAILED"
+                    )
+                    complete_error.__cause__ = exc
+                finally:
+                    self._clear_transaction_conn()
+                    if hasattr(self._transaction_local, "transaction_scope"):
+                        delattr(self._transaction_local, "transaction_scope")
                 if complete_error is not None:
                     raise complete_error
 
@@ -2603,6 +2642,37 @@ class PaperTradingV2Repository:
                     (run_id, event_type, message, psycopg2.extras.Json(context or {})),
                 )
 
+    def readback_local_sim_economic_facts(self, *, run_id: str, order_ids: set[str], fill_ids: set[str], order_event_ids: set[str], cash_fill_ids: set[str]) -> dict[str, int]:
+        queries = {
+            "order_ids": ("SELECT order_id FROM paper_v2.orders WHERE run_id = %s", order_ids),
+            "fill_ids": ("SELECT fill_id FROM paper_v2.fills WHERE run_id = %s", fill_ids),
+            "order_event_ids": ("SELECT event_id FROM paper_v2.order_events WHERE run_id = %s", order_event_ids),
+            "cash_fill_ids": ("SELECT fill_id FROM paper_v2.cash_ledger WHERE run_id = %s", cash_fill_ids),
+        }
+        counts: dict[str, int] = {}
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                for name, (sql, expected) in queries.items():
+                    cur.execute(sql, (run_id,))
+                    actual = {str(row[0]) for row in cur.fetchall()}
+                    missing = sorted(expected - actual)
+                    if missing:
+                        raise InvalidStateTransitionError("LocalSim economic fact independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_FACT_READBACK_FAILED", "run_id": run_id, "fact_type": name, "missing_ids": missing})
+                    counts[name] = len(actual)
+        return counts
+
+    def readback_local_sim_projection(self, *, run_id: str, portfolio_id: str, trade_date: date, outbox_id: str, generation: int, expected_position_count: int) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT COUNT(*) AS count FROM paper_v2.positions WHERE run_id = %s", (run_id,))
+                position_count = int(cur.fetchone()["count"])
+                cur.execute("SELECT run_id, metadata FROM paper_v2.daily_snapshots WHERE portfolio_id = %s AND trade_date = %s", (portfolio_id, trade_date))
+                snapshot = cur.fetchone()
+        metadata = dict(snapshot.get("metadata") or {}) if snapshot else {}
+        if snapshot is None or str(snapshot.get("run_id")) != run_id or position_count != expected_position_count or metadata.get("local_sim_outbox_id") != outbox_id or int(metadata.get("local_sim_generation") or 0) != generation:
+            raise InvalidStateTransitionError("LocalSim projection independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_READBACK_FAILED", "run_id": run_id, "outbox_id": outbox_id, "expected_generation": generation, "actual_generation": metadata.get("local_sim_generation"), "expected_position_count": expected_position_count, "actual_position_count": position_count})
+        return {"position_count": position_count, "snapshot_metadata": metadata}
+
     def save_error(self, *, run_id: str | None, portfolio_id: str | None, error: dict[str, Any]) -> None:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -3098,6 +3168,25 @@ class InMemoryPaperTradingV2Repository:
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
         yield
+
+    @contextmanager
+    def local_sim_economic_transaction(self, run_id: str) -> Iterator[None]:
+        if bool(getattr(self, "_local_sim_economic_transaction_active", False)):
+            raise InvalidStateTransitionError(
+                "LocalSim economic transaction cannot be nested",
+                context={"run_id": run_id, "reason_code": "PAPER_V2_LOCAL_SIM_ECONOMIC_TRANSACTION_CONFLICT"},
+            )
+        snapshot = deepcopy(self.__dict__)
+        self._local_sim_economic_transaction_active = True
+        try:
+            yield None
+        except Exception:
+            self.__dict__.clear()
+            self.__dict__.update(snapshot)
+            raise
+        finally:
+            if hasattr(self, "_local_sim_economic_transaction_active"):
+                delattr(self, "_local_sim_economic_transaction_active")
 
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
         self.portfolios[portfolio.portfolio_id] = portfolio
@@ -4086,6 +4175,28 @@ class InMemoryPaperTradingV2Repository:
 
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict[str, Any] | None = None) -> None:
         self.run_events.append({"run_id": run_id, "event_type": event_type, "message": message, "context": context or {}})
+
+    def readback_local_sim_economic_facts(self, *, run_id: str, order_ids: set[str], fill_ids: set[str], order_event_ids: set[str], cash_fill_ids: set[str]) -> dict[str, int]:
+        actual = {
+            "order_ids": {item.order_id for item in self.orders.get(run_id, [])},
+            "fill_ids": {item.fill_id for item in self.fills.get(run_id, [])},
+            "order_event_ids": {item.event_id for item in self.events.get(run_id, [])},
+            "cash_fill_ids": {item.fill_id for item in self.cash_entries.get(run_id, [])},
+        }
+        expected = {"order_ids": order_ids, "fill_ids": fill_ids, "order_event_ids": order_event_ids, "cash_fill_ids": cash_fill_ids}
+        for name, expected_ids in expected.items():
+            missing = sorted(expected_ids - actual[name])
+            if missing:
+                raise InvalidStateTransitionError("LocalSim economic fact independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_FACT_READBACK_FAILED", "run_id": run_id, "fact_type": name, "missing_ids": missing})
+        return {name: len(ids) for name, ids in actual.items()}
+
+    def readback_local_sim_projection(self, *, run_id: str, portfolio_id: str, trade_date: date, outbox_id: str, generation: int, expected_position_count: int) -> dict[str, Any]:
+        positions = self.positions.get(run_id, [])
+        metadata = dict(self.snapshot_metadata.get((portfolio_id, trade_date)) or {})
+        snapshot = self.snapshots.get(run_id)
+        if snapshot is None or len(positions) != expected_position_count or metadata.get("local_sim_outbox_id") != outbox_id or int(metadata.get("local_sim_generation") or 0) != generation:
+            raise InvalidStateTransitionError("LocalSim projection independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_READBACK_FAILED", "run_id": run_id, "outbox_id": outbox_id, "expected_generation": generation, "actual_generation": metadata.get("local_sim_generation"), "expected_position_count": expected_position_count, "actual_position_count": len(positions)})
+        return {"position_count": len(positions), "snapshot_metadata": metadata}
 
     def save_error(self, *, run_id: str | None, portfolio_id: str | None, error: dict[str, Any]) -> None:
         self.errors.append({"run_id": run_id, "portfolio_id": portfolio_id, "error": error})
