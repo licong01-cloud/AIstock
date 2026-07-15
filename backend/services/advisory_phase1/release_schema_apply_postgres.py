@@ -461,6 +461,17 @@ def _revalidate_plan(
     return current
 
 
+def _resolve_frozen_migration_bytes(content: bytes, expected_sha256: str) -> bytes | None:
+    """Resolve the registry-bound bytes across Git checkout line endings."""
+
+    lf_content = content.replace(b"\r\n", b"\n")
+    crlf_content = lf_content.replace(b"\n", b"\r\n")
+    for candidate in dict.fromkeys((content, lf_content, crlf_content)):
+        if hashlib.sha256(candidate).hexdigest() == expected_sha256:
+            return candidate
+    return None
+
+
 def _load_frozen_migration(migration: ManagedMigration) -> bytes:
     if migration.relative_path is None or migration.file_sha256 is None:
         raise ReleaseSchemaApplyError(
@@ -482,15 +493,22 @@ def _load_frozen_migration(migration: ManagedMigration) -> bytes:
             migration_order=migration.order,
             transaction_stage="LOAD_MIGRATION",
         )
-    content = source.read_bytes()
-    if hashlib.sha256(content).hexdigest() != migration.file_sha256:
+    working_tree_content = source.read_bytes()
+    content = _resolve_frozen_migration_bytes(working_tree_content, migration.file_sha256)
+    if content is None:
+        lf_content = working_tree_content.replace(b"\r\n", b"\n")
+        crlf_content = lf_content.replace(b"\n", b"\r\n")
         raise ReleaseSchemaApplyError(
             REASON_MIGRATION_HASH_MISMATCH,
             f"frozen migration hash mismatch at order {migration.order}",
             migration_order=migration.order,
             transaction_stage="LOAD_MIGRATION",
             expected={"file_sha256": migration.file_sha256},
-            actual={"file_sha256": hashlib.sha256(content).hexdigest()},
+            actual={
+                "working_tree_file_sha256": hashlib.sha256(working_tree_content).hexdigest(),
+                "lf_file_sha256": hashlib.sha256(lf_content).hexdigest(),
+                "crlf_file_sha256": hashlib.sha256(crlf_content).hexdigest(),
+            },
         )
     try:
         content.decode("utf-8")

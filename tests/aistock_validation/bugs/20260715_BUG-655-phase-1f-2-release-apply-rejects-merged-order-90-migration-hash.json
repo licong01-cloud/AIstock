@@ -1,6 +1,8 @@
 {
   "actual": "PR #2144 merged Phase 1F.2, but DEV apply fails before DDL with PHASE1F_MIGRATION_HASH_MISMATCH: registry expects 6d9f2a51... while the canonical root checkout reads c632cd54.... ddl_executed=false and catalog fingerprint is unchanged. Fix frozen migration hash portability/registry truth without bypass, silent fallback, new approval gate, or changes outside Advisory release infrastructure.",
   "allowed_write_scope": [
+    "backend/services/advisory_phase1/release_schema_apply_postgres.py",
+    "backend/tests/advisory_phase1/test_release_schema.py",
     "tests/aistock_validation/bugs/20260715_BUG-655-phase-1f-2-release-apply-rejects-merged-order-90-migration-hash.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],

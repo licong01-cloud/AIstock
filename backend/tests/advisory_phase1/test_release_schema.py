@@ -40,7 +40,14 @@ from backend.services.advisory_phase1.release_schema_verify_postgres import (
     resolve_database_connection,
     expected_managed_catalog_evidence,
 )
-from backend.services.advisory_phase1.release_schema_apply_postgres import _pending_operations
+from backend.services.advisory_phase1 import release_schema_apply_postgres
+from backend.services.advisory_phase1.release_schema_apply_postgres import (
+    REASON_MIGRATION_HASH_MISMATCH,
+    ReleaseSchemaApplyError,
+    _load_frozen_migration,
+    _pending_operations,
+    _resolve_frozen_migration_bytes,
+)
 from scripts.advisory_phase1_release_schema import EXIT_DDL, EXIT_POST_VERIFY_STORE, _exit_for_reason, _parser
 
 
@@ -122,7 +129,7 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
             assert migration.file_sha256 is not None
             source = Path(migration.relative_path)
             assert source.is_file()
-            assert hashlib.sha256(source.read_bytes()).hexdigest() == migration.file_sha256
+            assert _resolve_frozen_migration_bytes(source.read_bytes(), migration.file_sha256) is not None
     assert contract.ddl_session_policy == DdlSessionPolicy(
         lock_timeout_ms=10_000,
         statement_timeout_ms=900_000,
@@ -160,6 +167,40 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
     assert {
         item.object_id for item in contract.repairable_unexpected_objects if item.repairable_by_orders == (90,)
     } == old_objects
+
+
+def test_frozen_migration_loader_accepts_checkout_line_endings_but_rejects_content_tamper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    migration = load_release_schema_contract().managed_migrations[-1]
+    assert migration.relative_path is not None
+    canonical_source = Path(migration.relative_path).read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(canonical_source).hexdigest() == migration.file_sha256
+    checked_out_source = tmp_path / migration.relative_path
+    checked_out_source.parent.mkdir(parents=True)
+    checked_out_source.write_bytes(canonical_source.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(release_schema_apply_postgres, "_repo_root", lambda: tmp_path)
+
+    assert _load_frozen_migration(migration) == canonical_source
+
+    checked_out_source.write_bytes(checked_out_source.read_bytes() + b"\r\n-- tampered\r\n")
+    with pytest.raises(ReleaseSchemaApplyError, match=REASON_MIGRATION_HASH_MISMATCH):
+        _load_frozen_migration(migration)
+
+    historical_migration = load_release_schema_contract().managed_migrations[0]
+    assert historical_migration.relative_path is not None
+    historical_worktree_source = Path(historical_migration.relative_path).read_bytes()
+    historical_registry_source = _resolve_frozen_migration_bytes(
+        historical_worktree_source,
+        historical_migration.file_sha256,
+    )
+    assert historical_registry_source is not None
+    historical_checked_out_source = tmp_path / historical_migration.relative_path
+    historical_checked_out_source.parent.mkdir(parents=True, exist_ok=True)
+    historical_checked_out_source.write_bytes(historical_registry_source.replace(b"\r\n", b"\n"))
+
+    assert _load_frozen_migration(historical_migration) == historical_registry_source
 
 
 def test_registry_hash_rejects_any_mutated_object_contract() -> None:
