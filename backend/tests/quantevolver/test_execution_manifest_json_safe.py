@@ -13,6 +13,7 @@ import pytest
 from backend.services.qe_archive.models import normalize_json
 from backend.services.quantevolver.execution_manifest import (
     _artifact_manifest,
+    _compare_manifest,
     _safe_conf_yaml_load,
 )
 
@@ -67,3 +68,49 @@ def test_normalize_json_roundtrip_preserves_strings():
     once = normalize_json(manifest)
     twice = normalize_json(once)
     assert json.dumps(once) == json.dumps(twice)
+
+
+def test_right_tail_processor_is_audited_against_requested_identity():
+    conf = _safe_conf_yaml_load(
+        """
+task:
+  model: {class: LGBModel, kwargs: {}}
+  dataset:
+    class: DatasetH
+    kwargs:
+      handler:
+        kwargs:
+          learn_processors:
+            - class: LongHorizonLabelMaturityPurge
+            - class: CSRightTailBinaryLabel
+              module_path: qe_custom_loaders
+              kwargs: {quantile: 0.99}
+port_analysis_config:
+  strategy: {class: ScoreWeightedTopkStrategyV2, kwargs: {}}
+  backtest: {start_time: 2024-07-01, end_time: 2026-06-29, account: 10000000}
+  executor: {class: SimulatorExecutor}
+"""
+    )
+    requested = {
+        "factor_list": ["x"],
+        "label_horizon": 40,
+        "custom_params": {
+            "label_objective": "cs_top_quantile_return",
+            "right_tail_quantile": 0.99,
+        },
+    }
+    artifact = _artifact_manifest(conf, requested)
+
+    assert artifact["dataset"]["label_objective"] == {
+        "name": "cs_top_quantile_return",
+        "right_tail_quantile": 0.99,
+    }
+    assert _compare_manifest(requested, artifact) == []
+
+    drifted = dict(artifact)
+    drifted["dataset"] = dict(artifact["dataset"])
+    drifted["dataset"]["label_objective"] = {
+        "name": "cs_top_quantile_return",
+        "right_tail_quantile": 0.95,
+    }
+    assert any("right_tail_quantile" in item for item in _compare_manifest(requested, drifted))

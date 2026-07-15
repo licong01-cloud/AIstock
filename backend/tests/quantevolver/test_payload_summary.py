@@ -31,6 +31,10 @@ def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
                 "unfilled_handler_params": {"backup_depth": 15},
                 "candidate_symbols": ["too-large-to-return"],
             },
+            "custom_params": {
+                "label_objective": "cs_top_quantile_return",
+                "right_tail_quantile": 0.99,
+            },
             "factor_list": ["alpha_a", "alpha_b"],
         }
     )
@@ -39,6 +43,8 @@ def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
     assert summary["strategy_params"]["unfilled_handler"] == "TAIL_SUBSTITUTE"
     assert summary["strategy_params"]["unfilled_backup_depth"] == 15
     assert summary["unfilled_handler_params"]["backup_depth"] == 15
+    assert summary["label_objective"] == "cs_top_quantile_return"
+    assert summary["right_tail_quantile"] == 0.99
     assert "candidate_symbols" not in summary["strategy_params"]
     assert "factor_list" not in summary
 

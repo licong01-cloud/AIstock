@@ -1969,6 +1969,32 @@ def _gats_model_info():
     }
 
 
+def _tcn_model_info():
+    return {
+        "model_id": "__seed_TCN_20D_d02__",
+        "model_name": "TCN_20D_d02",
+        "model_type": "TimeSeries",
+        "model_config": {
+            "class": "GeneralPTNN",
+            "module_path": "qlib.contrib.model.pytorch_general_nn",
+            "dataset_type": "TSDatasetH",
+        },
+        "model_hyperparameters": {
+            "d_feat": 20,
+            "hidden_size": 64,
+            "num_layers": 3,
+            "dropout": 0.2,
+        },
+        "model_training_hyperparameters": {
+            "lr": 0.001,
+            "n_epochs": 200,
+            "batch_size": 4096,
+            "early_stop": 20,
+            "weight_decay": 0.001,
+        },
+    }
+
+
 def _efficient_gats_model_info():
     model_info = _gats_model_info()
     model_info["model_id"] = "__seed_EfficientGATs_default_v1__"
@@ -2236,6 +2262,63 @@ def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
     assert "d_feat: {{ num_features }}" in yaml_text
     assert "dropout: 0.1" in yaml_text
     assert "base_model: GRU" in yaml_text
+
+
+def test_tcn_seed_composes_qe_adapter_with_recorded_regularization():
+    yaml_text = _base_yaml(model_info=_tcn_model_info())
+
+    assert "class: AIStockTCN" in yaml_text
+    assert "module_path: aistock_models.tcn" in yaml_text
+    assert "class: GeneralPTNN" not in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+    assert "step_len: 20" in yaml_text
+    assert "d_feat: {{ num_features }}" in yaml_text
+    assert "n_chans: 64" in yaml_text
+    assert "num_layers: 3" in yaml_text
+    assert "dropout: 0.2" in yaml_text
+    assert "weight_decay: 0.001" in yaml_text
+
+
+def test_catalog_tcn_seed_materializes_qe_adapter_source(monkeypatch):
+    model_info = _tcn_model_info()
+    catalog_row = _catalog_row_from_model_info(model_info)
+    result = _compose_in_memory_with_catalog_model(
+        monkeypatch,
+        catalog_row,
+        model_id=model_info["model_id"],
+    )
+
+    conf_yaml = result["experiment_files"]["conf.yaml"]
+    assert "class: AIStockTCN" in conf_yaml
+    assert "module_path: aistock_models.tcn" in conf_yaml
+    assert "aistock_models/tcn.py" in result["experiment_files"]
+    assert "PYTHONPATH=" in result["wsl_command"]
+
+
+@pytest.mark.parametrize("step_len", [20, 40, 60, 75])
+def test_timeseries_step_len_is_explicit_and_not_allow_listed(step_len):
+    yaml_text = _base_yaml(
+        model_info=_tcn_model_info(),
+        custom_params={"step_len": step_len},
+    )
+
+    assert f"step_len: {step_len}" in yaml_text
+
+
+def test_sequence_step_len_aliases_must_agree():
+    with pytest.raises(ValueError, match="reason_code=qe_sequence_step_len_conflict"):
+        _base_yaml(
+            model_info=_tcn_model_info(),
+            custom_params={"step_len": 40, "num_timesteps": 60},
+        )
+
+
+def test_sequence_step_len_rejects_tabular_model_without_silent_ignore():
+    with pytest.raises(
+        ValueError,
+        match="reason_code=qe_sequence_step_len_requires_timeseries_dataset",
+    ):
+        _base_yaml(custom_params={"step_len": 40})
 
 
 def test_efficient_gats_seed_respects_model_config_module_path():

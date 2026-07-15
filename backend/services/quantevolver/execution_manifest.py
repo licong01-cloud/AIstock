@@ -77,6 +77,26 @@ def _strategy_subset(params: Mapping[str, Any]) -> dict[str, Any]:
     return {key: params.get(key) for key in _STRATEGY_KEYS if key in params}
 
 
+def _artifact_label_objective(dataset_handler: Mapping[str, Any]) -> dict[str, Any]:
+    processors = dataset_handler.get("learn_processors")
+    if not isinstance(processors, list):
+        return {"name": "raw_return", "right_tail_quantile": None}
+    matches = [
+        item
+        for item in processors
+        if isinstance(item, Mapping) and item.get("class") == "CSRightTailBinaryLabel"
+    ]
+    if not matches:
+        return {"name": "raw_return", "right_tail_quantile": None}
+    if len(matches) != 1:
+        raise ValueError("generated dataset contains duplicate CSRightTailBinaryLabel processors")
+    kwargs = _as_dict(matches[0].get("kwargs"))
+    return {
+        "name": "cs_top_quantile_return",
+        "right_tail_quantile": kwargs.get("quantile"),
+    }
+
+
 def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: str) -> dict[str, Any]:
     runtime_flags = config.build_runtime_flags()
     custom_params = config.build_custom_params()
@@ -127,6 +147,7 @@ def _artifact_manifest(conf: Mapping[str, Any], requested: Mapping[str, Any]) ->
             "class": _task_section(conf, "task", "dataset").get("class"),
             "handler": dataset_handler,
             "label_horizon": requested.get("label_horizon"),
+            "label_objective": _artifact_label_objective(dataset_handler),
         },
         "strategy": {
             "class": strategy.get("class"),
@@ -186,6 +207,22 @@ def _compare_manifest(requested: Mapping[str, Any], artifact: Mapping[str, Any])
         normalize_label_horizon(requested.get("label_horizon")),
         _as_dict(artifact.get("dataset")).get("label_horizon"),
     )
+    requested_custom = _as_dict(requested.get("custom_params"))
+    requested_objective = str(requested_custom.get("label_objective") or "raw_return")
+    artifact_objective = _as_dict(_as_dict(artifact.get("dataset")).get("label_objective"))
+    _append_mismatch(
+        mismatches,
+        "label_objective.name",
+        requested_objective,
+        artifact_objective.get("name"),
+    )
+    if requested_objective == "cs_top_quantile_return":
+        _append_mismatch(
+            mismatches,
+            "label_objective.right_tail_quantile",
+            float(requested_custom.get("right_tail_quantile", 0.99)),
+            artifact_objective.get("right_tail_quantile"),
+        )
     return mismatches
 
 

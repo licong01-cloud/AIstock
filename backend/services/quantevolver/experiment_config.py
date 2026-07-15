@@ -335,6 +335,8 @@ class ExperimentConfig(BaseModel):
     # ── Stock universe ─────────────────────────────────────────────────────────
     label_type: str | None = None
     label_horizon: int | None = None
+    label_objective: str | None = None
+    right_tail_quantile: float | None = None
     stock_pool: str | None = None
     sector_blacklist: list[str] | None = None
 
@@ -393,6 +395,25 @@ class ExperimentConfig(BaseModel):
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
         self.label_horizon = normalize_label_horizon(self.label_horizon)
+        objective = str(self.label_objective or "raw_return").strip().lower()
+        if objective not in {"raw_return", "cs_top_quantile_return"}:
+            raise ValueError(
+                "label_objective must be 'raw_return' or 'cs_top_quantile_return'"
+            )
+        self.label_objective = objective
+        if self.right_tail_quantile is not None:
+            try:
+                quantile = float(self.right_tail_quantile)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("right_tail_quantile must be numeric") from exc
+            if not 0.0 < quantile < 1.0:
+                raise ValueError("right_tail_quantile must be strictly between 0 and 1")
+            self.right_tail_quantile = quantile
+        if objective == "raw_return" and self.right_tail_quantile is not None:
+            raise ValueError(
+                "right_tail_quantile is only valid when "
+                "label_objective='cs_top_quantile_return'"
+            )
         return self
 
     def build_custom_params(self) -> dict[str, Any]:
@@ -445,6 +466,12 @@ class ExperimentConfig(BaseModel):
         if effective_label_horizon != DEFAULT_LABEL_HORIZON:
             params["label_horizon"] = effective_label_horizon
 
+        if self.label_objective != "raw_return":
+            params["label_objective"] = self.label_objective
+            params["right_tail_quantile"] = (
+                self.right_tail_quantile if self.right_tail_quantile is not None else 0.99
+            )
+
         # 8. suspend_d signal filter
         if self.filter_suspended_on_signal:
             params["filter_suspended_on_signal"] = True
@@ -473,6 +500,37 @@ class ExperimentConfig(BaseModel):
                     )
                 # Keep label_horizon controlled by the unified field above.
                 extra_params.pop("label_horizon", None)
+            if "label_objective" in extra_params:
+                extra_objective = str(extra_params["label_objective"]).strip().lower()
+                if extra_objective != self.label_objective:
+                    raise ValueError(
+                        "extra_params.label_objective conflicts with "
+                        "ExperimentConfig.label_objective"
+                    )
+                extra_params.pop("label_objective", None)
+            if "right_tail_quantile" in extra_params:
+                try:
+                    extra_quantile = float(extra_params["right_tail_quantile"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "extra_params.right_tail_quantile must be numeric"
+                    ) from exc
+                effective_quantile = (
+                    self.right_tail_quantile
+                    if self.right_tail_quantile is not None
+                    else 0.99
+                )
+                if self.label_objective != "cs_top_quantile_return":
+                    raise ValueError(
+                        "extra_params.right_tail_quantile requires "
+                        "label_objective='cs_top_quantile_return'"
+                    )
+                if extra_quantile != effective_quantile:
+                    raise ValueError(
+                        "extra_params.right_tail_quantile conflicts with "
+                        "ExperimentConfig.right_tail_quantile"
+                    )
+                extra_params.pop("right_tail_quantile", None)
             params.update(extra_params)
 
         # 11. initial_cash must NOT flow into custom_params

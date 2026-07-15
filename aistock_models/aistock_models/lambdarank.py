@@ -60,6 +60,7 @@ class LambdaRankModel(Model):
                  early_stopping_rounds=20,
                  verbose_eval=20,
                  random_state=42,
+                 relevance_bins=20,
                  **kwargs):
         super().__init__()
         self.objective = objective
@@ -77,6 +78,20 @@ class LambdaRankModel(Model):
         self.early_stopping_rounds = early_stopping_rounds
         self.verbose_eval = verbose_eval
         self.random_state = random_state
+        if isinstance(relevance_bins, bool):
+            raise ValueError("relevance_bins must be an integer in [2, 31]")
+        try:
+            parsed_relevance_bins = int(relevance_bins)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("relevance_bins must be an integer in [2, 31]") from exc
+        if (
+            isinstance(relevance_bins, (float, np.floating))
+            and not float(relevance_bins).is_integer()
+        ):
+            raise ValueError("relevance_bins must be an integer in [2, 31]")
+        self.relevance_bins = parsed_relevance_bins
+        if not 2 <= self.relevance_bins <= 31:
+            raise ValueError("relevance_bins must be in [2, 31] for LightGBM label_gain")
         self.extra_kwargs = kwargs
         self.model = None
 
@@ -94,43 +109,41 @@ class LambdaRankModel(Model):
             Qlib reweighter (not used by LambdaMART).
         """
         # 1. Extract train/valid data (same pattern as Qlib LGBModel._prepare_data)
-        assert "train" in dataset.segments, "dataset missing 'train' segment"
+        if "train" not in dataset.segments:
+            raise ValueError("dataset missing 'train' segment")
         data_parts = {}
         for key in ["train", "valid"]:
             if key in dataset.segments:
                 df = dataset.prepare(key, col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
                 if df.empty:
                     raise ValueError(f"Empty data for segment '{key}'")
-                data_parts[key] = df
+                data_parts[key] = self._sort_by_query(df, segment=key)
 
         df_train = data_parts["train"]
         x_train = df_train["feature"].values.astype(np.float64)
+        if df_train["label"].shape[1] != 1:
+            raise ValueError("LambdaRankModel requires exactly one label column")
         y_train_raw = df_train["label"].values.astype(np.float64).ravel()
 
         if "valid" in data_parts:
             df_valid = data_parts["valid"]
             x_valid = df_valid["feature"].values.astype(np.float64)
+            if df_valid["label"].shape[1] != 1:
+                raise ValueError("LambdaRankModel requires exactly one validation label column")
             y_valid_raw = df_valid["label"].values.astype(np.float64).ravel()
         else:
             x_valid, y_valid_raw = None, None
 
-        # LambdaMART requires integer relevance labels.
-        # Discretize continuous returns into ordered relevance classes.
-        all_labels = y_train_raw.copy()
-        if y_valid_raw is not None:
-            all_labels = np.concatenate([all_labels, y_valid_raw])
-        n_bins = min(20, len(np.unique(np.round(all_labels, 6))))
-        n_bins = max(n_bins, 5)
-        bin_edges = np.percentile(all_labels, np.linspace(0, 100, n_bins + 1))
-        bin_edges = np.unique(bin_edges)
-        n_classes = len(bin_edges) - 1
-        if n_classes < 2:
-            n_classes = 2
-            bin_edges = np.array([all_labels.min() - 0.01, all_labels.mean(), all_labels.max() + 0.01])
-        self._n_classes_ = n_classes
-        self._bin_edges_ = bin_edges
-        y_train = np.digitize(y_train_raw, bin_edges[1:-1]).astype(np.int32)
-        y_valid = np.digitize(y_valid_raw, bin_edges[1:-1]).astype(np.int32) if y_valid_raw is not None else None
+        # Relevance is query-local.  Build it per trading date and never use
+        # validation labels to define the training-label transformation.
+        y_train = self._cross_sectional_relevance(df_train.index, y_train_raw)
+        y_valid = (
+            self._cross_sectional_relevance(df_valid.index, y_valid_raw)
+            if y_valid_raw is not None
+            else None
+        )
+        self._n_classes_ = self.relevance_bins
+        self._bin_edges_ = None
 
         # 2. Build query groups from date index
         train_groups = self._build_query_groups(df_train.index)
@@ -139,7 +152,9 @@ class LambdaRankModel(Model):
         logger.info(
             "LambdaRankModel.fit: train=%d samples %d queries, valid=%d samples %d queries, %d rank classes",
             len(y_train), len(train_groups),
-            len(y_valid) if y_valid is not None else 0, len(valid_groups) if valid_groups else 0, n_classes
+            len(y_valid) if y_valid is not None else 0,
+            len(valid_groups) if valid_groups else 0,
+            self.relevance_bins,
         )
 
         # 3. Create and train LGBMRanker
@@ -203,7 +218,7 @@ class LambdaRankModel(Model):
             raise RuntimeError("Model not trained. Call fit() first.")
 
         df_test = dataset.prepare(
-            segment, col_set="feature", data_key=DataHandlerLP.DK_L
+            segment, col_set="feature", data_key=DataHandlerLP.DK_I
         )
         x_test = df_test.values.astype(np.float64)
         scores = self.model.predict(x_test)
@@ -211,6 +226,42 @@ class LambdaRankModel(Model):
         return pd.Series(scores, index=df_test.index, name="score")
 
     # ---- helpers ----
+
+    @staticmethod
+    def _sort_by_query(frame: pd.DataFrame, *, segment: str) -> pd.DataFrame:
+        if not isinstance(frame.index, pd.MultiIndex):
+            raise ValueError(
+                f"LambdaRankModel segment {segment!r} must use a MultiIndex"
+            )
+        names = list(frame.index.names)
+        if not {"datetime", "instrument"}.issubset(names):
+            raise ValueError(
+                f"LambdaRankModel segment {segment!r} index must contain "
+                f"datetime/instrument levels, got {names}"
+            )
+        return frame.sort_index(
+            level=["datetime", "instrument"], sort_remaining=True
+        )
+
+    def _cross_sectional_relevance(
+        self,
+        index: pd.MultiIndex,
+        values: np.ndarray,
+    ) -> np.ndarray:
+        if len(index) != len(values):
+            raise ValueError("label/index length mismatch while building relevance")
+        if not np.isfinite(values).all():
+            raise ValueError("LambdaRankModel labels must all be finite after learn processors")
+        labels = pd.Series(values, index=index, dtype="float64")
+        grouped = labels.groupby(level="datetime", sort=False)
+        rank = grouped.rank(method="average")
+        count = grouped.transform("count")
+        scaled = (rank - 1.0) / (count - 1.0).replace(0, np.nan)
+        scaled = scaled.fillna(0.5).clip(0.0, 1.0)
+        relevance = np.floor(
+            scaled.to_numpy() * (self.relevance_bins - 1) + 1e-12
+        )
+        return relevance.astype(np.int32)
 
     def _build_query_groups(self, index: pd.Index) -> list:
         """Build query group sizes from index.
@@ -233,13 +284,27 @@ class LambdaRankModel(Model):
         """
         if isinstance(index, pd.MultiIndex):
             # (datetime, instrument) → group by date
-            dates = index.get_level_values(0)
-            group_sizes = pd.Series(1, index=dates).groupby(level=0).count()
-            return group_sizes.values.tolist()
+            if "datetime" not in index.names:
+                raise ValueError(
+                    "LambdaRankModel query groups require a datetime MultiIndex level"
+                )
+            dates = pd.Index(index.get_level_values("datetime"))
+            if not dates.is_monotonic_increasing:
+                raise ValueError(
+                    "LambdaRankModel rows must be sorted by datetime before constructing groups"
+                )
+            group_sizes = pd.Series(dates).groupby(dates, sort=False).size()
+            if int(group_sizes.sum()) != len(index):
+                raise ValueError(
+                    "LambdaRankModel query groups do not cover every training row"
+                )
+            return group_sizes.astype("int64").tolist()
         else:
             # Flat index: all samples in one group (should not happen
             # for cross-sectional data, but handle gracefully)
-            return [len(index)]
+            raise ValueError(
+                "LambdaRankModel query groups require a datetime/instrument MultiIndex"
+            )
 
     # ---- persistence (qlib compatible) ----
 

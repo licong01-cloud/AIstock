@@ -266,6 +266,76 @@ def _resolve_label_horizon(
     return auth
 
 
+def _resolve_label_objective(
+    *,
+    authoritative: Any = None,
+    inherited: Any = None,
+    authoritative_quantile: Any = None,
+    inherited_quantile: Any = None,
+    context: str,
+) -> tuple[str, float | None]:
+    """Resolve the QE target identity without silently changing objectives."""
+
+    def _objective(value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        normalized = str(value).strip().lower()
+        if normalized not in {"raw_return", "cs_top_quantile_return"}:
+            raise ValueError(f"{context}: unsupported label_objective={value!r}")
+        return normalized
+
+    def _quantile(value: Any, *, field: str) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{context}: {field} must be numeric") from exc
+        if not 0.0 < parsed < 1.0:
+            raise ValueError(f"{context}: {field} must be strictly between 0 and 1")
+        return parsed
+
+    auth_objective = _objective(authoritative)
+    inherited_objective = _objective(inherited)
+    if (
+        auth_objective is not None
+        and inherited_objective is not None
+        and auth_objective != inherited_objective
+    ):
+        raise ValueError(
+            f"{context}: label_objective conflict authoritative={auth_objective}, "
+            f"inherited={inherited_objective}"
+        )
+    objective = auth_objective or inherited_objective or "raw_return"
+
+    auth_quantile = _quantile(
+        authoritative_quantile,
+        field="right_tail_quantile",
+    )
+    inherited_quantile_value = _quantile(
+        inherited_quantile,
+        field="inherited_right_tail_quantile",
+    )
+    if (
+        auth_quantile is not None
+        and inherited_quantile_value is not None
+        and auth_quantile != inherited_quantile_value
+    ):
+        raise ValueError(
+            f"{context}: right_tail_quantile conflict authoritative={auth_quantile}, "
+            f"inherited={inherited_quantile_value}"
+        )
+    quantile = auth_quantile if auth_quantile is not None else inherited_quantile_value
+    if objective == "raw_return":
+        if quantile is not None:
+            raise ValueError(
+                f"{context}: right_tail_quantile requires "
+                "label_objective='cs_top_quantile_return'"
+            )
+        return objective, None
+    return objective, quantile if quantile is not None else 0.99
+
+
 def _label_horizon_from_model_params(config: dict[str, Any] | None) -> Any:
     if not isinstance(config, dict):
         return None
@@ -367,6 +437,11 @@ def build_config_from_exp_record(
         inherited=custom_params.pop("label_horizon", None),
         context="exp_record",
     )
+    label_objective, right_tail_quantile = _resolve_label_objective(
+        inherited=custom_params.pop("label_objective", None),
+        inherited_quantile=custom_params.pop("right_tail_quantile", None),
+        context="exp_record",
+    )
 
     # HMM keys live inside custom_params in Path 1
     enable_sector_hmm: bool = bool(custom_params.pop("enable_sector_hmm", False))
@@ -400,6 +475,8 @@ def build_config_from_exp_record(
         data_split=data_split,
         label_type=label_type,
         label_horizon=label_horizon,
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         hmm=hmm,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params or None,
@@ -477,6 +554,32 @@ def build_config_from_evolution_loop(
         inherited=model_params_base.get("label_horizon"),
         context="evolution_loop",
     )
+    base_target_present = any(
+        value not in (None, "")
+        for value in (
+            config.get("label_objective"),
+            model_params_base.get("label_objective"),
+            config.get("right_tail_quantile"),
+            model_params_base.get("right_tail_quantile"),
+        )
+    )
+    base_objective: str | None = None
+    base_quantile: float | None = None
+    if base_target_present:
+        base_objective, base_quantile = _resolve_label_objective(
+            authoritative=config.get("label_objective"),
+            inherited=model_params_base.get("label_objective"),
+            authoritative_quantile=config.get("right_tail_quantile"),
+            inherited_quantile=model_params_base.get("right_tail_quantile"),
+            context="evolution_loop.base_config",
+        )
+    label_objective, right_tail_quantile = _resolve_label_objective(
+        authoritative=task.get("label_objective"),
+        inherited=base_objective,
+        authoritative_quantile=task.get("right_tail_quantile"),
+        inherited_quantile=base_quantile,
+        context="evolution_loop",
+    )
     hmm = _build_hmm_config_from_fields(config_hmm_fields, task_hmm_fields)
 
     # Multi-Alpha 透传 (Path 2)
@@ -493,6 +596,8 @@ def build_config_from_evolution_loop(
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
         label_horizon=label_horizon,
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         hmm=hmm,
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
@@ -542,6 +647,39 @@ def build_config_from_strategy_evo_loop(
                 "strategy_evo_loop: backtest-only label_horizon cannot differ "
                 f"from source model horizon {label_horizon}"
             )
+    base_target_present = any(
+        value not in (None, "")
+        for value in (
+            base_config.get("label_objective"),
+            model_params_base.get("label_objective"),
+            base_config.get("right_tail_quantile"),
+            model_params_base.get("right_tail_quantile"),
+        )
+    )
+    base_objective: str | None = None
+    base_quantile: float | None = None
+    if base_target_present:
+        base_objective, base_quantile = _resolve_label_objective(
+            authoritative=base_config.get("label_objective"),
+            inherited=model_params_base.get("label_objective"),
+            authoritative_quantile=base_config.get("right_tail_quantile"),
+            inherited_quantile=model_params_base.get("right_tail_quantile"),
+            context="strategy_evo_loop.base_config",
+        )
+    source_objective, source_quantile = _resolve_label_objective(
+        authoritative=task.get("label_objective"),
+        inherited=base_objective,
+        authoritative_quantile=task.get("right_tail_quantile"),
+        inherited_quantile=base_quantile,
+        context="strategy_evo_loop.source",
+    )
+    label_objective, right_tail_quantile = _resolve_label_objective(
+        authoritative=loop_config.get("label_objective"),
+        inherited=source_objective,
+        authoritative_quantile=loop_config.get("right_tail_quantile"),
+        inherited_quantile=source_quantile,
+        context="strategy_evo_loop",
+    )
 
     execution_algo: str | None = loop_config.get("execution_algo")
     execution_algo_params: dict[str, Any] = dict(
@@ -589,6 +727,8 @@ def build_config_from_strategy_evo_loop(
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
         label_horizon=label_horizon,
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         sector_blacklist=sector_blacklist,
         hmm=hmm,
         execution_algo=execution_algo,
@@ -671,6 +811,15 @@ def build_config_from_custom_evo_loop(
     suspend_filter_strict = _bool_from_config(loop_config.get("suspend_filter_strict", True))
     data_split = loop_config.get("data_split")
     label_type: str | None = loop_config.get("label_type")
+    label_objective, right_tail_quantile = _resolve_label_objective(
+        authoritative=loop_config.get("label_objective"),
+        inherited=model_params_base.get("label_objective"),
+        authoritative_quantile=loop_config.get("right_tail_quantile"),
+        inherited_quantile=model_params_base.get("right_tail_quantile"),
+        context="custom_evo_loop",
+    )
+    model_params_base.pop("label_objective", None)
+    model_params_base.pop("right_tail_quantile", None)
 
     enable_sector_hmm: bool = bool(loop_config.get("enable_sector_hmm", False))
     hmm_model_version_id: str | None = loop_config.get("hmm_model_version_id")
@@ -729,6 +878,8 @@ def build_config_from_custom_evo_loop(
         stock_pool=stock_pool,
         label_type=label_type,
         label_horizon=label_horizon,
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         sector_blacklist=sector_blacklist,
         hmm=hmm,
         execution_algo=execution_algo,
@@ -806,6 +957,31 @@ def build_config_from_retry_loop(
             authoritative=task.get("label_horizon"),
             context="retry_loop",
         )
+    snapshot_target_present = any(
+        value not in (None, "")
+        for value in (
+            config.get("label_objective"),
+            model_params_base.get("label_objective"),
+            config.get("right_tail_quantile"),
+            model_params_base.get("right_tail_quantile"),
+        )
+    )
+    if snapshot_target_present:
+        label_objective, right_tail_quantile = _resolve_label_objective(
+            authoritative=config.get("label_objective"),
+            inherited=model_params_base.get("label_objective"),
+            authoritative_quantile=config.get("right_tail_quantile"),
+            inherited_quantile=model_params_base.get("right_tail_quantile"),
+            context="retry_loop.snapshot",
+        )
+    else:
+        label_objective, right_tail_quantile = _resolve_label_objective(
+            authoritative=task.get("label_objective"),
+            authoritative_quantile=task.get("right_tail_quantile"),
+            context="retry_loop.task",
+        )
+    model_params_base.pop("label_objective", None)
+    model_params_base.pop("right_tail_quantile", None)
 
     # Retry must preserve the loop snapshot.  Custom-evo tasks can compare
     # V24/V25 or different holding periods in sibling loops, so task-level
@@ -859,6 +1035,8 @@ def build_config_from_retry_loop(
         stock_pool=_snapshot_or_task("stock_pool"),
         label_type=_snapshot_or_task("label_type"),
         label_horizon=label_horizon,
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         hmm=hmm,
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
@@ -886,6 +1064,8 @@ def build_config_from_multi_alpha(
     stock_pool=None,
     label_type=None,
     label_horizon=None,
+    label_objective=None,
+    right_tail_quantile=None,
     sector_blacklist=None,
     hmm_config=None,
     execution_algo=None,
@@ -925,6 +1105,8 @@ def build_config_from_multi_alpha(
         stock_pool=stock_pool,
         label_type=label_type,
         label_horizon=normalize_label_horizon(label_horizon),
+        label_objective=label_objective,
+        right_tail_quantile=right_tail_quantile,
         sector_blacklist=sector_blacklist,
         hmm=hmm_config,
         execution_algo=execution_algo,

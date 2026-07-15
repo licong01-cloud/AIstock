@@ -27,6 +27,89 @@ _ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20, 30, 40, 60, 120, 180}
 _LONG_HORIZON_MIN = 30
 
 
+class CSRightTailBinaryLabel(_QlibProcessor):
+    """Convert a mature forward-return label into a daily right-tail target.
+
+    The transformation is learn-only and uses only labels on the same signal
+    date.  Missing/immature labels remain missing so ``DropnaLabel`` retains
+    the existing maturity semantics.  The exact percentile and tie policy are
+    stored on the processor and therefore become part of the Qlib task config.
+    """
+
+    def __init__(self, *, quantile: float = 0.99) -> None:
+        try:
+            parsed = float(quantile)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CSRightTailBinaryLabel.quantile must be numeric") from exc
+        if not 0.0 < parsed < 1.0:
+            raise ValueError("CSRightTailBinaryLabel.quantile must be strictly between 0 and 1")
+        self.quantile = parsed
+        self.transform_summary: dict[str, object] = {}
+
+    @staticmethod
+    def _label_columns(df: pd.DataFrame) -> list[object]:
+        if isinstance(df.columns, pd.MultiIndex):
+            return [column for column in df.columns if str(column[0]).lower() == "label"]
+        return [column for column in df.columns if str(column).lower().startswith("label")]
+
+    def is_for_infer(self) -> bool:
+        return False
+
+    def readonly(self) -> bool:
+        return False
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            raise ValueError("CSRightTailBinaryLabel received empty learning data")
+        if not isinstance(df.index, pd.MultiIndex) or "datetime" not in df.index.names:
+            raise ValueError("CSRightTailBinaryLabel requires MultiIndex containing datetime")
+        label_columns = self._label_columns(df)
+        if not label_columns:
+            raise ValueError("CSRightTailBinaryLabel found no label columns")
+
+        datetimes = pd.DatetimeIndex(
+            pd.to_datetime(df.index.get_level_values("datetime"))
+        ).normalize()
+        result = df.copy()
+        valid_rows = 0
+        positive_rows = 0
+        per_column: dict[str, dict[str, int]] = {}
+        for column in label_columns:
+            numeric = pd.to_numeric(result[column], errors="coerce")
+            original_non_null = result[column].notna()
+            invalid = original_non_null & numeric.isna()
+            if bool(invalid.any()):
+                raise ValueError(
+                    f"CSRightTailBinaryLabel found non-numeric label values in {column!r}"
+                )
+            percentile_rank = numeric.groupby(datetimes, sort=False).rank(
+                method="average",
+                pct=True,
+            )
+            valid = numeric.notna()
+            transformed = pd.Series(float("nan"), index=result.index, dtype="float64")
+            transformed.loc[valid] = (percentile_rank.loc[valid] > self.quantile).astype("float64")
+            result.loc[:, column] = transformed
+            column_valid = int(valid.sum())
+            column_positive = int(transformed.eq(1.0).sum())
+            valid_rows += column_valid
+            positive_rows += column_positive
+            per_column[str(column)] = {
+                "valid_rows": column_valid,
+                "positive_rows": column_positive,
+            }
+
+        self.transform_summary = {
+            "objective": "cs_top_quantile_return",
+            "quantile": self.quantile,
+            "tie_policy": "daily_average_percentile_rank_strictly_greater_than_quantile",
+            "valid_rows": valid_rows,
+            "positive_rows": positive_rows,
+            "per_column": per_column,
+        }
+        return result
+
+
 class LongHorizonLabelMaturityPurge(_QlibProcessor):
     """Remove immature learning labels without truncating inference signals.
 

@@ -183,6 +183,20 @@ class TestQELoopCallbackUrls:
 
 
 class TestConfigComposerCommandGeneration:
+    def test_custom_timeseries_command_exports_requested_sequence_length(self):
+        composer = ConfigComposer()
+        env_lines, _ = composer._build_auto_wsl_command_parts(
+            "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+            use_custom_model=True,
+            model_type_tag="TimeSeries",
+            sequence_step_len=60,
+        )
+
+        assert "export dataset_cls=TSDatasetH" in env_lines
+        assert "export step_len=60" in env_lines
+        assert "export num_timesteps=60" in env_lines
+        assert "export step_len=20" not in env_lines
+
     def test_build_auto_wsl_command_parts_uses_factor_cache_root(self):
         composer = ConfigComposer()
         env_lines, core_parts = composer._build_auto_wsl_command_parts(

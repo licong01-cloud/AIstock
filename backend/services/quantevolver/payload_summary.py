@@ -157,6 +157,8 @@ SUMMARY_CONFIG_KEYS = (
     "model_id",
     "strategy_id",
     "label_horizon",
+    "label_objective",
+    "right_tail_quantile",
     "execution_algo",
     "node_id",
     "backtest_only",
@@ -561,7 +563,13 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
     unfilled_handler_params = _mapping(cfg.get("unfilled_handler_params"))
 
     if isinstance(model_params, Mapping):
-        for key in ("label_horizon", "random_seed", "execution_algo"):
+        for key in (
+            "label_horizon",
+            "label_objective",
+            "right_tail_quantile",
+            "random_seed",
+            "execution_algo",
+        ):
             if key in model_params and key not in summary:
                 summary[key] = model_params[key]
     runtime_flags = _mapping(cfg.get("runtime_flags"))
@@ -570,7 +578,15 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
             if key in runtime_flags and key not in summary:
                 summary[key] = runtime_flags[key]
     config_sources = [cfg, strategy_params, model_params, custom_params]
-    for key in ("hold_thresh", "unfilled_handler", "unfilled_backup_depth", "unfilled_trigger_minute", "stock_pool"):
+    for key in (
+        "hold_thresh",
+        "unfilled_handler",
+        "unfilled_backup_depth",
+        "unfilled_trigger_minute",
+        "stock_pool",
+        "label_objective",
+        "right_tail_quantile",
+    ):
         if key not in summary:
             compact = _compact_scalar_fields(config_sources, (key,))
             if key in compact:

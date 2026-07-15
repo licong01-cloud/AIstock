@@ -45,6 +45,7 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
 _GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
+_TCN_MODEL_CLASSES = {"AIStockTCN"}
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
@@ -71,6 +72,59 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _requested_sequence_step_len(custom_params: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Return the explicitly requested QE sequence lookback.
+
+    ``step_len`` is the canonical field. ``num_timesteps`` remains supported
+    because custom GeneralPTNN models consume that Jinja variable.  Supplying
+    both with different values is an invalid experiment definition; silently
+    choosing one would train a different model from the recorded config.
+
+    The research layer intentionally does not impose an allow-list of horizons:
+    any positive integer can be studied. Resource use is handled by the QE
+    scheduler, not by an artificial research-direction gate.
+    """
+
+    params = custom_params or {}
+    raw_step_len = params.get("step_len")
+    raw_num_timesteps = params.get("num_timesteps")
+    if raw_step_len is None and raw_num_timesteps is None:
+        return None
+
+    def _coerce(value: Any, *, field: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(
+                "reason_code=qe_sequence_step_len_invalid: "
+                f"{field} must be a positive integer, got boolean {value!r}"
+            )
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "reason_code=qe_sequence_step_len_invalid: "
+                f"{field} must be a positive integer, got {value!r}"
+            ) from exc
+        if parsed <= 0 or (isinstance(value, float) and not value.is_integer()):
+            raise ValueError(
+                "reason_code=qe_sequence_step_len_invalid: "
+                f"{field} must be a positive integer, got {value!r}"
+            )
+        return parsed
+
+    step_len = _coerce(raw_step_len, field="step_len") if raw_step_len is not None else None
+    num_timesteps = (
+        _coerce(raw_num_timesteps, field="num_timesteps")
+        if raw_num_timesteps is not None
+        else None
+    )
+    if step_len is not None and num_timesteps is not None and step_len != num_timesteps:
+        raise ValueError(
+            "reason_code=qe_sequence_step_len_conflict: "
+            f"step_len={step_len} differs from num_timesteps={num_timesteps}"
+        )
+    return step_len if step_len is not None else num_timesteps
+
+
 def _requires_qe_custom_loaders(
     *,
     has_custom_factors: bool,
@@ -79,7 +133,12 @@ def _requires_qe_custom_loaders(
 ) -> bool:
     """Return whether the generated workspace needs qe_custom_loaders.py."""
     label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
-    return (has_custom_factors and disable_alpha158) or label_horizon >= 30
+    label_objective = str((custom_params or {}).get("label_objective") or "raw_return").strip().lower()
+    return (
+        (has_custom_factors and disable_alpha158)
+        or label_horizon >= 30
+        or label_objective != "raw_return"
+    )
 
 
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
@@ -237,8 +296,16 @@ def _conf_uses_efficient_gats_adapter(conf_yaml: str) -> bool:
     return "module_path: aistock_models.efficient_gats" in conf_yaml
 
 
+def _conf_uses_tcn_adapter(conf_yaml: str) -> bool:
+    return "module_path: aistock_models.tcn" in conf_yaml
+
+
 def _conf_uses_workspace_aistock_model(conf_yaml: str) -> bool:
-    return _conf_uses_general_ptnn_ltr_adapter(conf_yaml) or _conf_uses_efficient_gats_adapter(conf_yaml)
+    return (
+        _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
+        or _conf_uses_efficient_gats_adapter(conf_yaml)
+        or _conf_uses_tcn_adapter(conf_yaml)
+    )
 
 
 def _general_ptnn_ltr_adapter_sources() -> dict[str, Path]:
@@ -267,6 +334,13 @@ def _workspace_aistock_model_sources(conf_yaml: str) -> dict[str, Path]:
                 "aistock_models/__init__.py": package_dir / "__init__.py",
                 "aistock_models/efficient_gats.py": package_dir / "efficient_gats.py",
                 "aistock_models/gats_industry_provider.py": package_dir / "gats_industry_provider.py",
+            }
+        )
+    if _conf_uses_tcn_adapter(conf_yaml):
+        sources.update(
+            {
+                "aistock_models/__init__.py": package_dir / "__init__.py",
+                "aistock_models/tcn.py": package_dir / "tcn.py",
             }
         )
     missing = [str(path) for path in sources.values() if not path.exists()]
@@ -1716,6 +1790,11 @@ class ConfigComposer:
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            sequence_step_len=(
+                _requested_sequence_step_len(custom_params)
+                if model_type_tag == "TimeSeries"
+                else None
+            ),
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             prediction_store_base_url=prediction_store_base_url,
@@ -2074,6 +2153,11 @@ class ConfigComposer:
             has_custom_factors=has_custom_factors,
             use_custom_model=bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            sequence_step_len=(
+                _requested_sequence_step_len(custom_params)
+                if model_type_tag == "TimeSeries"
+                else None
+            ),
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
@@ -2095,6 +2179,11 @@ class ConfigComposer:
             has_custom_factors=has_custom_factors,
             use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            sequence_step_len=(
+                _requested_sequence_step_len(custom_params)
+                if model_type_tag == "TimeSeries"
+                else None
+            ),
             mode="auto",
             backtest_freq=backtest_freq,
             train_only=train_only,
@@ -2784,6 +2873,11 @@ class ConfigComposer:
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            sequence_step_len=(
+                _requested_sequence_step_len(custom_params)
+                if model_type_tag == "TimeSeries"
+                else None
+            ),
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             prediction_store_base_url=prediction_store_base_url,
@@ -3002,6 +3096,71 @@ class ConfigComposer:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
+            elif "TCN" in model_type or (
+                model_type in {"TIMESERIES", "TIME_SERIES"}
+                and "TCN" in str(model_info.get("model_name") or "").upper()
+            ):
+                # The registered TCN seeds are source-free catalog entries whose
+                # historical model_type is TimeSeries. Route them to the full
+                # Qlib TCN Model through the QE-owned adapter; GeneralPTNN is not
+                # the correct wrapper for qlib.contrib.model.pytorch_tcn_ts.TCN.
+                model_class = "AIStockTCN"
+                model_module = "aistock_models.tcn"
+                model_dataset_cls = "TSDatasetH"
+                model_step_len = 20
+                model_kwargs = {
+                    "d_feat": 20,
+                    "n_chans": 64,
+                    "kernel_size": 5,
+                    "num_layers": 3,
+                    "dropout": 0.2,
+                    "n_epochs": 200,
+                    "lr": 1e-3,
+                    "metric": "loss",
+                    "batch_size": 4096,
+                    "early_stop": 20,
+                    "loss": "mse",
+                    "optimizer": "adam",
+                    "n_jobs": 2,
+                    "GPU": 0,
+                    "weight_decay": 0.0,
+                }
+                training_hp = model_info.get("model_training_hyperparameters")
+                if training_hp:
+                    if isinstance(training_hp, str):
+                        training_hp = json.loads(training_hp)
+                    allowed_training = {
+                        "n_epochs", "lr", "metric", "batch_size", "early_stop",
+                        "loss", "optimizer", "n_jobs", "GPU", "seed", "weight_decay",
+                    }
+                    unknown_training = set(training_hp) - allowed_training
+                    if unknown_training:
+                        raise ValueError(
+                            "reason_code=qe_tcn_training_params_unsupported: "
+                            f"unsupported TCN training parameters={sorted(unknown_training)}"
+                        )
+                    model_kwargs.update(training_hp)
+
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    hp = dict(hp)
+                    if "hidden_size" in hp:
+                        if "n_chans" in hp and hp["n_chans"] != hp["hidden_size"]:
+                            raise ValueError(
+                                "reason_code=qe_tcn_channel_width_conflict: "
+                                f"hidden_size={hp['hidden_size']!r} differs from n_chans={hp['n_chans']!r}"
+                            )
+                        hp["n_chans"] = hp.pop("hidden_size")
+                    allowed_arch = {"d_feat", "n_chans", "kernel_size", "num_layers", "dropout"}
+                    unknown_arch = set(hp) - allowed_arch
+                    if unknown_arch:
+                        raise ValueError(
+                            "reason_code=qe_tcn_arch_params_unsupported: "
+                            f"unsupported TCN architecture parameters={sorted(unknown_arch)}"
+                        )
+                    model_kwargs.update(hp)
             elif "GATS" in model_type:
                 # Qlib GATs is a full Model implementation with its own fit/predict
                 # and DailyBatchSampler. Route all constructor params directly to
@@ -3201,6 +3360,15 @@ class ConfigComposer:
                     f"无法生成 Qlib 配置。请检查模型数据完整性。"
                 )
 
+        requested_step_len = _requested_sequence_step_len(custom_params)
+        if model_dataset_cls == "TSDatasetH":
+            model_step_len = requested_step_len or model_step_len or 20
+        elif requested_step_len is not None:
+            raise ValueError(
+                "reason_code=qe_sequence_step_len_requires_timeseries_dataset: "
+                f"step_len={requested_step_len} was requested for dataset={model_dataset_cls!r}"
+            )
+
         # ── 策略配置 ──
         # 默认值：仅在用户未选择策略时使用 qlib 内置 TopkDropoutStrategy
         strategy_class = "TopkDropoutStrategy"
@@ -3296,12 +3464,19 @@ class ConfigComposer:
             "gats_adjacency_mode", "gats_industry_gamma_init",
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
+        _TCN_HP_KEYS = {
+            "d_feat", "n_chans", "kernel_size", "num_layers", "dropout",
+            "n_epochs", "lr", "metric", "batch_size", "early_stop", "loss",
+            "optimizer", "n_jobs", "GPU", "seed", "weight_decay",
+        }
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
             "label_type",   # 训练标签类型：close/open/vwap
             "label_horizon",  # Training label horizon: 1/3/5/10/20/30/40/60/120/180d
+            "label_objective",  # raw_return / cs_top_quantile_return
+            "right_tail_quantile",  # daily cross-sectional percentile for the right-tail objective
             "stock_pool",   # 股票池文件路径
             "runtime_mode",
             "bar_freq",
@@ -3338,7 +3513,7 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS | _TCN_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
@@ -3357,6 +3532,8 @@ class ConfigComposer:
                 hp_keys = _LINEAR_HP_KEYS
             elif model_class in _GATS_MODEL_CLASSES:
                 hp_keys = _GATS_HP_KEYS
+            elif model_class in _TCN_MODEL_CLASSES:
+                hp_keys = _TCN_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
             if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
                 hp_keys = hp_keys | _PTNN_HP_KEYS
@@ -3366,7 +3543,7 @@ class ConfigComposer:
                 if key in custom_params:
                     val = custom_params[key]
                     # 确保 GeneralPTNN 的 lr 和 weight_decay 是数值类型
-                    if model_class in (_GENERAL_PTNN_MODEL_CLASSES | _GATS_MODEL_CLASSES) and key in ("lr", "weight_decay") and isinstance(val, str):
+                    if model_class in (_GENERAL_PTNN_MODEL_CLASSES | _GATS_MODEL_CLASSES | _TCN_MODEL_CLASSES) and key in ("lr", "weight_decay") and isinstance(val, str):
                         val = float(val)
                     model_hp_overrides[key] = val
             if model_hp_overrides:
@@ -3586,6 +3763,18 @@ class ConfigComposer:
         _label_field = _LABEL_FIELDS[_label_type]
         _label_formula = f"Ref({_label_field}, -{_label_horizon + 1}) / Ref({_label_field}, -1) - 1"
         _requires_label_maturity_purge = _label_horizon >= 30
+        _label_objective = str((custom_params or {}).get("label_objective") or "raw_return").strip().lower()
+        if _label_objective not in {"raw_return", "cs_top_quantile_return"}:
+            raise ValueError(
+                "label_objective must be 'raw_return' or 'cs_top_quantile_return', "
+                f"got {_label_objective!r}"
+            )
+        try:
+            _right_tail_quantile = float((custom_params or {}).get("right_tail_quantile", 0.99))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("right_tail_quantile must be numeric") from exc
+        if not 0.0 < _right_tail_quantile < 1.0:
+            raise ValueError("right_tail_quantile must be strictly between 0 and 1")
 
         def _append_label_maturity_purge() -> None:
             if not _requires_label_maturity_purge:
@@ -3603,6 +3792,14 @@ class ConfigComposer:
                 "test_end",
             ):
                 lines.append(f"              {split_key}: {data_split[split_key]}")
+
+        def _append_label_objective_transform() -> None:
+            if _label_objective == "raw_return":
+                return
+            lines.append("        - class: CSRightTailBinaryLabel")
+            lines.append("          module_path: qe_custom_loaders")
+            lines.append("          kwargs:")
+            lines.append(f"              quantile: {_right_tail_quantile}")
 
         if _label_type != "close" or _label_horizon != 1:
             logger.info(
@@ -3687,10 +3884,12 @@ class ConfigComposer:
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
             _append_label_maturity_purge()
+            _append_label_objective_transform()
             lines.append("        - class: DropnaLabel")
-            lines.append("        - class: CSZScoreNorm")
-            lines.append("          kwargs:")
-            lines.append("              fields_group: label")
+            if _label_objective == "raw_return":
+                lines.append("        - class: CSZScoreNorm")
+                lines.append("          kwargs:")
+                lines.append("              fields_group: label")
         elif has_custom_factors and disable_alpha158:
             # 自定义因子 + 禁用Alpha158基线：使用 DynamicFactorsOnlyLoader
             # 注意：使用实验目录中的 qe_custom_loaders（QE独立版本），不影响RDAgent
@@ -3715,10 +3914,12 @@ class ConfigComposer:
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
             _append_label_maturity_purge()
+            _append_label_objective_transform()
             lines.append("        - class: DropnaLabel")
-            lines.append("        - class: CSZScoreNorm")
-            lines.append("          kwargs:")
-            lines.append("              fields_group: label")
+            if _label_objective == "raw_return":
+                lines.append("        - class: CSZScoreNorm")
+                lines.append("          kwargs:")
+                lines.append("              fields_group: label")
         else:
             # Alpha158 标准处理器（与 RDAgent conf_baseline.yaml 一致）
             lines.append("    infer_processors:")
@@ -3737,10 +3938,12 @@ class ConfigComposer:
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
             _append_label_maturity_purge()
+            _append_label_objective_transform()
             lines.append("        - class: DropnaLabel")
-            lines.append("        - class: CSRankNorm")
-            lines.append("          kwargs:")
-            lines.append("              fields_group: label")
+            if _label_objective == "raw_return":
+                lines.append("        - class: CSRankNorm")
+                lines.append("          kwargs:")
+                lines.append("              fields_group: label")
             lines.append(f'    label: ["{_label_formula}"]')
 
         lines.append("")
@@ -3879,7 +4082,7 @@ class ConfigComposer:
                 if k == "pt_model_kwargs":
                     continue
                 # pt_model_kwargs 使用Jinja2模板变量，与RDAgent一致
-                if model_class in _GATS_MODEL_CLASSES and model_dataset_cls == "TSDatasetH" and k == "d_feat":
+                if model_class in (_GATS_MODEL_CLASSES | _TCN_MODEL_CLASSES) and model_dataset_cls == "TSDatasetH" and k == "d_feat":
                     lines.append(f"            {k}: {{{{ num_features }}}}")
                 elif k == "pt_model_uri":
                     lines.append(f"            {k}: {v}")
@@ -3907,7 +4110,7 @@ class ConfigComposer:
                     lines.append('            }')
 
         # 数据集配置
-        if model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES:
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES or model_class in _TCN_MODEL_CLASSES:
             lines.append("    dataset:")
             lines.append(f'        class: {model_dataset_cls}')
             lines.append("        module_path: qlib.data.dataset")
@@ -3929,7 +4132,7 @@ class ConfigComposer:
         lines.append(f"                train: [{data_split['train_start']}, {data_split['train_end']}]")
         lines.append(f"                valid: [{data_split['valid_start']}, {data_split['valid_end']}]")
         lines.append(f"                test: [{data_split['test_start']}, {data_split['test_end']}]")
-        if (model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES) and model_step_len:
+        if (model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES or model_class in _TCN_MODEL_CLASSES) and model_step_len:
             lines.append(f"            step_len: {model_step_len}")
 
         # record
@@ -4973,6 +5176,7 @@ class ConfigComposer:
         has_custom_factors: bool = False,
         use_custom_model: bool = False,
         model_type_tag: Optional[str] = None,
+        sequence_step_len: Optional[int] = None,
         backtest_freq: str = "1min",
         train_only: bool = False,
         factor_cache_dir: Optional[str] = None,
@@ -5002,9 +5206,10 @@ class ConfigComposer:
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
+                resolved_step_len = sequence_step_len or 20
                 env_lines.append("export dataset_cls=TSDatasetH")
-                env_lines.append("export step_len=20")
-                env_lines.append("export num_timesteps=20")
+                env_lines.append(f"export step_len={resolved_step_len}")
+                env_lines.append(f"export num_timesteps={resolved_step_len}")
             else:
                 env_lines.append("export dataset_cls=DatasetH")
 
@@ -5099,6 +5304,7 @@ class ConfigComposer:
                               has_custom_factors: bool = False,
                               use_custom_model: bool = False,
                               model_type_tag: Optional[str] = None,
+                              sequence_step_len: Optional[int] = None,
                               mode: str = "manual",
                               backtest_freq: str = "1min",
                               train_only: bool = False,
@@ -5127,6 +5333,7 @@ class ConfigComposer:
             has_custom_factors=has_custom_factors,
             use_custom_model=use_custom_model,
             model_type_tag=model_type_tag,
+            sequence_step_len=sequence_step_len,
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
