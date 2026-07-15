@@ -1,0 +1,68 @@
+{
+  "actual": "Current custom rdagent_task_sync factors have mostly NULL data_source/factor_type metadata, blocking datasource coverage analysis.",
+  "allowed_write_scope": [
+    "docs/analysis/factor_library_datasource_coverage_audit_20260623.md",
+    "tests/aistock_validation/bugs/20260623_BUG-483-p3-analysis-chore-factor-library-datasource-coverage-audit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-483",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T16:37:25.900534Z",
+  "description": "Current custom rdagent_task_sync factors have mostly NULL data_source/factor_type metadata, blocking datasource coverage analysis.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-80e6af07c542",
+      "timestamp": "2026-06-22T16:37:25.900530Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A PR with an analysis report and gated metadata backfill proposal; no DB writes, no service start, no research-assistant changes.",
+  "first_seen_at": "2026-06-22T16:37:25.900534Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1488,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1488",
+  "last_seen_at": "2026-06-22T16:37:25.900534Z",
+  "module": "rdagent",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P3",
+  "status": "open",
+  "suspected_modules": [
+    "rdagent"
+  ],
+  "title": "P3 analysis/chore: factor library datasource coverage audit",
+  "trigger_condition": {
+    "fingerprint": "80e6af07c5425e39f722c44a",
+    "source_event_id": "FE-20260623-80e6af07c542"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
