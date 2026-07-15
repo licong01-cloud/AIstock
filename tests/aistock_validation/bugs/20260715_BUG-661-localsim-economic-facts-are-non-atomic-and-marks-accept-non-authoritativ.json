@@ -36,8 +36,8 @@
   "expected": "Persist economic facts, execution state, outbox and projections through one single-writer transaction with CAS, idempotency, dedupe, replay and independent readback; value positions only from authoritative market marks and fail loudly when unavailable.",
   "first_seen_at": "2026-07-15T13:20:52.225969Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f74fdf3b0fa6208eb8c9715ab64242410dc89fb0",
+  "fixed_at": "2026-07-15T15:33:41.930594Z",
   "github_issue_number": 2179,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2179",
   "last_seen_at": "2026-07-15T13:20:52.225969Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2187",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -64,6 +65,11 @@
     "fingerprint": "68ad5562cc18e54ced0a2771",
     "source_event_id": "FE-20260715-68ad5562cc18"
   },
+  "validation_evidence": [
+    "PR #2187 checks: 11 passed, 0 failed",
+    "post-rebase direct matrix: 16 passed",
+    "F2 validator and DESIGN-COMPLIANCE-001: passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
