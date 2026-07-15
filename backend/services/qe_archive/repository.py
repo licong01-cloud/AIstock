@@ -1820,6 +1820,60 @@ class QEArchiveRepository:
                 )
                 return self._fetch_dicts(cur)
 
+    def list_prediction_artifact_link_candidates(
+        self,
+        *,
+        run_ids: Sequence[str] = (),
+        task_ids: Sequence[str] = (),
+        after_run_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Page deterministic QE run identities for artifact-only backfill."""
+
+        limit = max(1, min(int(limit or 200), 500))
+        normalized_run_ids = [str(item).strip() for item in run_ids if str(item).strip()]
+        normalized_task_ids = [str(item).strip() for item in task_ids if str(item).strip()]
+        filters = [
+            "(r.task_id IS NOT NULL OR r.run_type IN ('evolution_loop', 'single_experiment', 'qe_experiment'))"
+        ]
+        params: list[Any] = []
+        if normalized_run_ids:
+            filters.append("r.run_id = ANY(%s)")
+            params.append(normalized_run_ids)
+        if normalized_task_ids:
+            filters.append("r.task_id = ANY(%s)")
+            params.append(normalized_task_ids)
+        if after_run_id:
+            filters.append("r.run_id > %s")
+            params.append(str(after_run_id))
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        r.run_id,
+                        r.source_system,
+                        r.logical_experiment_id,
+                        r.experiment_id,
+                        r.task_id,
+                        r.loop_id,
+                        r.loop_index,
+                        r.run_type,
+                        r.status,
+                        r.freq,
+                        r.label_horizon,
+                        r.completed_at,
+                        r.archived_at
+                    FROM qe_archive.run r
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY r.run_id ASC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
     def get_archive_summary(self) -> dict[str, Any]:
         """Return a compact warehouse health summary for API consumers."""
 
@@ -3105,6 +3159,45 @@ class QEArchiveRepository:
                         )
                 execute_values(cur, sql, rows, page_size=500)
         return len(records)
+
+    def list_artifact_manifest(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        artifact_type,
+                        artifact_name,
+                        artifact_uri,
+                        sha256,
+                        size_bytes,
+                        collected_status,
+                        parser_status,
+                        metadata
+                    FROM qe_archive.run_artifact
+                    WHERE run_id = %s
+                    ORDER BY artifact_type ASC, artifact_name ASC
+                    """,
+                    (run_id,),
+                )
+                return self._fetch_dicts(cur)
+
+    def update_run_source_artifact_uri(self, run_id: str, artifact_uri: str) -> int:
+        normalized_uri = str(artifact_uri or "").strip()
+        if not normalized_uri:
+            return 0
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_archive.run_source
+                    SET mlflow_artifact_uri = %s
+                    WHERE run_id = %s
+                      AND mlflow_artifact_uri IS DISTINCT FROM %s
+                    """,
+                    (normalized_uri, run_id, normalized_uri),
+                )
+                return int(cur.rowcount or 0)
 
     @staticmethod
     def _prepare_record(

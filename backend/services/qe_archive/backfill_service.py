@@ -99,6 +99,17 @@ class QEArchiveBackfillRunOptions:
         )
 
 
+@dataclass(frozen=True)
+class QEArchiveArtifactLinkBackfillOptions:
+    run_ids: Sequence[str] = ()
+    task_ids: Sequence[str] = ()
+    after_run_id: str | None = None
+    limit: int = 0
+    page_size: int = 200
+    write: bool = False
+    verify_sha256: bool = True
+
+
 class QEArchiveBackfillService:
     """Assemble existing QE DB rows and archive them through one API path."""
 
@@ -114,6 +125,79 @@ class QEArchiveBackfillService:
         self._repository = repository or QEArchiveRepository()
         self._archive_service = archive_service or QEArchiveService(repository=self._repository)
         self._multi_alpha_handler = multi_alpha_handler or MultiAlphaCombineArchiveHandler(repository=self._repository)
+
+    def backfill_prediction_artifact_links(
+        self,
+        options: QEArchiveArtifactLinkBackfillOptions,
+    ) -> dict[str, Any]:
+        """Backfill only QE Archive-to-Prediction Store pointer rows.
+
+        ``write=False`` is a complete dry run. The apply path is deliberately
+        artifact-only and does not re-run normal archive ingestion.
+        """
+
+        page_size = max(1, min(int(options.page_size or 200), 500))
+        requested_limit = max(0, int(options.limit or 0))
+        cursor = str(options.after_run_id or "").strip() or None
+        results: list[dict[str, Any]] = []
+        exhausted = False
+
+        while not exhausted:
+            remaining = requested_limit - len(results) if requested_limit else page_size
+            if requested_limit and remaining <= 0:
+                break
+            current_page_size = min(page_size, remaining) if requested_limit else page_size
+            candidates = self._repository.list_prediction_artifact_link_candidates(
+                run_ids=options.run_ids,
+                task_ids=options.task_ids,
+                after_run_id=cursor,
+                limit=current_page_size,
+            )
+            if not candidates:
+                exhausted = True
+                break
+            for candidate in candidates:
+                try:
+                    item = self._archive_service.link_prediction_artifacts_for_run(
+                        candidate,
+                        dry_run=not options.write,
+                        verify_sha256=options.verify_sha256,
+                    )
+                except Exception as exc:
+                    item = {
+                        "run_id": candidate.get("run_id"),
+                        "task_id": candidate.get("task_id"),
+                        "loop_index": candidate.get("loop_index"),
+                        "resolution_status": "failed",
+                        "action_status": "failed",
+                        "artifact_count": 0,
+                        "written_count": 0,
+                        "errors": [f"{type(exc).__name__}: {exc}"],
+                        "dry_run": not options.write,
+                    }
+                results.append(item)
+            cursor = str(candidates[-1].get("run_id") or "").strip() or cursor
+            exhausted = len(candidates) < current_page_size
+
+        actions = [str(item.get("action_status") or "") for item in results]
+        resolutions = [str(item.get("resolution_status") or "") for item in results]
+        return {
+            "schema_version": "qe_archive_prediction_artifact_link_backfill_v1",
+            "mode": "apply" if options.write else "dry_run",
+            "status": "failed" if "failed" in actions else "completed",
+            "scanned": len(results),
+            "linked": sum(action in {"linked", "linked_partial"} for action in actions),
+            "would_link": sum(action in {"would_link", "would_link_partial"} for action in actions),
+            "already_linked": sum(action in {"already_linked", "already_linked_partial"} for action in actions),
+            "missing": sum(status == "missing" for status in resolutions),
+            "corrupt": sum(status == "corrupt" for status in resolutions),
+            "partial": sum(status == "partial" for status in resolutions),
+            "failed": sum(action == "failed" for action in actions),
+            "artifact_rows_written": sum(int(item.get("written_count") or 0) for item in results),
+            "next_after_run_id": cursor,
+            "exhausted": exhausted,
+            "results": results,
+        }
 
     def preview_backfill(self, options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
         legacy = options.to_legacy_options(write=False)

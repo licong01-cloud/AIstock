@@ -1,0 +1,174 @@
+{
+  "actual": "R8B qe_20260715_104922_001d has six fully archived loops and successful Prediction Store manifests/files, but every qear_run reports artifact_count=0 and prediction pointer missing_or_unreadable because no run_artifact association was persisted.",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/source_assembler.py",
+    "backend/services/qe_archive/archive_service.py",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/model_store/service.py",
+    "backend/routers/prediction_store.py",
+    "scripts/qe_prediction_store_backfill.py",
+    "backend/tests/test_qe_prediction_store_backfill.py",
+    "backend/tests/test_model_store_prediction_store.py",
+    "tests/aistock_validation/bugs/20260715_BUG-659-qe-archive-artifact-count-remains-zero-after-successful-prediction-store.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-659",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-15T08:50:34.151495Z",
+  "description": "R8B qe_20260715_104922_001d has six fully archived loops and successful Prediction Store manifests/files, but every qear_run reports artifact_count=0 and prediction pointer missing_or_unreadable because no run_artifact association was persisted.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260715-99bd6b1107a5",
+      "timestamp": "2026-07-15T08:50:34.151492Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock/rdagent_assets/prediction_store/runs/qe_20260715_104922_001d_L1/manifest.json",
+    "backend/routers/prediction_store.py:175",
+    "backend/services/qe_archive/source_assembler.py:968",
+    "backend/services/qe_archive/payload_extractor.py:1144"
+  ],
+  "expected": "Newly archived QE loops automatically receive correct run_artifact associations after archive identity creation. A dry-run/apply historical command can backfill prior QE Archive runs from existing Prediction Store manifests and, when selected, existing QE workspaces; repeated execution is idempotent; receipts report scanned, linked, already-linked, missing, corrupt and failed counts; artifact_count and pointer lookup become consistent without rewriting statistical results.",
+  "first_seen_at": "2026-07-15T08:50:34.151495Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2165,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2165",
+  "last_seen_at": "2026-07-15T08:50:34.151495Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/qe_prediction_store_backfill.py --workspace-root F:/Dev/RD-Agent-main/qe_workspace --task-id qe_20260715_104922_001d --loops 1-6 --strict",
+  "required_verification": [
+    "l0",
+    "qe_archive_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE Archive artifact_count remains zero after successful Prediction Store uploads",
+  "trigger_condition": {
+    "fingerprint": "99bd6b1107a523acae5d41cb",
+    "source_event_id": "FE-20260715-99bd6b1107a5"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe_archive"
+      ],
+      "plans": [
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe_archive"
+        ],
+        "plans": [
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

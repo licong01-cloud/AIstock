@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -36,6 +37,171 @@ class ModelStoreService:
             "mlflow_pg_enabled": False,
             "artifact_store": self.artifact_store.health(),
         }
+
+    def resolve_archive_manifest(
+        self,
+        *,
+        run_id: str,
+        task_id: str | None = None,
+        loop_index: int | None = None,
+        verify_sha256: bool = True,
+    ) -> dict[str, Any]:
+        """Resolve and validate the Prediction Store manifest for one archive run.
+
+        QE uploads use ``<task_id>_L<loop_index>`` before the archive run id
+        exists. Older backfills can instead use the final ``qear_run_*`` key.
+        Both identities are therefore deterministic candidates; no directory
+        scan or workspace fallback is performed here.
+        """
+
+        candidates = _archive_manifest_candidates(run_id=run_id, task_id=task_id, loop_index=loop_index)
+        attempts: list[dict[str, Any]] = []
+        for candidate in candidates:
+            try:
+                manifest = self.artifact_store.load_manifest(candidate, missing_ok=True)
+            except (PredictionStoreError, OSError) as exc:
+                attempts.append(
+                    {
+                        "run_key": candidate,
+                        "status": "corrupt",
+                        "errors": [f"{type(exc).__name__}: {exc}"],
+                    }
+                )
+                continue
+            if manifest is None:
+                attempts.append({"run_key": candidate, "status": "missing", "errors": []})
+                continue
+
+            validation = self._validate_archive_manifest(
+                candidate,
+                manifest,
+                expected_task_id=task_id,
+                expected_loop_index=loop_index,
+                verify_sha256=verify_sha256,
+            )
+            attempts.append(
+                {
+                    "run_key": candidate,
+                    "status": validation["status"],
+                    "artifact_count": len(validation["valid_artifacts"]),
+                    "errors": validation["errors"],
+                }
+            )
+            if validation["valid_artifacts"]:
+                resolved_manifest = dict(manifest)
+                resolved_manifest["artifacts"] = validation["valid_artifacts"]
+                return {
+                    "status": validation["status"],
+                    "run_id": run_id,
+                    "selected_run_key": candidate,
+                    "candidate_run_keys": candidates,
+                    "artifact_count": len(validation["valid_artifacts"]),
+                    "errors": validation["errors"],
+                    "attempts": attempts,
+                    "manifest": resolved_manifest,
+                }
+
+        final_status = "corrupt" if any(item["status"] == "corrupt" for item in attempts) else "missing"
+        return {
+            "status": final_status,
+            "run_id": run_id,
+            "selected_run_key": None,
+            "candidate_run_keys": candidates,
+            "artifact_count": 0,
+            "errors": [error for item in attempts for error in item.get("errors", [])],
+            "attempts": attempts,
+            "manifest": None,
+        }
+
+    def _validate_archive_manifest(
+        self,
+        run_key: str,
+        manifest: Mapping[str, Any],
+        *,
+        expected_task_id: str | None,
+        expected_loop_index: int | None,
+        verify_sha256: bool,
+    ) -> dict[str, Any]:
+        errors: list[str] = []
+        metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), Mapping) else {}
+        manifest_task_id = str(metadata.get("task_id") or "").strip()
+        if expected_task_id and manifest_task_id and manifest_task_id != expected_task_id:
+            errors.append(
+                f"manifest task_id mismatch: expected={expected_task_id!r} actual={manifest_task_id!r}"
+            )
+        manifest_loop_index = metadata.get("loop_index")
+        if expected_loop_index is not None and manifest_loop_index not in (None, ""):
+            try:
+                normalized_loop_index = int(manifest_loop_index)
+            except (TypeError, ValueError):
+                errors.append(f"manifest loop_index is invalid: {manifest_loop_index!r}")
+            else:
+                if normalized_loop_index != int(expected_loop_index):
+                    errors.append(
+                        "manifest loop_index mismatch: "
+                        f"expected={int(expected_loop_index)} actual={normalized_loop_index}"
+                    )
+        if errors:
+            return {"status": "corrupt", "valid_artifacts": [], "errors": errors}
+
+        raw_artifacts = manifest.get("artifacts")
+        if not isinstance(raw_artifacts, list) or not raw_artifacts:
+            return {
+                "status": "corrupt",
+                "valid_artifacts": [],
+                "errors": ["prediction-store manifest has no artifact entries"],
+            }
+
+        valid_artifacts: list[dict[str, Any]] = []
+        for index, raw_item in enumerate(raw_artifacts):
+            if not isinstance(raw_item, Mapping):
+                errors.append(f"artifact[{index}] is not an object")
+                continue
+            item = dict(raw_item)
+            artifact_type = str(item.get("artifact_type") or "").strip()
+            artifact_name = str(item.get("artifact_name") or "").strip()
+            expected_sha256 = str(item.get("sha256") or "").strip().lower()
+            expected_size = item.get("size_bytes")
+            item_label = artifact_type or artifact_name or f"artifact[{index}]"
+            if not artifact_type or not artifact_name:
+                errors.append(f"{item_label}: artifact_type and artifact_name are required")
+                continue
+            if len(expected_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha256):
+                errors.append(f"{item_label}: sha256 is missing or invalid")
+                continue
+            try:
+                normalized_size = int(expected_size)
+            except (TypeError, ValueError):
+                errors.append(f"{item_label}: size_bytes is missing or invalid")
+                continue
+            try:
+                path = self.artifact_store.resolve_artifact_path(
+                    str(manifest.get("uri") or run_key),
+                    artifact_type=artifact_type,
+                )
+                actual_size = path.stat().st_size
+                if actual_size != normalized_size:
+                    raise PredictionStoreError(
+                        f"size mismatch expected={normalized_size} actual={actual_size}"
+                    )
+                if verify_sha256:
+                    actual_sha256 = _sha256_file(path)
+                    if actual_sha256 != expected_sha256:
+                        raise PredictionStoreError(
+                            f"sha256 mismatch expected={expected_sha256} actual={actual_sha256}"
+                        )
+            except (PredictionStoreError, OSError) as exc:
+                errors.append(f"{item_label}: {type(exc).__name__}: {exc}")
+                continue
+            valid_artifacts.append(item)
+
+        if valid_artifacts and errors:
+            status = "partial"
+        elif valid_artifacts:
+            status = "available"
+        else:
+            status = "corrupt"
+        return {"status": status, "valid_artifacts": valid_artifacts, "errors": errors}
 
     def get_pointer(self, *, run_id: str | None = None, experiment_id: str | None = None) -> dict[str, Any]:
         if not run_id and not experiment_id:
@@ -266,3 +432,18 @@ def _first_artifact_run_uri(artifacts: list[Mapping[str, Any]]) -> str | None:
                 continue
             return run_uri(run_key)
     return None
+
+
+def _archive_manifest_candidates(*, run_id: str, task_id: str | None, loop_index: int | None) -> list[str]:
+    candidates = [str(run_id or "").strip()]
+    if task_id and loop_index is not None:
+        candidates.append(f"{str(task_id).strip()}_L{int(loop_index)}")
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
