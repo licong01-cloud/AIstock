@@ -5,7 +5,10 @@
     "frontend/src/components/research-assistant/MemoryTreeView.tsx",
     "frontend/src/app/research-assistant/external-agents/page.tsx",
     "tests/aistock_validation/bugs/20260622_BUG-480-ra-frontend-residual-english-strings-in-agent-teams-memory-tree-and-exte.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/audit/ExternalAgentsSection.tsx",
+    "frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-480",
