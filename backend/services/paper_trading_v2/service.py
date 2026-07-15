@@ -1483,6 +1483,14 @@ class PaperTradingV2PortfolioService:
                 "target_broker_backend": target_broker_backend,
                 "trade_date": trade_date.isoformat(),
             },
+            miniqmt_quote_control=(
+                {
+                    "schema_version": "miniqmt_quote_control_binding_v1",
+                    "control_revision": "B0_QUOTE_V2",
+                }
+                if binding_broker_backend == "minqmt_sim"
+                else None
+            ),
             effective_from=trade_date,
             created_by=requested_by,
             created_reason="bind runtime release to portfolio and broker target",

@@ -157,6 +157,10 @@ def test_paper_v2_live_approval_candidate_binds_immutable_release_hashes() -> No
     )
     assert approval.audit_json["simulation_release_binding"]["release_hash"] == approval.runtime_release_sha256
     assert approval.audit_json["simulation_release_binding"]["binding_config_json"]["broker_backend"] == "minqmt_sim"
+    assert approval.audit_json["simulation_release_binding"]["binding_config_json"]["miniqmt_quote_control"] == {
+        "schema_version": "miniqmt_quote_control_binding_v1",
+        "control_revision": "B0_QUOTE_V2",
+    }
     assert "broker_account_id" not in approval.audit_json["runtime_release"]
 
     pending = service.submit_live_approval(
