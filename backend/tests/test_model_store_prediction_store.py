@@ -13,6 +13,8 @@ from backend.services.model_store.artifact_store import (
     PredictionStoreNotFound,
     validate_store_root,
 )
+from backend.services.model_store.service import ModelStoreService
+from backend.services.qe_archive.archive_service import QEArchiveService
 from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtractor
 
 
@@ -130,6 +132,116 @@ def test_prediction_artifact_store_accepts_label_manifest(tmp_path: Path) -> Non
     assert items["label"]["row_count"] == 2
     assert items["label"]["parser_status"] == "parsed"
     assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_type="label").exists()
+
+
+def test_model_store_resolves_task_loop_manifest_for_archive_and_detects_corruption(tmp_path: Path) -> None:
+    store = PredictionArtifactStore(root=tmp_path / "prediction_store")
+    manifest = store.write_artifacts(
+        run_key="qe_task_L3",
+        files={"prediction": ("pred.pkl", io.BytesIO(b"prediction-values"))},
+        metadata={"task_id": "qe_task", "loop_index": 3},
+    )
+    service = ModelStoreService(artifact_store=store)
+
+    resolved = service.resolve_archive_manifest(
+        run_id="qear_run_unit",
+        task_id="qe_task",
+        loop_index=3,
+    )
+
+    assert resolved["status"] == "available"
+    assert resolved["selected_run_key"] == "qe_task_L3"
+    assert resolved["artifact_count"] == 1
+    assert resolved["manifest"]["uri"] == manifest["uri"]
+
+    blob = store.resolve_artifact_path(manifest["uri"], artifact_type="prediction")
+    blob.write_bytes(b"tampered")
+    corrupt = service.resolve_archive_manifest(
+        run_id="qear_run_unit",
+        task_id="qe_task",
+        loop_index=3,
+    )
+
+    assert corrupt["status"] == "corrupt"
+    assert corrupt["artifact_count"] == 0
+    assert any("mismatch" in error for error in corrupt["errors"])
+
+
+class _ArtifactLinkRepository:
+    def __init__(self) -> None:
+        self.artifacts: list[dict] = []
+        self.writes = 0
+        self.source_uri: str | None = None
+
+    def list_artifact_manifest(self, _run_id: str) -> list[dict]:
+        return [dict(item) for item in self.artifacts]
+
+    def upsert_artifact_manifest(self, _run_id: str, artifacts: list[dict], *, replace_existing: bool) -> int:
+        assert replace_existing is True
+        self.artifacts = [dict(item) for item in artifacts]
+        self.writes += 1
+        return len(artifacts)
+
+    def update_run_source_artifact_uri(self, _run_id: str, artifact_uri: str) -> int:
+        self.source_uri = artifact_uri
+        return 1
+
+
+def test_archive_service_auto_attaches_and_historical_link_is_idempotent(tmp_path: Path) -> None:
+    store = PredictionArtifactStore(root=tmp_path / "prediction_store")
+    store.write_artifacts(
+        run_key="qe_task_L2",
+        files={"prediction": ("pred.pkl", io.BytesIO(b"prediction-values"))},
+        metadata={"task_id": "qe_task", "loop_index": 2},
+    )
+    model_store = ModelStoreService(artifact_store=store)
+
+    dry_run_service = QEArchiveService(model_store_service=model_store)
+    preview = dry_run_service.process_payload(
+        {
+            "source_system": "qe_evolution",
+            "source_id": "qe_task",
+            "source_sub_id": "Loop2",
+            "logical_experiment_id": "qe_task:Loop2",
+            "experiment_id": "exp_unit",
+            "task_id": "qe_task",
+            "loop_id": "Loop2",
+            "loop_index": 2,
+            "run_type": "evolution_loop",
+            "status": "completed",
+            "config": {"data_context": {"freq": "day", "label_horizon": 20}},
+            "metrics": {"IC": 0.01},
+        },
+        dry_run=True,
+    )
+    assert preview.stats["prediction_store_link"]["status"] == "available"
+    assert len(preview.extracted.artifact_manifest) == 1
+
+    repository = _ArtifactLinkRepository()
+    link_service = QEArchiveService(repository=repository, model_store_service=model_store)
+    identity = {
+        "run_id": "qear_run_unit",
+        "source_system": "qe_evolution",
+        "logical_experiment_id": "qe_task:Loop2",
+        "experiment_id": "exp_unit",
+        "task_id": "qe_task",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "run_type": "evolution_loop",
+        "status": "completed",
+        "freq": "day",
+        "label_horizon": 20,
+    }
+
+    first = link_service.link_prediction_artifacts_for_run(identity, dry_run=False)
+    second = link_service.link_prediction_artifacts_for_run(identity, dry_run=False)
+
+    assert first["action_status"] == "linked"
+    assert first["written_count"] == 1
+    assert second["action_status"] == "already_linked"
+    assert second["written_count"] == 0
+    assert repository.writes == 1
+    assert repository.source_uri == "aistock-prediction-store://runs/qe_task_L2"
 
 
 def test_prediction_store_client_requires_pred_when_upload_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

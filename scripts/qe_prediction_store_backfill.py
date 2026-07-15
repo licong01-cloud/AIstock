@@ -1,9 +1,10 @@
-"""One-off helper to backfill QE recorder artifacts into prediction-store.
+"""Backfill QE recorder artifacts and QE Archive pointer associations.
 
-The script is intentionally file/API only: it scans existing QE workspaces for
-``mlruns/**/artifacts/pred.pkl`` and reuses the runner upload client to POST
-artifacts when explicitly requested. Missing pred.pkl is reported as an error,
-never silently skipped.
+The workspace path scans ``mlruns/**/artifacts/pred.pkl`` and reuses the runner
+upload client to POST artifacts when explicitly requested. The archive-link
+path uses the backend repository and existing central manifests to associate
+historical ``qe_archive.run`` rows without re-uploading blobs or rewriting
+experiment statistics. Both operations default to dry-run.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -26,6 +29,7 @@ DEFAULT_WORKSPACE_ROOT = Path(
     os.getenv("QE_BACKFILL_WORKSPACE_ROOT")
     or (_REMOTE_WORKSPACE_ROOT if _REMOTE_WORKSPACE_ROOT.exists() else "F:/Dev/RD-Agent-main/qe_workspace")
 )
+ENV_FILE_ENV = "AISTOCK_ENV_FILE"
 LOOP_RE = re.compile(r"^(?P<task>.+?)(?:[/\\:](?P<loop_a>Loop\d+)|_L(?P<loop_b>\d+))$")
 
 
@@ -223,6 +227,11 @@ def upload_plan(plan: BackfillPlan, *, base_url: str | None, dry_run: bool) -> d
 
 
 def main(argv: list[str] | None = None) -> int:
+    configured_env_file = str(os.getenv(ENV_FILE_ENV) or "").strip()
+    if configured_env_file:
+        load_dotenv(Path(configured_env_file).expanduser(), override=False)
+    load_dotenv(REPO_ROOT / ".env", override=False)
+    load_dotenv(override=False)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("selectors", nargs="*", help="Existing path, task/LoopN, task:LoopN, task_LN, or workspace child")
     parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE_ROOT)
@@ -233,34 +242,105 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-key-template", default="{task_id}_L{loop_index}")
     parser.add_argument("--base-url", default=os.getenv("AISTOCK_PREDICTION_STORE_BASE_URL", ""))
     parser.add_argument("--upload", action="store_true", help="Actually POST artifacts; default only probes and reports")
-    parser.add_argument("--strict", action="store_true", help="Exit non-zero if any selected pred.pkl is missing")
+    parser.add_argument(
+        "--link-archive",
+        action="store_true",
+        help="Resolve stored manifests and backfill qe_archive.run_artifact associations",
+    )
+    parser.add_argument(
+        "--apply-links",
+        action="store_true",
+        help="Write archive associations; requires --link-archive (default is dry-run)",
+    )
+    parser.add_argument("--archive-run-id", action="append", default=[], help="Limit archive linking to qear_run id")
+    parser.add_argument("--archive-after-run-id", help="Resume linking after this lexicographic run id")
+    parser.add_argument("--archive-limit", type=int, default=0, help="Maximum archive runs; 0 processes all in pages")
+    parser.add_argument("--archive-page-size", type=int, default=200, help="Archive candidate page size (1-500)")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero for missing workspace artifacts or failed/corrupt archive-link results",
+    )
     args = parser.parse_args(argv)
 
+    if args.apply_links and not args.link_archive:
+        parser.error("--apply-links requires --link-archive")
+    if args.archive_limit < 0:
+        parser.error("--archive-limit must be >= 0")
+
     workspace_root = args.workspace_root.expanduser()
-    loops = parse_loop_range(args.loops)
-    targets = build_targets(
-        [*args.selectors, *args.run_id, *args.experiment_id],
-        workspace_root=workspace_root,
-        task_ids=args.task_id,
-        loops=loops,
-        run_key_template=args.run_key_template,
+    workspace_requested = bool(
+        args.selectors
+        or args.run_id
+        or args.experiment_id
+        or args.upload
+        or (args.task_id and not args.link_archive)
     )
-    plans = [plan_target(target) for target in targets]
-    results = [
-        upload_plan(plan, base_url=args.base_url or None, dry_run=not args.upload)
-        for plan in plans
-    ]
-    summary = {
-        "schema_version": "qe_prediction_store_backfill_report_v1",
-        "workspace_root": str(workspace_root),
-        "upload_requested": bool(args.upload),
-        "total": len(results),
-        "ready": sum(1 for item in results if item["status"] == "ready"),
-        "missing": sum(1 for item in results if item["status"] == "missing"),
-        "results": results,
-    }
+    workspace_summary: dict[str, Any] | None = None
+    if workspace_requested:
+        loops = parse_loop_range(args.loops)
+        targets = build_targets(
+            [*args.selectors, *args.run_id, *args.experiment_id],
+            workspace_root=workspace_root,
+            task_ids=args.task_id,
+            loops=loops,
+            run_key_template=args.run_key_template,
+        )
+        plans = [plan_target(target) for target in targets]
+        results = [
+            upload_plan(plan, base_url=args.base_url or None, dry_run=not args.upload)
+            for plan in plans
+        ]
+        workspace_summary = {
+            "schema_version": "qe_prediction_store_backfill_report_v1",
+            "workspace_root": str(workspace_root),
+            "upload_requested": bool(args.upload),
+            "total": len(results),
+            "ready": sum(1 for item in results if item["status"] == "ready"),
+            "missing": sum(1 for item in results if item["status"] == "missing"),
+            "results": results,
+        }
+
+    archive_summary: dict[str, Any] | None = None
+    if args.link_archive:
+        from backend.services.qe_archive.backfill_service import (
+            QEArchiveArtifactLinkBackfillOptions,
+            QEArchiveBackfillService,
+        )
+
+        archive_summary = QEArchiveBackfillService().backfill_prediction_artifact_links(
+            QEArchiveArtifactLinkBackfillOptions(
+                run_ids=args.archive_run_id,
+                task_ids=args.task_id,
+                after_run_id=args.archive_after_run_id,
+                limit=args.archive_limit,
+                page_size=args.archive_page_size,
+                write=bool(args.apply_links),
+                verify_sha256=True,
+            )
+        )
+
+    if workspace_summary is not None and archive_summary is None:
+        summary = workspace_summary
+    elif archive_summary is not None and workspace_summary is None:
+        summary = archive_summary
+    else:
+        if workspace_summary is None and archive_summary is None:
+            parser.error("provide a workspace selector/--task-id or use --link-archive")
+        summary = {
+            "schema_version": "qe_prediction_store_and_archive_link_backfill_v2",
+            "workspace": workspace_summary,
+            "archive_links": archive_summary,
+        }
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
-    if args.strict and summary["missing"]:
+    strict_failed = bool(workspace_summary and workspace_summary.get("missing")) or bool(
+        archive_summary
+        and (
+            archive_summary.get("failed")
+            or archive_summary.get("corrupt")
+        )
+    )
+    if args.strict and strict_failed:
         return 2
     return 0
 
