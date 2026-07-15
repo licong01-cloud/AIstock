@@ -30,8 +30,8 @@
   "expected": "After fit on the same CUDA device, predict gpu_resident activation should account for reclaimable torch reserved memory and should not misclassify reusable reserved pool as unavailable. Loud fallback must still happen when driver_free + reclaimable remains below required bytes.",
   "first_seen_at": "2026-07-09T01:33:34.523132Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7468f6d43856797f4fb14ec4478db8a0cf5d468e",
+  "fixed_at": "2026-07-15T13:31:14.281224Z",
   "github_issue_number": 1926,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1926",
   "last_seen_at": "2026-07-09T01:33:34.523132Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1927",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "fc2bf1c65c450922ceed8e35",
     "source_event_id": "FE-20260709-fc2bf1c65c45"
   },
+  "validation_evidence": [
+    "Source PR #1927 is MERGED (7468f6d43856797f4fb14ec4478db8a0cf5d468e); canonical BUG-609 remained open; metadata-only aftercare. Issue #1926 already closed prior to aftercare."
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
