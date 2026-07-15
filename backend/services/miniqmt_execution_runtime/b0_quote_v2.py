@@ -1597,6 +1597,7 @@ class B0QuoteV2ControllerFactory:
         supervisor: Any,
         config: QuoteIngressRuntimeConfig,
         data_session_key: str,
+        context_release_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.supervisor = supervisor
         self.config = config
@@ -1606,6 +1607,7 @@ class B0QuoteV2ControllerFactory:
         self._accept_new_assignments = True
         self._invalid_revision_ids: set[str] = set()
         self._parity_violation_count = 0
+        self._context_release_callback = context_release_callback
 
     def create(
         self,
@@ -1714,6 +1716,8 @@ class B0QuoteV2ControllerFactory:
         consumer_id = f"b0qv2:{runtime_id}"
         self.supervisor.release_consumer(consumer_id=consumer_id)
         self.supervisor.unregister_observation_sink(consumer_id=consumer_id)
+        if self._context_release_callback is not None:
+            self._context_release_callback(str(runtime_id))
 
     def health(self) -> dict[str, Any]:
         return {

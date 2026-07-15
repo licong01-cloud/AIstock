@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Callable, Iterable
+import threading
+from typing import Any, Callable, Iterable, Mapping
 
 from backend.execution_algos.adaptive_is.contracts import (
     CalendarSnapshot,
@@ -41,6 +42,7 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     QuoteSymbolContext,
     build_execution_clock_event,
 )
+from backend.services.miniqmt_execution_runtime.quote_normalizer import MINIQMT_NORMALIZER_MAP_VERSION
 from backend.services.paper_trading_v2.market_data import (
     EquityInstrumentMetadataProvider,
     LimitPriceProvider,
@@ -48,6 +50,11 @@ from backend.services.paper_trading_v2.market_data import (
     SuspendStatusProvider,
 )
 from backend.services.trading_calendar_status import TradingCalendarStatusService
+
+
+MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION = (
+    f"xtquant_whole_quote_bidVol_askVol_shares_v1:{MINIQMT_NORMALIZER_MAP_VERSION}"
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,101 @@ class QuoteContextSymbolSpec:
         object.__setattr__(self, "price_tick", tick)
 
 
+class MiniQMTInstrumentQuoteSpecProvider:
+    """Translate complete xtdata instrument authority into strict context specs."""
+
+    def __init__(self, instrument_reader: Callable[[str], Mapping[str, Any]]) -> None:
+        if not callable(instrument_reader):
+            raise TypeError("MiniQMT instrument quote spec provider requires a callable authority reader")
+        self._instrument_reader = instrument_reader
+
+    def get_symbol_spec(self, symbol: str) -> QuoteContextSymbolSpec:
+        normalized_symbol, market = exact_symbol(symbol)
+        try:
+            raw = self._instrument_reader(normalized_symbol)
+        except QuoteContractError:
+            raise
+        except Exception as exc:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "MiniQMT instrument-detail authority read failed",
+                stage=QuoteContractStage.TRADABILITY,
+                context={"symbol": normalized_symbol, "exception_type": type(exc).__name__},
+            ) from exc
+        if not isinstance(raw, Mapping) or not raw:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "MiniQMT instrument-detail authority returned no record",
+                stage=QuoteContractStage.TRADABILITY,
+                context={"symbol": normalized_symbol},
+            )
+        code = str(raw.get("InstrumentID") or "").strip().upper()
+        exchange = str(raw.get("ExchangeID") or raw.get("ExchangeCode") or "").strip().upper()
+        expected_code, expected_market = normalized_symbol.split(".", 1)
+        accepted_exchange_ids = {
+            MarketCode.SH: frozenset({"SH", "SSE"}),
+            MarketCode.SZ: frozenset({"SZ", "SZSE"}),
+            MarketCode.BJ: frozenset({"BJ", "BSE"}),
+        }[market]
+        if code != expected_code or exchange not in accepted_exchange_ids or expected_market != market.value:
+            raise quote_contract_error(
+                QuoteContractReasonCode.SYMBOL_INVALID,
+                "MiniQMT instrument-detail identity differs from the exact requested symbol",
+                context={
+                    "symbol": normalized_symbol,
+                    "instrument_id": code,
+                    "exchange_id": exchange,
+                },
+            )
+        price_tick = _required_positive_decimal(raw.get("PriceTick"), field_name="PriceTick", symbol=normalized_symbol)
+        lot_size = _required_positive_int(
+            raw.get("MinLimitOrderVolume"),
+            field_name="MinLimitOrderVolume",
+            symbol=normalized_symbol,
+        )
+        is_trading = raw.get("IsTrading")
+        instrument_status = raw.get("InstrumentStatus")
+        if not isinstance(is_trading, bool) or instrument_status is None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "MiniQMT instrument-detail trading status is incomplete",
+                stage=QuoteContractStage.TRADABILITY,
+                context={
+                    "symbol": normalized_symbol,
+                    "is_trading_type": type(is_trading).__name__,
+                    "instrument_status_present": instrument_status is not None,
+                },
+            )
+        authority_payload = {
+            "symbol": normalized_symbol,
+            "instrument_id": code,
+            "exchange_id": exchange,
+            "price_tick": price_tick,
+            "lot_size": lot_size,
+            "is_trading": is_trading,
+            "instrument_status": instrument_status,
+            "depth_unit_evidence_version": MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION,
+        }
+        authority_sha256 = canonical_sha256(authority_payload)
+        return QuoteContextSymbolSpec(
+            symbol=normalized_symbol,
+            depth_quantity_unit=DepthQuantityUnit.SHARES,
+            unit_evidence_version=(
+                f"{MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION}:{authority_sha256}"
+            ),
+            price_tick=price_tick,
+            lot_size=lot_size,
+            intraday_halt=not is_trading,
+            intraday_halt_source=f"xtquant.get_instrument_detail:{authority_sha256}",
+        )
+
+
+@dataclass(frozen=True)
+class _RegisteredRuntimeQuoteContext:
+    policy: QuoteContractPolicy
+    symbol_specs: tuple[QuoteContextSymbolSpec, ...]
+
+
 class MiniQMTQuoteContextAuthorityAdapter:
     """Build and atomically publish a complete P1-C context from authorities."""
 
@@ -127,6 +229,7 @@ class MiniQMTQuoteContextAuthorityAdapter:
         clock_continuity_tracker: ClockContinuityTracker | None = None,
         symbol_specs_provider: Callable[[], Iterable[QuoteContextSymbolSpec]] | None = None,
         policy_provider: Callable[[], QuoteContractPolicy] | None = None,
+        runtime_symbol_spec_provider: Callable[[str], QuoteContextSymbolSpec] | None = None,
         clock_domain_id: str = "simulation_lifecycle_scheduler_monotonic_v1",
     ) -> None:
         self._context_store = context_store
@@ -138,6 +241,9 @@ class MiniQMTQuoteContextAuthorityAdapter:
         self._continuity = clock_continuity_tracker or ClockContinuityTracker()
         self._symbol_specs_provider = symbol_specs_provider
         self._policy_provider = policy_provider
+        self._runtime_symbol_spec_provider = runtime_symbol_spec_provider
+        self._runtime_contexts: dict[str, _RegisteredRuntimeQuoteContext] = {}
+        self._runtime_context_lock = threading.RLock()
         self._clock_domain_id = clock_domain_id
         if not self._clock_domain_id.strip():
             raise quote_contract_error(
@@ -208,11 +314,89 @@ class MiniQMTQuoteContextAuthorityAdapter:
         return context
 
     def health(self) -> dict[str, object]:
-        return self._context_store.health()
+        with self._runtime_context_lock:
+            runtime_contexts = dict(self._runtime_contexts)
+        return {
+            **self._context_store.health(),
+            "registered_runtime_count": len(runtime_contexts),
+            "registered_runtime_ids": sorted(runtime_contexts),
+            "registered_policy_sha256": sorted(
+                {registration.policy.policy_sha256 for registration in runtime_contexts.values()}
+            ),
+        }
+
+    def registered_runtime_count(self) -> int:
+        with self._runtime_context_lock:
+            return len(self._runtime_contexts)
+
+    def prepare_runtime_context(
+        self,
+        *,
+        runtime_id: str,
+        symbols: Iterable[str],
+        execution_policy: Mapping[str, Any],
+        clock_at_utc: datetime,
+        clock_monotonic_ns: int,
+        source: str = "simulation_lifecycle_scheduler_plan",
+    ) -> QuoteEvaluationContext:
+        exact_runtime_id = str(runtime_id or "").strip()
+        if not exact_runtime_id:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "runtime quote context requires an authoritative runtime_id",
+            )
+        if self._runtime_symbol_spec_provider is None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "runtime quote context requires an injected instrument authority",
+                stage=QuoteContractStage.TRADABILITY,
+                context={"runtime_id": exact_runtime_id},
+            )
+        policy = QuoteContractPolicy.from_execution_policy(execution_policy)
+        normalized_symbols = tuple(sorted({exact_symbol(symbol)[0] for symbol in symbols}))
+        if not normalized_symbols:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "runtime quote context requires the exact active parent symbol set",
+                context={"runtime_id": exact_runtime_id},
+            )
+        specs = tuple(self._runtime_symbol_spec_provider(symbol) for symbol in normalized_symbols)
+        with self._runtime_context_lock:
+            prospective = dict(self._runtime_contexts)
+            prospective[exact_runtime_id] = _RegisteredRuntimeQuoteContext(policy=policy, symbol_specs=specs)
+            merged_policy, merged_specs = self._merge_runtime_contexts(prospective)
+            context = self.preload(
+                symbol_specs=merged_specs,
+                policy=merged_policy,
+                clock_at_utc=clock_at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                clock_domain_id=self._clock_domain_id,
+                source=source,
+            )
+            self._runtime_contexts = prospective
+            return context
+
+    def release_runtime_context(self, runtime_id: str) -> None:
+        exact_runtime_id = str(runtime_id or "").strip()
+        if not exact_runtime_id:
+            raise ValueError("runtime_id is required to release MiniQMT quote context")
+        with self._runtime_context_lock:
+            self._runtime_contexts.pop(exact_runtime_id, None)
 
     def refresh_lifecycle(self, *, clock_at_utc: datetime, clock_monotonic_ns: int) -> QuoteEvaluationContext:
         """Called by scheduler lifecycle only when explicit sources are configured."""
 
+        with self._runtime_context_lock:
+            runtime_contexts = dict(self._runtime_contexts)
+        if runtime_contexts:
+            policy, specs = self._merge_runtime_contexts(runtime_contexts)
+            return self.preload(
+                symbol_specs=specs,
+                policy=policy,
+                clock_at_utc=clock_at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                clock_domain_id=self._clock_domain_id,
+            )
         if self._symbol_specs_provider is None or self._policy_provider is None:
             error = quote_contract_error(
                 QuoteContractReasonCode.POLICY_SCHEMA_INVALID,
@@ -227,6 +411,30 @@ class MiniQMTQuoteContextAuthorityAdapter:
             clock_monotonic_ns=clock_monotonic_ns,
             clock_domain_id=self._clock_domain_id,
         )
+
+    @staticmethod
+    def _merge_runtime_contexts(
+        runtime_contexts: Mapping[str, _RegisteredRuntimeQuoteContext],
+    ) -> tuple[QuoteContractPolicy, tuple[QuoteContextSymbolSpec, ...]]:
+        policies = {registration.policy.policy_sha256: registration.policy for registration in runtime_contexts.values()}
+        if len(policies) != 1:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "one MiniQMT quote data session cannot mix frozen quote policies",
+                context={"policy_sha256": sorted(policies), "legacy_fallback": False},
+            )
+        specs_by_symbol: dict[str, QuoteContextSymbolSpec] = {}
+        for registration in runtime_contexts.values():
+            for spec in registration.symbol_specs:
+                previous = specs_by_symbol.get(spec.symbol)
+                if previous is not None and previous != spec:
+                    raise quote_contract_error(
+                        QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                        "one MiniQMT quote data session received conflicting instrument authority",
+                        context={"symbol": spec.symbol, "legacy_fallback": False},
+                    )
+                specs_by_symbol[spec.symbol] = spec
+        return next(iter(policies.values())), tuple(specs_by_symbol[symbol] for symbol in sorted(specs_by_symbol))
 
     def _build_calendar_snapshot_set(self, *, trade_date: date, effective_at_utc: datetime) -> CalendarSnapshotSet:
         try:
@@ -389,6 +597,37 @@ class MiniQMTQuoteContextAuthorityAdapter:
         )
 
 
+def _required_positive_decimal(value: Any, *, field_name: str, symbol: str) -> Decimal:
+    parsed = _positive_decimal_or_none(value, field_name=field_name, symbol=symbol)
+    if parsed is None:
+        raise quote_contract_error(
+            QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+            "instrument authority requires a positive decimal field",
+            stage=QuoteContractStage.TRADABILITY,
+            context={"symbol": symbol, "field": field_name, "value": value},
+        )
+    return parsed
+
+
+def _required_positive_int(value: Any, *, field_name: str, symbol: str) -> int:
+    if isinstance(value, bool):
+        parsed = None
+    else:
+        try:
+            decimal_value = Decimal(str(value))
+            parsed = int(decimal_value) if decimal_value == decimal_value.to_integral_value() else None
+        except (ArithmeticError, TypeError, ValueError):
+            parsed = None
+    if parsed is None or parsed <= 0:
+        raise quote_contract_error(
+            QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+            "instrument authority requires a positive integral field",
+            stage=QuoteContractStage.TRADABILITY,
+            context={"symbol": symbol, "field": field_name, "value": value},
+        )
+    return parsed
+
+
 def _positive_decimal_or_none(value: Any, *, field_name: str, symbol: str) -> Decimal | None:
     if value is None:
         return None
@@ -410,6 +649,8 @@ def _positive_decimal_or_none(value: Any, *, field_name: str, symbol: str) -> De
 
 
 __all__ = [
+    "MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION",
+    "MiniQMTInstrumentQuoteSpecProvider",
     "MiniQMTQuoteContextAuthorityAdapter",
     "QuoteContextSymbolSpec",
 ]

@@ -1,0 +1,172 @@
+{
+  "actual": "After MiniQMT/QMT reconnect, the production scheduler rolls forward but B0_QUOTE_V2 runs fail with 'controller requires scheduler-published context'. Live readback shows an ACTIVE subscription and writer but zero normalized observations, thousands rejected with ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID, and no broker call for the multi-alpha run. Production composition builds quote ingress activation without wiring the authoritative context adapter/shared context store. In the same recovery path, stale MiniQMT terminalization/reconcile exceptions run before current binding processing and can starve unrelated LocalSIM and MiniQMT bindings. Fix the production context publication lifecycle and isolate per-run recovery failures without legacy fallback, silent errors, business-logic drift, or new approval gates.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260715_BUG-654-miniqmt-recovery-misses-b0-quote-context-and-stale-run-failures-starve-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/infra/qmt_client.py",
+    "backend/services/miniqmt_execution_runtime/b0_quote_v2.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/miniqmt_quote_context.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-654",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-15T02:58:24.923848Z",
+  "description": "After MiniQMT/QMT reconnect, the production scheduler rolls forward but B0_QUOTE_V2 runs fail with 'controller requires scheduler-published context'. Live readback shows an ACTIVE subscription and writer but zero normalized observations, thousands rejected with ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID, and no broker call for the multi-alpha run. Production composition builds quote ingress activation without wiring the authoritative context adapter/shared context store. In the same recovery path, stale MiniQMT terminalization/reconcile exceptions run before current binding processing and can starve unrelated LocalSIM and MiniQMT bindings. Fix the production context publication lifecycle and isolate per-run recovery failures without legacy fallback, silent errors, business-logic drift, or new approval gates.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260715-ae031ae5aa68",
+      "timestamp": "2026-07-15T02:58:24.923837Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py::test_runtime_context_registration_is_atomic_idempotent_and_rejects_policy_drift",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_publishes_b0_context_before_miniqmt_submit_callable",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_failure_is_explicit_without_starving_current_bindings",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs"
+  ],
+  "expected": "For each new or durable-active B0_QUOTE_V2 runtime, the scheduler must atomically publish an authoritative quote evaluation context into the exact store used by the production ingress writer before any controller tick or broker submit. The frozen plan policy, exact parent symbols, instrument tick/lot/depth-unit evidence, calendar and tradability authorities must be used without defaults or LEGACY fallback. A stale or post-close recovery failure must remain explicit at stage/run granularity while other historical runs and all current eligible LocalSIM/MiniQMT bindings continue processing.",
+  "first_seen_at": "2026-07-15T02:58:24.923848Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2143,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2143",
+  "last_seen_at": "2026-07-15T02:58:24.923848Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_publishes_b0_context_before_miniqmt_submit_callable backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_failure_is_explicit_without_starving_current_bindings -q",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT recovery misses B0 quote context and stale-run failures starve bindings",
+  "trigger_condition": {
+    "fingerprint": "ae031ae5aa6805b078717cf6",
+    "source_event_id": "FE-20260715-ae031ae5aa68"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}

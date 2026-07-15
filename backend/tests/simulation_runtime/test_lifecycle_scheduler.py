@@ -5299,6 +5299,170 @@ def test_scheduler_terminalizes_stale_historical_miniqmt_planning_runs_before_to
     assert terminalized.run_payload_json["stale_active_terminalization"]["had_broker_side_effect"] is False
 
 
+def test_scheduler_recovery_failure_is_explicit_without_starving_current_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={qmt_binding.binding_id: _position_context(portfolio_id="portfolio_recovery_isolation")}
+        ),
+    )
+
+    def fail_stale_recovery(**_kwargs: Any) -> list[dict[str, Any]]:
+        raise DataUnavailableError("stale MiniQMT evidence unavailable", context={"run_id": "stale-run"})
+
+    monkeypatch.setattr(scheduler, "_terminalize_stale_miniqmt_active_runs", fail_stale_recovery)
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+
+    assert len(result.results) == 1
+    assert result.results[0].binding_id == qmt_binding.binding_id
+    assert result.stale_terminalized_count == 0
+    assert result.stale_recovery_failed_count == 1
+    assert result.stale_run_results[0]["status"] == "RECOVERY_FAILED"
+    assert result.stale_run_results[0]["error"] == {
+        "type": "DataUnavailableError",
+        "message": "stale MiniQMT evidence unavailable",
+        "context": {"run_id": "stale-run"},
+    }
+
+
+def test_scheduler_publishes_b0_context_before_miniqmt_submit_callable() -> None:
+    order: list[str] = []
+
+    class _Activation:
+        controller_factory = None
+        quote_context_adapter = None
+
+        def prepare_runtime_context(self, **kwargs: Any) -> dict[str, object]:
+            order.append("context")
+            assert kwargs["recovering_active"] is False
+            return {"context_id": "context-before-submit"}
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=InMemorySimulationRuntimeRepository(),
+        miniqmt_quote_ingress_activation=_Activation(),  # type: ignore[arg-type]
+    )
+    binding = SimpleNamespace(
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        binding_id="binding-context-order",
+        strategy_id="strategy-context-order",
+    )
+    plan = SimpleNamespace(
+        plan_id="plan-context-order",
+        target_trade_date=TRADE_DATE,
+        plan_payload_json={"quote_control": {"binding": {}, "revision": {}, "assignments": []}},
+        intents=(SimpleNamespace(symbol="000001.SZ"),),
+    )
+    run = SimpleNamespace(run_id="run-context-order")
+    expected = SimpleNamespace(status="SUBMITTED")
+
+    actual = scheduler._submit_execution_plan_with_timeout(
+        build_result=None,
+        binding=binding,
+        run=run,
+        plan=plan,
+        context=SimpleNamespace(),
+        mode="SIM",
+        as_of_time=datetime(2026, 5, 21, 10, 0, tzinfo=UTC),
+        submit_callable=lambda: order.append("submit") or expected,
+    )
+
+    assert actual is expected
+    assert order == ["context", "submit"]
+
+
+def test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+    bad_run = SimpleNamespace(
+        run_id="stale-bad",
+        trade_date=TRADE_DATE,
+        strategy_id="strategy-bad",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+    )
+    good_run = SimpleNamespace(
+        run_id="stale-good",
+        trade_date=TRADE_DATE,
+        strategy_id="strategy-good",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+    )
+    monkeypatch.setattr(scheduler, "_is_post_close_reconcile_time", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        scheduler.repository,
+        "list_simulation_daily_runs",
+        lambda **_kwargs: [bad_run, good_run],
+    )
+
+    def recover_one(*, run: Any, as_of_time: datetime | None) -> dict[str, Any]:  # noqa: ARG001
+        if run.run_id == "stale-bad":
+            raise DataUnavailableError("one durable run is unreadable", context={"run_id": run.run_id})
+        return {"run_id": run.run_id, "status": "SUCCEEDED"}
+
+    monkeypatch.setattr(scheduler, "_post_close_terminalize_miniqmt_run", recover_one)
+    results = scheduler._terminalize_post_close_miniqmt_runs(
+        trade_date=TRADE_DATE,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 21, 16, 0, tzinfo=UTC),
+    )
+
+    assert [item["run_id"] for item in results] == ["stale-bad", "stale-good"]
+    assert results[0]["status"] == "RECOVERY_FAILED"
+    assert results[0]["reason_code"] == "SIMULATION_SCHEDULER_RECOVERY_ITEM_FAILED"
+    assert results[1] == {"run_id": "stale-good", "status": "SUCCEEDED"}
+
+
+def test_post_close_recovery_failure_does_not_masquerade_as_terminalized_current_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={qmt_binding.binding_id: _position_context(portfolio_id="portfolio_post_close_failure")}
+        ),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 10, 0, tzinfo=UTC),
+    )
+    run_id = first.results[0].run.run_id
+    failure = {
+        "schema_version": "simulation_scheduler_recovery_failure_v1",
+        "terminalization_succeeded": False,
+        "status": "RECOVERY_FAILED",
+        "stage": "POST_CLOSE_MINIQMT_TERMINALIZATION",
+        "reason_code": "SIMULATION_SCHEDULER_RECOVERY_ITEM_FAILED",
+        "run_id": run_id,
+    }
+    monkeypatch.setattr(scheduler, "_terminalize_post_close_miniqmt_runs", lambda **_kwargs: [failure])
+
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 16, 0, tzinfo=UTC),
+    )
+
+    assert second.results[0].status != "POST_CLOSE_TERMINALIZED"
+    assert second.stale_recovery_failed_count == 1
+
+
 def test_scheduler_cross_day_terminalizes_side_effect_miniqmt_open_order_with_fresh_broker_reconcile() -> None:
     scheduler, repo, broker, _qmt_binding, qmt_repo, _snapshot_client = _miniqmt_scheduler_with_ledger_context()
 

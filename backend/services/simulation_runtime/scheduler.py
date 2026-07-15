@@ -2493,7 +2493,11 @@ class SimulationSchedulerRunOnceResult:
 
     @property
     def stale_terminalized_count(self) -> int:
-        return len(self.stale_run_results)
+        return sum(1 for item in self.stale_run_results if item.get("terminalization_succeeded") is not False)
+
+    @property
+    def stale_recovery_failed_count(self) -> int:
+        return sum(1 for item in self.stale_run_results if item.get("terminalization_succeeded") is False)
 
 
 @dataclass
@@ -2536,6 +2540,17 @@ class SimulationLifecycleScheduler:
         ):
             raise ValueError("scheduler quote activation and explicit B0_QUOTE_V2 controller factories conflict")
         effective_b0_factory = b0_quote_v2_controller_factory or activation_factory
+        activation_context_adapter = (
+            getattr(miniqmt_quote_ingress_activation, "quote_context_adapter", None)
+            if miniqmt_quote_ingress_activation is not None
+            else None
+        )
+        if (
+            miniqmt_quote_context_adapter is not None
+            and activation_context_adapter is not None
+            and miniqmt_quote_context_adapter is not activation_context_adapter
+        ):
+            raise ValueError("scheduler quote activation and explicit quote context adapters conflict")
         self.repository = repository or SimulationRuntimeRepository()
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
         self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
@@ -2576,7 +2591,7 @@ class SimulationLifecycleScheduler:
             self.trading_calendar_service = None
         else:
             self.trading_calendar_service = TradingCalendarStatusService()
-        self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter
+        self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter or activation_context_adapter
         self._miniqmt_quote_ingress_activation = miniqmt_quote_ingress_activation
         self._b0_quote_v2_controller_factory = effective_b0_factory
 
@@ -2656,9 +2671,16 @@ class SimulationLifecycleScheduler:
     def _refresh_miniqmt_quote_context_lifecycle(self) -> None:
         """Refresh read-only quote context without changing lifecycle or submit state."""
 
-        adapter = self._miniqmt_quote_context_adapter
+        adapter = self._current_miniqmt_quote_context_adapter()
         refresh = getattr(adapter, "refresh_lifecycle", None)
         if not callable(refresh):
+            return
+        registered_runtime_count = getattr(adapter, "registered_runtime_count", None)
+        if (
+            self._miniqmt_quote_ingress_activation is not None
+            and callable(registered_runtime_count)
+            and registered_runtime_count() == 0
+        ):
             return
         clock_at_utc = datetime.now(UTC)
         clock_monotonic_ns = monotonic_time.monotonic_ns()
@@ -2674,7 +2696,7 @@ class SimulationLifecycleScheduler:
             )
 
     def _miniqmt_quote_context_health(self) -> dict[str, Any]:
-        adapter = self._miniqmt_quote_context_adapter
+        adapter = self._current_miniqmt_quote_context_adapter()
         if adapter is None:
             return {
                 "status": "UNCONFIGURED",
@@ -2710,6 +2732,54 @@ class SimulationLifecycleScheduler:
                 "message": "configured MiniQMT quote context health is not a mapping",
             }
         return dict(result)
+
+    def _current_miniqmt_quote_context_adapter(self) -> Any | None:
+        activation_adapter = (
+            getattr(self._miniqmt_quote_ingress_activation, "quote_context_adapter", None)
+            if self._miniqmt_quote_ingress_activation is not None
+            else None
+        )
+        return activation_adapter or self._miniqmt_quote_context_adapter
+
+    def _prepare_miniqmt_quote_context_for_plan(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        plan: ExecutionPlan,
+        as_of_time: datetime | None,
+        recovering_active: bool,
+    ) -> dict[str, Any] | None:
+        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return None
+        if plan.plan_payload_json.get("quote_control") is None:
+            return None
+        activation = self._miniqmt_quote_ingress_activation
+        prepare = getattr(activation, "prepare_runtime_context", None)
+        if not callable(prepare):
+            raise RuntimeConfigInvalidError(
+                "B0_QUOTE_V2 execution requires scheduler-owned authoritative context publication",
+                context={
+                    "reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID",
+                    "stage": "CLOCK",
+                    "plan_id": plan.plan_id,
+                    "binding_id": binding.binding_id,
+                    "broker_called": False,
+                    "legacy_fallback": False,
+                },
+            )
+        runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
+        clock_at_utc = (
+            as_of_time.astimezone(UTC)
+            if isinstance(as_of_time, datetime) and as_of_time.tzinfo is not None
+            else datetime.now(UTC)
+        )
+        return prepare(
+            runtime_id=runtime_id,
+            plan=plan,
+            recovering_active=bool(recovering_active),
+            clock_at_utc=clock_at_utc,
+            clock_monotonic_ns=monotonic_time.monotonic_ns(),
+        )
 
     def _miniqmt_quote_ingress_activation_health(self) -> dict[str, Any]:
         activation = self._miniqmt_quote_ingress_activation
@@ -2913,35 +2983,55 @@ class SimulationLifecycleScheduler:
         as_of_time = self._scheduler_time(as_of_time)
         self._refresh_miniqmt_quote_context_lifecycle()
         self._advance_miniqmt_quote_ingress_lifecycle()
-        stale_run_results = self._terminalize_stale_miniqmt_active_runs(
-            trade_date=trade_date,
-            broker_backend=broker_backend,
-            strategy_id=strategy_id,
-            limit=limit,
-            as_of_time=as_of_time,
-        )
-        stale_run_results.extend(
-            self._terminalize_stale_localsim_active_runs(
-                trade_date=trade_date,
-                broker_backend=broker_backend,
-                strategy_id=strategy_id,
-                limit=limit,
-            )
-        )
-        eod_terminalized_results = self._terminalize_post_close_miniqmt_runs(
-            trade_date=trade_date,
-            broker_backend=broker_backend,
-            strategy_id=strategy_id,
-            limit=limit,
-            as_of_time=as_of_time,
-        )
-        eod_terminalized_results.extend(
-            self._terminalize_post_close_localsim_runs(
+        stale_run_results = self._run_recovery_stage_isolated(
+            stage="STALE_MINIQMT_TERMINALIZATION",
+            raise_on_error=raise_on_error,
+            func=lambda: self._terminalize_stale_miniqmt_active_runs(
                 trade_date=trade_date,
                 broker_backend=broker_backend,
                 strategy_id=strategy_id,
                 limit=limit,
                 as_of_time=as_of_time,
+                raise_on_error=raise_on_error,
+            ),
+        )
+        stale_run_results.extend(
+            self._run_recovery_stage_isolated(
+                stage="STALE_LOCALSIM_TERMINALIZATION",
+                raise_on_error=raise_on_error,
+                func=lambda: self._terminalize_stale_localsim_active_runs(
+                    trade_date=trade_date,
+                    broker_backend=broker_backend,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    raise_on_error=raise_on_error,
+                ),
+            )
+        )
+        eod_terminalized_results = self._run_recovery_stage_isolated(
+            stage="POST_CLOSE_MINIQMT_TERMINALIZATION",
+            raise_on_error=raise_on_error,
+            func=lambda: self._terminalize_post_close_miniqmt_runs(
+                trade_date=trade_date,
+                broker_backend=broker_backend,
+                strategy_id=strategy_id,
+                limit=limit,
+                as_of_time=as_of_time,
+                raise_on_error=raise_on_error,
+            ),
+        )
+        eod_terminalized_results.extend(
+            self._run_recovery_stage_isolated(
+                stage="POST_CLOSE_LOCALSIM_TERMINALIZATION",
+                raise_on_error=raise_on_error,
+                func=lambda: self._terminalize_post_close_localsim_runs(
+                    trade_date=trade_date,
+                    broker_backend=broker_backend,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    as_of_time=as_of_time,
+                    raise_on_error=raise_on_error,
+                ),
             )
         )
         bindings = self.repository.list_simulation_release_bindings(
@@ -2972,7 +3062,11 @@ class SimulationLifecycleScheduler:
             blocked_binding_keys=blocked_binding_keys,
         )
         results: list[SimulationSchedulerBindingResult] = list(lifecycle_skips)
-        eod_terminalized_run_ids = {str(item.get("run_id")) for item in eod_terminalized_results if item.get("run_id")}
+        eod_terminalized_run_ids = {
+            str(item.get("run_id"))
+            for item in eod_terminalized_results
+            if item.get("run_id") and item.get("terminalization_succeeded") is not False
+        }
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] = {}
         shared_selection_keys = self._shared_selection_cache_keys(
             bindings=bindings,
@@ -3025,6 +3119,77 @@ class SimulationLifecycleScheduler:
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
+
+    @staticmethod
+    def _run_recovery_stage_isolated(
+        *,
+        stage: str,
+        raise_on_error: bool,
+        func: Callable[[], list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        try:
+            return func()
+        except Exception as exc:  # noqa: BLE001 - recovery isolation is explicit and diagnostic.
+            if raise_on_error:
+                raise
+            diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(stage=stage, exc=exc)
+            logger.error("Simulation scheduler recovery stage failed without starving bindings: %s", diagnostic, exc_info=True)
+            return [diagnostic]
+
+    @staticmethod
+    def _run_recovery_item_isolated(
+        *,
+        stage: str,
+        run: SimulationDailyRun,
+        raise_on_error: bool,
+        func: Callable[[], dict[str, Any] | None],
+    ) -> dict[str, Any] | None:
+        try:
+            return func()
+        except Exception as exc:  # noqa: BLE001 - one bad durable run must not starve other runs or bindings.
+            if raise_on_error:
+                raise
+            diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(stage=stage, exc=exc, run=run)
+            logger.error("Simulation scheduler recovery item failed without starving peers: %s", diagnostic, exc_info=True)
+            return diagnostic
+
+    @staticmethod
+    def _recovery_failure_diagnostic(
+        *,
+        stage: str,
+        exc: Exception,
+        run: SimulationDailyRun | None = None,
+    ) -> dict[str, Any]:
+        context = getattr(exc, "context", None)
+        reason_code = "SIMULATION_SCHEDULER_RECOVERY_ITEM_FAILED" if run is not None else "SIMULATION_SCHEDULER_RECOVERY_STAGE_FAILED"
+        diagnostic = {
+            "schema_version": "simulation_scheduler_recovery_failure_v1",
+            "terminalization_succeeded": False,
+            "status": "RECOVERY_FAILED",
+            "stage": stage,
+            "reason_code": reason_code,
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "context": dict(context) if isinstance(context, dict) else context,
+            },
+            "alert": {
+                "severity": "ERROR",
+                "reason_code": reason_code,
+                "stage": stage,
+                "message": str(exc),
+            },
+        }
+        if run is not None:
+            diagnostic.update(
+                {
+                    "run_id": run.run_id,
+                    "trade_date": run.trade_date.isoformat(),
+                    "strategy_id": run.strategy_id,
+                    "broker_backend": run.broker_backend.value,
+                }
+            )
+        return diagnostic
 
     def _run_binding_with_watchdog(
         self,
@@ -3790,6 +3955,7 @@ class SimulationLifecycleScheduler:
         strategy_id: str | None,
         limit: int,
         as_of_time: datetime | None,
+        raise_on_error: bool = False,
     ) -> list[dict[str, Any]]:
         if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.MINIQMT_SIM:
             return []
@@ -3805,68 +3971,83 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids or run.trade_date >= trade_date:
                     continue
                 seen_run_ids.add(run.run_id)
-                had_side_effect = bool(run.run_payload_json.get("broker_called") or run.run_payload_json.get("qmt_batch_id"))
-                if had_side_effect and self._mini_qmt_batch_has_broker_side_effect_evidence(run.run_payload_json):
-                    terminalized_run = self._post_close_terminalize_miniqmt_run(run=run, as_of_time=as_of_time)
-                    if terminalized_run is not None:
-                        terminalized_run.update(
-                            {
-                                "cross_day_terminalization": True,
-                                "scheduler_trade_date": trade_date.isoformat(),
-                            }
-                        )
-                        terminalized.append(terminalized_run)
-                        if len(terminalized) >= limit:
-                            return terminalized
-                        continue
-                next_status = (
-                    SimulationDailyRunStatus.FAILED_RETRYABLE
-                    if had_side_effect
-                    else SimulationDailyRunStatus.CANCELLED
-                )
-                reason_code = (
-                    "MINIQMT_STALE_ACTIVE_WITH_BROKER_SIDE_EFFECT_UNRESOLVED"
-                    if had_side_effect
-                    else "MINIQMT_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
-                )
-                evidence = {
-                    "schema_version": "miniqmt_stale_active_run_terminalization_v1",
-                    "reason": (
-                        "stale_historical_miniqmt_run_with_broker_side_effect_unresolved"
-                        if had_side_effect
-                        else "stale_historical_miniqmt_run_without_broker_side_effect"
+                terminalized_run = self._run_recovery_item_isolated(
+                    stage="STALE_MINIQMT_TERMINALIZATION",
+                    run=run,
+                    raise_on_error=raise_on_error,
+                    func=lambda run=run: self._terminalize_stale_miniqmt_run(
+                        run=run,
+                        scheduler_trade_date=trade_date,
+                        as_of_time=as_of_time,
                     ),
-                    "reason_code": reason_code,
-                    "scheduler_trade_date": trade_date.isoformat(),
-                    "stale_trade_date": run.trade_date.isoformat(),
-                    "previous_status": run.status.value,
-                    "had_broker_side_effect": had_side_effect,
-                    "broker_authoritative_terminalization_attempted": had_side_effect,
-                    "terminalized_at": self._scheduler_time(as_of_time).isoformat() if as_of_time is not None else self._scheduler_now().isoformat(),
-                }
-                updated = self.repository.update_simulation_daily_run(
-                    run.run_id,
-                    status=next_status,
-                    payload_patch={
-                        "last_stage": next_status.value,
-                        "stale_active_terminalization": evidence,
-                        "broker_called": bool(run.run_payload_json.get("broker_called")),
-                    },
                 )
-                terminalized.append(
-                    {
-                        "run_id": updated.run_id,
-                        "trade_date": updated.trade_date.isoformat(),
-                        "strategy_id": updated.strategy_id,
-                        "previous_status": run.status.value,
-                        "status": updated.status.value,
-                        "reason": evidence["reason"],
-                        "reason_code": reason_code,
-                    }
-                )
+                if terminalized_run is not None:
+                    terminalized.append(terminalized_run)
                 if len(terminalized) >= limit:
                     return terminalized
         return terminalized[:limit]
+
+    def _terminalize_stale_miniqmt_run(
+        self,
+        *,
+        run: SimulationDailyRun,
+        scheduler_trade_date: date,
+        as_of_time: datetime | None,
+    ) -> dict[str, Any]:
+        had_side_effect = bool(run.run_payload_json.get("broker_called") or run.run_payload_json.get("qmt_batch_id"))
+        if had_side_effect and self._mini_qmt_batch_has_broker_side_effect_evidence(run.run_payload_json):
+            terminalized_run = self._post_close_terminalize_miniqmt_run(run=run, as_of_time=as_of_time)
+            if terminalized_run is not None:
+                terminalized_run.update(
+                    {
+                        "cross_day_terminalization": True,
+                        "scheduler_trade_date": scheduler_trade_date.isoformat(),
+                    }
+                )
+                return terminalized_run
+        next_status = SimulationDailyRunStatus.FAILED_RETRYABLE if had_side_effect else SimulationDailyRunStatus.CANCELLED
+        reason_code = (
+            "MINIQMT_STALE_ACTIVE_WITH_BROKER_SIDE_EFFECT_UNRESOLVED"
+            if had_side_effect
+            else "MINIQMT_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
+        )
+        evidence = {
+            "schema_version": "miniqmt_stale_active_run_terminalization_v1",
+            "reason": (
+                "stale_historical_miniqmt_run_with_broker_side_effect_unresolved"
+                if had_side_effect
+                else "stale_historical_miniqmt_run_without_broker_side_effect"
+            ),
+            "reason_code": reason_code,
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "stale_trade_date": run.trade_date.isoformat(),
+            "previous_status": run.status.value,
+            "had_broker_side_effect": had_side_effect,
+            "broker_authoritative_terminalization_attempted": had_side_effect,
+            "terminalized_at": (
+                self._scheduler_time(as_of_time).isoformat()
+                if as_of_time is not None
+                else self._scheduler_now().isoformat()
+            ),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=next_status,
+            payload_patch={
+                "last_stage": next_status.value,
+                "stale_active_terminalization": evidence,
+                "broker_called": bool(run.run_payload_json.get("broker_called")),
+            },
+        )
+        return {
+            "run_id": updated.run_id,
+            "trade_date": updated.trade_date.isoformat(),
+            "strategy_id": updated.strategy_id,
+            "previous_status": run.status.value,
+            "status": updated.status.value,
+            "reason": evidence["reason"],
+            "reason_code": reason_code,
+        }
 
     def _terminalize_stale_localsim_active_runs(
         self,
@@ -3875,6 +4056,7 @@ class SimulationLifecycleScheduler:
         broker_backend: SimulationBrokerBackend | str | None,
         strategy_id: str | None,
         limit: int,
+        raise_on_error: bool = False,
     ) -> list[dict[str, Any]]:
         if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.LOCAL_SIM:
             return []
@@ -3890,57 +4072,69 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids or run.trade_date >= trade_date:
                     continue
                 seen_run_ids.add(run.run_id)
-                had_side_effect = self._localsim_run_had_side_effect(run.run_payload_json)
-                next_status = (
-                    SimulationDailyRunStatus.FAILED_RETRYABLE
-                    if had_side_effect
-                    else SimulationDailyRunStatus.CANCELLED
-                )
-                reason_code = (
-                    "LOCALSIM_STALE_ACTIVE_WITH_BROKER_SIDE_EFFECT"
-                    if had_side_effect
-                    else "LOCALSIM_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
-                )
-                evidence = {
-                    "schema_version": "localsim_stale_active_run_terminalization_v1",
-                    "reason": (
-                        "stale_historical_localsim_run_with_broker_side_effect"
-                        if had_side_effect
-                        else "stale_historical_localsim_run_without_broker_side_effect"
+                terminalized_run = self._run_recovery_item_isolated(
+                    stage="STALE_LOCALSIM_TERMINALIZATION",
+                    run=run,
+                    raise_on_error=raise_on_error,
+                    func=lambda run=run: self._terminalize_stale_localsim_run(
+                        run=run,
+                        scheduler_trade_date=trade_date,
                     ),
-                    "reason_code": reason_code,
-                    "scheduler_trade_date": trade_date.isoformat(),
-                    "stale_trade_date": run.trade_date.isoformat(),
-                    "previous_status": run.status.value,
-                    "terminal_status": next_status.value,
-                    "had_broker_side_effect": had_side_effect,
-                    "terminalized_at": self._scheduler_now().isoformat(),
-                }
-                updated = self.repository.update_simulation_daily_run(
-                    run.run_id,
-                    status=next_status,
-                    payload_patch={
-                        "last_stage": next_status.value,
-                        "localsim_stale_active_terminalization": evidence,
-                        "stale_active_terminalization": evidence,
-                        "broker_called": bool(run.run_payload_json.get("broker_called")),
-                    },
                 )
-                terminalized.append(
-                    {
-                        "run_id": updated.run_id,
-                        "trade_date": updated.trade_date.isoformat(),
-                        "strategy_id": updated.strategy_id,
-                        "broker_backend": updated.broker_backend.value,
-                        "previous_status": run.status.value,
-                        "status": updated.status.value,
-                        "reason": evidence["reason"],
-                        "reason_code": reason_code,
-                    }
-                )
+                if terminalized_run is not None:
+                    terminalized.append(terminalized_run)
                 if len(terminalized) >= limit:
                     return terminalized
         return terminalized[:limit]
+
+    def _terminalize_stale_localsim_run(
+        self,
+        *,
+        run: SimulationDailyRun,
+        scheduler_trade_date: date,
+    ) -> dict[str, Any]:
+        had_side_effect = self._localsim_run_had_side_effect(run.run_payload_json)
+        next_status = SimulationDailyRunStatus.FAILED_RETRYABLE if had_side_effect else SimulationDailyRunStatus.CANCELLED
+        reason_code = (
+            "LOCALSIM_STALE_ACTIVE_WITH_BROKER_SIDE_EFFECT"
+            if had_side_effect
+            else "LOCALSIM_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
+        )
+        evidence = {
+            "schema_version": "localsim_stale_active_run_terminalization_v1",
+            "reason": (
+                "stale_historical_localsim_run_with_broker_side_effect"
+                if had_side_effect
+                else "stale_historical_localsim_run_without_broker_side_effect"
+            ),
+            "reason_code": reason_code,
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "stale_trade_date": run.trade_date.isoformat(),
+            "previous_status": run.status.value,
+            "terminal_status": next_status.value,
+            "had_broker_side_effect": had_side_effect,
+            "terminalized_at": self._scheduler_now().isoformat(),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=next_status,
+            payload_patch={
+                "last_stage": next_status.value,
+                "localsim_stale_active_terminalization": evidence,
+                "stale_active_terminalization": evidence,
+                "broker_called": bool(run.run_payload_json.get("broker_called")),
+            },
+        )
+        return {
+            "run_id": updated.run_id,
+            "trade_date": updated.trade_date.isoformat(),
+            "strategy_id": updated.strategy_id,
+            "broker_backend": updated.broker_backend.value,
+            "previous_status": run.status.value,
+            "status": updated.status.value,
+            "reason": evidence["reason"],
+            "reason_code": reason_code,
+        }
 
     def _terminalize_post_close_miniqmt_runs(
         self,
@@ -3950,6 +4144,7 @@ class SimulationLifecycleScheduler:
         strategy_id: str | None,
         limit: int,
         as_of_time: datetime | None,
+        raise_on_error: bool = False,
     ) -> list[dict[str, Any]]:
         if not self._is_post_close_reconcile_time(as_of_time=as_of_time):
             return []
@@ -3967,7 +4162,15 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids or run.trade_date != trade_date:
                     continue
                 seen_run_ids.add(run.run_id)
-                terminalized_run = self._post_close_terminalize_miniqmt_run(run=run, as_of_time=as_of_time)
+                terminalized_run = self._run_recovery_item_isolated(
+                    stage="POST_CLOSE_MINIQMT_TERMINALIZATION",
+                    run=run,
+                    raise_on_error=raise_on_error,
+                    func=lambda run=run: self._post_close_terminalize_miniqmt_run(
+                        run=run,
+                        as_of_time=as_of_time,
+                    ),
+                )
                 if terminalized_run is None:
                     continue
                 terminalized.append(terminalized_run)
@@ -3983,6 +4186,7 @@ class SimulationLifecycleScheduler:
         strategy_id: str | None,
         limit: int,
         as_of_time: datetime | None,
+        raise_on_error: bool = False,
     ) -> list[dict[str, Any]]:
         if not self._is_post_close_reconcile_time(as_of_time=as_of_time):
             return []
@@ -4000,7 +4204,15 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids or run.trade_date != trade_date:
                     continue
                 seen_run_ids.add(run.run_id)
-                terminalized_run = self._post_close_terminalize_localsim_run(run=run, as_of_time=as_of_time)
+                terminalized_run = self._run_recovery_item_isolated(
+                    stage="POST_CLOSE_LOCALSIM_TERMINALIZATION",
+                    run=run,
+                    raise_on_error=raise_on_error,
+                    func=lambda run=run: self._post_close_terminalize_localsim_run(
+                        run=run,
+                        as_of_time=as_of_time,
+                    ),
+                )
                 if terminalized_run is None:
                     continue
                 terminalized.append(terminalized_run)
@@ -7683,6 +7895,12 @@ class SimulationLifecycleScheduler:
         mode: str,
         as_of_time: datetime | None,
     ) -> Any | None:
+        self._prepare_miniqmt_quote_context_for_plan(
+            binding=binding,
+            plan=plan,
+            as_of_time=as_of_time,
+            recovering_active=True,
+        )
         try:
             result = self._run_callable_with_timeout(
                 stage="MINIQMT_EVENT_LOOP_TICK_DRIVER",
@@ -8101,6 +8319,12 @@ class SimulationLifecycleScheduler:
     ) -> SimulationExecutionResult:
         if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             return submit_callable()
+        self._prepare_miniqmt_quote_context_for_plan(
+            binding=binding,
+            plan=plan,
+            as_of_time=as_of_time,
+            recovering_active=False,
+        )
         try:
             return self._run_callable_with_timeout(
                 stage="MINIQMT_EVENT_LOOP_SUBMIT",
@@ -9368,6 +9592,15 @@ class SimulationLifecycleBackgroundScheduler:
                     alert = terminalized.get("alert")
                     if isinstance(alert, dict):
                         alerts.append(alert)
+                    recovery_error = terminalized.get("error")
+                    if terminalized.get("terminalization_succeeded") is False and isinstance(recovery_error, dict):
+                        result["errors"].append(
+                            {
+                                **recovery_error,
+                                "stage": terminalized.get("stage"),
+                                "reason_code": terminalized.get("reason_code"),
+                            }
+                        )
                 result["processed"] = processed
                 result["terminalized_runs"] = list(tick.stale_run_results)
                 result["alerts"] = alerts
@@ -9381,6 +9614,7 @@ class SimulationLifecycleBackgroundScheduler:
                         1 for item in tick.results if item.status == "SKIPPED_RETIRED_PACKAGE"
                     ),
                     "stale_terminalized_count": tick.stale_terminalized_count,
+                    "stale_recovery_failed_count": tick.stale_recovery_failed_count,
                     "succeeded_with_capacity_residual_count": sum(
                         1 for item in processed if item.get("succeeded_with_capacity_residual")
                     )
