@@ -8,7 +8,7 @@
   ],
   "assigned_agent": "codex_app",
   "bug_id": "BUG-491",
-  "closed_at": "2026-06-23T05:22:50.317055Z",
+  "closed_at": "2026-07-15T07:17:55Z",
   "closure_requirements": [
     "Root cause is documented with repo catalog and client-session evidence.",
     "Do not add fake local_data tools when the direct MCP server is not connected.",
