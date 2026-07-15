@@ -96,7 +96,7 @@ function RunCard({ run, traces }: { run: AssistantAgentRun; traces: AssistantTra
         <span>trace_id</span><strong>{display(run.trace_id)}</strong>
         <span>reduce_summary</span><strong>{display(result.reduce_summary || result.summary)}</strong>
       </div>
-      {link ? <Link className="ra-chat-admin-link" href={link}>Open worker trace</Link> : <p className="ra-muted">Trace link unavailable because this run has no trace_id.</p>}
+      {link ? <Link className="ra-chat-admin-link" href={link}>查看 worker 轨迹</Link> : <p className="ra-muted">Trace link unavailable because this run has no trace_id.</p>}
       <div className="ra-phase7-card-grid">
         {evidenceCards.map((card) => <EvidenceCard card={card} key={card.card_id} />)}
         {blockerCards.map((card) => <BlockerCard card={card} key={card.blocker_id} />)}
@@ -108,7 +108,7 @@ function RunCard({ run, traces }: { run: AssistantAgentRun; traces: AssistantTra
 
 export function AgentTeamsRunView({ runs, traceEvents }: { runs: AssistantAgentRun[]; traceEvents: AssistantTraceEvent[] }) {
   if (!runs.length) {
-    return <EmptyState title="No Agent Teams runs" hint="The API returned no assistant_agent_runs rows for this filter." />;
+    return <EmptyState title="暂无 Agent Teams 运行记录" hint="The API returned no assistant_agent_runs rows for this filter." />;
   }
   const orchestrators = runs.filter((run) => String(run.role || run.agent_key || "").toLowerCase().includes("orchestrator"));
   const workers = runs.filter((run) => !orchestrators.includes(run));
