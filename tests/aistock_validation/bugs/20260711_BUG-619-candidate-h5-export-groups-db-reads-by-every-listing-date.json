@@ -32,8 +32,8 @@
   "expected": "Chunk the unique stock universe globally so 4720 stocks at batch size 400 require about 12 DB reads while preserving PIT/listing boundaries in the official universe mask.",
   "first_seen_at": "2026-07-11T17:18:45.161423Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1f700e7be0ea77e544c159df6d75f989996e2f55",
+  "fixed_at": "2026-07-15T13:53:27.598846Z",
   "github_issue_number": 1981,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1981",
   "last_seen_at": "2026-07-11T17:18:45.161423Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1984",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "scripts"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "b9e620e10e59dec9d6d05822",
     "source_event_id": "FE-20260711-b9e620e10e59"
   },
+  "validation_evidence": [
+    "Source PR #1984 is MERGED (1f700e7be0ea77e544c159df6d75f989996e2f55); canonical BUG-619 remained open; metadata-only aftercare. Issue #1981 already closed prior to aftercare."
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
