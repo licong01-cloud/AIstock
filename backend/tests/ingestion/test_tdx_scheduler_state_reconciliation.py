@@ -272,6 +272,27 @@ def test_recent_submission_keeps_running_job_visible_outside_recent_window():
     assert seen["params"][:2] == ("index_daily", "incremental")
 
 
+def test_recent_submission_can_exclude_current_delayed_job():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    seen = {}
+    job_id = uuid.uuid4()
+
+    def _fetchall(sql, params=()):
+        seen["sql"] = sql
+        seen["params"] = params
+        return []
+
+    scheduler._fetchall = _fetchall
+
+    assert scheduler._recent_dataset_submission_exists(
+        "sector_data",
+        "incremental",
+        exclude_job_id=str(job_id),
+    ) is False
+    assert "job_id::text <> %s::text" in seen["sql"]
+    assert seen["params"][2:4] == (str(job_id), str(job_id))
+
+
 def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
@@ -630,12 +651,121 @@ def test_delayed_retry_persists_target_before_timer(monkeypatch):
     assert ("timer", 3600) in calls
 
 
+def test_delayed_retry_excludes_its_own_job_from_recent_dedupe(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._delayed_retry_keys = set()
+    calls = []
+    job_id = uuid.uuid4()
+
+    class _Timer:
+        def __init__(self, _delay_seconds, fn):
+            self._fn = fn
+            self.daemon = False
+
+        def start(self):
+            self._fn()
+
+    monkeypatch.setattr(scheduler_module.threading, "Timer", _Timer)
+    scheduler._target_date_for_retry = lambda _dataset, _opts=None: dt.date(2026, 7, 15)
+    scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
+        2026, 7, 15, 18, 0, tzinfo=dt.timezone.utc
+    )
+    scheduler._record_retry_target = lambda *_args, **_kwargs: "target-1"
+
+    def _recent(dataset, mode, window_seconds=60, exclude_job_id=None):
+        calls.append(("recent", dataset, mode, window_seconds, exclude_job_id))
+        return False
+
+    scheduler._recent_dataset_submission_exists = _recent
+    scheduler.run_ingestion_now = lambda dataset, mode, **kwargs: calls.append(
+        ("run", dataset, mode, kwargs)
+    ) or uuid.uuid4()
+
+    scheduler._schedule_delayed_retry(
+        "sector_data",
+        "incremental",
+        delay_minutes=0,
+        reason="upstream not ready",
+        options={"job_id": str(job_id), "delayed_attempt": 1},
+    )
+
+    assert calls[0] == ("recent", "sector_data", "incremental", 60, str(job_id))
+    assert calls[1][0:3] == ("run", "sector_data", "incremental")
+    assert calls[1][3]["options"]["job_id"] == str(job_id)
+
+
+def test_latest_completed_trading_day_stays_on_previous_day_before_close():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    seen = []
+    scheduler._latest_trading_day = lambda as_of_date=None: seen.append(as_of_date) or as_of_date
+
+    before_close = scheduler._latest_completed_trading_day(
+        dt.datetime(2026, 7, 16, 0, 2, tzinfo=scheduler_module._CN_TZ)
+    )
+    after_close = scheduler._latest_completed_trading_day(
+        dt.datetime(2026, 7, 16, 16, 1, tzinfo=scheduler_module._CN_TZ)
+    )
+
+    assert before_close == dt.date(2026, 7, 15)
+    assert after_close == dt.date(2026, 7, 16)
+    assert seen == [dt.date(2026, 7, 15), dt.date(2026, 7, 16)]
+
+
 def test_final_deadline_uses_china_local_time():
     scheduler = TDXScheduler.__new__(TDXScheduler)
 
     deadline = scheduler._final_deadline_for_target("cyq_perf", dt.date(2026, 5, 18))
 
     assert deadline == dt.datetime(2026, 5, 18, 15, 30, tzinfo=dt.timezone.utc)
+
+
+def test_sector_data_recovery_deadline_extends_to_next_day_0200_china_time():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    deadline = scheduler._final_deadline_for_target("sector_data", dt.date(2026, 7, 15))
+
+    assert deadline == dt.datetime(2026, 7, 15, 18, 0, tzinfo=dt.timezone.utc)
+
+
+def test_sector_data_upstream_delay_finalizes_job_as_delayed(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    job_id = uuid.uuid4()
+    max_dates = {
+        "market.sector_data": dt.date(2026, 7, 14),
+        "market.sw_daily": dt.date(2026, 7, 14),
+        "market.moneyflow_ts": dt.date(2026, 7, 15),
+    }
+
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: object())
+    scheduler._query_max_date = lambda table, _date_col: max_dates[table]
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 15)
+    scheduler._execute = lambda sql, params=(): calls.append(("execute", sql, params))
+    scheduler._schedule_delayed_retry = lambda *args, **kwargs: calls.append(
+        ("retry", args, kwargs)
+    )
+    scheduler._log_ingestion_run = lambda *args, **kwargs: calls.append(
+        ("log", args, kwargs)
+    )
+
+    scheduler._run_sector_data_build(
+        uuid.uuid4(),
+        None,
+        "incremental",
+        "auto_retry",
+        {"job_id": str(job_id), "delayed_attempt": 0},
+    )
+
+    sql_text = "\n".join(call[1] for call in calls if call[0] == "execute")
+    assert "status='running', started_at=NOW(), finished_at=NULL" in sql_text
+    assert "status='delayed', finished_at=NOW()" in sql_text
+    assert "status='success'" not in sql_text
+    retry = next(call for call in calls if call[0] == "retry")
+    assert retry[1][0:2] == ("sector_data", "incremental")
+    assert retry[2]["options"]["job_id"] == str(job_id)
+    assert retry[2]["options"]["delayed_attempt"] == 1
 
 
 def test_margin_detail_uses_previous_trading_day_and_t_plus_one_window():
@@ -748,7 +878,7 @@ def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monke
     scheduler._schedule_delayed_retry = lambda *args, **kwargs: calls.append(("delayed", args, kwargs))
     scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
     scheduler._compute_auto_range = lambda _dataset: (dt.date(2026, 5, 18), dt.date(2026, 5, 18))
-    scheduler._submit_ingestion = lambda *args, **kwargs: None
+    scheduler._submit_ingestion = lambda *args, **kwargs: calls.append(("submit", args, kwargs))
     scheduler._check_dataset_recovered = lambda _dataset: SimpleNamespace(
         status="stale",
         coverage_pct=0,
@@ -801,6 +931,7 @@ def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monke
     )
 
     assert any(call[0] == "retry" for call in calls)
+    assert all(call[1][0] is None for call in calls if call[0] == "submit")
     assert not any(call[0] == "final" for call in calls)
     assert not any(call[0] == "alert" for call in calls)
 

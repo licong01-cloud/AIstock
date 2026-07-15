@@ -1,6 +1,7 @@
 {
   "actual": "The 23:00 sector_data attempt delayed before sw_daily completed; the 23:30 retry skipped itself as recent/running; late retries moved schedule last_run_at and suppressed the next nominal fire; after midnight the range advanced to the current incomplete trade date.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "backend/routers/ingestion.py",
     "backend/services/local_data_management.py",

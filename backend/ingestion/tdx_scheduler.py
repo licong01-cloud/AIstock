@@ -82,6 +82,10 @@ _STALE_QUEUED_JOB_MINUTES = 10
 _TARGET_STALE_QUEUED_JOB_MINUTES = _AUTO_RETRY_LEASE_MINUTES
 _AVAILABILITY_LAG_TRADING_DAYS = {"margin_detail": 1}
 _AVAILABILITY_READY_AT = {"margin_detail": dt.time(19, 10)}
+_DAILY_DATA_COMPLETION_READY_AT = dt.time(16, 0)
+_NEXT_DAY_RECOVERY_DEADLINE_DATASETS = frozenset(
+    {"index_daily", "sector_data", "stock_moneyflow_ts", "sw_daily", "sw_sector"}
+)
 _MODE_INSENSITIVE_SCHEDULE_DATASETS = frozenset({"stock_basic"})
 _HIGH_FREQUENCY_REVIEW_DATASETS = frozenset({"suspend_d", "anns_metadata"})
 
@@ -441,9 +445,11 @@ class TDXScheduler:
         dataset: str,
         mode: str,
         window_seconds: int = _AUTO_RETRY_DEDUP_SECONDS,
+        exclude_job_id: Optional[str] = None,
     ) -> bool:
         ds = (dataset or "").strip().lower()
         md = (mode or "").strip().lower()
+        excluded_job_id = str(exclude_job_id or "").strip()
         if not ds:
             return False
         try:
@@ -453,6 +459,7 @@ class TDXScheduler:
                   FROM market.ingestion_jobs
                  WHERE lower(summary->>'dataset') = %s
                    AND lower(COALESCE(summary->>'mode', '')) = %s
+                   AND (%s::text = '' OR job_id::text <> %s::text)
                    AND (
                        (
                            status IN ('queued', 'pending', 'running')
@@ -467,7 +474,14 @@ class TDXScheduler:
                  ORDER BY created_at DESC
                  LIMIT 1
                 """,
-                (ds, md, str(_ACTIVE_JOB_LEASE_MINUTES), str(max(int(window_seconds), 1))),
+                (
+                    ds,
+                    md,
+                    excluded_job_id,
+                    excluded_job_id,
+                    str(_ACTIVE_JOB_LEASE_MINUTES),
+                    str(max(int(window_seconds), 1)),
+                ),
             )
             return bool(rows)
         except Exception as exc:  # noqa: BLE001
@@ -1181,6 +1195,20 @@ class TDXScheduler:
     def _latest_trading_day(self, as_of_date: Optional[dt.date] = None) -> Optional[dt.date]:
         return self._trading_calendar_service().latest_trading_day_on_or_before(as_of_date or dt.date.today())
 
+    def _latest_completed_trading_day(
+        self,
+        now: Optional[dt.datetime] = None,
+    ) -> Optional[dt.date]:
+        """Return the latest day whose post-close datasets may be complete."""
+        current = now or _now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=_CN_TZ)
+        current_cn = current.astimezone(_CN_TZ)
+        anchor_date = current_cn.date()
+        if current_cn.time() < _DAILY_DATA_COMPLETION_READY_AT:
+            anchor_date -= dt.timedelta(days=1)
+        return self._latest_trading_day(anchor_date)
+
     def _next_trading_day(self, anchor_date: dt.date, *, inclusive: bool = False) -> dt.date:
         return self._trading_calendar_service().next_trading_day(anchor_date, inclusive=inclusive)
 
@@ -1260,7 +1288,7 @@ class TDXScheduler:
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
         else:
-            latest_date = self._latest_trading_day()
+            latest_date = self._latest_completed_trading_day()
             latest_date = self._availability_adjusted_target_date(dataset, latest_date)
         if latest_date is None:
             return None, None
@@ -1587,7 +1615,7 @@ class TDXScheduler:
                     return dt.date.fromisoformat(str(raw))
                 except ValueError:
                     continue
-        latest_trading_day = self._latest_trading_day()
+        latest_trading_day = self._latest_completed_trading_day()
         return self._availability_adjusted_target_date(dataset, latest_trading_day)
 
     def _final_deadline_for_target(self, dataset: str, target_date: Optional[dt.date]) -> Optional[dt.datetime]:
@@ -1595,7 +1623,11 @@ class TDXScheduler:
             return None
         dataset_key = (dataset or "").strip().lower()
         deadline_date = self._availability_date_for_target(dataset_key, target_date)
-        local_deadline = dt.datetime.combine(deadline_date, dt.time(23, 30), tzinfo=_CN_TZ)
+        deadline_time = dt.time(23, 30)
+        if dataset_key in _NEXT_DAY_RECOVERY_DEADLINE_DATASETS:
+            deadline_date += dt.timedelta(days=1)
+            deadline_time = dt.time(2, 0)
+        local_deadline = dt.datetime.combine(deadline_date, deadline_time, tzinfo=_CN_TZ)
         return local_deadline.astimezone(dt.timezone.utc)
 
     def _record_retry_target(self, dataset: str, target_date: dt.date, **kwargs: Any) -> str | None:
@@ -1885,7 +1917,11 @@ class TDXScheduler:
                 dataset, mode, reason, delay_minutes,
             )
             try:
-                if self._recent_dataset_submission_exists(dataset, mode):
+                if self._recent_dataset_submission_exists(
+                    dataset,
+                    mode,
+                    exclude_job_id=str(opts.get("job_id") or "").strip() or None,
+                ):
                     _logger.info("delayed_retry: skip %s/%s because a recent job already ran", dataset, mode)
                     return
                 self.run_ingestion_now(dataset, mode, triggered_by="delayed_retry", options=opts)
@@ -2547,21 +2583,6 @@ class TDXScheduler:
                             _logger.error("unexpected error: %s", exc)
                     break
 
-            # sw_daily 同步完成后，补齐 6 个未发布 L2 行业的数据
-            if overall_status == "success":
-                try:
-                    import importlib.util
-                    _script = Path(__file__).resolve().parents[2] / "scripts" / "patch_sw_daily_unpublished.py"
-                    _spec = importlib.util.spec_from_file_location("patch_sw_daily_unpublished", _script)
-                    _mod = importlib.util.module_from_spec(_spec)
-                    _spec.loader.exec_module(_mod)
-                    start_str = start_date.strftime("%Y%m%d") if start_date else None
-                    end_str = end_date.strftime("%Y%m%d") if end_date else None
-                    patched = _mod.patch(start_str, end_str)
-                    _logger.info("sw_sector composite: patched %d rows for unpublished L2 industries", patched)
-                except Exception as patch_exc:
-                    _logger.warning("sw_sector composite: patch_sw_daily_unpublished failed: %s", patch_exc)
-
         except Exception as exc:
             overall_status = "failed"
             _logger.exception("sw_sector composite sync error: %s", exc)
@@ -2629,7 +2650,7 @@ class TDXScheduler:
             if job_id is not None:
                 try:
                     self._execute(
-                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW(), finished_at=NULL WHERE job_id=%s",
                         (job_id,),
                     )
                 except Exception as exc:
@@ -2653,13 +2674,7 @@ class TDXScheduler:
                     raise ValueError("依赖表 sw_daily 或 moneyflow_ts 无数据，无法增量构建 sector_data")
 
                 # 上游就绪检查：确保 sw_daily 和 moneyflow_ts 已更新到最新交易日
-                with _get_conn(self._db_cfg) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT MAX(cal_date) FROM market.trading_calendar"
-                            " WHERE cal_date <= CURRENT_DATE AND is_trading = TRUE"
-                        )
-                        latest_trading = cur.fetchone()[0]
+                latest_trading = self._latest_completed_trading_day()
                 if latest_trading:
                     upstream_unready = []
                     if latest_sw < latest_trading:
@@ -2726,6 +2741,27 @@ class TDXScheduler:
                     )
                 except Exception as audit_exc:
                     _logger.warning("sector_data refresh audit failed: %s", audit_exc)
+            if job_id is not None and delayed:
+                try:
+                    summary_patch = json.dumps(
+                        {
+                            "dataset": "sector_data",
+                            "mode": mode,
+                            "delay_reason": error_msg,
+                            "delayed_attempt": options.get("delayed_attempt", 0),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    self._execute(
+                        """UPDATE market.ingestion_jobs
+                              SET status='delayed', finished_at=NOW(),
+                                  summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                            WHERE job_id=%s""",
+                        (summary_patch, job_id),
+                    )
+                except Exception as exc:
+                    _logger.error("failed to mark delayed sector_data job %s: %s", job_id, exc)
             if job_id is not None and not delayed:
                 try:
                     summary_patch = json.dumps(
@@ -3262,7 +3298,6 @@ class TDXScheduler:
                         _log.warning("auto-retry: %s has no active schedule, skipping", ds)
                         entry["action"] = "skip_no_schedule"
                         continue
-                    sid = sched["schedule_id"]
                     retry_mode = sched.get("mode") or "incremental"
 
                     attempt = 0
@@ -3322,7 +3357,9 @@ class TDXScheduler:
                             _log.warning("auto-retry L%d: failed to create job record for %s: %s",
                                         layer_idx, ds, jr_exc)
 
-                        self._submit_ingestion(sid, ds, retry_mode, "auto_retry", retry_opts)
+                        # Recovery must not advance the canonical schedule's
+                        # last_run_at and suppress the next nominal fire.
+                        self._submit_ingestion(None, ds, retry_mode, "auto_retry", retry_opts)
 
                         # Wait for this job to complete (10 min timeout)
                         key = f"ingestion:{ds}:{retry_mode}"
