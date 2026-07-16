@@ -33,7 +33,7 @@
   "first_seen_at": "2026-07-16T07:56:34.722691Z",
   "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
   "fix_commit": "c7790b9d2aa855992f3bd312d3e54201e767229e",
-  "fixed_at": "2026-07-16T10:11:57.320169Z",
+  "fixed_at": "2026-07-16T10:13:08.892205Z",
   "github_issue_number": 2222,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2222",
   "last_seen_at": "2026-07-16T07:56:34.722691Z",
