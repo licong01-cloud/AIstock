@@ -42,8 +42,8 @@
   "expected": "Every uncaught scheduler tick exception immediately produces a current BLOCKED technical health fact visible in status while the thread remains alive; repeated failures update bounded diagnostics, and a later successful tick automatically clears the active exception without erasing historical timestamps.",
   "first_seen_at": "2026-07-16T15:46:19.867938Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4ad5342162b374c6cd10060796954bb42819afb7",
+  "fixed_at": "2026-07-16T16:18:17.291275Z",
   "github_issue_number": 2236,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2236",
   "last_seen_at": "2026-07-16T15:46:19.867938Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2237",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -70,6 +71,9 @@
     "fingerprint": "a011f8fe8eb17b1c4c51c779",
     "source_event_id": "FE-20260716-a011f8fe8eb1"
   },
+  "validation_evidence": [
+    "PR #2237 CI: 17 passed, 0 failed; local related matrix 20 passed plus malformed schema negative 1 passed; Ruff, py_compile, nox l0, validation_module_registry_l0, F2 validator, verify-clients all passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
