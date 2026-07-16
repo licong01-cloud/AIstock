@@ -6889,6 +6889,79 @@ def test_miniqmt_reconciliation_warning_rejects_conflicting_durable_evidence() -
     ]
 
 
+def _tick_driver_result_payload() -> dict[str, Any]:
+    return {
+        "schema_version": "miniqmt_event_loop_tick_driver_v1",
+        "runtime_id": "mqrt_bug680",
+        "source": "simulation_runtime_event_loop_tick_driver",
+        "submitted_child_count": 13,
+        "rejected_child_count": 0,
+        "pending_algo_count": 16,
+        "batch_results": {},
+        "runtime_evidence": {
+            "runtime_id": "mqrt_bug680",
+            "source": "simulation_runtime_event_loop_tick_driver",
+            "submitted_child_count": 13,
+            "rejected_child_count": 0,
+            "pending_algo_count": 16,
+        },
+    }
+
+
+def test_miniqmt_tick_driver_result_requires_exact_schema_identity_and_counts() -> None:
+    evidence, submitted, rejected, pending = SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(
+        _tick_driver_result_payload()
+    )
+
+    assert evidence["runtime_id"] == "mqrt_bug680"
+    assert (submitted, rejected, pending) == (13, 0, 16)
+
+    missing = _tick_driver_result_payload()
+    missing["runtime_evidence"].pop("submitted_child_count")
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(missing)
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_TICK_DRIVER_COUNTER_MISSING"
+
+    invalid = _tick_driver_result_payload()
+    invalid["pending_algo_count"] = "invalid"
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(invalid)
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_COUNTER_INVALID"
+
+    conflict = _tick_driver_result_payload()
+    conflict["runtime_evidence"]["rejected_child_count"] = 1
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(conflict)
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_TICK_DRIVER_COUNTER_CONFLICT"
+
+    identity_conflict = _tick_driver_result_payload()
+    identity_conflict["runtime_evidence"]["runtime_id"] = "mqrt_other"
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(identity_conflict)
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_TICK_DRIVER_IDENTITY_CONFLICT"
+
+
+def test_miniqmt_pending_and_submitted_evidence_rejects_malformed_counters_instead_of_defaulting() -> None:
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._mini_qmt_event_loop_has_submitted_children(
+            {"submitted_intents": "invalid"}
+        )
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_COUNTER_INVALID"
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(
+            {"pending_intents": float("nan")}
+        )
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_COUNTER_INVALID"
+
+    assert (
+        SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(
+            {"qmt_batch_status": OrderBatchStatus.SUBMITTING.value}
+        )
+        is False
+    )
+
+
 def test_scheduler_broker_backend_filter_limits_tick_scope() -> None:
     release, _, qmt_binding, repo = _release_and_bindings()
     scheduler = SimulationLifecycleScheduler(

@@ -635,6 +635,8 @@ runtime 存在 active algo、pending action 或任一 child fact，则 typed ass
 
 `BUG-677` 修复 LocalSIM 上游 ingestion 的重启僵尸状态：`refresh_schedules()` 在注册/驱动 schedule 和 due target 前，使用既有 120 分钟 active-job lease 仅将超时 `running` job 原子更新为显式 `timeout`，保留原 summary 并写入版本化 reconciliation 证据；合法 `schedule_id` 同步投影为失败，持久 `data_sync_target_id` 写回 `retry` 和 attempt 事实，随后由既有 30 秒 refresh cadence 的 due-target reconciliation 自动续跑。fresh running job、Selection/Target、LocalSIM execution 和 MiniQMT 均不受此修复影响；任何 reconciliation/target projection 异常均记录 exception，不返回假成功。2026-07-16 生产只读证据确认原 `sector_data` job 由 `data_sync_target_due` 创建且带 durable target id；本 PR 只交付 source/test/蓝图，不执行数据库写入、服务重启或人工补单。
 
+`BUG-680` 收敛 `F-020` 的 MiniQMT count/price/callback 子切片：tick-driver 持久化只接受 exact `miniqmt_event_loop_tick_driver_v1`、固定 source、相同 runtime id，以及 top-level/runtime-evidence 双份均存在且逐项一致的 submitted/rejected/pending 非负整数；缺失、布尔、负数、非整数、非有限值或冲突均以 typed reason code 失败，不再归零或跳过。trade/tick callback 的数量和价格别名必须全部可解析、正数、有限且彼此一致；order/trade callback 在 append durable event 前完成确定性 numeric、cumulative quantity 和 OMS canonical fact 预检。有效 trade event、child metadata 与 qmt_strategy trade ledger 共享同一 trade id 和 `canonical_trade_fact_sha256`；后续 repository I/O/projection 失败继续向上抛出，durable event 保留可重放的 canonical fact。本 slice 不改变 Selection、方向、数量、T+1、lot、limit/suspend、B0 tick source 或 broker route，不新增审批/门禁，也不执行 DDL/DML/config、broker call 或服务重启。
+
 严格代码审核后的补充修复证据：五 BUG 最终小矩阵 `10 passed`，另有 durable wait fingerprint tamper 反例 `1 passed`；覆盖 projection-context 并发交付、current-clock eligibility、controller reconstruction 去重、hash 冲突 fail-loud、durable `FAILED+STALE` 非假绿，以及既有 release isolation/owned retry。该补充不新增执行 gate、审批或人工确认。
 
 ### P1-A：Phase 0B B0 baseline observation
@@ -783,7 +785,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-017` | §5.7、§9 P0-C；`RebalanceIntentService`、`ExecutionPlanCompiler`、`PaperTradingV2Service.create_live_approval_candidate` | frozen target/dropped-position reference identity、new/live-candidate binding、new parent、no LEGACY fallback tests | implemented_verified | explicitly approved production-state separation：production binding migration DML 尚未执行；不表示 source 未完成或 migration 已执行 |
 | `F-018` | §6.2、§6.4..6.9 migration sequence；`MiniQMTRouteMigrationService` | active parent/child/open-order/conflict/overflow zero-write、transaction/rollback/retry/readback/idempotency tests | implemented_verified | explicitly approved production-state separation：operator 仅完成 source；production dry-run/apply/readback 尚未执行 |
 | `F-019` | §5.8、§6；retired router/Paper/day-runner/client paths | direct broker static guards、410/typed retirement、historical read-model tests | implemented_verified | explicitly approved production-state separation：source merge 后仍需正常交易日唯一路径观察；不表示观察已完成 |
-| `F-020` | §5.9 | malformed count/time/price/status fail-loud tests | design_ready | none |
+| `F-020` | §5.9；`SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result`；`QmtClientMiniQMTEventLoopGateway`；`MiniQMTExecutionRuntime.record_order_event/record_trade_event`；`MiniQMTOmsLedger.prepare_trade_fill` | BUG-680 missing/invalid/conflicting count、numeric alias、pre-append reject、event/ledger canonical hash tests；direct matrix 31 passed；剩余实现状态由 `SIM-P-009` 跟踪 | design_ready | none |
 | `F-021` | §5.10 | process/binding/backend/durability/business false-green tests | design_ready | none |
 | `F-022` | §7 | diagnostics no-side-effect and bounded metrics/auto-clear alert tests | design_ready | none |
 | `F-023` | §10.1、§10.4 | in-memory fixture no-DB/no-broker isolation tests | design_ready | none |
@@ -794,7 +796,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 
 状态枚举：`IMPLEMENTED_VERIFIED`、`REPAIR_REQUIRED`、`EVIDENCE_REFRESH_REQUIRED`、`DESIGN_ONLY`、`HISTORICAL_RETIRED`。本表记录当前摘要；详细历史以 Git/PR/BUG/CI 为准。
 
-| Progress ID | Acceptance IDs | Current state after this PR（base `main@e39c7ce7`） | Evidence | Status | Next implementation slice |
+| Progress ID | Acceptance IDs | Current state after this PR（base `origin/main@ce45e101`） | Evidence | Status | Next implementation slice |
 | --- | --- | --- | --- | --- | --- |
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
@@ -804,7 +806,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-006` | `F-015` | BUG-661 已删除计划价和通用 price map 的 mark fallback；broker 从执行使用的同一 minute provider 读取最后一个 causal close，`LocalSimMarketMarkV1` 强制真实 source/as-of/provenance/hash 与 authoritative previous-close 停牌证明 | PR #2187、merge `f74fdf3b`；close-sync PR #2189、merge `7d7d1434`；generic-price negative、realtime/historical/suspended provenance、LocalSIM partial/restart tests | IMPLEMENTED_VERIFIED | source 已合入；restart/runtime observation 尚未核验；核对真实历史日/当日 mark provenance |
 | `SIM-P-007` | `F-016` | MiniQMT canonical runtime 已有真实 tick callback、bootstrap、durable event loop | Phase 1 design/PR #2019、BUG-604/614 tests | IMPLEMENTED_VERIFIED | 唯一路径静态与真实 SIM 持续验证 |
 | `SIM-P-008` | `F-016..019` | BUG-662 将 MiniQMT 新 binding/new parent 收敛到 exact `B0_QUOTE_V2`，补齐 LEGACY binding 原子迁移/readback operator，永久退役 Paper/day-runner/raw-router/client broker side-effect，并以真实 callback 驱动 scheduler 回归；production DML/config/restart/broker 均未执行 | BUG-662 / issue #2190；migration 13 tests、route/Paper core 50 tests、scheduler 158 passed + 6 exact-main baseline failures、assignment transition 5 tests | IMPLEMENTED_VERIFIED | source merge/close-sync 后，单独执行 production migration dry-run/readback；用户授权 DML 与重启后再做正常交易日证据 |
-| `SIM-P-009` | `F-020,021` | MiniQMT recovery/pending/submitted 解析仍有 pass/归零；raw batch 顶层恒真 | `scheduler.py:7776-7794,7897-7914`、`routers/qmt.py:458-464` | REPAIR_REQUIRED | P0-D |
+| `SIM-P-009` | `F-020,021` | BUG-680 已移除 MiniQMT tick-driver/recovery/pending/submitted count 的 pass/归零，收紧 callback numeric 与 event/OMS canonical fact；raw QMT write router 已是 410 retired。scheduler loop false-green、其余 time/status parse 和平台 health 尚未闭合 | BUG-680 / issue #2232；direct numeric/evidence matrix 31 passed；`scheduler.py`、`gateway.py`、`runtime.py`、`oms.py` | REPAIR_REQUIRED | P0-D：scheduler top-level exception durable health，再处理剩余 time/status parse |
 | `SIM-P-010` | `F-023` | BUG-678 已为 roll-forward/ops/custom selection fixture 注入显式 in-memory StrategyPackage lifecycle authority 和 scheduler，B0 harness 使用当前 paired observation-context callback；测试不再连接生产 DB | BUG-678 / issue #2222；原失败 nodeid direct 1 passed；main 基线 33 failures 修复后 `pytest --lf` 28 passed | IMPLEMENTED_VERIFIED | 保持 fixture 与 package/B0/ops 当前接口同步，禁止用产品 fallback 修测试 |
 | `SIM-P-011` | `F-022,024` | Phase 1 quote diagnostics/evidence 已存在，但平台级 LocalSIM/MiniQMT 聚合 health/runbook 尚未按本文统一 | Phase 1 diagnostics/runbook、当前 scheduler ops | REPAIR_REQUIRED | P0-D |
 | `SIM-P-012` | `F-024,025` | Phase 0A 专项文档只明确记录 0A-0..0A-3；当前源码已有 TCA read API/EOD/projector 组件，专项进度与代码证据尚未重新闭合 | Phase 0A 专项文档顶部状态、`simulation_runtime/tca_*` 当前源码 | EVIDENCE_REFRESH_REQUIRED | 在相关 TCA PR 前先按当前 main 刷新专项证据和本行 |
@@ -821,6 +823,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-023` | `F-021,022,024` | BUG-676 保留最后 blocking tick，并按当前有效交易日分别有界读取 durable `FAILED_RETRYABLE`/`FAILED_TERMINAL`；即使首个 scheduler tick 尚未发生也不得假绿。scheduler status 透传 selection inference、watchdog、event-loop runtime 与 quote context，空窗口结果不得覆盖为成功，scheduler 未运行时聚合态明确为 `SCHEDULER_INACTIVE` | BUG-676 / issue #2220；no-op rollover、before-first-tick/current-day blocker readback、inactive scheduler、status-specific bounded projection、component projection direct tests | IMPLEMENTED_VERIFIED | source PR/CI/merge 后补生产 read-only status；LocalSIM/MiniQMT 全平台 metrics/alerts/operator runbook 仍由 `SIM-P-011` 收敛 |
 | `SIM-P-024` | `F-020,021,023` | BUG-678 修复 package lifecycle reader、B0 paired observation context、ops scheduler 与 roll-forward authority 的 test fixture 漂移；不引入生产 DB/broker/mock fallback | BUG-678 / issue #2222；base 代表失败复现；修复后 5 representative、28 last-failed、roll-forward direct tests passed | IMPLEMENTED_VERIFIED | source PR/CI/merge 后由 CI 运行完整矩阵；fixture 漂移不得作为放宽产品 fail-fast 的理由 |
 | `SIM-P-025` | `F-010,021,022,024` | BUG-677 在 startup/每次 schedule refresh 复用同一 stale-running lease reconciliation：超时 job 持久化为 `timeout`，linked schedule/target 明确失败与 retry，target retry 继续由既有 durable due-target cadence 驱动；fresh running job 不变 | BUG-677 / issue #2221；生产只读 job/target linkage；expired/fresh predicate、schedule projection、target retry+attempt、refresh ordering、shared 23:00 helper direct tests 36 passed | IMPLEMENTED_VERIFIED | source PR/CI/merge 后由用户重启；只读核对旧 job timeout、target retry/attempt 及新 sector_data job 完成，不把 source merge 写成 runtime recovered |
+| `SIM-P-026` | `F-020,024` | BUG-680 为 MiniQMT tick-driver result 建立 exact schema/source/runtime/count contract；callback numeric alias invalid/conflict 在 durable append 前失败；order/trade cumulative quantity 与 OMS canonical trade fact 预检完成，event/child/ledger hash 可重建 | BUG-680 / issue #2232；gateway、OMS、runtime、scheduler direct matrix 31 passed；Ruff changed-files pass | IMPLEMENTED_VERIFIED | PR/CI/merge 后只读观察正常交易时段 tick-driver evidence；DDL/DML/config/restart/broker activation 均为 noop，本项不替代 `SIM-P-009/011` 剩余工作 |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -883,6 +886,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_business_semantic_drift` | pass | 未改 dataset readiness、Selection/Target、LocalSIM/MiniQMT 执行语义；只修复超过既有 120 分钟 lease 且不可能跨 restart 存活的 ingestion 状态 |
 | `no_unrequested_gate_or_approval` | pass | 未新增审批、RBAC、人工 acknowledge、confirm-run 或 execution gate；恢复沿用既有 durable target/cadence 自动执行 |
 | `production state separation` | pass | 仅执行生产 HTTP 只读核对；本 PR 未执行 DML/DDL/config、未重启服务、未人工提交 ingestion job |
+
+`BUG-680` source implementation 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass | tick-driver schema/source/runtime/三项 count 双份一致性、callback numeric alias、order/trade cumulative quantity、OMS preflight、durable event/child/ledger canonical hash 均覆盖正反路径；未以单层 `int(... or 0)`、mock-only 或仅日志告警替代产品契约 |
+| `no_silent_error` | pass | missing/invalid/negative/non-integer/non-finite/conflicting count/price/quantity 均 typed fail loud；确定性 numeric/OMS 错误发生在 durable event append 前，后续 repository/projection 异常仍向上抛出 |
+| `no_business_semantic_drift` | pass | Selection、target、方向、数量、T+1、lot、limit/suspend、B0 callback tick source 和唯一 broker route 不变；只规范执行证据解析、canonical identity 与投影顺序 |
+| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、业务开关或执行 gate；数据恢复仍依赖既有自动 scheduler/runtime 路径 |
+| `production state separation` | pass | 本 slice 只改 source/test/蓝图；未执行 DDL/DML/config、未调用 broker、未重启服务，PR/CI/merge 和正常交易日 readback 继续独立记录 |
 
 ## 17. Definition of Done
 

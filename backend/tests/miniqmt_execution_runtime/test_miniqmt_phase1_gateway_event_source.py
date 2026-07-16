@@ -134,6 +134,69 @@ def test_event_loop_gateway_rejects_malformed_callbacks_loudly() -> None:
         gateway.on_tick({"last_price": 10.2})
 
 
+@pytest.mark.parametrize(
+    ("payload", "reason_code"),
+    [
+        (
+            {"order_id": "900001", "traded_price": 10.2},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_MISSING",
+        ),
+        (
+            {"order_id": "900001", "traded_volume": "invalid", "quantity": 100, "traded_price": 10.2},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+        ),
+        (
+            {"order_id": "900001", "traded_volume": 0, "traded_price": 10.2},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+        ),
+        (
+            {"order_id": "900001", "traded_volume": 100, "quantity": 200, "traded_price": 10.2},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_CONFLICT",
+        ),
+        (
+            {"order_id": "900001", "traded_volume": 100, "traded_price": float("nan")},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+        ),
+        (
+            {"order_id": "900001", "traded_volume": 100, "traded_price": 10.2, "price": 10.3},
+            "MINIQMT_EVENT_LOOP_NUMERIC_FIELD_CONFLICT",
+        ),
+    ],
+)
+def test_event_loop_gateway_rejects_invalid_or_conflicting_trade_numeric_facts_before_append(
+    payload: dict,
+    reason_code: str,
+) -> None:
+    runtime, repository, gateway = _runtime()
+    runtime.start()
+    before = len(repository.list_events(runtime.config.runtime_id))
+
+    with pytest.raises(MiniQMTGatewayEventSourceError, match=reason_code):
+        gateway.on_trade(payload)
+
+    assert len(repository.list_events(runtime.config.runtime_id)) == before
+
+
+def test_event_loop_gateway_accepts_equivalent_numeric_aliases_and_persists_canonical_values() -> None:
+    runtime, _repository, gateway = _runtime()
+    runtime.start()
+
+    event = gateway.on_trade(
+        {
+            "order_id": "900001",
+            "traded_volume": 100,
+            "quantity": "100",
+            "traded_price": 10.2,
+            "price": "10.20",
+        }
+    )
+
+    assert event.payload["broker_order_id"] == "900001"
+    assert event.payload["quantity"] == 100
+    assert event.payload["price"] == 10.2
+    assert event.payload["cumulative_quantity"] == 100
+
+
 def test_legacy_and_b0_quote_v2_parent_never_share_or_switch_quote_source() -> None:
     legacy_runtime, legacy_repository, _legacy_gateway = _runtime()
     legacy_runtime.start()

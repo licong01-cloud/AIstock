@@ -8738,25 +8738,164 @@ class SimulationLifecycleScheduler:
         )
 
     @staticmethod
+    def _miniqmt_optional_nonnegative_counter(
+        container: Mapping[str, Any],
+        key: str,
+        *,
+        field_path: str,
+    ) -> int | None:
+        if key not in container or container.get(key) in (None, ""):
+            return None
+        value = container.get(key)
+        try:
+            if isinstance(value, bool):
+                raise ValueError("boolean is not an execution counter")
+            parsed_decimal = Decimal(str(value))
+            if not parsed_decimal.is_finite() or parsed_decimal != parsed_decimal.to_integral_value():
+                raise ValueError("counter is not a finite integer")
+            parsed = int(parsed_decimal)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT event-loop evidence contains an invalid counter",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_COUNTER_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_EVIDENCE_PARSE",
+                    "field_path": field_path,
+                    "value": value,
+                },
+            ) from exc
+        if parsed < 0:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT event-loop evidence contains a negative counter",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_COUNTER_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_EVIDENCE_PARSE",
+                    "field_path": field_path,
+                    "value": value,
+                },
+            )
+        return parsed
+
+    @classmethod
+    def _validated_miniqmt_tick_driver_result(
+        cls,
+        result_payload: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], int, int, int]:
+        if result_payload.get("schema_version") != "miniqmt_event_loop_tick_driver_v1":
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result schema is missing or unsupported",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "schema_version": result_payload.get("schema_version"),
+                },
+            )
+        raw_evidence = result_payload.get("runtime_evidence")
+        if not isinstance(raw_evidence, dict):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result requires typed runtime evidence",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "runtime_evidence",
+                },
+            )
+        evidence = dict(raw_evidence)
+        top_source = str(result_payload.get("source") or "").strip()
+        evidence_source = str(evidence.get("source") or "").strip()
+        if (
+            top_source != "simulation_runtime_event_loop_tick_driver"
+            or evidence_source != top_source
+        ):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result source identity is invalid",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "result_source": top_source,
+                    "evidence_source": evidence_source,
+                },
+            )
+        result_runtime_id = str(result_payload.get("runtime_id") or "").strip()
+        evidence_runtime_id = str(evidence.get("runtime_id") or "").strip()
+        if not result_runtime_id or evidence_runtime_id != result_runtime_id:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result runtime identity is missing or conflicting",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "result_runtime_id": result_runtime_id or None,
+                    "evidence_runtime_id": evidence_runtime_id or None,
+                },
+            )
+        counts: dict[str, int] = {}
+        for key in ("submitted_child_count", "rejected_child_count", "pending_algo_count"):
+            top_value = cls._miniqmt_optional_nonnegative_counter(
+                result_payload,
+                key,
+                field_path=key,
+            )
+            evidence_value = cls._miniqmt_optional_nonnegative_counter(
+                evidence,
+                key,
+                field_path=f"runtime_evidence.{key}",
+            )
+            if top_value is None or evidence_value is None:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver result is missing a required execution counter",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_COUNTER_MISSING",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field": key,
+                        "top_level_present": top_value is not None,
+                        "runtime_evidence_present": evidence_value is not None,
+                    },
+                )
+            if top_value != evidence_value:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver result contains conflicting execution counters",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_COUNTER_CONFLICT",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field": key,
+                        "top_level_value": top_value,
+                        "runtime_evidence_value": evidence_value,
+                    },
+                )
+            counts[key] = top_value
+        return (
+            evidence,
+            counts["submitted_child_count"],
+            counts["rejected_child_count"],
+            counts["pending_algo_count"],
+        )
+
+    @staticmethod
     def _mini_qmt_event_loop_has_submitted_children(payload: dict[str, Any]) -> bool:
         for key in ("submitted_intents", "triggered_child_order_count"):
-            try:
-                if int(payload.get(key) or 0) > 0:
-                    return True
-            except (TypeError, ValueError):
-                pass
+            parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+                payload,
+                key,
+                field_path=key,
+            )
+            if parsed is not None and parsed > 0:
+                return True
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         for key in ("succeeded", "submitted_child_count", "triggered_child_order_count"):
-            try:
-                if int(batch.get(key) or 0) > 0:
-                    return True
-            except (TypeError, ValueError):
-                pass
+            parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+                batch,
+                key,
+                field_path=f"qmt_batch_result.{key}",
+            )
+            if parsed is not None and parsed > 0:
+                return True
         runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
-        try:
-            return int(runtime_evidence.get("submitted_child_count") or 0) > 0
-        except (TypeError, ValueError):
-            return False
+        parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+            runtime_evidence,
+            "submitted_child_count",
+            field_path="qmt_batch_result.runtime_evidence.submitted_child_count",
+        )
+        return parsed is not None and parsed > 0
 
     @staticmethod
     def _mini_qmt_batch_has_open_order_evidence(payload: dict[str, Any]) -> bool:
@@ -9016,25 +9155,29 @@ class SimulationLifecycleScheduler:
     @staticmethod
     def _mini_qmt_event_loop_has_pending_algos(payload: dict[str, Any]) -> bool:
         for key in ("pending_intents", "event_loop_pending_count"):
-            try:
-                if int(payload.get(key) or 0) > 0:
-                    return True
-            except (TypeError, ValueError):
-                pass
+            parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+                payload,
+                key,
+                field_path=key,
+            )
+            if parsed is not None and parsed > 0:
+                return True
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         for key in ("pending", "pending_child_trigger_count"):
-            try:
-                if int(batch.get(key) or 0) > 0:
-                    return True
-            except (TypeError, ValueError):
-                pass
-        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
-        try:
-            if int(runtime_evidence.get("pending_algo_count") or 0) > 0:
+            parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+                batch,
+                key,
+                field_path=f"qmt_batch_result.{key}",
+            )
+            if parsed is not None and parsed > 0:
                 return True
-        except (TypeError, ValueError):
-            pass
-        return str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper() == "SUBMITTING"
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        parsed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+            runtime_evidence,
+            "pending_algo_count",
+            field_path="qmt_batch_result.runtime_evidence.pending_algo_count",
+        )
+        return parsed is not None and parsed > 0
 
     def _drive_miniqmt_event_loop_ticks_with_timeout(
         self,
@@ -9134,13 +9277,41 @@ class SimulationLifecycleScheduler:
     ) -> SimulationDailyRun:
         payload = run.run_payload_json
         result_payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-        evidence = result_payload.get("runtime_evidence") if isinstance(result_payload.get("runtime_evidence"), dict) else {}
-        submitted_child_count = int(evidence.get("submitted_child_count") or result_payload.get("submitted_child_count") or 0)
-        rejected_child_count = int(evidence.get("rejected_child_count") or result_payload.get("rejected_child_count") or 0)
-        pending_algo_count = int(evidence.get("pending_algo_count") or result_payload.get("pending_algo_count") or 0)
+        evidence, submitted_child_count, rejected_child_count, pending_algo_count = (
+            self._validated_miniqmt_tick_driver_result(result_payload)
+        )
         qmt_batch_id = str(payload.get("qmt_batch_id") or "").strip()
-        batch_results = result_payload.get("batch_results") if isinstance(result_payload.get("batch_results"), dict) else {}
+        raw_batch_results = result_payload.get("batch_results")
+        if not isinstance(raw_batch_results, dict):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result batch_results contract is invalid",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "batch_results",
+                    "value_type": type(raw_batch_results).__name__,
+                },
+            )
+        batch_results = raw_batch_results
         qmt_batch_result = dict(payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {})
+        previous_runtime_evidence = (
+            qmt_batch_result.get("runtime_evidence")
+            if isinstance(qmt_batch_result.get("runtime_evidence"), dict)
+            else {}
+        )
+        previous_runtime_id = str(previous_runtime_evidence.get("runtime_id") or "").strip()
+        current_runtime_id = str(evidence.get("runtime_id") or "").strip()
+        if previous_runtime_id and current_runtime_id != previous_runtime_id:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result runtime identity changed from the durable batch",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "qmt_batch_id": qmt_batch_id or None,
+                    "durable_runtime_id": previous_runtime_id,
+                    "result_runtime_id": current_runtime_id,
+                },
+            )
         qmt_batch_status = payload.get("qmt_batch_status")
         if qmt_batch_id and isinstance(batch_results.get(qmt_batch_id), dict):
             latest_batch = batch_results[qmt_batch_id]
@@ -9425,14 +9596,22 @@ class SimulationLifecycleScheduler:
             return False
         if batch.get("success") is False:
             return False
-        try:
-            failed = int(batch.get("failed", payload.get("failed_intents", 0)) or 0)
-        except (TypeError, ValueError):
-            return False
-        try:
-            total = int(batch.get("total", payload.get("submitted_intents", 0)) or 0)
-        except (TypeError, ValueError):
-            return False
+        failed_container = batch if "failed" in batch else payload
+        failed_key = "failed" if "failed" in batch else "failed_intents"
+        failed = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+            failed_container,
+            failed_key,
+            field_path="qmt_batch_result.failed" if "failed" in batch else "failed_intents",
+        )
+        total_container = batch if "total" in batch else payload
+        total_key = "total" if "total" in batch else "submitted_intents"
+        total = SimulationLifecycleScheduler._miniqmt_optional_nonnegative_counter(
+            total_container,
+            total_key,
+            field_path="qmt_batch_result.total" if "total" in batch else "submitted_intents",
+        )
+        failed = failed if failed is not None else 0
+        total = total if total is not None else 0
         return total > 0 and failed == 0
 
     def _sync_before_submit(

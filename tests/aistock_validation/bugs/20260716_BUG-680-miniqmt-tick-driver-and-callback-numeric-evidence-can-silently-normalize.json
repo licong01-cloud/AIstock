@@ -7,7 +7,10 @@
     "backend/services/miniqmt_execution_runtime/oms.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260716_BUG-680-miniqmt-tick-driver-and-callback-numeric-evidence-can-silently-normalize.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-680",
@@ -25,6 +28,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260716-554d0084063d",
       "timestamp": "2026-07-16T14:23:39.901492Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added the three direct existing test files required to verify scheduler, gateway, runtime, and OMS contracts; product source scope is unchanged.",
+      "timestamp": "2026-07-16T22:54:14.6090832+08:00"
     }
   ],
   "evidence_uris": [
