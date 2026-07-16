@@ -37,7 +37,7 @@ class TestIsolationConstraints:
         ]
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
 
             for forbidden in forbidden_imports:
                 assert forbidden not in content, (
@@ -64,7 +64,7 @@ class TestIsolationConstraints:
         ]
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
 
             for pattern in forbidden_patterns:
                 assert pattern not in content, (
@@ -77,7 +77,7 @@ class TestIsolationConstraints:
 
         # 检查 backtest_source.py 中的 artifact 引用
         source_file = Path("backend/services/hmm_data_source/backtest_source.py")
-        content = source_file.read_text()
+        content = source_file.read_text(encoding="utf-8")
 
         # 确保没有下载配置文件
         forbidden_files = [
@@ -127,7 +127,7 @@ class TestIsolationConstraints:
         forbidden_operations = ['UPDATE', 'DELETE', 'INSERT INTO', 'DROP', 'ALTER']
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
 
             for table in allowed_market_tables:
                 if table in content:
@@ -141,7 +141,7 @@ class TestIsolationConstraints:
     def test_no_qe_config_api_calls(self):
         """验证不调用 QE 配置相关 API"""
         source_file = Path("backend/services/hmm_data_source/backtest_source.py")
-        content = source_file.read_text()
+        content = source_file.read_text(encoding="utf-8")
 
         # 只允许调用 download_artifact
         assert 'download_artifact' in content
@@ -170,7 +170,7 @@ class TestIsolationConstraints:
         ]
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
 
             for pattern in forbidden_api_patterns:
                 # 允许在注释中提及
@@ -251,7 +251,7 @@ class TestCodeQuality:
         source_dir = Path("backend/services/hmm_data_source")
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
 
             # 检查常见的绝对路径模式
             forbidden_patterns = [
@@ -271,11 +271,11 @@ class TestCodeQuality:
         """验证缓存目录可配置"""
         from backend.services.hmm_data_source import ArtifactCacheManager
 
-        # 测试自定义缓存目录
+        # 测试自定义缓存目录（跨平台比较，规避 Windows 反斜杠差异）
         custom_dir = "custom/cache/path"
         manager = ArtifactCacheManager(custom_dir)
 
-        assert str(manager.cache_dir) == custom_dir
+        assert manager.cache_dir == Path(custom_dir)
 
     def test_no_production_credentials_in_code(self):
         """验证代码中没有硬编码的生产凭证"""
@@ -289,7 +289,7 @@ class TestCodeQuality:
         ]
 
         for py_file in source_dir.glob("*.py"):
-            content = py_file.read_text().lower()
+            content = py_file.read_text(encoding="utf-8").lower()
 
             # 检查赋值语句中的凭证
             lines = content.split('\n')

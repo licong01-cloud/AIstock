@@ -210,13 +210,28 @@ class TestBacktestDataSource:
         )
 
         # Mock 数据库查询
-        with patch('backend.services.hmm_data_source.backtest_source.get_conn') as mock_conn:
-            mock_cursor = AsyncMock()
-            mock_cursor.fetchall.return_value = [
+        with patch('backend.services.hmm_data_source.backtest_source.get_conn') as mock_get_conn:
+            # cur.fetchall() 是协程；cur.execute() 是协程
+            mock_cursor = MagicMock()
+            mock_cursor.execute = AsyncMock()
+            mock_cursor.fetchall = AsyncMock(return_value=[
                 ('000001.SZ', '801780.SI'),
                 ('600000.SH', '801192.SI'),
-            ]
-            mock_conn.return_value.__aenter__.return_value.cursor.return_value.__aenter__.return_value = mock_cursor
+            ])
+
+            # async with conn.cursor() as cur -> cursor() 返回异步上下文管理器
+            cursor_cm = MagicMock()
+            cursor_cm.__aenter__ = AsyncMock(return_value=mock_cursor)
+            cursor_cm.__aexit__ = AsyncMock(return_value=False)
+
+            mock_conn = MagicMock()
+            mock_conn.cursor = MagicMock(return_value=cursor_cm)
+
+            # async with get_conn() as conn -> get_conn() 返回异步上下文管理器
+            conn_cm = MagicMock()
+            conn_cm.__aenter__ = AsyncMock(return_value=mock_conn)
+            conn_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_get_conn.return_value = conn_cm
 
             mapping = await source.get_sector_mapping(date(2024, 7, 1))
 

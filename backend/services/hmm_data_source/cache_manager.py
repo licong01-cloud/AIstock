@@ -10,12 +10,15 @@ QE Artifact 缓存管理器
 
 import hashlib
 import json
+import logging
 import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from .exceptions import CacheError
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactCacheManager:
@@ -249,10 +252,36 @@ class ArtifactCacheManager:
         else:
             all_info = {}
             for loop_dir in self.cache_dir.iterdir():
-                if loop_dir.is_dir():
-                    loop_ref = loop_dir.name.replace("_", "/", 1)
-                    all_info[loop_ref] = self.get_cache_info(loop_ref)
+                if not loop_dir.is_dir():
+                    continue
+                # loop_ref 的清洗（"/" -> "_"）是有损的，无法从目录名可靠还原，
+                # 因此从 metadata.json 中读取写入时保存的原始 loop_ref。
+                original_loop_ref = self._recover_loop_ref(loop_dir)
+                if original_loop_ref is None:
+                    # 无 metadata 或已损坏：跳过并告警，不静默伪造 loop_ref
+                    logger.warning(
+                        f"Cannot recover loop_ref for cache dir {loop_dir.name}, skipping"
+                    )
+                    continue
+                all_info[original_loop_ref] = self.get_cache_info(original_loop_ref)
             return all_info
+
+    def _recover_loop_ref(self, loop_dir: Path) -> Optional[str]:
+        """从 metadata.json 恢复原始 loop_ref（清洗过程有损，无法从目录名还原）"""
+        metadata_path = loop_dir / "metadata.json"
+        if not metadata_path.exists():
+            return None
+        try:
+            all_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            logger.warning(f"Corrupted metadata in {loop_dir.name}: {e}")
+            return None
+        except Exception as e:
+            raise CacheError(f"Failed to read metadata in {loop_dir.name}: {e}")
+        for entry in all_metadata.values():
+            if isinstance(entry, dict) and entry.get("loop_ref"):
+                return entry["loop_ref"]
+        return None
 
     def _get_metadata_path(self, loop_ref: str) -> Path:
         """获取元数据文件路径"""
@@ -266,9 +295,14 @@ class ArtifactCacheManager:
         # 读取现有元数据
         if metadata_path.exists():
             try:
-                all_metadata = json.loads(metadata_path.read_text())
-            except:
+                all_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                # JSON 格式损坏，重置元数据（可接受的降级行为）
+                logger.warning(f"Corrupted metadata for {loop_ref}, resetting: {e}")
                 all_metadata = {}
+            except Exception as e:
+                # 其他错误（文件系统、权限等）必须上报
+                raise CacheError(f"Failed to read metadata for {loop_ref}: {e}")
         else:
             all_metadata = {}
 
@@ -276,7 +310,9 @@ class ArtifactCacheManager:
         all_metadata[artifact_name] = metadata
 
         # 写回
-        metadata_path.write_text(json.dumps(all_metadata, indent=2))
+        metadata_path.write_text(
+            json.dumps(all_metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def _load_metadata(self, loop_ref: str, artifact_name: str) -> Optional[dict]:
         """从 metadata.json 加载元数据"""
@@ -286,7 +322,12 @@ class ArtifactCacheManager:
             return None
 
         try:
-            all_metadata = json.loads(metadata_path.read_text())
+            all_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             return all_metadata.get(artifact_name)
-        except:
+        except json.JSONDecodeError as e:
+            # JSON 格式损坏，返回 None（可接受）
+            logger.warning(f"Corrupted metadata for {loop_ref}/{artifact_name}: {e}")
             return None
+        except Exception as e:
+            # 其他错误必须上报
+            raise CacheError(f"Failed to load metadata for {loop_ref}/{artifact_name}: {e}")

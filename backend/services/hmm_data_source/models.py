@@ -7,7 +7,7 @@ HMM 数据源数据模型
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DataSourceConfig(BaseModel):
@@ -24,17 +24,18 @@ class DataSourceConfig(BaseModel):
     lag_days: int = Field(1, description="数据延迟天数")
     max_query_days: int = Field(730, description="单次查询最大天数")
 
-    @validator('mode')
+    @field_validator('mode')
+    @classmethod
     def validate_mode(cls, v):
         if v not in ['backtest', 'realtime']:
             raise ValueError(f"mode must be 'backtest' or 'realtime', got '{v}'")
         return v
 
-    @validator('base_loop_ref')
-    def validate_backtest_config(cls, v, values):
-        if values.get('mode') == 'backtest' and not v:
+    @model_validator(mode="after")
+    def validate_backtest_config(self):
+        if self.mode == 'backtest' and not self.base_loop_ref:
             raise ValueError("base_loop_ref is required for backtest mode")
-        return v
+        return self
 
 
 class PredictionRecord(BaseModel):
@@ -69,11 +70,11 @@ class DateRange(BaseModel):
     start_date: date
     end_date: date
 
-    @validator('end_date')
-    def validate_date_order(cls, v, values):
-        if 'start_date' in values and v < values['start_date']:
-            raise ValueError(f"end_date {v} must be >= start_date {values['start_date']}")
-        return v
+    @model_validator(mode="after")
+    def validate_date_order(self):
+        if self.end_date < self.start_date:
+            raise ValueError(f"end_date {self.end_date} must be >= start_date {self.start_date}")
+        return self
 
 
 class CacheInfo(BaseModel):
