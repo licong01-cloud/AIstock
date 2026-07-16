@@ -23,6 +23,7 @@
 """
 # ruff: noqa: E402
 import argparse
+from contextlib import contextmanager
 import os
 import random
 import re
@@ -64,7 +65,15 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
     maybe_upload_prediction_artifacts = None
 
 try:
-    from qe_runtime_resource import finish_resource_monitor, start_resource_monitor
+    from qe_runtime_resource import (
+        capture_gpu_phase_release_baseline,
+        defer_resource_phase_events,
+        finalize_gpu_phase_release,
+        finish_resource_monitor,
+        start_resource_monitor,
+        task_train_with_resource_phases,
+        transition_resource_phase,
+    )
 except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
     if exc.name != "qe_runtime_resource":
         raise
@@ -74,6 +83,54 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
 
     def finish_resource_monitor(*, status: str, error: str | None = None):
         return None
+
+    def _phase_helper_required() -> bool:
+        return os.environ.get("QE_PHASE_PIPELINE_ENABLED", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    def task_train_with_resource_phases(
+        task_config,
+        *,
+        experiment_name: str,
+        recorder_name: str | None = None,
+        release_next_phase: str = "backtest",
+    ):
+        if _phase_helper_required():
+            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+        return task_train(
+            task_config,
+            experiment_name=experiment_name,
+            recorder_name=recorder_name,
+        )
+
+    def transition_resource_phase(phase: str, *, metadata: dict | None = None):
+        if _phase_helper_required():
+            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+
+    def capture_gpu_phase_release_baseline() -> dict:
+        if _phase_helper_required():
+            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+        return {}
+
+    def finalize_gpu_phase_release(
+        baseline: dict | None,
+        *,
+        predict_error: BaseException | None = None,
+        next_phase: str = "backtest",
+    ) -> bool:
+        if _phase_helper_required():
+            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+        return False
+
+    @contextmanager
+    def defer_resource_phase_events(reason: str):
+        if _phase_helper_required():
+            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+        yield
 
 
 
@@ -1282,7 +1339,13 @@ def _run_seed_analysis_records(config: dict, recorder, label_obj) -> None:
         record.generate()
 
 
-def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
+def _task_train_with_gats_industry_provider(
+    config: dict,
+    experiment_name: str,
+    *,
+    manage_resource_phases: bool = True,
+    release_next_phase: str = "backtest",
+):
     task_config = (config or {}).get("task") if isinstance(config, dict) else None
     model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
     model_kwargs = model_cfg.get("kwargs") or {}
@@ -1294,11 +1357,30 @@ def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
         from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
 
         inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
-    return task_train(task_config, experiment_name=experiment_name)
+    if not manage_resource_phases:
+        with defer_resource_phase_events("nested_qe_task_train"):
+            return task_train(task_config, experiment_name=experiment_name)
+    return task_train_with_resource_phases(
+        task_config,
+        experiment_name=experiment_name,
+        release_next_phase=release_next_phase,
+    )
 
 
-def _run_full_backtest(config: dict, experiment_name: str, *, mode: str = "full", output_dir: Path | str | None = None):
-    recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
+def _run_full_backtest(
+    config: dict,
+    experiment_name: str,
+    *,
+    mode: str = "full",
+    output_dir: Path | str | None = None,
+    manage_resource_phases: bool = True,
+):
+    recorder = _task_train_with_gats_industry_provider(
+        config,
+        experiment_name=experiment_name,
+        manage_resource_phases=manage_resource_phases,
+        release_next_phase="backtest",
+    )
     recorder_ref = _write_qe_current_recorder(recorder, mode, experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, mode, experiment_name, config)
@@ -1321,6 +1403,11 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         "seeds": seeds,
         "seed_recorders": [],
     }
+    transition_resource_phase(
+        "train",
+        metadata={"runner_mode": "seed_score_ensemble", "seed_count": len(seeds)},
+    )
+    release_baseline = capture_gpu_phase_release_baseline()
 
     for seed in seeds:
         seed_config = copy.deepcopy(config)
@@ -1328,7 +1415,11 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         apply_qe_fixed_seed(seed_config)
         seed_experiment_name = f"{experiment_name}__seed_{seed}"
         print(f"[INFO] Seed ensemble: training seed={seed} experiment={seed_experiment_name}")
-        recorder = _run_train_only(seed_config, seed_experiment_name)
+        recorder = _run_train_only(
+            seed_config,
+            seed_experiment_name,
+            manage_resource_phases=False,
+        )
         pred_obj = recorder.load_object("pred.pkl")
         score_series = _prediction_score_series(pred_obj, seed=seed)
         seed_scores.append((seed, score_series))
@@ -1345,6 +1436,10 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
             }
         )
 
+    transition_resource_phase(
+        "predict",
+        metadata={"runner_mode": "seed_score_ensemble", "seed_count": len(seeds)},
+    )
     combined_pred = _aggregate_seed_predictions(seed_scores, agg)
     combined_path = output_dir / "ensemble_pred.pkl"
     with combined_path.open("wb") as f:
@@ -1356,6 +1451,7 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         f"[INFO] Seed ensemble: aggregated {len(seeds)} seeds with agg={agg}; "
         f"rows={combined_pred.shape[0]}"
     )
+    finalize_gpu_phase_release(release_baseline, next_phase="backtest")
     _run_pred_backtest(config, experiment_name, combined_path)
 
 
@@ -1380,6 +1476,11 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
         "seeds": seeds,
         "seed_recorders": [],
     }
+    transition_resource_phase(
+        "train",
+        metadata={"runner_mode": "seed_portfolio_ensemble", "seed_count": len(seeds)},
+    )
+    release_baseline = capture_gpu_phase_release_baseline()
 
     for seed in seeds:
         seed_config = copy.deepcopy(config)
@@ -1394,6 +1495,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
             seed_experiment_name,
             mode="seed_portfolio_member",
             output_dir=seed_dir,
+            manage_resource_phases=False,
         )
 
         pred_obj = _load_recorder_object(recorder, "pred.pkl", seed=seed)
@@ -1434,6 +1536,12 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
                 "position_days": int(len(seed_positions[-1][1])),
             }
         )
+
+    transition_resource_phase(
+        "predict",
+        metadata={"runner_mode": "seed_portfolio_ensemble", "seed_count": len(seeds)},
+    )
+    finalize_gpu_phase_release(release_baseline, next_phase="finalize")
 
     combined_pred = _aggregate_seed_predictions(seed_scores, agg)
     merged_positions = _aggregate_seed_positions(seed_positions, seed_reports)
@@ -1556,7 +1664,9 @@ def _run_main(args):
     if seed_ensemble and (args.backtest_only or args.train_only or args.pred_backtest):
         raise RuntimeError("qe_runtime.ensemble is only supported in full submit mode")
 
+    runner_mode = "full"
     if seed_ensemble:
+        runner_mode = f"seed_{seed_ensemble['level']}_ensemble"
         print(f"[INFO] Seed ensemble mode: {seed_ensemble}")
         if seed_ensemble["level"] == "score":
             _run_seed_score_ensemble(config, experiment_name, seed_ensemble)
@@ -1565,6 +1675,7 @@ def _run_main(args):
         else:
             raise ValueError(f"unsupported seed ensemble level: {seed_ensemble['level']}")
     elif args.pred_backtest:
+        runner_mode = "pred_backtest"
         # Pred-backtest mode: use an externally supplied prediction file.
         pred_path = Path(args.pred_backtest)
         if not pred_path.exists():
@@ -1572,18 +1683,23 @@ def _run_main(args):
                 f"--pred-backtest: prediction file not found: {pred_path.resolve()}"
             )
         print(f"[INFO] Pred-backtest mode: loading prediction from {pred_path}")
+        transition_resource_phase("backtest", metadata={"runner_mode": runner_mode})
         _run_pred_backtest(config, experiment_name, pred_path)
     elif args.backtest_only:
+        runner_mode = "backtest_only"
         # Backtest-only mode: skip training and load an existing model.
         print("[INFO] Backtest-only mode: skipping model training, loading existing model")
+        transition_resource_phase("backtest", metadata={"runner_mode": runner_mode})
         _run_backtest_only(config, experiment_name)
     elif args.train_only:
+        runner_mode = "train_only"
         # Train-only mode: generate pred.pkl but skip portfolio backtest.
         print("[INFO] Train-only mode: training model + generating predictions, skipping backtest")
         _run_train_only(config, experiment_name)
     else:
         # Full mode: train and backtest.
         _run_full_backtest(config, experiment_name)
+    transition_resource_phase("finalize", metadata={"runner_mode": runner_mode})
 
 
 def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
@@ -1718,7 +1834,12 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     print("[INFO] Pred-backtest completed: IC analysis + portfolio backtest done")
 
 
-def _run_train_only(config: dict, experiment_name: str):
+def _run_train_only(
+    config: dict,
+    experiment_name: str,
+    *,
+    manage_resource_phases: bool = True,
+):
     """只训练模型 + 生成 pred.pkl，跳过回测（PortAnaRecord）。
 
     用于多Alpha分布式架构：从节点只负责训练，主节点收集 pred.pkl 后统一回测。
@@ -1747,7 +1868,12 @@ def _run_train_only(config: dict, experiment_name: str):
 
     config_for_train = copy.deepcopy(config)
     config_for_train["task"] = task_config
-    recorder = _task_train_with_gats_industry_provider(config_for_train, experiment_name=experiment_name)
+    recorder = _task_train_with_gats_industry_provider(
+        config_for_train,
+        experiment_name=experiment_name,
+        manage_resource_phases=manage_resource_phases,
+        release_next_phase="finalize",
+    )
     recorder_ref = _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, "train_only", experiment_name, config)

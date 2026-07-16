@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import platform
@@ -51,6 +52,9 @@ _NVML_INITIALIZED = False
 _NVML_HANDLES: dict[int, Any] = {}
 _GPU_CACHE_SCHEMA_VERSION = "qe_node_gpu_snapshot_v1"
 _WSL_GPU_QUERY_SUPPRESSED_REASON = "QE_RESOURCE_GPU_DEVICE_QUERY_SUPPRESSED_WSL_DXG"
+_DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES = 256 * 1024**2
+_GPU_RELEASE_NEXT_PHASES = {"backtest", "finalize"}
+_PHASE_EVENT_STATE = threading.local()
 
 
 def _utc_now() -> str:
@@ -611,6 +615,14 @@ class QERuntimeResourceMonitor:
         with self._lock:
             if self._finished:
                 return
+            if next_phase == self._phase.phase:
+                self._phase.metadata.update(dict(metadata or {}))
+                self._write_local()
+                print(
+                    "[INFO] reason_code=QE_RESOURCE_PHASE_ALREADY_ACTIVE "
+                    f"phase={next_phase} transition_skipped=true"
+                )
+                return
             self._publish_current("completed")
             self._phase = _PhaseAggregate(next_phase, metadata=dict(metadata or {}))
             self._sample_once()
@@ -632,8 +644,13 @@ class QERuntimeResourceMonitor:
                 }
             )
 
-    def release_gpu_phase(self, *, proof: dict[str, Any]) -> bool:
+    def release_gpu_phase(self, *, proof: dict[str, Any], next_phase: str = "backtest") -> bool:
         with self._lock:
+            if next_phase not in _GPU_RELEASE_NEXT_PHASES:
+                raise ValueError(
+                    "QE GPU phase release next_phase must be one of "
+                    f"{sorted(_GPU_RELEASE_NEXT_PHASES)}, got {next_phase!r}"
+                )
             self._publish_current("completed")
             passed = bool(proof.get("release_check_passed"))
             phase = "gpu_phase_released" if passed else "release_rejected"
@@ -659,9 +676,20 @@ class QERuntimeResourceMonitor:
                 }
             }
             self._publish(release_event)
-            self._phase = _PhaseAggregate("backtest")
+            self._phase = _PhaseAggregate(next_phase)
             self._sample_once()
             return passed and self._last_uploaded_sequence_no >= int(release_event["sequence_no"])
+
+    def last_gpu_release_event(self) -> dict[str, Any] | None:
+        with self._lock:
+            for event in reversed(self._events):
+                if event.get("phase") in {"gpu_phase_released", "release_rejected"}:
+                    return dict(event)
+        return None
+
+    def event_is_uploaded(self, sequence_no: int) -> bool:
+        with self._lock:
+            return self._last_uploaded_sequence_no >= int(sequence_no)
 
     def finish(self, *, status: str, error: str | None = None) -> None:
         with self._lock:
@@ -851,7 +879,43 @@ def start_resource_monitor() -> QERuntimeResourceMonitor | None:
         return None
 
 
+def resource_phase_pipeline_active() -> bool:
+    return bool(_MONITOR is not None and _MONITOR.phase_pipeline_enabled)
+
+
+def _resource_phase_events_deferred() -> bool:
+    return int(getattr(_PHASE_EVENT_STATE, "defer_depth", 0) or 0) > 0
+
+
+@contextmanager
+def defer_resource_phase_events(reason: str):
+    """Keep a cyclic inner workflow under one outer monotonic QE phase session."""
+
+    if not resource_phase_pipeline_active():
+        yield
+        return
+    previous_depth = int(getattr(_PHASE_EVENT_STATE, "defer_depth", 0) or 0)
+    _PHASE_EVENT_STATE.defer_depth = previous_depth + 1
+    _PHASE_EVENT_STATE.defer_reason = str(reason or "unspecified")
+    print(
+        "[INFO] reason_code=QE_RESOURCE_PHASE_EVENTS_DEFERRED "
+        f"reason={_PHASE_EVENT_STATE.defer_reason} depth={previous_depth + 1}"
+    )
+    try:
+        yield
+    finally:
+        _PHASE_EVENT_STATE.defer_depth = previous_depth
+        if previous_depth == 0:
+            _PHASE_EVENT_STATE.defer_reason = None
+
+
 def transition_resource_phase(phase: str, *, metadata: dict[str, Any] | None = None) -> None:
+    if _resource_phase_events_deferred():
+        print(
+            "[INFO] reason_code=QE_RESOURCE_PHASE_EVENT_DEFERRED "
+            f"phase={phase} reason={getattr(_PHASE_EVENT_STATE, 'defer_reason', None)}"
+        )
+        return
     if _MONITOR is not None:
         _MONITOR.transition(phase, metadata=metadata)
 
@@ -870,12 +934,228 @@ def record_gpu_resident_state(
         )
 
 
-def publish_gpu_phase_release(proof: dict[str, Any]) -> bool:
+def publish_gpu_phase_release(proof: dict[str, Any], *, next_phase: str = "backtest") -> bool:
+    if _resource_phase_events_deferred():
+        print(
+            "[INFO] reason_code=QE_GPU_PHASE_RELEASE_DEFERRED "
+            f"reason={getattr(_PHASE_EVENT_STATE, 'defer_reason', None)}"
+        )
+        return False
     if _MONITOR is None:
         if _env_bool("QE_PHASE_PIPELINE_ENABLED", False):
             print("[ERROR] reason_code=QE_GPU_PHASE_HELPER_MISSING release_event_not_published=true")
         return False
-    return _MONITOR.release_gpu_phase(proof=proof)
+    return _MONITOR.release_gpu_phase(proof=proof, next_phase=next_phase)
+
+
+def _last_gpu_release_event() -> dict[str, Any] | None:
+    if _MONITOR is None:
+        return None
+    return _MONITOR.last_gpu_release_event()
+
+
+def _gpu_release_tolerance_bytes() -> int:
+    raw = _env("QE_GPU_PHASE_RELEASE_TOLERANCE_BYTES")
+    value = int(raw) if raw else _DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES
+    if value < 0:
+        raise ValueError("QE_GPU_PHASE_RELEASE_TOLERANCE_BYTES must be non-negative")
+    return value
+
+
+def _torch_cuda_release_snapshot() -> dict[str, Any]:
+    torch = sys.modules.get("torch")
+    if torch is None or not getattr(torch, "cuda", None):
+        return {
+            "cuda_allocated_bytes": 0,
+            "cuda_reserved_bytes": 0,
+            "release_snapshot_source": "torch_not_loaded",
+        }
+    is_initialized = getattr(torch.cuda, "is_initialized", None)
+    if not callable(is_initialized) or not is_initialized():
+        return {
+            "cuda_allocated_bytes": 0,
+            "cuda_reserved_bytes": 0,
+            "release_snapshot_source": "torch_cuda_not_initialized",
+        }
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.empty_cache()
+    return {
+        "cuda_allocated_bytes": int(torch.cuda.memory_allocated()),
+        "cuda_reserved_bytes": int(torch.cuda.memory_reserved()),
+        "release_snapshot_source": "torch_cuda_in_process",
+    }
+
+
+def capture_gpu_phase_release_baseline() -> dict[str, Any]:
+    if not resource_phase_pipeline_active():
+        return {
+            "release_baseline_allocated_bytes": 0,
+            "release_baseline_reserved_bytes": 0,
+            "release_capture_source": "phase_pipeline_inactive",
+        }
+    try:
+        snapshot = _torch_cuda_release_snapshot()
+        return {
+            "release_baseline_allocated_bytes": int(snapshot["cuda_allocated_bytes"]),
+            "release_baseline_reserved_bytes": int(snapshot["cuda_reserved_bytes"]),
+            "release_capture_source": snapshot["release_snapshot_source"],
+        }
+    except Exception as exc:
+        print(
+            "[ERROR] reason_code=QE_GPU_PHASE_RELEASE_BASELINE_FAILED "
+            f"error={type(exc).__name__}"
+        )
+        return {
+            "release_baseline_allocated_bytes": 0,
+            "release_baseline_reserved_bytes": 0,
+            "release_capture_source": "capture_failed",
+            "release_capture_error_type": type(exc).__name__,
+        }
+
+
+def finalize_gpu_phase_release(
+    baseline: dict[str, Any] | None,
+    *,
+    predict_error: BaseException | None = None,
+    next_phase: str = "backtest",
+) -> bool:
+    if not resource_phase_pipeline_active():
+        return False
+    existing = _last_gpu_release_event()
+    if existing is not None:
+        sequence_no = int(existing.get("sequence_no") or 0)
+        acknowledged = bool(
+            existing.get("phase") == "gpu_phase_released"
+            and _MONITOR is not None
+            and _MONITOR.event_is_uploaded(sequence_no)
+        )
+        print(
+            "[INFO] reason_code=QE_GPU_PHASE_RELEASE_ALREADY_PUBLISHED "
+            f"phase={existing.get('phase')} acknowledged={str(acknowledged).lower()}"
+        )
+        return acknowledged
+
+    baseline = dict(baseline or {})
+    tolerance = _gpu_release_tolerance_bytes()
+    release_error_type = None
+    try:
+        after = _torch_cuda_release_snapshot()
+    except Exception as exc:
+        release_error_type = type(exc).__name__
+        print(
+            "[ERROR] reason_code=QE_GPU_PHASE_RELEASE_SNAPSHOT_FAILED "
+            f"error={release_error_type}"
+        )
+        after = {
+            "cuda_allocated_bytes": int(baseline.get("release_baseline_allocated_bytes") or 0),
+            "cuda_reserved_bytes": int(baseline.get("release_baseline_reserved_bytes") or 0),
+            "release_snapshot_source": "snapshot_failed",
+        }
+
+    allocated_after = int(after["cuda_allocated_bytes"])
+    reserved_after = int(after["cuda_reserved_bytes"])
+    allocated_limit = int(baseline.get("release_baseline_allocated_bytes") or 0) + tolerance
+    reserved_limit = int(baseline.get("release_baseline_reserved_bytes") or 0) + tolerance
+    release_check_passed = bool(
+        predict_error is None
+        and release_error_type is None
+        and not baseline.get("release_capture_error_type")
+        and allocated_after <= allocated_limit
+        and reserved_after <= reserved_limit
+    )
+    proof = {
+        **baseline,
+        "cuda_allocated_bytes_after": allocated_after,
+        "cuda_reserved_bytes_after": reserved_after,
+        "release_tolerance_bytes": tolerance,
+        "release_check_passed": release_check_passed,
+        "release_proof_source": "runner_generic_cuda_baseline_v1",
+        "release_snapshot_source": after.get("release_snapshot_source"),
+    }
+    if predict_error is not None:
+        proof["predict_error_type"] = type(predict_error).__name__
+    if release_error_type is not None:
+        proof["release_snapshot_error_type"] = release_error_type
+    return publish_gpu_phase_release(proof, next_phase=next_phase)
+
+
+def _record_is_portfolio_backtest(record: Any) -> bool:
+    record_class = record.get("class") if isinstance(record, dict) else record
+    if isinstance(record_class, str):
+        name = record_class
+    else:
+        name = getattr(record_class, "__name__", type(record_class).__name__)
+    return "PortAna" in name
+
+
+def task_train_with_resource_phases(
+    task_config: dict[str, Any],
+    *,
+    experiment_name: str,
+    recorder_name: str | None = None,
+    release_next_phase: str = "backtest",
+):
+    """Run Qlib's task_train contract with real QE train/predict/backtest boundaries."""
+
+    import qlib.model.trainer as trainer
+
+    if not resource_phase_pipeline_active() or _resource_phase_events_deferred():
+        return trainer.task_train(
+            task_config,
+            experiment_name=experiment_name,
+            recorder_name=recorder_name,
+        )
+
+    with trainer.R.start(experiment_name=experiment_name, recorder_name=recorder_name):
+        trainer._log_task_info(task_config)
+        recorder = trainer.R.get_recorder()
+        model = trainer.init_instance_by_config(task_config["model"], accept_types=trainer.Model)
+        dataset = trainer.init_instance_by_config(task_config["dataset"], accept_types=trainer.Dataset)
+        reweighter = task_config.get("reweighter", None)
+
+        transition_resource_phase("train", metadata={"phase_source": "qlib_task_train"})
+        trainer.auto_filter_kwargs(model.fit)(dataset, reweighter=reweighter)
+        trainer.R.save_objects(**{"params.pkl": model})
+        dataset.config(dump_all=False, recursive=True)
+        trainer.R.save_objects(**{"dataset": dataset})
+
+        placeholder_value = {"<MODEL>": model, "<DATASET>": dataset}
+        filled_task_config = trainer.fill_placeholder(task_config, placeholder_value)
+        records = filled_task_config.get("record", [])
+        if isinstance(records, dict):
+            records = [records]
+        first_backtest_index = next(
+            (index for index, record in enumerate(records) if _record_is_portfolio_backtest(record)),
+            None,
+        )
+
+        transition_resource_phase("predict", metadata={"phase_source": "qlib_task_records"})
+        release_baseline = capture_gpu_phase_release_baseline()
+        release_attempted = False
+        try:
+            for index, record in enumerate(records):
+                if not release_attempted and index == first_backtest_index:
+                    finalize_gpu_phase_release(release_baseline, next_phase="backtest")
+                    release_attempted = True
+                record_instance = trainer.init_instance_by_config(
+                    record,
+                    recorder=recorder,
+                    default_module="qlib.workflow.record_temp",
+                    try_kwargs={"model": model, "dataset": dataset},
+                )
+                record_instance.generate()
+            if not release_attempted:
+                finalize_gpu_phase_release(release_baseline, next_phase=release_next_phase)
+        except Exception as exc:
+            if not release_attempted and _last_gpu_release_event() is None:
+                finalize_gpu_phase_release(
+                    release_baseline,
+                    predict_error=exc,
+                    next_phase="finalize",
+                )
+            raise
+        return trainer.R.get_recorder()
 
 
 def finish_resource_monitor(*, status: str, error: str | None = None) -> None:
