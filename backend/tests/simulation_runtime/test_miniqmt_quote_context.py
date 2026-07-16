@@ -10,6 +10,7 @@ from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy
 from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     BoundedNormalizedQuoteStore,
+    MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
     QuoteEvaluationContextStore,
 )
 from backend.services.miniqmt_execution_runtime.quote_ingress import (
@@ -178,6 +179,35 @@ def test_context_preload_reuses_authority_providers_without_callback_db_io() -> 
 
     assert providers.calls == calls_after_preload
     assert normalized.get("000001.SZ", context_id=context.context_id) is not None
+
+
+def test_runtime_clock_advance_uses_paired_sample_without_provider_io() -> None:
+    store = QuoteEvaluationContextStore()
+    providers = _Providers()
+    adapter = _adapter(store, providers)
+    original = adapter.preload(
+        symbol_specs=[_spec()],
+        policy=_policy(),
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=100_000_000,
+        clock_domain_id=MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
+    )
+    provider_calls = providers.calls
+
+    advanced = adapter.advance_clock(
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, 15, tzinfo=UTC),
+        clock_monotonic_ns=15_100_000_000,
+    )
+
+    assert providers.calls == provider_calls
+    assert advanced.clock.clock_at_utc == datetime(2026, 7, 12, 1, 30, 15, tzinfo=UTC)
+    assert advanced.clock.clock_monotonic_ns == 15_100_000_000
+    assert advanced.clock.clock_domain_id == MINIQMT_QUOTE_CLOCK_DOMAIN_ID
+    assert advanced.continuity_generation == original.continuity_generation
+    assert advanced.continuity_valid is True
+    assert advanced.calendar_snapshot_set is original.calendar_snapshot_set
+    assert advanced.symbol_context("000001.SZ") == original.symbol_context("000001.SZ")
+    assert store.snapshot() is advanced
 
 
 def test_provider_failure_is_loud_and_does_not_publish_partial_context() -> None:

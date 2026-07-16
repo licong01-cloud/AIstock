@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
+from backend.execution_algos.adaptive_is.contracts import QuoteSourceMethod
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
@@ -9,11 +13,24 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntime,
 )
 from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
+    B0QuoteV2Controller,
     B0QuoteV2ControllerFactory,
     ParentQuoteControlAssignmentV1,
 )
+from backend.services.miniqmt_execution_runtime.quote_evidence import QuoteEvidenceCoordinator
+from backend.services.miniqmt_execution_runtime.quote_eligibility import (
+    BoundedNormalizedQuoteStore,
+    QuoteEvaluationContext,
+    QuoteEvaluationContextStore,
+)
+from backend.services.miniqmt_execution_runtime.quote_ingress import (
+    PhaseOneQuoteProjectionSink,
+    PhaseOneRawQuoteSnapshotStore,
+)
+from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame
 
-from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import _runtime_controller
+from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
+from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _projection_context
 
 
 class _LifecycleSupervisor:
@@ -39,6 +56,180 @@ class _LifecycleSupervisor:
 
     def release_consumer(self, *, consumer_id: str) -> None:
         self.leases.pop(consumer_id, None)
+
+
+def test_projection_sink_delivers_the_exact_context_used_to_normalize_observation() -> None:
+    context_store = QuoteEvaluationContextStore()
+    context = _projection_context()
+    context_store.publish(context)
+    normalized_store = BoundedNormalizedQuoteStore(max_symbols=1)
+    sink = PhaseOneQuoteProjectionSink(
+        raw_store=PhaseOneRawQuoteSnapshotStore(max_symbols=1),
+        normalized_store=normalized_store,
+        context_store=context_store,
+    )
+    sink.replace_admitted(("000001.SZ",))
+    sink.on_generation_published(1)
+    captured: list[tuple[object, QuoteEvaluationContext]] = []
+    sink.register_observation_sink(
+        consumer_id="b0-context-handoff",
+        sink=lambda observation, observation_context: captured.append((observation, observation_context)),
+    )
+
+    frame = capture_raw_quote_frame(
+        {
+            "time": "09300000",
+            "lastPrice": "10.00",
+            "preClose": "10.00",
+            "openint": "OPEN",
+            "bidPrice": ["9.99", "9.98", None, None, None],
+            "bidVol": [100, 100, 0, 0, 0],
+            "askPrice": ["10.01", "10.02", None, None, None],
+            "askVol": [100, 100, 0, 0, 0],
+        },
+        callback_symbol="000001.SZ",
+        source_session_id="context-handoff-session",
+        ingress_generation=1,
+        ingress_sequence=1,
+        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        received_monotonic_ns=1_999_500_000,
+        clock_domain_id="test-clock",
+        source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+    )
+    sink.project(frame)
+
+    assert len(captured) == 1
+    assert captured[0][1] is context
+    assert captured[0][0] is normalized_store.get("000001.SZ", context_id=context.context_id)
+
+
+def test_lifecycle_tick_advances_clock_and_keeps_exact_observation_authority_pairing() -> None:
+    controller, _runtime, gateway, repository = _runtime_controller()
+    observation = controller.normalized_store.get("000001.SZ")
+    original = controller.context_store.snapshot()
+    assert observation is not None and original is not None
+    interleaved = QuoteEvaluationContext(
+        calendar_snapshot_set=original.calendar_snapshot_set,
+        clock=replace(
+            original.clock,
+            clock_event_id="clock-p1e-interleaved-before-observer",
+            clock_at_utc=CLOCK_AT + timedelta(milliseconds=250),
+            clock_monotonic_ns=original.clock.clock_monotonic_ns + 250_000_000,
+            observed_at_utc=CLOCK_AT + timedelta(milliseconds=250),
+        ),
+        continuity_generation=original.continuity_generation,
+        continuity_valid=True,
+        policy=original.policy,
+        symbols=original.symbols,
+    )
+    controller.context_store.publish(interleaved)
+    controller.observe(observation, original)
+    sampled_at = CLOCK_AT + timedelta(milliseconds=500)
+    sampled_monotonic_ns = original.clock.clock_monotonic_ns + 500_000_000
+
+    def advance_clock(*, clock_at_utc, clock_monotonic_ns):  # type: ignore[no-untyped-def]
+        advanced = QuoteEvaluationContext(
+            calendar_snapshot_set=original.calendar_snapshot_set,
+            clock=replace(
+                original.clock,
+                clock_event_id="clock-p1e-callback-current",
+                clock_at_utc=clock_at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                observed_at_utc=clock_at_utc,
+            ),
+            continuity_generation=original.continuity_generation,
+            continuity_valid=True,
+            policy=original.policy,
+            symbols=original.symbols,
+        )
+        controller.context_store.publish(advanced)
+        return advanced
+
+    controller._context_advance_callback = advance_clock
+    controller._clock_sample_provider = lambda: (sampled_at, sampled_monotonic_ns)
+
+    controller.lifecycle_tick()
+
+    assert controller.context_store.snapshot().clock.clock_at_utc == sampled_at  # type: ignore[union-attr]
+    assert len(gateway.submitted_orders) == 1
+    assert any(event.event_type.value == "CHILD_ORDER_SUBMITTED" for event in repository.list_events("runtime-p1e"))
+
+
+def test_lifecycle_without_observation_persists_runtime_wait_not_quote_less_action_reject() -> None:
+    controller, runtime, gateway, repository = _runtime_controller()
+    controller.normalized_store._latest_by_symbol.clear()
+
+    first = controller.lifecycle_tick(now_utc=CLOCK_AT)
+    second = controller.lifecycle_tick(now_utc=CLOCK_AT)
+
+    events = repository.list_events("runtime-p1e", include_archived=True)
+    waiting = [
+        event
+        for event in events
+        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
+    ]
+    assert len(waiting) == 1
+    assert waiting[0].event_type.value == "TIMER"
+    assert waiting[0].source == "quote_ingress"
+    assert waiting[0].payload["eligibility_state"] == "WAITING_FIRST_QUOTE"
+    assert waiting[0].payload["reason_code"] == "ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE"
+    assert waiting[0].payload["market_data_id"] is None
+    assert waiting[0].payload["raw_ingress_identity_available"] is False
+    assert waiting[0].payload["broker_called"] is False
+    assert not any(event.event_type.value == "QUOTE_REJECTED" for event in events)
+    assert first["b0_quote_v2_waiting_for_quote_algo_count"] == 1
+    assert second["b0_quote_v2_quote_wait_event_total"] == 1
+    assert gateway.submitted_orders == []
+
+    recovered = B0QuoteV2Controller(
+        runtime=runtime,
+        assignments=controller.assignments,
+        normalized_store=controller.normalized_store,
+        context_store=controller.context_store,
+        evidence_coordinator=QuoteEvidenceCoordinator(repository=repository, config=controller.config),
+        config=controller.config,
+        symbols=tuple(controller.symbols),
+    )
+    recovered_health = recovered.lifecycle_tick(now_utc=CLOCK_AT)
+    recovered_waiting = [
+        event
+        for event in repository.list_events("runtime-p1e", include_archived=True)
+        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
+    ]
+    assert len(recovered_waiting) == 1
+    assert recovered_waiting[0].payload["wait_fingerprint"]
+    assert recovered_health["b0_quote_v2_waiting_for_quote_algo_count"] == 1
+    assert recovered_health["b0_quote_v2_quote_wait_event_total"] == 1
+    assert gateway.submitted_orders == []
+
+
+def test_quote_wait_recovery_rejects_tampered_durable_fingerprint() -> None:
+    controller, runtime, _gateway, repository = _runtime_controller()
+    controller.normalized_store._latest_by_symbol.clear()
+    controller.lifecycle_tick(now_utc=CLOCK_AT)
+    events = repository._events["runtime-p1e"]
+    wait_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
+    )
+    wait_event = events[wait_index]
+    events[wait_index] = wait_event.model_copy(
+        update={"payload": {**wait_event.payload, "wait_fingerprint": "0" * 64}}
+    )
+
+    with pytest.raises(QuoteContractError) as exc_info:
+        B0QuoteV2Controller(
+            runtime=runtime,
+            assignments=controller.assignments,
+            normalized_store=controller.normalized_store,
+            context_store=controller.context_store,
+            evidence_coordinator=QuoteEvidenceCoordinator(repository=repository, config=controller.config),
+            config=controller.config,
+            symbols=tuple(controller.symbols),
+        )
+
+    assert exc_info.value.reason_code.value == "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_IDEMPOTENCY_CONFLICT"
 
 
 def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_ingress() -> None:

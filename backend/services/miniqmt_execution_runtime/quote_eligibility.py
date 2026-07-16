@@ -49,6 +49,7 @@ from backend.services.miniqmt_execution_runtime.quote_normalizer import RawQuote
 
 
 A_SHARE_EQUITY_PHASE_SCHEDULE_VERSION = "A_SHARE_EQUITY_PHASE_SCHEDULE_V1_20260706"
+MINIQMT_QUOTE_CLOCK_DOMAIN_ID = "miniqmt_quote_ingress_monotonic_v1"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 # These are exact, versioned normalizer-map values.  The evaluator does not

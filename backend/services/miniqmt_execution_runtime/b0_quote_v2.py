@@ -47,6 +47,7 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     BoundedNormalizedQuoteStore,
     EligibilityEvaluation,
     NormalizedQuoteObservation,
+    QuoteEvaluationContext,
     QuoteEvaluationContextStore,
 )
 from backend.services.miniqmt_execution_runtime.quote_evidence import MarkoutAnchor, QuoteEvidenceCoordinator
@@ -62,6 +63,20 @@ QUOTE_EVIDENCE_POLICY_KEY = "quote_evidence"
 QUOTE_EVIDENCE_POLICY_SCHEMA_VERSION = "miniqmt_quote_evidence_policy_v1"
 B0_QUOTE_V2_ACTION_ENVELOPE_SCHEMA_VERSION = "b0_quote_v2_action_envelope_v1"
 B0_QUOTE_V2_ACTION_PENDING_SCHEMA_VERSION = "b0_quote_v2_action_pending_v1"
+B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION = "b0_quote_v2_quote_waiting_v1"
+B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS = (
+    "runtime_id",
+    "binding_id",
+    "parent_intent_id",
+    "algo_instance_id",
+    "symbol",
+    "side",
+    "eligibility_state",
+    "reason_code",
+    "stage",
+    "diagnostics",
+    "action_business_sha256",
+)
 PARITY_EXCLUDED_FIELDS = frozenset(
     {
         "action_id",
@@ -106,6 +121,19 @@ def _required_text(value: Any, *, field_name: str) -> str:
             f"{field_name} is required",
         )
     return text
+
+
+def _quote_waiting_fingerprint(payload: Mapping[str, Any]) -> str:
+    missing = [field for field in B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS if field not in payload]
+    if missing:
+        raise quote_contract_error(
+            QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+            "quote wait semantic payload is incomplete",
+            context={"missing_fields": missing},
+        )
+    return canonical_sha256(
+        {field: payload[field] for field in B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS}
+    )
 
 
 def _required_sha256(value: Any, *, field_name: str) -> str:
@@ -908,6 +936,8 @@ class B0QuoteV2Controller:
         symbols: tuple[str, ...],
         evaluator: ActionQuoteEvaluator | None = None,
         release_callback: Callable[[str], None] | None = None,
+        context_advance_callback: Callable[..., QuoteEvaluationContext] | None = None,
+        clock_sample_provider: Callable[[], tuple[datetime, int]] | None = None,
     ) -> None:
         self.runtime = runtime
         self.runtime_id = str(runtime.config.runtime_id)
@@ -922,13 +952,35 @@ class B0QuoteV2Controller:
         self._pending: dict[str, _PendingB0QuoteV2Action] = {}
         self._pending_by_algo: dict[str, str] = {}
         self._release_callback = release_callback
+        self._context_advance_callback = context_advance_callback
+        self._clock_sample_provider = clock_sample_provider
+        self._observation_context_by_symbol: dict[str, QuoteEvaluationContext] = {}
         self._closed = False
         self._duplicate_prevented_action_ids: set[str] = set()
         self._last_durable_to_submit_latency_ms: int | None = None
+        self._quote_waiting_fingerprint_by_algo: dict[str, str] = {}
+        self._quote_waiting_fingerprints_seen: set[tuple[str, str]] = set()
+        self._quote_wait_event_total = 0
         self._recover_pending_actions()
 
-    def observe(self, observation: NormalizedQuoteObservation) -> None:
+    def observe(
+        self,
+        observation: NormalizedQuoteObservation,
+        observation_context: QuoteEvaluationContext,
+    ) -> None:
         if observation.quote.symbol in self.symbols:
+            if observation_context.context_id != observation.context_id:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
+                    "normalized observation is not paired with its projection authority context",
+                    context={
+                        "runtime_id": self.runtime_id,
+                        "symbol": observation.quote.symbol,
+                        "observation_context_id": observation.context_id,
+                        "projection_context_id": observation_context.context_id,
+                    },
+                )
+            self._observation_context_by_symbol[observation.quote.symbol] = observation_context
             self.evidence_coordinator.observe(observation)
 
     def lifecycle_tick(self, *, now_utc: datetime | None = None) -> dict[str, Any]:
@@ -938,7 +990,27 @@ class B0QuoteV2Controller:
                 "closed B0_QUOTE_V2 controller cannot run a lifecycle tick",
                 context={"runtime_id": self.runtime_id},
             )
-        current_time = (now_utc or datetime.now(UTC)).astimezone(UTC)
+        if self._clock_sample_provider is not None:
+            sampled_at_utc, sampled_monotonic_ns = self._clock_sample_provider()
+            current_time = (
+                sampled_at_utc.astimezone(UTC)
+                if self._context_advance_callback is not None or now_utc is None
+                else now_utc.astimezone(UTC)
+            )
+        else:
+            current_time = (now_utc or datetime.now(UTC)).astimezone(UTC)
+            sampled_monotonic_ns = 0
+        if self._context_advance_callback is not None:
+            if sampled_monotonic_ns <= 0:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
+                    "B0_QUOTE_V2 clock advance requires a positive monotonic sample",
+                    context={"runtime_id": self.runtime_id},
+                )
+            self._context_advance_callback(
+                clock_at_utc=current_time,
+                clock_monotonic_ns=sampled_monotonic_ns,
+            )
         self.evidence_coordinator.drain_markouts(now_utc=current_time)
         receipts = self.evidence_coordinator.flush(now_utc=current_time)
         self._apply_receipts(receipts)
@@ -950,20 +1022,30 @@ class B0QuoteV2Controller:
             assignment = self._assignment_for(instance)
             evaluation, observation = self._evaluate(instance=instance, assignment=assignment)
             if evaluation.eligibility.state != EligibilityState.READY:
-                self._persist_reject(
-                    instance=instance,
-                    assignment=assignment,
-                    evaluation=evaluation,
-                    observation=observation,
-                    action_id=None,
-                    now_utc=current_time,
-                )
+                if observation is None:
+                    self._persist_quote_waiting(
+                        instance=instance,
+                        assignment=assignment,
+                        evaluation=evaluation,
+                        action=None,
+                    )
+                else:
+                    self._quote_waiting_fingerprint_by_algo.pop(instance.algo_instance_id, None)
+                    self._persist_reject(
+                        instance=instance,
+                        assignment=assignment,
+                        evaluation=evaluation,
+                        observation=observation,
+                        action_id=None,
+                        now_utc=current_time,
+                    )
                 continue
             if observation is None:
                 raise quote_contract_error(
                     QuoteContractReasonCode.B0_QUOTE_V2_TICK_PROJECTION_INVALID,
                     "READY eligibility cannot be projected without its normalized observation",
                 )
+            self._quote_waiting_fingerprint_by_algo.pop(instance.algo_instance_id, None)
             tick = project_vnpy_tick(
                 observation=observation,
                 eligibility=evaluation.eligibility,
@@ -995,15 +1077,25 @@ class B0QuoteV2Controller:
         assignment = self._assignment_for(instance)
         evaluation, observation = self._evaluate(instance=instance, assignment=assignment)
         if evaluation.eligibility.state != EligibilityState.READY or observation is None:
-            self._persist_reject(
-                instance=instance,
-                assignment=assignment,
-                evaluation=evaluation,
-                observation=observation,
-                action_id=None,
-                now_utc=evaluation.eligibility.evaluated_at_utc,
-            )
+            if observation is None:
+                self._persist_quote_waiting(
+                    instance=instance,
+                    assignment=assignment,
+                    evaluation=evaluation,
+                    action=action,
+                )
+            else:
+                self._quote_waiting_fingerprint_by_algo.pop(instance.algo_instance_id, None)
+                self._persist_reject(
+                    instance=instance,
+                    assignment=assignment,
+                    evaluation=evaluation,
+                    observation=observation,
+                    action_id=None,
+                    now_utc=evaluation.eligibility.evaluated_at_utc,
+                )
             return
+        self._quote_waiting_fingerprint_by_algo.pop(instance.algo_instance_id, None)
         ordinal = self._next_action_ordinal(instance.algo_instance_id)
         business_sha256 = canonical_sha256(_action_business_payload(action))
         action_id = "b0qact_" + canonical_sha256(
@@ -1084,6 +1176,9 @@ class B0QuoteV2Controller:
             "b0_quote_v2_pending_actions": len(self._pending),
             "b0_quote_v2_duplicate_prevented_total": len(self._duplicate_prevented_action_ids),
             "b0_quote_v2_durable_to_submit_latency_ms": self._last_durable_to_submit_latency_ms,
+            "b0_quote_v2_waiting_for_quote_algo_count": len(self._quote_waiting_fingerprint_by_algo),
+            "b0_quote_v2_waiting_for_quote_algo_ids": sorted(self._quote_waiting_fingerprint_by_algo),
+            "b0_quote_v2_quote_wait_event_total": self._quote_wait_event_total,
             "evidence": evidence_health,
         }
 
@@ -1107,7 +1202,20 @@ class B0QuoteV2Controller:
                 "controller context policy differs from the frozen parent assignment",
                 context={"runtime_id": self.runtime_id, "parent_intent_id": instance.parent_intent_id},
             )
-        observation = self.normalized_store.get(instance.symbol, context_id=context.context_id)
+        observation = self.normalized_store.get(instance.symbol)
+        observation_context = self._observation_context_by_symbol.get(instance.symbol)
+        if (
+            observation_context is None
+            and observation is not None
+            and observation.context_id == context.context_id
+        ):
+            observation_context = context
+        if observation is not None and not self._observation_context_is_compatible(
+            observation=observation,
+            observation_context=observation_context,
+            evaluation_context=context,
+        ):
+            observation = None
         request = ActionQuoteRequest(
             runtime_id=self.runtime_id,
             parent_intent_id=instance.parent_intent_id,
@@ -1120,6 +1228,28 @@ class B0QuoteV2Controller:
             adapter_sha256=revision.adapter_sha256,
         )
         return self.evaluator.evaluate(request=request, context=context, observation=observation), observation
+
+    @staticmethod
+    def _observation_context_is_compatible(
+        *,
+        observation: NormalizedQuoteObservation,
+        observation_context: QuoteEvaluationContext | None,
+        evaluation_context: QuoteEvaluationContext,
+    ) -> bool:
+        if observation_context is None or observation.context_id != observation_context.context_id:
+            return False
+        symbol = observation.quote.symbol
+        return (
+            observation_context.calendar_snapshot_set.set_sha256
+            == evaluation_context.calendar_snapshot_set.set_sha256
+            and observation_context.policy.policy_sha256 == evaluation_context.policy.policy_sha256
+            and observation_context.continuity_generation == evaluation_context.continuity_generation
+            and observation_context.continuity_valid
+            and evaluation_context.continuity_valid
+            and observation_context.clock.clock_domain_id == evaluation_context.clock.clock_domain_id
+            and observation_context.clock.clock_trade_date == evaluation_context.clock.clock_trade_date
+            and observation_context.symbol_context(symbol) == evaluation_context.symbol_context(symbol)
+        )
 
     def _action_evidence(
         self,
@@ -1208,6 +1338,64 @@ class B0QuoteV2Controller:
         self.evidence_coordinator.enqueue(evidence, event_type=MiniQMTExecutionEventType.QUOTE_REJECTED)
         self.evidence_coordinator.flush(now_utc=now_utc)
 
+    def _persist_quote_waiting(
+        self,
+        *,
+        instance: MiniQMTExecutionAlgoInstance,
+        assignment: ParentQuoteControlAssignmentV1,
+        evaluation: EligibilityEvaluation,
+        action: VnpyAction | None,
+    ) -> None:
+        """Persist a non-market-data wait state when no raw ingress identity exists.
+
+        ACTION_REJECT is market-data evidence and cannot be manufactured before a
+        raw frame or normalized observation exists.  TIMER is the durable runtime
+        lifecycle carrier for this explicit, broker-side-effect-free wait state.
+        """
+
+        eligibility = evaluation.eligibility
+        action_payload = _action_payload(action) if action is not None else None
+        semantic_payload = {
+            "runtime_id": self.runtime_id,
+            "binding_id": assignment.binding_id,
+            "parent_intent_id": instance.parent_intent_id,
+            "algo_instance_id": instance.algo_instance_id,
+            "symbol": instance.symbol,
+            "side": instance.side.value,
+            "eligibility_state": eligibility.state.value,
+            "reason_code": eligibility.reason_code.value if eligibility.reason_code is not None else None,
+            "stage": eligibility.stage,
+            "diagnostics": list(evaluation.diagnostics),
+            "action_business_sha256": canonical_sha256(action_payload) if action_payload is not None else None,
+        }
+        fingerprint = _quote_waiting_fingerprint(semantic_payload)
+        if self._quote_waiting_fingerprint_by_algo.get(instance.algo_instance_id) == fingerprint:
+            return
+        dedup_key = (instance.algo_instance_id, fingerprint)
+        if dedup_key in self._quote_waiting_fingerprints_seen:
+            self._quote_waiting_fingerprint_by_algo[instance.algo_instance_id] = fingerprint
+            return
+        self.runtime.events.append(
+            runtime_id=self.runtime_id,
+            event_type=MiniQMTExecutionEventType.TIMER,
+            source="quote_ingress",
+            payload={
+                "schema_version": B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION,
+                "control_revision": ControlRevision.B0_QUOTE_V2.value,
+                **semantic_payload,
+                "wait_fingerprint": fingerprint,
+                "clock_event_id": eligibility.clock_event_id,
+                "evaluated_at_utc": eligibility.evaluated_at_utc.isoformat(),
+                "action": action_payload,
+                "market_data_id": None,
+                "raw_ingress_identity_available": False,
+                "broker_called": False,
+            },
+        )
+        self._quote_waiting_fingerprints_seen.add(dedup_key)
+        self._quote_waiting_fingerprint_by_algo[instance.algo_instance_id] = fingerprint
+        self._quote_wait_event_total += 1
+
     def _apply_receipts(self, receipts: tuple[DurableEvidenceReceipt, ...]) -> None:
         by_evidence_id = {
             str(receipt.event.payload.get("evidence", {}).get("evidence_id")): receipt
@@ -1280,8 +1468,23 @@ class B0QuoteV2Controller:
                 "child receipt cannot be built without context and frozen revision",
             )
         receipt_observation = self.normalized_store.get(child.symbol, context_id=context.context_id)
+        receipt_quote = (
+            receipt_observation.quote
+            if receipt_observation is not None
+            else pending.evidence.quote
+        )
+        receipt_tradability = (
+            receipt_observation.tradability
+            if receipt_observation is not None
+            else pending.evidence.tradability
+        )
+        receipt_market_data_id = (
+            receipt_observation.market_data_id
+            if receipt_observation is not None
+            else pending.evidence.market_data_id
+        )
         receipt = MarketDataEvidenceV1(
-            market_data_id=receipt_observation.market_data_id if receipt_observation is not None else None,
+            market_data_id=receipt_market_data_id,
             evidence_schema_version=MARKET_DATA_EVIDENCE_SCHEMA_VERSION,
             capture_type=EvidenceCaptureType.CHILD_RECEIPT,
             runtime_id=self.runtime_id,
@@ -1290,8 +1493,8 @@ class B0QuoteV2Controller:
             parent_intent_id=pending.assignment.parent_intent_id,
             child_order_id=child.child_order_id,
             action_id=pending.action_id,
-            quote=receipt_observation.quote if receipt_observation is not None else None,
-            tradability=receipt_observation.tradability if receipt_observation is not None else None,
+            quote=receipt_quote,
+            tradability=receipt_tradability,
             clock_event_id=context.clock.clock_event_id,
             quality_reason_code=None,
             stage=None,
@@ -1317,9 +1520,7 @@ class B0QuoteV2Controller:
             side=child.side.value,
             anchor_market_data_id=pending.evidence.market_data_id,
             action_evidence_id=pending.evidence.evidence_id,
-            tradability_id=receipt_observation.tradability.tradability_id
-            if receipt_observation and receipt_observation.tradability
-            else None,
+            tradability_id=receipt_tradability.tradability_id if receipt_tradability is not None else None,
         )
         self.evidence_coordinator.enqueue(receipt, event_type=MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED)
         receipts = self.evidence_coordinator.flush(now_utc=now_utc)
@@ -1389,6 +1590,14 @@ class B0QuoteV2Controller:
             item.algo_instance_id: item
             for item in self.runtime.repository.list_algo_instances(self.runtime_id, active_only=False)
         }
+        active_algo_instance_ids = {
+            item.algo_instance_id
+            for item in self.runtime.repository.list_algo_instances(self.runtime_id, active_only=True)
+        }
+        self._recover_quote_waiting_dedup(
+            events=events,
+            active_algo_instance_ids=active_algo_instance_ids,
+        )
         action_evidence_ids = {
             str(event.payload.get("b0_quote_v2_action", {}).get("action_evidence_id"))
             for event in events
@@ -1484,6 +1693,50 @@ class B0QuoteV2Controller:
                     evidence,
                     event_type=MiniQMTExecutionEventType.QUOTE_ELIGIBILITY_EVALUATED,
                 )
+
+    def _recover_quote_waiting_dedup(
+        self,
+        *,
+        events: list[MiniQMTExecutionEvent],
+        active_algo_instance_ids: set[str],
+    ) -> None:
+        latest_by_algo: dict[str, tuple[int, str]] = {}
+        for event in sorted(events, key=lambda item: (item.sequence, item.event_id)):
+            payload = event.payload
+            if payload.get("schema_version") != B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION:
+                if event.event_type == MiniQMTExecutionEventType.ALGO_ACTION_EMITTED:
+                    action_payload = payload.get("b0_quote_v2_action")
+                    if isinstance(action_payload, dict):
+                        latest_by_algo.pop(str(action_payload.get("algo_instance_id") or ""), None)
+                continue
+            if event.event_type != MiniQMTExecutionEventType.TIMER or event.source != "quote_ingress":
+                raise quote_contract_error(
+                    QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+                    "quote wait recovery found an invalid runtime event carrier",
+                    context={"runtime_id": self.runtime_id, "event_id": event.event_id},
+                )
+            fingerprint = _quote_waiting_fingerprint(payload)
+            declared_fingerprint = str(payload.get("wait_fingerprint") or "")
+            if declared_fingerprint != fingerprint:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+                    "quote wait recovery fingerprint conflicts with its durable semantic payload",
+                    context={
+                        "runtime_id": self.runtime_id,
+                        "event_id": event.event_id,
+                        "declared_wait_fingerprint": declared_fingerprint or None,
+                        "computed_wait_fingerprint": fingerprint,
+                    },
+                )
+            algo_instance_id = str(payload["algo_instance_id"])
+            self._quote_waiting_fingerprints_seen.add((algo_instance_id, fingerprint))
+            latest_by_algo[algo_instance_id] = (event.sequence, fingerprint)
+        self._quote_wait_event_total = len(self._quote_waiting_fingerprints_seen)
+        self._quote_waiting_fingerprint_by_algo = {
+            algo_instance_id: fingerprint
+            for algo_instance_id, (_sequence, fingerprint) in latest_by_algo.items()
+            if algo_instance_id in active_algo_instance_ids
+        }
 
     def _assignment_for(self, instance: MiniQMTExecutionAlgoInstance) -> ParentQuoteControlAssignmentV1:
         assignment = self.assignments.get(instance.parent_intent_id)
@@ -1598,6 +1851,8 @@ class B0QuoteV2ControllerFactory:
         config: QuoteIngressRuntimeConfig,
         data_session_key: str,
         context_release_callback: Callable[[str], None] | None = None,
+        context_advance_callback: Callable[..., QuoteEvaluationContext] | None = None,
+        clock_sample_provider: Callable[[], tuple[datetime, int]] | None = None,
     ) -> None:
         self.supervisor = supervisor
         self.config = config
@@ -1608,6 +1863,8 @@ class B0QuoteV2ControllerFactory:
         self._invalid_revision_ids: set[str] = set()
         self._parity_violation_count = 0
         self._context_release_callback = context_release_callback
+        self._context_advance_callback = context_advance_callback
+        self._clock_sample_provider = clock_sample_provider
 
     def create(
         self,
@@ -1659,6 +1916,8 @@ class B0QuoteV2ControllerFactory:
             config=self.config,
             symbols=exact_symbols,
             release_callback=self.release,
+            context_advance_callback=self._context_advance_callback,
+            clock_sample_provider=self._clock_sample_provider,
         )
         consumer_id = f"b0qv2:{key[1]}"
         self.supervisor.register_observation_sink(consumer_id=consumer_id, sink=controller.observe)

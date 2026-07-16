@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
@@ -27,6 +27,7 @@ TERMINAL_RUN_STATUSES = frozenset(
         SimulationDailyRunStatus.CANCELLED,
     }
 )
+MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER = 2
 
 
 def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
@@ -41,6 +42,215 @@ def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict
             },
         )
     return dict(value)
+
+
+def _enum_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value))
+
+
+def _required_positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeConfigInvalidError(
+            f"{field} must be a positive integer",
+            context={
+                "reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_CONFIG_INVALID",
+                "stage": "MINIQMT_QUOTE_HEALTH_PROJECTION",
+                "field": field,
+                "value": value,
+            },
+        )
+    return value
+
+
+def _runtime_controller_health(registry: dict[str, Any], runtime_id: str) -> dict[str, Any] | None:
+    controllers = registry.get("controllers")
+    if isinstance(controllers, dict) and isinstance(controllers.get(runtime_id), dict):
+        return dict(controllers[runtime_id])
+    for key in ("delegate", "drain_factory"):
+        nested = registry.get(key)
+        if isinstance(nested, dict):
+            found = _runtime_controller_health(nested, runtime_id)
+            if found is not None:
+                return found
+    return None
+
+
+def _canonical_miniqmt_quote_health(
+    *,
+    runtime: Any,
+    runtime_id: str,
+    durable_health: dict[str, Any] | None,
+    durable_health_event: dict[str, Any] | None,
+    scheduler_status: dict[str, Any],
+) -> dict[str, Any]:
+    activation = _required_scheduler_status_mapping(scheduler_status, "miniqmt_quote_ingress_activation")
+    controller_registry = _required_scheduler_status_mapping(scheduler_status, "b0_quote_v2_controllers")
+    ingress = dict(activation.get("ingress")) if isinstance(activation.get("ingress"), dict) else None
+    subscription = (
+        dict(ingress.get("subscription"))
+        if isinstance(ingress, dict) and isinstance(ingress.get("subscription"), dict)
+        else None
+    )
+    writer = (
+        dict(ingress.get("writer"))
+        if isinstance(ingress, dict) and isinstance(ingress.get("writer"), dict)
+        else None
+    )
+    controller = _runtime_controller_health(controller_registry, runtime_id)
+    durable_health_present = isinstance(durable_health, dict)
+    cadence_seconds = (
+        _required_positive_int(
+            activation.get("evidence_cadence_seconds"),
+            field="miniqmt_quote_ingress_activation.evidence_cadence_seconds",
+        )
+        if durable_health_present
+        else None
+    )
+    durable_health_max_age_ms = (
+        cadence_seconds * MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER * 1000
+        if cadence_seconds is not None
+        else None
+    )
+    event_time = (
+        durable_health_event.get("event_time")
+        if isinstance(durable_health_event, dict)
+        else None
+    )
+    event_id = durable_health_event.get("event_id") if isinstance(durable_health_event, dict) else None
+    event_sequence = durable_health_event.get("sequence") if isinstance(durable_health_event, dict) else None
+    durable_event_valid = bool(
+        isinstance(event_id, str)
+        and event_id.strip()
+        and isinstance(event_sequence, int)
+        and not isinstance(event_sequence, bool)
+        and event_sequence > 0
+        and isinstance(event_time, datetime)
+        and event_time.tzinfo is not None
+    )
+    if durable_event_valid:
+        assert isinstance(event_time, datetime)
+        event_time_utc = event_time.astimezone(UTC)
+        event_time_text = event_time_utc.isoformat()
+        age_ms = int((datetime.now(UTC) - event_time_utc).total_seconds() * 1000)
+    else:
+        event_time_text = None
+        age_ms = None
+    durable_reported = durable_health_present and durable_event_valid
+    durable_status = (
+        str(durable_health.get("status") or "").strip().upper()
+        if durable_health_present
+        else None
+    )
+    runtime_projection = {
+        "event_loop_state": _enum_value(getattr(runtime, "event_loop_state", None)),
+        "gateway_state": _enum_value(getattr(runtime, "gateway_state", None)),
+        "oms_state": _enum_value(getattr(runtime, "oms_state", None)),
+        "last_event_sequence": int(getattr(runtime, "last_event_sequence", 0) or 0),
+        "updated_at": getattr(runtime, "updated_at", None).isoformat()
+        if isinstance(getattr(runtime, "updated_at", None), datetime)
+        else None,
+    }
+    runtime_state = str(runtime_projection["event_loop_state"] or "UNKNOWN")
+    inactive_runtime = runtime_state == "STOPPED"
+    reasons: list[str] = []
+    durable_projection_failed = False
+    if durable_health_present and not durable_event_valid:
+        reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_READBACK_INVALID")
+        durable_projection_failed = True
+    elif not durable_reported:
+        reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED")
+    if durable_reported:
+        if durable_status not in {"HEALTHY", "DEGRADED", "FAILED"}:
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_STATUS_INVALID")
+            durable_projection_failed = True
+        elif durable_status == "FAILED":
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_REPORTED_FAILED")
+            durable_projection_failed = True
+        elif durable_status == "DEGRADED":
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_REPORTED_DEGRADED")
+        if age_ms is not None and age_ms < 0:
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_EVENT_TIME_IN_FUTURE")
+            durable_projection_failed = True
+        elif (
+            age_ms is not None
+            and durable_health_max_age_ms is not None
+            and age_ms > durable_health_max_age_ms
+        ):
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_STALE")
+    activation_status = str(activation.get("status") or "UNKNOWN")
+    writer_status = str(writer.get("status") or "UNKNOWN") if writer is not None else "UNKNOWN"
+    subscription_status = str(subscription.get("status") or "UNKNOWN") if subscription is not None else "UNKNOWN"
+    controller_status = str(controller.get("status") or "UNKNOWN") if controller is not None else "UNKNOWN"
+    if not inactive_runtime and activation_status not in {"READY", "DRAINING"}:
+        reasons.append("MINIQMT_QUOTE_INGRESS_ACTIVATION_NOT_READY")
+    if not inactive_runtime and writer_status not in {"ACTIVE", "STARTING"}:
+        reasons.append("MINIQMT_QUOTE_INGRESS_WRITER_NOT_ACTIVE")
+    if not inactive_runtime and subscription_status not in {"ACTIVE", "READY"}:
+        reasons.append("MINIQMT_QUOTE_CALLBACK_SUBSCRIPTION_NOT_ACTIVE")
+    if not inactive_runtime and controller_status not in {"HEALTHY", "READY"}:
+        reasons.append("MINIQMT_B0_QUOTE_CONTROLLER_NOT_HEALTHY")
+    if not inactive_runtime and runtime_projection["gateway_state"] != "CONNECTED":
+        reasons.append("MINIQMT_RUNTIME_GATEWAY_NOT_CONNECTED")
+    if runtime_projection["oms_state"] != "RECONCILED":
+        reasons.append("MINIQMT_RUNTIME_OMS_NOT_RECONCILED")
+
+    explicit_failure_states = {"FAILED", "BLOCKED"}
+    component_states = {
+        activation_status,
+        writer_status,
+        subscription_status,
+        controller_status,
+        str(runtime_projection["event_loop_state"] or "UNKNOWN"),
+        str(runtime_projection["gateway_state"] or "UNKNOWN"),
+        str(runtime_projection["oms_state"] or "UNKNOWN"),
+    }
+    if durable_projection_failed or component_states.intersection(explicit_failure_states):
+        status = "FAILED"
+    elif inactive_runtime:
+        status = "INACTIVE"
+    else:
+        status = "HEALTHY" if not reasons else "DEGRADED"
+    return {
+        "schema_version": "miniqmt_quote_canonical_health_v1",
+        "authority": "simulation_runtime_miniqmt_quote_diagnostics",
+        "authoritative": True,
+        "runtime_id": runtime_id,
+        "status": status,
+        "reason_codes": sorted(set(reasons)),
+        "durable_health": {
+            "reported": durable_reported,
+            "durable_ack": durable_reported,
+            "readback_verified": durable_reported,
+            "status": durable_status,
+            "event_id": event_id,
+            "sequence": event_sequence,
+            "event_time": event_time_text,
+            "age_ms": age_ms,
+            "max_age_ms": durable_health_max_age_ms,
+            "stale": (
+                age_ms is not None
+                and durable_health_max_age_ms is not None
+                and age_ms > durable_health_max_age_ms
+            ),
+            "health_or_aggregate": dict(durable_health) if durable_health is not None else None,
+        },
+        "live_components": {
+            "activation": activation,
+            "callback_subscription": subscription,
+            "writer": writer,
+            "controller": controller,
+        },
+        "runtime_projection": runtime_projection,
+        "legacy_status": {
+            "authority": "legacy_miniqmt_interface",
+            "authoritative": False,
+            "retired_for_simulation_runtime": True,
+            "scope": "manual legacy MiniQMT interface connectivity only",
+            "canonical_endpoint": "/api/v1/simulation-runtime/miniqmt/quote-diagnostics",
+        },
+    }
 
 
 def _quote_evidence(event: Any) -> dict[str, Any] | None:
@@ -248,6 +458,12 @@ class SimulationRuntimeOpsService:
                 status,
                 "b0_quote_v2_controllers",
             ),
+            "miniqmt_quote_health_authority": {
+                "authority": "simulation_scheduler_live_components",
+                "authoritative": False,
+                "scope": "live in-process component telemetry",
+                "canonical_endpoint": "/api/v1/simulation-runtime/miniqmt/quote-diagnostics",
+            },
             "account_slot_persistence": {
                 "enabled": True,
                 "release_binding_columns": ["account_group_id", "strategy_slot_id"],
@@ -381,6 +597,7 @@ class SimulationRuntimeOpsService:
             limit=limit,
         )
         summary = runtime_repository.quote_diagnostics_summary(runtime_id, symbol=symbol)
+        scheduler_status = dict(self.scheduler.status())
         markout = dict(summary["markout"])
         markout_due = int(markout["terminal_due_count"])
         markout_captured = int(markout["captured_count"])
@@ -404,12 +621,13 @@ class SimulationRuntimeOpsService:
             "runtime_id": runtime_id,
             "read_only": True,
             "production_ddl_gate": runtime_repository.quote_event_schema_gate(),
-            "health": summary["health"]
-            or {
-                "status": "UNKNOWN",
-                "reason_code": "MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED",
-                "durable_ack": False,
-            },
+            "health": _canonical_miniqmt_quote_health(
+                runtime=runtime,
+                runtime_id=runtime_id,
+                durable_health=summary["health"],
+                durable_health_event=summary.get("health_event"),
+                scheduler_status=scheduler_status,
+            ),
             "per_symbol": sorted(per_symbol, key=lambda item: item["symbol"]),
             "recent_reason": last_reason,
             "reason_counts": dict(sorted(summary["reason_counts"].items())),

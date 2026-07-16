@@ -7164,6 +7164,8 @@ class SimulationLifecycleScheduler:
         return (
             binding.package_id,
             binding.manifest_sha256,
+            binding.release_id,
+            binding.release_hash,
             trade_date.isoformat(),
             data_source,
             selection_artifact_runtime_hash(runtime_config),

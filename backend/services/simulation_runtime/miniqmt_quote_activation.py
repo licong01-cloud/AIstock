@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 import logging
 import os
 import threading
+import time as monotonic_time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
@@ -284,6 +285,8 @@ def _build_runtime_components(
         config=runtime_config,
         data_session_key=MINIQMT_B0_QUOTE_V2_SIM_DATA_SESSION_KEY,
         context_release_callback=context_adapter.release_runtime_context,
+        context_advance_callback=context_adapter.advance_clock,
+        clock_sample_provider=lambda: (datetime.now(UTC), monotonic_time.monotonic_ns()),
     )
     return supervisor, controller_factory, context_adapter
 
@@ -343,6 +346,7 @@ class MiniQMTQuoteIngressActivation:
             "process_config_sha256": quote_ingress_config_sha256(process_config),
             "runtime_config_sha256": quote_ingress_config_sha256(runtime_config),
             "runtime_config_enabled": runtime_config.enabled,
+            "evidence_cadence_seconds": runtime_config.evidence_cadence_seconds,
             "production_ddl_gate": production_ddl_gate,
             "reason_code": self.reason_code,
             "factory_available": self.controller_factory is not None and not self._shutdown,

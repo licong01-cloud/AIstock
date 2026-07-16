@@ -1,0 +1,163 @@
+{
+  "actual": "scheduler status reports ingress READY, callback subscription ACTIVE, controller HEALTHY, gateway CONNECTED and OMS RECONCILED, while quote diagnostics return MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED and /monitor/miniqmt/status returns ready=false.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260716_BUG-672-miniqmt-diagnostics-expose-contradictory-durable-and-legacy-health-state.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/monitor.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_diagnostics.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-672",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-16T02:28:07.739843Z",
+  "description": "scheduler status reports ingress READY, callback subscription ACTIVE, controller HEALTHY, gateway CONNECTED and OMS RECONCILED, while quote diagnostics return MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED and /monitor/miniqmt/status returns ready=false.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260716-f83c7cc20428",
+      "timestamp": "2026-07-16T02:28:07.739839Z"
+    }
+  ],
+  "evidence_uris": [
+    "mqrt_sim_47b2a128d475a0c66afdcbf2;2026-07-16 live readback"
+  ],
+  "expected": "Read-only diagnostics expose one canonical runtime authority with durable ack, freshness, callback progress, writer health, controller health, gateway and OMS state; legacy status is explicitly retired or labeled non-authoritative.",
+  "first_seen_at": "2026-07-16T02:28:07.739843Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2211,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2211",
+  "last_seen_at": "2026-07-16T02:28:07.739843Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/scheduler/status and GET /api/v1/simulation-runtime/miniqmt/quote-diagnostics",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT diagnostics expose contradictory durable and legacy health states",
+  "trigger_condition": {
+    "fingerprint": "f83c7cc20428b220311762cb",
+    "source_event_id": "FE-20260716-f83c7cc20428"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

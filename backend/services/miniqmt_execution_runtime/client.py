@@ -1049,7 +1049,7 @@ class MiniQMTExecutionRuntimeClient:
         failed_quote_symbols: list[str] = []
         errors: list[dict[str, Any]] = []
         if controller is not None:
-            controller.lifecycle_tick(now_utc=as_of_time or datetime.now(UTC))
+            controller.lifecycle_tick()
             quote_count = len(instance_by_symbol)
             tick_event_count = len(instance_by_symbol)
         for symbol in () if controller is not None else sorted(instance_by_symbol):
@@ -1603,6 +1603,8 @@ class MiniQMTExecutionRuntimeClient:
         if batch is None:
             batch = self._event_loop_find_dependent_buy_batch_by_logical_key(requests)
         if batch is None:
+            batch = self._event_loop_find_owned_failed_batch_by_remarks(requests)
+        if batch is None:
             return None
         stored_requests = _event_loop_requests_from_batch(batch)
         if not stored_requests:
@@ -1619,6 +1621,14 @@ class MiniQMTExecutionRuntimeClient:
                 batch=batch,
                 managed_order_service=managed_order_service,
             )
+        intents = list_intents(effective_batch_id)
+        if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED and intents:
+            return self._event_loop_restore_owned_parent_intents(
+                batch_id=effective_batch_id,
+                requests=requests,
+                stored_requests=stored_requests,
+                intents=intents,
+            )
         if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED or (
             batch.batch_status == OrderBatchStatus.FAILED
             and metadata.get("capacity_residual_skipped")
@@ -1626,7 +1636,6 @@ class MiniQMTExecutionRuntimeClient:
             and not any(result.broker_called for result in stored_results)
         ):
             return None
-        intents = list_intents(batch_id)
         results = stored_results or tuple(_event_loop_result_from_existing_intent(intent) for intent in intents)
         if not results:
             return None
@@ -1654,6 +1663,200 @@ class MiniQMTExecutionRuntimeClient:
             },
             submit_parent_intent_ids=frozenset(),
         )
+
+    def _event_loop_restore_owned_parent_intents(
+        self,
+        *,
+        batch_id: str,
+        requests: list[ManagedOrderRequest],
+        stored_requests: list[ManagedOrderRequest],
+        intents: list[Any],
+    ) -> MiniQMTEventLoopPreflightResult:
+        """Restore an exact, runtime-owned preflight without rerunning mutable checks.
+
+        A B0 failure can happen after the parent intents have been durably written but
+        before any broker call.  Re-previewing that same batch makes its own order
+        remarks and pending sell reservations look foreign.  Recovery is therefore
+        allowed only when the incoming request, stored batch request, remark index,
+        and parent intent form one exact ownership chain with no broker side effect.
+        """
+
+        request_mismatches = _event_loop_owned_retry_request_mismatches(
+            requests=requests,
+            stored_requests=stored_requests,
+        )
+        if request_mismatches:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop retry request differs from the durable failed batch",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_REQUEST_MISMATCH",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "mismatches": request_mismatches,
+                    "broker_called": False,
+                },
+            )
+        by_parent = {str(getattr(intent, "intent_id", "")): intent for intent in intents}
+        expected_parent_ids = [_parent_id_from_request(request) for request in stored_requests]
+        if (
+            any(not parent_id for parent_id in expected_parent_ids)
+            or len(expected_parent_ids) != len(set(expected_parent_ids))
+            or len(intents) != len(expected_parent_ids)
+            or set(by_parent) != set(expected_parent_ids)
+        ):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop failed batch has an incomplete durable parent-intent set",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_PARENT_SET_MISMATCH",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "expected_parent_intent_ids": expected_parent_ids,
+                    "stored_parent_intent_ids": sorted(by_parent),
+                    "broker_called": False,
+                },
+            )
+        runtime_ids = {
+            str(request.metadata.get("runtime_id") or "").strip()
+            for request in stored_requests
+        }
+        if len(runtime_ids) != 1 or not next(iter(runtime_ids)):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop owned retry requires one exact runtime identity",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_RUNTIME_SET_MISMATCH",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "runtime_ids": sorted(runtime_ids),
+                    "broker_called": False,
+                },
+            )
+        runtime_id = next(iter(runtime_ids))
+        existing_children = [
+            child
+            for child in self.repository.list_child_orders(runtime_id, active_only=False)
+            if child.parent_intent_id in set(expected_parent_ids)
+        ]
+        list_order_ledger = getattr(self.strategy_ledger_repository, "list_order_ledger", None)
+        if not callable(list_order_ledger):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop owned retry requires order-ledger side-effect readback",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_ORDER_LEDGER_AUTHORITY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "runtime_id": runtime_id,
+                    "broker_called": False,
+                },
+            )
+        existing_ledger_orders = list_order_ledger(batch_id=batch_id)
+        if existing_children or existing_ledger_orders:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop owned retry found broker-side-effect evidence and will not resubmit",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_SIDE_EFFECT_PRESENT",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "runtime_id": runtime_id,
+                    "child_order_ids": [child.child_order_id for child in existing_children],
+                    "qmt_order_ids": [str(order.qmt_order_id) for order in existing_ledger_orders],
+                    "broker_called": True,
+                },
+            )
+        get_by_remark = getattr(self.strategy_ledger_repository, "get_order_intent_by_remark", None)
+        if not callable(get_by_remark):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop owned retry requires durable order-remark lookup",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_REMARK_AUTHORITY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                    "qmt_batch_id": batch_id,
+                    "broker_called": False,
+                },
+            )
+
+        results: list[ManagedOrderSubmitResult] = []
+        submit_parent_ids: set[str] = set()
+        for request in stored_requests:
+            parent_id = _parent_id_from_request(request)
+            intent = by_parent[parent_id]
+            mismatches = _event_loop_owned_parent_intent_mismatches(
+                batch_id=batch_id,
+                request=request,
+                intent=intent,
+            )
+            remark_intent = get_by_remark(request.account_id, request.order_remark)
+            if remark_intent is None or str(getattr(remark_intent, "intent_id", "")) != parent_id:
+                mismatches["order_remark_owner"] = {
+                    "expected": parent_id,
+                    "actual": getattr(remark_intent, "intent_id", None),
+                }
+            if mismatches:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop failed batch is not an exact runtime-owned retry",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_IDENTITY_MISMATCH",
+                        "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_RESTORE",
+                        "qmt_batch_id": batch_id,
+                        "parent_intent_id": parent_id,
+                        "order_remark": request.order_remark,
+                        "mismatches": mismatches,
+                        "broker_called": False,
+                    },
+                )
+            preflight = OrderPreflightResult(
+                allowed=True,
+                errors=(),
+                strategy_id=str(getattr(intent, "strategy_id", "")) or None,
+                estimated_notional=getattr(intent, "estimated_notional", None) or Decimal("0"),
+                estimated_fee=getattr(intent, "estimated_fee", None) or Decimal("0"),
+                freeze_amount=Decimal("0"),
+                available_cash=None,
+            )
+            results.append(
+                ManagedOrderSubmitResult(
+                    False,
+                    parent_id,
+                    None,
+                    "restored exact runtime-owned parent intent; child order remains pending a true tick",
+                    preflight,
+                    False,
+                )
+            )
+            submit_parent_ids.add(parent_id)
+
+        return MiniQMTEventLoopPreflightResult(
+            batch_id=batch_id,
+            retry_of_batch_id=batch_id,
+            requests=tuple(stored_requests),
+            results=tuple(results),
+            request_by_parent_intent_id={
+                _parent_id_from_request(request): request for request in stored_requests
+            },
+            submit_parent_intent_ids=frozenset(submit_parent_ids),
+        )
+
+    def _event_loop_find_owned_failed_batch_by_remarks(
+        self,
+        requests: list[ManagedOrderRequest],
+    ) -> OrderBatchRecord | None:
+        repository = self.strategy_ledger_repository
+        get_batch = getattr(repository, "get_order_batch", None)
+        get_by_remark = getattr(repository, "get_order_intent_by_remark", None)
+        if not callable(get_batch) or not callable(get_by_remark) or not requests:
+            return None
+        batch_ids: set[str] = set()
+        for request in requests:
+            if not request.order_remark:
+                return None
+            intent = get_by_remark(request.account_id, request.order_remark)
+            stored_batch_id = str(getattr(intent, "batch_id", "") or "") if intent is not None else ""
+            if not stored_batch_id:
+                return None
+            batch_ids.add(stored_batch_id)
+        if len(batch_ids) != 1:
+            return None
+        batch = get_batch(next(iter(batch_ids)))
+        return batch if batch is not None and batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED else None
 
     def _event_loop_find_dependent_buy_batch_by_logical_key(
         self,
@@ -2999,6 +3202,136 @@ def _event_loop_result_from_existing_intent(intent: Any) -> ManagedOrderSubmitRe
         preflight,
         success,
     )
+
+
+def _event_loop_owned_parent_intent_mismatches(
+    *,
+    batch_id: str,
+    request: ManagedOrderRequest,
+    intent: Any,
+) -> dict[str, dict[str, Any]]:
+    parent_id = _parent_id_from_request(request)
+    intent_metadata = dict(getattr(intent, "metadata", None) or {})
+    request_metadata = dict(request.metadata or {})
+    expected = {
+        "intent_id": parent_id,
+        "batch_id": batch_id,
+        "account_id": request.account_id,
+        "strategy_name": request.strategy_name,
+        "symbol": request.symbol,
+        "side": request.side,
+        "order_type": request.order_type,
+        "quantity": request.quantity,
+        "price_type": request.price_type,
+        "order_remark": request.order_remark,
+        "trade_date": request.trade_date,
+        "package_id": request.package_id,
+        "selection_run_id": request.selection_run_id,
+        "limit_price": request.price,
+        "target_weight": request.target_weight,
+        "preflight_status": IntentPreflightStatus.PASSED,
+        "submit_status": IntentSubmitStatus.SUBMITTED,
+    }
+    actual = {
+        key: getattr(intent, key, None)
+        for key in expected
+    }
+    mismatches = {
+        key: {"expected": _diagnostic_value(value), "actual": _diagnostic_value(actual[key])}
+        for key, value in expected.items()
+        if actual[key] != value
+    }
+    expected_metadata = {
+        "runtime_id": request_metadata.get("runtime_id"),
+        "runtime_parent_intent_id": parent_id,
+        "event_loop_submit": True,
+        "broker_called": False,
+        "broker_call_pending": True,
+        "qmt_batch_id": batch_id,
+    }
+    for key, value in expected_metadata.items():
+        if intent_metadata.get(key) != value:
+            mismatches[f"metadata.{key}"] = {
+                "expected": _diagnostic_value(value),
+                "actual": _diagnostic_value(intent_metadata.get(key)),
+            }
+    return mismatches
+
+
+def _event_loop_owned_retry_request_mismatches(
+    *,
+    requests: list[ManagedOrderRequest],
+    stored_requests: list[ManagedOrderRequest],
+) -> dict[str, Any]:
+    incoming_by_parent = {_parent_id_from_request(request): request for request in requests}
+    stored_by_parent = {_parent_id_from_request(request): request for request in stored_requests}
+    if (
+        not incoming_by_parent
+        or len(incoming_by_parent) != len(requests)
+        or len(stored_by_parent) != len(stored_requests)
+        or set(incoming_by_parent) != set(stored_by_parent)
+    ):
+        return {
+            "parent_intent_ids": {
+                "incoming": sorted(incoming_by_parent),
+                "stored": sorted(stored_by_parent),
+            }
+        }
+    mismatches: dict[str, Any] = {}
+    for parent_id, stored in stored_by_parent.items():
+        incoming = incoming_by_parent[parent_id]
+        fields = {
+            "account_id": (incoming.account_id, stored.account_id),
+            "strategy_name": (incoming.strategy_name, stored.strategy_name),
+            "symbol": (incoming.symbol, stored.symbol),
+            "side": (incoming.side, stored.side),
+            "order_type": (incoming.order_type, stored.order_type),
+            "quantity": (incoming.quantity, stored.quantity),
+            "price_type": (incoming.price_type, stored.price_type),
+            "order_remark": (incoming.order_remark, stored.order_remark),
+            "trade_date": (incoming.trade_date, stored.trade_date),
+            "mode": (incoming.mode, stored.mode),
+            "package_id": (incoming.package_id, stored.package_id),
+            "selection_run_id": (incoming.selection_run_id, stored.selection_run_id),
+            "target_weight": (incoming.target_weight, stored.target_weight),
+        }
+        incoming_metadata = dict(incoming.metadata or {})
+        stored_metadata = dict(stored.metadata or {})
+        for key in (
+            "runtime_id",
+            "runtime_parent_intent_id",
+            "event_loop_preflight",
+            "event_loop_submit",
+            "runtime_owner",
+            "source",
+            "runtime_child_order_id",
+            "runtime_algo_instance_id",
+            "execution_policy_id",
+            "execution_policy_sha256",
+            "compiler_route_retired",
+        ):
+            fields[f"metadata.{key}"] = (incoming_metadata.get(key), stored_metadata.get(key))
+        parent_mismatches = {
+            key: {
+                "incoming": _diagnostic_value(incoming_value),
+                "stored": _diagnostic_value(stored_value),
+            }
+            for key, (incoming_value, stored_value) in fields.items()
+            if incoming_value != stored_value
+        }
+        if parent_mismatches:
+            mismatches[parent_id] = parent_mismatches
+    return mismatches
+
+
+def _diagnostic_value(value: Any) -> Any:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if hasattr(value, "value"):
+        return value.value
+    return value
 
 
 def _event_loop_probe_intent_for_algo(
