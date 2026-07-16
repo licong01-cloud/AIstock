@@ -42,8 +42,8 @@
   "expected": "Absent optional evidence remains explicitly missing; every consumed provided invalid, conflicting, non-finite, boolean, negative, or non-integral quote/preflight field produces a stable typed capture error with safe field/value and parent/batch identity, which is durably projected to the TCA sidecar without changing B0 broker execution or order semantics.",
   "first_seen_at": "2026-07-16T16:27:30.828353Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bef8512de29d8a2161bcc2897f0d903e5edb662e",
+  "fixed_at": "2026-07-16T17:08:02.591662Z",
   "github_issue_number": 2239,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2239",
   "last_seen_at": "2026-07-16T16:27:30.828353Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2241",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -70,6 +71,9 @@
     "fingerprint": "0e8ec3a53354ddd4e9cb0d77",
     "source_event_id": "FE-20260716-0e8ec3a53354"
   },
+  "validation_evidence": [
+    "PR #2241 CI 17 passed 0 failed; related pytest 37 passed; lifecycle exact-reason 2 passed; targeted carrier 4 passed; Ruff py_compile diff-check CodeGraph-UA F2 l0 registry PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
