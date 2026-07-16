@@ -27,6 +27,7 @@ TERMINAL_RUN_STATUSES = frozenset(
         SimulationDailyRunStatus.CANCELLED,
     }
 )
+MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER = 2
 
 
 def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
@@ -47,6 +48,20 @@ def _enum_value(value: Any) -> str | None:
     if value is None:
         return None
     return str(getattr(value, "value", value))
+
+
+def _required_positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeConfigInvalidError(
+            f"{field} must be a positive integer",
+            context={
+                "reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_CONFIG_INVALID",
+                "stage": "MINIQMT_QUOTE_HEALTH_PROJECTION",
+                "field": field,
+                "value": value,
+            },
+        )
+    return value
 
 
 def _runtime_controller_health(registry: dict[str, Any], runtime_id: str) -> dict[str, Any] | None:
@@ -84,19 +99,50 @@ def _canonical_miniqmt_quote_health(
         else None
     )
     controller = _runtime_controller_health(controller_registry, runtime_id)
+    durable_health_present = isinstance(durable_health, dict)
+    cadence_seconds = (
+        _required_positive_int(
+            activation.get("evidence_cadence_seconds"),
+            field="miniqmt_quote_ingress_activation.evidence_cadence_seconds",
+        )
+        if durable_health_present
+        else None
+    )
+    durable_health_max_age_ms = (
+        cadence_seconds * MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER * 1000
+        if cadence_seconds is not None
+        else None
+    )
     event_time = (
         durable_health_event.get("event_time")
         if isinstance(durable_health_event, dict)
         else None
     )
-    if isinstance(event_time, datetime):
+    event_id = durable_health_event.get("event_id") if isinstance(durable_health_event, dict) else None
+    event_sequence = durable_health_event.get("sequence") if isinstance(durable_health_event, dict) else None
+    durable_event_valid = bool(
+        isinstance(event_id, str)
+        and event_id.strip()
+        and isinstance(event_sequence, int)
+        and not isinstance(event_sequence, bool)
+        and event_sequence > 0
+        and isinstance(event_time, datetime)
+        and event_time.tzinfo is not None
+    )
+    if durable_event_valid:
+        assert isinstance(event_time, datetime)
         event_time_utc = event_time.astimezone(UTC)
         event_time_text = event_time_utc.isoformat()
         age_ms = int((datetime.now(UTC) - event_time_utc).total_seconds() * 1000)
     else:
         event_time_text = None
         age_ms = None
-    durable_reported = durable_health is not None and isinstance(durable_health_event, dict)
+    durable_reported = durable_health_present and durable_event_valid
+    durable_status = (
+        str(durable_health.get("status") or "").strip().upper()
+        if durable_health_present
+        else None
+    )
     runtime_projection = {
         "event_loop_state": _enum_value(getattr(runtime, "event_loop_state", None)),
         "gateway_state": _enum_value(getattr(runtime, "gateway_state", None)),
@@ -109,8 +155,30 @@ def _canonical_miniqmt_quote_health(
     runtime_state = str(runtime_projection["event_loop_state"] or "UNKNOWN")
     inactive_runtime = runtime_state == "STOPPED"
     reasons: list[str] = []
-    if not durable_reported:
+    durable_projection_failed = False
+    if durable_health_present and not durable_event_valid:
+        reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_READBACK_INVALID")
+        durable_projection_failed = True
+    elif not durable_reported:
         reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED")
+    if durable_reported:
+        if durable_status not in {"HEALTHY", "DEGRADED", "FAILED"}:
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_STATUS_INVALID")
+            durable_projection_failed = True
+        elif durable_status == "FAILED":
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_REPORTED_FAILED")
+            durable_projection_failed = True
+        elif durable_status == "DEGRADED":
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_REPORTED_DEGRADED")
+        if age_ms is not None and age_ms < 0:
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_EVENT_TIME_IN_FUTURE")
+            durable_projection_failed = True
+        elif (
+            age_ms is not None
+            and durable_health_max_age_ms is not None
+            and age_ms > durable_health_max_age_ms
+        ):
+            reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_STALE")
     activation_status = str(activation.get("status") or "UNKNOWN")
     writer_status = str(writer.get("status") or "UNKNOWN") if writer is not None else "UNKNOWN"
     subscription_status = str(subscription.get("status") or "UNKNOWN") if subscription is not None else "UNKNOWN"
@@ -135,9 +203,10 @@ def _canonical_miniqmt_quote_health(
         subscription_status,
         controller_status,
         str(runtime_projection["event_loop_state"] or "UNKNOWN"),
+        str(runtime_projection["gateway_state"] or "UNKNOWN"),
         str(runtime_projection["oms_state"] or "UNKNOWN"),
     }
-    if component_states.intersection(explicit_failure_states):
+    if durable_projection_failed or component_states.intersection(explicit_failure_states):
         status = "FAILED"
     elif inactive_runtime:
         status = "INACTIVE"
@@ -154,10 +223,17 @@ def _canonical_miniqmt_quote_health(
             "reported": durable_reported,
             "durable_ack": durable_reported,
             "readback_verified": durable_reported,
-            "event_id": durable_health_event.get("event_id") if isinstance(durable_health_event, dict) else None,
-            "sequence": durable_health_event.get("sequence") if isinstance(durable_health_event, dict) else None,
+            "status": durable_status,
+            "event_id": event_id,
+            "sequence": event_sequence,
             "event_time": event_time_text,
             "age_ms": age_ms,
+            "max_age_ms": durable_health_max_age_ms,
+            "stale": (
+                age_ms is not None
+                and durable_health_max_age_ms is not None
+                and age_ms > durable_health_max_age_ms
+            ),
             "health_or_aggregate": dict(durable_health) if durable_health is not None else None,
         },
         "live_components": {

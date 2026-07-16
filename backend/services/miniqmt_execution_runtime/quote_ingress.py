@@ -33,6 +33,7 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     BoundedNormalizedQuoteStore,
     MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
     NormalizedQuoteObservation,
+    QuoteEvaluationContext,
     QuoteEvaluationContextStore,
     QuoteOrderingTracker,
     deterministic_market_data_id,
@@ -269,6 +270,10 @@ class PhaseOneQuoteProjectionSink:
         self._ordering = QuoteOrderingTracker()
         self._loud_sink = loud_sink
         self._observation_sinks: dict[str, Callable[[NormalizedQuoteObservation], None]] = {}
+        self._contextual_observation_sinks: dict[
+            str,
+            Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
+        ] = {}
         if observation_sink is not None:
             self._observation_sinks["initial"] = observation_sink
         self._lock = threading.RLock()
@@ -288,7 +293,7 @@ class PhaseOneQuoteProjectionSink:
         self,
         *,
         consumer_id: str,
-        sink: Callable[[NormalizedQuoteObservation], None],
+        sink: Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
     ) -> None:
         normalized_id = str(consumer_id or "").strip()
         if not normalized_id or not callable(sink):
@@ -297,17 +302,17 @@ class PhaseOneQuoteProjectionSink:
                 "observation sink registration requires consumer identity and callable sink",
             )
         with self._lock:
-            if normalized_id in self._observation_sinks:
+            if normalized_id in self._observation_sinks or normalized_id in self._contextual_observation_sinks:
                 raise quote_contract_error(
                     QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
                     "observation sink consumer id is already registered",
                     context={"consumer_id": normalized_id},
                 )
-            self._observation_sinks[normalized_id] = sink
+            self._contextual_observation_sinks[normalized_id] = sink
 
     def unregister_observation_sink(self, *, consumer_id: str) -> bool:
         with self._lock:
-            return self._observation_sinks.pop(str(consumer_id or "").strip(), None) is not None
+            return self._contextual_observation_sinks.pop(str(consumer_id or "").strip(), None) is not None
 
     def on_generation_published(self, generation: int) -> None:
         self._ordering.activate_generation(generation)
@@ -367,6 +372,7 @@ class PhaseOneQuoteProjectionSink:
             observation_sink_failed = False
             with self._lock:
                 observation_sinks = tuple(self._observation_sinks.items())
+                contextual_observation_sinks = tuple(self._contextual_observation_sinks.items())
             for consumer_id, observation_sink in observation_sinks:
                 try:
                     observation_sink(observation)
@@ -383,6 +389,27 @@ class PhaseOneQuoteProjectionSink:
                             context={
                                 "symbol": frame.symbol,
                                 "consumer_id": consumer_id,
+                                "exception_type": type(exc).__name__,
+                            },
+                        ),
+                    )
+            for consumer_id, observation_sink in contextual_observation_sinks:
+                try:
+                    observation_sink(observation, context)
+                except QuoteContractError as error:
+                    observation_sink_failed = True
+                    self._record_loud(frame=frame, error=error)
+                except Exception as exc:  # noqa: BLE001 - observation reporting must not rewrite quote state.
+                    observation_sink_failed = True
+                    self._record_loud(
+                        frame=frame,
+                        error=quote_contract_error(
+                            QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                            "contextual quote observation sink raised unexpectedly",
+                            context={
+                                "symbol": frame.symbol,
+                                "consumer_id": consumer_id,
+                                "context_id": context.context_id,
                                 "exception_type": type(exc).__name__,
                             },
                         ),
@@ -980,7 +1007,7 @@ class QuoteIngressSupervisor:
         self,
         *,
         consumer_id: str,
-        sink: Callable[[NormalizedQuoteObservation], None],
+        sink: Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
     ) -> None:
         self._projection_sink.register_observation_sink(consumer_id=consumer_id, sink=sink)
 

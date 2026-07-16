@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from backend.execution_algos.adaptive_is.contracts import EvidenceCaptureType, canonical_sha256
 from backend.tests.miniqmt_execution_runtime.test_quote_evidence import _evidence
@@ -52,6 +52,7 @@ class _HealthyScheduler:
         return {
             "miniqmt_quote_ingress_activation": {
                 "status": "READY",
+                "evidence_cadence_seconds": 30,
                 "ingress": {
                     "subscription": {
                         "status": "ACTIVE",
@@ -167,7 +168,7 @@ def test_quote_diagnostics_unifies_durable_live_controller_gateway_and_oms_healt
             oms_state=MiniQMTOmsState.RECONCILED,
         )
     )
-    health_time = datetime(2026, 7, 13, 1, 31, tzinfo=UTC)
+    health_time = datetime.now(UTC)
     repo.append_event(
         MiniQMTExecutionEvent(
             event_id="quote-health-diagnostics",
@@ -212,3 +213,58 @@ def test_quote_diagnostics_unifies_durable_live_controller_gateway_and_oms_healt
     assert health["runtime_projection"]["oms_state"] == "RECONCILED"
     assert health["legacy_status"]["authoritative"] is False
     assert "account-never-exposed" not in str(diagnostics)
+
+
+def test_quote_diagnostics_fails_loud_for_failed_stale_durable_health() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    repo.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id="runtime-diagnostics",
+                account_group_id="account-never-exposed",
+                trade_date=date(2026, 7, 13),
+                runtime_config_hash="a" * 64,
+            ).model_dump(),
+            event_loop_state=MiniQMTExecutionRuntimeState.RUNNING,
+            gateway_state=MiniQMTGatewayState.CONNECTED,
+            oms_state=MiniQMTOmsState.RECONCILED,
+        )
+    )
+    health_time = datetime.now(UTC) - timedelta(days=1)
+    repo.append_event(
+        MiniQMTExecutionEvent(
+            event_id="quote-health-failed-stale",
+            runtime_id="runtime-diagnostics",
+            sequence=1,
+            event_type=MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH,
+            event_time=health_time,
+            source="quote_ingress",
+            payload={
+                "schema_version": "miniqmt_quote_ingress_health_payload_v1",
+                "health_or_aggregate": {
+                    "status": "FAILED",
+                    "health_sha256": "c" * 64,
+                },
+            },
+        )
+    )
+    service = SimulationRuntimeOpsService(
+        repository=InMemorySimulationRuntimeRepository(),
+        scheduler=_HealthyScheduler(),  # type: ignore[arg-type]
+    )
+
+    diagnostics = service.list_miniqmt_quote_diagnostics(
+        runtime_repository=repo,
+        runtime_id="runtime-diagnostics",
+        limit=10,
+    )
+
+    health = diagnostics["health"]
+    assert health["status"] == "FAILED"
+    assert health["reason_codes"] == [
+        "MINIQMT_QUOTE_INGRESS_HEALTH_REPORTED_FAILED",
+        "MINIQMT_QUOTE_INGRESS_HEALTH_STALE",
+    ]
+    assert health["durable_health"]["status"] == "FAILED"
+    assert health["durable_health"]["stale"] is True
+    assert health["durable_health"]["age_ms"] > health["durable_health"]["max_age_ms"]

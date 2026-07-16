@@ -203,7 +203,7 @@ MiniQMT SIM 的产品执行行情只有以下来源：
 4. `B0_QUOTE_V2` context/evidence durable ack 后驱动 `MiniQMTExecutionRuntime`；
 5. runtime 通过唯一 OMS/Gateway 提交 child，broker order/trade callback 及 reconcile 反向更新状态。
 
-每次 callback/lifecycle evaluation 必须使用同一次采样得到的当前 wall clock 与 monotonic clock；scheduler 启动时刻或前一轮 tick 的时间不能复用为后续 quote eligibility 时钟。已接受 observation 保留其原始 context identity，只有 calendar/policy/continuity generation/clock domain/trade date/symbol authority 与当前 evaluation context 全部一致时才可在当前时钟重新评价；不得重写 observation identity，也不得用 timer 合成新 quote。
+每次 callback/lifecycle evaluation 必须使用同一次采样得到的当前 wall clock 与 monotonic clock；scheduler 启动时刻或前一轮 tick 的时间不能复用为后续 quote eligibility 时钟。single writer 在生成 observation 时必须把同一个不可变 projection context 一并交付 controller；controller 先校验 observation/context identity，再保存这份原始 authority，不得在 callback sink 中重新读取可能已经推进的 current context 来猜测原始 identity。已接受 observation 只有 calendar/policy/continuity generation/clock domain/trade date/symbol authority 与当前 evaluation context 全部一致时才可在当前时钟重新评价；不得重写 observation identity，也不得用 timer 合成新 quote。
 
 禁止：分钟线代理 tick、定时器合成 tick、普通 quote 合成 auction 字段、提交后只查一次、旧 compiler/day runner 直接下单、B0_V2 失败时回退 LEGACY_B0。
 
@@ -352,7 +352,7 @@ event-loop retry 若发现同一 runtime 已持久化 parent intent，只能在 
 
 禁止 `_safe_int -> 0` 用于业务状态、`except ...: pass` 后返回无 side effect、raw batch 顶层恒真、scheduler alive 代替 daily run healthy。
 
-`ACTION_REJECT` 是 market-data evidence：有 normalized observation 时必须携带其 `market_data_id/tradability/raw ingress` 关联；没有可归属的 raw/normalized observation 时不得伪造 quote-less evidence。首次 quote 尚未到达或 context 尚无兼容 observation 时，runtime 必须持久化有界去重的 `b0_quote_v2_quote_waiting_v1` lifecycle event，明确 reason/stage/parent/algo/clock、`market_data_id=null`、`broker_called=false`，并保持 algo 等待真实 tick；持久化失败必须向调用方抛出，不能静默跳过。
+`ACTION_REJECT` 是 market-data evidence：有 normalized observation 时必须携带其 `market_data_id/tradability/raw ingress` 关联；没有可归属的 raw/normalized observation 时不得伪造 quote-less evidence。首次 quote 尚未到达或 context 尚无兼容 observation 时，runtime 必须持久化有界去重的 `b0_quote_v2_quote_waiting_v1` lifecycle event，明确 reason/stage/parent/algo/clock、`market_data_id=null`、`broker_called=false`，并保持 algo 等待真实 tick；wait event 必须携带由完整 semantic payload 计算的 deterministic fingerprint，controller 恢复时从包含 archived 的 durable journal 校验并重建已见 fingerprint/current wait，不得因进程重建重复写相同 runtime/algo/semantic wait；hash 或 event carrier 冲突必须 typed fail loud。持久化失败必须向调用方抛出，不能静默跳过。
 
 ### 5.10 Scheduler health contract
 
@@ -523,7 +523,7 @@ config、restart、binding migration 和真实 SIM observation 六类状态继�
 
 diagnostics 绝不启动 feed、修改状态、重放订单、修复 DB 或触发 broker。
 
-MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/miniqmt/quote-diagnostics`。同一响应必须按 `runtime_id` 同时呈现 durable health ack/readback/event time/age、callback subscription progress、single-writer health、B0 controller health、gateway state 和 OMS state，并保留各层原始事实；缺少 durable health 时整体为明确 `DEGRADED` 与稳定 reason，而不是与 scheduler live telemetry 形成两个互相竞争的布尔状态。scheduler status 仅标注为 in-process live component telemetry；`/monitor/miniqmt/status` 仅是 legacy 手工接口连接状态，必须显式 `authoritative_for_simulation_runtime=false`，不得参与模拟盘健康判定。
+MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/miniqmt/quote-diagnostics`。同一响应必须按 `runtime_id` 同时呈现 durable health ack/readback/event time/age、callback subscription progress、single-writer health、B0 controller health、gateway state 和 OMS state，并保留各层原始事实；canonical status 必须消费 durable payload 自身的 `HEALTHY/DEGRADED/FAILED`，并以当前 process config 的 evidence cadence 两倍作为只读 freshness 上限，超期必须给出稳定 `STALE` reason，durable `FAILED`、invalid readback/status 或未来事件时间不得被 live component 绿色覆盖。该 freshness 只影响 diagnostics，不成为执行、审批或人工确认门禁。缺少 durable health 时整体为明确 `DEGRADED` 与稳定 reason，而不是与 scheduler live telemetry 形成两个互相竞争的布尔状态。scheduler status 仅标注为 in-process live component telemetry；`/monitor/miniqmt/status` 仅是 legacy 手工接口连接状态，必须显式 `authoritative_for_simulation_runtime=false`，不得参与模拟盘健康判定。
 
 ### 7.2 Bounded metrics
 
@@ -628,6 +628,8 @@ runtime 存在 active algo、pending action 或任一 child fact，则 typed ass
 承接 `F-020` 至 `F-023`：移除 silent count/price/time parse、raw batch 假成功、scheduler false green；修复 repository fixture 泄漏；补齐 read-only diagnostics、metrics、alerts、runbook。
 
 `BUG-668..672` source implementation（2026-07-16 批次）分别完成：跨 release selection inference 隔离；B0 callback 当前成对时钟与 observation authority pairing；自有 durable parent retry/remark/strategy-slot lot 恢复；无 quote 时 runtime wait event 取代非法 `ACTION_REJECT`；durable/live/controller/gateway/OMS canonical diagnostics 与 legacy authority 标注。五项保持独立 BUG/Issue 和直接验收证据，但在同一模拟盘 runtime 批次 PR 交付；本批次不执行 DDL/DML/config、不调用 broker、不重启服务，source merge、CI、restart 与正常交易日 runtime observation 继续分别记录。
+
+严格代码审核后的补充修复证据：五 BUG 最终小矩阵 `10 passed`，另有 durable wait fingerprint tamper 反例 `1 passed`；覆盖 projection-context 并发交付、current-clock eligibility、controller reconstruction 去重、hash 冲突 fail-loud、durable `FAILED+STALE` 非假绿，以及既有 release isolation/owned retry。该补充不新增执行 gate、审批或人工确认。
 
 ### P1-A：Phase 0B B0 baseline observation
 
@@ -804,10 +806,10 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-014` | `F-025` | Phase 0B 详细设计在 PR #2141，未合入；当前应受本文约束 | PR #2141 CI green，state OPEN（2026-07-15 readback） | DESIGN_ONLY | 本蓝图合入后更新其上位权威和前置映射 |
 | `SIM-P-015` | `F-025` | `ADAPTIVE_IS_L1` 仅有算法域蓝图和 Phase 0A/1 基础，不存在经本文批准的可达新算法 broker submit | algorithm domain blueprint、Phase 0A/1 designs | DESIGN_ONLY | Phase 0B 可重建基线完成后再做阶段设计 |
 | `SIM-P-016` | `F-005,006,021` | BUG-668 将 selection inference in-flight identity 补齐 `release_id/release_hash`，不同 runtime release 不再共享 future、结果或错误上下文 | BUG-668 / issue #2207；`test_scheduler_auto_generated_selection_inference_isolated_by_runtime_release`；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 后，正常调度日核对各 release inference evidence 独立推进 |
-| `SIM-P-017` | `F-016,020,021` | BUG-669 由 B0 controller 每次 lifecycle tick 使用成对当前 wall/monotonic sample 推进 clock；observation 保留原 context identity，只在静态 authority/continuity/clock domain/trade date 兼容时以当前时钟评价 | BUG-669 / issue #2208；paired-clock no-provider-IO、current-clock child submit direct tests；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，正常交易时段观察 callback time 持续推进且无 stale scheduler snapshot |
+| `SIM-P-017` | `F-016,020,021` | BUG-669 由 B0 controller 每次 lifecycle tick 使用成对当前 wall/monotonic sample 推进 clock；single writer 同步交付 observation 的原 projection context，controller 不再以可能已推进的 current context 拒绝合法 callback；仅在静态 authority/continuity/clock domain/trade date 兼容时以当前时钟评价 | BUG-669 / issue #2208；paired-clock no-provider-IO、projection-context handoff、interleaved current-clock child submit direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，正常交易时段观察 callback time 持续推进且无 stale scheduler snapshot/context race rejection |
 | `SIM-P-018` | `F-016,020` | BUG-670 仅对 exact runtime-owned durable parent chain 恢复原 batch/preflight；动态 quote repricing 不再把自身 remark/pending sell lot 当外部重复，foreign/mismatch 仍 typed fail loud 且 broker call=0 | BUG-670 / issue #2209；self-duplicate sell reservation、repriced retry、foreign owner negative direct test；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，readback 原失败 run 自动恢复且不重复 child/order |
-| `SIM-P-019` | `F-016,020,022` | BUG-671 在无兼容 observation 时写有界去重 runtime wait event，不再构造缺少 raw ingress identity 的 quote-less `ACTION_REJECT`；algo 保持等待真实 tick | BUG-671 / issue #2210；no-observation durable wait/no-QUOTE_REJECTED/broker-call-zero direct test；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，观察首次 callback 到达后 wait 自动清除并进入真实 tick 路径 |
-| `SIM-P-020` | `F-021,022,024` | BUG-672 建立 runtime-id canonical quote health，联合 durable ack/readback/freshness、callback、writer、controller、gateway、OMS；scheduler live 与 legacy monitor 状态均明确非权威范围 | BUG-672 / issue #2211；canonical healthy、missing durable degraded、paginated read-only direct tests；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 后补真实 runtime diagnostics readback；平台级 LocalSIM 聚合 metrics/alerts/runbook 仍由 `SIM-P-011` 后续完成 |
+| `SIM-P-019` | `F-016,020,022` | BUG-671 在无兼容 observation 时写带 deterministic semantic fingerprint 的 runtime wait event，不再构造缺少 raw ingress identity 的 quote-less `ACTION_REJECT`；恢复从 durable journal 校验并重建去重状态，algo 保持等待真实 tick | BUG-671 / issue #2210；no-observation durable wait/no-QUOTE_REJECTED/broker-call-zero、controller reconstruction no-duplicate direct test | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，观察首次 callback 到达后 wait 自动清除并进入真实 tick 路径 |
+| `SIM-P-020` | `F-021,022,024` | BUG-672 建立 runtime-id canonical quote health，联合 durable ack/readback/payload status/cadence freshness、callback、writer、controller、gateway、OMS；durable failed/invalid/future/stale 不得假绿，scheduler live 与 legacy monitor 状态均明确非权威范围 | BUG-672 / issue #2211；canonical healthy、failed+stale、missing durable degraded、paginated read-only direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 后补真实 runtime diagnostics readback；平台级 LocalSIM 聚合 metrics/alerts/runbook 仍由 `SIM-P-011` 后续完成 |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -845,8 +847,8 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 
 | Control | Review result | Implementation evidence |
 | --- | --- | --- |
-| `no_simplified_delivery` | pass | release identity、paired clock、observation context、owned retry identity、remark/lot attribution、runtime wait evidence、canonical health 各自实现完整正反路径；未以全局放宽 duplicate、旧 clock、合成 quote、mock-only diagnostics 或 legacy fallback 代替 |
-| `no_silent_error` | pass | release/clock/context/request/batch/parent/remark/runtime identity 不一致均 typed failure；无 quote 明确写 durable wait event，写失败向上抛出；canonical health 对 durable 缺失返回 `DEGRADED` reason，不伪装绿色 |
+| `no_simplified_delivery` | pass | release identity、paired clock、exact projection-context handoff、owned retry identity、remark/lot attribution、durable wait fingerprint recovery、canonical health status/freshness 各自实现完整正反路径；未以全局放宽 duplicate、旧 clock、合成 quote、进程内-only 去重、mock-only diagnostics 或 legacy fallback 代替 |
+| `no_silent_error` | pass | release/clock/context/request/batch/parent/remark/runtime/wait hash identity 不一致均 typed failure；无 quote 明确写 durable wait event，写失败向上抛出；canonical health 对 durable 缺失、FAILED、invalid、future、stale 均返回明确 reason，不伪装绿色 |
 | `no_business_semantic_drift` | pass | Selection score/target、方向、数量、T+1/lot/limit/suspend、B0 tick source 和唯一 broker route 均未改变；只修复并发 identity、当前时钟、exact retry 和 diagnostics projection |
 | `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、业务开关或重启前置；恢复由 exact durable ownership 自动判定，foreign/mismatch 仅作为已有技术一致性约束 fail loud |
 | `production state separation` | pass | 本批次只改 source/test/蓝图；DDL、DML、production config、broker call、服务重启和正常交易日 observation 均未执行，PR/CI/merge 继续独立记录 |

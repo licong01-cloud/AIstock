@@ -346,6 +346,7 @@ class MiniQMTQuoteIngressActivation:
             "process_config_sha256": quote_ingress_config_sha256(process_config),
             "runtime_config_sha256": quote_ingress_config_sha256(runtime_config),
             "runtime_config_enabled": runtime_config.enabled,
+            "evidence_cadence_seconds": runtime_config.evidence_cadence_seconds,
             "production_ddl_gate": production_ddl_gate,
             "reason_code": self.reason_code,
             "factory_available": self.controller_factory is not None and not self._shutdown,

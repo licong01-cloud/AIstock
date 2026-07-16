@@ -64,6 +64,19 @@ QUOTE_EVIDENCE_POLICY_SCHEMA_VERSION = "miniqmt_quote_evidence_policy_v1"
 B0_QUOTE_V2_ACTION_ENVELOPE_SCHEMA_VERSION = "b0_quote_v2_action_envelope_v1"
 B0_QUOTE_V2_ACTION_PENDING_SCHEMA_VERSION = "b0_quote_v2_action_pending_v1"
 B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION = "b0_quote_v2_quote_waiting_v1"
+B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS = (
+    "runtime_id",
+    "binding_id",
+    "parent_intent_id",
+    "algo_instance_id",
+    "symbol",
+    "side",
+    "eligibility_state",
+    "reason_code",
+    "stage",
+    "diagnostics",
+    "action_business_sha256",
+)
 PARITY_EXCLUDED_FIELDS = frozenset(
     {
         "action_id",
@@ -108,6 +121,19 @@ def _required_text(value: Any, *, field_name: str) -> str:
             f"{field_name} is required",
         )
     return text
+
+
+def _quote_waiting_fingerprint(payload: Mapping[str, Any]) -> str:
+    missing = [field for field in B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS if field not in payload]
+    if missing:
+        raise quote_contract_error(
+            QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+            "quote wait semantic payload is incomplete",
+            context={"missing_fields": missing},
+        )
+    return canonical_sha256(
+        {field: payload[field] for field in B0_QUOTE_V2_QUOTE_WAITING_SEMANTIC_FIELDS}
+    )
 
 
 def _required_sha256(value: Any, *, field_name: str) -> str:
@@ -933,24 +959,28 @@ class B0QuoteV2Controller:
         self._duplicate_prevented_action_ids: set[str] = set()
         self._last_durable_to_submit_latency_ms: int | None = None
         self._quote_waiting_fingerprint_by_algo: dict[str, str] = {}
+        self._quote_waiting_fingerprints_seen: set[tuple[str, str]] = set()
         self._quote_wait_event_total = 0
         self._recover_pending_actions()
 
-    def observe(self, observation: NormalizedQuoteObservation) -> None:
+    def observe(
+        self,
+        observation: NormalizedQuoteObservation,
+        observation_context: QuoteEvaluationContext,
+    ) -> None:
         if observation.quote.symbol in self.symbols:
-            context = self.context_store.snapshot()
-            if context is None or context.context_id != observation.context_id:
+            if observation_context.context_id != observation.context_id:
                 raise quote_contract_error(
                     QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
-                    "normalized observation is not paired with the published authority context",
+                    "normalized observation is not paired with its projection authority context",
                     context={
                         "runtime_id": self.runtime_id,
                         "symbol": observation.quote.symbol,
                         "observation_context_id": observation.context_id,
-                        "published_context_id": context.context_id if context is not None else None,
+                        "projection_context_id": observation_context.context_id,
                     },
                 )
-            self._observation_context_by_symbol[observation.quote.symbol] = context
+            self._observation_context_by_symbol[observation.quote.symbol] = observation_context
             self.evidence_coordinator.observe(observation)
 
     def lifecycle_tick(self, *, now_utc: datetime | None = None) -> dict[str, Any]:
@@ -1338,8 +1368,12 @@ class B0QuoteV2Controller:
             "diagnostics": list(evaluation.diagnostics),
             "action_business_sha256": canonical_sha256(action_payload) if action_payload is not None else None,
         }
-        fingerprint = canonical_sha256(semantic_payload)
+        fingerprint = _quote_waiting_fingerprint(semantic_payload)
         if self._quote_waiting_fingerprint_by_algo.get(instance.algo_instance_id) == fingerprint:
+            return
+        dedup_key = (instance.algo_instance_id, fingerprint)
+        if dedup_key in self._quote_waiting_fingerprints_seen:
+            self._quote_waiting_fingerprint_by_algo[instance.algo_instance_id] = fingerprint
             return
         self.runtime.events.append(
             runtime_id=self.runtime_id,
@@ -1349,6 +1383,7 @@ class B0QuoteV2Controller:
                 "schema_version": B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION,
                 "control_revision": ControlRevision.B0_QUOTE_V2.value,
                 **semantic_payload,
+                "wait_fingerprint": fingerprint,
                 "clock_event_id": eligibility.clock_event_id,
                 "evaluated_at_utc": eligibility.evaluated_at_utc.isoformat(),
                 "action": action_payload,
@@ -1357,6 +1392,7 @@ class B0QuoteV2Controller:
                 "broker_called": False,
             },
         )
+        self._quote_waiting_fingerprints_seen.add(dedup_key)
         self._quote_waiting_fingerprint_by_algo[instance.algo_instance_id] = fingerprint
         self._quote_wait_event_total += 1
 
@@ -1554,6 +1590,14 @@ class B0QuoteV2Controller:
             item.algo_instance_id: item
             for item in self.runtime.repository.list_algo_instances(self.runtime_id, active_only=False)
         }
+        active_algo_instance_ids = {
+            item.algo_instance_id
+            for item in self.runtime.repository.list_algo_instances(self.runtime_id, active_only=True)
+        }
+        self._recover_quote_waiting_dedup(
+            events=events,
+            active_algo_instance_ids=active_algo_instance_ids,
+        )
         action_evidence_ids = {
             str(event.payload.get("b0_quote_v2_action", {}).get("action_evidence_id"))
             for event in events
@@ -1649,6 +1693,50 @@ class B0QuoteV2Controller:
                     evidence,
                     event_type=MiniQMTExecutionEventType.QUOTE_ELIGIBILITY_EVALUATED,
                 )
+
+    def _recover_quote_waiting_dedup(
+        self,
+        *,
+        events: list[MiniQMTExecutionEvent],
+        active_algo_instance_ids: set[str],
+    ) -> None:
+        latest_by_algo: dict[str, tuple[int, str]] = {}
+        for event in sorted(events, key=lambda item: (item.sequence, item.event_id)):
+            payload = event.payload
+            if payload.get("schema_version") != B0_QUOTE_V2_QUOTE_WAITING_SCHEMA_VERSION:
+                if event.event_type == MiniQMTExecutionEventType.ALGO_ACTION_EMITTED:
+                    action_payload = payload.get("b0_quote_v2_action")
+                    if isinstance(action_payload, dict):
+                        latest_by_algo.pop(str(action_payload.get("algo_instance_id") or ""), None)
+                continue
+            if event.event_type != MiniQMTExecutionEventType.TIMER or event.source != "quote_ingress":
+                raise quote_contract_error(
+                    QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+                    "quote wait recovery found an invalid runtime event carrier",
+                    context={"runtime_id": self.runtime_id, "event_id": event.event_id},
+                )
+            fingerprint = _quote_waiting_fingerprint(payload)
+            declared_fingerprint = str(payload.get("wait_fingerprint") or "")
+            if declared_fingerprint != fingerprint:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+                    "quote wait recovery fingerprint conflicts with its durable semantic payload",
+                    context={
+                        "runtime_id": self.runtime_id,
+                        "event_id": event.event_id,
+                        "declared_wait_fingerprint": declared_fingerprint or None,
+                        "computed_wait_fingerprint": fingerprint,
+                    },
+                )
+            algo_instance_id = str(payload["algo_instance_id"])
+            self._quote_waiting_fingerprints_seen.add((algo_instance_id, fingerprint))
+            latest_by_algo[algo_instance_id] = (event.sequence, fingerprint)
+        self._quote_wait_event_total = len(self._quote_waiting_fingerprints_seen)
+        self._quote_waiting_fingerprint_by_algo = {
+            algo_instance_id: fingerprint
+            for algo_instance_id, (_sequence, fingerprint) in latest_by_algo.items()
+            if algo_instance_id in active_algo_instance_ids
+        }
 
     def _assignment_for(self, instance: MiniQMTExecutionAlgoInstance) -> ParentQuoteControlAssignmentV1:
         assignment = self.assignments.get(instance.parent_intent_id)
