@@ -1,0 +1,166 @@
+{
+  "actual": "A more-than-16-hour-old sector_data job survived restart and blocked LocalSIM readiness while TDX was healthy.",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260716_BUG-677-ingestion-startup-leaves-stale-running-sector-data-job-blocking-localsim.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-677",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-16T07:29:56.652107Z",
+  "description": "A more-than-16-hour-old sector_data job survived restart and blocked LocalSIM readiness while TDX was healthy.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260716-9d2b389e01fc",
+      "timestamp": "2026-07-16T07:29:56.652104Z"
+    }
+  ],
+  "evidence_uris": [
+    "sector_data created 2026-07-15T15:00:28Z remained running on 2026-07-16"
+  ],
+  "expected": "Startup and schedule refresh terminalize stale running jobs with established timeout semantics and allow normal retry; fresh running jobs remain untouched.",
+  "first_seen_at": "2026-07-16T07:29:56.652107Z",
+  "fix_branch": "bug/BUG-677-ingestion-stale-running-sector-data-20260716",
+  "fix_commit": "6a88b2415077bfabacd933d104044504f8a03e16",
+  "fixed_at": "2026-07-16T10:29:26.630696Z",
+  "github_issue_number": 2221,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2221",
+  "last_seen_at": "2026-07-16T07:29:56.652107Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2229",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "Ingestion startup leaves stale running sector_data job blocking LocalSIM readiness",
+  "trigger_condition": {
+    "fingerprint": "9d2b389e01fce4f1c13a6228",
+    "source_event_id": "FE-20260716-9d2b389e01fc"
+  },
+  "validation_evidence": [
+    "PR #2229 all required checks passed",
+    "ingestion state reconciliation 36 passed",
+    "F2 validator 25 design items, 0 warnings"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "aistock_backend"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "aistock_backend"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

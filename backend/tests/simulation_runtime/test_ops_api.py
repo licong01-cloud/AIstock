@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,12 +27,29 @@ from backend.services.simulation_runtime import (
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.strategy_package.models import PackageStatus
 
 TRADE_DATE = date(2026, 5, 21)
 MINIQMT_B0_QUOTE_CONTROL = {
     "schema_version": "miniqmt_quote_control_binding_v1",
     "control_revision": "B0_QUOTE_V2",
 }
+
+
+def _scheduler_component_status() -> dict[str, object]:
+    return {
+        "selection_inference": {
+            "mode": "artifact_hit_sync_else_background",
+            "in_flight_count": 0,
+            "in_flight": [],
+        },
+        "binding_watchdog": {"timeout_seconds": 30.0},
+        "miniqmt_sim_runtime": {
+            "sim_runtime_kind": "event_loop",
+            "compiler_route_retired": True,
+        },
+        "miniqmt_quote_context": {"status": "READY"},
+    }
 
 
 def _b0_quote_policy() -> dict[str, Any]:
@@ -129,6 +147,13 @@ def _evidence(release: Any, *, candidates: list[SelectionCandidate]) -> DailySel
 class FakeSelectionService:
     def __init__(self, release: Any) -> None:
         self.release = release
+        self.package_repository = SimpleNamespace(
+            get=lambda package_id: SimpleNamespace(
+                package_id=package_id,
+                manifest_sha256=release.manifest_sha256,
+                package_status=PackageStatus.SELECTION_ENABLED,
+            )
+        )
 
     def run_selection(self, **kwargs: Any) -> StrategyPackageSelectionResult:
         candidates = _candidate_rows()
@@ -201,6 +226,7 @@ def repo_with_plan() -> tuple[InMemorySimulationRuntimeRepository, str, str]:
     plan = result.results[0].execution_plan
     assert run is not None
     assert plan is not None
+    setattr(repo, "_ops_test_scheduler", scheduler)
     return repo, run.run_id, plan.plan_id
 
 
@@ -210,7 +236,10 @@ def client(repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str])
     app = FastAPI()
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.dependency_overrides[simulation_runtime.get_simulation_runtime_ops_service] = (
-        lambda: SimulationRuntimeOpsService(repository=repo)
+        lambda: SimulationRuntimeOpsService(
+            repository=repo,
+            scheduler=getattr(repo, "_ops_test_scheduler"),
+        )
     )
     return TestClient(app)
 
@@ -259,10 +288,15 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["controlled_ops_api"] is True
     assert scheduler["manual_tick_endpoint_enabled"] is True
     assert scheduler["scheduler_control_api_enabled"] is False
+    assert scheduler["effective_runtime_health"] == "SCHEDULER_INACTIVE"
     assert scheduler["account_slot_persistence"]["enabled"] is True
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
-    assert scheduler["context_provider_mode"] == "fail_fast"
+    assert scheduler["context_provider_mode"] == "StaticSimulationRunContextProvider"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
+    assert scheduler["selection_inference"]["mode"] == "artifact_hit_sync_else_background"
+    assert scheduler["binding_watchdog"]["timeout_seconds"] > 0
+    assert scheduler["miniqmt_sim_runtime"]["sim_runtime_kind"] == "event_loop"
+    assert isinstance(scheduler["miniqmt_quote_context"], dict)
     assert scheduler["miniqmt_quote_ingress_activation"] == {
         "schema_version": "miniqmt_quote_ingress_activation_v1",
         "status": "UNCONFIGURED",
@@ -277,7 +311,11 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
         "pre_open",
         "selection",
         "planning",
+        "opening_auction_observe",
         "execution",
+        "lunch_recess",
+        "execution_afternoon",
+        "closing_auction_observe",
         "post_close_reconcile",
     ]
 
@@ -285,9 +323,11 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
 def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
     class _EnabledSubmitScheduler:
         def status(self) -> dict[str, object]:
-            return {
-                "scheduler": "simulation_lifecycle_scheduler",
-                "default_submit": True,
+                return {
+                    "scheduler": "simulation_lifecycle_scheduler",
+                    "running": True,
+                    "thread_alive": True,
+                    "default_submit": True,
                 "sim_binding_selection_policy": "all_non_retired",
                 "miniqmt_quote_ingress_activation": {
                     "schema_version": "miniqmt_quote_ingress_activation_v1",
@@ -298,14 +338,21 @@ def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
                     "status": "RUNNING",
                     "controller_count": 2,
                 },
+                **_scheduler_component_status(),
             }
 
-    scheduler = SimulationRuntimeOpsService(scheduler=_EnabledSubmitScheduler()).scheduler_status()
+    scheduler = SimulationRuntimeOpsService(
+        repository=InMemorySimulationRuntimeRepository(),
+        scheduler=_EnabledSubmitScheduler(),
+    ).scheduler_status()
 
     assert scheduler["default_submit"] is True
     assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
     assert scheduler["miniqmt_quote_ingress_activation"]["status"] == "RUNNING"
     assert scheduler["b0_quote_v2_controllers"]["controller_count"] == 2
+    assert scheduler["selection_inference"]["in_flight_count"] == 0
+    assert scheduler["miniqmt_sim_runtime"]["compiler_route_retired"] is True
+    assert scheduler["effective_runtime_health"] == "NO_CURRENT_DAY_BLOCKER"
     assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
 
 
@@ -322,11 +369,128 @@ def test_scheduler_status_rejects_missing_or_invalid_quote_health(status_patch: 
             return {
                 "scheduler": "simulation_lifecycle_scheduler",
                 "default_submit": False,
+                **_scheduler_component_status(),
                 **status_patch,
             }
 
     with pytest.raises(RuntimeConfigInvalidError, match="scheduler status .* must be a mapping"):
-        SimulationRuntimeOpsService(scheduler=_InvalidQuoteHealthScheduler()).scheduler_status()
+        SimulationRuntimeOpsService(
+            repository=InMemorySimulationRuntimeRepository(),
+            scheduler=_InvalidQuoteHealthScheduler(),
+        ).scheduler_status()
+
+
+def test_scheduler_status_keeps_current_day_failed_runs_visible_after_noop_window(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "PRE_RUN_FAILED",
+            "pre_run_failure": {
+                "reason_code": "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
+                "message": "required dataset refresh status is missing",
+            },
+        },
+    )
+
+    class _PostCloseNoopScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "default_submit": True,
+                "last_result": {
+                    "trade_date": TRADE_DATE.isoformat(),
+                    "reason": "post_close_reconcile",
+                    "processed": [],
+                    "errors": [],
+                    "alerts": [],
+                    "has_blocking_result": False,
+                },
+                "last_blocking_result": {
+                    "trade_date": TRADE_DATE.isoformat(),
+                    "reason": "submit",
+                    "has_blocking_result": True,
+                    "summary": {"failed_count": 1},
+                },
+                "miniqmt_quote_ingress_activation": {
+                    "schema_version": "miniqmt_quote_ingress_activation_v1",
+                    "status": "INACTIVE",
+                    "factory_available": True,
+                },
+                "b0_quote_v2_controllers": {"status": "IDLE", "controller_count": 0},
+                **_scheduler_component_status(),
+            }
+
+    projected = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PostCloseNoopScheduler(),  # type: ignore[arg-type]
+    ).scheduler_status()
+
+    assert projected["last_error_count"] == 0
+    assert projected["last_result"]["has_blocking_result"] is False
+    assert projected["last_blocking_result"]["has_blocking_result"] is True
+    assert projected["effective_runtime_health"] == "BLOCKED"
+    blockers = projected["current_trade_date_blockers"]
+    assert blockers["status"] == "BLOCKED"
+    assert blockers["blocker_count"] == 1
+    assert blockers["blockers"][0]["run_id"] == run_id
+    assert blockers["blockers"][0]["reason_code"] == "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
+    assert blockers["execution_gate"] is False
+
+
+def test_scheduler_status_reads_current_day_blockers_before_first_scheduler_tick(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={
+            "last_stage": "PRE_RUN_FAILED",
+            "pre_run_failure": {
+                "reason_code": "SIMULATION_PACKAGE_ASSET_UNAVAILABLE",
+            },
+        },
+    )
+
+    class _BeforeFirstTickScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "default_submit": True,
+                "last_result": None,
+                "last_blocking_result": None,
+                "miniqmt_quote_ingress_activation": {
+                    "schema_version": "miniqmt_quote_ingress_activation_v1",
+                    "status": "INACTIVE",
+                    "factory_available": True,
+                },
+                "b0_quote_v2_controllers": {"status": "IDLE", "controller_count": 0},
+                **_scheduler_component_status(),
+            }
+
+    projected = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_BeforeFirstTickScheduler(),  # type: ignore[arg-type]
+    ).scheduler_status()
+
+    assert projected["effective_runtime_health"] == "BLOCKED"
+    blockers = projected["current_trade_date_blockers"]
+    assert blockers["trade_date"] == TRADE_DATE.isoformat()
+    assert blockers["blocker_count"] == 1
+    assert blockers["blockers"][0]["run_id"] == run_id
+    assert blockers["last_observed_trade_dates"] == []
 
 
 def test_list_runs_returns_business_summary_and_filters(
