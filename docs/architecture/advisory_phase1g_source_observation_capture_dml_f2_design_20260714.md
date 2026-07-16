@@ -1210,8 +1210,10 @@ result/attempt/batch store failure均按真实事实恢复，不引入hidden ret
 
 G5详细设计冻结F-841至F-878：先做read-only inventory，再通过validation-only owner transaction执行完整G4图并
 physical rollback/fresh readback证明零残留；L4只使用真实持久dual-track输入和正常G4短事务。当前代码与L0-L2已完成，
-disposable PostgreSQL已跑通完整G4 rollback-only与single/native-multi persistent双轨；真实DEV inventory、L3、L4均未执行，
-不得以L2冒充真实DEV evidence。
+disposable PostgreSQL已跑通完整G4 rollback-only与single/native-multi persistent双轨。2026-07-16真实DEV inventory
+已执行并准确得到`L3_SOURCE_PENDING`，空rollback manifest发布`NOT_RUN_SOURCE_EVIDENCE_PENDING`且零DML；真实L3、
+L4仍未执行。缺失输入按`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md`准备，不得以L2、
+production DSE v1、fixture或手写证据冒充真实DEV evidence。
 
 每批必须完整实现自己的设计条目，不得以 placeholder/in-memory-only/fixture-only交付冒充完成。
 
@@ -1321,9 +1323,10 @@ disposable PostgreSQL已跑通完整G4 rollback-only与single/native-multi persi
 4. F2 validator、文档引用和`git diff --check`通过。
 5. 无额外角色、审批、授权、备份、shared runtime或DDL设计。
 
-Phase 1G G5代码开始条件已经满足：G0 Phase 1F.2和G1-G4均已合入，G4直接相关矩阵与GitHub CI通过。
-下一步按G5详细设计实现inventory、rollback coordinator和DEV evidence receipts，不需要角色、审批或人工业务门禁。
-真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable DSE/receipt。
+Phase 1G G5代码与L0-L2已经完成并合入，首次真实DEV inventory/pending evidence也已完成。下一步不是修改G5契约，
+而是按`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md`的O1-O4形成正常DEV Program、dated
+binding、prospective DSE v2、historical receipt和Phase1E计划；有eligible source后再执行L3，达到
+`L4_DUAL_TRACK_READY`后再执行L4。该顺序不需要角色、审批、备份或人工业务门禁。
 
 Phase 1G分批代码可请求合入的条件：
 

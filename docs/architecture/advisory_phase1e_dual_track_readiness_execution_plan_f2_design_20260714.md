@@ -39,6 +39,13 @@ runtime_activation = noop
 model_training = none
 ```
 
+真实 DEV 输入的准备不得使用 fixture、全库刷新、手写 DSE/receipt 或共享运行时调用。其唯一实施级子设计为
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md`：production只读导出exact package/asset闭包，
+DEV只对package关系执行`INSERT-or-compare`，再通过正常DEV service创建Program/dated binding、由正常prospective
+Selection producer生成DSE v2，最后由historical runner、Phase 1D和本编译器形成正式输入。production DSE v1和
+legacy null binding不得导入或升级。该子设计当前仅`design_ready_pending_implementation`，不改变E6的
+`blocked_by_input`事实。
+
 2026-07-14 implementation record:
 
 - E1-E5 are implemented in the Advisory-owned paths in Section 11. Local contract, store, CLI,
@@ -801,6 +808,10 @@ Implementation status: `blocked_by_input`. DEV has no immutable historical resea
 the required single-Alpha and native multi-Alpha E2E cases must run after real completed receipts
 and their explicit Phase 1E input artifacts exist.
 
+E6 的前置实现顺序由
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 冻结为 O1-O5。identity-complete 但
+source-pending 的计划只证明真实身份链已形成，不能冒充 source-ready、G5 L3/L4 或 E6 完成。
+
 使用当前测试单 Alpha Program 与原生多 Alpha Program 的显式已完成历史日期和真实 immutable
 receipt，验证同 batch 独立 plan、dated binding、source gap、capacity PARTIAL 和 exact retry。
 
@@ -1034,6 +1045,10 @@ DEV completion:
   提升，execution prohibited。
 - [x] `training_boundary`：不读回测/QE/Qlib训练产物、不训练模型；未来训练只在 WSL/Conda。
 - [x] `production_truth`：设计、代码、Phase 1D生产 DDL、observer activation和后续 DML分别报告。
+
+在进入本节退出条件前，真实 DEV 输入必须按
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 从 O1 contracts/inventory/CAS 开始，
+O1-O4 形成正式 Phase 1E 输入后才可继续 E6。该顺序不增加审批门禁，只补齐当前缺失的权威数据生产路径。
 
 ## 20. Exit Criteria / 设计与未来代码退出条件
 
