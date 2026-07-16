@@ -2,7 +2,16 @@
   "actual": "511 durable quote events were rejected with ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID. Evidence shows captured_at_utc 10:02:15, source_exchange_time_utc 10:02:24, and received_at_utc 10:02:25.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260716_BUG-669-b0-quote-callbacks-are-evaluated-against-a-stale-scheduler-clock-snapsho.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/b0_quote_v2.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/quote_eligibility.py",
+    "backend/services/miniqmt_execution_runtime/quote_ingress.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/miniqmt_quote_context.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-669",

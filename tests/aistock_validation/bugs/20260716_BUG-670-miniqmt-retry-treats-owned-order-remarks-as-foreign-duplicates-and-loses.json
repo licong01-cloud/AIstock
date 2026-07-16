@@ -2,7 +2,10 @@
   "actual": "All 40 intents in qmtbatch_66ff22287126abb7acd2054d fail with primary DUPLICATE_ORDER_REMARK and broker_called=false; 21 sell intents additionally report zero strategy available lot.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260716_BUG-670-miniqmt-retry-treats-owned-order-remarks-as-foreign-duplicates-and-loses.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-670",

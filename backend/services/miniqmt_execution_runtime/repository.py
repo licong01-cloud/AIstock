@@ -1364,7 +1364,8 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                 markout = dict(cur.fetchone())
                 cur.execute(
                     """
-                    SELECT payload -> 'health_or_aggregate' AS health
+                    SELECT payload -> 'health_or_aggregate' AS health,
+                           event_id, sequence, event_time
                     FROM qmt_strategy.execution_runtime_event
                     WHERE runtime_id = %s AND archived_at IS NULL AND event_type = 'QUOTE_INGRESS_HEALTH'
                     ORDER BY sequence DESC, event_id DESC
@@ -1379,6 +1380,15 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             "last_reason": dict(last_reason) if last_reason else None,
             "markout": markout,
             "health": dict(health_row["health"]) if health_row and isinstance(health_row["health"], dict) else None,
+            "health_event": (
+                {
+                    "event_id": str(health_row["event_id"]),
+                    "sequence": int(health_row["sequence"]),
+                    "event_time": health_row["event_time"],
+                }
+                if health_row and isinstance(health_row["health"], dict)
+                else None
+            ),
         }
 
     def _last_event_sequence(self, runtime_id: str) -> int:
@@ -2326,10 +2336,20 @@ def _quote_diagnostics_summary_from_events(events: list[MiniQMTExecutionEvent]) 
     last_reason: dict[str, Any] | None = None
     markout = {"terminal_due_count": 0, "captured_count": 0, "unavailable_count": 0}
     health: dict[str, Any] | None = None
+    health_event: dict[str, Any] | None = None
     for event in sorted(events, key=lambda item: (item.sequence, item.event_id)):
         if event.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH:
             payload = event.payload.get("health_or_aggregate")
             health = dict(payload) if isinstance(payload, dict) else None
+            health_event = (
+                {
+                    "event_id": event.event_id,
+                    "sequence": event.sequence,
+                    "event_time": event.event_time,
+                }
+                if health is not None
+                else None
+            )
         evidence = event.payload.get("evidence")
         if not isinstance(evidence, dict):
             continue
@@ -2359,6 +2379,7 @@ def _quote_diagnostics_summary_from_events(events: list[MiniQMTExecutionEvent]) 
         "last_reason": last_reason,
         "markout": markout,
         "health": health,
+        "health_event": health_event,
     }
 
 

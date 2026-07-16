@@ -15,6 +15,7 @@ import psycopg2
 import pytest
 
 import backend.services.simulation_runtime.bridges as simulation_bridges
+import backend.services.miniqmt_execution_runtime.client as miniqmt_runtime_client
 
 from backend.execution_algos.adaptive_is.contracts import (
     CalendarSnapshot,
@@ -132,6 +133,7 @@ from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightResult,
 )
 from backend.services.trading_core.errors import (
+    BrokerSubmitError,
     BrokerUnavailableError,
     BrokerRejectedError,
     DataUnavailableError,
@@ -143,6 +145,7 @@ from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSi
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
     InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTChildOrder,
     MiniQMTExecutionRuntime,
     MiniQMTExecutionRuntimeConfig,
     MiniQMTOperatorCommandStatus,
@@ -2661,6 +2664,124 @@ def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindin
         assert selection.calls.count(slow_release.package_id) == 1
         assert inflight_status["in_flight_count"] == 1
         assert inflight_status["in_flight"][0]["timed_out"] is True
+    finally:
+        selection.release.set()
+        scheduler.shutdown_selection_inference(wait=True)
+
+
+def test_scheduler_auto_generated_selection_inference_isolated_by_runtime_release() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    auto_generate_config = {
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "include_reference_price": True,
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    release_a = _create_scheduler_release(
+        repo,
+        package_id="pkg_release_isolation",
+        manifest_sha256="manifest_release_isolation",
+        release_metadata={"selection_runtime_config": auto_generate_config, "release_marker": "a"},
+    )
+    release_b = _create_scheduler_release(
+        repo,
+        package_id="pkg_release_isolation",
+        manifest_sha256="manifest_release_isolation",
+        release_metadata={"selection_runtime_config": auto_generate_config, "release_marker": "b"},
+    )
+    binding_a = service.create_binding(
+        strategy_id="strategy_release_isolation_a",
+        release=release_a,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="release-isolated inference a",
+    )
+    binding_b = service.create_binding(
+        strategy_id="strategy_release_isolation_b",
+        release=release_b,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="release-isolated inference b",
+    )
+
+    class BlockingPerReleaseSelectionService:
+        def __init__(self) -> None:
+            self.package_repository = FakePackageRepository(
+                package_id=release_a.package_id,
+                manifest_sha256=release_a.manifest_sha256,
+            )
+            self.started = {
+                release_a.release_id: threading.Event(),
+                release_b.release_id: threading.Event(),
+            }
+            self.release = threading.Event()
+
+        def run_selection(self, **kwargs):
+            runtime_release = kwargs["runtime_release"]
+            self.started[runtime_release.release_id].set()
+            self.release.wait(timeout=5.0)
+            candidates = _candidate_rows()
+            evidence = _evidence(
+                runtime_release,
+                candidates=candidates,
+                target_trade_date=kwargs.get("trade_date") or TRADE_DATE,
+            )
+            return StrategyPackageSelectionResult(
+                runtime_config={
+                    "runtime_profile": {
+                        "selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}
+                    }
+                },
+                package_results={runtime_release.package_id: candidates},
+                aggregate_results=candidates,
+                excluded_results={runtime_release.package_id: []},
+                manifest_sha256_by_package={runtime_release.package_id: runtime_release.manifest_sha256},
+                evidence_by_package={runtime_release.package_id: evidence},
+            )
+
+    selection = BlockingPerReleaseSelectionService()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                binding_a.binding_id: _position_context(portfolio_id="portfolio_release_isolation_a"),
+                binding_b.binding_id: _position_context(portfolio_id="portfolio_release_isolation_b"),
+            }
+        ),
+        selection_inference_timeout_seconds=5.0,
+        selection_inference_max_workers=2,
+    )
+
+    try:
+        result = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+        )
+
+        assert result.failed_count == 2
+        assert selection.started[release_a.release_id].wait(timeout=1.0)
+        assert selection.started[release_b.release_id].wait(timeout=1.0)
+        by_binding_id = {item.binding_id: item for item in result.results}
+        assert by_binding_id[binding_a.binding_id].error["context"]["release_id"] == release_a.release_id
+        assert by_binding_id[binding_b.binding_id].error["context"]["release_id"] == release_b.release_id
+        status = scheduler.status()["selection_inference"]
+        assert status["in_flight_count"] == 2
+        assert {item["release_id"] for item in status["in_flight"]} == {
+            release_a.release_id,
+            release_b.release_id,
+        }
     finally:
         selection.release.set()
         scheduler.shutdown_selection_inference(wait=True)
@@ -9523,6 +9644,115 @@ def test_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
     assert "pre_run_failure" not in latest_run.run_payload_json
     assert "submit_failure" not in latest_run.run_payload_json
     assert broker.place_order_payloads == []
+
+
+def test_event_loop_retry_restores_exact_owned_parent_intents_without_self_duplicate_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_event_loop_test_scheduler(
+        candidates=_candidate_rows(),
+        execution_policy_json={
+            "algo_code": "TWAP_LITE_MINIQMT",
+            "algo_config": {"time": 60, "interval": 60},
+        }
+    )
+    runtime_store = tmp_path / "miniqmt-owned-parent-retry.json"
+    monkeypatch.delenv("MINIQMT_EXECUTION_RUNTIME", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(runtime_store))
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    context = scheduler.context_provider._by_binding_id[qmt_binding.binding_id]
+    qmt_repo = context.qmt_ledger_repository
+    assert isinstance(qmt_repo, InMemoryQmtStrategyLedgerRepository)
+    batch_id = run.run_payload_json["qmt_batch_id"]
+    batch = qmt_repo.get_order_batch(batch_id)
+    assert batch is not None
+    requests = miniqmt_runtime_client._event_loop_requests_from_batch(batch)
+    assert requests
+    sell_request = next(request for request in requests if request.side == "SELL")
+    self_duplicate = context.managed_order_service.preview_order(sell_request)
+    assert "DUPLICATE_ORDER_REMARK" in {error.code for error in self_duplicate.errors}
+    assert self_duplicate.pending_sell_quantity is not None
+    assert self_duplicate.pending_sell_quantity >= sell_request.quantity
+
+    qmt_repo.upsert_order_batch(replace(batch, batch_status=OrderBatchStatus.PREFLIGHT_FAILED))
+    runtime_repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    client = miniqmt_runtime_client.MiniQMTExecutionRuntimeClient(
+        repository=runtime_repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+    repriced_requests = [
+        replace(
+            request,
+            price=request.price + Decimal("0.01"),
+            metadata={**request.metadata, "qmt_batch_id": "qmtbatch_current_quote_changed"},
+        )
+        for request in requests
+    ]
+    restored = client._event_loop_existing_batch_result(
+        batch_id="qmtbatch_current_quote_changed",
+        requests=repriced_requests,
+        request_count=len(requests),
+        managed_order_service=context.managed_order_service,
+    )
+
+    assert restored is not None
+    assert restored.retry_of_batch_id == batch_id
+    assert restored.submit_parent_intent_ids == frozenset(
+        request.metadata["runtime_parent_intent_id"] for request in requests
+    )
+    assert all(result.preflight.allowed for result in restored.results)
+    assert all(result.broker_called is False for result in restored.results)
+    assert all("restored exact runtime-owned parent intent" in result.broker_message for result in restored.results)
+    assert broker.place_order_payloads == []
+
+    first_request = requests[0]
+    runtime_repo.upsert_child_order(
+        MiniQMTChildOrder(
+            runtime_id=first_request.metadata["runtime_id"],
+            algo_instance_id=first_request.metadata["runtime_algo_instance_id"],
+            parent_intent_id=first_request.metadata["runtime_parent_intent_id"],
+            strategy_slot_id=qmt_binding.strategy_slot_id or qmt_binding.binding_id,
+            symbol=first_request.symbol,
+            side=OrderSide(first_request.side),
+            quantity=first_request.quantity,
+            price=float(first_request.price),
+        )
+    )
+    with pytest.raises(BrokerSubmitError) as side_effect:
+        client._event_loop_existing_batch_result(
+            batch_id="qmtbatch_current_quote_changed",
+            requests=repriced_requests,
+            request_count=len(requests),
+            managed_order_service=context.managed_order_service,
+        )
+    assert side_effect.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_OWNED_RETRY_SIDE_EFFECT_PRESENT"
+    assert side_effect.value.context["broker_called"] is True
+    runtime_repo._child_orders.clear()
+
+    first_parent_id = requests[0].metadata["runtime_parent_intent_id"]
+    first_intent = qmt_repo.get_order_intent(first_parent_id)
+    qmt_repo._order_intents[first_parent_id] = replace(
+        first_intent,
+        metadata={**first_intent.metadata, "runtime_id": "mqrt_foreign_owner"},
+    )
+    with pytest.raises(BrokerSubmitError) as mismatch:
+        client._event_loop_existing_batch_result(
+            batch_id="qmtbatch_current_quote_changed",
+            requests=repriced_requests,
+            request_count=len(requests),
+            managed_order_service=context.managed_order_service,
+        )
+    assert mismatch.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_OWNED_RETRY_IDENTITY_MISMATCH"
+    assert mismatch.value.context["broker_called"] is False
 
 
 def test_scheduler_poll_does_not_synthesize_b0_children_from_broker_quote_cache(

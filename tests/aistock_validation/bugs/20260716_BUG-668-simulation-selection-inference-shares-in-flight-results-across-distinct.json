@@ -2,7 +2,10 @@
   "actual": "LocalSIM rejects evidence dse_a868e3398777add6 for runtime_release mismatch while MiniQMT L16 remains SIMULATION_SELECTION_INFERENCE_IN_PROGRESS with started_at reset and elapsed_seconds 0 on every scheduler tick.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260716_BUG-668-simulation-selection-inference-shares-in-flight-results-across-distinct.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-668",

@@ -31,6 +31,7 @@ from backend.infra.realtime_quote_subscriber import (
 from backend.miniqmt_quote_contract_config import QuoteIngressRuntimeConfig
 from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     BoundedNormalizedQuoteStore,
+    MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
     NormalizedQuoteObservation,
     QuoteEvaluationContextStore,
     QuoteOrderingTracker,
@@ -948,7 +949,7 @@ class QuoteIngressSupervisor:
         self._lock = threading.RLock()
         self._consumers: dict[str, QuoteIngressConsumer] = {}
         self._source_session_id = f"phase1-{hashlib.sha256(data_session_key.encode('utf-8')).hexdigest()[:24]}"
-        self._clock_domain_id = "miniqmt_quote_ingress_monotonic_v1"
+        self._clock_domain_id = MINIQMT_QUOTE_CLOCK_DOMAIN_ID
         self._projection_sink = PhaseOneQuoteProjectionSink(
             raw_store=self._snapshot_store,
             normalized_store=self._normalized_store,

@@ -38,6 +38,7 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     A_SHARE_EQUITY_PHASE_SCHEDULE_VERSION,
     CHINA_TZ,
     ClockContinuityTracker,
+    MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
     QuoteEvaluationContext,
     QuoteEvaluationContextStore,
     QuoteSymbolContext,
@@ -270,7 +271,7 @@ class MiniQMTQuoteContextAuthorityAdapter:
         symbol_specs_provider: Callable[[], Iterable[QuoteContextSymbolSpec]] | None = None,
         policy_provider: Callable[[], QuoteContractPolicy] | None = None,
         runtime_symbol_spec_provider: Callable[[str], QuoteContextSymbolSpec] | None = None,
-        clock_domain_id: str = "simulation_lifecycle_scheduler_monotonic_v1",
+        clock_domain_id: str = MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
     ) -> None:
         self._context_store = context_store
         self._calendar = trading_calendar_service
@@ -307,6 +308,27 @@ class MiniQMTQuoteContextAuthorityAdapter:
         source: str = "simulation_lifecycle_scheduler",
     ) -> QuoteEvaluationContext:
         """Publish a full context or invalidate the old one loudly; never partial."""
+
+        with self._runtime_context_lock:
+            return self._preload_locked(
+                symbol_specs=symbol_specs,
+                policy=policy,
+                clock_at_utc=clock_at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                clock_domain_id=clock_domain_id,
+                source=source,
+            )
+
+    def _preload_locked(
+        self,
+        *,
+        symbol_specs: Iterable[QuoteContextSymbolSpec],
+        policy: QuoteContractPolicy,
+        clock_at_utc: datetime,
+        clock_monotonic_ns: int,
+        clock_domain_id: str,
+        source: str,
+    ) -> QuoteEvaluationContext:
 
         try:
             at_utc = ensure_utc(clock_at_utc, field_name="quote_context.clock_at_utc")
@@ -352,6 +374,48 @@ class MiniQMTQuoteContextAuthorityAdapter:
             raise error from exc
         self._context_store.publish(context)
         return context
+
+    def advance_clock(
+        self,
+        *,
+        clock_at_utc: datetime,
+        clock_monotonic_ns: int,
+        source: str = "miniqmt_b0_quote_v2_lifecycle_tick",
+    ) -> QuoteEvaluationContext:
+        """Advance only the paired clock sample; never call a provider or broker."""
+
+        with self._runtime_context_lock:
+            context = self._context_store.snapshot()
+            if context is None:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
+                    "runtime clock advance requires a published authority context",
+                    stage=QuoteContractStage.CLOCK,
+                )
+            at_utc = ensure_utc(clock_at_utc, field_name="quote_context.clock_at_utc")
+            clock = build_execution_clock_event(
+                calendar_snapshot_set=context.calendar_snapshot_set,
+                clock_at_utc=at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                clock_domain_id=self._clock_domain_id,
+                source=source,
+                observed_at_utc=at_utc,
+            )
+            continuity = self._continuity.observe(
+                clock=clock,
+                calendar_snapshot_set=context.calendar_snapshot_set,
+                max_negative_skew_ms=context.policy.max_negative_skew_ms,
+            )
+            advanced = QuoteEvaluationContext(
+                calendar_snapshot_set=context.calendar_snapshot_set,
+                clock=clock,
+                continuity_generation=continuity.generation,
+                continuity_valid=continuity.valid,
+                policy=context.policy,
+                symbols=context.symbols,
+            )
+            self._context_store.publish(advanced)
+            return advanced
 
     def health(self) -> dict[str, object]:
         with self._runtime_context_lock:

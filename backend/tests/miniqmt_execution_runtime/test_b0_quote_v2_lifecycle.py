@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import timedelta
+
 import pytest
 
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
@@ -12,8 +15,9 @@ from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
     B0QuoteV2ControllerFactory,
     ParentQuoteControlAssignmentV1,
 )
+from backend.services.miniqmt_execution_runtime.quote_eligibility import QuoteEvaluationContext
 
-from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import _runtime_controller
+from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
 
 
 class _LifecycleSupervisor:
@@ -39,6 +43,70 @@ class _LifecycleSupervisor:
 
     def release_consumer(self, *, consumer_id: str) -> None:
         self.leases.pop(consumer_id, None)
+
+
+def test_lifecycle_tick_advances_clock_and_keeps_exact_observation_authority_pairing() -> None:
+    controller, _runtime, gateway, repository = _runtime_controller()
+    observation = controller.normalized_store.get("000001.SZ")
+    original = controller.context_store.snapshot()
+    assert observation is not None and original is not None
+    controller.observe(observation)
+    sampled_at = CLOCK_AT + timedelta(milliseconds=500)
+    sampled_monotonic_ns = original.clock.clock_monotonic_ns + 500_000_000
+
+    def advance_clock(*, clock_at_utc, clock_monotonic_ns):  # type: ignore[no-untyped-def]
+        advanced = QuoteEvaluationContext(
+            calendar_snapshot_set=original.calendar_snapshot_set,
+            clock=replace(
+                original.clock,
+                clock_event_id="clock-p1e-callback-current",
+                clock_at_utc=clock_at_utc,
+                clock_monotonic_ns=clock_monotonic_ns,
+                observed_at_utc=clock_at_utc,
+            ),
+            continuity_generation=original.continuity_generation,
+            continuity_valid=True,
+            policy=original.policy,
+            symbols=original.symbols,
+        )
+        controller.context_store.publish(advanced)
+        return advanced
+
+    controller._context_advance_callback = advance_clock
+    controller._clock_sample_provider = lambda: (sampled_at, sampled_monotonic_ns)
+
+    controller.lifecycle_tick()
+
+    assert controller.context_store.snapshot().clock.clock_at_utc == sampled_at  # type: ignore[union-attr]
+    assert len(gateway.submitted_orders) == 1
+    assert any(event.event_type.value == "CHILD_ORDER_SUBMITTED" for event in repository.list_events("runtime-p1e"))
+
+
+def test_lifecycle_without_observation_persists_runtime_wait_not_quote_less_action_reject() -> None:
+    controller, _runtime, gateway, repository = _runtime_controller()
+    controller.normalized_store._latest_by_symbol.clear()
+
+    first = controller.lifecycle_tick(now_utc=CLOCK_AT)
+    second = controller.lifecycle_tick(now_utc=CLOCK_AT)
+
+    events = repository.list_events("runtime-p1e", include_archived=True)
+    waiting = [
+        event
+        for event in events
+        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
+    ]
+    assert len(waiting) == 1
+    assert waiting[0].event_type.value == "TIMER"
+    assert waiting[0].source == "quote_ingress"
+    assert waiting[0].payload["eligibility_state"] == "WAITING_FIRST_QUOTE"
+    assert waiting[0].payload["reason_code"] == "ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE"
+    assert waiting[0].payload["market_data_id"] is None
+    assert waiting[0].payload["raw_ingress_identity_available"] is False
+    assert waiting[0].payload["broker_called"] is False
+    assert not any(event.event_type.value == "QUOTE_REJECTED" for event in events)
+    assert first["b0_quote_v2_waiting_for_quote_algo_count"] == 1
+    assert second["b0_quote_v2_quote_wait_event_total"] == 1
+    assert gateway.submitted_orders == []
 
 
 def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_ingress() -> None:

@@ -64,6 +64,19 @@ def _build_monitor_summary() -> Dict[str, Any]:
     }
 
 
+def _legacy_miniqmt_status_payload() -> Dict[str, Any]:
+    status = dict(get_miniqmt_status())
+    return {
+        **status,
+        "schema_version": "legacy_miniqmt_interface_status_v2",
+        "authority": "legacy_miniqmt_interface",
+        "authoritative_for_simulation_runtime": False,
+        "retired_for_simulation_runtime": True,
+        "scope": "manual legacy MiniQMT interface connectivity only",
+        "canonical_simulation_runtime_endpoint": "/api/v1/simulation-runtime/miniqmt/quote-diagnostics",
+    }
+
+
 @router.get("/summary", summary="监测概览")
 def get_monitor_summary() -> Dict[str, Any]:
     """返回当前监测概览信息。
@@ -319,7 +332,7 @@ def miniqmt_status() -> Dict[str, Any]:
     与旧版中 miniqmt_interface.get_miniqmt_status 语义一致，用于前端展示量化组件是否启用、连接状态和账户信息。
     """
 
-    return get_miniqmt_status()
+    return _legacy_miniqmt_status_payload()
 
 
 @router.post("/miniqmt/connect", summary="连接 MiniQMT")
@@ -331,7 +344,7 @@ def miniqmt_connect() -> Dict[str, Any]:
     """
 
     success, message = init_miniqmt()
-    status = get_miniqmt_status()
+    status = _legacy_miniqmt_status_payload()
     return {"success": bool(success), "message": message, "status": status}
 
 
@@ -347,5 +360,5 @@ def miniqmt_disconnect() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    status = get_miniqmt_status()
+    status = _legacy_miniqmt_status_payload()
     return {"success": bool(disconnected), "status": status}

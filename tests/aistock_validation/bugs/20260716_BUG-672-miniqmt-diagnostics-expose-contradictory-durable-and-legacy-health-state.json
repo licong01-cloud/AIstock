@@ -2,7 +2,12 @@
   "actual": "scheduler status reports ingress READY, callback subscription ACTIVE, controller HEALTHY, gateway CONNECTED and OMS RECONCILED, while quote diagnostics return MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED and /monitor/miniqmt/status returns ready=false.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260716_BUG-672-miniqmt-diagnostics-expose-contradictory-durable-and-legacy-health-state.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/monitor.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_diagnostics.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-672",
