@@ -2,7 +2,11 @@
   "actual": "Two parallel QE TCN loops start one resource sampler per loop. Each sampler polls process-tree PSS plus two nvidia-smi commands every second. The R10 task logged thousands of QE_RESOURCE_GPU_SAMPLE_FAILED timeouts, while WSL dmesg showed dxgvmb_send_sync_msg and dxgkio_query_adapter_info failures exactly during training; Windows desktop froze because the display-active RTX 5080 shares WDDM scheduling. Historical identical TCN model and loader settings did not include this sampler. Fix must preserve two-loop TCN training, accurate telemetry, QE-only isolation, fail-loud evidence, and training/backtest phase semantics; no silent telemetry disable, model simplification, or training-parameter change.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260716_BUG-673-qe-per-loop-gpu-telemetry-polling-causes-wsl-dxg-stalls-during-parallel.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/qe_runtime_resource.py",
+    "scripts/qrun_limit.py",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qe_runtime_resource.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-673",
@@ -20,10 +24,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260716-039ec0347357",
       "timestamp": "2026-07-16T03:19:20.832709Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scoped implementation to the QE runtime sampler, QE runner wiring allowance, and direct sampler tests after CodeGraph/source localization.",
+      "timestamp": "2026-07-16T04:03:34.3005759Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "qe_task:qe_20260716_050817_4b7e:Loop7-Loop10",
+    "wsl_dmesg:2026-07-16T10:44:38+08:00/2026-07-16T10:58:27+08:00"
+  ],
+  "expected": "Two parallel TCN loops retain identical training semantics while WSL runner telemetry avoids dxg adapter queries, records per-loop torch.cuda/PSS/RSS truth, marks unavailable device utilization as null with an explicit reason code, and never silently falls back to nvidia-smi.",
   "first_seen_at": "2026-07-16T03:19:20.832712Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,9 +51,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run two resource-telemetry-enabled __seed_TCN_10D_d02__ loops on wsl2-5080; correlate evolution.log QE_RESOURCE_GPU_SAMPLE_FAILED timeouts with WSL dmesg dxgkio_query_adapter_info/dxgvmb_send_sync_msg failures during training.",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -152,5 +166,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }

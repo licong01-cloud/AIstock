@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from scripts import qe_runtime_resource as qrr
 
 
-def _set_resource_env(monkeypatch):
+def _set_resource_env(monkeypatch, tmp_path):
     values = {
         "QE_RESOURCE_SESSION_ID": "qers_test",
         "QE_RESOURCE_SOURCE_RUN_KEY": "qe_task_L1",
@@ -17,6 +17,7 @@ def _set_resource_env(monkeypatch):
         "QE_NODE_ID": "wsl2-5080",
         "QE_PHASE_PIPELINE_ENABLED": "1",
         "QE_RESOURCE_SAMPLE_INTERVAL_SEC": "60",
+        "QE_RESOURCE_GPU_CACHE_DIR": str(tmp_path / "node-gpu-cache"),
         "QE_RESOURCE_UPLOAD_RETRY_INTERVAL_SEC": "0.01",
         "QE_RESOURCE_FINAL_UPLOAD_GRACE_SEC": "0.01",
         "AISTOCK_PREDICTION_STORE_BASE_URL": "http://127.0.0.1:8001",
@@ -26,7 +27,7 @@ def _set_resource_env(monkeypatch):
 
 
 def test_runtime_resource_monitor_publishes_ordered_phase_aggregates(monkeypatch, tmp_path):
-    _set_resource_env(monkeypatch)
+    _set_resource_env(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     qrr._MONITOR = None
     qrr._RESOURCE_SECRET_CACHE = None
@@ -47,14 +48,28 @@ def test_runtime_resource_monitor_publishes_ordered_phase_aggregates(monkeypatch
         posts.append({"url": url, "json": dict(json), "headers": dict(headers), "timeout": timeout})
         return SimpleNamespace(status_code=200, text="ok")
 
-    def fake_run(command, **_kwargs):
-        joined = " ".join(command)
-        if "query-gpu" in joined:
-            return SimpleNamespace(returncode=0, stdout="NVIDIA Test, 1024, 25\n")
-        return SimpleNamespace(returncode=0, stdout=f"{qrr.os.getpid()}, 512\n")
-
     monkeypatch.setattr(qrr.requests, "post", fake_post)
-    monkeypatch.setattr(qrr.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_query_nvml_device",
+        lambda _self, gpu_index: {
+            "gpu_device_index": gpu_index,
+            "gpu_name": "NVIDIA Test",
+            "gpu_memory_used_bytes": 1024 * 1024 * 1024,
+            "gpu_utilization_pct": 25.0,
+        },
+    )
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_torch_sample",
+        staticmethod(
+            lambda: {
+                "cuda_allocated_bytes": 256 * 1024 * 1024,
+                "cuda_reserved_bytes": 512 * 1024 * 1024,
+                "gpu_process_sample_source": "torch.cuda.memory_reserved",
+            }
+        ),
+    )
 
     monitor = qrr.start_resource_monitor()
     assert monitor is not None
@@ -86,7 +101,7 @@ def test_runtime_resource_monitor_publishes_ordered_phase_aggregates(monkeypatch
 
 
 def test_runtime_resource_upload_failure_is_loud_and_release_remains_closed(monkeypatch, tmp_path, capsys):
-    _set_resource_env(monkeypatch)
+    _set_resource_env(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     qrr._MONITOR = None
     qrr._RESOURCE_SECRET_CACHE = None
@@ -131,7 +146,7 @@ def test_runtime_resource_upload_failure_is_loud_and_release_remains_closed(monk
 
 
 def test_runtime_resource_outbox_replays_ordered_events_after_backend_recovers(monkeypatch, tmp_path, capsys):
-    _set_resource_env(monkeypatch)
+    _set_resource_env(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     qrr._MONITOR = None
     qrr._RESOURCE_SECRET_CACHE = None
@@ -175,7 +190,7 @@ def test_runtime_resource_outbox_replays_ordered_events_after_backend_recovers(m
 
 
 def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatch, tmp_path, capsys):
-    _set_resource_env(monkeypatch)
+    _set_resource_env(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     qrr._RESOURCE_SECRET_CACHE = None
 
@@ -188,12 +203,21 @@ def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatc
             "process_pids": [qrr.os.getpid()],
         },
     )
-    def fake_run(command, **_kwargs):
-        if any("query-gpu" in part for part in command):
-            return SimpleNamespace(returncode=9, stdout="", stderr="unavailable")
-        return SimpleNamespace(returncode=0, stdout=f"{qrr.os.getpid()}, 256\n", stderr="")
+    def fail_nvml(_self, _gpu_index):
+        raise RuntimeError("NVML device unavailable")
 
-    monkeypatch.setattr(qrr.subprocess, "run", fake_run)
+    monkeypatch.setattr(qrr.QERuntimeResourceMonitor, "_query_nvml_device", fail_nvml)
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_torch_sample",
+        staticmethod(
+            lambda: {
+                "cuda_allocated_bytes": 128 * 1024 * 1024,
+                "cuda_reserved_bytes": 256 * 1024 * 1024,
+                "gpu_process_sample_source": "torch.cuda.memory_reserved",
+            }
+        ),
+    )
 
     monitor = qrr.QERuntimeResourceMonitor()
     sample = monitor._collect_sample()
@@ -201,6 +225,7 @@ def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatc
     assert sample["process_rss_bytes"] == 1
     assert sample["gpu_process_memory_bytes"] == 256 * 1024 * 1024
     assert sample["gpu_process_sample_available"] is True
+    assert sample["gpu_process_sample_source"] == "torch.cuda.memory_reserved"
     assert sample["gpu_device_sample_available"] is False
     assert sample["resource_sample_errors"] == [
         "QE_RESOURCE_GPU_SAMPLE_FAILED:device:RuntimeError"
@@ -210,8 +235,8 @@ def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatc
     assert "component=device" in output
 
 
-def test_runtime_resource_process_gpu_timeout_preserves_device_metrics(monkeypatch, tmp_path, capsys):
-    _set_resource_env(monkeypatch)
+def test_runtime_resource_torch_gpu_failure_preserves_device_metrics(monkeypatch, tmp_path, capsys):
+    _set_resource_env(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     qrr._RESOURCE_SECRET_CACHE = None
     monkeypatch.setattr(
@@ -224,12 +249,25 @@ def test_runtime_resource_process_gpu_timeout_preserves_device_metrics(monkeypat
         },
     )
 
-    def fake_run(command, **_kwargs):
-        if any("query-gpu" in part for part in command):
-            return SimpleNamespace(returncode=0, stdout="NVIDIA Test, 1024, 25\n", stderr="")
-        raise qrr.subprocess.TimeoutExpired(command, timeout=5)
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_query_nvml_device",
+        lambda _self, gpu_index: {
+            "gpu_device_index": gpu_index,
+            "gpu_name": "NVIDIA Test",
+            "gpu_memory_used_bytes": 1024 * 1024 * 1024,
+            "gpu_utilization_pct": 25.0,
+        },
+    )
 
-    monkeypatch.setattr(qrr.subprocess, "run", fake_run)
+    def fail_torch_sample():
+        raise TimeoutError("CUDA allocator query failed")
+
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_torch_sample",
+        staticmethod(fail_torch_sample),
+    )
 
     sample = qrr.QERuntimeResourceMonitor()._collect_sample()
 
@@ -238,11 +276,111 @@ def test_runtime_resource_process_gpu_timeout_preserves_device_metrics(monkeypat
     assert sample["gpu_device_sample_available"] is True
     assert sample["gpu_process_sample_available"] is False
     assert sample["resource_sample_errors"] == [
-        "QE_RESOURCE_GPU_SAMPLE_FAILED:process:TimeoutExpired"
+        "QE_RESOURCE_CUDA_SAMPLE_FAILED:TimeoutError"
     ]
     output = capsys.readouterr().out
-    assert "reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED" in output
-    assert "component=process" in output
+    assert "reason_code=QE_RESOURCE_CUDA_SAMPLE_FAILED" in output
+
+
+def test_runtime_resource_gpu_device_snapshot_is_shared_across_loops(monkeypatch, tmp_path):
+    _set_resource_env(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    qrr._RESOURCE_SECRET_CACHE = None
+    query_count = 0
+
+    def fake_nvml(_self, gpu_index):
+        nonlocal query_count
+        query_count += 1
+        return {
+            "gpu_device_index": gpu_index,
+            "gpu_name": "NVIDIA Test",
+            "gpu_memory_used_bytes": 2048,
+            "gpu_utilization_pct": 42.0,
+        }
+
+    monkeypatch.setattr(qrr.QERuntimeResourceMonitor, "_query_nvml_device", fake_nvml)
+    first = qrr.QERuntimeResourceMonitor()
+    monkeypatch.setenv("QE_LOOP_ID", "Loop2")
+    monkeypatch.setenv("QE_LOOP_INDEX", "2")
+    second = qrr.QERuntimeResourceMonitor()
+
+    first_sample = first._gpu_device_sample()
+    second_sample = second._gpu_device_sample()
+
+    assert query_count == 1
+    assert first_sample["gpu_device_sample_cache_hit"] is False
+    assert second_sample["gpu_device_sample_cache_hit"] is True
+    assert first_sample["gpu_utilization_pct"] == second_sample["gpu_utilization_pct"] == 42.0
+    assert first_sample["gpu_device_sample_source"] == "pynvml_shared_cache"
+    assert second_sample["gpu_device_sample_source"] == "pynvml_shared_cache"
+
+
+def test_runtime_resource_backtest_phase_does_not_query_gpu_driver(monkeypatch, tmp_path):
+    _set_resource_env(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    qrr._RESOURCE_SECRET_CACHE = None
+    monitor = qrr.QERuntimeResourceMonitor()
+    monitor._phase = qrr._PhaseAggregate("backtest")
+    monkeypatch.setattr(
+        monitor,
+        "_query_nvml_device",
+        lambda _gpu_index: (_ for _ in ()).throw(AssertionError("NVML must not run during backtest")),
+    )
+
+    sample = monitor._gpu_device_sample()
+
+    assert sample == {
+        "gpu_device_sample_available": False,
+        "gpu_device_sample_source": "phase_not_gpu",
+        "gpu_device_sample_skipped_phase": "backtest",
+    }
+
+
+def test_runtime_resource_wsl_uses_torch_only_without_adapter_query(monkeypatch, tmp_path):
+    _set_resource_env(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    qrr._RESOURCE_SECRET_CACHE = None
+    monitor = qrr.QERuntimeResourceMonitor()
+    monitor.wsl_runtime = True
+    monkeypatch.setattr(
+        monitor,
+        "_query_nvml_device",
+        lambda _gpu_index: (_ for _ in ()).throw(AssertionError("WSL must not query NVML")),
+    )
+
+    sample = monitor._gpu_device_sample()
+    aggregate = qrr._PhaseAggregate("train")
+    aggregate.observe(sample)
+    event = aggregate.event_fields()
+
+    assert sample == {
+        "gpu_device_sample_available": False,
+        "gpu_device_sample_source": "wsl_torch_only",
+        "gpu_device_sample_skipped_reason_code": qrr._WSL_GPU_QUERY_SUPPRESSED_REASON,
+    }
+    assert event["gpu_utilization_avg_pct"] is None
+    assert event["gpu_utilization_peak_pct"] is None
+    assert event["metadata"]["gpu_utilization_sample_count"] == 0
+
+    aggregate.observe(
+        {
+            "gpu_device_sample_available": True,
+            "gpu_device_sample_source": "windows_host",
+            "gpu_utilization_pct": 40.0,
+        }
+    )
+    mixed_event = aggregate.event_fields()
+    assert mixed_event["gpu_utilization_avg_pct"] == 40.0
+    assert mixed_event["gpu_utilization_peak_pct"] == 40.0
+    assert mixed_event["metadata"]["gpu_utilization_sample_count"] == 1
+
+
+def test_runtime_resource_has_no_nvidia_smi_subprocess_fallback():
+    source = qrr.Path(qrr.__file__).read_text(encoding="utf-8")
+
+    assert "subprocess.run" not in source
+    assert "--query-gpu" not in source
+    assert "--query-compute-apps" not in source
 
 
 def test_runtime_resource_process_sample_keeps_sum_rss_and_adds_complete_pss(monkeypatch):

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import platform
+import re
 import sys
+import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +24,16 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised on minimal compute images
     psutil = None
 
+try:
+    import pynvml
+except ModuleNotFoundError:  # pragma: no cover - exercised on CPU-only/minimal compute images
+    pynvml = None
+
+if os.name == "nt":  # pragma: no cover - production QE runners are Linux/WSL
+    import msvcrt
+else:  # pragma: no cover - covered by the WSL runtime canary
+    import fcntl
+
 
 RESOURCE_FILE = "qe_runtime_resource.json"
 UPLOAD_FAILURE_FILE = "qe_runtime_resource_upload_failure.json"
@@ -33,6 +46,11 @@ BASE_URL_ENVS = (
 )
 _MONITOR: "QERuntimeResourceMonitor | None" = None
 _RESOURCE_SECRET_CACHE: dict[str, Any] | None = None
+_NVML_LOCK = threading.Lock()
+_NVML_INITIALIZED = False
+_NVML_HANDLES: dict[int, Any] = {}
+_GPU_CACHE_SCHEMA_VERSION = "qe_node_gpu_snapshot_v1"
+_WSL_GPU_QUERY_SUPPRESSED_REASON = "QE_RESOURCE_GPU_DEVICE_QUERY_SUPPRESSED_WSL_DXG"
 
 
 def _utc_now() -> str:
@@ -81,9 +99,80 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     tmp.replace(path)
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path):
+    """Cross-process node lock used only for the shared GPU snapshot."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":  # pragma: no cover - production QE runners are Linux/WSL
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover - covered by the WSL runtime canary
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _safe_cache_component(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "unknown")).strip("._")
+    return normalized or "unknown"
+
+
+def _is_wsl_runtime() -> bool:
+    if _env("WSL_INTEROP") or _env("WSL_DISTRO_NAME"):
+        return True
+    return "microsoft" in platform.release().lower()
+
+
+def _nvml_device_snapshot(gpu_index: int) -> dict[str, Any]:
+    """Query NVML through one persistent process-local handle, never a subprocess."""
+
+    global _NVML_INITIALIZED
+    if _is_wsl_runtime():
+        raise RuntimeError(
+            f"{_WSL_GPU_QUERY_SUPPRESSED_REASON}: NVML adapter queries are forbidden inside WSL QE runners"
+        )
+    if pynvml is None:
+        raise RuntimeError(
+            "QE_RESOURCE_NVML_UNAVAILABLE: pynvml is required for GPU telemetry; "
+            "nvidia-smi subprocess fallback is intentionally disabled"
+        )
+    with _NVML_LOCK:
+        if not _NVML_INITIALIZED:
+            pynvml.nvmlInit()
+            _NVML_INITIALIZED = True
+        handle = _NVML_HANDLES.get(gpu_index)
+        if handle is None:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+            _NVML_HANDLES[gpu_index] = handle
+        raw_name = pynvml.nvmlDeviceGetName(handle)
+        memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+    name = raw_name.decode("utf-8", errors="replace") if isinstance(raw_name, bytes) else str(raw_name)
+    return {
+        "gpu_device_index": int(gpu_index),
+        "gpu_name": name,
+        "gpu_memory_used_bytes": int(memory.used),
+        "gpu_utilization_pct": float(utilization.gpu),
+    }
 
 
 @dataclass
@@ -100,6 +189,7 @@ class _PhaseAggregate:
     gpu_process_memory_peak_bytes: int = 0
     gpu_utilization_sum_pct: float = 0.0
     gpu_utilization_peak_pct: float = 0.0
+    gpu_utilization_sample_count: int = 0
     cuda_allocated_peak_bytes: int = 0
     cuda_reserved_peak_bytes: int = 0
     gpu_device_index: int | None = None
@@ -111,7 +201,9 @@ class _PhaseAggregate:
         sample_errors = sample.get("resource_sample_errors") or []
         if sample_errors:
             recorded = self.metadata.setdefault("sample_errors", [])
+            error_counts = self.metadata.setdefault("sample_error_counts", {})
             for error in sample_errors:
+                error_counts[str(error)] = int(error_counts.get(str(error)) or 0) + 1
                 if error not in recorded and len(recorded) < 20:
                     recorded.append(error)
         self.process_rss_peak_bytes = max(self.process_rss_peak_bytes, int(sample.get("process_rss_bytes") or 0))
@@ -133,9 +225,11 @@ class _PhaseAggregate:
             self.gpu_process_memory_peak_bytes,
             int(sample.get("gpu_process_memory_bytes") or 0),
         )
-        utilization = float(sample.get("gpu_utilization_pct") or 0.0)
-        self.gpu_utilization_sum_pct += utilization
-        self.gpu_utilization_peak_pct = max(self.gpu_utilization_peak_pct, utilization)
+        if sample.get("gpu_device_sample_available") is True and sample.get("gpu_utilization_pct") is not None:
+            utilization = float(sample["gpu_utilization_pct"])
+            self.gpu_utilization_sum_pct += utilization
+            self.gpu_utilization_peak_pct = max(self.gpu_utilization_peak_pct, utilization)
+            self.gpu_utilization_sample_count += 1
         self.cuda_allocated_peak_bytes = max(
             self.cuda_allocated_peak_bytes,
             int(sample.get("cuda_allocated_bytes") or 0),
@@ -153,6 +247,18 @@ class _PhaseAggregate:
             if sample.get(availability_key) is True:
                 count_key = f"gpu_{component}_sample_success_count"
                 self.metadata[count_key] = int(self.metadata.get(count_key) or 0) + 1
+            source = sample.get(f"gpu_{component}_sample_source")
+            if source:
+                source_counts = self.metadata.setdefault(f"gpu_{component}_sample_source_counts", {})
+                source_counts[str(source)] = int(source_counts.get(str(source)) or 0) + 1
+        if sample.get("gpu_device_sample_cache_hit") is True:
+            self.metadata["gpu_device_cache_hit_count"] = int(
+                self.metadata.get("gpu_device_cache_hit_count") or 0
+            ) + 1
+        elif sample.get("gpu_device_sample_cache_hit") is False:
+            self.metadata["gpu_device_cache_refresh_count"] = int(
+                self.metadata.get("gpu_device_cache_refresh_count") or 0
+            ) + 1
 
     def event_fields(self) -> dict[str, Any]:
         ended_at = _utc_now()
@@ -170,6 +276,7 @@ class _PhaseAggregate:
                 "process_capacity_metric": (
                     "process_pss_peak_bytes" if self.process_pss_complete_sample_count else None
                 ),
+                "gpu_utilization_sample_count": self.gpu_utilization_sample_count,
             }
         )
         return {
@@ -184,9 +291,13 @@ class _PhaseAggregate:
             "gpu_memory_used_peak_bytes": self.gpu_memory_used_peak_bytes or None,
             "gpu_process_memory_peak_bytes": self.gpu_process_memory_peak_bytes or None,
             "gpu_utilization_avg_pct": (
-                self.gpu_utilization_sum_pct / self.sample_count if self.sample_count else None
+                self.gpu_utilization_sum_pct / self.gpu_utilization_sample_count
+                if self.gpu_utilization_sample_count
+                else None
             ),
-            "gpu_utilization_peak_pct": self.gpu_utilization_peak_pct if self.sample_count else None,
+            "gpu_utilization_peak_pct": (
+                self.gpu_utilization_peak_pct if self.gpu_utilization_sample_count else None
+            ),
             "cuda_allocated_peak_bytes": self.cuda_allocated_peak_bytes or None,
             "cuda_reserved_peak_bytes": self.cuda_reserved_peak_bytes or None,
             "metadata": metadata,
@@ -205,6 +316,13 @@ class QERuntimeResourceMonitor:
         self.node_id = _env("QE_NODE_ID") or _env("AISTOCK_NODE_ID")
         self.phase_pipeline_enabled = _env_bool("QE_PHASE_PIPELINE_ENABLED", False)
         self.sample_interval = _env_float("QE_RESOURCE_SAMPLE_INTERVAL_SEC", 1.0)
+        self.gpu_cache_max_age = _env_float(
+            "QE_RESOURCE_GPU_CACHE_MAX_AGE_SEC",
+            self.sample_interval,
+        )
+        cache_root = _env("QE_RESOURCE_GPU_CACHE_DIR")
+        self.gpu_cache_dir = Path(cache_root) if cache_root else Path(tempfile.gettempdir()) / "aistock-qe-gpu"
+        self.wsl_runtime = _is_wsl_runtime()
         self.upload_timeout = _env_float("QE_RESOURCE_UPLOAD_TIMEOUT_SEC", 10.0)
         self.upload_retry_interval = _env_float("QE_RESOURCE_UPLOAD_RETRY_INTERVAL_SEC", 5.0)
         self.final_upload_grace = _env_float("QE_RESOURCE_FINAL_UPLOAD_GRACE_SEC", 30.0)
@@ -218,6 +336,8 @@ class QERuntimeResourceMonitor:
         self._events: list[dict[str, Any]] = []
         self._upload_broken = False
         self._next_upload_retry_monotonic = 0.0
+        self._sample_error_counts: dict[str, int] = {}
+        self._sample_error_last_print: dict[str, float] = {}
         self._finished = False
 
     @classmethod
@@ -257,6 +377,12 @@ class QERuntimeResourceMonitor:
         return f"{base}{path}"
 
     def start(self) -> None:
+        if self.wsl_runtime:
+            print(
+                f"[WARN] reason_code={_WSL_GPU_QUERY_SUPPRESSED_REASON} "
+                "device_metrics_source=unavailable process_metrics_source=torch.cuda "
+                "node_gpu_metrics_must_be_collected_by_the_windows_host"
+            )
         self._sample_once()
         self._thread = threading.Thread(target=self._sample_loop, name="qe-resource-sampler", daemon=True)
         self._thread.start()
@@ -282,37 +408,57 @@ class QERuntimeResourceMonitor:
         sample = self._process_sample()
         errors: list[str] = []
 
-        gpu_samplers = (
-            ("device", self._gpu_device_sample),
-            (
-                "process",
-                lambda: self._gpu_process_sample(set(sample.get("process_pids") or [])),
-            ),
-        )
-        for component, sampler in gpu_samplers:
-            try:
-                sample.update(sampler())
-            except Exception as exc:
-                error = f"QE_RESOURCE_GPU_SAMPLE_FAILED:{component}:{type(exc).__name__}"
-                errors.append(error)
-                sample[f"gpu_{component}_sample_available"] = False
-                print(
-                    "[ERROR] reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED "
-                    f"component={component} error={type(exc).__name__}: {exc}"
-                )
+        try:
+            sample.update(self._gpu_device_sample())
+        except Exception as exc:
+            error = f"QE_RESOURCE_GPU_SAMPLE_FAILED:device:{type(exc).__name__}"
+            errors.append(error)
+            sample["gpu_device_sample_available"] = False
+            sample["gpu_device_sample_source"] = "pynvml_shared_cache"
+            self._print_sample_error(
+                reason_code="QE_RESOURCE_GPU_SAMPLE_FAILED",
+                component="device",
+                error=exc,
+            )
 
         try:
-            sample.update(self._torch_sample())
+            torch_sample = self._torch_sample()
+            sample.update(torch_sample)
+            if torch_sample.get("cuda_reserved_bytes") is not None:
+                sample["gpu_process_memory_bytes"] = int(torch_sample["cuda_reserved_bytes"])
+                sample["gpu_process_sample_available"] = True
+                sample["gpu_process_sample_source"] = "torch.cuda.memory_reserved"
+            else:
+                sample["gpu_process_sample_available"] = False
+                sample["gpu_process_sample_source"] = str(
+                    torch_sample.get("gpu_process_sample_source") or "torch_cuda_not_initialized"
+                )
         except Exception as exc:
             error = f"QE_RESOURCE_CUDA_SAMPLE_FAILED:{type(exc).__name__}"
             errors.append(error)
-            print(
-                "[ERROR] reason_code=QE_RESOURCE_CUDA_SAMPLE_FAILED "
-                f"error={type(exc).__name__}: {exc}"
+            sample["gpu_process_sample_available"] = False
+            sample["gpu_process_sample_source"] = "torch_cuda_error"
+            self._print_sample_error(
+                reason_code="QE_RESOURCE_CUDA_SAMPLE_FAILED",
+                component="process",
+                error=exc,
             )
         if errors:
             sample["resource_sample_errors"] = errors
         return sample
+
+    def _print_sample_error(self, *, reason_code: str, component: str, error: Exception) -> None:
+        key = f"{reason_code}:{component}:{type(error).__name__}"
+        count = int(self._sample_error_counts.get(key) or 0) + 1
+        self._sample_error_counts[key] = count
+        now = time.monotonic()
+        last_print = float(self._sample_error_last_print.get(key) or 0.0)
+        if count == 1 or now - last_print >= 60.0:
+            self._sample_error_last_print[key] = now
+            print(
+                f"[ERROR] reason_code={reason_code} component={component} "
+                f"error={type(error).__name__}: {error} occurrence_count={count}"
+            )
 
     @staticmethod
     def _read_vm_hwm(pid: int) -> int:
@@ -376,80 +522,89 @@ class QERuntimeResourceMonitor:
             "process_sampler": "psutil_process_tree",
         }
 
-    def _gpu_device_sample(self) -> dict[str, Any]:
-        gpu_index = int(_env("QE_GPU_DEVICE_INDEX") or 0)
-        query = subprocess.run(
-            [
-                "nvidia-smi",
-                f"--id={gpu_index}",
-                "--query-gpu=name,memory.used,utilization.gpu",
-                "--format=csv,noheader,nounits",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
+    def _gpu_cache_paths(self, gpu_index: int) -> tuple[Path, Path]:
+        identity = f"{_safe_cache_component(self.node_id)}-gpu{int(gpu_index)}"
+        return (
+            self.gpu_cache_dir / f"{identity}.json",
+            self.gpu_cache_dir / f"{identity}.lock",
         )
-        if query.returncode != 0:
-            raise RuntimeError(f"nvidia-smi GPU query failed with exit_code={query.returncode}")
-        if not query.stdout.strip():
-            raise RuntimeError("nvidia-smi GPU query returned no rows")
-        try:
-            name, memory_mib, utilization = [part.strip() for part in query.stdout.splitlines()[0].split(",", 2)]
-            return {
-                "gpu_device_index": gpu_index,
-                "gpu_name": name,
-                "gpu_memory_used_bytes": int(float(memory_mib)) * 1024 * 1024,
-                "gpu_utilization_pct": float(utilization),
-                "gpu_device_sample_available": True,
-            }
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("nvidia-smi GPU query returned an invalid row") from exc
 
-    @staticmethod
-    def _gpu_process_sample(process_pids: set[int]) -> dict[str, Any]:
-        process_query = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-compute-apps=pid,used_memory",
-                "--format=csv,noheader,nounits",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if process_query.returncode != 0:
-            raise RuntimeError(
-                f"nvidia-smi process query failed with exit_code={process_query.returncode}"
+    def _read_fresh_gpu_cache(self, path: Path, *, gpu_index: int, now: float) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            sampled_at = float(payload["sampled_at_epoch"])
+            if payload.get("schema_version") != _GPU_CACHE_SCHEMA_VERSION:
+                raise ValueError("schema_version mismatch")
+            if str(payload.get("node_id") or "") != self.node_id:
+                raise ValueError("node_id mismatch")
+            if int(payload.get("gpu_device_index")) != int(gpu_index):
+                raise ValueError("gpu_device_index mismatch")
+            age = max(0.0, now - sampled_at)
+            if age > self.gpu_cache_max_age:
+                return None
+            payload["gpu_device_sample_cache_hit"] = True
+            payload["gpu_device_sample_age_seconds"] = age
+            return payload
+        except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            print(
+                "[ERROR] reason_code=QE_RESOURCE_GPU_CACHE_INVALID "
+                f"path={path} error={type(exc).__name__}: {exc}"
             )
-        process_memory_mib = 0
-        invalid_rows = 0
-        for line in process_query.stdout.splitlines():
-            parts = [part.strip() for part in line.split(",", 1)]
-            if len(parts) != 2:
-                invalid_rows += 1
-                continue
-            try:
-                if int(parts[0]) in process_pids:
-                    process_memory_mib += int(float(parts[1]))
-            except ValueError:
-                invalid_rows += 1
-        if invalid_rows:
-            raise RuntimeError(f"nvidia-smi process query returned invalid_rows={invalid_rows}")
-        return {
-            "gpu_process_memory_bytes": process_memory_mib * 1024 * 1024,
-            "gpu_process_sample_available": True,
-        }
+            return None
+
+    def _query_nvml_device(self, gpu_index: int) -> dict[str, Any]:
+        return _nvml_device_snapshot(gpu_index)
+
+    def _gpu_device_sample(self) -> dict[str, Any]:
+        if self.wsl_runtime:
+            return {
+                "gpu_device_sample_available": False,
+                "gpu_device_sample_source": "wsl_torch_only",
+                "gpu_device_sample_skipped_reason_code": _WSL_GPU_QUERY_SUPPRESSED_REASON,
+            }
+        if self.phase_pipeline_enabled and self._phase.phase in {"backtest", "finalize"}:
+            return {
+                "gpu_device_sample_available": False,
+                "gpu_device_sample_source": "phase_not_gpu",
+                "gpu_device_sample_skipped_phase": self._phase.phase,
+            }
+        gpu_index = int(_env("QE_GPU_DEVICE_INDEX") or 0)
+        cache_path, lock_path = self._gpu_cache_paths(gpu_index)
+        with _exclusive_file_lock(lock_path):
+            now = time.time()
+            cached = self._read_fresh_gpu_cache(cache_path, gpu_index=gpu_index, now=now)
+            if cached is not None:
+                return cached
+            snapshot = dict(self._query_nvml_device(gpu_index))
+            snapshot.update(
+                {
+                    "schema_version": _GPU_CACHE_SCHEMA_VERSION,
+                    "node_id": self.node_id,
+                    "sampled_at_epoch": now,
+                    "gpu_device_sample_available": True,
+                    "gpu_device_sample_source": "pynvml_shared_cache",
+                    "gpu_device_sample_cache_hit": False,
+                    "gpu_device_sample_age_seconds": 0.0,
+                    "gpu_device_sample_owner_pid": os.getpid(),
+                }
+            )
+            _atomic_json(cache_path, snapshot)
+            return snapshot
 
     @staticmethod
     def _torch_sample() -> dict[str, Any]:
         torch = sys.modules.get("torch")
-        if torch is None or not getattr(torch, "cuda", None) or not torch.cuda.is_available():
-            return {}
+        if torch is None or not getattr(torch, "cuda", None):
+            return {"gpu_process_sample_source": "torch_not_loaded"}
+        is_initialized = getattr(torch.cuda, "is_initialized", None)
+        if not callable(is_initialized) or not is_initialized():
+            return {"gpu_process_sample_source": "torch_cuda_not_initialized"}
         return {
             "cuda_allocated_bytes": int(torch.cuda.memory_allocated()),
             "cuda_reserved_bytes": int(torch.cuda.memory_reserved()),
+            "gpu_process_sample_source": "torch.cuda.memory_reserved",
         }
 
     def transition(self, next_phase: str, *, metadata: dict[str, Any] | None = None) -> None:
