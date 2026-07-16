@@ -7326,6 +7326,104 @@ def test_background_scheduler_noop_window_does_not_erase_last_blocking_result() 
     assert status["last_blocking_result"]["errors"][0]["type"] == "DataUnavailableError"
 
 
+def test_background_scheduler_run_loop_exception_reports_blocked_while_thread_stays_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+    recorded = threading.Event()
+    original_record = background._record_loop_exception
+
+    def record_and_signal(exc: Exception) -> dict[str, Any]:
+        failure = original_record(exc)
+        recorded.set()
+        return failure
+
+    def crash() -> dict[str, Any]:
+        raise DataUnavailableError(
+            "scheduler dependency crashed " + ("x" * 3000),
+            context={
+                "reason_code": "SIMULATION_TEST_DEPENDENCY_UNAVAILABLE",
+                "stage": "TEST_DEPENDENCY_READ",
+                "binding_id": "binding-" + ("b" * 600),
+                "credential": "must-not-be-projected",
+            },
+        )
+
+    monkeypatch.setattr(background, "_record_loop_exception", record_and_signal)
+    monkeypatch.setattr(background, "run_once", crash)
+    try:
+        background.start(interval_seconds=60)
+        assert recorded.wait(timeout=2.0)
+
+        status = background.status()
+        assert status["running"] is True
+        assert status["thread_alive"] is True
+        assert status["last_result"]["reason"] == "background_scheduler_run_loop_exception"
+        assert status["last_result"]["has_blocking_result"] is True
+        assert status["last_blocking_result"] == status["last_result"]
+        health = status["scheduler_loop_health"]
+        assert health["status"] == "BLOCKED"
+        assert health["reason_code"] == "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION"
+        assert health["consecutive_failure_count"] == 1
+        assert health["total_failure_count"] == 1
+        assert health["execution_gate"] is False
+        failure = health["active_failure"]
+        assert failure["exception_type"] == "DataUnavailableError"
+        assert len(failure["exception_message"]) == 2048
+        assert failure["exception_message_truncated"] is True
+        assert failure["underlying_reason_code"] == "SIMULATION_TEST_DEPENDENCY_UNAVAILABLE"
+        assert failure["underlying_stage"] == "TEST_DEPENDENCY_READ"
+        assert len(failure["context"]["binding_id"]) == 512
+        assert "credential" not in failure["context"]
+    finally:
+        background.shutdown(wait=True)
+
+
+def test_background_scheduler_success_clears_active_loop_failure_and_preserves_history() -> None:
+    lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+    first = background._record_loop_exception(RuntimeError("first loop failure"))
+    second = background._record_loop_exception(RuntimeError("second loop failure"))
+
+    blocked = background.status()["scheduler_loop_health"]
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["consecutive_failure_count"] == 2
+    assert blocked["total_failure_count"] == 2
+    assert second["first_failure_at"] == first["first_failure_at"]
+    assert blocked["last_failure"]["exception_message"] == "second loop failure"
+
+    background._record_result(
+        started_at=datetime(2026, 5, 21, 10, 0, tzinfo=UTC),
+        result={
+            "trade_date": TRADE_DATE.isoformat(),
+            "reason": "outside_configured_windows",
+            "processed": [],
+            "errors": [],
+            "alerts": [],
+        },
+    )
+    background._record_loop_success()
+
+    recovered = background.status()
+    health = recovered["scheduler_loop_health"]
+    assert health["status"] == "HEALTHY"
+    assert health["reason_code"] == "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_OK"
+    assert health["active_failure"] is None
+    assert health["last_failure"]["exception_message"] == "second loop failure"
+    assert health["consecutive_failure_count"] == 0
+    assert health["total_failure_count"] == 2
+    assert health["total_success_count"] == 1
+    assert health["last_successful_tick_at"] is not None
+    assert recovered["last_result"]["reason"] == "outside_configured_windows"
+
+
 def test_background_scheduler_exposes_retired_package_skip_without_selection_or_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
