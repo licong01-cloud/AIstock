@@ -3283,6 +3283,16 @@ class SimulationLifecycleScheduler:
         created_by: str,
         exc: Exception,
     ) -> SimulationSchedulerBindingResult:
+        if self._is_selection_inference_pending_error(exc):
+            pending = self._record_selection_inference_pending_result(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+                created_by=created_by,
+                exc=exc,
+            )
+            if pending is not None:
+                return pending
         existing_after_failure = self.repository.get_simulation_daily_run_by_key(
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
@@ -3356,6 +3366,141 @@ class SimulationLifecycleScheduler:
             run=failed_run,
             error=self._pre_run_failure_error_payload(failed_run, exc=exc),
             data_source=effective_data_source,
+        )
+
+    @staticmethod
+    def _is_selection_inference_pending_error(exc: Exception) -> bool:
+        context = getattr(exc, "context", None)
+        return (
+            isinstance(exc, DataUnavailableError)
+            and isinstance(context, dict)
+            and str(context.get("reason_code") or "").upper()
+            == "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS"
+        )
+
+    def _record_selection_inference_pending_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        created_by: str,
+        exc: Exception,
+    ) -> SimulationSchedulerBindingResult | None:
+        """Persist an explicit non-terminal wait without inventing a failed run."""
+
+        runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+            trade_date=trade_date,
+        )
+        if existing is not None and (
+            existing.execution_plan_id
+            or self._run_has_broker_side_effect_evidence(existing)
+            or existing.status
+            in {
+                SimulationDailyRunStatus.SUCCEEDED,
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                SimulationDailyRunStatus.CANCELLED,
+            }
+        ):
+            logger.error(
+                "Selection inference pending collided with a planned, side-effect-bearing, or terminal run",
+                extra={
+                    "reason_code": "SIMULATION_SELECTION_INFERENCE_PENDING_STATE_CONFLICT",
+                    "run_id": existing.run_id,
+                    "run_status": existing.status.value,
+                    "execution_plan_id": existing.execution_plan_id,
+                    "binding_id": binding.binding_id,
+                },
+            )
+            return None
+
+        identity = self._simulation_daily_run_identity(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+        )
+        context = self._exception_context(exc)
+        observed_at = datetime.now(UTC).isoformat()
+        diagnostic = {
+            "schema_version": "simulation_selection_inference_pending_v1",
+            "status": "PENDING",
+            "reason_code": "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS",
+            "stage": "SELECTION_INFERENCE",
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "package_id": binding.package_id,
+            "release_id": binding.release_id,
+            "trade_date": trade_date.isoformat(),
+            "data_source": data_source,
+            "observed_at": observed_at,
+            "broker_called": False,
+            "context": context,
+        }
+        if existing is None:
+            digest = canonical_json_sha256(identity)
+            existing = self.repository.save_simulation_daily_run(
+                SimulationDailyRun(
+                    run_id=f"simrun_{digest[:16]}",
+                    trade_date=trade_date,
+                    strategy_id=binding.strategy_id,
+                    broker_backend=binding.broker_backend,
+                    package_id=runtime_release.package_id,
+                    manifest_sha256=runtime_release.manifest_sha256,
+                    release_id=runtime_release.release_id,
+                    release_hash=runtime_release.release_hash or "",
+                    binding_id=binding.binding_id,
+                    binding_hash=binding.binding_hash or "",
+                    account_group_id=binding.account_group_id,
+                    strategy_slot_id=binding.strategy_slot_id,
+                    status=SimulationDailyRunStatus.SIGNAL_GENERATING,
+                    run_payload_json={
+                        **identity,
+                        "created_by": created_by,
+                        "last_stage": SimulationDailyRunStatus.SIGNAL_GENERATING.value,
+                        "broker_called": False,
+                        "submitted_intents": 0,
+                        "failed_intents": 0,
+                        "selection_inference_pending": diagnostic,
+                    },
+                )
+            )
+        else:
+            existing = self.repository.update_simulation_daily_run(
+                existing.run_id,
+                status=SimulationDailyRunStatus.SIGNAL_GENERATING,
+                payload_patch={
+                    "last_stage": SimulationDailyRunStatus.SIGNAL_GENERATING.value,
+                    "broker_called": False,
+                    "submitted_intents": 0,
+                    "failed_intents": 0,
+                    "selection_inference_pending": diagnostic,
+                },
+                payload_unset=(
+                    "pre_run_failure",
+                    "pre_run_failure_last_observed_at",
+                    "pre_run_failure_observed_after_terminal",
+                    "submit_failure",
+                ),
+            )
+        logger.info(
+            "Simulation selection inference remains pending without marking the run failed: %s",
+            {
+                "run_id": existing.run_id,
+                "binding_id": binding.binding_id,
+                "trade_date": trade_date.isoformat(),
+            },
+        )
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status="SELECTION_INFERENCE_PENDING",
+            run=existing,
+            lifecycle_diagnostic=diagnostic,
+            data_source=data_source,
         )
 
     def _has_broker_side_effect_evidence(
@@ -3456,7 +3601,10 @@ class SimulationLifecycleScheduler:
             if existing.execution_plan_id and isinstance(existing.run_payload_json.get("submit_failure"), dict):
                 return existing
             if (
-                not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+                (
+                    not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+                    or isinstance(existing.run_payload_json.get("selection_inference_pending"), dict)
+                )
                 and existing.status not in terminal_statuses
                 and not self._run_has_broker_side_effect_evidence(existing)
             ):
@@ -3786,7 +3934,10 @@ class SimulationLifecycleScheduler:
         self,
         build_result: SimulationPlanBuildResult,
     ) -> SimulationPlanBuildResult:
-        if "pre_run_failure" not in build_result.run.run_payload_json:
+        if not any(
+            key in build_result.run.run_payload_json
+            for key in ("pre_run_failure", "selection_inference_pending")
+        ):
             return build_result
         cleared = self.repository.update_simulation_daily_run(
             build_result.run.run_id,
@@ -3795,6 +3946,7 @@ class SimulationLifecycleScheduler:
                 "pre_run_failure_last_observed_at",
                 "pre_run_failure_observed_after_terminal",
                 "submit_failure",
+                "selection_inference_pending",
             ),
         )
         return replace(build_result, run=cleared)
@@ -5942,7 +6094,12 @@ class SimulationLifecycleScheduler:
             )
         context: SimulationRunContext | None = None
         tick_driver_result = None
-        if self._should_drive_existing_miniqmt_event_loop(binding=binding, run=run, submit=submit):
+        if self._should_drive_existing_miniqmt_event_loop(
+            binding=binding,
+            run=run,
+            plan=plan,
+            submit=submit,
+        ):
             context = self._load_run_context(
                 runtime_release=runtime_release,
                 binding=binding,
@@ -8686,10 +8843,19 @@ class SimulationLifecycleScheduler:
         *,
         binding: SimulationReleaseBinding,
         run: SimulationDailyRun,
+        plan: ExecutionPlan,
         submit: bool,
     ) -> bool:
         if not submit or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             return False
+        if run.status == SimulationDailyRunStatus.FAILED_RETRYABLE:
+            return bool(
+                SimulationLifecycleScheduler._miniqmt_failed_run_durable_pending_recovery_evidence(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                )["eligible"]
+            )
         if run.status not in {
             SimulationDailyRunStatus.SUBMITTING,
             SimulationDailyRunStatus.INTRADAY_RUNNING,
@@ -8701,6 +8867,151 @@ class SimulationLifecycleScheduler:
         if str(route.get("route") or "").upper() not in {"", "A_EVENT_LOOP"}:
             return False
         return SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(payload)
+
+    @staticmethod
+    def _miniqmt_failed_run_durable_pending_recovery_evidence(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+    ) -> dict[str, Any]:
+        """Prove the one safe FAILED_RETRYABLE -> tick-driver recovery path.
+
+        Parent submission is deliberately not retried here. Recovery is allowed
+        only when the immutable plan, runtime id, B0 control revision, durable
+        pending algo counts, and side-effect-free child evidence all agree.
+        """
+
+        payload = run.run_payload_json
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        route = payload.get("miniqmt_runtime_route") if isinstance(payload.get("miniqmt_runtime_route"), dict) else {}
+        quote_control = plan.plan_payload_json.get("quote_control")
+        quote_revision = (
+            quote_control.get("revision")
+            if isinstance(quote_control, dict) and isinstance(quote_control.get("revision"), dict)
+            else {}
+        )
+        conflicts: list[str] = []
+
+        payload_batch_id = str(payload.get("qmt_batch_id") or "").strip()
+        result_batch_id = str(batch.get("batch_id") or "").strip()
+        if not payload_batch_id or not result_batch_id:
+            conflicts.append("batch_id_missing")
+        elif payload_batch_id != result_batch_id:
+            conflicts.append("batch_id_conflict")
+
+        batch_status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
+        if batch_status not in {OrderBatchStatus.SUBMITTING.value, OrderBatchStatus.PREFLIGHT_FAILED.value}:
+            conflicts.append("batch_status_not_recoverable")
+
+        runtime_id = str(runtime_evidence.get("runtime_id") or "").strip()
+        expected_runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
+        if not runtime_id:
+            conflicts.append("runtime_id_missing")
+        elif runtime_id != expected_runtime_id:
+            conflicts.append("runtime_id_conflict")
+        source = str(runtime_evidence.get("source") or "").strip()
+        if source not in {
+            "simulation_runtime_event_loop_submit",
+            "simulation_runtime_event_loop_tick_driver",
+        }:
+            conflicts.append("runtime_evidence_source_invalid")
+
+        runtime_kind = str(payload.get("miniqmt_runtime_kind") or "").strip().lower()
+        route_name = str(route.get("route") or "").strip().upper()
+        if runtime_kind != MiniQMTExecutionRuntimeKind.EVENT_LOOP.value and route_name != "A_EVENT_LOOP":
+            conflicts.append("event_loop_route_identity_missing")
+        if route_name and route_name != "A_EVENT_LOOP":
+            conflicts.append("event_loop_route_conflict")
+
+        control_revision = str(quote_revision.get("control_revision") or "").strip().upper()
+        assignments = quote_control.get("assignments") if isinstance(quote_control, dict) else None
+        if control_revision != "B0_QUOTE_V2":
+            conflicts.append("quote_control_revision_not_b0_quote_v2")
+        if not isinstance(assignments, list) or not assignments:
+            conflicts.append("quote_control_assignments_missing")
+
+        def exact_nonnegative_int(raw: Any, field: str) -> int | None:
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                conflicts.append(f"{field}_invalid")
+                return None
+            return raw
+
+        active_count = exact_nonnegative_int(runtime_evidence.get("active_algo_count"), "active_algo_count")
+        pending_count = exact_nonnegative_int(runtime_evidence.get("pending_algo_count"), "pending_algo_count")
+        submitted_count = exact_nonnegative_int(
+            runtime_evidence.get("submitted_child_count"),
+            "submitted_child_count",
+        )
+        rejected_count = exact_nonnegative_int(
+            runtime_evidence.get("rejected_child_count"),
+            "rejected_child_count",
+        )
+        if pending_count is not None and pending_count <= 0:
+            conflicts.append("pending_algo_count_zero")
+        if active_count is not None and pending_count is not None and active_count != pending_count:
+            conflicts.append("active_pending_count_conflict")
+        if submitted_count not in {None, 0}:
+            conflicts.append("submitted_child_side_effect_present")
+        if rejected_count not in {None, 0}:
+            conflicts.append("rejected_child_present")
+
+        child_order_ids = runtime_evidence.get("child_order_ids")
+        if isinstance(child_order_ids, str):
+            child_order_ids = [item for item in child_order_ids.split() if item]
+        if child_order_ids:
+            conflicts.append("child_order_ids_present")
+        if SimulationLifecycleScheduler._mini_qmt_batch_has_broker_side_effect_evidence(payload):
+            conflicts.append("broker_side_effect_evidence_present")
+        if payload.get("miniqmt_side_effect_state") == "UNKNOWN_TIMEOUT":
+            conflicts.append("unknown_timeout_side_effect_state")
+        if isinstance(payload.get("miniqmt_submit_timeout"), dict):
+            conflicts.append("submit_timeout_present")
+
+        results = batch.get("results")
+        if not isinstance(results, list) or not results:
+            conflicts.append("batch_results_missing")
+        else:
+            for index, result in enumerate(results):
+                if not isinstance(result, dict):
+                    conflicts.append(f"batch_result_{index}_invalid")
+                    continue
+                if bool(result.get("broker_called")):
+                    conflicts.append(f"batch_result_{index}_broker_called")
+                    continue
+                if bool(result.get("success")):
+                    continue
+                preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+                errors = preflight.get("errors")
+                error_codes = (
+                    {
+                        str(error.get("code") or "").strip().upper()
+                        for error in errors
+                        if isinstance(error, dict) and str(error.get("code") or "").strip()
+                    }
+                    if isinstance(errors, list)
+                    else set()
+                )
+                if error_codes != {"DUPLICATE_ORDER_REMARK"}:
+                    conflicts.append(f"batch_result_{index}_failure_not_owned_duplicate")
+
+        return {
+            "schema_version": "miniqmt_failed_run_durable_pending_recovery_v1",
+            "eligible": not conflicts,
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "batch_id": payload_batch_id or result_batch_id or None,
+            "runtime_id": runtime_id or None,
+            "expected_runtime_id": expected_runtime_id,
+            "runtime_evidence_source": source or None,
+            "active_algo_count": active_count,
+            "pending_algo_count": pending_count,
+            "submitted_child_count": submitted_count,
+            "rejected_child_count": rejected_count,
+            "control_revision": control_revision or None,
+            "conflicts": conflicts,
+        }
 
     @staticmethod
     def _mini_qmt_event_loop_has_pending_algos(payload: dict[str, Any]) -> bool:
@@ -8772,7 +9083,12 @@ class SimulationLifecycleScheduler:
                 self._mark_miniqmt_tick_driver_timeout(binding=binding, run=run, plan=plan, exc=exc)
                 return None
             raise
-        self._persist_miniqmt_tick_driver_result(binding=binding, run=run, result=result)
+        self._persist_miniqmt_tick_driver_result(
+            binding=binding,
+            run=run,
+            plan=plan,
+            result=result,
+        )
         return result
 
     def _drive_miniqmt_event_loop_ticks(
@@ -8813,6 +9129,7 @@ class SimulationLifecycleScheduler:
         *,
         binding: SimulationReleaseBinding,
         run: SimulationDailyRun,
+        plan: ExecutionPlan,
         result: Any,
     ) -> SimulationDailyRun:
         payload = run.run_payload_json
@@ -8858,6 +9175,27 @@ class SimulationLifecycleScheduler:
             payload_patch["qmt_batch_status"] = qmt_batch_status
         if qmt_batch_result:
             payload_patch["qmt_batch_result"] = qmt_batch_result
+        if run.status == SimulationDailyRunStatus.FAILED_RETRYABLE:
+            recovery_evidence = self._miniqmt_failed_run_durable_pending_recovery_evidence(
+                binding=binding,
+                run=run,
+                plan=plan,
+            )
+            if not recovery_evidence["eligible"]:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT failed-run tick recovery lost its durable evidence contract before persistence",
+                    context={
+                        "reason_code": "MINIQMT_FAILED_RUN_RECOVERY_EVIDENCE_CHANGED",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        **recovery_evidence,
+                    },
+                )
+            payload_patch["miniqmt_failed_run_recovery"] = {
+                **recovery_evidence,
+                "status": "RECOVERED_TO_TICK_DRIVER",
+                "recovered_at": datetime.now(UTC).isoformat(),
+                "parent_resubmitted": False,
+            }
         return self.repository.update_simulation_daily_run(
             run.run_id,
             status=SimulationDailyRunStatus.INTRADAY_RUNNING,
@@ -10484,6 +10822,7 @@ class SimulationLifecycleBackgroundScheduler:
         self._limit = self._default_limit()
         self._last_run_at: datetime | None = None
         self._last_result: dict[str, Any] | None = None
+        self._last_blocking_result: dict[str, Any] | None = None
 
     def start(self, *, interval_seconds: int | None = None, default_submit: bool | None = None) -> dict[str, Any]:
         interval = int(interval_seconds or self._interval_seconds)
@@ -10550,6 +10889,7 @@ class SimulationLifecycleBackgroundScheduler:
             "limit": self._limit,
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
+            "last_blocking_result": self._last_blocking_result,
             "trading_calendar_policy": self._trading_calendar_policy(),
         }
 
@@ -10856,9 +11196,43 @@ class SimulationLifecycleBackgroundScheduler:
 
     def _record_result(self, *, started_at: datetime, result: dict[str, Any]) -> dict[str, Any]:
         result["completed_at"] = SimulationLifecycleScheduler._scheduler_now().isoformat()
+        result["has_blocking_result"] = self._result_has_blocking_evidence(result)
         self._last_run_at = started_at
         self._last_result = result
+        if result["has_blocking_result"]:
+            self._last_blocking_result = deepcopy(result)
         return result
+
+    @staticmethod
+    def _result_has_blocking_evidence(result: dict[str, Any]) -> bool:
+        if isinstance(result.get("errors"), list) and bool(result["errors"]):
+            return True
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        for field in ("failed_count", "stale_recovery_failed_count"):
+            try:
+                if int(summary.get(field) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                return True
+        processed = result.get("processed")
+        if isinstance(processed, list):
+            for item in processed:
+                if not isinstance(item, dict):
+                    return True
+                if isinstance(item.get("error"), dict):
+                    return True
+                if str(item.get("status") or "").upper() in {
+                    SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                    SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                }:
+                    return True
+        terminalized = result.get("terminalized_runs")
+        if isinstance(terminalized, list) and any(
+            isinstance(item, dict) and item.get("terminalization_succeeded") is False
+            for item in terminalized
+        ):
+            return True
+        return False
 
     @staticmethod
     def _trade_date(now: datetime) -> date:

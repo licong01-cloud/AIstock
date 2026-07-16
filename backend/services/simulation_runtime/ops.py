@@ -420,10 +420,20 @@ class SimulationRuntimeOpsService:
         status = dict(self.scheduler.status())
         default_submit = bool(status.get("default_submit", False))
         last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
+        last_blocking_result = (
+            status.get("last_blocking_result")
+            if isinstance(status.get("last_blocking_result"), dict)
+            else None
+        )
         last_result_errors = (
             list(last_result.get("errors") or [])
             if isinstance(last_result, dict) and isinstance(last_result.get("errors"), list)
             else []
+        )
+        current_trade_date_blockers = self._current_trade_date_blockers(
+            status=status,
+            last_result=last_result,
+            last_blocking_result=last_blocking_result,
         )
         return {
             "ok": True,
@@ -433,8 +443,15 @@ class SimulationRuntimeOpsService:
             "thread_alive": bool(status.get("thread_alive", False)),
             "last_run_at": status.get("last_run_at"),
             "last_result": last_result,
+            "last_blocking_result": last_blocking_result,
             "last_result_errors": last_result_errors,
             "last_error_count": len(last_result_errors),
+            "current_trade_date_blockers": current_trade_date_blockers,
+            "effective_runtime_health": (
+                "BLOCKED"
+                if current_trade_date_blockers["blocker_count"] > 0
+                else "NO_CURRENT_DAY_BLOCKER"
+            ),
             "default_submit": default_submit,
             "approval_states": list(status.get("approval_states") or []),
             "sim_binding_selection_policy": status.get("sim_binding_selection_policy"),
@@ -450,6 +467,22 @@ class SimulationRuntimeOpsService:
             "context_provider_mode": status.get("context_provider_mode"),
             "data_source": status.get("data_source"),
             "data_source_policy": status.get("data_source_policy") or {},
+            "selection_inference": _required_scheduler_status_mapping(
+                status,
+                "selection_inference",
+            ),
+            "binding_watchdog": _required_scheduler_status_mapping(
+                status,
+                "binding_watchdog",
+            ),
+            "miniqmt_sim_runtime": _required_scheduler_status_mapping(
+                status,
+                "miniqmt_sim_runtime",
+            ),
+            "miniqmt_quote_context": _required_scheduler_status_mapping(
+                status,
+                "miniqmt_quote_context",
+            ),
             "miniqmt_quote_ingress_activation": _required_scheduler_status_mapping(
                 status,
                 "miniqmt_quote_ingress_activation",
@@ -480,6 +513,110 @@ class SimulationRuntimeOpsService:
                 ),
             },
         }
+
+    def _current_trade_date_blockers(
+        self,
+        *,
+        status: dict[str, Any],
+        last_result: dict[str, Any] | None,
+        last_blocking_result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        observed_trade_dates: list[str] = []
+        for candidate in (last_result, last_blocking_result):
+            if isinstance(candidate, dict) and candidate.get("trade_date"):
+                raw_trade_date = str(candidate["trade_date"])
+                try:
+                    date.fromisoformat(raw_trade_date)
+                except ValueError as exc:
+                    raise RuntimeConfigInvalidError(
+                        "scheduler status has an invalid trade_date",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_STATUS_TRADE_DATE_INVALID",
+                            "stage": "SCHEDULER_STATUS_PROJECTION",
+                            "trade_date": raw_trade_date,
+                        },
+                    ) from exc
+                observed_trade_dates.append(raw_trade_date)
+        trade_date = SimulationLifecycleBackgroundScheduler._trade_date(
+            SimulationLifecycleScheduler._scheduler_now()
+        )
+        blocking_statuses = (
+            SimulationDailyRunStatus.FAILED_RETRYABLE,
+            SimulationDailyRunStatus.FAILED_TERMINAL,
+        )
+        try:
+            runs_by_status = {
+                blocking_status: self.repository.list_simulation_daily_runs(
+                    trade_date=trade_date,
+                    status=blocking_status,
+                    limit=100,
+                )
+                for blocking_status in blocking_statuses
+            }
+        except Exception as exc:  # noqa: BLE001 - diagnostics must fail loudly, never return false green.
+            raise DataUnavailableError(
+                "failed to read current-trade-date simulation blockers",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_BLOCKER_READBACK_FAILED",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "trade_date": trade_date.isoformat(),
+                    "repository": type(self.repository).__name__,
+                },
+            ) from exc
+        all_blockers = sorted(
+            (run for runs in runs_by_status.values() for run in runs),
+            key=lambda run: (run.updated_at, run.created_at, run.run_id),
+            reverse=True,
+        )
+        bounded_blockers = all_blockers[:100]
+        blockers = [
+            {
+                "run_id": run.run_id,
+                "strategy_id": run.strategy_id,
+                "binding_id": run.binding_id,
+                "broker_backend": run.broker_backend.value,
+                "status": run.status.value,
+                "last_stage": run.run_payload_json.get("last_stage"),
+                "reason_code": self._run_blocker_reason_code(run),
+                "execution_plan_id": run.execution_plan_id,
+            }
+            for run in bounded_blockers
+        ]
+        return {
+            "schema_version": "simulation_scheduler_current_day_blockers_v1",
+            "trade_date": trade_date.isoformat(),
+            "status": "BLOCKED" if blockers else "CLEAR",
+            "blocker_count": len(blockers),
+            "blockers": blockers,
+            "observed_blocker_count": len(all_blockers),
+            "bounded_limit": 100,
+            "truncated": len(all_blockers) > 100 or any(
+                len(runs) >= 100 for runs in runs_by_status.values()
+            ),
+            "execution_gate": False,
+            "source": "simulation_daily_run_readback",
+            "scheduler_running": bool(status.get("running", False)),
+            "last_observed_trade_dates": list(dict.fromkeys(observed_trade_dates)),
+        }
+
+    @staticmethod
+    def _run_blocker_reason_code(run: SimulationDailyRun) -> str:
+        payload = run.run_payload_json
+        candidates = (
+            payload.get("pre_run_failure"),
+            payload.get("submit_failure"),
+            payload.get("local_sim_retry_diagnostics"),
+            payload.get("miniqmt_event_loop_tick_driver_timeout"),
+        )
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("reason_code"):
+                return str(candidate["reason_code"])
+            context = candidate.get("context")
+            if isinstance(context, dict) and context.get("reason_code"):
+                return str(context["reason_code"])
+        return run.status.value
 
     def list_runs(
         self,
