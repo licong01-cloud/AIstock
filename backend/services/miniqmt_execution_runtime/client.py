@@ -3558,6 +3558,7 @@ def _persist_event_loop_tca_batch_observations(
         from backend.services.simulation_runtime.tca_capture import (
             CaptureMergeOutcome,
             TcaCaptureConfigurationError,
+            TcaCaptureDataError,
             build_arrival_benchmark_capture,
             build_capture_error,
             build_preflight_eligibility_capture,
@@ -3696,6 +3697,27 @@ def _persist_event_loop_tca_batch_observations(
                     parent_id,
                     eligibility.primary_reason_code,
                 )
+        except TcaCaptureDataError as exc:
+            outcome = merger(
+                batch_id=batch_id,
+                logical_tca_scope_hash=logical_tca_scope_hash,
+                parent_intent_id=parent_id,
+                capture_error=build_capture_error(
+                    parent_intent_id=parent_id,
+                    stage="CAPTURE",
+                    reason_code=exc.reason_code,
+                    message=str(exc),
+                    context={"batch_id": batch_id, "symbol": request.symbol, **exc.context},
+                ),
+            )
+            LOGGER.error(
+                "TCA event-loop data invalid reason_code=%s stage=CAPTURE batch_id=%s parent_intent_id=%s outcome=%s",
+                exc.reason_code,
+                batch_id,
+                parent_id,
+                getattr(outcome, "value", outcome),
+                exc_info=True,
+            )
         except Exception as exc:  # evidence failure is loud and isolated from B0.
             outcome = merger(
                 batch_id=batch_id,
