@@ -450,6 +450,23 @@ class FakePackageRepository:
         )
 
 
+class FakePackageMapRepository:
+    def __init__(self, releases_by_package: dict[str, Any]) -> None:
+        self.releases_by_package = dict(releases_by_package)
+        self.calls: list[str] = []
+
+    def get(self, package_id: str) -> Any:
+        self.calls.append(package_id)
+        release = self.releases_by_package.get(package_id)
+        if release is None:
+            raise DataUnavailableError("fake StrategyPackage does not exist", context={"package_id": package_id})
+        return SimpleNamespace(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+            package_status=PackageStatus.SELECTION_ENABLED,
+        )
+
+
 class FakeSelectionService:
     def __init__(
         self,
@@ -508,6 +525,7 @@ class PackageRoutingSelectionService:
         self.failing_package_id = failing_package_id
         self.exc = exc or _live_inference_preflight_error(package_id=failing_package_id)
         self.calls: list[dict[str, Any]] = []
+        self.package_repository = FakePackageMapRepository(self.releases_by_package)
 
     def run_selection(self, **kwargs):
         self.calls.append(kwargs)
@@ -932,7 +950,7 @@ class _RealB0QuoteSupervisor:
             for symbol in symbols:
                 observation = self._observations[symbol]
                 self.normalized_store.accept(observation)
-                sink(observation)
+                self._deliver_observation(sink=sink, observation=observation)
 
     def register_observation_sink(self, *, consumer_id: str, sink: Any) -> None:
         if consumer_id in self._sinks:
@@ -960,7 +978,17 @@ class _RealB0QuoteSupervisor:
         for symbol in exact_symbols:
             observation = self._observations[symbol]
             self.normalized_store.accept(observation)
-            sink(observation)
+            self._deliver_observation(sink=sink, observation=observation)
+
+    def _deliver_observation(self, *, sink: Any, observation: NormalizedQuoteObservation) -> None:
+        observation_context = self.context_store.snapshot()
+        if observation_context is None or observation_context.context_id != observation.context_id:
+            raise AssertionError(
+                "B0 test callback observation lost its exact projection context: "
+                f"observation={observation.context_id} "
+                f"projection={getattr(observation_context, 'context_id', None)}"
+            )
+        sink(observation, observation_context)
 
     def release_consumer(self, *, consumer_id: str) -> None:
         self._symbols_by_consumer.pop(consumer_id, None)
@@ -1224,6 +1252,7 @@ class _PendingOnlyB0Controller:
 class _PendingOnlyB0ControllerFactory:
     def __init__(self) -> None:
         self.controllers: dict[str, _PendingOnlyB0Controller] = {}
+        self.recovering_active_by_runtime: dict[str, bool] = {}
 
     def assert_accepts_new_assignments(self) -> None:
         return None
@@ -1231,10 +1260,18 @@ class _PendingOnlyB0ControllerFactory:
     def get(self, runtime_id: str) -> _PendingOnlyB0Controller | None:
         return self.controllers.get(runtime_id)
 
-    def create(self, *, runtime: Any, assignments: Any, symbols: Any) -> _PendingOnlyB0Controller:
+    def create(
+        self,
+        *,
+        runtime: Any,
+        assignments: Any,
+        symbols: Any,
+        recovering_active: bool = False,
+    ) -> _PendingOnlyB0Controller:
         del assignments, symbols
         controller = _PendingOnlyB0Controller(runtime.config.runtime_id)
         self.controllers[runtime.config.runtime_id] = controller
+        self.recovering_active_by_runtime[runtime.config.runtime_id] = bool(recovering_active)
         return controller
 
 
@@ -2586,7 +2623,18 @@ def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindin
         def __init__(self) -> None:
             self.started = threading.Event()
             self.release = threading.Event()
+            self.completed = threading.Event()
             self.calls: list[str] = []
+            self.package_repository = SimpleNamespace(
+                get=lambda package_id: SimpleNamespace(
+                    package_id=package_id,
+                    manifest_sha256={
+                        slow_release.package_id: slow_release.manifest_sha256,
+                        fast_release.package_id: fast_release.manifest_sha256,
+                    }[package_id],
+                    package_status=PackageStatus.SELECTION_ENABLED,
+                )
+            )
 
         def run_selection(self, **kwargs):
             package_id = kwargs["package_ids"][0]
@@ -2594,6 +2642,7 @@ def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindin
             if package_id == slow_release.package_id:
                 self.started.set()
                 self.release.wait(timeout=5.0)
+                self.completed.set()
             runtime_release = kwargs.get("runtime_release") or {
                 slow_release.package_id: slow_release,
                 fast_release.package_id: fast_release,
@@ -2641,9 +2690,15 @@ def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindin
         by_binding_id = {item.binding_id: item for item in first.results}
         assert elapsed < 0.5
         assert first.total_bindings == 2
-        assert first.failed_count == 1
+        assert first.failed_count == 0
         assert first.planned_count == 1
-        assert by_binding_id[slow_binding.binding_id].error["context"]["reason_code"] == "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS"
+        pending = by_binding_id[slow_binding.binding_id]
+        assert pending.status == "SELECTION_INFERENCE_PENDING"
+        assert pending.error is None
+        assert pending.lifecycle_diagnostic["reason_code"] == "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS"
+        assert pending.run.status == SimulationDailyRunStatus.SIGNAL_GENERATING
+        assert "pre_run_failure" not in pending.run.run_payload_json
+        assert "submit_failure" not in pending.run.run_payload_json
         assert by_binding_id[fast_binding.binding_id].status == "PLANNED"
 
         time_module.sleep(0.03)
@@ -2664,6 +2719,22 @@ def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindin
         assert selection.calls.count(slow_release.package_id) == 1
         assert inflight_status["in_flight_count"] == 1
         assert inflight_status["in_flight"][0]["timed_out"] is True
+
+        selection.release.set()
+        assert selection.completed.wait(timeout=1.0)
+        completed = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+        )
+        completed_by_binding_id = {item.binding_id: item for item in completed.results}
+        completed_slow = completed_by_binding_id[slow_binding.binding_id]
+        assert completed_slow.status == "PLANNED"
+        assert completed_slow.run.status == SimulationDailyRunStatus.PLANNING_EXECUTION
+        assert "selection_inference_pending" not in completed_slow.run.run_payload_json
+        assert "pre_run_failure" not in completed_slow.run.run_payload_json
+        assert "submit_failure" not in completed_slow.run.run_payload_json
     finally:
         selection.release.set()
         scheduler.shutdown_selection_inference(wait=True)
@@ -2770,12 +2841,14 @@ def test_scheduler_auto_generated_selection_inference_isolated_by_runtime_releas
             submit=False,
         )
 
-        assert result.failed_count == 2
+        assert result.failed_count == 0
         assert selection.started[release_a.release_id].wait(timeout=1.0)
         assert selection.started[release_b.release_id].wait(timeout=1.0)
         by_binding_id = {item.binding_id: item for item in result.results}
-        assert by_binding_id[binding_a.binding_id].error["context"]["release_id"] == release_a.release_id
-        assert by_binding_id[binding_b.binding_id].error["context"]["release_id"] == release_b.release_id
+        assert by_binding_id[binding_a.binding_id].status == "SELECTION_INFERENCE_PENDING"
+        assert by_binding_id[binding_b.binding_id].status == "SELECTION_INFERENCE_PENDING"
+        assert by_binding_id[binding_a.binding_id].lifecycle_diagnostic["context"]["release_id"] == release_a.release_id
+        assert by_binding_id[binding_b.binding_id].lifecycle_diagnostic["context"]["release_id"] == release_b.release_id
         status = scheduler.status()["selection_inference"]
         assert status["in_flight_count"] == 2
         assert {item["release_id"] for item in status["in_flight"]} == {
@@ -2915,6 +2988,11 @@ def test_scheduler_does_not_swallow_system_exit_from_binding_boundary() -> None:
     assert local_binding is not None
 
     class SystemExitSelectionService:
+        package_repository = FakePackageRepository(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
+
         def run_selection(self, **_kwargs):
             raise SystemExit("fatal scheduler stop signal")
 
@@ -7131,6 +7209,48 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert result["summary"]["planned_count"] == 2
     assert background.status()["default_submit"] is False
     assert background.status()["last_result"]["summary"]["total_bindings"] == 2
+    assert background.status()["last_result"]["has_blocking_result"] is False
+
+
+def test_background_scheduler_noop_window_does_not_erase_last_blocking_result() -> None:
+    lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+    started_at = datetime(2026, 5, 21, 10, 0, tzinfo=UTC)
+    blocking = background._record_result(
+        started_at=started_at,
+        result={
+            "trade_date": TRADE_DATE.isoformat(),
+            "reason": "submit",
+            "processed": [],
+            "errors": [
+                {
+                    "type": "DataUnavailableError",
+                    "message": "required dataset refresh status is missing",
+                }
+            ],
+            "alerts": [],
+        },
+    )
+    noop = background._record_result(
+        started_at=started_at + timedelta(hours=5),
+        result={
+            "trade_date": TRADE_DATE.isoformat(),
+            "reason": "outside_configured_windows",
+            "processed": [],
+            "errors": [],
+            "alerts": [],
+        },
+    )
+
+    status = background.status()
+    assert blocking["has_blocking_result"] is True
+    assert noop["has_blocking_result"] is False
+    assert status["last_result"]["reason"] == "outside_configured_windows"
+    assert status["last_blocking_result"]["reason"] == "submit"
+    assert status["last_blocking_result"]["errors"][0]["type"] == "DataUnavailableError"
 
 
 def test_background_scheduler_exposes_retired_package_skip_without_selection_or_submit(
@@ -9646,6 +9766,147 @@ def test_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
     assert broker.place_order_payloads == []
 
 
+def test_scheduler_restart_recovers_exact_failed_durable_pending_runtime_without_parent_resubmit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_event_loop_test_scheduler(
+        execution_policy_json={
+            "algo_code": "TWAP_LITE_MINIQMT",
+            "algo_config": {"time": 60, "interval": 60},
+        }
+    )
+    runtime_store = tmp_path / "miniqmt-failed-durable-pending-restart.json"
+    monkeypatch.delenv("MINIQMT_EXECUTION_RUNTIME", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(runtime_store))
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    original = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    original_batch = deepcopy(original.run_payload_json["qmt_batch_result"])
+    runtime_evidence = deepcopy(original_batch["runtime_evidence"])
+    intent_count = len(submitted.results[0].execution_plan.intents)
+    duplicate_results = [
+        {
+            "success": False,
+            "intent_id": None,
+            "qmt_order_id": None,
+            "broker_called": False,
+            "broker_message": "event_loop preflight failed",
+            "preflight": {
+                "allowed": False,
+                "errors": [
+                    {
+                        "code": "DUPLICATE_ORDER_REMARK",
+                        "message": "order_remark already exists in this account",
+                        "context": {},
+                    }
+                ],
+            },
+        }
+        for _ in range(intent_count)
+    ]
+    failed_batch = {
+        **original_batch,
+        "success": False,
+        "batch_status": OrderBatchStatus.PREFLIGHT_FAILED.value,
+        "succeeded": 0,
+        "failed": intent_count,
+        "pending": 0,
+        "pending_child_trigger_count": 0,
+        "triggered_child_order_count": 0,
+        "results": duplicate_results,
+        "runtime_evidence": runtime_evidence,
+    }
+    failed = repo.update_simulation_daily_run(
+        original.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": intent_count,
+            "pending_intents": 0,
+            "qmt_batch_status": OrderBatchStatus.PREFLIGHT_FAILED.value,
+            "qmt_batch_result": failed_batch,
+            "submit_failure": {
+                "type": "QuoteContractError",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_FAILED",
+                "message": "quote-less ACTION_REJECT requires complete raw ingress identity",
+            },
+        },
+    )
+    plan = submitted.results[0].execution_plan
+    recovery_evidence = scheduler._miniqmt_failed_run_durable_pending_recovery_evidence(
+        binding=qmt_binding,
+        run=failed,
+        plan=plan,
+    )
+    assert recovery_evidence["eligible"] is True
+    assert recovery_evidence["runtime_id"] == runtime_evidence["runtime_id"]
+    assert recovery_evidence["pending_algo_count"] == intent_count
+    assert broker.place_order_payloads == []
+
+    for field, value, expected_conflict in (
+        ("runtime_id", "mqrt_tampered", "runtime_id_conflict"),
+        ("submitted_child_count", 1, "submitted_child_side_effect_present"),
+    ):
+        tampered_payload = deepcopy(failed.run_payload_json)
+        tampered_payload["qmt_batch_result"]["runtime_evidence"][field] = value
+        tampered_run = failed.model_copy(update={"run_payload_json": tampered_payload})
+        tampered_evidence = scheduler._miniqmt_failed_run_durable_pending_recovery_evidence(
+            binding=qmt_binding,
+            run=tampered_run,
+            plan=plan,
+        )
+        assert tampered_evidence["eligible"] is False
+        assert expected_conflict in tampered_evidence["conflicts"]
+        assert scheduler._should_drive_existing_miniqmt_event_loop(
+            binding=qmt_binding,
+            run=tampered_run,
+            plan=plan,
+            submit=True,
+        ) is False
+        assert scheduler._should_submit_existing_plan(
+            binding=qmt_binding,
+            run=tampered_run,
+            plan=plan,
+            submit=True,
+        ) is False
+
+    restart_activation = _PendingOnlyB0Activation()
+    restarted = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=scheduler.selection_service,
+        context_provider=scheduler.context_provider,
+        miniqmt_quote_ingress_activation=restart_activation,  # type: ignore[arg-type]
+    )
+    assert restart_activation.controller_factory.controllers == {}
+
+    recovered = restarted.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        raise_on_error=True,
+    )
+
+    latest = repo.get_simulation_daily_run(original.run_id)
+    assert recovered.results[0].status == "MINIQMT_EVENT_LOOP_TICK_DRIVEN"
+    assert latest.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert latest.run_payload_json["miniqmt_failed_run_recovery"]["status"] == "RECOVERED_TO_TICK_DRIVER"
+    assert latest.run_payload_json["miniqmt_failed_run_recovery"]["parent_resubmitted"] is False
+    assert latest.run_payload_json["miniqmt_failed_run_recovery"]["runtime_id"] == runtime_evidence["runtime_id"]
+    assert "submit_failure" not in latest.run_payload_json
+    assert runtime_evidence["runtime_id"] in restart_activation.controller_factory.controllers
+    assert restart_activation.controller_factory.recovering_active_by_runtime[runtime_evidence["runtime_id"]] is True
+    assert broker.place_order_payloads == []
+
+
 def test_event_loop_retry_restores_exact_owned_parent_intents_without_self_duplicate_preflight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -10811,6 +11072,11 @@ def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
     )
 
     class StaleSelectionService:
+        package_repository = FakePackageRepository(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
+
         def run_selection(self, **kwargs):
             return stale_selection
 
@@ -10883,6 +11149,10 @@ def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
     class StaleCutoffSelectionService:
         def __init__(self) -> None:
             self.resolver = StrategyPackageSelectionService(calendar_provider=RollingCalendar())
+            self.package_repository = FakePackageRepository(
+                package_id=release.package_id,
+                manifest_sha256=release.manifest_sha256,
+            )
 
         def run_selection(self, **kwargs):
             return stale_selection

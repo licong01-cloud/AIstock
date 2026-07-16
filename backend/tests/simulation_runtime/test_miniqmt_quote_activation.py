@@ -740,12 +740,21 @@ def test_unattended_roll_forward_preserves_b0_quote_control_without_revision_dri
         "schema_version": "miniqmt_quote_control_binding_v1",
         "control_revision": "B0_QUOTE_V2",
     }
-    _release, source = _release_and_binding(
+    release, source = _release_and_binding(
         repository,
         backend=SimulationBrokerBackend.MINIQMT_SIM,
         quote_control=quote_control,
     )
-    scheduler = SimulationLifecycleScheduler(repository=repository)
+    package_repository = SimpleNamespace(
+        get=lambda package_id: SimpleNamespace(
+            package_id=package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repository,
+        selection_service=SimpleNamespace(package_repository=package_repository),
+    )
 
     rolled = scheduler._roll_forward_unattended_binding(source=source, trade_date=date(2026, 7, 14))
 

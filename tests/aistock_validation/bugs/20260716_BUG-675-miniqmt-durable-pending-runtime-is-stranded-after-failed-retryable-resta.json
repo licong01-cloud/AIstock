@@ -3,7 +3,7 @@
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "docs/architecture/simulation_runtime_reliability_blueprint.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260716_BUG-675-miniqmt-durable-pending-runtime-is-stranded-after-failed-retryable-resta.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -30,7 +30,7 @@
   ],
   "expected": "Recover the existing controller and resume tick-driven processing without resubmitting the parent or duplicating broker calls.",
   "first_seen_at": "2026-07-16T07:24:58.926380Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2219,
@@ -50,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],
