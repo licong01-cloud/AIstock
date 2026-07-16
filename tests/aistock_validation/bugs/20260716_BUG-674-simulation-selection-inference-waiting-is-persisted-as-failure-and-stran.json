@@ -30,7 +30,7 @@
   ],
   "expected": "异步推理等待必须是显式非终态，不得覆盖已有有效 selection/plan 或记为业务失败；future 完成后由后续 tick 原子消费，超时才形成 typed failure，状态 API 必须暴露 in-flight identity 和 age。",
   "first_seen_at": "2026-07-16T07:19:34.430971Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2218,
@@ -50,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],

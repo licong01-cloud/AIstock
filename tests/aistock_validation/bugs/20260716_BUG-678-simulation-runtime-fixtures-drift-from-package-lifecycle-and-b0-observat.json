@@ -31,7 +31,7 @@
   ],
   "expected": "Simulation tests must provide explicit in-memory package lifecycle authority, use the current paired observation-context callback contract, and keep controlled ops ticks on the injected in-memory scheduler with no DB/broker dependency.",
   "first_seen_at": "2026-07-16T07:56:34.722691Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2222,
@@ -51,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],
