@@ -43,8 +43,8 @@
   "expected": "Missing, conflicting, non-positive, or non-finite required execution facts fail with a typed reason before success state is persisted; valid callback events remain durable and reconstructable with unchanged order quantity, price, direction, and identity semantics.",
   "first_seen_at": "2026-07-16T14:23:39.901497Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a4b23892cdd5c1662a38b29be736a93ca9d5242a",
+  "fixed_at": "2026-07-16T15:31:40.774196Z",
   "github_issue_number": 2232,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2232",
   "last_seen_at": "2026-07-16T14:23:39.901497Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2233",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -71,6 +72,10 @@
     "fingerprint": "554d0084063d78d570ebbffa",
     "source_event_id": "FE-20260716-554d0084063d"
   },
+  "validation_evidence": [
+    "pytest targeted MiniQMT gateway/OMS/scheduler matrix -> 31 passed",
+    "PR #2233 CI -> all required checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
