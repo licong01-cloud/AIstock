@@ -30,7 +30,7 @@
   ],
   "expected": "Startup and schedule refresh terminalize stale running jobs with established timeout semantics and allow normal retry; fresh running jobs remain untouched.",
   "first_seen_at": "2026-07-16T07:29:56.652107Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-677-ingestion-stale-running-sector-data-20260716",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2221,
@@ -50,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "aistock_backend"
   ],
