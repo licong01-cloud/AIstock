@@ -1,8 +1,9 @@
 {
   "actual": "A more-than-16-hour-old sector_data job survived restart and blocked LocalSIM readiness while TDX was healthy.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-    "docs/architecture/simulation_runtime_reliability_blueprint.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260716_BUG-677-ingestion-startup-leaves-stale-running-sector-data-job-blocking-localsim.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,7 +30,7 @@
   ],
   "expected": "Startup and schedule refresh terminalize stale running jobs with established timeout semantics and allow normal retry; fresh running jobs remain untouched.",
   "first_seen_at": "2026-07-16T07:29:56.652107Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-677-ingestion-stale-running-sector-data-20260716",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2221,
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "aistock_backend"
   ],

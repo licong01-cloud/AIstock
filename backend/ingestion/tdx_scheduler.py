@@ -80,6 +80,7 @@ _AUTO_RETRY_SCHEDULE_ALIASES = {physical: scheduled for scheduled, physical in _
 _SCHEDULE_ERROR_CLEAR_STATUSES = frozenset({"success"})
 _STALE_QUEUED_JOB_MINUTES = 10
 _TARGET_STALE_QUEUED_JOB_MINUTES = _AUTO_RETRY_LEASE_MINUTES
+_STALE_RUNNING_JOB_MINUTES = _ACTIVE_JOB_LEASE_MINUTES
 _AVAILABILITY_LAG_TRADING_DAYS = {"margin_detail": 1}
 _AVAILABILITY_READY_AT = {"margin_detail": dt.time(19, 10)}
 _DAILY_DATA_COMPLETION_READY_AT = dt.time(16, 0)
@@ -661,6 +662,132 @@ class TDXScheduler:
                     _logger.warning("failed to release stale target job %s: %s", row.get("job_id"), exc)
         return count
 
+    def _reconcile_stale_running_ingestion_jobs(
+        self,
+        older_than_minutes: int = _STALE_RUNNING_JOB_MINUTES,
+        dataset: Optional[str] = None,
+        mode: Optional[str] = None,
+        reason: str = "scheduler_stale_running_reconciliation",
+    ) -> int:
+        """Terminalize jobs whose execution lease cannot survive scheduler restart.
+
+        This is the startup/readiness counterpart of the 23:00 zombie cleanup.
+        It never touches a fresh running job and preserves the original row as
+        explicit timeout evidence instead of deleting or silently replacing it.
+        """
+
+        minutes = max(int(older_than_minutes), 1)
+        ds = (dataset or "").strip().lower() or None
+        md = (mode or "").strip().lower() or None
+        payload = {
+            "schema_version": "ingestion_stale_running_reconciliation_v1",
+            "stale_reconciled": True,
+            "stale_previous_status": "running",
+            "stale_reason": reason,
+            "stale_running_timeout_minutes": minutes,
+            "error": reason,
+        }
+        rows = self._fetchall(
+            """
+            UPDATE market.ingestion_jobs
+               SET status = 'timeout',
+                   finished_at = NOW(),
+                   summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+             WHERE status = 'running'
+               AND started_at IS NOT NULL
+               AND started_at < NOW() - (%s || ' minutes')::interval
+               AND (%s IS NULL OR lower(summary->>'dataset') = %s)
+               AND (%s IS NULL OR lower(COALESCE(summary->>'mode', '')) = %s)
+             RETURNING job_id,
+                       summary->>'schedule_id' AS schedule_id,
+                       summary->>'data_sync_target_id' AS data_sync_target_id,
+                       summary->>'triggered_by' AS triggered_by
+            """,
+            (
+                json.dumps(payload, ensure_ascii=False, default=str),
+                str(minutes),
+                ds,
+                ds,
+                md,
+                md,
+            ),
+        )
+        if not rows:
+            return 0
+
+        _logger.warning(
+            "reconciled %d stale running ingestion jobs older than %d minutes as timeout",
+            len(rows),
+            minutes,
+        )
+        for row in rows:
+            schedule_id = str(row.get("schedule_id") or "").strip()
+            if schedule_id:
+                try:
+                    uuid.UUID(schedule_id)
+                except ValueError:
+                    _logger.error(
+                        "stale running job has invalid schedule_id",
+                        extra={
+                            "reason_code": "INGESTION_STALE_RUNNING_SCHEDULE_ID_INVALID",
+                            "job_id": str(row.get("job_id") or ""),
+                            "schedule_id": schedule_id,
+                        },
+                    )
+                else:
+                    try:
+                        self._execute(
+                            """
+                            UPDATE market.ingestion_schedules
+                               SET last_status = 'failed',
+                                   last_error = %s,
+                                   updated_at = NOW()
+                             WHERE schedule_id = %s
+                               AND last_status IN ('queued', 'running')
+                            """,
+                            (reason, schedule_id),
+                        )
+                    except Exception:  # noqa: BLE001 - the timed-out job remains durable and this is loud.
+                        _logger.exception(
+                            "failed to project stale running job %s to schedule %s",
+                            row.get("job_id"),
+                            schedule_id,
+                        )
+
+            target_id = str(row.get("data_sync_target_id") or "").strip()
+            if not target_id:
+                continue
+            retry_after = _now() + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES)
+            context = {
+                "schema_version": "data_sync_target_stale_running_release_v1",
+                "stale_reconciled": True,
+                "stale_reason": reason,
+                "job_id": str(row.get("job_id") or ""),
+                "previous_status": "running",
+            }
+            try:
+                repo = DataSyncTargetRepository()
+                repo.mark_retry(target_id, retry_after=retry_after, reason=reason, context=context)
+                repo.record_attempt(
+                    DataSyncAttemptRecord(
+                        target_id=target_id,
+                        status="retry",
+                        trigger_source="stale_running_reconciliation",
+                        job_id=str(row.get("job_id") or "") or None,
+                        finished_at=_now(),
+                        error_message=reason,
+                        retry_after=retry_after,
+                        context_json=context,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - never hide a target-release failure.
+                _logger.exception(
+                    "failed to release stale running data-sync target job %s target=%s",
+                    row.get("job_id"),
+                    target_id,
+                )
+        return len(rows)
+
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
         rows = self._fetchall(
             """
@@ -773,9 +900,13 @@ class TDXScheduler:
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
         try:
+            self._reconcile_stale_running_ingestion_jobs()
+        except Exception:  # noqa: BLE001 - refresh continues so the next cadence can retry.
+            _logger.exception("stale running ingestion job reconciliation failed")
+        try:
             self._reconcile_stale_queued_ingestion_jobs()
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("stale queued ingestion job reconciliation failed: %s", exc)
+        except Exception:  # noqa: BLE001
+            _logger.exception("stale queued ingestion job reconciliation failed")
         testing = self._fetchall(
             """
             SELECT schedule_id, enabled, frequency, options
@@ -3131,17 +3262,15 @@ class TDXScheduler:
 
             # ── Phase 0: 僵尸 job 清理 ──────────────────────────────────
             try:
-                self._execute("""
-                    UPDATE market.ingestion_jobs
-                    SET status = 'timeout', finished_at = NOW(),
-                        summary = COALESCE(summary::jsonb,'{}'::jsonb)
-                                  || '{"error":"auto-cleanup: running > 2h"}'::jsonb
-                    WHERE status = 'running'
-                      AND started_at < NOW() - INTERVAL '2 hours'
-                """)
-                _log.info("auto-retry Phase 0: cleaned up zombie running jobs (>2h)")
-            except Exception as exc:
-                _log.warning("Phase 0 zombie cleanup failed: %s", exc)
+                reconciled_running = self._reconcile_stale_running_ingestion_jobs(
+                    reason="auto_retry_stale_phase0",
+                )
+                _log.info(
+                    "auto-retry Phase 0: reconciled %d zombie running jobs (>2h)",
+                    reconciled_running,
+                )
+            except Exception:  # noqa: BLE001 - later phases continue, but cleanup failure is loud.
+                _log.exception("Phase 0 zombie cleanup failed")
 
             # Phase 1: run the same health checker used by alerting instead of
             # maintaining a separate hard-coded MAX(date) list here.
