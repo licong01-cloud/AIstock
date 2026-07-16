@@ -725,27 +725,44 @@ class MiniQMTExecutionRuntime:
         payload: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        order_payload = dict(payload or {})
         child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
-        event = self.events.append(
-            runtime_id=runtime.runtime_id,
-            event_type=MiniQMTExecutionEventType.ORDER_EVENT,
-            source="gateway",
-            payload={"broker_order_id": broker_order_id, "status": status, **dict(payload or {})},
-        )
-        risk_triggered = False
-        child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
-        if child is not None:
-            broker_status_payload = {**dict(payload or {}), "order_status": status}
-            broker_status_payload.setdefault("status", status)
-            child_status = _child_status_from_broker_order_snapshot(
+        cumulative_quantity = _order_event_cumulative_quantity(order_payload)
+        if child is not None and cumulative_quantity is not None and cumulative_quantity > child.quantity:
+            raise RuntimeError(
+                "MiniQMT order callback cumulative quantity exceeds its child order; "
+                "reason_code=MINIQMT_RUNTIME_ORDER_CUMULATIVE_QUANTITY_INVALID, "
+                f"broker_order_id={broker_order_id!r}, cumulative_quantity={cumulative_quantity}, "
+                f"child_quantity={child.quantity}"
+            )
+        broker_status_payload = {
+            **order_payload,
+            "broker_order_id": broker_order_id,
+            "order_status": status,
+            "status": status,
+            **({"traded_volume": cumulative_quantity} if cumulative_quantity is not None else {}),
+        }
+        child_status = (
+            _child_status_from_broker_order_snapshot(
                 broker_status_payload,
                 child_quantity=child.quantity,
                 broker_trades=[],
             )
+            if child is not None
+            else None
+        )
+        event = self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=MiniQMTExecutionEventType.ORDER_EVENT,
+            source="gateway",
+            payload=broker_status_payload,
+        )
+        risk_triggered = False
+        if child is not None:
             child_metadata = {
                 **dict(child.metadata),
-                "status_msg": str((payload or {}).get("status_msg") or child.metadata.get("status_msg") or ""),
-                "broker_order_event": dict(payload or {}),
+                "status_msg": str(order_payload.get("status_msg") or child.metadata.get("status_msg") or ""),
+                "broker_order_event": broker_status_payload,
             }
             child = self.oms.record_child_order(
                 child.model_copy(update={"status": child_status, "metadata": child_metadata})
@@ -769,11 +786,11 @@ class MiniQMTExecutionRuntime:
                     VnpyOrderUpdate(
                         vt_orderid=str(child.metadata.get("vnpy_vt_orderid") or child.child_order_id),
                         active=child_status not in _TERMINAL_CHILD_ORDER_STATUSES,
-                        traded=int((payload or {}).get("traded") or (payload or {}).get("filled_quantity") or 0),
-                        price=_optional_float((payload or {}).get("price") or child.price),
+                        traded=cumulative_quantity or 0,
+                        price=_optional_float(order_payload.get("price") or child.price),
                         raw_status=str(status),
-                        status_msg=str((payload or {}).get("status_msg") or ""),
-                        raw={"broker_order_id": broker_order_id, **dict(payload or {})},
+                        status_msg=str(order_payload.get("status_msg") or ""),
+                        raw=broker_status_payload,
                     )
                 )
                 self._persist_vnpy_core_state(instance, core)
@@ -797,7 +814,28 @@ class MiniQMTExecutionRuntime:
         payload: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        quantity = _required_trade_quantity(quantity)
+        price = _required_trade_price(price)
+        trade_payload = dict(payload or {})
         child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
+        cumulative_quantity = _trade_cumulative_quantity(trade_payload, default=quantity)
+        if child is not None and (cumulative_quantity < quantity or cumulative_quantity > child.quantity):
+            raise RuntimeError(
+                "MiniQMT trade callback cumulative quantity is inconsistent with its child order; "
+                "reason_code=MINIQMT_RUNTIME_TRADE_CUMULATIVE_QUANTITY_INVALID, "
+                f"broker_order_id={broker_order_id!r}, quantity={quantity}, "
+                f"cumulative_quantity={cumulative_quantity}, child_quantity={child.quantity}"
+            )
+        prepared_trade = (
+            self.oms.prepare_trade_fill(
+                child,
+                quantity=quantity,
+                price=price,
+                payload=trade_payload,
+            )
+            if child is not None
+            else None
+        )
         anchor_payload: dict[str, Any] | None = None
         anchor_error: Exception | None = None
         if (
@@ -810,7 +848,7 @@ class MiniQMTExecutionRuntime:
                     child=child,
                     quantity=quantity,
                     price=price,
-                    payload=dict(payload or {}),
+                    payload=trade_payload,
                 )
             except Exception as exc:  # Trade fact remains authoritative; failure is persisted and re-raised.
                 anchor_error = exc
@@ -819,10 +857,20 @@ class MiniQMTExecutionRuntime:
             event_type=MiniQMTExecutionEventType.TRADE_EVENT,
             source="gateway",
             payload={
+                **trade_payload,
                 "broker_order_id": broker_order_id,
                 "quantity": quantity,
                 "price": price,
-                **dict(payload or {}),
+                "cumulative_quantity": cumulative_quantity,
+                "trade_fact_schema_version": "miniqmt_trade_event_fact_v1",
+                **(
+                    {
+                        "qmt_strategy_trade_id": prepared_trade.trade_id,
+                        "qmt_strategy_trade_fact_sha256": prepared_trade.canonical_trade_fact_sha256,
+                    }
+                    if prepared_trade is not None
+                    else {}
+                ),
                 **({"quote_evidence_markout_anchor_v1": anchor_payload} if anchor_payload is not None else {}),
                 **(
                     {
@@ -840,9 +888,6 @@ class MiniQMTExecutionRuntime:
         )
         risk_triggered = False
         if child is not None:
-            cumulative_quantity = int(
-                (payload or {}).get("cumulative_quantity") or (payload or {}).get("filled_quantity") or quantity
-            )
             updated_child = child.model_copy(
                 update={
                     "status": MiniQMTChildOrderStatus.FILLED
@@ -851,22 +896,26 @@ class MiniQMTExecutionRuntime:
                     "metadata": {
                         **dict(child.metadata),
                         "last_trade_event": {
+                            **trade_payload,
                             "broker_order_id": broker_order_id,
                             "quantity": quantity,
                             "price": price,
-                            **dict(payload or {}),
+                            "cumulative_quantity": cumulative_quantity,
+                            **(
+                                {
+                                    "qmt_strategy_trade_id": prepared_trade.trade_id,
+                                    "qmt_strategy_trade_fact_sha256": prepared_trade.canonical_trade_fact_sha256,
+                                }
+                                if prepared_trade is not None
+                                else {}
+                            ),
                         },
                         "last_trade_price": price,
                         "cumulative_quantity": cumulative_quantity,
                     },
                 }
             )
-            trade_record, _trade_inserted = self.oms.record_trade_fill(
-                updated_child,
-                quantity=quantity,
-                price=price,
-                payload=payload,
-            )
+            trade_record, _trade_inserted = self.oms.persist_prepared_trade_fill(prepared_trade)
             if updated_child.side == OrderSide.SELL and trade_record is not None:
                 self.oms.settle_sell_trade_cash_once(trade_record)
             child = self.oms.record_child_order(updated_child)
@@ -3504,6 +3553,95 @@ def _child_price_type_from_metadata(metadata: dict[str, Any]) -> int:
             f"reason_code=MINIQMT_EVENT_LOOP_PRICE_TYPE_INVALID, price_type={raw!r}"
         )
     return price_type
+
+
+def _required_runtime_integer(value: Any, *, reason_code: str, field_name: str, allow_zero: bool) -> int:
+    try:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not an integer runtime fact")
+        parsed_decimal = Decimal(str(value))
+        if not parsed_decimal.is_finite() or parsed_decimal != parsed_decimal.to_integral_value():
+            raise ValueError("runtime fact is not a finite integer")
+        parsed = int(parsed_decimal)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT runtime received an invalid integer fact; "
+            f"reason_code={reason_code}, field_name={field_name}, value={value!r}"
+        ) from exc
+    if parsed < 0 or (parsed == 0 and not allow_zero):
+        raise RuntimeError(
+            "MiniQMT runtime received an out-of-range integer fact; "
+            f"reason_code={reason_code}, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _required_trade_quantity(value: Any) -> int:
+    return _required_runtime_integer(
+        value,
+        reason_code="MINIQMT_RUNTIME_TRADE_QUANTITY_INVALID",
+        field_name="trade_quantity",
+        allow_zero=False,
+    )
+
+
+def _order_event_cumulative_quantity(payload: dict[str, Any]) -> int | None:
+    parsed_by_key: dict[str, int] = {}
+    for key in ("cumulative_quantity", "filled_quantity", "traded_volume", "traded"):
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        parsed_by_key[key] = _required_runtime_integer(
+            value,
+            reason_code="MINIQMT_RUNTIME_ORDER_CUMULATIVE_QUANTITY_INVALID",
+            field_name=key,
+            allow_zero=True,
+        )
+    if not parsed_by_key:
+        return None
+    if len(set(parsed_by_key.values())) != 1:
+        raise RuntimeError(
+            "MiniQMT runtime received conflicting cumulative order quantity aliases; "
+            "reason_code=MINIQMT_RUNTIME_ORDER_CUMULATIVE_QUANTITY_CONFLICT, "
+            f"parsed_values={parsed_by_key!r}"
+        )
+    return next(iter(parsed_by_key.values()))
+
+
+def _required_trade_price(value: Any) -> float:
+    try:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not a trade price")
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT runtime received invalid trade price; "
+            f"reason_code=MINIQMT_RUNTIME_TRADE_PRICE_INVALID, value={value!r}"
+        ) from exc
+    if parsed <= 0 or not math.isfinite(parsed):
+        raise RuntimeError(
+            "MiniQMT runtime received non-positive or non-finite trade price; "
+            f"reason_code=MINIQMT_RUNTIME_TRADE_PRICE_INVALID, value={value!r}"
+        )
+    return parsed
+
+
+def _trade_cumulative_quantity(payload: dict[str, Any], *, default: int) -> int:
+    parsed_by_key: dict[str, int] = {}
+    for key in ("cumulative_quantity", "filled_quantity"):
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        parsed_by_key[key] = _required_trade_quantity(value)
+    if not parsed_by_key:
+        return default
+    if len(set(parsed_by_key.values())) != 1:
+        raise RuntimeError(
+            "MiniQMT runtime received conflicting cumulative trade quantity aliases; "
+            "reason_code=MINIQMT_RUNTIME_TRADE_CUMULATIVE_QUANTITY_CONFLICT, "
+            f"parsed_values={parsed_by_key!r}"
+        )
+    return next(iter(parsed_by_key.values()))
 
 
 def _resolve_vnpy_board_lot_params(

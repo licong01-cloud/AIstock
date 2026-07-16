@@ -11,6 +11,7 @@ from backend.services.miniqmt_execution_runtime import (
     InMemoryMiniQMTExecutionRuntimeRepository,
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrderStatus,
+    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeClient,
 )
 from backend.services.miniqmt_execution_runtime.config import MiniQMTExecutionRuntimeKind
@@ -132,6 +133,118 @@ def test_event_loop_oms_writes_child_order_and_trade_facts_to_qmt_strategy_ledge
     assert filled.traded_volume == 100
     assert len(ledger_repo._trade_ledgers) == 1
     assert runtime.repository.list_child_orders(runtime.config.runtime_id, active_only=True) == []
+
+
+@pytest.mark.parametrize(
+    ("quantity", "price", "payload", "reason_code"),
+    [
+        (0, 10.2, {"trade_id": "trade_zero_quantity"}, "MINIQMT_RUNTIME_TRADE_QUANTITY_INVALID"),
+        (100, float("inf"), {"trade_id": "trade_infinite_price"}, "MINIQMT_RUNTIME_TRADE_PRICE_INVALID"),
+        (100, 10.2, {}, "MINIQMT_RUNTIME_TRADE_ID_MISSING"),
+        (
+            100,
+            10.2,
+            {"trade_id": "trade_invalid_cumulative", "cumulative_quantity": 50},
+            "MINIQMT_RUNTIME_TRADE_CUMULATIVE_QUANTITY_INVALID",
+        ),
+    ],
+)
+def test_event_loop_trade_preflight_rejects_invalid_fact_before_durable_event_or_ledger_write(
+    quantity: int,
+    price: float,
+    payload: dict,
+    reason_code: str,
+) -> None:
+    ledger_repo = InMemoryQmtStrategyLedgerRepository()
+    runtime, _client = _event_loop_runtime(ledger_repo=ledger_repo)
+    child = _create_child(runtime)
+    trade_event_count_before = sum(
+        event.event_type == MiniQMTExecutionEventType.TRADE_EVENT
+        for event in runtime.repository.list_events(runtime.config.runtime_id)
+    )
+
+    with pytest.raises(RuntimeError, match=reason_code):
+        runtime.record_trade_event(
+            broker_order_id=child.broker_order_id or "",
+            quantity=quantity,
+            price=price,
+            payload=payload,
+        )
+
+    assert (
+        sum(
+            event.event_type == MiniQMTExecutionEventType.TRADE_EVENT
+            for event in runtime.repository.list_events(runtime.config.runtime_id)
+        )
+        == trade_event_count_before
+    )
+    assert ledger_repo._trade_ledgers == {}
+
+
+def test_event_loop_trade_event_and_qmt_strategy_ledger_share_canonical_trade_fact_hash() -> None:
+    ledger_repo = InMemoryQmtStrategyLedgerRepository()
+    runtime, _client = _event_loop_runtime(ledger_repo=ledger_repo)
+    child = _create_child(runtime)
+
+    event = runtime.record_trade_event(
+        broker_order_id=child.broker_order_id or "",
+        quantity=100,
+        price=10.2,
+        payload={"trade_id": "trade_hash_link_001", "cumulative_quantity": 100},
+    )
+
+    trade = next(iter(ledger_repo._trade_ledgers.values()))
+    assert event.payload["qmt_strategy_trade_id"] == trade.trade_id
+    assert event.payload["qmt_strategy_trade_fact_sha256"] == trade.canonical_trade_fact_sha256
+    stored_child = runtime.repository.list_child_orders(runtime.config.runtime_id, active_only=False)[0]
+    assert (
+        stored_child.metadata["last_trade_event"]["qmt_strategy_trade_fact_sha256"]
+        == trade.canonical_trade_fact_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason_code"),
+    [
+        (
+            {"traded_volume": "invalid"},
+            "MINIQMT_RUNTIME_ORDER_CUMULATIVE_QUANTITY_INVALID",
+        ),
+        (
+            {"traded_volume": 50, "filled_quantity": 60},
+            "MINIQMT_RUNTIME_ORDER_CUMULATIVE_QUANTITY_CONFLICT",
+        ),
+    ],
+)
+def test_event_loop_order_numeric_preflight_rejects_invalid_fact_before_durable_event_or_projection(
+    payload: dict,
+    reason_code: str,
+) -> None:
+    ledger_repo = InMemoryQmtStrategyLedgerRepository()
+    runtime, _client = _event_loop_runtime(ledger_repo=ledger_repo)
+    child = _create_child(runtime)
+    order_event_count_before = sum(
+        event.event_type == MiniQMTExecutionEventType.ORDER_EVENT
+        for event in runtime.repository.list_events(runtime.config.runtime_id)
+    )
+
+    with pytest.raises(RuntimeError, match=reason_code):
+        runtime.record_order_event(
+            broker_order_id=child.broker_order_id or "",
+            status=str(STATUS_PART_SUCC),
+            payload=payload,
+        )
+
+    assert (
+        sum(
+            event.event_type == MiniQMTExecutionEventType.ORDER_EVENT
+            for event in runtime.repository.list_events(runtime.config.runtime_id)
+        )
+        == order_event_count_before
+    )
+    order_fact = ledger_repo.get_order_ledger(ACCOUNT_ID, child.broker_order_id or "")
+    assert order_fact is not None
+    assert order_fact.traded_volume == 0
 
 
 def test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_runtime_is_retired() -> None:

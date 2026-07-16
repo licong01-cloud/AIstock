@@ -116,8 +116,28 @@ class MiniQMTOmsLedger:
         price: float,
         payload: dict[str, Any] | None = None,
     ) -> tuple[TradeLedgerRecord | None, bool]:
+        trade = self.prepare_trade_fill(
+            child_order,
+            quantity=quantity,
+            price=price,
+            payload=payload,
+        )
+        return self.persist_prepared_trade_fill(trade)
+
+    def prepare_trade_fill(
+        self,
+        child_order: MiniQMTChildOrder,
+        *,
+        quantity: int,
+        price: float,
+        payload: dict[str, Any] | None = None,
+    ) -> TradeLedgerRecord | None:
+        """Validate and canonicalize a trade fact before its durable event append."""
+
+        normalized_quantity = _positive_int(quantity, field_name="trade_quantity")
+        normalized_price = _positive_decimal(price, field_name="trade_price")
         if self._strategy_ledger_repository is None:
-            return None, False
+            return None
         self._require_qmt_strategy_context()
         trade_id = _trade_id(payload or {})
         if not trade_id:
@@ -140,9 +160,9 @@ class MiniQMTOmsLedger:
             qmt_order_sysid=_optional_text((payload or {}).get("qmt_order_sysid") or (payload or {}).get("order_sysid")),
             symbol=child_order.symbol,
             side=child_order.side.value,
-            price=_decimal(price, field_name="trade_price"),
-            quantity=max(int(quantity), 0),
-            amount=_decimal(price, field_name="trade_price") * Decimal(max(int(quantity), 0)),
+            price=normalized_price,
+            quantity=normalized_quantity,
+            amount=normalized_price * Decimal(normalized_quantity),
             trade_date=self._trade_date,
             account_id=self._account_id or "",
             commission=_decimal(
@@ -166,10 +186,23 @@ class MiniQMTOmsLedger:
                 qmt_order_id=qmt_order_id,
                 symbol=child_order.symbol,
                 side=child_order.side.value,
-                price=_decimal(price, field_name="trade_price"),
-                quantity=max(int(quantity), 0),
+                price=normalized_price,
+                quantity=normalized_quantity,
             ),
         )
+        return trade
+
+    def persist_prepared_trade_fill(
+        self,
+        trade: TradeLedgerRecord | None,
+    ) -> tuple[TradeLedgerRecord | None, bool]:
+        if trade is None:
+            return None, False
+        if self._strategy_ledger_repository is None:
+            raise RuntimeError(
+                "MiniQMT prepared trade fact lost qmt_strategy ledger authority before persistence; "
+                "reason_code=MINIQMT_RUNTIME_TRADE_LEDGER_AUTHORITY_MISSING"
+            )
         return self._strategy_ledger_repository.upsert_trade_ledger(trade)
 
     def settle_sell_trade_cash_once(self, trade: TradeLedgerRecord) -> tuple[CashLedgerEntry, bool]:
@@ -564,30 +597,21 @@ def _traded_volume(order: MiniQMTChildOrder) -> int:
         value = order.metadata.get(key)
         if value in (None, ""):
             continue
-        try:
-            return max(int(value), 0)
-        except (TypeError, ValueError):
-            continue
+        return _nonnegative_int(value, field_name=f"child_order.metadata.{key}")
     trade_event = order.metadata.get("last_trade_event")
     if isinstance(trade_event, dict):
         for key in ("cumulative_quantity", "filled_quantity", "traded_volume", "quantity"):
             value = trade_event.get(key)
             if value in (None, ""):
                 continue
-            try:
-                return max(int(value), 0)
-            except (TypeError, ValueError):
-                continue
+            return _nonnegative_int(value, field_name=f"child_order.metadata.last_trade_event.{key}")
     order_event = order.metadata.get("broker_order_event")
     if isinstance(order_event, dict):
         for key in ("cumulative_quantity", "filled_quantity", "traded_volume", "quantity"):
             value = order_event.get(key)
             if value in (None, ""):
                 continue
-            try:
-                return max(int(value), 0)
-            except (TypeError, ValueError):
-                continue
+            return _nonnegative_int(value, field_name=f"child_order.metadata.broker_order_event.{key}")
     if order.status == MiniQMTChildOrderStatus.FILLED:
         return int(order.quantity)
     return 0
@@ -638,6 +662,47 @@ def _decimal(value: Any, *, field_name: str) -> Decimal:
         raise RuntimeError(
             "MiniQMT event-loop OMS received non-finite decimal field; "
             f"reason_code=MINIQMT_RUNTIME_OMS_DECIMAL_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _positive_decimal(value: Any, *, field_name: str) -> Decimal:
+    parsed = _decimal(value, field_name=field_name)
+    if parsed <= 0:
+        raise RuntimeError(
+            "MiniQMT event-loop OMS received non-positive decimal field; "
+            f"reason_code=MINIQMT_RUNTIME_OMS_DECIMAL_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _nonnegative_int(value: Any, *, field_name: str) -> int:
+    try:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not an integer fact")
+        parsed_decimal = Decimal(str(value))
+        if not parsed_decimal.is_finite() or parsed_decimal != parsed_decimal.to_integral_value():
+            raise ValueError("value is not a finite integer")
+        parsed = int(parsed_decimal)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT event-loop OMS received invalid integer field; "
+            f"reason_code=MINIQMT_RUNTIME_OMS_INTEGER_INVALID, field_name={field_name}, value={value!r}"
+        ) from exc
+    if parsed < 0:
+        raise RuntimeError(
+            "MiniQMT event-loop OMS received negative integer field; "
+            f"reason_code=MINIQMT_RUNTIME_OMS_INTEGER_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _positive_int(value: Any, *, field_name: str) -> int:
+    parsed = _nonnegative_int(value, field_name=field_name)
+    if parsed <= 0:
+        raise RuntimeError(
+            "MiniQMT event-loop OMS received non-positive integer field; "
+            f"reason_code=MINIQMT_RUNTIME_OMS_INTEGER_INVALID, field_name={field_name}, value={value!r}"
         )
     return parsed
 

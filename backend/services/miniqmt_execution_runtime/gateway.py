@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from backend.services.trading_core.models import OrderSide
@@ -516,34 +517,84 @@ def _payload_text(payload: dict[str, Any], *keys: str) -> str | None:
 
 
 def _payload_int(payload: dict[str, Any], *keys: str) -> int:
+    parsed_by_key: dict[str, int] = {}
     for key in keys:
         value = payload.get(key)
         if value in (None, ""):
             continue
         try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            continue
-        if parsed >= 0:
-            return parsed
+            if isinstance(value, bool):
+                raise ValueError("boolean is not an integer callback fact")
+            decimal_value = Decimal(str(value))
+            if not decimal_value.is_finite() or decimal_value != decimal_value.to_integral_value():
+                raise ValueError("callback fact is not a finite integer")
+            parsed = int(decimal_value)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains an invalid integer field",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+                context={"field": key, "value": value, "keys": list(keys)},
+            ) from exc
+        if parsed <= 0:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains a non-positive integer field",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+                context={"field": key, "value": value, "keys": list(keys)},
+            )
+        parsed_by_key[key] = parsed
+    if parsed_by_key:
+        distinct_values = set(parsed_by_key.values())
+        if len(distinct_values) != 1:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains conflicting integer aliases",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_CONFLICT",
+                context={"keys": list(keys), "parsed_values": parsed_by_key},
+            )
+        return next(iter(distinct_values))
     raise MiniQMTGatewayEventSourceError(
-        "MiniQMT callback missing non-negative integer field",
+        "MiniQMT callback missing positive integer field",
         reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_MISSING",
-        context={"keys": list(keys), "payload": payload},
+        context={"keys": list(keys)},
     )
 
 
 def _payload_float(payload: dict[str, Any], *keys: str) -> float:
+    parsed_by_key: dict[str, Decimal] = {}
     for key in keys:
         value = payload.get(key)
         if value in (None, ""):
             continue
         try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
+            if isinstance(value, bool):
+                raise ValueError("boolean is not a numeric callback fact")
+            parsed = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains an invalid numeric price field",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+                context={"field": key, "value": value, "keys": list(keys)},
+            ) from exc
+        if not parsed.is_finite() or parsed <= 0:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains a non-positive or non-finite price field",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_INVALID",
+                context={"field": key, "value": value, "keys": list(keys)},
+            )
+        parsed_by_key[key] = parsed
+    if parsed_by_key:
+        distinct_values = set(parsed_by_key.values())
+        if len(distinct_values) != 1:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT callback contains conflicting numeric price aliases",
+                reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_CONFLICT",
+                context={
+                    "keys": list(keys),
+                    "parsed_values": {key: str(value) for key, value in parsed_by_key.items()},
+                },
+            )
+        return float(next(iter(distinct_values)))
     raise MiniQMTGatewayEventSourceError(
         "MiniQMT callback missing numeric price field",
         reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_MISSING",
-        context={"keys": list(keys), "payload": payload},
+        context={"keys": list(keys)},
     )
