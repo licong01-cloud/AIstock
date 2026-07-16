@@ -222,9 +222,9 @@ class _NoCallQmtClient:
 class _RecordingRecoveryController:
     def __init__(self, runtime_id: str) -> None:
         self.runtime_id = runtime_id
-        self.lifecycle_ticks: list[datetime] = []
+        self.lifecycle_ticks: list[datetime | None] = []
 
-    def lifecycle_tick(self, *, now_utc: datetime) -> None:
+    def lifecycle_tick(self, *, now_utc: datetime | None = None) -> None:
         self.lifecycle_ticks.append(now_utc)
 
 
@@ -412,7 +412,7 @@ def test_client_tick_driver_recovers_durable_active_b0_through_drain_delegate() 
         }
     ]
     assert delegate.controller is not None
-    assert delegate.controller.lifecycle_ticks == [tick_time]
+    assert delegate.controller.lifecycle_ticks == [None]
     assert qmt_client.calls == []
 
 
@@ -514,6 +514,10 @@ def test_activation_parses_frozen_plan_and_publishes_exact_runtime_context() -> 
 
         def release_runtime_context(self, runtime_id: str) -> None:
             captured["released_runtime_id"] = runtime_id
+
+        def advance_clock(self, **kwargs: Any) -> SimpleNamespace:
+            captured["advanced_clock"] = dict(kwargs)
+            return SimpleNamespace(context_id="advanced-context")
 
         def prepare_runtime_context(self, **kwargs: Any) -> SimpleNamespace:
             captured.update(kwargs)

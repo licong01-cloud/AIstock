@@ -10,6 +10,7 @@
     "backend/services/simulation_runtime/miniqmt_quote_activation.py",
     "backend/services/simulation_runtime/miniqmt_quote_context.py",
     "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
     "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
