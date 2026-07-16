@@ -9,6 +9,7 @@ import os
 import stat
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,16 +39,24 @@ from backend.services.advisory_phase1.release_schema_verify_postgres import (
 from .contracts import (
     AlphaComponentEvidence,
     AlphaMode,
+    ALLOWED_EXPORT_PACKAGE_STATUSES,
+    BundleBlobRef,
+    BundlePackageRef,
+    DependencyEdge,
     EvidenceKind,
     InventoryClassification,
+    NativeMultiComponentRef,
     OnboardingArtifactRef,
     PackageClosureStatus,
     PackageInventoryCandidate,
+    PortableAdvisoryEvidenceBundle,
+    PortableRelationRowSet,
     RealDevOnboardingError,
     RealDevOnboardingInventoryReceipt,
     RealDevOnboardingInventoryQuery,
     RealDevOnboardingRequest,
     REASON_DATABASE_CONNECTION_FAILED,
+    REASON_BUNDLE_EXPORT_FAILED,
     REASON_ENV_INVALID,
     REASON_MULTI_TRACK_MISSING,
     REASON_PACKAGE_MANIFEST_MISMATCH,
@@ -62,8 +71,12 @@ from .contracts import (
     REASON_SOURCE_PROGRAM_MISSING,
     REASON_TARGET_CONFLICT,
     SourceFactEligibility,
+    compute_portable_manifest_json_sha256,
     database_identity_hash,
+    portable_manifest_runtime_asset_refs,
+    validate_sha256,
 )
+from .store import RealDevOnboardingEvidenceStore, resolve_package_asset_roots
 
 
 LOGGER = logging.getLogger(__name__)
@@ -72,6 +85,47 @@ InventoryInput = RealDevOnboardingRequest | RealDevOnboardingInventoryQuery
 
 READONLY_STATEMENT_TIMEOUT_MS = 120_000
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+
+PACKAGE_SEMANTIC_COLUMNS = (
+    "package_id",
+    "package_name",
+    "package_version",
+    "source_type",
+    "source_id",
+    "loop_id",
+    "run_id",
+    "package_status",
+    "manifest_json",
+    "manifest_sha256",
+    "alpha_mode",
+    "signal_domain",
+    "display_name",
+    "legacy_name",
+    "data_vintage",
+    "prediction_ref_uri",
+    "prediction_ref_sha256",
+    "model_artifact_uri",
+    "model_artifact_sha256",
+    "seed_policy",
+    "master_seed",
+    "seed_sequence",
+    "seed_contract",
+    "seed_contract_sha256",
+    "reproducibility_level",
+    "nondeterministic_flags",
+)
+PACKAGE_PROVENANCE_COLUMNS = ("paper_portfolio_count", "created_at", "updated_at")
+PACKAGE_ASSET_SEMANTIC_COLUMNS = (
+    "package_id",
+    "asset_type",
+    "asset_ref",
+    "asset_sha256",
+    "metadata",
+    "asset_role",
+    "asset_size_bytes",
+    "protected_asset",
+)
+PACKAGE_ASSET_PROVENANCE_COLUMNS = ("asset_id", "created_at")
 
 SQL: dict[str, str] = {
     "identity": """
@@ -83,7 +137,7 @@ SQL: dict[str, str] = {
                current_setting('transaction_read_only') AS transaction_read_only
     """,
     "packages": """
-        SELECT package_id, source_id, manifest_json, manifest_sha256, alpha_mode, data_vintage
+        SELECT package_id, source_id, package_status, manifest_json, manifest_sha256, alpha_mode, data_vintage
         FROM strategy_pkg.package
         WHERE package_id = ANY(%s)
         ORDER BY package_id
@@ -136,6 +190,29 @@ SQL: dict[str, str] = {
         FROM app.advisory_strategy_binding_version
         WHERE program_id = ANY(%s)
         ORDER BY program_id, effective_from_trade_date NULLS FIRST, binding_version_id
+    """,
+    "export_snapshot_identity": """
+        SELECT txid_current_snapshot()::text AS snapshot_identity
+    """,
+    "export_packages": """
+        SELECT package_id, package_name, package_version, source_type, source_id,
+               loop_id, run_id, package_status, manifest_json, manifest_sha256,
+               alpha_mode, signal_domain, display_name, legacy_name, data_vintage,
+               prediction_ref_uri, prediction_ref_sha256,
+               model_artifact_uri, model_artifact_sha256,
+               seed_policy, master_seed, seed_sequence, seed_contract,
+               seed_contract_sha256, reproducibility_level, nondeterministic_flags,
+               paper_portfolio_count, created_at, updated_at
+        FROM strategy_pkg.package
+        WHERE package_id = ANY(%s)
+        ORDER BY package_id
+    """,
+    "export_package_assets": """
+        SELECT asset_id, package_id, asset_type, asset_ref, asset_sha256,
+               metadata, asset_role, asset_size_bytes, protected_asset, created_at
+        FROM strategy_pkg.package_asset
+        WHERE package_id = ANY(%s)
+        ORDER BY package_id, asset_type, asset_ref, asset_id
     """,
 }
 
@@ -441,6 +518,385 @@ class RealDevOnboardingInventoryService:
         )
 
 
+@dataclass(frozen=True)
+class ProductionBundleExportResult:
+    bundle: PortableAdvisoryEvidenceBundle
+    bundle_ref: OnboardingArtifactRef
+    idempotent: bool
+
+
+class RealDevProductionPackageExporter:
+    """Export the exact immutable package closure from production without DB writes."""
+
+    def __init__(self, *, connector: Connector = psycopg2.connect) -> None:
+        self._connector = connector
+
+    def export(
+        self,
+        *,
+        request: RealDevOnboardingRequest,
+        request_ref: OnboardingArtifactRef,
+        inventory: RealDevOnboardingInventoryReceipt,
+        env_file: Path,
+        evidence_store: RealDevOnboardingEvidenceStore,
+        source_package_asset_root: Path,
+        target_package_asset_root: Path,
+    ) -> ProductionBundleExportResult:
+        _validate_export_authority(request=request, request_ref=request_ref, inventory=inventory)
+        roots = resolve_package_asset_roots(
+            source_root=source_package_asset_root,
+            target_root=target_package_asset_root,
+        )
+        try:
+            source_config = resolve_database_connection(target_label=TargetLabel.PRODUCTION, env_file=env_file)
+        except ReleaseSchemaVerificationError as exc:
+            raise RealDevOnboardingError(
+                REASON_ENV_INVALID,
+                "unable to resolve exact production connection for package export",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        with readonly_onboarding_connection(source_config, connector=self._connector) as source_connection:
+            source = FixedReadOnlyProjection(source_connection, source_config)
+            source_identity = source.identity()
+            if database_identity_hash(source_identity) != database_identity_hash(inventory.source_database_identity):
+                raise RealDevOnboardingError(
+                    REASON_BUNDLE_EXPORT_FAILED,
+                    "production export identity differs from the inventory authority",
+                )
+            snapshot = source.one("export_snapshot_identity", ())
+            package_ids = list(request.source_package_ids)
+            package_rows = source.all("export_packages", (package_ids,))
+            asset_rows = source.all("export_package_assets", (package_ids,))
+            source_program_ids = list(request.source_program_refs)
+            source_program_rows = source.all("source_programs", (source_program_ids,)) if source_program_ids else []
+            source_binding_rows = source.all("source_bindings", (source_program_ids,)) if source_program_ids else []
+            if source_program_ids:
+                if {str(row["program_id"]) for row in source_program_rows} != set(source_program_ids):
+                    raise RealDevOnboardingError(
+                        REASON_SOURCE_PROGRAM_MISSING,
+                        "production source Program provenance changed after inventory",
+                    )
+                program_packages = _source_program_packages(source_binding_rows)
+                referenced_packages = {package_id for values in program_packages.values() for package_id in values}
+                if not set(request.source_package_ids).issubset(referenced_packages):
+                    raise RealDevOnboardingError(
+                        REASON_SOURCE_PROGRAM_MISSING,
+                        "production source Program no longer references the requested package closure",
+                    )
+            actual_asset_counts = {
+                package_id: sum(str(row.get("package_id")) == package_id for row in asset_rows)
+                for package_id in request.source_package_ids
+            }
+            expected_asset_counts = {
+                item.package_id: item.package_asset_count for item in inventory.program_candidates
+            }
+            if actual_asset_counts != expected_asset_counts:
+                raise RealDevOnboardingError(
+                    REASON_BUNDLE_EXPORT_FAILED,
+                    "production package asset closure changed after inventory; rerun exact inventory",
+                )
+            if source.write_query_count:
+                raise RealDevOnboardingError(
+                    REASON_READONLY_ASSERTION_FAILED,
+                    "production package export recorded a write query",
+                )
+            bundle = _build_portable_bundle(
+                request=request,
+                source_identity=source_identity,
+                export_snapshot_identity=str(snapshot["snapshot_identity"]),
+                package_rows=package_rows,
+                asset_rows=asset_rows,
+                source_package_asset_root=roots.source_readonly_root,
+                evidence_store=evidence_store,
+            )
+        stored = evidence_store.publish(bundle)
+        readback = evidence_store.load(stored.ref)
+        evidence_store.verify_reference_closure(readback)
+        if not isinstance(readback, PortableAdvisoryEvidenceBundle) or readback.bundle_content_hash != bundle.bundle_content_hash:
+            raise RealDevOnboardingError(
+                REASON_BUNDLE_EXPORT_FAILED,
+                "portable bundle full readback differs from the exported closure",
+            )
+        return ProductionBundleExportResult(bundle=bundle, bundle_ref=stored.ref, idempotent=stored.idempotent)
+
+
+def _validate_export_authority(
+    *,
+    request: RealDevOnboardingRequest,
+    request_ref: OnboardingArtifactRef,
+    inventory: RealDevOnboardingInventoryReceipt,
+) -> None:
+    if request_ref.evidence_kind is not EvidenceKind.REQUEST or request_ref.semantic_content_hash != request.request_hash:
+        raise RealDevOnboardingError(REASON_REQUEST_INVALID, "bundle export request ref differs from its request")
+    if (
+        inventory.classification is not InventoryClassification.DUAL_TRACK_AVAILABLE
+        or inventory.selected_input_ref != request_ref
+        or inventory.selected_request_hash != request.request_hash
+        or inventory.release_receipt_ref != request.release_receipt_ref
+    ):
+        raise RealDevOnboardingError(
+            REASON_BUNDLE_EXPORT_FAILED,
+            "bundle export requires the exact successful request-driven inventory",
+        )
+    candidates = {item.package_id: item for item in inventory.program_candidates if item.package_eligible}
+    if set(candidates) != set(request.source_package_ids):
+        raise RealDevOnboardingError(REASON_BUNDLE_EXPORT_FAILED, "inventory package closure differs from the request")
+    expected_modes = {item.package_id: item.alpha_mode for item in request.target_dev_program_specs}
+    for package_id, expected_sha in request.expected_package_manifest_sha256s.items():
+        candidate = candidates[package_id]
+        if candidate.manifest_sha256 != expected_sha or candidate.alpha_mode is not expected_modes[package_id]:
+            raise RealDevOnboardingError(
+                REASON_BUNDLE_EXPORT_FAILED,
+                "inventory package identity differs from the request",
+                context={"package_id": package_id},
+            )
+
+
+def _build_portable_bundle(
+    *,
+    request: RealDevOnboardingRequest,
+    source_identity: DatabaseIdentity,
+    export_snapshot_identity: str,
+    package_rows: list[dict[str, Any]],
+    asset_rows: list[dict[str, Any]],
+    source_package_asset_root: Path,
+    evidence_store: RealDevOnboardingEvidenceStore,
+) -> PortableAdvisoryEvidenceBundle:
+    expected_ids = set(request.source_package_ids)
+    if {str(row.get("package_id")) for row in package_rows} != expected_ids or len(package_rows) != len(expected_ids):
+        raise RealDevOnboardingError(REASON_PACKAGE_MISSING, "production export package rows differ from the request")
+    expected_modes = {item.package_id: item.alpha_mode for item in request.target_dev_program_specs}
+    package_refs: list[BundlePackageRef] = []
+    component_refs: list[NativeMultiComponentRef] = []
+    manifest_asset_refs: dict[str, dict[str, str]] = {}
+    for row in package_rows:
+        package_id = str(row["package_id"])
+        manifest_sha = validate_sha256(str(row["manifest_sha256"]), field_name="manifest_sha256")
+        if manifest_sha != request.expected_package_manifest_sha256s[package_id]:
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_MANIFEST_MISMATCH,
+                "production export manifest hash differs from the request",
+                context={"package_id": package_id},
+            )
+        manifest = _json_object(row["manifest_json"], field_name="manifest_json")
+        computed_manifest_sha = _compute_manifest_json_sha256(manifest)
+        package_status = str(row.get("package_status") or "").upper()
+        if (
+            str(manifest.get("package_id") or "") != package_id
+            or str(manifest.get("manifest_sha256") or "").lower() != manifest_sha
+            or computed_manifest_sha != manifest_sha
+            or str(manifest.get("alpha_mode") or "") != expected_modes[package_id].value
+            or str(row.get("alpha_mode") or "") != expected_modes[package_id].value
+            or package_status not in ALLOWED_EXPORT_PACKAGE_STATUSES
+        ):
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_MANIFEST_MISMATCH,
+                "production export manifest identity is inconsistent",
+                context={"package_id": package_id},
+            )
+        components = _components(manifest)
+        if (expected_modes[package_id] is AlphaMode.SINGLE and len(components) != 1) or (
+            expected_modes[package_id] is AlphaMode.MULTI and len(components) < 2
+        ):
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_MANIFEST_MISMATCH,
+                "production export alpha component closure is invalid",
+                context={"package_id": package_id},
+            )
+        package_refs.append(
+            BundlePackageRef(package_id=package_id, manifest_sha256=manifest_sha, alpha_mode=expected_modes[package_id])
+        )
+        if expected_modes[package_id] is AlphaMode.MULTI:
+            component_refs.extend(
+                NativeMultiComponentRef(parent_package_id=package_id, component=component)
+                for component in components
+            )
+        _assert_portable_payload({name: row.get(name) for name in PACKAGE_SEMANTIC_COLUMNS})
+        runtime_asset_refs = _manifest_runtime_asset_refs(manifest)
+        if not runtime_asset_refs:
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_ASSET_MISSING,
+                "production export manifest has no governed runtime asset closure",
+                context={"package_id": package_id},
+        )
+        manifest_asset_refs[package_id] = runtime_asset_refs
+
+    asset_rows_by_package_ref: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in asset_rows:
+        package_id = str(row.get("package_id"))
+        if package_id not in expected_ids:
+            raise RealDevOnboardingError(REASON_BUNDLE_EXPORT_FAILED, "package asset row is outside the request closure")
+        normalized = dict(row)
+        normalized["asset_sha256"] = validate_sha256(str(row.get("asset_sha256") or ""), field_name="asset_sha256")
+        size = row.get("asset_size_bytes")
+        if size is not None and int(size) < 0:
+            raise RealDevOnboardingError(REASON_BUNDLE_EXPORT_FAILED, "package asset size is negative")
+        _assert_portable_payload({name: normalized.get(name) for name in PACKAGE_ASSET_SEMANTIC_COLUMNS})
+        asset_rows_by_package_ref.setdefault((package_id, str(row["asset_ref"])), []).append(normalized)
+
+    blob_refs: list[BundleBlobRef] = []
+    normalized_assets: list[dict[str, Any]] = []
+    for package_id, required_refs in manifest_asset_refs.items():
+        for asset_ref, expected_sha in required_refs.items():
+            ledger_rows = asset_rows_by_package_ref.get((package_id, asset_ref), [])
+            matching_rows = [row for row in ledger_rows if row["asset_sha256"] == expected_sha]
+            if not matching_rows:
+                raise RealDevOnboardingError(
+                    REASON_PACKAGE_ASSET_MISSING,
+                    "manifest runtime asset is absent from the package ledger",
+                    context={"package_id": package_id, "asset_ref_hash": hashlib.sha256(asset_ref.encode()).hexdigest()},
+                )
+            raw = _read_source_package_blob(source_package_asset_root, expected_sha)
+            for row in matching_rows:
+                normalized_assets.append(row)
+                expected_size = row.get("asset_size_bytes")
+                if expected_size is not None and int(expected_size) != len(raw):
+                    raise RealDevOnboardingError(
+                        REASON_BUNDLE_EXPORT_FAILED,
+                        "package asset size differs from its immutable blob",
+                        context={"package_id": package_id, "asset_type": str(row["asset_type"])},
+                    )
+                stored_blob = evidence_store.publish_blob(raw=raw, expected_sha256=expected_sha)
+                blob_refs.append(
+                    BundleBlobRef(
+                        package_id=package_id,
+                        asset_type=str(row["asset_type"]),
+                        asset_ref=asset_ref,
+                        blob_ref=stored_blob.ref,
+                    )
+                )
+
+    package_row_set = PortableRelationRowSet(
+        relation_name="strategy_pkg.package",
+        primary_or_natural_key_fields=("package_id",),
+        semantic_column_names=PACKAGE_SEMANTIC_COLUMNS,
+        source_provenance_column_names=PACKAGE_PROVENANCE_COLUMNS,
+        sorted_rows=tuple(package_rows),
+    )
+    asset_row_set = PortableRelationRowSet(
+        relation_name="strategy_pkg.package_asset",
+        primary_or_natural_key_fields=("package_id", "asset_type", "asset_ref"),
+        semantic_column_names=PACKAGE_ASSET_SEMANTIC_COLUMNS,
+        source_provenance_column_names=PACKAGE_ASSET_PROVENANCE_COLUMNS,
+        sorted_rows=tuple(normalized_assets),
+    )
+    edges: list[DependencyEdge] = [
+        DependencyEdge(
+            parent_identity=item.parent_package_id,
+            child_identity=f"alpha_component:{item.parent_package_id}:{item.component.alpha_id}",
+            relation="PACKAGE_COMPONENT",
+        )
+        for item in component_refs
+    ]
+    for row in normalized_assets:
+        package_id = str(row["package_id"])
+        asset_identity = f"package_asset:{package_id}:{row['asset_type']}:{row['asset_ref']}"
+        edges.append(
+            DependencyEdge(parent_identity=package_id, child_identity=asset_identity, relation="PACKAGE_ASSET")
+        )
+    for item in blob_refs:
+        asset_identity = f"package_asset:{item.package_id}:{item.asset_type}:{item.asset_ref}"
+        edges.append(
+            DependencyEdge(parent_identity=asset_identity, child_identity=f"sha256:{item.asset_sha256}", relation="ASSET_BLOB")
+        )
+    try:
+        return PortableAdvisoryEvidenceBundle(
+            request=request,
+            source_database_identity_hash=database_identity_hash(source_identity),
+            export_snapshot_identity=export_snapshot_identity,
+            package_refs=tuple(package_refs),
+            native_multi_component_refs=tuple(component_refs),
+            relation_row_sets=(package_row_set, asset_row_set),
+            artifact_blob_refs=tuple(blob_refs),
+            dependency_edges=tuple(edges),
+        )
+    except ValueError as exc:
+        raise RealDevOnboardingError(
+            REASON_BUNDLE_EXPORT_FAILED,
+            "portable production package closure is invalid",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+
+
+def _manifest_runtime_asset_refs(manifest: Mapping[str, Any]) -> dict[str, str]:
+    try:
+        return portable_manifest_runtime_asset_refs(manifest)
+    except ValueError as exc:
+        raise RealDevOnboardingError(
+            REASON_PACKAGE_MANIFEST_MISMATCH,
+            "manifest runtime asset closure is invalid",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+
+
+def _compute_manifest_json_sha256(manifest: Mapping[str, Any]) -> str:
+    return compute_portable_manifest_json_sha256(manifest)
+
+
+def _read_source_package_blob(root: Path, digest: str) -> bytes:
+    normalized = validate_sha256(digest, field_name="asset_sha256")
+    path = root / "blobs" / normalized[:2] / normalized
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        _assert_no_reparse_from_root(root=root, path=resolved)
+        if not resolved.is_file():
+            raise OSError("package asset blob is not a regular file")
+        raw = resolved.read_bytes()
+    except (OSError, ValueError) as exc:
+        raise RealDevOnboardingError(
+            REASON_PACKAGE_ASSET_MISSING,
+            "immutable package asset blob cannot be resolved from the explicit source root",
+            context={"asset_sha256": normalized},
+        ) from exc
+    if hashlib.sha256(raw).hexdigest() != normalized:
+        raise RealDevOnboardingError(
+            REASON_BUNDLE_EXPORT_FAILED,
+            "source package asset blob hash differs from its ledger authority",
+            context={"asset_sha256": normalized},
+        )
+    return raw
+
+
+def _assert_no_reparse_from_root(*, root: Path, path: Path) -> None:
+    relative = path.relative_to(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        attributes = os.lstat(current)
+        if stat.S_ISLNK(attributes.st_mode) or (
+            getattr(attributes, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+        ):
+            raise ValueError("package asset path contains a symlink or reparse point")
+
+
+def _assert_portable_payload(value: Any, *, key_name: str | None = None) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = str(key).lower().replace("-", "_")
+            if normalized_key in {"password", "passwd", "secret", "token", "api_key"} and item not in (None, ""):
+                raise RealDevOnboardingError(REASON_BUNDLE_EXPORT_FAILED, "portable bundle contains a credential-like field")
+            _assert_portable_payload(item, key_name=normalized_key)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_portable_payload(item, key_name=key_name)
+        return
+    if not isinstance(value, str):
+        return
+    normalized = value.replace("\\", "/")
+    if (
+        normalized.startswith(("/", "//", "file://"))
+        or (len(normalized) >= 3 and normalized[0].isalpha() and normalized[1:3] == ":/")
+        or normalized.lower().startswith(("/mnt/", "//wsl$/", "//wsl.localhost/"))
+    ):
+        raise RealDevOnboardingError(
+            REASON_BUNDLE_EXPORT_FAILED,
+            "portable bundle contains an absolute workstation path",
+            context={"field": key_name},
+        )
+
+
 def _candidate_from_row(
     *,
     row: Mapping[str, Any],
@@ -457,9 +913,11 @@ def _candidate_from_row(
     manifest_sha256 = str(row["manifest_sha256"]).lower()
     manifest = _json_object(row["manifest_json"], field_name="manifest_json")
     embedded_hash = str(manifest.get("manifest_sha256") or "").lower()
+    computed_hash = _compute_manifest_json_sha256(manifest)
     if (
         manifest_sha256 != expected_manifest
         or embedded_hash != manifest_sha256
+        or computed_hash != manifest_sha256
         or str(manifest.get("package_id") or "") != package_id
         or str(manifest.get("alpha_mode") or "") != str(row["alpha_mode"])
     ):
@@ -480,8 +938,13 @@ def _candidate_from_row(
         alpha_mode is AlphaMode.MULTI and len(components) < 2
     ):
         reasons.add(REASON_PACKAGE_MANIFEST_MISMATCH)
-    package_status = str(manifest.get("package_status") or "UNKNOWN")
+    package_status = str(row.get("package_status") or "UNKNOWN").upper()
+    if package_status not in ALLOWED_EXPORT_PACKAGE_STATUSES:
+        reasons.add(REASON_PACKAGE_MANIFEST_MISMATCH)
+    runtime_asset_refs = _manifest_runtime_asset_refs(manifest)
     if asset_count <= 0:
+        reasons.add(REASON_PACKAGE_ASSET_MISSING)
+    if not runtime_asset_refs:
         reasons.add(REASON_PACKAGE_ASSET_MISSING)
     relevant_bindings = [
         item for item in binding_rows if package_id in tuple(str(value) for value in (item.get("package_ids") or ()))
@@ -510,7 +973,7 @@ def _candidate_from_row(
         package_status=package_status,
         components=components,
         package_asset_count=asset_count,
-        has_runtime_assets=bool(manifest.get("runtime_assets")),
+        has_runtime_assets=bool(runtime_asset_refs),
         has_source_evidence=bool(manifest.get("source_evidence")),
         closure_status=(
             PackageClosureStatus.O2_EXPORT_VERIFICATION_REQUIRED

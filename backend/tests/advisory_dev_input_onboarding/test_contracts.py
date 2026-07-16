@@ -172,7 +172,18 @@ def test_bundle_rejects_missing_dependency_edge(onboarding_request: RealDevOnboa
                 NativeMultiComponentRef(parent_package_id="pkg_multi", component=_component("b", window="80d")),
             ),
             relation_row_sets=_row_sets(),
-            artifact_blob_refs=(),
+            artifact_blob_refs=(
+                BundleBlobRef(
+                    package_id="pkg_multi",
+                    asset_type="MODEL",
+                    asset_ref="models/multi.bin",
+                    blob_ref=OnboardingBlobRef(
+                        relative_path=f"blobs/{SHA_C[:2]}/{SHA_C}.blob",
+                        blob_sha256=SHA_C,
+                        size_bytes=20,
+                    ),
+                ),
+            ),
             dependency_edges=(),
         )
 

@@ -23,14 +23,19 @@ scheduler 或审批系统。
 当前状态：
 
 ```text
-design_status = design_ready_pending_implementation
-implementation_status = not_started
+design_status = accepted
+o1_implementation_status = merged_pr_2231
+o2_implementation_status = code_validated_pending_review_and_merge
+o3_to_o5_implementation_status = not_started
 dev_database = schema_ready_but_real_dual_track_input_absent
 production_database = read_only_source_only
 production_ddl = none_for_this_design
 production_dml = prohibited
+production_readonly_export_execution = not_run
 dev_ddl = none
-dev_dml = pending_future_code_execution
+dev_import_plan_execution = not_run
+dev_import_rollback_validation = not_run
+dev_import_persistent_execution = not_run
 runtime_activation = none
 role_or_approval_gate = none
 model_training = none
@@ -330,11 +335,14 @@ PARTIAL/diagnostic plan，但不得被G5当作L3/L4 ready。
 2. production 连接设置 server-enforced read-only、`REPEATABLE READ` 和有界 statement timeout。
 3. 验证source Program仅作为provenance存在；其legacy null binding和DSE v1明确标记`INELIGIBLE_SOURCE_FACT`，
    不进入portable bundle。
-4. 验证single/native-multi package identity、current manifest hash和允许的package lifecycle状态。
+4. 验证single/native-multi package identity，并按StrategyPackage权威canonical算法从`manifest_json`重算current
+   manifest hash；允许状态固定为当前Selection可见的非`RETIRED`已知生命周期，未知状态和`RETIRED`均不导出。
 5. 对 native multi parent 从 manifest 恢复全部 component package identities 和 component evidence；不同合法
    lookback/window 保持独立，不要求腿级窗口相同。
-6. 读取parent/component package和package_asset的exact闭包；manifest引用的runtime blob必须从显式只读source
-   asset root加载、逐blob SHA验证并进入bundle CAS。与Selection运行无关的历史输出文件不加载。
+6. 读取parent/component package和package_asset的exact闭包；runtime blob只从`factor_set`、`model_asset`、
+   `runtime_assets`及`source_evidence.multi_alpha.legs[].runtime_assets/seed_runtime_assets`投影，从显式只读source
+   asset root加载、逐blob SHA验证并进入bundle CAS。不得递归收集其他`source_evidence`，与Selection运行无关的
+   历史输出文件不加载。
 7. 重新计算package/manifest/asset/component/policy canonical hashes，不继承source Program/binding hash作为DEV身份。
 8. 构造dependency graph；任一必需child缺失、重复、hash不同或越界时，整个bundle不发布。
 9. bundle以`<root>/advisory/dev-onboarding/bundles/<prefix>/<bundle_hash>.json` atomic no-replace发布并
@@ -465,6 +473,9 @@ scripts/advisory_real_dev_onboarding.py build-phase1e-inputs
 scripts/advisory_real_dev_onboarding.py verify-evidence
 ```
 
+`verify-import`必须同时接收生成receipt的exact `--plan`，并核对request、bundle、plan、source/target database
+identity、relation counts、全部post-readback hashes和dependency closure；不能只验证部分receipt字段。
+
 每个有副作用的command语义由命令名和exact request决定，不增加 `--confirm`、审批token、role、backup或
 manual bypass。`inventory/export/verify/plan` 永远零DB写入；`import-dev`只写固定import allowlist；
 `run-historical`只通过现有runner写Advisory historical relations；`build-phase1e-inputs`只写external CAS。
@@ -547,7 +558,8 @@ ADVISORY_DEV_ONBOARDING_SOURCE_EVIDENCE_PENDING
 ADVISORY_DEV_ONBOARDING_UNEXPECTED_ERROR
 ```
 
-expected business gap记录一次摘要；unexpected error保留后台traceback。日志只包含command、request/bundle/plan/
+expected business gap记录一次摘要；unexpected error保留后台traceback。Pydantic/contract校验错误只输出字段路径、
+错误数量和稳定reason，不得输出`input_value`或原始payload。日志只包含command、request/bundle/plan/
 receipt hash、target label、relation counts和reason/context，不输出密码、DSN、完整manifest、模型payload、候选全量
 或逐行无价值日志。禁止catch-all转success、空列表或 `ALREADY_PRESENT`。
 
@@ -619,7 +631,8 @@ source不成熟时准确pending。
 
 ### 18.3 L2 disposable PostgreSQL 16
 
-使用production migration chain构造source/target两个disposable database：
+使用与O2关系有关的完整production StrategyPackage migration chain构造source/target disposable database，禁止在
+测试中手写`strategy_pkg.package/package_asset`替代生产结构：
 
 1. source只读强制和write injection拒绝；
 2. single/native multi package/asset/component exact export、bundle full readback，DSE v1和legacy binding拒绝进入bundle；
@@ -776,27 +789,27 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-879 | §7.1、§8 | request canonical/hash/date/package tests | design_ready | none |
-| F-880 | §5.1、§8 | server read-only/write injection/query spy | design_ready | none |
-| F-881 | §5.2、§10 | env isolation/database identity tests | design_ready | none |
-| F-882 | §5.2、§9.1 | source-target identity/catalog receipt integration | design_ready | none |
-| F-883 | §7.4、§8 | CAS no-replace/collision/tamper/readback tests | design_ready | none |
-| F-884 | §7.3 | typed PostgreSQL value serialization golden tests | design_ready | none |
-| F-885 | §7.4、§8 | single/native-multi/component-window closure tests | design_ready | none |
-| F-886 | §5.4、§8 | package/blob/component graph and mutable-row exclusion tests | design_ready | none |
-| F-887 | §7.4、§16 | credential/path/payload redaction scan | design_ready | none |
-| F-888 | §5.4、§8 | fixed relation/column/query registry tests | design_ready | none |
-| F-889 | §7.5、§9.1 | INSERT/EXACT/CONFLICT plan classification | design_ready | none |
-| F-890 | §9、§18.1 | SQL AST allowlist and forbidden statement scan | design_ready | none |
-| F-891 | §9.2、§18.3 | owner transaction/constraint/trigger rollback tests | design_ready | none |
-| F-892 | §9.2 | full row insert-or-compare mutation tests | design_ready | none |
-| F-893 | §9.3 | commit response loss committed/not/state-unknown tests | design_ready | none |
-| F-894 | §9.4、§15 | exact rerun zero-DML and receipt parity | design_ready | none |
-| F-895 | §15 | same/different bundle concurrency barrier tests | design_ready | none |
-| F-896 | §9.4、§20.2 | persistence and no-cleanup SQL scan | design_ready | none |
-| F-897 | §5.3、§10 | one-way import graph and candidate parity oracle | design_ready | none |
-| F-898 | §4、§9.2 | batch-a/replica-role/sequence-reset denylist | design_ready | none |
-| F-899 | §3、§6 | multi-Program independent identity/result tests | design_ready | none |
+| F-879 | §7.1、§8 | `contracts.py`; request canonical/hash/date/package tests；PR #2231 | verified_merged | none |
+| F-880 | §5.1、§8 | `production_projection.py`; server read-only/write-query spy；PR #2231 | verified_merged | none |
+| F-881 | §5.2、§10 | exact env/database identity tests；PR #2231 | verified_merged | none |
+| F-882 | §5.2、§9.1 | source-target identity/catalog receipt tests；PR #2231 | verified_merged | none |
+| F-883 | §7.4、§8 | `store.py`; CAS no-replace/collision/tamper/readback tests；PR #2231 | verified_merged | none |
+| F-884 | §7.3 | typed PostgreSQL value serialization golden tests；PR #2231 | verified_merged | none |
+| F-885 | §7.4、§8 | single/native-multi/component-window closure tests；PR #2231 | verified_merged | none |
+| F-886 | §5.4、§8 | package/blob/component graph and mutable-row exclusion tests；PR #2231 | verified_merged | none |
+| F-887 | §7.4、§16 | credential/path/payload redaction scan；PR #2231 | verified_merged | none |
+| F-888 | §5.4、§8 | canonical manifest/lifecycle/runtime projection tests；migration-chain PostgreSQL actual readonly exporter | verified_l0_l2 | none |
+| F-889 | §7.5、§9.1 | `dev_importer.py`; INSERT/EXACT/CONFLICT classification tests | verified_l0_l2 | none |
+| F-890 | §9、§18.1 | fixed SQL registry/AST/forbidden statement scan | verified_l0_l2 | none |
+| F-891 | §9.2、§18.3 | production StrategyPackage migration-chain PostgreSQL 16 owner transaction/trigger rollback | verified_l0_l2 | none |
+| F-892 | §9.2 | disposable PostgreSQL full-row insert-or-compare/readback | verified_l0_l2 | none |
+| F-893 | §9.3 | all-key committed/not-observed/state-unknown tests including preexisting-row conflict | verified_l0_l2 | none |
+| F-894 | §9.4、§15 | exact rerun zero-DML/new receipt；forged request/source/plan/count rejection | verified_l0_l2 | none |
+| F-895 | §15 | disposable PostgreSQL same/different bundle concurrency tests | verified_l0_l2 | none |
+| F-896 | §9.4、§20.2 | no-cleanup SQL/source scan | verified_l0_l2 | none |
+| F-897 | §5.3、§10 | one-way onboarding import graph/runtime import AST test | verified_l0_l2 | none |
+| F-898 | §4、§9.2 | batch-a/replica-role/sequence-reset denylist | verified_l0_l2 | none |
+| F-899 | §3、§6 | multi-package request and independent package identity tests | verified_l0_l2 | none |
 | F-900 | §10、§13 | exact DEV injected repositories/no-global-pool tests | design_ready | none |
 | F-901 | §10 | normal service future-effective binding tests | design_ready | none |
 | F-902 | §10 | prospective DSE v2 golden and v1 rejection tests | design_ready | none |
@@ -815,7 +828,8 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-915 | §4、§21 | API/UI/scheduler/startup/production-impact scan | design_ready | none |
 | F-916 | §1、§21、§26 | separated state reporting assertions | design_ready | none |
 
-本矩阵只表示设计无缺口，不表示代码、数据库或运行证据已经完成。
+本矩阵的 `gap_or_exception` 只记录设计偏差或验收例外，不记录尚未执行的环境层验证。代码、数据库和运行证据的
+完成状态以本文开头的独立状态字段为准；`verified_l0_l2` 不代表真实 production/DEV 执行已完成。
 
 ## 25. DESIGN-COMPLIANCE-001 Review
 

@@ -18,8 +18,10 @@ from backend.services.advisory_dev_input_onboarding.production_projection import
 )
 from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity, TargetLabel
 from backend.services.advisory_phase1.release_schema_verify_postgres import DatabaseConnectionConfig
+from backend.services.strategy_package.manifest import compute_manifest_json_sha256
 from backend.services.strategy_package.models import StrategyPackageManifest
 import backend.services.advisory_dev_input_onboarding.production_projection as projection_module
+from backend.tests.advisory_dev_input_onboarding.conftest import onboarding_request as base_onboarding_request
 
 
 SHA_A = "a" * 64
@@ -76,6 +78,7 @@ def _manifest(package_id: str, digest: str, *, multi: bool) -> dict[str, Any]:
         "source": {
             "source_type": "multi_alpha_combine_run" if multi else "candidate_strategy_package",
             "source_id": f"source_{package_id}",
+            "created_at": "2026-07-01T00:00:00Z",
         },
         "manifest_sha256": digest,
         "alpha_mode": "multi_alpha" if multi else "single_alpha",
@@ -90,9 +93,19 @@ def _manifest(package_id: str, digest: str, *, multi: bool) -> dict[str, Any]:
             for index in range(1, len(components) + 1)
         ],
         "model_asset": [
-            {"model_id": item["model_id"], "model_type": "test"}
+            {
+                "model_id": item["model_id"],
+                "model_type": "test",
+                "asset_ref": f"aistock-package-asset://blobs/{SHA_C}?model_id={item['model_id']}",
+                "sha256": SHA_C,
+            }
             for item in components
-        ] if multi else {"model_id": "model_1", "model_type": "test"},
+        ] if multi else {
+            "model_id": "model_1",
+            "model_type": "test",
+            "asset_ref": f"aistock-package-asset://blobs/{SHA_C}?model_id=model_1",
+            "sha256": SHA_C,
+        },
         "runtime_assets": {
             "contract_version": "strategy_package_runtime_assets_v2",
             "alpha158": {"enabled": False},
@@ -104,6 +117,18 @@ def _manifest(package_id: str, digest: str, *, multi: bool) -> dict[str, Any]:
         "backtest_summary": {"ic": 0.01},
     }
     return StrategyPackageManifest.model_validate(payload).model_dump(mode="json")
+
+
+SHA_A = compute_manifest_json_sha256(_manifest("pkg_single", "0" * 64, multi=False))
+SHA_B = compute_manifest_json_sha256(_manifest("pkg_multi", "0" * 64, multi=True))
+
+
+@pytest.fixture
+def onboarding_request():
+    base = base_onboarding_request.__wrapped__()
+    payload = base.model_dump(mode="python", exclude={"request_hash"})
+    payload["expected_package_manifest_sha256s"] = {"pkg_single": SHA_A, "pkg_multi": SHA_B}
+    return type(base).model_validate(payload)
 
 
 class StubProjection:
@@ -128,6 +153,7 @@ def _source_rows() -> dict[str, list[dict[str, Any]]]:
             {
                 "package_id": "pkg_single",
                 "source_id": "s1",
+                "package_status": "SELECTION_ENABLED",
                 "manifest_json": _manifest("pkg_single", SHA_A, multi=False),
                 "manifest_sha256": SHA_A,
                 "alpha_mode": "single_alpha",
@@ -136,6 +162,7 @@ def _source_rows() -> dict[str, list[dict[str, Any]]]:
             {
                 "package_id": "pkg_multi",
                 "source_id": "s2",
+                "package_status": "SELECTION_ENABLED",
                 "manifest_json": _manifest("pkg_multi", SHA_B, multi=True),
                 "manifest_sha256": SHA_B,
                 "alpha_mode": "multi_alpha",
@@ -397,14 +424,11 @@ def test_target_active_legacy_null_binding_is_a_conflict(onboarding_request, onb
     assert receipt.reason_codes == ("ADVISORY_REAL_DEV_TARGET_CONFLICT",)
 
 
-def test_package_status_is_diagnostic_and_full_closure_is_explicitly_deferred(
+def test_non_retired_package_status_remains_eligible_for_explicit_o2_closure(
     onboarding_request, onboarding_request_ref
 ) -> None:
     rows = _source_rows()
-    single_manifest = dict(rows["packages"][0]["manifest_json"])
-    single_manifest["package_status"] = "PAPER_FAILED"
-    single_manifest["source_evidence"] = {}
-    rows["packages"][0] = {**rows["packages"][0], "manifest_json": single_manifest}
+    rows["packages"][0] = {**rows["packages"][0], "package_status": "PAPER_FAILED"}
     receipt = RealDevOnboardingInventoryService().project(
         input_contract=onboarding_request,
         selected_input_ref=onboarding_request_ref,
@@ -422,7 +446,7 @@ def test_package_status_is_diagnostic_and_full_closure_is_explicitly_deferred(
     candidate = next(item for item in receipt.program_candidates if item.package_id == "pkg_single")
     assert candidate.package_eligible is True
     assert candidate.package_status == "PAPER_FAILED"
-    assert candidate.has_source_evidence is False
+    assert candidate.has_source_evidence is True
     assert candidate.closure_status.value == "O2_EXPORT_VERIFICATION_REQUIRED"
     assert receipt.dependency_closure_hash is None
 
