@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+from collections.abc import Mapping
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, ClassVar, Literal
+from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -17,7 +22,7 @@ from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GInputArtifactKind,
     Phase1GInputArtifactRef,
 )
-from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity
+from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity, TargetLabel
 
 
 REQUEST_SCHEMA_VERSION = "advisory_real_dev_onboarding_request_v1"
@@ -26,6 +31,20 @@ INVENTORY_SCHEMA_VERSION = "advisory_real_dev_onboarding_inventory_v1"
 BUNDLE_SCHEMA_VERSION = "advisory_real_dev_portable_bundle_v1"
 ROW_SET_SCHEMA_VERSION = "advisory_real_dev_relation_row_set_v1"
 CONTRACT_SCHEMA_VERSION = "advisory_real_dev_onboarding_contract_v1"
+IMPORT_PLAN_SCHEMA_VERSION = "advisory_real_dev_import_plan_v1"
+IMPORT_RECEIPT_SCHEMA_VERSION = "advisory_real_dev_import_receipt_v1"
+ALLOWED_EXPORT_PACKAGE_STATUSES = frozenset(
+    {
+        "DRAFT",
+        "ASSET_VALIDATED",
+        "BACKTEST_APPROVED",
+        "SELECTION_ENABLED",
+        "PAPER_ENABLED",
+        "PAPER_RUNNING",
+        "PAPER_PASSED",
+        "PAPER_FAILED",
+    }
+)
 
 STORE_POLICY_PAYLOAD = {
     "schema_version": "advisory_real_dev_onboarding_store_policy_v1",
@@ -60,7 +79,15 @@ REASON_LEGACY_BINDING_INELIGIBLE = "ADVISORY_REAL_DEV_LEGACY_BINDING_INELIGIBLE"
 REASON_TARGET_CONFLICT = "ADVISORY_REAL_DEV_TARGET_CONFLICT"
 REASON_EVIDENCE_STORE_FAILED = "ADVISORY_REAL_DEV_EVIDENCE_STORE_FAILED"
 REASON_BUNDLE_INVALID = "ADVISORY_REAL_DEV_BUNDLE_INVALID"
+REASON_BUNDLE_EXPORT_FAILED = "ADVISORY_REAL_DEV_BUNDLE_EXPORT_FAILED"
+REASON_IMPORT_PLAN_CONFLICT = "ADVISORY_REAL_DEV_IMPORT_PLAN_CONFLICT"
+REASON_IMPORT_PLAN_INVALID = "ADVISORY_REAL_DEV_IMPORT_PLAN_INVALID"
+REASON_IMPORT_TRANSACTION_FAILED = "ADVISORY_REAL_DEV_IMPORT_TRANSACTION_FAILED"
+REASON_IMPORT_READBACK_FAILED = "ADVISORY_REAL_DEV_IMPORT_READBACK_FAILED"
+REASON_IMPORT_COMMIT_NOT_OBSERVED = "ADVISORY_REAL_DEV_IMPORT_COMMIT_NOT_OBSERVED"
+REASON_IMPORT_COMMIT_STATE_UNKNOWN = "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN"
 REASON_UNEXPECTED_ERROR = "ADVISORY_REAL_DEV_UNEXPECTED_ERROR"
+IMPORT_RELATION_SET = frozenset({"strategy_pkg.package", "strategy_pkg.package_asset"})
 
 
 class RealDevOnboardingError(RuntimeError):
@@ -131,6 +158,24 @@ class EvidenceKind(str, Enum):
     INVENTORY_QUERY = "inventory_query"
     INVENTORY = "inventory"
     BUNDLE = "bundle"
+
+
+class ImportRowDisposition(str, Enum):
+    INSERT = "INSERT"
+    EXACT_MATCH = "EXACT_MATCH"
+    CONFLICT = "CONFLICT"
+
+
+class ImportPlanStatus(str, Enum):
+    EXECUTABLE = "EXECUTABLE"
+    ALREADY_PRESENT = "ALREADY_PRESENT"
+    CONFLICT = "CONFLICT"
+
+
+class ImportCommitOutcome(str, Enum):
+    COMMITTED = "COMMITTED"
+    ALREADY_PRESENT = "ALREADY_PRESENT"
+    STATE_UNKNOWN = "STATE_UNKNOWN"
 
 
 class OnboardingArtifactRef(StrictContract):
@@ -523,6 +568,122 @@ def serialize_postgres_value(value: Any) -> Any:
     raise ValueError(f"unsupported PostgreSQL value type: {type(value).__name__}")
 
 
+def deserialize_postgres_value(value: Any) -> Any:
+    """Invert the portable typed PostgreSQL envelope without text parsing SQL values."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if not isinstance(value, dict) or "type" not in value:
+        raise ValueError("portable PostgreSQL value must use a typed envelope")
+    value_type = value.get("type")
+    if value_type == "numeric" and set(value) == {"type", "value"}:
+        return Decimal(str(value["value"]))
+    if value_type == "float" and set(value) == {"type", "value"}:
+        return float.fromhex(str(value["value"]))
+    if value_type == "timestamptz" and set(value) == {"type", "value"}:
+        parsed = datetime.fromisoformat(str(value["value"]))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("portable timestamptz must be timezone-aware")
+        return parsed
+    if value_type == "date" and set(value) == {"type", "value"}:
+        return date.fromisoformat(str(value["value"]))
+    if value_type == "uuid" and set(value) == {"type", "value"}:
+        return UUID(str(value["value"]))
+    if value_type == "bytea" and set(value) == {"type", "base64"}:
+        return base64.b64decode(str(value["base64"]), validate=True)
+    if value_type == "array" and set(value) == {"type", "items"} and isinstance(value["items"], list):
+        return [deserialize_postgres_value(item) for item in value["items"]]
+    if value_type == "jsonb" and set(value) == {"type", "value"} and isinstance(value["value"], dict):
+        return {str(key): deserialize_postgres_value(item) for key, item in value["value"].items()}
+    raise ValueError("portable PostgreSQL typed envelope is invalid")
+
+
+def compute_portable_manifest_json_sha256(manifest: Mapping[str, Any]) -> str:
+    """Recompute the persisted StrategyPackage manifest hash without runtime imports."""
+
+    payload = deepcopy(dict(manifest))
+    payload["manifest_sha256"] = None
+    payload["package_status"] = None
+    payload = _drop_empty_manifest_asset_fields(payload)
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def portable_manifest_runtime_asset_refs(manifest: Mapping[str, Any]) -> dict[str, str]:
+    refs: dict[str, str] = {}
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            asset_ref = node.get("asset_ref")
+            sha256 = node.get("sha256")
+            if asset_ref is not None or sha256 is not None:
+                if not isinstance(asset_ref, str) or not isinstance(sha256, str):
+                    raise ValueError("manifest runtime asset ref is not hash-closed")
+                digest = validate_sha256(sha256, field_name="manifest_asset_sha256")
+                existing = refs.setdefault(asset_ref, digest)
+                if existing != digest:
+                    raise ValueError("manifest reuses one runtime asset ref with different hashes")
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                visit(child)
+
+    roots: list[Any] = []
+    for key in ("factor_set", "model_asset", "runtime_assets"):
+        value = manifest.get(key)
+        if value not in (None, {}, []):
+            roots.append(value)
+    source_evidence = manifest.get("source_evidence")
+    multi_alpha = source_evidence.get("multi_alpha") if isinstance(source_evidence, Mapping) else None
+    legs = multi_alpha.get("legs") if isinstance(multi_alpha, Mapping) else None
+    if isinstance(legs, list):
+        for leg in legs:
+            if not isinstance(leg, Mapping):
+                continue
+            for key in ("runtime_assets", "seed_runtime_assets"):
+                value = leg.get(key)
+                if isinstance(value, Mapping):
+                    roots.append(value)
+    for root in roots:
+        visit(root)
+    return dict(sorted(refs.items()))
+
+
+def _drop_empty_manifest_asset_fields(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "factor_set" and isinstance(item, list):
+            cleaned[key] = [_drop_empty_manifest_asset_defaults(asset) for asset in item]
+        elif key == "model_asset" and isinstance(item, list):
+            cleaned[key] = [_drop_empty_manifest_asset_defaults(asset) for asset in item]
+        elif key == "model_asset" and isinstance(item, dict):
+            cleaned[key] = _drop_empty_manifest_asset_defaults(item)
+        elif key == "runtime_assets" and item in (None, {}, []):
+            continue
+        else:
+            cleaned[key] = item
+    return cleaned
+
+
+def _drop_empty_manifest_asset_defaults(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    empty_asset_keys = {"asset_ref", "sha256", "size_bytes", "source_uri"}
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in empty_asset_keys and item in (None, "", [], {}):
+            continue
+        if key == "model_code_assets" and item in (None, [], {}):
+            continue
+        if key == "model_code_required" and item is False:
+            continue
+        cleaned[key] = item
+    return cleaned
+
+
 class PortableRelationRowSet(HashClosedContract):
     hash_field: ClassVar[str] = "row_set_hash"
     schema_version: Literal[ROW_SET_SCHEMA_VERSION] = ROW_SET_SCHEMA_VERSION
@@ -647,9 +808,28 @@ class BundleBlobRef(StrictContract):
     @field_validator("asset_ref")
     @classmethod
     def _asset_ref(cls, value: str) -> str:
-        if value.startswith(("/", "\\")) or ":" in value or ".." in value.replace("\\", "/").split("/"):
+        normalized = value.replace("\\", "/")
+        parsed = urlparse(normalized)
+        if parsed.scheme:
+            if parsed.scheme != "aistock-package-asset" or parsed.netloc != "blobs":
+                raise ValueError("asset_ref URI must use the controlled package asset scheme")
+            digest_parts = tuple(part for part in parsed.path.strip("/").split("/") if part)
+            if len(digest_parts) != 1:
+                raise ValueError("package asset URI must contain exactly one blob digest")
+            validate_sha256(digest_parts[0], field_name="asset_ref_digest")
+            return normalized
+        if normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
             raise ValueError("asset_ref must not contain an absolute or escaping path")
-        return value.replace("\\", "/")
+        return normalized
+
+    @model_validator(mode="after")
+    def _controlled_uri_closes_blob(self) -> "BundleBlobRef":
+        parsed = urlparse(self.asset_ref)
+        if parsed.scheme:
+            digest = parsed.path.strip("/")
+            if digest != self.blob_ref.blob_sha256:
+                raise ValueError("package asset URI digest differs from the blob authority")
+        return self
 
 
 class DependencyEdge(StrictContract):
@@ -684,6 +864,8 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
             raise ValueError("package_refs package ids must be unique")
         if {item.package_id for item in packages} != set(self.request.source_package_ids):
             raise ValueError("bundle package refs must exactly close the request")
+        if {item.package_id: item.manifest_sha256 for item in packages} != self.request.expected_package_manifest_sha256s:
+            raise ValueError("bundle package manifest identities must exactly match the request")
         if {item.alpha_mode for item in packages} != {AlphaMode.SINGLE, AlphaMode.MULTI}:
             raise ValueError("bundle must contain both single and native multi packages")
         components = tuple(
@@ -716,6 +898,25 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
         expected_package_identities = {(item.package_id, item.manifest_sha256) for item in packages}
         if package_row_identities != expected_package_identities:
             raise ValueError("package row set differs from package refs")
+        runtime_refs_by_package: dict[str, dict[str, str]] = {}
+        if {"manifest_json", "package_status"}.issubset(package_row_set.semantic_column_names):
+            for row in package_row_set.sorted_rows:
+                package_id = str(deserialize_postgres_value(row["package_id"]))
+                manifest_sha = str(deserialize_postgres_value(row["manifest_sha256"])).lower()
+                package_status = str(deserialize_postgres_value(row["package_status"])).upper()
+                manifest = deserialize_postgres_value(row["manifest_json"])
+                if not isinstance(manifest, Mapping):
+                    raise ValueError("package manifest_json must decode to an object")
+                if (
+                    str(manifest.get("manifest_sha256") or "").lower() != manifest_sha
+                    or compute_portable_manifest_json_sha256(manifest) != manifest_sha
+                    or package_status not in ALLOWED_EXPORT_PACKAGE_STATUSES
+                ):
+                    raise ValueError("package row manifest hash or lifecycle is invalid")
+                runtime_refs = portable_manifest_runtime_asset_refs(manifest)
+                if not runtime_refs:
+                    raise ValueError("package row has no governed runtime asset closure")
+                runtime_refs_by_package[package_id] = runtime_refs
         asset_row_set = next(item for item in row_sets if item.relation_name == "strategy_pkg.package_asset")
         if not {"package_id", "asset_type", "asset_ref", "asset_sha256"}.issubset(asset_row_set.semantic_column_names):
             raise ValueError("package asset row set lacks its identity columns")
@@ -725,6 +926,35 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
         }
         if any(package_id not in {item.package_id for item in packages} for package_id, _, _ in asset_rows):
             raise ValueError("package asset row set contains an unrelated package")
+        projected_assets = {
+            (
+                str(deserialize_postgres_value(row["package_id"])),
+                str(deserialize_postgres_value(row["asset_ref"])),
+                str(deserialize_postgres_value(row["asset_sha256"])).lower(),
+            )
+            for row in asset_row_set.sorted_rows
+        }
+        required_assets = {
+            (package_id, asset_ref, digest)
+            for package_id, refs in runtime_refs_by_package.items()
+            for asset_ref, digest in refs.items()
+        }
+        if runtime_refs_by_package and (
+            not required_assets.issubset(projected_assets)
+            or any(
+                (package_id, asset_ref, digest) not in required_assets
+                for package_id, asset_ref, digest in projected_assets
+            )
+        ):
+            raise ValueError("package asset rows differ from the manifest runtime closure")
+        blob_rows = {
+            (blob.package_id, blob.asset_type, blob.asset_ref): blob.asset_sha256
+            for blob in blobs
+        }
+        if len(blob_rows) != len(blobs):
+            raise ValueError("artifact blob refs must have unique package asset identities")
+        if blob_rows != asset_rows:
+            raise ValueError("every package asset row must close to exactly one artifact blob ref")
         for blob in blobs:
             key = (blob.package_id, blob.asset_type, blob.asset_ref)
             if asset_rows.get(key) != blob.asset_sha256:
@@ -764,6 +994,248 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
         object.__setattr__(self, "artifact_blob_refs", blobs)
         object.__setattr__(self, "dependency_edges", edges)
         object.__setattr__(self, "dependency_closure_hash", closure_hash)
+        self.close_hash()
+        return self
+
+
+class PlannedImportRow(HashClosedContract):
+    """One exact bundle row classified against a fresh DEV readback."""
+
+    hash_field: ClassVar[str] = "row_plan_hash"
+    relation_name: Literal["strategy_pkg.package", "strategy_pkg.package_asset"]
+    natural_key_fields: tuple[str, ...] = Field(min_length=1)
+    natural_key_values: dict[str, Any]
+    semantic_row: dict[str, Any]
+    expected_row_hash: str = Field(min_length=64, max_length=64)
+    disposition: ImportRowDisposition
+    actual_row_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    row_plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("expected_row_hash", "actual_row_hash", "row_plan_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "PlannedImportRow":
+        key_fields = sorted_unique(self.natural_key_fields, field_name="natural_key_fields")
+        if set(self.natural_key_values) != set(key_fields):
+            raise ValueError("natural key values must exactly match natural key fields")
+        if not set(key_fields).issubset(self.semantic_row):
+            raise ValueError("natural key fields must be present in the semantic row")
+        expected_key_values = {name: self.semantic_row[name] for name in key_fields}
+        if self.natural_key_values != expected_key_values:
+            raise ValueError("natural key values differ from the semantic row")
+        expected_hash = canonical_json_sha256(self.semantic_row)
+        if self.expected_row_hash != expected_hash:
+            raise ValueError("expected row hash differs from the semantic row")
+        if self.disposition is ImportRowDisposition.INSERT and self.actual_row_hash is not None:
+            raise ValueError("INSERT row cannot carry an actual row hash")
+        if self.disposition is ImportRowDisposition.EXACT_MATCH and self.actual_row_hash != self.expected_row_hash:
+            raise ValueError("EXACT_MATCH row must have the expected actual hash")
+        if self.disposition is ImportRowDisposition.CONFLICT and (
+            self.actual_row_hash is None or self.actual_row_hash == self.expected_row_hash
+        ):
+            raise ValueError("CONFLICT row requires a different actual hash")
+        object.__setattr__(self, "natural_key_fields", key_fields)
+        self.close_hash()
+        return self
+
+
+class ImportWriteOperation(StrictContract):
+    relation_name: Literal["strategy_pkg.package", "strategy_pkg.package_asset"]
+    row_plan_hash: str = Field(min_length=64, max_length=64)
+    expected_row_hash: str = Field(min_length=64, max_length=64)
+    natural_key_values: dict[str, Any]
+    semantic_row: dict[str, Any]
+
+    @field_validator("row_plan_hash", "expected_row_hash")
+    @classmethod
+    def _hashes(cls, value: str, info: Any) -> str:
+        return validate_sha256(value, field_name=info.field_name)
+
+
+class RealDevImportPlan(HashClosedContract):
+    hash_field: ClassVar[str] = "plan_hash"
+    schema_version: Literal[IMPORT_PLAN_SCHEMA_VERSION] = IMPORT_PLAN_SCHEMA_VERSION
+    bundle_ref: OnboardingArtifactRef
+    target_database_identity: DatabaseIdentity
+    release_receipt_ref: Phase1GInputArtifactRef
+    classified_rows: tuple[PlannedImportRow, ...]
+    insert_rows_by_relation: dict[str, tuple[str, ...]]
+    exact_match_rows_by_relation: dict[str, tuple[str, ...]]
+    conflict_rows_by_relation: dict[str, tuple[str, ...]]
+    ordered_write_operations: tuple[ImportWriteOperation, ...]
+    planned_write_relation_set: tuple[str, ...]
+    status: ImportPlanStatus
+    reason_codes: tuple[str, ...] = ()
+    plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("plan_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        return validate_sha256(value, field_name="plan_hash") if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "RealDevImportPlan":
+        if self.bundle_ref.evidence_kind is not EvidenceKind.BUNDLE:
+            raise ValueError("import plan bundle_ref must reference a bundle")
+        _validate_release_receipt_ref(self.release_receipt_ref)
+        if self.target_database_identity.target_label is not TargetLabel.DEV:
+            raise ValueError("import plan target database must be DEV")
+        rows = tuple(
+            sorted(
+                self.classified_rows,
+                key=lambda item: (item.relation_name, canonical_json_sha256(item.natural_key_values)),
+            )
+        )
+        row_hashes = tuple(str(item.row_plan_hash) for item in rows)
+        if len(row_hashes) != len(set(row_hashes)):
+            raise ValueError("classified rows must have unique row plan hashes")
+        grouped = {
+            disposition: {
+                relation: tuple(
+                    str(item.row_plan_hash)
+                    for item in rows
+                    if item.disposition is disposition and item.relation_name == relation
+                )
+                for relation in ("strategy_pkg.package", "strategy_pkg.package_asset")
+                if any(item.disposition is disposition and item.relation_name == relation for item in rows)
+            }
+            for disposition in ImportRowDisposition
+        }
+        supplied_groups = {
+            ImportRowDisposition.INSERT: self.insert_rows_by_relation,
+            ImportRowDisposition.EXACT_MATCH: self.exact_match_rows_by_relation,
+            ImportRowDisposition.CONFLICT: self.conflict_rows_by_relation,
+        }
+        for disposition, supplied in supplied_groups.items():
+            normalized = {name: tuple(values) for name, values in sorted(supplied.items())}
+            if normalized != grouped[disposition]:
+                raise ValueError(f"{disposition.value} row summary differs from classified rows")
+        insert_rows = [item for item in rows if item.disposition is ImportRowDisposition.INSERT]
+        relation_order = {"strategy_pkg.package": 0, "strategy_pkg.package_asset": 1}
+        insert_rows.sort(key=lambda item: (relation_order[item.relation_name], canonical_json_sha256(item.natural_key_values)))
+        has_conflict = any(item.disposition is ImportRowDisposition.CONFLICT for item in rows)
+        expected_operations = (
+            ()
+            if has_conflict
+            else tuple(
+                ImportWriteOperation(
+                    relation_name=item.relation_name,
+                    row_plan_hash=str(item.row_plan_hash),
+                    expected_row_hash=item.expected_row_hash,
+                    natural_key_values=item.natural_key_values,
+                    semantic_row=item.semantic_row,
+                )
+                for item in insert_rows
+            )
+        )
+        if self.ordered_write_operations != expected_operations:
+            raise ValueError("ordered write operations differ from INSERT rows")
+        relation_set = () if has_conflict else tuple(sorted({item.relation_name for item in insert_rows}))
+        if self.planned_write_relation_set != relation_set:
+            raise ValueError("planned write relation set differs from INSERT rows")
+        reasons = sorted_unique(self.reason_codes, field_name="reason_codes") if self.reason_codes else ()
+        expected_status = (
+            ImportPlanStatus.CONFLICT
+            if has_conflict
+            else ImportPlanStatus.EXECUTABLE
+            if insert_rows
+            else ImportPlanStatus.ALREADY_PRESENT
+        )
+        if self.status is not expected_status:
+            raise ValueError("import plan status differs from row classifications")
+        if expected_status is ImportPlanStatus.CONFLICT:
+            if REASON_IMPORT_PLAN_CONFLICT not in reasons or self.ordered_write_operations:
+                raise ValueError("conflict plan requires its reason and zero write operations")
+        elif reasons:
+            raise ValueError("executable/already-present plan cannot carry failure reasons")
+        object.__setattr__(self, "classified_rows", rows)
+        object.__setattr__(self, "planned_write_relation_set", relation_set)
+        object.__setattr__(self, "reason_codes", reasons)
+        self.close_hash()
+        return self
+
+
+class RealDevImportReceipt(HashClosedContract):
+    hash_field: ClassVar[str] = "receipt_hash"
+    schema_version: Literal[IMPORT_RECEIPT_SCHEMA_VERSION] = IMPORT_RECEIPT_SCHEMA_VERSION
+    import_invocation_id: str = Field(min_length=1, max_length=160)
+    bundle_ref: OnboardingArtifactRef
+    request_hash: str = Field(min_length=64, max_length=64)
+    bundle_hash: str = Field(min_length=64, max_length=64)
+    plan_hash: str = Field(min_length=64, max_length=64)
+    source_database_identity_hash: str = Field(min_length=64, max_length=64)
+    target_database_identity_hash: str = Field(min_length=64, max_length=64)
+    transaction_id: str | None = Field(default=None, min_length=1, max_length=160)
+    inserted_row_counts: dict[str, int]
+    matched_row_counts: dict[str, int]
+    write_relation_set: tuple[str, ...]
+    post_readback_row_hashes: dict[str, tuple[str, ...]]
+    post_dependency_closure_hash: str = Field(min_length=64, max_length=64)
+    physical_commit_count: int | None = Field(default=None, ge=0, le=1)
+    commit_outcome: ImportCommitOutcome
+    started_at: datetime
+    finished_at: datetime
+    reason_codes: tuple[str, ...] = ()
+    receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "request_hash",
+        "bundle_hash",
+        "plan_hash",
+        "source_database_identity_hash",
+        "target_database_identity_hash",
+        "post_dependency_closure_hash",
+        "receipt_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "RealDevImportReceipt":
+        if self.bundle_ref.evidence_kind is not EvidenceKind.BUNDLE or self.bundle_ref.semantic_content_hash != self.bundle_hash:
+            raise ValueError("import receipt bundle identity is invalid")
+        if set(self.inserted_row_counts) != IMPORT_RELATION_SET or set(self.matched_row_counts) != IMPORT_RELATION_SET:
+            raise ValueError("import receipt relation counts must exactly match the fixed import allowlist")
+        if not set(self.post_readback_row_hashes).issubset(IMPORT_RELATION_SET):
+            raise ValueError("import receipt post readback relations exceed the fixed import allowlist")
+        if any(value < 0 for value in (*self.inserted_row_counts.values(), *self.matched_row_counts.values())):
+            raise ValueError("import receipt row counts must be non-negative")
+        write_set = tuple(sorted(name for name, count in self.inserted_row_counts.items() if count > 0))
+        if self.write_relation_set != write_set:
+            raise ValueError("import receipt write relation set differs from inserted row counts")
+        post_hashes = {
+            name: tuple(validate_sha256(item, field_name="post_readback_row_hash") for item in values)
+            for name, values in sorted(self.post_readback_row_hashes.items())
+        }
+        if any(tuple(sorted(values)) != values for values in post_hashes.values()):
+            raise ValueError("post readback row hashes must be sorted")
+        if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
+        if self.finished_at.tzinfo is None or self.finished_at.utcoffset() is None:
+            raise ValueError("finished_at must be timezone-aware")
+        started = self.started_at.astimezone(timezone.utc)
+        finished = self.finished_at.astimezone(timezone.utc)
+        if finished < started:
+            raise ValueError("finished_at must not precede started_at")
+        reasons = sorted_unique(self.reason_codes, field_name="reason_codes") if self.reason_codes else ()
+        if self.commit_outcome is ImportCommitOutcome.COMMITTED:
+            if self.transaction_id is None or self.physical_commit_count != 1 or reasons:
+                raise ValueError("COMMITTED receipt requires one physical commit and no failure reason")
+        elif self.commit_outcome is ImportCommitOutcome.ALREADY_PRESENT:
+            if self.transaction_id is not None or self.physical_commit_count != 0 or any(self.inserted_row_counts.values()) or reasons:
+                raise ValueError("ALREADY_PRESENT receipt requires zero DML and zero failure reason")
+        else:
+            if self.transaction_id is None or self.physical_commit_count is not None or REASON_IMPORT_COMMIT_STATE_UNKNOWN not in reasons:
+                raise ValueError("STATE_UNKNOWN receipt requires unknown commit count and stable reason")
+        object.__setattr__(self, "write_relation_set", write_set)
+        object.__setattr__(self, "post_readback_row_hashes", post_hashes)
+        object.__setattr__(self, "started_at", started)
+        object.__setattr__(self, "finished_at", finished)
+        object.__setattr__(self, "reason_codes", reasons)
         self.close_hash()
         return self
 

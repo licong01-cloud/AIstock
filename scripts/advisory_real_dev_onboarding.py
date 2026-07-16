@@ -13,6 +13,8 @@ import sys
 import traceback
 from typing import Any
 
+from pydantic import ValidationError
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
@@ -21,8 +23,12 @@ from backend.services.advisory_phase0a.policy import canonical_json_text
 from backend.services.advisory_dev_input_onboarding.contracts import (
     EvidenceKind,
     InventoryClassification,
+    ImportCommitOutcome,
+    ImportPlanStatus,
     OnboardingArtifactRef,
     PortableAdvisoryEvidenceBundle,
+    RealDevImportPlan,
+    RealDevImportReceipt,
     RealDevOnboardingError,
     RealDevOnboardingInventoryReceipt,
     RealDevOnboardingInventoryQuery,
@@ -32,8 +38,10 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
 )
 from backend.services.advisory_dev_input_onboarding.production_projection import (
     RealDevOnboardingInventoryService,
+    RealDevProductionPackageExporter,
     load_exact_release_receipt,
 )
+from backend.services.advisory_dev_input_onboarding.dev_importer import RealDevPackageImporter
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
 
 
@@ -67,6 +75,39 @@ def _parser() -> argparse.ArgumentParser:
     verify_bundle.add_argument("--bundle-ref", required=True, type=Path)
     verify_bundle.add_argument("--evidence-root", required=True, type=Path)
     verify_bundle.add_argument("--release-receipt-root", required=True, type=Path)
+
+    export_bundle = subparsers.add_parser("export-bundle", help="export the exact production package closure")
+    export_bundle.add_argument("--request", required=True, type=Path)
+    export_bundle.add_argument("--inventory-ref", required=True, type=Path)
+    export_bundle.add_argument("--env-file", required=True, type=Path)
+    export_bundle.add_argument("--evidence-root", required=True, type=Path)
+    export_bundle.add_argument("--source-package-asset-root", required=True, type=Path)
+    export_bundle.add_argument("--target-package-asset-root", required=True, type=Path)
+
+    plan_import = subparsers.add_parser("plan-import", help="classify exact DEV rows without DML")
+    plan_import.add_argument("--bundle-ref", required=True, type=Path)
+    plan_import.add_argument("--env-file", required=True, type=Path)
+    plan_import.add_argument("--release-receipt-root", required=True, type=Path)
+    plan_import.add_argument("--evidence-root", required=True, type=Path)
+
+    import_dev = subparsers.add_parser("import-dev", help="execute the fixed DEV package INSERT-or-compare protocol")
+    import_dev.add_argument("--bundle-ref", required=True, type=Path)
+    import_dev.add_argument("--plan", required=True, type=Path)
+    import_dev.add_argument("--env-file", required=True, type=Path)
+    import_dev.add_argument("--release-receipt-root", required=True, type=Path)
+    import_dev.add_argument("--evidence-root", required=True, type=Path)
+    import_dev.add_argument("--source-package-asset-root", required=True, type=Path)
+    import_dev.add_argument("--target-package-asset-root", required=True, type=Path)
+
+    verify_import = subparsers.add_parser("verify-import", help="freshly verify a completed DEV package import")
+    verify_import.add_argument("--bundle-ref", required=True, type=Path)
+    verify_import.add_argument("--receipt", required=True, type=Path)
+    verify_import.add_argument("--plan", required=True, type=Path)
+    verify_import.add_argument("--env-file", required=True, type=Path)
+    verify_import.add_argument("--release-receipt-root", required=True, type=Path)
+    verify_import.add_argument("--evidence-root", required=True, type=Path)
+    verify_import.add_argument("--source-package-asset-root", required=True, type=Path)
+    verify_import.add_argument("--target-package-asset-root", required=True, type=Path)
     return parser
 
 
@@ -145,6 +186,106 @@ def _inventory(args: argparse.Namespace) -> int:
     return EXIT_INPUT_PENDING
 
 
+def _load_bundle(*, store: RealDevOnboardingEvidenceStore, ref_path: Path) -> tuple[PortableAdvisoryEvidenceBundle, OnboardingArtifactRef]:
+    ref = _read_ref(ref_path, expected=EvidenceKind.BUNDLE)
+    bundle = store.load(ref)
+    store.verify_reference_closure(bundle)
+    if not isinstance(bundle, PortableAdvisoryEvidenceBundle):
+        raise ValueError("bundle ref resolved to the wrong evidence model")
+    return bundle, ref
+
+
+def _export_bundle(args: argparse.Namespace) -> int:
+    request = RealDevOnboardingRequest.model_validate(_read_json(args.request))
+    store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
+    request_ref = store.publish(request).ref
+    inventory_ref = _read_ref(args.inventory_ref, expected=EvidenceKind.INVENTORY)
+    inventory = store.load(inventory_ref)
+    store.verify_reference_closure(inventory)
+    if not isinstance(inventory, RealDevOnboardingInventoryReceipt):
+        raise ValueError("inventory ref resolved to the wrong evidence model")
+    result = RealDevProductionPackageExporter().export(
+        request=request,
+        request_ref=request_ref,
+        inventory=inventory,
+        env_file=args.env_file,
+        evidence_store=store,
+        source_package_asset_root=args.source_package_asset_root,
+        target_package_asset_root=args.target_package_asset_root,
+    )
+    _emit(
+        {
+            "ok": True,
+            "command": "export-bundle",
+            "bundle_ref": result.bundle_ref,
+            "bundle_hash": result.bundle.bundle_content_hash,
+            "dependency_closure_hash": result.bundle.dependency_closure_hash,
+            "idempotent": result.idempotent,
+        }
+    )
+    return EXIT_SUCCESS
+
+
+def _plan_import(args: argparse.Namespace) -> int:
+    store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
+    bundle, bundle_ref = _load_bundle(store=store, ref_path=args.bundle_ref)
+    plan = RealDevPackageImporter().plan(
+        bundle=bundle,
+        bundle_ref=bundle_ref,
+        evidence_store=store,
+        env_file=args.env_file,
+        release_receipt_root=args.release_receipt_root,
+    )
+    _emit(plan)
+    return EXIT_INVALID if plan.status is ImportPlanStatus.CONFLICT else EXIT_SUCCESS
+
+
+def _import_dev(args: argparse.Namespace) -> int:
+    store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
+    bundle, bundle_ref = _load_bundle(store=store, ref_path=args.bundle_ref)
+    supplied_plan = RealDevImportPlan.model_validate(_read_json(args.plan))
+    receipt = RealDevPackageImporter().import_dev(
+        bundle=bundle,
+        bundle_ref=bundle_ref,
+        supplied_plan=supplied_plan,
+        evidence_store=store,
+        env_file=args.env_file,
+        release_receipt_root=args.release_receipt_root,
+        source_package_asset_root=args.source_package_asset_root,
+        target_package_asset_root=args.target_package_asset_root,
+    )
+    _emit(receipt)
+    return EXIT_STATE_UNKNOWN if receipt.commit_outcome is ImportCommitOutcome.STATE_UNKNOWN else EXIT_SUCCESS
+
+
+def _verify_import(args: argparse.Namespace) -> int:
+    store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
+    bundle, bundle_ref = _load_bundle(store=store, ref_path=args.bundle_ref)
+    receipt = RealDevImportReceipt.model_validate(_read_json(args.receipt))
+    supplied_plan = RealDevImportPlan.model_validate(_read_json(args.plan))
+    RealDevPackageImporter().verify_import(
+        bundle=bundle,
+        bundle_ref=bundle_ref,
+        receipt=receipt,
+        supplied_plan=supplied_plan,
+        evidence_store=store,
+        env_file=args.env_file,
+        release_receipt_root=args.release_receipt_root,
+        source_package_asset_root=args.source_package_asset_root,
+        target_package_asset_root=args.target_package_asset_root,
+    )
+    _emit(
+        {
+            "ok": True,
+            "command": "verify-import",
+            "receipt_hash": receipt.receipt_hash,
+            "commit_outcome": receipt.commit_outcome.value,
+            "bundle_hash": receipt.bundle_hash,
+        }
+    )
+    return EXIT_SUCCESS
+
+
 def _verify(args: argparse.Namespace, *, expected: EvidenceKind | None = None) -> int:
     store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
     ref_path = args.bundle_ref if expected is EvidenceKind.BUNDLE else args.evidence_ref
@@ -191,11 +332,44 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "inventory":
             return _inventory(args)
+        if args.command == "export-bundle":
+            return _export_bundle(args)
+        if args.command == "plan-import":
+            return _plan_import(args)
+        if args.command == "import-dev":
+            return _import_dev(args)
+        if args.command == "verify-import":
+            return _verify_import(args)
         if args.command == "verify-evidence":
             return _verify(args)
         if args.command == "verify-bundle":
             return _verify(args, expected=EvidenceKind.BUNDLE)
         raise ValueError("unsupported command")
+    except ValidationError as exc:
+        reason_code = "ADVISORY_REAL_DEV_CONTRACT_INVALID"
+        LOGGER.error(
+            "advisory_onboarding_contract_validation_failed command=%s reason_code=%s error_count=%s",
+            args.command,
+            reason_code,
+            exc.error_count(),
+        )
+        fields = sorted(
+            {
+                ".".join(str(part) for part in error.get("loc", ())) or "contract"
+                for error in exc.errors(include_url=False, include_context=False, include_input=False)
+            }
+        )
+        _emit(
+            {
+                "ok": False,
+                "command": args.command,
+                "reason_code": reason_code,
+                "message": "input contract validation failed",
+                "invalid_fields": fields,
+                "error_count": exc.error_count(),
+            }
+        )
+        return EXIT_INVALID
     except ValueError as exc:
         reason_code = "ADVISORY_REAL_DEV_CONTRACT_INVALID"
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
@@ -205,7 +379,15 @@ def main(argv: list[str] | None = None) -> int:
         reason_code = getattr(exc, "reason_code", "ADVISORY_REAL_DEV_CONTRACT_INVALID")
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
         _emit({"ok": False, "command": args.command, "reason_code": reason_code, "message": str(exc)})
-        return EXIT_VERIFICATION_FAILED if args.command in {"verify-evidence", "verify-bundle"} else EXIT_INVALID
+        if reason_code == "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN":
+            return EXIT_STATE_UNKNOWN
+        if args.command in {"verify-evidence", "verify-bundle", "verify-import"} or reason_code in {
+            "ADVISORY_REAL_DEV_IMPORT_COMMIT_NOT_OBSERVED",
+            "ADVISORY_REAL_DEV_IMPORT_READBACK_FAILED",
+            "ADVISORY_REAL_DEV_IMPORT_TRANSACTION_FAILED",
+        }:
+            return EXIT_VERIFICATION_FAILED
+        return EXIT_INVALID
     except Exception as exc:  # pragma: no cover - process boundary.
         _log_sanitized_exception("unexpected onboarding failure", exc)
         _emit({"ok": False, "command": args.command, "reason_code": REASON_UNEXPECTED_ERROR, "message": "unexpected internal error"})
