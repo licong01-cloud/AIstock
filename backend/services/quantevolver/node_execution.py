@@ -5,6 +5,7 @@ silently fall back to the local RD-Agent API when a selected node is unavailable
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Iterable
 
@@ -15,6 +16,11 @@ from .qe_workspace_client import QEWorkspaceClient
 
 DEFAULT_QE_NODE_ID = "wsl2-5080"
 MAX_QE_NODE_PARALLELISM = 4
+QE_NODE_GLOBAL_LOOP_LIMITS_ENV = "AISTOCK_QE_NODE_GLOBAL_LOOP_LIMITS_JSON"
+DEFAULT_QE_NODE_GLOBAL_LOOP_LIMITS = {
+    DEFAULT_QE_NODE_ID: 2,
+    "rdagent-node1": 4,
+}
 
 
 class QENodePreflightError(RuntimeError):
@@ -37,6 +43,81 @@ class QENodePreflightError(RuntimeError):
 def resolve_default_qe_node_id() -> str:
     """Return the explicit default QE node id used when the UI leaves node blank."""
     return (os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID") or DEFAULT_QE_NODE_ID).strip() or DEFAULT_QE_NODE_ID
+
+
+def resolve_qe_node_global_loop_limits() -> dict[str, int]:
+    """Return the process-wide QE Loop capacity for every configured node.
+
+    The built-in capacities encode the currently approved execution contract:
+    WSL may run at most two Loops and the remote CPU node at most four.  An
+    optional JSON object can override or extend that map for future nodes.  A
+    malformed override is a configuration error and must never be ignored.
+
+    Unknown nodes retain the legacy maximum of four so existing development
+    nodes remain usable; production nodes should be added explicitly to the
+    map or the environment override before their capacity is raised or lowered.
+    """
+
+    limits: dict[str, int] = dict(DEFAULT_QE_NODE_GLOBAL_LOOP_LIMITS)
+    raw = (os.getenv(QE_NODE_GLOBAL_LOOP_LIMITS_ENV) or "").strip()
+    if not raw:
+        return limits
+
+    try:
+        configured = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise QENodePreflightError(
+            "QE_NODE_GLOBAL_LOOP_LIMITS_JSON_INVALID",
+            f"{QE_NODE_GLOBAL_LOOP_LIMITS_ENV} must be a JSON object.",
+            {"value": raw, "error": str(exc)},
+        ) from exc
+    if not isinstance(configured, dict):
+        raise QENodePreflightError(
+            "QE_NODE_GLOBAL_LOOP_LIMITS_NOT_OBJECT",
+            f"{QE_NODE_GLOBAL_LOOP_LIMITS_ENV} must be a JSON object.",
+            {"value_type": type(configured).__name__},
+        )
+
+    for raw_node_id, raw_limit in configured.items():
+        node_id = str(raw_node_id or "").strip()
+        if not node_id:
+            raise QENodePreflightError(
+                "QE_NODE_GLOBAL_LOOP_LIMIT_NODE_EMPTY",
+                "QE node global Loop limit contains an empty node id.",
+            )
+        if isinstance(raw_limit, bool) or (
+            isinstance(raw_limit, float) and not raw_limit.is_integer()
+        ):
+            raise QENodePreflightError(
+                "QE_NODE_GLOBAL_LOOP_LIMIT_INVALID",
+                f"Node {node_id} global Loop limit must be an integer.",
+                {"node_id": node_id, "value": raw_limit},
+            )
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError) as exc:
+            raise QENodePreflightError(
+                "QE_NODE_GLOBAL_LOOP_LIMIT_INVALID",
+                f"Node {node_id} global Loop limit must be an integer.",
+                {"node_id": node_id, "value": raw_limit},
+            ) from exc
+        if limit < 1 or limit > MAX_QE_NODE_PARALLELISM:
+            raise QENodePreflightError(
+                "QE_NODE_GLOBAL_LOOP_LIMIT_OUT_OF_RANGE",
+                f"Node {node_id} global Loop limit must be between 1 and {MAX_QE_NODE_PARALLELISM}.",
+                {"node_id": node_id, "value": limit, "max": MAX_QE_NODE_PARALLELISM},
+            )
+        limits[node_id] = limit
+    return limits
+
+
+def resolve_qe_node_global_loop_limit(node_id: str) -> int:
+    """Return the atomic cross-task Loop capacity for one QE node."""
+
+    normalized = str(node_id or "").strip()
+    if not normalized:
+        raise QENodePreflightError("QE_NODE_ID_EMPTY", "QE execution node id is empty.")
+    return resolve_qe_node_global_loop_limits().get(normalized, MAX_QE_NODE_PARALLELISM)
 
 
 def get_compute_node(node_id: str) -> dict[str, Any] | None:
@@ -62,7 +143,7 @@ def normalize_node_parallelism(
     selected_node_ids: Iterable[str],
     raw: dict[str, Any] | None,
 ) -> dict[str, int]:
-    """Normalize per-node parallelism: selected nodes only, default 1, max 4."""
+    """Normalize task-local parallelism within each selected node's global capacity."""
     selected = {str(node_id).strip() for node_id in selected_node_ids if str(node_id or "").strip()}
     if not selected:
         raise QENodePreflightError(
@@ -90,11 +171,12 @@ def normalize_node_parallelism(
                 f"Invalid parallelism for node {node_id}: {value!r}.",
                 {"node_id": node_id, "value": value},
             ) from exc
-        if limit < 1 or limit > MAX_QE_NODE_PARALLELISM:
+        global_limit = resolve_qe_node_global_loop_limit(node_id)
+        if limit < 1 or limit > global_limit:
             raise QENodePreflightError(
                 "QE_NODE_PARALLELISM_OUT_OF_RANGE",
-                f"Node {node_id} parallelism must be between 1 and {MAX_QE_NODE_PARALLELISM}.",
-                {"node_id": node_id, "value": limit, "max": MAX_QE_NODE_PARALLELISM},
+                f"Node {node_id} parallelism must be between 1 and its global capacity {global_limit}.",
+                {"node_id": node_id, "value": limit, "max": global_limit},
             )
         normalized[node_id] = limit
     return normalized
