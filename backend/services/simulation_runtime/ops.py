@@ -419,6 +419,7 @@ class SimulationRuntimeOpsService:
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
         default_submit = bool(status.get("default_submit", False))
+        scheduler_loop_health = self._scheduler_loop_health(status)
         last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
         last_blocking_result = (
             status.get("last_blocking_result")
@@ -434,6 +435,7 @@ class SimulationRuntimeOpsService:
             status=status,
             last_result=last_result,
             last_blocking_result=last_blocking_result,
+            scheduler_loop_health=scheduler_loop_health,
         )
         return {
             "ok": True,
@@ -446,10 +448,12 @@ class SimulationRuntimeOpsService:
             "last_blocking_result": last_blocking_result,
             "last_result_errors": last_result_errors,
             "last_error_count": len(last_result_errors),
+            "scheduler_loop_health": scheduler_loop_health,
             "current_trade_date_blockers": current_trade_date_blockers,
             "effective_runtime_health": self._effective_runtime_health(
                 status=status,
                 current_trade_date_blockers=current_trade_date_blockers,
+                scheduler_loop_health=scheduler_loop_health,
             ),
             "default_submit": default_submit,
             "approval_states": list(status.get("approval_states") or []),
@@ -518,7 +522,10 @@ class SimulationRuntimeOpsService:
         *,
         status: dict[str, Any],
         current_trade_date_blockers: dict[str, Any],
+        scheduler_loop_health: dict[str, Any],
     ) -> str:
+        if scheduler_loop_health["status"] == "BLOCKED":
+            return "BLOCKED"
         if current_trade_date_blockers["blocker_count"] > 0:
             return "BLOCKED"
         if not bool(status.get("running", False)) or not bool(status.get("thread_alive", False)):
@@ -531,6 +538,7 @@ class SimulationRuntimeOpsService:
         status: dict[str, Any],
         last_result: dict[str, Any] | None,
         last_blocking_result: dict[str, Any] | None,
+        scheduler_loop_health: dict[str, Any],
     ) -> dict[str, Any]:
         observed_trade_dates: list[str] = []
         for candidate in (last_result, last_blocking_result):
@@ -579,8 +587,29 @@ class SimulationRuntimeOpsService:
             key=lambda run: (run.updated_at, run.created_at, run.run_id),
             reverse=True,
         )
-        bounded_blockers = all_blockers[:100]
-        blockers = [
+        active_loop_failure = scheduler_loop_health.get("active_failure")
+        loop_blockers: list[dict[str, Any]] = []
+        if scheduler_loop_health["status"] == "BLOCKED":
+            loop_blockers.append(
+                {
+                    "component": "simulation_background_scheduler_run_loop",
+                    "status": "BLOCKED",
+                    "reason_code": scheduler_loop_health["reason_code"],
+                    "stage": active_loop_failure.get("stage"),
+                    "exception_type": active_loop_failure.get("exception_type"),
+                    "exception_message": active_loop_failure.get("exception_message"),
+                    "underlying_reason_code": active_loop_failure.get("underlying_reason_code"),
+                    "underlying_stage": active_loop_failure.get("underlying_stage"),
+                    "failure_trade_date": active_loop_failure.get("trade_date"),
+                    "first_failure_at": active_loop_failure.get("first_failure_at"),
+                    "failure_at": active_loop_failure.get("failure_at"),
+                    "consecutive_failure_count": scheduler_loop_health["consecutive_failure_count"],
+                    "execution_gate": False,
+                }
+            )
+        database_limit = 100 - len(loop_blockers)
+        bounded_blockers = all_blockers[:database_limit]
+        database_blockers = [
             {
                 "run_id": run.run_id,
                 "strategy_id": run.strategy_id,
@@ -593,22 +622,222 @@ class SimulationRuntimeOpsService:
             }
             for run in bounded_blockers
         ]
+        blockers = [*loop_blockers, *database_blockers]
+        observed_blocker_count = len(loop_blockers) + len(all_blockers)
         return {
             "schema_version": "simulation_scheduler_current_day_blockers_v1",
             "trade_date": trade_date.isoformat(),
             "status": "BLOCKED" if blockers else "CLEAR",
             "blocker_count": len(blockers),
             "blockers": blockers,
-            "observed_blocker_count": len(all_blockers),
+            "observed_blocker_count": observed_blocker_count,
             "bounded_limit": 100,
-            "truncated": len(all_blockers) > 100 or any(
+            "truncated": observed_blocker_count > 100 or any(
                 len(runs) >= 100 for runs in runs_by_status.values()
             ),
             "execution_gate": False,
-            "source": "simulation_daily_run_readback",
+            "source": (
+                "scheduler_loop_health+simulation_daily_run_readback"
+                if loop_blockers
+                else "simulation_daily_run_readback"
+            ),
             "scheduler_running": bool(status.get("running", False)),
             "last_observed_trade_dates": list(dict.fromkeys(observed_trade_dates)),
         }
+
+    @staticmethod
+    def _scheduler_loop_health(status: dict[str, Any]) -> dict[str, Any]:
+        value = status.get("scheduler_loop_health")
+        if value is None:
+            if bool(status.get("scheduler_control_api_enabled", False)):
+                raise RuntimeConfigInvalidError(
+                    "background scheduler status is missing scheduler_loop_health",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_MISSING",
+                        "stage": "SCHEDULER_STATUS_PROJECTION",
+                    },
+                )
+            return {
+                "schema_version": "simulation_background_scheduler_loop_health_v1",
+                "status": "NOT_APPLICABLE",
+                "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_LOOP_NOT_APPLICABLE",
+                "active_failure": None,
+                "last_failure": None,
+                "last_successful_tick_at": None,
+                "consecutive_failure_count": 0,
+                "total_failure_count": 0,
+                "total_success_count": 0,
+                "execution_gate": False,
+                "auto_clears_on_success": True,
+            }
+        if not isinstance(value, dict):
+            raise RuntimeConfigInvalidError(
+                "scheduler status scheduler_loop_health must be a mapping",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "scheduler_loop_health",
+                },
+            )
+        projected = dict(value)
+        if projected.get("schema_version") != "simulation_background_scheduler_loop_health_v1":
+            raise RuntimeConfigInvalidError(
+                "scheduler_loop_health schema_version is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "schema_version",
+                    "value": projected.get("schema_version"),
+                },
+            )
+        health_status = projected.get("status")
+        if health_status not in {"BLOCKED", "HEALTHY", "NOT_YET_RUN"}:
+            raise RuntimeConfigInvalidError(
+                "scheduler_loop_health status is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "status",
+                    "value": health_status,
+                },
+            )
+        expected_reason_code = {
+            "BLOCKED": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+            "HEALTHY": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_OK",
+            "NOT_YET_RUN": "SIMULATION_BACKGROUND_SCHEDULER_LOOP_NOT_YET_RUN",
+        }[health_status]
+        if projected.get("reason_code") != expected_reason_code:
+            raise RuntimeConfigInvalidError(
+                "scheduler_loop_health reason_code does not match status",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "reason_code",
+                    "status": health_status,
+                    "value": projected.get("reason_code"),
+                },
+            )
+        if projected.get("execution_gate") is not False:
+            raise RuntimeConfigInvalidError(
+                "scheduler_loop_health execution_gate must be false",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "execution_gate",
+                    "value": projected.get("execution_gate"),
+                },
+            )
+        if projected.get("auto_clears_on_success") is not True:
+            raise RuntimeConfigInvalidError(
+                "scheduler_loop_health auto_clears_on_success must be true",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "auto_clears_on_success",
+                    "value": projected.get("auto_clears_on_success"),
+                },
+            )
+        active_failure = projected.get("active_failure")
+        if health_status == "BLOCKED" and not isinstance(active_failure, dict):
+            raise RuntimeConfigInvalidError(
+                "blocked scheduler_loop_health requires active_failure",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "active_failure",
+                },
+            )
+        if health_status != "BLOCKED" and active_failure is not None:
+            raise RuntimeConfigInvalidError(
+                "non-blocked scheduler_loop_health cannot have active_failure",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "active_failure",
+                    "status": health_status,
+                },
+            )
+        if isinstance(active_failure, dict):
+            expected_failure_fields = {
+                "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                "status": "BLOCKED",
+                "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                "execution_gate": False,
+                "auto_clears_on_success": True,
+            }
+            for field, expected_value in expected_failure_fields.items():
+                if active_failure.get(field) != expected_value:
+                    raise RuntimeConfigInvalidError(
+                        f"scheduler_loop_health active_failure {field} is invalid",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                            "stage": "SCHEDULER_STATUS_PROJECTION",
+                            "field": f"active_failure.{field}",
+                            "value": active_failure.get(field),
+                        },
+                    )
+            exception_message = active_failure.get("exception_message")
+            if not isinstance(exception_message, str) or len(exception_message) > 2048:
+                raise RuntimeConfigInvalidError(
+                    "scheduler_loop_health active_failure exception_message is invalid",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                        "stage": "SCHEDULER_STATUS_PROJECTION",
+                        "field": "active_failure.exception_message",
+                    },
+                )
+            failure_context = active_failure.get("context")
+            if not isinstance(failure_context, dict) or any(
+                len(str(key)) > 64 or len(str(value)) > 512
+                for key, value in failure_context.items()
+            ):
+                raise RuntimeConfigInvalidError(
+                    "scheduler_loop_health active_failure context is invalid",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                        "stage": "SCHEDULER_STATUS_PROJECTION",
+                        "field": "active_failure.context",
+                    },
+                )
+        for field in (
+            "consecutive_failure_count",
+            "total_failure_count",
+            "total_success_count",
+        ):
+            count = projected.get(field)
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise RuntimeConfigInvalidError(
+                    f"scheduler_loop_health {field} must be a non-negative integer",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                        "stage": "SCHEDULER_STATUS_PROJECTION",
+                        "field": field,
+                        "value": count,
+                    },
+                )
+        consecutive_failure_count = projected["consecutive_failure_count"]
+        if health_status == "BLOCKED" and consecutive_failure_count <= 0:
+            raise RuntimeConfigInvalidError(
+                "blocked scheduler_loop_health requires a positive consecutive failure count",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "consecutive_failure_count",
+                    "value": consecutive_failure_count,
+                },
+            )
+        if health_status != "BLOCKED" and consecutive_failure_count != 0:
+            raise RuntimeConfigInvalidError(
+                "non-blocked scheduler_loop_health requires zero consecutive failures",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID",
+                    "stage": "SCHEDULER_STATUS_PROJECTION",
+                    "field": "consecutive_failure_count",
+                    "value": consecutive_failure_count,
+                },
+            )
+        return projected
 
     @staticmethod
     def _run_blocker_reason_code(run: SimulationDailyRun) -> str:

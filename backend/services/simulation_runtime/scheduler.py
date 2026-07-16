@@ -11002,6 +11002,12 @@ class SimulationLifecycleBackgroundScheduler:
         self._last_run_at: datetime | None = None
         self._last_result: dict[str, Any] | None = None
         self._last_blocking_result: dict[str, Any] | None = None
+        self._active_loop_failure: dict[str, Any] | None = None
+        self._last_loop_failure: dict[str, Any] | None = None
+        self._last_successful_loop_tick_at: datetime | None = None
+        self._loop_consecutive_failure_count = 0
+        self._loop_total_failure_count = 0
+        self._loop_total_success_count = 0
 
     def start(self, *, interval_seconds: int | None = None, default_submit: bool | None = None) -> dict[str, Any]:
         interval = int(interval_seconds or self._interval_seconds)
@@ -11053,12 +11059,18 @@ class SimulationLifecycleBackgroundScheduler:
     def status(self) -> dict[str, Any]:
         thread = self._thread
         base = self.lifecycle_scheduler.status()
-        running = bool(thread and thread.is_alive() and not self._stop_event.is_set())
+        with self._lock:
+            thread_alive = bool(thread and thread.is_alive())
+            running = bool(thread_alive and not self._stop_event.is_set())
+            last_run_at = self._last_run_at
+            last_result = deepcopy(self._last_result)
+            last_blocking_result = deepcopy(self._last_blocking_result)
+            scheduler_loop_health = self._scheduler_loop_health_locked()
         return {
             **base,
             "autostart": running,
             "running": running,
-            "thread_alive": bool(thread and thread.is_alive()),
+            "thread_alive": thread_alive,
             "scheduler_control_api_enabled": True,
             "manual_tick_endpoint_enabled": True,
             "interval_seconds": self._interval_seconds,
@@ -11066,9 +11078,10 @@ class SimulationLifecycleBackgroundScheduler:
             "data_source": self._data_source,
             "data_source_policy": self._data_source_policy(),
             "limit": self._limit,
-            "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
-            "last_result": self._last_result,
-            "last_blocking_result": self._last_blocking_result,
+            "last_run_at": last_run_at.isoformat() if last_run_at else None,
+            "last_result": last_result,
+            "last_blocking_result": last_blocking_result,
+            "scheduler_loop_health": scheduler_loop_health,
             "trading_calendar_policy": self._trading_calendar_policy(),
         }
 
@@ -11278,10 +11291,162 @@ class SimulationLifecycleBackgroundScheduler:
         while not self._stop_event.is_set():
             try:
                 self.run_once()
-            except Exception:
-                logger.exception("Simulation runtime scheduler run_once crashed")
+            except Exception as exc:
+                failure = self._record_loop_exception(exc)
+                logger.exception(
+                    "Simulation runtime scheduler run_once crashed reason_code=%s consecutive_failure_count=%s",
+                    failure["reason_code"],
+                    failure["consecutive_failure_count"],
+                )
+            else:
+                self._record_loop_success()
             if self._stop_event.wait(timeout=self._interval_seconds):
                 break
+
+    def _record_loop_exception(self, exc: Exception) -> dict[str, Any]:
+        failure_at = datetime.now(UTC)
+        trade_date = failure_at.astimezone(SCHEDULER_TZ).date()
+        raw_context = getattr(exc, "context", None)
+        context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
+        message = str(exc)
+        bounded_message = message[:2048]
+        raw_underlying_reason_code = context.get("reason_code")
+        raw_underlying_stage = context.get("stage") or context.get("failure_stage")
+        underlying_reason_code = (
+            str(raw_underlying_reason_code)[:512] if raw_underlying_reason_code is not None else None
+        )
+        underlying_stage = str(raw_underlying_stage)[:512] if raw_underlying_stage is not None else None
+        with self._lock:
+            consecutive_failure_count = self._loop_consecutive_failure_count + 1
+            first_failure_at = (
+                str(self._active_loop_failure.get("first_failure_at"))
+                if isinstance(self._active_loop_failure, dict)
+                and self._active_loop_failure.get("first_failure_at")
+                else failure_at.isoformat()
+            )
+            failure = {
+                "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                "status": "BLOCKED",
+                "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                "exception_type": type(exc).__name__,
+                "exception_message": bounded_message,
+                "exception_message_truncated": len(message) > len(bounded_message),
+                "underlying_reason_code": underlying_reason_code,
+                "underlying_stage": underlying_stage,
+                "context": self._bounded_loop_exception_context(context),
+                "trade_date": trade_date.isoformat(),
+                "first_failure_at": first_failure_at,
+                "failure_at": failure_at.isoformat(),
+                "consecutive_failure_count": consecutive_failure_count,
+                "total_failure_count": self._loop_total_failure_count + 1,
+                "last_successful_tick_at": (
+                    self._last_successful_loop_tick_at.isoformat()
+                    if self._last_successful_loop_tick_at is not None
+                    else None
+                ),
+                "execution_gate": False,
+                "auto_clears_on_success": True,
+            }
+            failure_result = {
+                "schema_version": "simulation_background_scheduler_loop_result_v1",
+                "started_at": failure_at.isoformat(),
+                "completed_at": failure_at.isoformat(),
+                "trade_date": trade_date.isoformat(),
+                "timezone": SCHEDULER_TZ_NAME,
+                "window": None,
+                "should_run": False,
+                "submit": False,
+                "reason": "background_scheduler_run_loop_exception",
+                "processed": [],
+                "errors": [
+                    {
+                        "type": failure["exception_type"],
+                        "message": failure["exception_message"],
+                        "reason_code": failure["reason_code"],
+                        "underlying_reason_code": failure["underlying_reason_code"],
+                        "stage": failure["stage"],
+                    }
+                ],
+                "alerts": [],
+                "has_blocking_result": True,
+                "scheduler_loop_failure": deepcopy(failure),
+            }
+            self._loop_consecutive_failure_count = consecutive_failure_count
+            self._loop_total_failure_count += 1
+            self._active_loop_failure = deepcopy(failure)
+            self._last_loop_failure = deepcopy(failure)
+            self._last_run_at = failure_at
+            self._last_result = deepcopy(failure_result)
+            self._last_blocking_result = deepcopy(failure_result)
+            return deepcopy(failure)
+
+    def _record_loop_success(self) -> None:
+        success_at = datetime.now(UTC)
+        with self._lock:
+            self._loop_consecutive_failure_count = 0
+            self._loop_total_success_count += 1
+            self._last_successful_loop_tick_at = success_at
+            self._active_loop_failure = None
+
+    def _scheduler_loop_health_locked(self) -> dict[str, Any]:
+        if self._active_loop_failure is not None:
+            status = "BLOCKED"
+            reason_code = "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION"
+        elif self._last_successful_loop_tick_at is not None:
+            status = "HEALTHY"
+            reason_code = "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_OK"
+        else:
+            status = "NOT_YET_RUN"
+            reason_code = "SIMULATION_BACKGROUND_SCHEDULER_LOOP_NOT_YET_RUN"
+        return {
+            "schema_version": "simulation_background_scheduler_loop_health_v1",
+            "status": status,
+            "reason_code": reason_code,
+            "active_failure": deepcopy(self._active_loop_failure),
+            "last_failure": deepcopy(self._last_loop_failure),
+            "last_successful_tick_at": (
+                self._last_successful_loop_tick_at.isoformat()
+                if self._last_successful_loop_tick_at is not None
+                else None
+            ),
+            "consecutive_failure_count": self._loop_consecutive_failure_count,
+            "total_failure_count": self._loop_total_failure_count,
+            "total_success_count": self._loop_total_success_count,
+            "execution_gate": False,
+            "auto_clears_on_success": True,
+        }
+
+    @staticmethod
+    def _bounded_loop_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:
+        allowed_keys = (
+            "reason_code",
+            "stage",
+            "failure_stage",
+            "trade_date",
+            "binding_id",
+            "run_id",
+            "plan_id",
+            "strategy_id",
+            "broker_backend",
+            "timeout_seconds",
+            "thread_alive",
+        )
+        bounded: dict[str, Any] = {}
+        for key in allowed_keys:
+            if key not in context:
+                continue
+            value = context[key]
+            if value is None or isinstance(value, (bool, int, float)):
+                bounded[key] = value
+            elif isinstance(value, (date, datetime)):
+                bounded[key] = value.isoformat()
+            elif isinstance(value, Enum):
+                bounded[key] = value.value
+            else:
+                text = str(value)
+                bounded[key] = text[:512]
+        return bounded
 
     def _window_decision(self, *, as_of_time: datetime, trade_date: date) -> dict[str, Any]:
         windows = SimulationLifecycleScheduler._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time)
@@ -11376,10 +11541,12 @@ class SimulationLifecycleBackgroundScheduler:
     def _record_result(self, *, started_at: datetime, result: dict[str, Any]) -> dict[str, Any]:
         result["completed_at"] = SimulationLifecycleScheduler._scheduler_now().isoformat()
         result["has_blocking_result"] = self._result_has_blocking_evidence(result)
-        self._last_run_at = started_at
-        self._last_result = result
-        if result["has_blocking_result"]:
-            self._last_blocking_result = deepcopy(result)
+        stored_result = deepcopy(result)
+        with self._lock:
+            self._last_run_at = started_at
+            self._last_result = stored_result
+            if result["has_blocking_result"]:
+                self._last_blocking_result = deepcopy(stored_result)
         return result
 
     @staticmethod

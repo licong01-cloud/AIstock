@@ -289,6 +289,8 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["manual_tick_endpoint_enabled"] is True
     assert scheduler["scheduler_control_api_enabled"] is False
     assert scheduler["effective_runtime_health"] == "SCHEDULER_INACTIVE"
+    assert scheduler["scheduler_loop_health"]["status"] == "NOT_APPLICABLE"
+    assert scheduler["scheduler_loop_health"]["execution_gate"] is False
     assert scheduler["account_slot_persistence"]["enabled"] is True
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "StaticSimulationRunContextProvider"
@@ -354,6 +356,150 @@ def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
     assert scheduler["miniqmt_sim_runtime"]["compiler_route_retired"] is True
     assert scheduler["effective_runtime_health"] == "NO_CURRENT_DAY_BLOCKER"
     assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
+
+
+def test_scheduler_status_projects_active_run_loop_exception_as_current_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+
+    class _LoopBlockedScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "default_submit": True,
+                "scheduler_control_api_enabled": True,
+                "miniqmt_quote_ingress_activation": {"status": "RUNNING"},
+                "b0_quote_v2_controllers": {"status": "RUNNING", "controller_count": 1},
+                "scheduler_loop_health": {
+                    "schema_version": "simulation_background_scheduler_loop_health_v1",
+                    "status": "BLOCKED",
+                    "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                    "active_failure": {
+                        "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                        "status": "BLOCKED",
+                        "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                        "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                        "exception_type": "DataUnavailableError",
+                        "exception_message": "dependency failed",
+                        "underlying_reason_code": "SIMULATION_DEPENDENCY_UNAVAILABLE",
+                        "underlying_stage": "DEPENDENCY_READ",
+                        "trade_date": TRADE_DATE.isoformat(),
+                        "first_failure_at": "2026-05-21T01:20:00+00:00",
+                        "failure_at": "2026-05-21T01:21:00+00:00",
+                        "context": {},
+                        "execution_gate": False,
+                        "auto_clears_on_success": True,
+                    },
+                    "last_failure": None,
+                    "last_successful_tick_at": "2026-05-21T01:19:00+00:00",
+                    "consecutive_failure_count": 2,
+                    "total_failure_count": 3,
+                    "total_success_count": 5,
+                    "execution_gate": False,
+                    "auto_clears_on_success": True,
+                },
+                **_scheduler_component_status(),
+            }
+
+    projected = SimulationRuntimeOpsService(
+        repository=InMemorySimulationRuntimeRepository(),
+        scheduler=_LoopBlockedScheduler(),  # type: ignore[arg-type]
+    ).scheduler_status()
+
+    assert projected["thread_alive"] is True
+    assert projected["effective_runtime_health"] == "BLOCKED"
+    assert projected["scheduler_loop_health"]["status"] == "BLOCKED"
+    blockers = projected["current_trade_date_blockers"]
+    assert blockers["status"] == "BLOCKED"
+    assert blockers["blocker_count"] == 1
+    assert blockers["observed_blocker_count"] == 1
+    assert blockers["source"] == "scheduler_loop_health+simulation_daily_run_readback"
+    assert blockers["execution_gate"] is False
+    assert blockers["blockers"][0] == {
+        "component": "simulation_background_scheduler_run_loop",
+        "status": "BLOCKED",
+        "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+        "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+        "exception_type": "DataUnavailableError",
+        "exception_message": "dependency failed",
+        "underlying_reason_code": "SIMULATION_DEPENDENCY_UNAVAILABLE",
+        "underlying_stage": "DEPENDENCY_READ",
+        "failure_trade_date": TRADE_DATE.isoformat(),
+        "first_failure_at": "2026-05-21T01:20:00+00:00",
+        "failure_at": "2026-05-21T01:21:00+00:00",
+        "consecutive_failure_count": 2,
+        "execution_gate": False,
+    }
+
+
+def test_scheduler_status_rejects_missing_loop_health_from_background_scheduler() -> None:
+    class _MissingLoopHealthScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "scheduler_control_api_enabled": True,
+                "miniqmt_quote_ingress_activation": {"status": "RUNNING"},
+                "b0_quote_v2_controllers": {"status": "RUNNING", "controller_count": 1},
+                **_scheduler_component_status(),
+            }
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationRuntimeOpsService(
+            repository=InMemorySimulationRuntimeRepository(),
+            scheduler=_MissingLoopHealthScheduler(),  # type: ignore[arg-type]
+        ).scheduler_status()
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_SCHEDULER_LOOP_HEALTH_MISSING"
+
+
+def test_scheduler_status_rejects_malformed_active_loop_failure() -> None:
+    class _MalformedLoopHealthScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "scheduler_control_api_enabled": True,
+                "scheduler_loop_health": {
+                    "schema_version": "simulation_background_scheduler_loop_health_v1",
+                    "status": "BLOCKED",
+                    "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                    "active_failure": {
+                        "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                        "status": "BLOCKED",
+                        "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                        "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                        "exception_message": "x" * 2049,
+                        "context": {},
+                        "execution_gate": False,
+                        "auto_clears_on_success": True,
+                    },
+                    "last_failure": None,
+                    "last_successful_tick_at": None,
+                    "consecutive_failure_count": 1,
+                    "total_failure_count": 1,
+                    "total_success_count": 0,
+                    "execution_gate": False,
+                    "auto_clears_on_success": True,
+                },
+                "miniqmt_quote_ingress_activation": {"status": "RUNNING"},
+                "b0_quote_v2_controllers": {"status": "RUNNING", "controller_count": 1},
+                **_scheduler_component_status(),
+            }
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationRuntimeOpsService(
+            repository=InMemorySimulationRuntimeRepository(),
+            scheduler=_MalformedLoopHealthScheduler(),  # type: ignore[arg-type]
+        ).scheduler_status()
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_SCHEDULER_LOOP_HEALTH_INVALID"
+    assert exc_info.value.context["field"] == "active_failure.exception_message"
 
 
 @pytest.mark.parametrize(
