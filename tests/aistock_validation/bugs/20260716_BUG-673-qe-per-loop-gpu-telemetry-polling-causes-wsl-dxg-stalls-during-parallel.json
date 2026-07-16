@@ -39,8 +39,8 @@
   "expected": "Two parallel TCN loops retain identical training semantics while WSL runner telemetry avoids dxg adapter queries, records per-loop torch.cuda/PSS/RSS truth, marks unavailable device utilization as null with an explicit reason code, and never silently falls back to nvidia-smi.",
   "first_seen_at": "2026-07-16T03:19:20.832712Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cb3ec2b643074639a8706fd07d61333b461dc8cc",
+  "fixed_at": "2026-07-16T15:12:59.367502Z",
   "github_issue_number": 2213,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2213",
   "last_seen_at": "2026-07-16T03:19:20.832712Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2215",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -68,6 +69,12 @@
     "fingerprint": "039ec03473570ad47ccddce2",
     "source_event_id": "FE-20260716-039ec0347357"
   },
+  "validation_evidence": [
+    "targeted_QE_telemetry_phase_matrix_22_passed",
+    "pycompile_ruff_diffcheck_passed",
+    "nox_l0_and_validation_module_registry_l0_passed",
+    "code_intelligence_clients_4_of_4_ready"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
