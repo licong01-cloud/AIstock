@@ -8,7 +8,6 @@
 """
 
 import asyncio
-import os
 from pathlib import Path
 
 from backend.db.pg_pool import get_conn
@@ -171,13 +170,15 @@ async def verify_installation():
             print("  ✓ Database users exist")
 
     # 3. 检查 Python 依赖
-    try:
-        import pandas
-        import pydantic
-        print("  ✓ Python dependencies installed")
-    except ImportError as e:
-        print(f"  ✗ Missing dependency: {e}")
-        raise
+    import importlib.util
+
+    missing = [
+        name for name in ("pandas", "pydantic")
+        if importlib.util.find_spec(name) is None
+    ]
+    if missing:
+        raise ImportError(f"Missing required dependencies: {', '.join(missing)}")
+    print("  ✓ Python dependencies installed")
 
     print("✅ Installation verified successfully")
 

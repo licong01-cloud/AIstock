@@ -10,7 +10,6 @@
 这些测试是阻塞性的 - 任何一项失败都应该停止验收。
 """
 
-import os
 from pathlib import Path
 
 import pytest
@@ -72,26 +71,16 @@ class TestIsolationConstraints:
                 )
 
     def test_only_artifact_files_allowed(self):
-        """验证只允许下载 artifact 文件"""
-        allowed_artifacts = ['pred.pkl', 'label.pkl']
+        """验证回测数据源在代码级强制只允许下载 pred.pkl/label.pkl 白名单"""
+        # 白名单必须精确等于 {pred.pkl, label.pkl}，不得放宽
+        assert BacktestDataSource.ALLOWED_ARTIFACTS == frozenset(
+            {"pred.pkl", "label.pkl"}
+        )
 
-        # 检查 backtest_source.py 中的 artifact 引用
-        source_file = Path("backend/services/hmm_data_source/backtest_source.py")
-        content = source_file.read_text(encoding="utf-8")
-
-        # 确保没有下载配置文件
-        forbidden_files = [
-            '.json',
-            '.yaml',
-            '.toml',
-            'config',
-            'strategy',
-        ]
-
-        # 检查 _download_artifact 方法
-        # 应该只接受 pred.pkl 和 label.pkl
-        assert 'pred.pkl' in content
-        assert 'label.pkl' in content
+        # 配置类文件后缀不得出现在白名单内
+        for forbidden_suffix in (".json", ".yaml", ".toml"):
+            for allowed in BacktestDataSource.ALLOWED_ARTIFACTS:
+                assert not allowed.endswith(forbidden_suffix)
 
     def test_cache_directory_isolation(self, tmp_path):
         """验证缓存目录完全隔离"""

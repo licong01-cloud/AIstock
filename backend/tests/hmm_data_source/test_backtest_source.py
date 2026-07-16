@@ -22,9 +22,8 @@ import pytest
 
 from backend.services.hmm_data_source import (
     BacktestDataSource,
-    DateRangeError,
+    DataSourceError,
     HorizonError,
-    DataNotFoundError,
 )
 
 
@@ -303,29 +302,54 @@ class TestBacktestDataSourceIsolation:
     """隔离约束验证测试"""
 
     @pytest.mark.asyncio
-    async def test_forbid_config_file_download(self):
-        """测试禁止下载配置文件"""
+    async def test_forbid_config_file_download(self, tmp_path):
+        """验证 _download_artifact 强制拒绝非白名单文件（如配置文件）"""
         mock_qe_client = MagicMock()
         mock_qe_client.download_artifact = AsyncMock()
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
-            cache_dir="tmp/test_cache/",
+            cache_dir=str(tmp_path / "cache"),
             qe_client=mock_qe_client,
         )
 
-        # 尝试下载配置文件应该被拦截
-        # （实际实现中需要在 _download_artifact 添加检查）
         forbidden_files = [
             'config.json',
             'hmm_config.yaml',
             'strategy.toml',
+            'model_train_configs.json',
         ]
 
         for filename in forbidden_files:
-            # 这里假设未来会添加配置文件检查
-            # 当前实现中只下载 pred.pkl 和 label.pkl
-            pass
+            with pytest.raises(DataSourceError, match="only|permitted"):
+                await source._download_artifact(filename)
+
+        # 被拒绝时不得真正发起下载
+        mock_qe_client.download_artifact.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allow_whitelisted_artifact_download(self, tmp_path):
+        """验证白名单内的 artifact（pred.pkl/label.pkl）允许下载"""
+        import pickle
+
+        sample_df = pd.DataFrame([
+            {'trade_date': date(2024, 7, 1), 'symbol': '000001.SZ', 'score': 0.5},
+        ])
+        mock_qe_client = MagicMock()
+        mock_qe_client.download_artifact = AsyncMock(
+            return_value=pickle.dumps(sample_df)
+        )
+
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+        )
+
+        # pred.pkl 在白名单内，应成功下载并缓存
+        await source._download_artifact("pred.pkl")
+        mock_qe_client.download_artifact.assert_called_once()
+        assert source.cache_manager.is_cached("qe_test/Loop1", "pred.pkl")
 
     @pytest.mark.asyncio
     async def test_only_read_artifact_files(self, tmp_path):

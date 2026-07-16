@@ -12,7 +12,6 @@ ArtifactCacheManager 单元测试
 
 import hashlib
 import pickle
-from pathlib import Path
 
 import pytest
 

@@ -13,8 +13,7 @@
 """
 
 import asyncio
-import pickle
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -44,6 +43,10 @@ class BacktestDataSource(HMMDataSourceInterface):
             end_date=date(2024, 7, 5),
         )
     """
+
+    # 隔离约束：回测数据源只允许下载 QE 实验产物，禁止下载任何配置文件。
+    # 这是「完全隔离，不干扰」的代码级强制：只读 pred/label 数据，不触碰 QE/模拟盘配置。
+    ALLOWED_ARTIFACTS: frozenset[str] = frozenset({"pred.pkl", "label.pkl"})
 
     def __init__(
         self,
@@ -255,8 +258,16 @@ class BacktestDataSource(HMMDataSourceInterface):
             artifact_name: artifact 名称（pred.pkl 或 label.pkl）
 
         Raises:
-            DataSourceError: 下载失败
+            DataSourceError: 下载失败，或 artifact 名称不在允许白名单内
         """
+        # 隔离约束强制：只允许下载数据产物，拒绝配置文件等其他内容
+        if artifact_name not in self.ALLOWED_ARTIFACTS:
+            raise DataSourceError(
+                f"Refused to download '{artifact_name}': only "
+                f"{sorted(self.ALLOWED_ARTIFACTS)} are permitted. "
+                f"HMM evolution must not fetch QE/paper config files."
+            )
+
         # 解析 base_loop_ref
         # 格式: "qe_20260502_131502_9b54/Loop1"
         parts = self.base_loop_ref.split("/")
