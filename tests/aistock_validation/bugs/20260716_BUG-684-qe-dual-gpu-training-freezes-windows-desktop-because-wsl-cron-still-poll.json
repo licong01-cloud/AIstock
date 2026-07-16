@@ -45,8 +45,8 @@
   "expected": "QE training and monitoring must perform no nvidia-smi, NVML, GPU utilization, VRAM, CUDA allocator, or other resource polling; lifecycle phase transitions remain available without resource gates; current experiments continue without creating new experiments.",
   "first_seen_at": "2026-07-16T18:08:17.034558Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6922e95e37e4663fe0456131b5853173ca01f6dc",
+  "fixed_at": "2026-07-16T19:07:25.435101Z",
   "github_issue_number": 2244,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2244",
   "last_seen_at": "2026-07-16T18:08:17.034558Z",
@@ -54,6 +54,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2246",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -73,6 +74,13 @@
     "fingerprint": "f82752204e65496aaca6c40c",
     "source_event_id": "FE-20260716-f82752204e65"
   },
+  "validation_evidence": [
+    "core lifecycle, phase service and MCP matrix: 52 passed",
+    "custom-evo mutation and route matrix: 23 passed",
+    "QE model and scheduler fix-points: 6 passed, 3 environment skips; WSL rdagent-gpu import passed",
+    "ruff, py_compile, git diff check, nox l0 and validation_module_registry_l0 passed",
+    "CI checks clean; live WSL GPU collector disabled"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
