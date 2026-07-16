@@ -1,8 +1,9 @@
 {
   "actual": "A more-than-16-hour-old sector_data job survived restart and blocked LocalSIM readiness while TDX was healthy.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-    "docs/architecture/simulation_runtime_reliability_blueprint.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260716_BUG-677-ingestion-startup-leaves-stale-running-sector-data-job-blocking-localsim.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],

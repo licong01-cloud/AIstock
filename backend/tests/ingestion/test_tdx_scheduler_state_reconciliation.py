@@ -1,5 +1,6 @@
-import uuid
 import datetime as dt
+import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -200,6 +201,87 @@ def test_stale_target_queue_job_releases_target_without_deleting_history(monkeyp
     assert calls[1] == ("attempt", "retry", "target-1", str(job_id))
 
 
+def test_stale_running_reconciliation_times_out_only_expired_job_and_updates_schedule():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    seen = {}
+    job_id = uuid.uuid4()
+    schedule_id = uuid.uuid4()
+
+    def _fetchall(sql, params=()):
+        seen["sql"] = sql
+        seen["params"] = params
+        return [{"job_id": job_id, "schedule_id": str(schedule_id), "data_sync_target_id": None}]
+
+    def _execute(sql, params=()):
+        seen["schedule_sql"] = sql
+        seen["schedule_params"] = params
+
+    scheduler._fetchall = _fetchall
+    scheduler._execute = _execute
+
+    count = scheduler._reconcile_stale_running_ingestion_jobs(
+        older_than_minutes=120,
+        dataset="SECTOR_DATA",
+        mode="INCREMENTAL",
+        reason="unit_test_stale_running",
+    )
+
+    assert count == 1
+    assert "status = 'timeout'" in seen["sql"]
+    assert "status = 'running'" in seen["sql"]
+    assert "started_at IS NOT NULL" in seen["sql"]
+    assert "started_at < NOW() - (%s || ' minutes')::interval" in seen["sql"]
+    assert "finished_at = NOW()" in seen["sql"]
+    assert seen["params"][1:] == (
+        "120",
+        "sector_data",
+        "sector_data",
+        "incremental",
+        "incremental",
+    )
+    summary_patch = json.loads(seen["params"][0])
+    assert summary_patch["schema_version"] == "ingestion_stale_running_reconciliation_v1"
+    assert summary_patch["stale_previous_status"] == "running"
+    assert summary_patch["stale_running_timeout_minutes"] == 120
+    assert "UPDATE market.ingestion_schedules" in seen["schedule_sql"]
+    assert "last_status IN ('queued', 'running')" in seen["schedule_sql"]
+    assert seen["schedule_params"] == ("unit_test_stale_running", str(schedule_id))
+
+
+def test_stale_running_target_job_releases_retry_target_with_explicit_attempt(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    job_id = uuid.uuid4()
+    scheduler._fetchall = lambda _sql, _params=(): [
+        {
+            "job_id": job_id,
+            "schedule_id": None,
+            "data_sync_target_id": "target-stale-running",
+            "triggered_by": "data_sync_target_due",
+        }
+    ]
+    scheduler._execute = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("target-created stale job must not update an unrelated schedule")
+    )
+
+    class _Repo:
+        def mark_retry(self, target_id, **kwargs):
+            calls.append(("retry", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record))
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+
+    assert scheduler._reconcile_stale_running_ingestion_jobs() == 1
+    assert calls[0][0:2] == ("retry", "target-stale-running")
+    attempt = calls[1][1]
+    assert attempt.status == "retry"
+    assert attempt.trigger_source == "stale_running_reconciliation"
+    assert attempt.job_id == str(job_id)
+    assert attempt.context_json["previous_status"] == "running"
+
+
 def test_script_ingestion_job_started_at_uses_database_clock(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
@@ -245,14 +327,15 @@ def test_refresh_schedules_reconciles_due_sync_targets():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
 
-    scheduler._reconcile_stale_queued_ingestion_jobs = lambda: calls.append("stale")
+    scheduler._reconcile_stale_running_ingestion_jobs = lambda: calls.append("stale_running")
+    scheduler._reconcile_stale_queued_ingestion_jobs = lambda: calls.append("stale_queued")
     scheduler._fetchall = lambda sql, params=(): []
     scheduler._update_jobs = lambda testing, ingestion: calls.append(("jobs", list(testing), list(ingestion)))
     scheduler._reconcile_due_data_sync_targets = lambda: calls.append("due")
 
     scheduler.refresh_schedules()
 
-    assert calls == ["stale", ("jobs", [], []), "due"]
+    assert calls == ["stale_running", "stale_queued", ("jobs", [], []), "due"]
 
 
 def test_recent_submission_keeps_running_job_visible_outside_recent_window():
