@@ -66,22 +66,21 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
 
 try:
     from qe_runtime_resource import (
-        capture_gpu_phase_release_baseline,
-        defer_resource_phase_events,
-        finalize_gpu_phase_release,
-        finish_resource_monitor,
-        start_resource_monitor,
-        task_train_with_resource_phases,
-        transition_resource_phase,
+        defer_runtime_phase_events,
+        finalize_gpu_phase_lifecycle,
+        finish_phase_publisher,
+        start_phase_publisher,
+        task_train_with_phase_events,
+        transition_runtime_phase,
     )
 except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
     if exc.name != "qe_runtime_resource":
         raise
 
-    def start_resource_monitor():
+    def start_phase_publisher():
         return None
 
-    def finish_resource_monitor(*, status: str, error: str | None = None):
+    def finish_phase_publisher(*, status: str, error: str | None = None):
         return None
 
     def _phase_helper_required() -> bool:
@@ -92,7 +91,7 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
             "on",
         }
 
-    def task_train_with_resource_phases(
+    def task_train_with_phase_events(
         task_config,
         *,
         experiment_name: str,
@@ -100,36 +99,30 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
         release_next_phase: str = "backtest",
     ):
         if _phase_helper_required():
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
         return task_train(
             task_config,
             experiment_name=experiment_name,
             recorder_name=recorder_name,
         )
 
-    def transition_resource_phase(phase: str, *, metadata: dict | None = None):
+    def transition_runtime_phase(phase: str, *, metadata: dict | None = None):
         if _phase_helper_required():
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
 
-    def capture_gpu_phase_release_baseline() -> dict:
-        if _phase_helper_required():
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
-        return {}
-
-    def finalize_gpu_phase_release(
-        baseline: dict | None,
+    def finalize_gpu_phase_lifecycle(
         *,
         predict_error: BaseException | None = None,
         next_phase: str = "backtest",
     ) -> bool:
         if _phase_helper_required():
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
         return False
 
     @contextmanager
-    def defer_resource_phase_events(reason: str):
+    def defer_runtime_phase_events(reason: str):
         if _phase_helper_required():
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
         yield
 
 
@@ -1358,9 +1351,9 @@ def _task_train_with_gats_industry_provider(
 
         inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
     if not manage_resource_phases:
-        with defer_resource_phase_events("nested_qe_task_train"):
+        with defer_runtime_phase_events("nested_qe_task_train"):
             return task_train(task_config, experiment_name=experiment_name)
-    return task_train_with_resource_phases(
+    return task_train_with_phase_events(
         task_config,
         experiment_name=experiment_name,
         release_next_phase=release_next_phase,
@@ -1403,12 +1396,10 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         "seeds": seeds,
         "seed_recorders": [],
     }
-    transition_resource_phase(
+    transition_runtime_phase(
         "train",
         metadata={"runner_mode": "seed_score_ensemble", "seed_count": len(seeds)},
     )
-    release_baseline = capture_gpu_phase_release_baseline()
-
     for seed in seeds:
         seed_config = copy.deepcopy(config)
         _set_config_seed(seed_config, seed)
@@ -1436,7 +1427,7 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
             }
         )
 
-    transition_resource_phase(
+    transition_runtime_phase(
         "predict",
         metadata={"runner_mode": "seed_score_ensemble", "seed_count": len(seeds)},
     )
@@ -1451,7 +1442,7 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         f"[INFO] Seed ensemble: aggregated {len(seeds)} seeds with agg={agg}; "
         f"rows={combined_pred.shape[0]}"
     )
-    finalize_gpu_phase_release(release_baseline, next_phase="backtest")
+    finalize_gpu_phase_lifecycle(next_phase="backtest")
     _run_pred_backtest(config, experiment_name, combined_path)
 
 
@@ -1476,12 +1467,10 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
         "seeds": seeds,
         "seed_recorders": [],
     }
-    transition_resource_phase(
+    transition_runtime_phase(
         "train",
         metadata={"runner_mode": "seed_portfolio_ensemble", "seed_count": len(seeds)},
     )
-    release_baseline = capture_gpu_phase_release_baseline()
-
     for seed in seeds:
         seed_config = copy.deepcopy(config)
         _set_config_seed(seed_config, seed)
@@ -1537,11 +1526,11 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
             }
         )
 
-    transition_resource_phase(
+    transition_runtime_phase(
         "predict",
         metadata={"runner_mode": "seed_portfolio_ensemble", "seed_count": len(seeds)},
     )
-    finalize_gpu_phase_release(release_baseline, next_phase="finalize")
+    finalize_gpu_phase_lifecycle(next_phase="finalize")
 
     combined_pred = _aggregate_seed_predictions(seed_scores, agg)
     merged_positions = _aggregate_seed_positions(seed_positions, seed_reports)
@@ -1613,14 +1602,14 @@ def main():
                             help="run IC analysis and portfolio backtest from an existing prediction pkl")
     args = parser.parse_args()
 
-    start_resource_monitor()
+    start_phase_publisher()
     try:
         _run_main(args)
     except Exception as exc:
-        finish_resource_monitor(status="failed", error=type(exc).__name__)
+        finish_phase_publisher(status="failed", error=type(exc).__name__)
         raise
     else:
-        finish_resource_monitor(status="completed")
+        finish_phase_publisher(status="completed")
 
 
 def _run_main(args):
@@ -1683,13 +1672,13 @@ def _run_main(args):
                 f"--pred-backtest: prediction file not found: {pred_path.resolve()}"
             )
         print(f"[INFO] Pred-backtest mode: loading prediction from {pred_path}")
-        transition_resource_phase("backtest", metadata={"runner_mode": runner_mode})
+        transition_runtime_phase("backtest", metadata={"runner_mode": runner_mode})
         _run_pred_backtest(config, experiment_name, pred_path)
     elif args.backtest_only:
         runner_mode = "backtest_only"
         # Backtest-only mode: skip training and load an existing model.
         print("[INFO] Backtest-only mode: skipping model training, loading existing model")
-        transition_resource_phase("backtest", metadata={"runner_mode": runner_mode})
+        transition_runtime_phase("backtest", metadata={"runner_mode": runner_mode})
         _run_backtest_only(config, experiment_name)
     elif args.train_only:
         runner_mode = "train_only"
@@ -1699,7 +1688,7 @@ def _run_main(args):
     else:
         # Full mode: train and backtest.
         _run_full_backtest(config, experiment_name)
-    transition_resource_phase("finalize", metadata={"runner_mode": runner_mode})
+    transition_runtime_phase("finalize", metadata={"runner_mode": runner_mode})
 
 
 def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):

@@ -1224,7 +1224,10 @@ class CustomEvolutionCreateRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
     phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
-    resource_telemetry_enabled: bool = Field(False, description="Persist phase-level GPU/RAM telemetry to QE Archive")
+    resource_telemetry_enabled: bool = Field(
+        False,
+        description="Deprecated compatibility input; GPU/VRAM resource monitoring is removed and this value is ignored",
+    )
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
     auto_start: bool = Field(True, description="Create and immediately submit loops; template materialization sets false")
@@ -1238,7 +1241,10 @@ class CustomEvoConfigUpdateRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
-    resource_telemetry_enabled: bool = Field(False, description="Persist phase-level GPU/RAM telemetry to QE Archive")
+    resource_telemetry_enabled: bool = Field(
+        False,
+        description="Deprecated compatibility input; GPU/VRAM resource monitoring is removed and this value is ignored",
+    )
     engine_mode: str = Field("unified", description="Only unified is supported")
 
 
@@ -1247,7 +1253,10 @@ class CustomEvoLoopRerunRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="Default execution node for this mutation")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     phase_pipeline_enabled: Optional[bool] = Field(None, description="Optional task-level phase-pipeline override")
-    resource_telemetry_enabled: Optional[bool] = Field(None, description="Optional task-level telemetry override")
+    resource_telemetry_enabled: Optional[bool] = Field(
+        None,
+        description="Deprecated compatibility input; GPU/VRAM resource monitoring is removed and this value is ignored",
+    )
     engine_mode: str = Field("unified", description="Only unified is supported")
     confirm_delete_old_result: bool = Field(False, description="Must be true because rerun deletes old results")
 
@@ -1257,7 +1266,10 @@ class CustomEvoAppendRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="Default execution node for appended loops")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     phase_pipeline_enabled: Optional[bool] = Field(None, description="Optional task-level phase-pipeline override")
-    resource_telemetry_enabled: Optional[bool] = Field(None, description="Optional task-level telemetry override")
+    resource_telemetry_enabled: Optional[bool] = Field(
+        None,
+        description="Deprecated compatibility input; GPU/VRAM resource monitoring is removed and this value is ignored",
+    )
     engine_mode: str = Field("unified", description="Only unified is supported")
     ack_failed_loop_warning: bool = Field(False, description="Caller acknowledged existing failed/cancelled loops")
 

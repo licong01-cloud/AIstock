@@ -113,7 +113,10 @@ def get_qe_archive_health():
     }
 
 
-@router.get("/resource-phases", summary="Query phase-level QE GPU/RAM resource telemetry")
+@router.get(
+    "/resource-phases",
+    summary="Query QE runtime phase lifecycle and legacy resource telemetry history",
+)
 def query_qe_archive_resource_phases(
     run_id: str | None = Query(None),
     task_id: str | None = Query(None),

@@ -6,6 +6,7 @@ from backend.services.quantevolver import qe_resource_phase_service as qrps
 from backend.services.quantevolver.qe_resource_phase_service import (
     AUTH_FAILED_REASON,
     GPU_LEASE_BUSY_REASON,
+    GPU_PHASE_LIFECYCLE_REASON,
     PHASE_INVALID_REASON,
     QEResourcePhaseError,
     _canonical_sha256,
@@ -259,28 +260,36 @@ def test_resource_service_requests_managed_transaction_for_atomic_paths(monkeypa
     assert calls == [{"autocommit": False, "manage_transaction": True}]
 
 
-def test_gpu_phase_release_requires_positive_release_proof():
+def test_gpu_phase_release_accepts_lifecycle_completion_without_resource_proof():
     event = {
         "phase": "gpu_phase_released",
-        "release_check_passed": True,
-        "reason_code": "QE_GPU_PHASE_RELEASE_CONFIRMED",
+        "release_check_passed": None,
+        "reason_code": GPU_PHASE_LIFECYCLE_REASON,
+        "metadata": {"resource_monitoring_enabled": False},
     }
     validate_phase_transition("predict", event)
 
     with pytest.raises(QEResourcePhaseError) as exc_info:
         validate_phase_transition(
             "predict",
-            {**event, "release_check_passed": False},
+            {**event, "metadata": {"resource_monitoring_enabled": True}},
         )
     assert exc_info.value.reason_code == PHASE_INVALID_REASON
 
     with pytest.raises(QEResourcePhaseError) as exc_info:
-        validate_phase_transition(
-            "train",
-            event,
-        )
+        validate_phase_transition("train", event)
     assert exc_info.value.reason_code == PHASE_INVALID_REASON
 
+
+def test_gpu_phase_release_keeps_legacy_measured_event_compatible():
+    validate_phase_transition(
+        "predict",
+        {
+            "phase": "gpu_phase_released",
+            "release_check_passed": True,
+            "reason_code": "QE_GPU_PHASE_RELEASE_CONFIRMED",
+        },
+    )
 
 def test_resource_phase_state_machine_rejects_regression_and_allows_safe_terminal():
     validate_phase_transition("created", {"phase": "bootstrap"})
@@ -429,8 +438,9 @@ def test_resource_event_ingestion_is_ordered_authenticated_and_idempotent():
             "sequence_no": 4,
             "phase": "gpu_phase_released",
             "phase_status": "released",
-            "release_check_passed": True,
-            "reason_code": "QE_GPU_PHASE_RELEASE_CONFIRMED",
+            "release_check_passed": None,
+            "reason_code": GPU_PHASE_LIFECYCLE_REASON,
+            "metadata": {"resource_monitoring_enabled": False},
         },
     ]
     for event in events:

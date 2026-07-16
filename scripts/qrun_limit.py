@@ -33,22 +33,22 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
 
 try:
     from qe_runtime_resource import (
-        finish_resource_monitor,
-        start_resource_monitor,
-        task_train_with_resource_phases,
-        transition_resource_phase,
+        finish_phase_publisher,
+        start_phase_publisher,
+        task_train_with_phase_events,
+        transition_runtime_phase,
     )
 except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
     if exc.name != "qe_runtime_resource":
         raise
 
-    def start_resource_monitor():
+    def start_phase_publisher():
         return None
 
-    def finish_resource_monitor(*, status: str, error: str | None = None):
+    def finish_phase_publisher(*, status: str, error: str | None = None):
         return None
 
-    def task_train_with_resource_phases(
+    def task_train_with_phase_events(
         task_config,
         *,
         experiment_name: str,
@@ -56,16 +56,16 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
         release_next_phase: str = "backtest",
     ):
         if os.environ.get("QE_PHASE_PIPELINE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
         return task_train(
             task_config,
             experiment_name=experiment_name,
             recorder_name=recorder_name,
         )
 
-    def transition_resource_phase(phase: str, *, metadata: dict | None = None):
+    def transition_runtime_phase(phase: str, *, metadata: dict | None = None):
         if os.environ.get("QE_PHASE_PIPELINE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
-            raise RuntimeError("QE_RUNTIME_RESOURCE_HELPER_MISSING")
+            raise RuntimeError("QE_RUNTIME_PHASE_HELPER_MISSING")
 
 
 RECORDER_REF_FILE = "qe_current_recorder.json"
@@ -125,7 +125,7 @@ def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
         from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
 
         inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
-    return task_train_with_resource_phases(
+    return task_train_with_phase_events(
         task_config,
         experiment_name=experiment_name,
         release_next_phase="backtest",
@@ -286,14 +286,14 @@ def apply_qe_fixed_seed(config: dict) -> int | None:
 def main():
     yaml_path = sys.argv[1] if len(sys.argv) > 1 else "conf.yaml"
 
-    start_resource_monitor()
+    start_phase_publisher()
     try:
         _run_main(yaml_path)
     except Exception as exc:
-        finish_resource_monitor(status="failed", error=type(exc).__name__)
+        finish_phase_publisher(status="failed", error=type(exc).__name__)
         raise
     else:
-        finish_resource_monitor(status="completed")
+        finish_phase_publisher(status="completed")
 
 
 def _run_main(yaml_path):
@@ -326,7 +326,7 @@ def _run_main(yaml_path):
     recorder_ref = _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, "full", experiment_name, config)
-    transition_resource_phase("finalize", metadata={"runner_mode": "full"})
+    transition_runtime_phase("finalize", metadata={"runner_mode": "full"})
 
 
 if __name__ == '__main__':

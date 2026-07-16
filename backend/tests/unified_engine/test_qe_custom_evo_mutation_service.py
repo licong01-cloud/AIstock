@@ -87,6 +87,14 @@ def _patch_fake_db(monkeypatch):
     return state
 
 
+def test_removed_resource_telemetry_is_explicitly_normalized_false(caplog):
+    assert qes._normalize_removed_resource_telemetry(
+        True,
+        context="unit-test",
+    ) is False
+    assert "QE_RESOURCE_MONITORING_DISABLED" in caplog.text
+
+
 def test_rerun_custom_evo_loop_uses_get_conn_context_manager_for_lock(monkeypatch):
     state = _patch_fake_db(monkeypatch)
     scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)

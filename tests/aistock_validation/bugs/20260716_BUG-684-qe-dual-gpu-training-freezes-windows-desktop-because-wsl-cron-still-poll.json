@@ -1,7 +1,22 @@
 {
   "actual": "Every minute cron launches WSL nvidia-smi; dual TCN training produced 70 dxg kernel errors from 01:16 to 01:52 and repeated desktop stalls. QE also samples torch.cuda allocator stats every second per loop.",
   "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/routers/qe_archive.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_resource_phase_service.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py",
+    "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+    "backend/tests/unified_engine/test_qe_runtime_resource.py",
+    "monitoring/grafana/patch_node_exporter_dashboard.py",
+    "monitoring/textfile_collector/collect_gpu_metrics.sh",
+    "scripts/aistock_qe_experiment_mcp_server.py",
     "scripts/qe_runtime_resource.py",
+    "scripts/qrun_limit.py",
     "scripts/qrun_limit_minute.py",
     "tests/aistock_validation/bugs/20260716_BUG-684-qe-dual-gpu-training-freezes-windows-desktop-because-wsl-cron-still-poll.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
