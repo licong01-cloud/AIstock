@@ -685,9 +685,16 @@ PACKAGE_READY
 
 该阶段不创建生产 Program/binding，不发布新 package identity，也不启动 scheduler：
 
+真实 DEV 双轨输入的准备由
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 唯一规定：只读导出production已存在的
+package/asset闭包，在DEV通过正常service创建future-effective Program/binding，并由正常prospective Selection
+producer原生生成DSE v2，再由现有historical runner产生正式receipt。production DSE v1和legacy null binding只作为
+不合格诊断，不导入、不升级。禁止新增production DML、全库刷新、fixture或手写receipt。
+
 1. 对现有单 Alpha current manifest 和原生多 Alpha parent 执行无业务写入 research preflight；失败时返回 exact reason，不自动发布替代包。
 2. 冻结 research policy/runtime/style、query registry 和 request hashes。
-3. 用户显式选择历史已有 binding 可解析的 Program 和已完成交易日；resolver 不创建、补写或修改 binding。
+3. production只读验收选择已有dated binding可解析的Program；真实DEV验收按子设计创建新的future-effective
+   binding并等待其生效后的已完成交易日。两条路径均不backdate、补写或修改历史binding。
 4. 同一批次独立运行两个或更多 Program，验证 exact retry、失败隔离和候选互不融合。
 5. 使用只读 audit 验证 `PARTIAL/HANDOFF_EMITTED/RESEARCH_READY`；结果保持 historical research only。
 
@@ -722,7 +729,9 @@ PACKAGE_READY
 
 ### 16.3 L4 真实只读验证
 
-生产 DML onboarding 完成后，以 read-only session 执行：
+production 既有package identity及DSE v1不合格事实已完成只读核验、且DEV已按
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 通过正常Program/binding和prospective
+Selection producer形成DSE v2后，以read-only session执行：
 
 1. 验证现有 single current manifest 与 native multi parent 的只读 preflight receipt 和历史 dated binding resolution。
 2. 同一 manual historical batch 对两个 Program 执行；一个失败时另一个仍能完成并产生独立 receipt。
@@ -844,6 +853,10 @@ production_runtime_gate = noop
 ## 21. Exit Criteria / 设计退出条件
 
 本文可标记 `design_ready` 的条件：
+
+真实 DEV L4 输入的后继实现必须遵循
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 的 O1-O5；identity-complete/source-pending
+不得冒充 `RESEARCH_READY`、Phase 1E E6 或 G5 完成。
 
 - F2 Feature Workflow validator 通过。
 - Design Acceptance Matrix 无 gap。

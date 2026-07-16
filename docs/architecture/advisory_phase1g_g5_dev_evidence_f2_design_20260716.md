@@ -46,6 +46,12 @@ role_or_approval_gate = none
 
 代码和L0-L2验证完成不代表DEV L3、DEV L4、Phase 1G整体或production运行完成。
 
+2026-07-16真实 inventory 已执行并得到 `L3_SOURCE_PENDING`：DEV虽有current Phase 1F.2 schema receipt，但没有
+Phase 1E plan、single/native-multi历史 receipt或可执行source evidence。缺失输入的正规准备路径由
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 唯一规定；不得用fixture、手写DSE、全库
+refresh或production DSE v1补齐，也不得从G5调用Selection/Paper运行时。正常DEV prospective Selection是独立上游
+一次性producer，由子设计编排且不修改G5/runtime import边界。该子设计当前仅design-ready，不表示G5状态已经前进。
+
 ## 2. 目标
 
 G5必须完整实现：
@@ -858,3 +864,8 @@ G5代码经用户确认合入后，才可另行执行read-only inventory；有�
 `not_run_source_evidence_pending`。只有真实dual-track input receipt达到`L4_DUAL_TRACK_READY`时再执行L4 persistent DEV；
 否则准确保持`code_complete_pending_real_dev_input`。L3/L4完成后
 才可关闭Phase 1G DEV evidence并进入Phase 1H详细设计，仍不代表production DML或runtime activation完成。
+
+当 inventory 因 DEV 上游事实缺失而 pending 时，先按
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 的 O1-O4形成正式 Phase 1E输入，再重新执行
+inventory。identity-complete/source-pending仍保持G5零DML；只有source-ready自动满足既有技术条件后才执行L3/L4，
+不增加角色、审批、授权或备份流程。
