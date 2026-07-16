@@ -461,7 +461,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "node_parallelism": node_parallelism,
                 "engine_mode": engine_mode,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "resource_telemetry_enabled": False,
             },
         )
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
@@ -492,7 +492,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "node_parallelism": node_parallelism,
                 "engine_mode": engine_mode,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "resource_telemetry_enabled": False,
             },
         )
         safe = registry.sanitize(task_id, "task_id")
@@ -547,7 +547,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "loop": loop_payload,
                 "confirm_delete_old_result": True,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "resource_telemetry_enabled": False,
             },
         )
 
@@ -564,7 +564,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "loops": loop_payloads,
                 "ack_failed_loop_warning": True,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "resource_telemetry_enabled": False,
             },
         )
 

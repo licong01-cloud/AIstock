@@ -32,9 +32,6 @@ from qlib.data.dataset.handler import DataHandlerLP
 from qlib.utils import get_or_create_path
 
 
-_DEFAULT_VRAM_MARGIN_BYTES = 512 * 1024**2
-_DEFAULT_WORKING_MEMORY_MULTIPLIER = 4
-_DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES = 256 * 1024**2
 _GATS_ADJACENCY_OFF = "off"
 _GATS_ADJACENCY_INDUSTRY_BIAS = "industry_bias"
 _GATS_ADJACENCY_MODES = {_GATS_ADJACENCY_OFF, _GATS_ADJACENCY_INDUSTRY_BIAS}
@@ -50,24 +47,24 @@ _GATS_INDUSTRY_EMBEDDING_CLASSES = _GATS_L2_INDUSTRY_CLASSES + 1
 
 try:
     from qe_runtime_resource import (
-        publish_gpu_phase_release as _publish_gpu_phase_release,
-        record_gpu_resident_state as _record_gpu_resident_state,
-        transition_resource_phase as _transition_resource_phase,
+        finalize_gpu_phase_lifecycle as _finalize_gpu_phase_lifecycle,
+        record_model_resident_state as _record_model_resident_state,
+        transition_runtime_phase as _transition_runtime_phase,
     )
 except ModuleNotFoundError as exc:  # old/non-runner environments remain compatible
     if exc.name != "qe_runtime_resource":
         raise
 
-    def _transition_resource_phase(_phase, *, metadata=None):
+    def _transition_runtime_phase(_phase, *, metadata=None):
         return None
 
-    def _record_gpu_resident_state(*, requested, active, fallback_reason_code=None):
+    def _record_model_resident_state(*, requested, active, fallback_reason_code=None):
         return None
 
-    def _publish_gpu_phase_release(_proof):
+    def _finalize_gpu_phase_lifecycle(*, predict_error=None, next_phase="backtest"):
         enabled = (os.environ.get("QE_PHASE_PIPELINE_ENABLED") or "").strip().lower()
         if enabled in {"1", "true", "yes", "on"}:
-            print("[ERROR] reason_code=QE_GPU_PHASE_HELPER_MISSING release_event_not_published=true")
+            print("[ERROR] reason_code=QE_GPU_PHASE_HELPER_MISSING lifecycle_event_not_published=true")
         return False
 
 
@@ -235,23 +232,22 @@ class EfficientGATs(QlibGATs):
             )
         self.gpu_resident = bool(kwargs.pop("gpu_resident", False))
         self.gpu_resident_shuffle_days = bool(kwargs.pop("gpu_resident_shuffle_days", True))
-        self.gpu_resident_vram_margin_bytes = int(
-            kwargs.pop("gpu_resident_vram_margin_bytes", _DEFAULT_VRAM_MARGIN_BYTES)
-        )
-        self.gpu_resident_working_memory_multiplier = int(
-            kwargs.pop("gpu_resident_working_memory_multiplier", _DEFAULT_WORKING_MEMORY_MULTIPLIER)
-        )
-        self.gpu_phase_release_tolerance_bytes = int(
-            kwargs.pop("gpu_phase_release_tolerance_bytes", _DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES)
-        )
-        if self.gpu_phase_release_tolerance_bytes < 0:
-            raise ValueError(
-                "reason_code=efficient_gats_gpu_phase_release_tolerance_invalid: "
-                f"value={self.gpu_phase_release_tolerance_bytes} expected_non_negative_int"
+        removed_resource_options = {
+            key: kwargs.pop(key)
+            for key in (
+                "gpu_resident_vram_margin_bytes",
+                "gpu_resident_working_memory_multiplier",
+                "gpu_phase_release_tolerance_bytes",
+            )
+            if key in kwargs
+        }
+        if removed_resource_options:
+            print(
+                "[INFO] reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED "
+                f"ignored_options={sorted(removed_resource_options)}"
             )
         self.gpu_resident_active = False
         self.gpu_resident_last_fallback = None
-        self.gpu_phase_release_last_proof = None
         self.gats_adjacency_last_event = None
         self.gats_adjacency_events = []
         self._industry_code_to_id = {}
@@ -288,7 +284,7 @@ class EfficientGATs(QlibGATs):
         self.gpu_resident_active = False
         payload = {"reason_code": reason_code, **details}
         self.gpu_resident_last_fallback = payload
-        _record_gpu_resident_state(
+        _record_model_resident_state(
             requested=bool(self.gpu_resident),
             active=False,
             fallback_reason_code=reason_code,
@@ -496,134 +492,17 @@ class EfficientGATs(QlibGATs):
             "industry_ids": self._require_segment_industry_ids(segment, segment_name=segment_name),
         }
 
-    def _model_parameter_bytes(self):
-        total = 0
-        for tensor in list(self.GAT_model.parameters()) + list(self.GAT_model.buffers()):
-            total += tensor.numel() * tensor.element_size()
-        return total
-
-    def _resident_estimate(self, resident_segments):
-        resident_bytes = sum(
-            segment["tensor"].numel() * segment["tensor"].element_size()
-            for segment in resident_segments
-        )
-        max_daily_count = 0
-        max_feature_bytes = 0
-        for segment in resident_segments:
-            tensor = segment["tensor"]
-            for daily_index in segment["daily_indices"]:
-                count = int(len(daily_index))
-                max_daily_count = max(max_daily_count, count)
-                max_feature_bytes = max(
-                    max_feature_bytes,
-                    count * int(tensor.shape[1]) * int(tensor.shape[2]) * int(tensor.element_size()),
-                )
-        attention_bytes = max_daily_count * max_daily_count * 4
-        working_bytes = (
-            attention_bytes * max(1, self.gpu_resident_working_memory_multiplier)
-            + max_feature_bytes
-        )
-        model_bytes = self._model_parameter_bytes()
-        required_bytes = resident_bytes + working_bytes + model_bytes + self.gpu_resident_vram_margin_bytes
-        return {
-            "resident_bytes": int(resident_bytes),
-            "working_bytes": int(working_bytes),
-            "model_bytes": int(model_bytes),
-            "margin_bytes": int(self.gpu_resident_vram_margin_bytes),
-            "required_bytes": int(required_bytes),
-            "max_daily_count": int(max_daily_count),
-        }
-
-    def _cuda_available_bytes(self):
-        free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
-        reserved_bytes = int(torch.cuda.memory_reserved(self.device))
-        allocated_bytes = int(torch.cuda.memory_allocated(self.device))
-        reclaimable_bytes = max(0, reserved_bytes - allocated_bytes)
-        return int(free_bytes) + reclaimable_bytes, int(total_bytes)
-
     def _release_cached_cuda_blocks(self):
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def _capture_gpu_phase_release_baseline(self):
-        if self.device.type != "cuda" or not torch.cuda.is_available():
-            return {
-                "release_baseline_allocated_bytes": 0,
-                "release_baseline_reserved_bytes": 0,
-            }
-        torch.cuda.synchronize(self.device)
-        gc.collect()
-        torch.cuda.empty_cache()
-        return {
-            "release_baseline_allocated_bytes": int(torch.cuda.memory_allocated(self.device)),
-            "release_baseline_reserved_bytes": int(torch.cuda.memory_reserved(self.device)),
-        }
-
-    def _finalize_gpu_phase_release(self, baseline, *, predict_error=None):
-        baseline = dict(baseline or {})
-        tolerance = int(self.gpu_phase_release_tolerance_bytes)
-        if self.device.type != "cuda" or not torch.cuda.is_available():
-            proof = {
-                **baseline,
-                "cuda_allocated_bytes_after": 0,
-                "cuda_reserved_bytes_after": 0,
-                "release_tolerance_bytes": tolerance,
-                "release_check_passed": predict_error is None,
-            }
-        else:
-            torch.cuda.synchronize(self.device)
-            gc.collect()
-            torch.cuda.empty_cache()
-            allocated_after = int(torch.cuda.memory_allocated(self.device))
-            reserved_after = int(torch.cuda.memory_reserved(self.device))
-            allocated_limit = int(baseline.get("release_baseline_allocated_bytes") or 0) + tolerance
-            reserved_limit = int(baseline.get("release_baseline_reserved_bytes") or 0) + tolerance
-            proof = {
-                **baseline,
-                "cuda_allocated_bytes_after": allocated_after,
-                "cuda_reserved_bytes_after": reserved_after,
-                "release_tolerance_bytes": tolerance,
-                "release_check_passed": (
-                    predict_error is None
-                    and allocated_after <= allocated_limit
-                    and reserved_after <= reserved_limit
-                ),
-            }
-        if predict_error is not None:
-            proof["predict_error"] = str(predict_error)
-        self.gpu_phase_release_last_proof = proof
-        _publish_gpu_phase_release(proof)
-        return proof
-
-    def _can_activate_gpu_resident(self, resident_segments):
+    def _can_activate_gpu_resident(self, _resident_segments):
         if not self.gpu_resident:
             return False
         if self.device.type != "cuda" or not torch.cuda.is_available():
             self._loud_gpu_resident_fallback(
                 "efficient_gats_gpu_resident_not_cuda",
                 device=str(self.device),
-                available_bytes=0,
-                required_bytes=0,
-            )
-            return False
-
-        estimate = self._resident_estimate(resident_segments)
-        try:
-            available_bytes, total_bytes = self._cuda_available_bytes()
-        except RuntimeError as exc:
-            self._loud_gpu_resident_fallback(
-                "efficient_gats_gpu_resident_vram_query_failed",
-                error=str(exc),
-                **estimate,
-            )
-            return False
-
-        if estimate["required_bytes"] > available_bytes:
-            self._loud_gpu_resident_fallback(
-                "efficient_gats_gpu_resident_vram_insufficient",
-                available_bytes=available_bytes,
-                total_bytes=total_bytes,
-                **estimate,
             )
             return False
         return True
@@ -898,8 +777,8 @@ class EfficientGATs(QlibGATs):
         evals_result=dict(),
         save_path=None,
     ):
-        _transition_resource_phase("train")
-        _record_gpu_resident_state(requested=bool(self.gpu_resident), active=False)
+        _transition_runtime_phase("train")
+        _record_model_resident_state(requested=bool(self.gpu_resident), active=False)
         if not self.gpu_resident:
             return self._fit_streaming(dataset, evals_result, save_path)
 
@@ -934,13 +813,12 @@ class EfficientGATs(QlibGATs):
             self._loud_gpu_resident_fallback(
                 "efficient_gats_gpu_resident_preload_failed",
                 error=str(exc),
-                **self._resident_estimate(resident_cpu),
             )
             return self._fit_streaming(dataset, evals_result, save_path)
 
         self.gpu_resident_active = True
         self.gpu_resident_last_fallback = None
-        _record_gpu_resident_state(requested=True, active=True)
+        _record_model_resident_state(requested=True, active=True)
         self.logger.info(
             "EfficientGATs GPU resident mode active: train_rows=%s valid_rows=%s model_size=%.4f MB",
             train_resident["tensor"].shape[0],
@@ -1000,9 +878,8 @@ class EfficientGATs(QlibGATs):
     def predict(self, dataset):
         if not self.fitted:
             raise ValueError("model is not fitted yet!")
-        _transition_resource_phase("predict")
+        _transition_runtime_phase("predict")
         self._release_cached_cuda_blocks()
-        release_baseline = self._capture_gpu_phase_release_baseline()
         predict_error = None
         test_cpu = None
         test_resident = None
@@ -1029,7 +906,6 @@ class EfficientGATs(QlibGATs):
                 self._loud_gpu_resident_fallback(
                     "efficient_gats_gpu_resident_predict_preload_failed",
                     error=str(exc),
-                    **self._resident_estimate([test_cpu]),
                 )
                 return self._predict_streaming(dataset)
 
@@ -1057,7 +933,7 @@ class EfficientGATs(QlibGATs):
             test_resident = None
             test_cpu = None
             gc.collect()
-            self._finalize_gpu_phase_release(release_baseline, predict_error=predict_error)
+            _finalize_gpu_phase_lifecycle(predict_error=predict_error)
 
     def _predict_streaming(self, dataset):
         if not self._industry_side_channel_enabled():
