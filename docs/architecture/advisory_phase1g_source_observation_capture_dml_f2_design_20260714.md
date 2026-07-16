@@ -28,7 +28,7 @@ Phase 1 自有表和仓库外制品目录。
 
 ```text
 design_status = g5_detailed_design_ready_after_g4_merge_2026_07_16
-implementation_status = g1_pr_2158_g2_pr_2167_g3_pr_2178_g4_pr_2191_merged_g5_not_started
+implementation_status = g1_g4_merged_g5_code_complete_l0_l2_passed_pending_review_and_real_dev_l3_l4
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
@@ -37,7 +37,7 @@ phase1f2_standalone_f2_design = validated_and_merged_2026_07_15
 phase1f2_dev_apply_receipt = 0770cc350efc5740e563b59601be54328228dce364e7a316f5c8399415ac5fe4
 phase1f2_production_apply_receipt = c9191c4c28becae8cc4424c7bdb825fc61b2480c297fc944a8d84cd02a032a7e
 phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
-phase1g_code_start_state = g4_merged_ready_for_g5_implementation
+phase1g_code_start_state = g5_code_complete_pending_user_review
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 g5_detailed_design = advisory_phase1g_g5_dev_evidence_f2_design_20260716.md
 g5_dev_input_inventory = not_run
@@ -1209,8 +1209,9 @@ result/attempt/batch store failure均按真实事实恢复，不引入hidden ret
 - 更新实现矩阵和父级文档。
 
 G5详细设计冻结F-841至F-878：先做read-only inventory，再通过validation-only owner transaction执行完整G4图并
-physical rollback/fresh readback证明零残留；L4只使用真实持久dual-track输入和正常G4短事务。当前为
-`design_ready / implementation_not_started / DEV inventory、L3、L4均未执行`。
+physical rollback/fresh readback证明零残留；L4只使用真实持久dual-track输入和正常G4短事务。当前代码与L0-L2已完成，
+disposable PostgreSQL已跑通完整G4 rollback-only与single/native-multi persistent双轨；真实DEV inventory、L3、L4均未执行，
+不得以L2冒充真实DEV evidence。
 
 每批必须完整实现自己的设计条目，不得以 placeholder/in-memory-only/fixture-only交付冒充完成。
 

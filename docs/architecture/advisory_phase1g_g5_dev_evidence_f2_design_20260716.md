@@ -19,7 +19,7 @@ G5不是新的荐股算法、运行服务或审批层。它只验证 G4 在真�
 exact DEV connection和真实 immutable input条件下能否按父设计运行，并形成不可伪造的验证证据。
 
 任务分级为 T3 / F2，因为 L3 需要在真实 DEV 数据库执行 rollback-only DML，L4在真实双轨输入存在时会提交
-append-only DEV业务事实；但本设计阶段不执行任何数据库操作。
+append-only DEV业务事实。本次代码实现只完成 L0-L2；真实 DEV inventory、L3和L4仍未执行。
 
 当前状态：
 
@@ -27,7 +27,13 @@ append-only DEV业务事实；但本设计阶段不执行任何数据库操作�
 design_tier = F2
 design_status = design_ready_after_interface_and_consistency_audit_2026_07_16
 design_audit_status = passed_no_open_design_gap_2026_07_16
-implementation_status = not_started
+implementation_status = code_complete_l0_l2_passed_pending_real_dev_l3_l4
+implementation_audit_status = passed_design_compliance_review_after_logic_fixes_2026_07_16
+local_static_validation = compileall_pass_ruff_pass_diff_check_pass
+local_phase1g_regression = 182_passed_1_skipped
+local_g5_targeted_regression = 47_passed
+disposable_postgresql_l2 = 2_passed
+feature_workflow_validation = f2_pass_38_of_38_zero_warning
 g4_dependency = merged_pr_2191_merge_commit_81c8d85e3b23493dc502a6f4c632603ae2fea1f3
 dev_input_inventory = not_run
 l3_transactional_dev = not_run
@@ -38,7 +44,7 @@ runtime_activation = none
 role_or_approval_gate = none
 ```
 
-设计完成不代表 G5代码、DEV L3、DEV L4、Phase 1G整体或production运行完成。
+代码和L0-L2验证完成不代表DEV L3、DEV L4、Phase 1G整体或production运行完成。
 
 ## 2. 目标
 
@@ -46,7 +52,8 @@ G5必须完整实现：
 
 1. 只读盘点DEV中可被G4消费的exact Phase 1F.2 receipt、Phase 1E plan、single Alpha和原生multi Alpha证据。
 2. 输入缺失时输出稳定的pending evidence，不把空环境、fixture或手写DSE声明为L4完成。
-3. 在真实DEV schema上通过同一物理事务执行完整G4 plan/capture/readback，并由唯一owner整体rollback。
+3. 在真实DEV schema上先用真实read-only snapshot冻结immutable target，再由同一owner物理事务执行G4 mutable-state
+   plan、capture和in-transaction readback，最后整体rollback；不得伪造`transaction_read_only`。
 4. 使用新连接逐表验证L3 invocation对应的业务行全部不存在，不能用DELETE/TRUNCATE清理冒充零残留。
 5. 验证L3 read-only/write query scope、transaction ownership、constraint/trigger和有界并发冲突行为。
 6. L3只复用真实Selection/package只读事实；临时上游Advisory测试事实必须typed、完整并随外层事务回滚。
@@ -110,9 +117,9 @@ G5可以只读消费：
 - `strategy_pkg.package` exact manifest projection；
 - `app.advisory_strategy_binding_version`及Phase0A/1E所需Advisory事实。
 
-G5禁止向前三类Selection/StrategyPackage表写入。L3若需要验证用Program/binding/historical receipt，只能通过
-现有typed Advisory domain service在外层rollback transaction中创建完整测试事实；不得手写、复制或伪造DSE、
-Selection artifact、package manifest或source availability event。
+G5禁止向前三类Selection/StrategyPackage表写入。L3 inventory只选择已经存在且G4 read-only plan证明fresh的完整
+Phase 1E source plan及其Program/binding/historical/DSE/package/source事实，composer只在临时external root做exact typed
+republish；不得创建、手写、复制或伪造任何上述数据库事实。
 
 ### 4.3 G4复用边界
 
@@ -121,6 +128,7 @@ G5不得复制G4 plan、stale oracle、batch lifecycle、writer、result builder
 `Phase1GService`。G4 CLI四个命令、参数、exit/reason和运行语义保持不变。
 
 G4 service和CLI不得反向import任何G5 module；G5 validation code不能进入FastAPI、scheduler或startup import闭包。
+共享factory必须保留G4既有CLI契约：Phase1G result root必须是显式、已存在的外部目录，不得因抽取factory而改成自动创建。
 
 ## 5. 分阶段工作流
 
@@ -130,28 +138,35 @@ G4 service和CLI不得反向import任何G5 module；G5 validation code不能进�
 2. 加载exact Phase 1F.2 receipt并用当前catalog做read-only schema guard。
 3. 在受约束Phase 1E artifact root中按content-addressed layout枚举L4 target文件；拒绝symlink、reparse、alias和越界路径。
 4. 对每份L4 artifact执行raw SHA、envelope、store policy、semantic plan hash和typed projection验证。
-5. 独立只读发现可供L3 typed composer消费的真实DSE、Selection artifact、package manifest和source event基础事实；
-   L3 source不要求已经存在Program、dated binding或Phase 1E executable plan，也不能被列为L4 target。
+5. 独立只读发现可供L3 typed composer消费的exact Phase 1E source plan、真实DSE、Selection artifact、package
+   manifest和source event基础事实；只有原始G4 read-only plan成功且capture chain/outbox均为空的target才是L3 eligible，
+   从而保证rollback运行确实观察到事务型DML。L3 source候选不能被persistent runner当作L4 target消费。
 6. L3 source分类为`L3_SOURCE_ELIGIBLE_SINGLE`、`L3_SOURCE_ELIGIBLE_NATIVE_MULTI`、`L3_SOURCE_INCOMPLETE`；
    L4 target分类为`L4_EXECUTABLE_SINGLE`、`L4_EXECUTABLE_NATIVE_MULTI`、`L4_DEFERRED`、`L4_DIAGNOSTIC`、
    `L4_STALE`、`L4_INCOMPLETE`。
 7. 分别输出稳定排序的L3 source refs、L4 target refs和一个inventory receipt；不自动执行DML。
 
 inventory不会按目录时间、mtime或“最新文件”选择输入。L3 rollback manifest可以选择一个或多个exact L3 source，
-不要求双轨；L4 persistent manifest可以包含多个single或multi策略包，但至少有一个single和一个native multi target
-才能形成`L4_DUAL_TRACK_READY`。两类候选不能相互冒充。
+不要求双轨；当inventory没有eligible L3 source时，空rollback manifest只表达pending且零DML，有source时空manifest拒绝。
+L4 persistent manifest可以包含多个single或multi策略包，但至少有一个single和一个native multi target才能形成
+`L4_DUAL_TRACK_READY`；输入未形成时空persistent manifest只表达pending。两类候选不能相互冒充。
 
 ### 5.2 G5B：Transactional DEV zero-residue
 
 L3必须使用真实DEV database identity和schema，但不能提交业务DML。执行顺序：
 
-1. read-only preflight确认schema receipt、database identity、至少一个exact L3 source和L3 test namespace均合法；没有合法
-   source时发布`NOT_RUN_SOURCE_EVIDENCE_PENDING` receipt并保持零DML。
+1. read-only preflight确认schema receipt、database identity、至少一个exact L3 source和L3 test namespace均合法；逐target
+   使用真实`REPEATABLE READ READ ONLY` snapshot加载并冻结release、Phase 1E、source event、DSE、Selection artifact、package、
+   binding和完整capture plan。没有合法source时发布`NOT_RUN_SOURCE_EVIDENCE_PENDING` receipt并保持零DML。
 2. 打开唯一物理DEV连接，设置`autocommit=false`、typed statement/lock timeout和唯一application name。
 3. 由outer owner建立一个READ COMMITTED transaction；生成invocation id和exact test namespace。
-4. 必要的Advisory validation-only upstream事实通过现有typed service写入同一外层事务；Selection/package事实只读。
-5. 生成并重新typed-load exact Phase1E artifact、Phase1G batch request和Phase1G batch plan。
-6. 将同一物理连接通过read/write facades注入原始`Phase1GService`并调用`capture_batch(plan)`。
+4. 从eligible source candidate重新typed-load并发布到L3临时root的exact Phase1E artifact；不创建、复制或修改Program、
+   binding、historical receipt、DSE、Selection artifact、package或source event数据库事实。read-only preload必须在owner写事务
+   开始前结束，且request hash与冻结target逐字节一致。
+5. 使用只接受上述冻结target的G4 service adapter，在owner事务中生成exact Phase1G batch plan；adapter遇到未知request hash或
+   相同hash不同payload必须fail-fast，不得重新查询、猜测或fallback。
+6. 将同一owner物理连接通过read/write facades注入该G4 service并调用`capture_batch(plan)`；mutable capture chain、control
+   binding、outbox、DML和in-transaction readback全部位于该owner事务。
 7. 在事务内完成full G4 result/attempt/batch readback、query-scope和committed-phases核对。
 8. 无论成功或异常，唯一outer owner在`finally`中调用一次physical rollback并关闭连接。
 9. 使用全新read-only连接按exact invocation identities查询所有allowlisted表，证明零业务残留。
@@ -208,6 +223,7 @@ phase1g_overall = pending_l4
 
 ```text
 source_candidate_id/hash
+source_phase1e_plan_ref
 alpha_mode = single_alpha | multi_alpha
 component_package_ids[]
 decision_trade_date
@@ -219,8 +235,10 @@ classification
 reason_codes[]
 ```
 
-L3 source只证明typed validation composer具备真实、不可伪造的只读基础事实；它不包含Phase 1E executable plan或
-`target_request`，也不能被persistent runner消费。
+L3 source持有exact source Phase 1E artifact ref，但不携带可被persistent runner直接消费的`target_request`。composer
+只做typed exact republish和闭合核对，不修改plan语义；candidate仍不能被persistent runner消费。
+`L3_SOURCE_INCOMPLETE`必须保留计划身份、包、DSE/artifact与原因；尚未形成的source receipt/event字段保持NULL/空，只有
+eligible分类才要求exact non-empty source receipt和event refs。
 
 ### 6.2 Phase1GDevL4TargetCandidate
 
@@ -240,6 +258,8 @@ reason_codes[]
 
 两类candidate中的`multi_alpha`都必须至少有两个唯一component ids，且component evidence与parent manifest exact一致。
 candidate不包含密码、DSN、绝对artifact path、模型payload或逐candidate股票数据。
+`L4_DIAGNOSTIC`保留target diagnostic的program/date/package与DSE/artifact身份，但`target_request`及admission scope字段保持
+NULL且永远不可被persistent manifest选择；不得为了满足可执行契约补造scope。
 
 ### 6.3 Phase1GDevInputInventoryReceipt
 
@@ -277,9 +297,10 @@ native_multi_target_count >= 1                            # persistent
 manifest_hash
 ```
 
-manifest只选择同一inventory中的exact candidate，不覆盖program/date/package/scope/hash。rollback manifest至少选择一个
-L3 source且两个target数组互斥；persistent manifest至少选择一个single和一个native multi L4 target。显式manifest是数据
-输入，不是审批记录。
+manifest只选择同一inventory中的exact candidate，不覆盖program/date/package/scope/hash。正常rollback manifest至少选择
+一个L3 source且两个target数组互斥；仅在inventory无eligible source时允许空manifest发布pending。正常persistent manifest
+至少选择一个single和一个native multi L4 target；仅在inventory未达到dual-track时允许空manifest发布pending。显式manifest
+是数据输入，不是审批记录。
 
 ### 6.5 Phase1GDevRollbackReceipt
 
@@ -307,7 +328,12 @@ rollback_receipt_hash
 ```
 
 L3 receipt不能携带指向已删除ephemeral files的`Phase1GOutputArtifactRef`；只记录semantic hashes和明确的
-`ephemeral_artifacts_disposed=true`。
+`ephemeral_artifacts_disposed=true`。`COMPLETE_ZERO_RESIDUE`必须同时闭合：observed DML、唯一physical rollback、非零
+read/write计数、非空allowlisted write relation、非空in-transaction outcome和ephemeral hashes、全部write relation均有
+fresh residue check、至少一个exact identity被核对且residue全零、并发probe成功、零reason。任何字段缺失都不能构造complete receipt。
+L4在消费rollback receipt前必须按`input_manifest_hash`从G5 CAS重新加载exact rollback manifest，并证明其
+`execution_mode=ROLLBACK_VALIDATION`且`inventory_receipt_ref`等于本次persistent manifest引用的inventory；只校验同库同
+catalog不足以形成summary闭包。
 
 ### 6.6 Phase1GDevPersistentReceipt
 
@@ -318,10 +344,9 @@ database_identity/catalog_fingerprint
 inventory_receipt_ref/hash
 execution_manifest_hash
 batch_plan_ref/hash
-first_batch_outcome
-rerun_batch_outcome
-target_result_refs[]
-target_attempt_refs[]
+first_batch_outcome_hash
+rerun_batch_outcome_hash
+target_outcomes[]（含first/rerun status、DML、committed phases、stable result、distinct attempt refs）
 batch_attempt_refs[]
 single_target_count/native_multi_target_count
 first_dml_target_count
@@ -334,10 +359,17 @@ started_at/finished_at
 persistent_receipt_hash
 ```
 
+`COMPLETE_DUAL_TRACK`要求每个target首跑和rerun均SUCCESS、stable result一致、first/rerun target attempt ref不同、两个batch
+attempt ref不同、rerun零DML且不含任何数据库写phase，并且full referenced DB readback hash闭合。异常发生在首跑、readback或
+rerun任一位置时，已经durable的target/batch attempt、operation status、DML和committed phases必须保留在PARTIAL/FAILED
+receipt中，不能因后续异常被清空或改写成“未执行”。
+
 ### 6.7 Phase1GDevEvidenceSummary
 
 summary只引用已经durable存在的inventory/L3/L4 receipts。缺失L3或L4时不伪造ref；summary状态分别明确为
-`PENDING_L3_SOURCE`或`PENDING_L4`。
+`PENDING_L3_SOURCE`或`PENDING_L4`。online/offline verify必须从summary、persistent、rollback或manifest递归遍历到inventory、
+rollback manifest和persistent batch plan；任一child ref缺失、raw hash错误、semantic hash错误、kind错误或状态不一致都以
+`ADVISORY_PHASE1G_G5_REFERENCED_READBACK_FAILED`失败，不得只验证顶层文件。
 
 ## 7. External Evidence Store
 
@@ -358,16 +390,17 @@ latest pointer、mtime选择和跨namespace identity复用。store失败不改�
 
 ### 8.1 单一物理事务所有权
 
-`Phase1GDevRollbackCoordinator`唯一拥有physical connection。传给G4的facade只提供cursor/session接口：
+immutable preload使用在owner事务开始前打开并关闭的真实read-only连接；它只冻结append-only/immutable输入，不执行DML，
+也不与owner事务并存。`Phase1GDevRollbackCoordinator`随后成为唯一write-capable physical connection owner。传给G4的facade
+只提供cursor/session接口：
 
 - `commit()`、`rollback()`、`close()`和connection context exit均只记录调用且不结束physical transaction；
 - 任何facade试图切换autocommit、启动第二physical transaction或关闭owner connection立即失败；
 - exact `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`由coordinator在事务开始时执行一次；后续相同setup由
   cursor facade验证后no-op，其他transaction-control SQL拒绝；
-- G4 `_readonly_scope`发出的exact
-  `set_session(readonly=True, autocommit=False, isolation_level="REPEATABLE READ")`由read facade验证参数并no-op；
-  该scope的只读性由read cursor SQL allowlist强制，不能在已开始且可能已有写入的outer READ COMMITTED transaction中
-  物理切换transaction characteristics，也不得把L3描述为真实REPEATABLE READ证据；
+- G2 immutable projection只在preload的真实`REPEATABLE READ READ ONLY`事务运行；owner事务不得再次调用G2 projection。
+  read facade仅兼容验证exact `set_session(...)`和
+  `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`后no-op，不能以此声称owner事务为read-only；
 - `set_config(statement_timeout/lock_timeout)`仍转发并记录typed值；
 - outer owner在finally中执行唯一physical rollback和close。
 
@@ -408,7 +441,7 @@ rollback后使用新连接验证：
 - source revision set/member不存在；
 - outbox/delivery不存在；
 - observation/version/lineage/stage/candidate identities不存在；
-- L3临时Advisory program/binding/historical facts不存在；
+- L3不创建Advisory program/binding/historical或shared facts，query recorder证明这些关系零DML；
 - catalog fingerprint和database identity不变；
 - query recorder没有Selection/StrategyPackage/market/shared runtime DML。
 
@@ -477,6 +510,7 @@ validate-rollback
 
 capture-persistent
   --inventory-ref
+  --rollback-ref      # exact COMPLETE_ZERO_RESIDUE receipt for summary closure
   --execution-manifest  # execution_mode=PERSISTENT_DUAL_TRACK
   --same exact roots/env
 
@@ -486,7 +520,8 @@ verify-evidence
 ```
 
 G5 target固定DEV，没有`--target-db production`。CLI不提供force、skip、latest、cleanup、delete、arbitrary SQL、approval、
-role、backup或ignore-hash参数。显式调用`capture-persistent`是运维动作，不在应用中增加确认/审批模型。
+role、backup或ignore-hash参数。`--rollback-ref`是explicit immutable evidence reference，不是审批、授权或确认门禁；显式调用
+`capture-persistent`是运维动作，不在应用中增加确认/审批模型。
 
 stdout只输出一个compact canonical JSON；structured logs写stderr。exit优先级：
 
@@ -527,6 +562,8 @@ ADVISORY_PHASE1G_G5_UNEXPECTED_ERROR
 
 日志只包含invocation id、hash prefix、alpha mode、stage、status、reason、relation和计数。禁止输出password、DSN、绝对root、
 候选股票、完整SQL参数、artifact payload或逐row噪声。unexpected必须有后台traceback；已知业务错误保留底层cause reason。
+unexpected traceback只记录按调用顺序排列的源码文件basename、line和function以及异常类型，不记录原异常message、源码行或
+绝对路径，避免底层driver把password、DSN或artifact root带入日志。
 
 ## 12. Isolation And No-Gate Contract
 
@@ -657,6 +694,7 @@ scripts/advisory_phase1g_dev_evidence.py
 backend/tests/advisory_phase1/test_phase1g_dev_evidence_contract.py
 backend/tests/advisory_phase1/test_phase1g_dev_inventory.py
 backend/tests/advisory_phase1/test_phase1g_dev_rollback.py
+backend/tests/advisory_phase1/test_phase1g_dev_evidence.py
 backend/tests/advisory_phase1/test_phase1g_dev_evidence_postgres.py
 backend/tests/advisory_phase1/test_phase1g_dev_evidence_cli.py
 backend/tests/advisory_phase1/test_phase1g_dev_evidence_import_boundary.py
@@ -715,7 +753,7 @@ L4提交append-only事实后不提供删除式rollback。代码版本回滚不�
 - F-845：artifact/root/ref按content hash和containment验证，无latest/mtime/reparse路径。
 - F-846：L3 source与L4 target分型；single/native multi/deferred/diagnostic/stale/incomplete分类精确且保留原因。
 - F-847：L3 source或L4真实输入缺失均发布对应pending receipt并零DML，不用fixture冒充L4。
-- F-848：rollback manifest至少含一个L3 source；persistent manifest至少含一条single和一条native multi，且允许多个策略包独立target。
+- F-848：正常rollback manifest至少含一个L3 source，正常persistent manifest至少含一条single和一条native multi；空manifest只表达对应input pending且零DML。
 - F-849：inventory/manifest/plan/L3/L4/summary contracts和hash完整闭合。
 - F-850：L3使用真实DEV database identity、schema、constraints和triggers。
 - F-851：L3由一个outer owner和一个physical transaction执行完整G4图。
@@ -725,7 +763,7 @@ L4提交append-only事实后不提供删除式rollback。代码版本回滚不�
 - F-855：成功、异常和进程连接关闭路径均不提交L3业务DML。
 - F-856：L3 rollback后使用新连接逐identity验证零残留，禁止cleanup DML。
 - F-857：L3 ephemeral G4 artifacts销毁后receipt不保留悬空ref。
-- F-858：L3 validation evidence只用typed Advisory service和真实只读Selection/package事实，不手写DSE/source event。
+- F-858：L3 composer只typed republish exact eligible Phase 1E source plan并复核真实只读Selection/package/source事实，不手写DSE/source event或上游数据库事实。
 - F-859：L3两连接并发probe均rollback，验证锁/unique且无fork/残留。
 - F-860：L3不冒充G4正常commit/commit-uncertainty证据，L2与L3证据边界明确。
 - F-861：L4只接受真实持久single/native multi完整immutable evidence。
@@ -751,44 +789,44 @@ L4提交append-only事实后不提供删除式rollback。代码版本回滚不�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-841 | §1-4、§12 | import/write-scope impact scan | design_ready | none |
-| F-842 | §4.3、§5、§15 | G4 delegation/call spy | design_ready | none |
-| F-843 | §5、§10、§12 | exact DEV config and production-key deny tests | design_ready | none |
-| F-844 | §5.1、§6.3 | read-only query spy and zero-DML inventory | design_ready | none |
-| F-845 | §5.1、§7 | containment/hash/reparse/latest negatives | design_ready | none |
-| F-846 | §5.1、§6.1-6.3 | candidate-family/disposition/alpha/input matrix | design_ready | none |
-| F-847 | §5.1、§5.4 | pending receipt and zero-DML evidence | design_ready | none |
-| F-848 | §5.1、§6.4、§9.2 | mode-specific manifest count/order/multi-target tests | design_ready | none |
-| F-849 | §6-7 | contract/hash/tamper/reference tests | design_ready | none |
-| F-850 | §5.2、§13.4 | exact database/catalog/constraint receipt | design_ready | none |
-| F-851 | §8.1 | physical connection/transaction identity spy | design_ready | none |
-| F-852 | §8.1 | finalize call-count/fault matrix | design_ready | none |
-| F-853 | §8.2 | sqlparse SELECT/DML/DDL/unknown matrix | design_ready | none |
-| F-854 | §8.1-8.2 | transaction/read-scope setup vs business SQL forwarding spy | design_ready | none |
-| F-855 | §5.2、§8.1 | success/error/close rollback tests | design_ready | none |
-| F-856 | §8.3、§13.3-13.4 | per-relation fresh readback and residue negative | design_ready | none |
-| F-857 | §5.2、§6.5 | dangling-ref/disposed artifact contract tests | design_ready | none |
-| F-858 | §4.2、§5.2 | typed composer/import/write-schema spy | design_ready | none |
-| F-859 | §8.4、§13.3-13.4 | two-connection rollback-only PostgreSQL tests | design_ready | none |
-| F-860 | §5.2、§8.4 | evidence-level non-equivalence assertions | design_ready | none |
-| F-861 | §5.3、§6.2、§6.4、§13.5 | real dual-track eligibility/readback | design_ready | none |
-| F-862 | §4.2、§5.3 | shared-schema DML deny scan/query receipt | design_ready | none |
-| F-863 | §5.3、§9.1 | plan CAS reload/tamper/stale tests | design_ready | none |
-| F-864 | §5.3、§9.2 | persistent first-run full referenced readback | design_ready | none |
-| F-865 | §5.3、§9.3 | exact rerun parity and row-hash evidence | design_ready | none |
-| F-866 | §5.3、§9.4 | target failure isolation/normal recovery receipt | design_ready | none |
-| F-867 | §6.2、§9.2 | native multi component/stage/candidate closure | design_ready | none |
-| F-868 | §3.2、§9.4、§13 | no-fault/no-delete static and query scan | design_ready | none |
-| F-869 | §5.4、§6 | status/reference closure matrix | design_ready | none |
-| F-870 | §7 | CAS collision/tamper/readback tests | design_ready | none |
-| F-871 | §10-11 | exit/reason/redaction/caplog tests | design_ready | none |
-| F-872 | §2-3、§10、§12 | approval/RBAC/backup/bypass scan | design_ready | none |
-| F-873 | §3.2、§12、§15-16 | changed-path/no-DDL/no-runtime scan | design_ready | none |
-| F-874 | §4.3、§12-13 | transitive + isolated runtime import tests | design_ready | none |
-| F-875 | §10 | CLI parser/stdout/exit precedence tests | design_ready | none |
-| F-876 | §13、§16 | layer-specific receipts/state truth audit | design_ready | none |
-| F-877 | §8-9、§14、§17 | positive-path and no-gate review | design_ready | none |
-| F-878 | §1、§15-16、§21 | parent/child status and reference check | design_ready | none |
+| F-841 | `phase1g_dev_*`、import boundary test | import/write-scope impact scan | verified_l0_l2 | none |
+| F-842 | `phase1g_command_factory.py`、G4 CLI delegate | G4 delegation and compatibility tests | verified_l0_l2 | none |
+| F-843 | command factory、G5 CLI | exact DEV config and production-key deny tests | verified_l0_l2 | none |
+| F-844 | `phase1g_dev_inventory.py` | inventory unit tests and zero writer path | verified_l0_l2 | none |
+| F-845 | inventory、evidence store | containment/hash/reparse/latest negatives | verified_l0_l2 | none |
+| F-846 | inventory contracts/tests | candidate-family/disposition/alpha/input matrix | verified_l0_l2 | none |
+| F-847 | evidence service/contracts | pending receipt reachability and zero-DML evidence | verified_l0_l2 | none |
+| F-848 | execution manifest/contracts/service | mode-specific count/order/multi-target tests | verified_l0_l2 | none |
+| F-849 | contracts、evidence store、reference closure walker | contract/hash/tamper/dangling-child tests | verified_l0_l2 | none |
+| F-850 | inventory/PostgreSQL helpers | disposable PostgreSQL catalog/constraint evidence | verified_l0_l2 | none |
+| F-851 | rollback coordinator | physical connection/transaction identity tests | verified_l0_l2 | none |
+| F-852 | rollback coordinator tests | finalize call-count/fault matrix | verified_l0_l2 | none |
+| F-853 | rollback SQL classifier tests | sqlparse SELECT/DML/DDL/unknown/multi-DML CTE matrix | verified_l0_l2 | none |
+| F-854 | rollback query facade tests | setup/business SQL forwarding tests | verified_l0_l2 | none |
+| F-855 | rollback coordinator tests | success/error/close rollback tests | verified_l0_l2 | none |
+| F-856 | `phase1g_dev_evidence_postgres.py` | relation readback and residue negatives | verified_l0_l2 | none |
+| F-857 | L3 composer/service tests | dangling-ref/disposed artifact contract tests | verified_l0_l2 | none |
+| F-858 | L3 typed composer/import tests | typed plan composition and write-schema scan | verified_l0_l2 | none |
+| F-859 | `test_disposable_postgres_g5_persistent_dual_track_first_run_and_exact_rerun` | real G5 inventory/preload/rollback/zero-residue service path | verified_l0_l2 | none |
+| F-860 | rollback receipt/contracts | evidence-level non-equivalence assertions | verified_l0_l2 | none |
+| F-861 | same disposable PostgreSQL G5 orchestration test | single/native-multi inventory to persistent first run/readback/rerun | verified_l0_l2 | none |
+| F-862 | import boundary and query recorder | shared-schema DML deny scan/query receipt | verified_l0_l2 | none |
+| F-863 | evidence store/service | plan CAS reload/tamper/stale tests | verified_l0_l2 | none |
+| F-864 | persistent service/PostgreSQL L2 test | first-run attempt/batch/DB full referenced readback | verified_l0_l2 | none |
+| F-865 | persistent service/PostgreSQL L2 and contract negatives | distinct rerun attempts、zero DML、same stable result、committed-phase evidence | verified_l0_l2 | none |
+| F-866 | persistent receipt/service tests plus existing G4 recovery tests | already-durable first-attempt preservation and normal state-machine recovery | verified_l0_l2 | none |
+| F-867 | disposable PostgreSQL native-multi test | component/stage/candidate closure | verified_l0_l2 | none |
+| F-868 | CLI/import/query static tests | no-fault/no-delete scan | verified_l0_l2 | none |
+| F-869 | contracts/service/reference closure tests | status/reference/transitive CAS closure matrix | verified_l0_l2 | none |
+| F-870 | evidence store tests | CAS collision/tamper/readback tests | verified_l0_l2 | none |
+| F-871 | CLI/service tests | exit/reason/redaction/logging tests | verified_l0_l2 | none |
+| F-872 | CLI/import static tests | approval/RBAC/backup/bypass scan | verified_l0_l2 | none |
+| F-873 | changed-path and import scan | no-DDL/no-runtime review | verified_l0_l2 | none |
+| F-874 | G4/G5 import boundary tests | transitive and isolated import tests | verified_l0_l2 | none |
+| F-875 | G5 CLI tests | parser/stdout/exit precedence tests | verified_l0_l2 | none |
+| F-876 | receipts/design status audit | layer-specific state truth | verified_l0_l2 | none |
+| F-877 | disposable PostgreSQL positive paths | positive path and no-gate review | verified_l0_l2 | none |
+| F-878 | parent/child document sync | status and reference check | verified_l0_l2 | none |
 
 ## 20. DESIGN-COMPLIANCE-001
 
@@ -806,9 +844,9 @@ L4提交append-only事实后不提供删除式rollback。代码版本回滚不�
 
 ## 21. 退出条件与下一阶段
 
-G5设计进入代码阶段前必须满足：
+G5代码进入提交审核前必须满足：
 
-1. F-841至F-878共38项全部design_ready，无未批准gap/TODO。
+1. F-841至F-878共38项均有实现和验证映射；真实DEV L3/L4缺口必须如实保留，不得以L2冒充。
 2. 与父设计F-701至F-735、G4 F-800至F-840和当前main G4接口一致。
 3. L3真实rollback与L4正常commit边界清楚，不用低层证据冒充高层完成。
 4. 无cleanup DML、shared schema write、fixture L4、生产入口或额外审批门禁。
@@ -816,7 +854,7 @@ G5设计进入代码阶段前必须满足：
 6. 所有transaction ownership、SQL allowlist、residue和failure条件均有正向/反向验证设计。
 7. F2 validator、引用检查、状态一致性和`git diff --check`通过。
 
-G5代码合入后先执行read-only inventory；有合法L3 source时执行L3 transactional DEV，没有时准确保持
+G5代码经用户确认合入后，才可另行执行read-only inventory；有合法L3 source时执行L3 transactional DEV，没有时准确保持
 `not_run_source_evidence_pending`。只有真实dual-track input receipt达到`L4_DUAL_TRACK_READY`时再执行L4 persistent DEV；
 否则准确保持`code_complete_pending_real_dev_input`。L3/L4完成后
 才可关闭Phase 1G DEV evidence并进入Phase 1H详细设计，仍不代表production DML或runtime activation完成。

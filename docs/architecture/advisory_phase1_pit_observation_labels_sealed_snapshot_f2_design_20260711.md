@@ -2123,7 +2123,7 @@ Phase 1B 实施验收表：
 
 ### 22.10 Phase 1G：Source ledger 与 observation capture DML
 
-- 唯一父级实施设计为`docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`。G1-G4代码已分别由PR #2158、#2167、#2178、#2191合入；G5唯一实施级设计为`docs/architecture/advisory_phase1g_g5_dev_evidence_f2_design_20260716.md`，当前`design_ready / implementation_not_started / DEV_inventory_not_run / L3_not_run / L4_not_run`。下一项是实现G5；真实persistent DEV L4仍只接受Phase 1E形成的single/native multi Alpha immutable DSE/receipt，不用fixture或L3临时证据冒充。
+- 唯一父级实施设计为`docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`。G1-G4代码已分别由PR #2158、#2167、#2178、#2191合入；G5唯一实施级设计为`docs/architecture/advisory_phase1g_g5_dev_evidence_f2_design_20260716.md`。G5代码与L0-L2已完成并等待用户审核，disposable PostgreSQL已跑通完整rollback-only G4图和single/native-multi persistent双轨；真实DEV inventory、L3、L4仍未执行。真实persistent DEV L4仍只接受Phase 1E形成的single/native multi Alpha immutable DSE/receipt，不用fixture或L3临时证据冒充。
 - Phase 1G 不新增 source availability event；它在 Phase 1E 相同 cutoff 重放 source resolution，逐 hash 一致后冻结 revision set。source event 的生产权仍唯一属于 Phase 1D observer。
 - immutable DSE/artifact/package 仅通过 Advisory-owned read-only projection 消费；不调用 Selection、策略包 validator/asset loader/inference，不改变 Selection、荐股、模拟盘、Paper、QE/RD-Agent/Qlib/QMT。
 - control binding 自动 get-or-append exact；observation/version/lineage/stage/candidate/outbox/membership/delivery 使用caller-owned单 plan PostgreSQL原子事务。Phase 1G以强类型只读plan执行stale revalidation，并把稳定capture result与逐次attempt receipt分离。single Alpha 与原生 multi Alpha 各 Program 独立执行，失败显式、正常重跑自动收敛，无自动 retry loop、角色、审批或人工改库。

@@ -57,7 +57,11 @@ OBSERVED = datetime(2026, 7, 1, 6, 0, tzinfo=UTC)
 
 
 def _requirement_set(
-    *, manifest_sha256: str = h("9"), alpha_mode: str = "single_alpha"
+    *,
+    manifest_sha256: str = h("9"),
+    alpha_mode: str = "single_alpha",
+    package_id: str = "package-a",
+    binding_version_id: str = "binding-a",
 ) -> SourceRequirementSet:
     params = {"lookback": 20, "source_role": "FEATURE_T"}
     common_pit_hash = build_source_requirement_common_pit_identity_hash(
@@ -65,8 +69,8 @@ def _requirement_set(
         admission_scope_hash=h("2"),
         handoff_readiness_hash=h("0"),
         program_id="program-a",
-        binding_version_id="binding-a",
-        package_id="package-a",
+        binding_version_id=binding_version_id,
+        package_id=package_id,
         manifest_sha256=manifest_sha256,
         alpha_mode=alpha_mode,
         decision_as_of_trade_date=DECISION_DATE,
@@ -103,8 +107,8 @@ def _requirement_set(
         admission_scope_hash=h("2"),
         handoff_readiness_hash=h("0"),
         program_id="program-a",
-        binding_version_id="binding-a",
-        package_id="package-a",
+        binding_version_id=binding_version_id,
+        package_id=package_id,
         manifest_sha256=manifest_sha256,
         alpha_mode=alpha_mode,
         decision_as_of_trade_date=DECISION_DATE,
@@ -144,13 +148,18 @@ def g2_source_case(
     manifest_sha256: str = h("9"),
     alpha_mode: str = "single_alpha",
     component_ids: tuple[str, ...] = (),
+    package_id: str = "package-a",
+    binding_version_id: str = "binding-a",
 ) -> tuple[
     Phase1EExecutionPlanProjection,
     Phase1GTargetExecutionRequest,
     SourceAvailabilityEvent,
 ]:
     requirements = _requirement_set(
-        manifest_sha256=manifest_sha256, alpha_mode=alpha_mode
+        manifest_sha256=manifest_sha256,
+        alpha_mode=alpha_mode,
+        package_id=package_id,
+        binding_version_id=binding_version_id,
     )
     event = _source_event()
     resolved = FixtureSourceRevisionResolver().resolve(
@@ -166,6 +175,8 @@ def g2_source_case(
     binding_data.update(
         {
             "binding_payload_hash": canonical_json_sha256(binding_payload),
+            "binding_version_id": binding_version_id,
+            "package_id": package_id,
             "manifest_sha256": manifest_sha256,
             "alpha_mode": alpha_mode,
             "manifest_alpha_component_ids": component_ids,
@@ -180,7 +191,7 @@ def g2_source_case(
         "program_id": "program-a",
         "decision_trade_date": DECISION_DATE.isoformat(),
         "evidence_binding_hash": binding.evidence_binding_hash,
-        "package_id": "package-a",
+        "package_id": package_id,
         "manifest_sha256": manifest_sha256,
         "alpha_mode": alpha_mode,
         "admission_scope_id": "scope-a",
@@ -238,7 +249,7 @@ def g2_source_case(
             "scope_key": {
                 "program_id": "program-a",
                 "decision_trade_date": DECISION_DATE,
-                "package_id": "package-a",
+                "package_id": package_id,
                 "manifest_sha256": manifest_sha256,
                 "admission_scope_id": "scope-a",
                 "evidence_scope": "RETROSPECTIVE_RESEARCH_ONLY",
