@@ -1,0 +1,165 @@
+{
+  "actual": "scripts/rl_execution/v25_monitor.sh line 18 runs nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total.",
+  "allowed_write_scope": [
+    "scripts/rl_execution/v25_monitor.sh",
+    "tests/aistock_validation/bugs/20260716_BUG-685-rl-v25-monitor-retains-forbidden-nvidia-smi-polling-after-gpu-monitoring.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-685",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-16T19:19:31.489439Z",
+  "description": "scripts/rl_execution/v25_monitor.sh line 18 runs nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260716-821ac13c99c8",
+      "timestamp": "2026-07-16T19:19:31.489436Z"
+    }
+  ],
+  "evidence_uris": [
+    "Follow-up global audit after BUG-684 merge PR #2246"
+  ],
+  "expected": "AIstock monitoring scripts perform no GPU, VRAM, NVML, CUDA allocator, or nvidia-smi resource queries; V25 monitor remains useful through process, log, output, and evaluation status only.",
+  "first_seen_at": "2026-07-16T19:19:31.489439Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2248,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2248",
+  "last_seen_at": "2026-07-16T19:19:31.489439Z",
+  "module": "rl_execution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'nvidia-smi|GPU Status' scripts/rl_execution/v25_monitor.sh",
+  "required_verification": [
+    "l0",
+    "rl_execution_smoke"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "rl_execution"
+  ],
+  "title": "RL V25 monitor retains forbidden nvidia-smi polling after GPU monitoring removal",
+  "trigger_condition": {
+    "fingerprint": "821ac13c99c8c515fafa3b0b",
+    "source_event_id": "FE-20260716-821ac13c99c8"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "rl_execution",
+        "rl_execution_smoke"
+      ],
+      "plans": [
+        "rl_execution_smoke"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "rl_execution",
+          "rl_execution_smoke"
+        ],
+        "plans": [
+          "rl_execution_smoke"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
