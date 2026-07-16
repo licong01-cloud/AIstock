@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v5.5（F-014 修正版真实重放、R10 多模型/持有阈值增量证据与技术恢复记录，2026-07-16）
+- 当前版本：v5.6（R10E2 持有阈值六 Loop 收口、R10E3 hold30 形状探针启动，2026-07-16）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -99,6 +99,8 @@ v5.4 将 R10 LambdaMART `qe_20260716_002956_b2eb` 的 6/6 个成功 Loop 纳入�
 
 v5.5 使用修正后的 evaluator source `1baddba8...206a95f` 对 R8B h40 seed123 真实 Loop 重放成功：`signal_path` 与 `sector_regime` 为 `COMPUTED`，`position_episode`、`portfolio_result` 和 `order_fill` 为 `COMPUTED_WITH_LIMITATIONS`，不再因四条合法 Qlib overfill 误报 `NOT_COMPUTABLE`；`execution_cause` 因 Recorder 未保存订单意图/队列原因码而单独为 `NOT_VERIFIABLE`。同一 evaluation 保存 `2,206,952` 条 signal、`2,343` 个 episode、`2,430` 项指标和完整输入 hash。R10 同时新增 G15-FPL LSTM 两种子、G13-F LGBM h60 seed123 与 hold10/20 seed314 结果；hold20 在 seed123 变弱、在 seed314 反而明显变强，进一步证明持有逻辑必须跨种子和 episode 分析，不能由单一 trial 概括。运行期还复现了资源采样器退出阶段卡住已完成 wrapper，以及旧 main 的 Results-only `RealDictRow` 状态重算异常；已完成预测/回测均被恢复并入仓，技术状态不覆盖研究证据，也不停止任何模型、期限或策略方向。
 
+v5.6 收口 R10E2 `qe_20260716_045612_4ddd` 的 hold10/20 × 三种子 6/6。hold10 平均绝对 CAGR/Sharpe/回撤约 `61.72%/1.7158/-19.10%`，hold20 约 `57.17%/1.6274/-20.35%`，原 hold2 基线约 `61.19%/1.7655/-18.48%`。hold10 仅把平均 CAGR 提高约 `0.53` 个百分点，却降低 Sharpe 并扩大回撤；hold20 平均更弱，但 seed314 单腿仍由 `60.71%` 提高到 `69.51%`，说明固定最短持有与信号种子存在强交互。该结果不否定“早退损失”或退出逻辑方向，而是把下一步从统一延长持有细化为 hold30 形状探针、score hysteresis、趋势失效退出和动态 TopK。R10E3 `qe_20260716_083500_a8e0` 已创建并启动 3 个 backtest-only hold30 Loop，继续使用相同 prediction SHA 做严格配对。
+
 ### 2.5 当前执行总账（截至 2026-07-16）
 
 本表是阅读本文时判断“已完成/待执行/仅设计”的首要入口。历史 Gate-0 receipt 不因后续进度而删除，但当前状态以本表、对应实验 task/run 和第 15 节验收矩阵为准。
@@ -124,7 +126,8 @@ v5.5 使用修正后的 evaluator source `1baddba8...206a95f` 对 R8B h40 seed12
 | 两层板块→个股模型 | `RESEARCH_PLANNED` | 第 9.5 节 | oracle 与现实 hard/soft 两层模型可并行；板块层和个股层分别归因。oracle 弱结果只描述其当前口径，不停止完整工程或新假设。 |
 | R10 LSTM 因子角色 | `RUNNING_8_OF_12_ARCHIVED` | `qe_20260716_011004_21b2`；G13 批次 `qear_bf_b916...e0cb6`；G15 L7/L8 批次 `qear_bf_969d...e1b0`、`qear_bf_5db3...1ec3c` | G13-F 六腿与 G15-FPL h40 seeds123/314 均已入仓。G15 两腿 RankIC/CAGR 约 `0.10590/64.58%`、`0.10341/59.44%`；seed123 由 Results-only 恢复并保存部分资产，seed314 完整保存 95 指标、曲线、交易和 3 文件资产。G15 h40 第三种子及 h60 正在运行。 |
 | R10 LambdaMART 排序目标 | `COMPLETED_6_OF_6_ARCHIVED_LEGACY_OBJECTIVE_RECORDED` | `qe_20260716_002956_b2eb`；G14-FP × h40/h60 × 3 seeds；QE Archive 6 runs/18 文件资产；第 9.6.2.4 节 | 旧实现 h40/h60 平均 RankIC `-0.02411/+0.00969`、CAGR `55.38%/37.12%`。train+valid 全局 relevance 分箱和 `DK_L` 推理使预测分别止于 2026-04-28/03-30，不是完整测试尾部的逐日截面排序对照；结果保留，修正版同卡复跑及右尾/barrier 目标继续。 |
-| R10E2 持有阈值 | `RUNNING_4_OF_6_ARCHIVED` | `qe_20260716_045612_4ddd`；批次 `qear_bf_3f36...5aa6`、`qear_bf_6dd4...164d`；G14-FP h60、hold 10/20 × 3 seeds | 同种子两腿 prediction SHA 相同。seed123 hold10/20 的 CAGR 为 `57.16%/47.88%`，seed314 则为 `60.71%/69.51%`；seed314 hold20 的 Sharpe/回撤约 `1.8944/-19.95%`。相反的种子响应说明不存在由单种子支持的通用持有阈值；seed2718 与 F-014 episode capture 正在补充。 |
+| R10E2 持有阈值 | `COMPLETED_6_OF_6_ARCHIVED` | `qe_20260716_045612_4ddd`；追加批次 `qear_bf_227c...0f08`、`qear_bf_d09b...0e60`；G14-FP h60、hold 10/20 × 3 seeds | hold10 三种子平均 CAGR/Sharpe/回撤约 `61.72%/1.7158/-19.10%`，hold20 为 `57.17%/1.6274/-20.35%`；原 hold2 为 `61.19%/1.7655/-18.48%`。固定持有不能稳定改善风险收益，但种子异质性支持继续研究状态化退出。 |
+| R10E3 hold30 形状探针 | `RUNNING_3_LOOP_BACKTEST_ONLY` | `qe_20260716_083500_a8e0`；R8B G14-FP h60 三种子原 prediction | 与 hold2/10/20 使用同一预测和同一执行口径，只增加 hold30；用于描绘固定持有响应曲线，并与 score hysteresis、趋势失效退出和动态 TopK 独立比较。 |
 | R10T TCN 同口径恢复 | `RUNNING_2_OF_12_ARCHIVED` | `qe_20260716_050817_4b7e`；G13-F/G15-FPL × h40/h60 × 3 seeds；回填 `qear_bf_ff3c22b2733e42dc86c78ad0e447a1c7` | G13-F h40 seeds 123/314 已完成并入仓，RankIC/CAGR 为 `0.11129/70.71%`、`0.09822/55.67%`；prediction/label 均完整到 2026-06-30。Loop3/4 已继续运行，TCN 作为独立时序归纳偏置继续完整矩阵。 |
 | R10L LGBM 结构基线 | `RUNNING_REMOTE_CPU4_4_OF_12_ARCHIVED` | `qe_20260716_052124_63d2`；批次 `qear_bf_0e60...cfd2`、`qear_bf_52d1...42f` | G13-F h40 三种子均值 RankIC/CAGR/Sharpe/回撤约 `0.09992/50.36%/1.5077/-21.35%`；h60 seed123 为 `0.11017/60.26%/1.7825/-20.58%`。prediction 均完整到 2026-06-30；其余 h60/G15 Loop 正继续远端并行。 |
 | R8M 多期限共享表示 | `DESIGN_PLANNED_NOT_STARTED` | 第 9.6.3 节；F-019 | 独立实验比较独立训练、共享头、冻结迁移和全量微调；transfer matrix/LOO/梯度冲突与各 F-014 可用指标族共同形成分析，不存在全局裁决门。 |
@@ -826,7 +829,16 @@ R9S 两个 backtest-only task 已全部完成：LSTM `qe_20260715_190925_2cd9` 1
 | LGBM h60 | 53.35% | 57.47% | n_drop=3 较优 |
 | LGBM h120 | 44.66% | 41.39% | 过慢替换反而变弱，期限不等于机械持仓长度 |
 
-因此不存在跨模型、跨期限通用的 `n_drop`；预测期限、决策频率和持有/退出逻辑必须继续分轴。R10E2 在 LSTM G14-FP h60、n_drop=3 上进一步比较 hold 10/20；seed123 首对结果为 hold10 CAGR/Sharpe/最大回撤/年化换手 `57.16%/1.6175/-19.56%/11.82`，hold20 为 `47.88%/1.4167/-22.28%/7.74`。seed314 的关系相反：hold10 为 `60.71%/1.6817/-19.31%`，hold20 为 `69.51%/1.8944/-19.95%`。四腿已入 QE 数仓，同种子 hold10/20 的 Prediction Store SHA 完全相同且均为 `2,206,952` 行、到 `2026-06-30`，所以差异是同一分数上的策略转换，不是模型重训。当前结果说明降低换手既不必然改善、也不必然损害收益；必须完成第三种子并用 F-014 episode capture、退出后 MFE 和成本路径解释异质性。
+因此不存在跨模型、跨期限通用的 `n_drop`；预测期限、决策频率和持有/退出逻辑必须继续分轴。R10E2 在 LSTM G14-FP h60、n_drop=3 上完成 hold10/20 × 三种子的严格配对；同种子两腿与原 hold2 的 Prediction Store SHA 完全相同且均为 `2,206,952` 行、到 `2026-06-30`，所以差异是同一分数上的策略转换，不是模型重训。
+
+| seed | hold2 CAGR/Sharpe/回撤 | hold10 CAGR/Sharpe/回撤 | hold20 CAGR/Sharpe/回撤 | 当前 trial 解释 |
+|---:|---:|---:|---:|---|
+| 123 | `56.04%/1.6550/-18.61%` | `57.16%/1.6175/-19.56%` | `47.88%/1.4167/-22.28%` | 统一延长到 20 日明显损害收益和风险。 |
+| 314 | `63.19%/1.7683/-18.71%` | `60.71%/1.6817/-19.31%` | `69.51%/1.8944/-19.95%` | hold20 提高收益/Sharpe，但回撤仍略扩大。 |
+| 2718 | `64.35%/1.8731/-18.11%` | `67.28%/1.8483/-18.42%` | `54.11%/1.5711/-18.84%` | hold10 提高收益，hold20 再次变弱。 |
+| 三种子均值 | `61.19%/1.7655/-18.48%` | `61.72%/1.7158/-19.10%` | `57.17%/1.6274/-20.35%` | 固定 hold10 只有小幅 CAGR 增量，风险调整后不占优；hold20 平均更弱。 |
+
+R10E2 因此把“固定最短持有”定位为策略响应曲线的一轴，而不是早退问题的完整解。R10E3 `qe_20260716_083500_a8e0` 已启动 hold30 × 三种子，继续补齐曲线；同时把 score hysteresis、趋势失效/板块状态退出、动态 TopK 与退出后 MFE 作为独立实验，不因固定 hold 的当前混合结果停止退出逻辑研究。
 
 R10 主矩阵 `qe_20260716_011004_21b2` 比较 LSTM 的 G13-F 与 G15-FPL、h40/h60、三种子；前六个 G13-F Loop 的 h40 RankIC/CAGR 分别为 `0.10869/67.35%`、`0.10121/63.62%`、`0.10955/53.17%`，h60 为 `0.09756/59.83%`、`0.10700/完整回测已形成`、`0.09818/63.42%`。Loop1–4/6 已完整写入 QE Archive；Loop5 训练、预测、回测及 220.7 万行 Prediction Store 都已完成，父状态失败仅来自上传超时后的 Results-only `RealDictRow` 读取缺陷。该 Loop 也已按失败状态定向入仓，保存 `research_valid=true`、32 指标和 prediction/label/params 三资产，同时诚实记录 `backtest_window`、曲线、交易和执行事件未从失败 payload 重建；其真实 workspace/F-014 制品继续用于补充互证。
 
@@ -921,8 +933,8 @@ h30、h40、h60、h120 不是天然独立的四条腿，模型名不同也不自
 
 截至 2026-07-16，R2–R9S 与历史失败 task 的 Loop 级证据已补账；R8B 6/6 已完成 F-014 signal/episode/portfolio 首轮重评；R10 LSTM、TCN、hold-threshold 和远端 LGBM 四个矩阵正在执行。以下仅按当前信息增益/成本排列，不是依赖链、审批、准入或研究许可条件；任一方向可在 QE 范围内并行，资源不足时只调整并发和执行顺序，不停止研究路线：
 
-1. **A：收口在途 R10 四矩阵并逐 Loop 补算 F-014**：完成 G13-F/G15-FPL 的 LSTM/TCN/LGBM 同口径比较、hold10/20 三种子和所有有效 Loop 归档；父 task 技术失败不覆盖成功训练/预测/回测制品。
-2. **A：长期持仓与退出逻辑演进**：R9S 已证明 `n_drop` 与期限强交互，F-014 又显示 false early-exit 约 92%–96%；在 hold10/20 后继续研究最短持有、趋势失效、score hysteresis、动态 TopK 和退出后 MFE，不把标签期限机械变成固定持仓天数。
+1. **A：收口在途 R10 三模型矩阵并逐 Loop 补算 F-014**：完成 G13-F/G15-FPL 的 LSTM/TCN/LGBM 同口径比较和所有有效 Loop 归档；R10E2 hold10/20 已 6/6 收口，父 task 技术失败不覆盖成功训练/预测/回测制品。
+2. **A：长期持仓与退出逻辑演进**：R9S 已证明 `n_drop` 与期限强交互，F-014 又显示 false early-exit 约 92%–96%；R10E3 hold30 正在补齐固定持有曲线，同时继续趋势失效、score hysteresis、动态 TopK、板块状态退出和退出后 MFE，不把标签期限机械变成固定持仓天数。
 3. **A：科技右尾与现实板块选择模型**：围绕半导体、通信、元件、消费电子、电子化学品等集体漏捕，继续 breadth/state、资金流加速、龙头领先度、右尾 barrier/NDCG/LTR、hard Top-M 与 soft gating；oracle 上界已显示主要空间在板块选择层。
 4. **A：F-014 真实制品重放与 QE-only 平台层**：先用修正后的 Qlib overfill 语义重放 R8B/R10，再并行交付 CAS、资源状态、三表、API/MCP/UI 和历史批量关联。平台面只提高持久化与查询效率，不控制任何研究是否开始。
 5. **B：R8C 组合层融合与任务级 LOO**：复用现有 LGBM/LSTM prediction，固定总风险预算比较 portfolio fusion、跨期限组合和单腿剔除；G13/G14 高相关只说明其不是自然独立腿，不替代真实组合回测。R8C 的 L2 artifact 路径修复在 #2199，合入/重启前保留可复算卡与现有制品，不把部署等待解释成研究否定。
@@ -1183,6 +1195,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 - v5.3 实证 rollout：R8B 六个 Loop 已完成 signal/sector/episode/portfolio 初次重评；R9S 24/24 收口；R10 四矩阵在 QE-only 节点运行。Qlib overfill 语义修复只改 F-014 离线评价制品，不连接 route/startup/scheduler/DDL/DB 或任何非 QE 模块；正在运行的 QE 训练/回测不读取研究 worktree，因此不受本地源代码提交影响。
 - v5.4 LTR rollout：R10 LambdaMART 6/6 旧实现结果已进入 Loop 级蓝图总账；远端运行源、配置和候选 Parquet 索引均已复核。修正版逐日 relevance/query contract/`DK_I` 推理属于本 changeset，部署状态与旧实验状态分列；旧结果不删除，修正版复跑与右尾目标不因当前弱 RankIC 停止。
 - v5.5 运行证据 rollout：F-014 Qlib overfill 修正版已在 R8B L1 真实制品重放；R10 G15 LSTM、hold seed314 与 G13 LGBM h60 新结果已逐 Loop 入仓。资源采样退出卡住和旧 main 的 Results-only `RealDictRow` 缺陷均按技术问题记录，已完成制品恢复但未部署修复；技术状态不覆盖科研结果，也不形成方向门禁。
+- v5.6 持有逻辑 rollout：R10E2 hold10/20 三种子 6/6 已完成并全部入仓；固定 hold 的平均风险收益没有稳定超越 hold2，但种子响应显著异质。R10E3 hold30 三 Loop 已按同 prediction 启动；动态退出与状态化退出继续作为独立方向，不由固定 hold trial 决定去留。
 - Schema rollout：现有 factor h20 指标已可用；未来 F-014 三表必须通过版本化 migration 和独立 DDL 授权，依赖既有每日备份，不在 DDL 前额外导出数据库。
 - Data rollout：R8 默认继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
 - Rollback：文档按 PR revert；未来 evaluator/schema 可停止新写入并保留历史 receipt，数据回切上一版本；任何回滚不得删除试验台账、预测或评价制品。
@@ -1200,7 +1213,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 | QE research writes | OFFICIAL_RESEARCH_WRITES_COMPLETE | 官方因子指标/相关性和 QE archive 已持久化；v5.0 文档任务不写 DB。 |
 | frontend/backend dependency | noop | 本批无依赖或 lockfile 变化。 |
 | candidate snapshot | VERIFIED_QE_20260630 | R6/R7/R8 当前使用该快照；其他快照可另立 identity 并行研究。 |
-| QE experiment | R6_R9S_R10LTR_COMPLETED_R10_RUNNING | R7A/R7B、R8A 12/12、R8B 6/6、R9S 24/24 与 R10 LambdaMART 旧实现 6/6 已完成；R10 LSTM、TCN、hold-threshold 和远端 LGBM 正在运行，F-014 与板块/右尾分析逐 Loop 并行。 |
+| QE experiment | R6_R10E2_COMPLETED_R10_RUNNING | R7A/R7B、R8A 12/12、R8B 6/6、R9S 24/24、R10 LambdaMART 旧实现 6/6 与 R10E2 hold10/20 6/6 已完成；R10 LSTM、TCN、远端 LGBM 和 R10E3 hold30 正在运行，F-014 与板块/右尾分析逐 Loop 并行。 |
 | service/runtime restart | NOT_REQUIRED_CORE_DEFAULT_OFF | Phase 1 没有 route/startup/scheduler 接入，不会自动创建评价；代码合入无需重启，未来平台接入另行汇报。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
