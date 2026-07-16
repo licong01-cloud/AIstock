@@ -11208,9 +11208,9 @@ class SimulationLifecycleBackgroundScheduler:
         if isinstance(result.get("errors"), list) and bool(result["errors"]):
             return True
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        for field in ("failed_count", "stale_recovery_failed_count"):
+        for summary_field in ("failed_count", "stale_recovery_failed_count"):
             try:
-                if int(summary.get(field) or 0) > 0:
+                if int(summary.get(summary_field) or 0) > 0:
                     return True
             except (TypeError, ValueError):
                 return True
