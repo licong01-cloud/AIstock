@@ -49,6 +49,7 @@ from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRe
 from .tca_capture import (
     CaptureMergeOutcome,
     TcaCaptureConfigurationError,
+    TcaCaptureDataError,
     build_capture_error,
     build_decision_benchmark_capture,
     resolve_tca_benchmark_policy,
@@ -432,8 +433,19 @@ class SimulationLifecycleOrchestrator:
             return
         for intent in execution_plan.intents:
             try:
-                tradability = (pre_trade_tradability or {}).get(intent.symbol) or {}
-                quote_evidence = tradability.get("quote_evidence") if isinstance(tradability, dict) else None
+                raw_tradability = (pre_trade_tradability or {}).get(intent.symbol)
+                if raw_tradability is None:
+                    tradability = {}
+                elif isinstance(raw_tradability, dict):
+                    tradability = raw_tradability
+                else:
+                    raise TcaCaptureDataError(
+                        "ADAPTIVE_IS_TCA_TRADABILITY_PAYLOAD_INVALID",
+                        "pre_trade_tradability entry must be a mapping",
+                        field=f"pre_trade_tradability.{intent.symbol}",
+                        raw_value=raw_tradability,
+                    )
+                quote_evidence = tradability.get("quote_evidence")
                 price_policy = intent.price_policy if isinstance(intent.price_policy, dict) else {}
                 capture = build_decision_benchmark_capture(
                     execution_plan_id=execution_plan.plan_id,
@@ -442,7 +454,7 @@ class SimulationLifecycleOrchestrator:
                     symbol=intent.symbol,
                     side=intent.side.value,
                     decision_event_at=decision_event_at,
-                    quote_evidence=quote_evidence if isinstance(quote_evidence, dict) else None,
+                    quote_evidence=quote_evidence,
                     policy=policy,
                     strategy_decision_price=price_policy.get("reference_price"),
                     strategy_decision_source="execution_plan.price_policy.reference_price",
@@ -457,6 +469,18 @@ class SimulationLifecycleOrchestrator:
                     decision_capture=capture.model_dump(mode="json"),
                 )
             except Exception as exc:  # capture is observation-only and must never roll back B0 planning.
+                if isinstance(exc, TcaCaptureDataError):
+                    reason_code = exc.reason_code
+                    message = str(exc)
+                    error_context = {
+                        "plan_id": execution_plan.plan_id,
+                        "symbol": intent.symbol,
+                        **exc.context,
+                    }
+                else:
+                    reason_code = "ADAPTIVE_IS_TCA_DECISION_CAPTURE_FAILED"
+                    message = f"{type(exc).__name__}: {exc}"
+                    error_context = {"plan_id": execution_plan.plan_id, "symbol": intent.symbol}
                 outcome = merger(
                     run_id=run.run_id,
                     expected_plan_id=execution_plan.plan_id,
@@ -465,9 +489,10 @@ class SimulationLifecycleOrchestrator:
                     capture_error=build_capture_error(
                         parent_intent_id=intent.intent_id,
                         stage="CAPTURE",
-                        reason_code="ADAPTIVE_IS_TCA_DECISION_CAPTURE_FAILED",
-                        message=f"{type(exc).__name__}: {exc}",
-                        context={"plan_id": execution_plan.plan_id, "symbol": intent.symbol},
+                        reason_code=reason_code,
+                        message=message,
+                        context=error_context,
+                        occurred_at=decision_event_at,
                     ),
                 )
             self._log_tca_capture_outcome(outcome=outcome, parent_intent_id=intent.intent_id, stage="CAPTURE")

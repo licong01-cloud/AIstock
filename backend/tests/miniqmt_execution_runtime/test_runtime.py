@@ -628,6 +628,75 @@ def test_event_loop_tca_policy_missing_is_loud_but_does_not_block_b0() -> None:
     assert result.batch_status == batch.batch_status.value
 
 
+def test_event_loop_invalid_preflight_evidence_is_durable_error_without_changing_broker_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+    policy = _event_loop_policy(
+        algo_config={
+            "tca": {
+                "benchmark_policy": {
+                    "benchmark_max_age_ms": 10_000,
+                    "arrival_forward_window_ms": 2_000,
+                    "clock_skew_tolerance_ms": 1_000,
+                    "benchmark_max_transport_latency_ms": 3_000,
+                    "policy_version": "phase0a_test_v1",
+                }
+            }
+        }
+    )
+    original_to_dict = OrderPreflightResult.to_dict
+
+    def invalid_allowed(self: OrderPreflightResult) -> dict[str, object]:
+        payload = original_to_dict(self)
+        payload["allowed"] = "false"
+        return payload
+
+    monkeypatch.setattr(OrderPreflightResult, "to_dict", invalid_allowed)
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=policy,
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_tca_invalid_evidence",
+        runtime_id="mqrt_event_loop_tca_invalid_evidence",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+        child_context_factory=lambda parent, _index: {
+            "execution_plan_id": "plan_tca_invalid_evidence",
+            "execution_plan_hash": "hash_tca_invalid_evidence",
+            "execution_plan_intent_id": parent.intent_id,
+        },
+    )
+
+    batch = qmt_repo.get_order_batch(result.batch_id or "")
+    assert batch is not None
+    sidecar = batch.metadata["tca_observation_v1"]
+    error = sidecar["capture_errors"][intent.intent_id]
+    assert error["reason_code"] == "ADAPTIVE_IS_TCA_PREFLIGHT_ALLOWED_INVALID"
+    assert error["context"]["field"] == "preflight_result.allowed"
+    assert error["context"]["raw_type"] == "str"
+    assert error["context"]["raw_value"] == "false"
+    assert error["retryable"] is False
+    assert error["terminal"] is True
+    assert error["observation_only"] is True
+    assert error["execution_gate"] is False
+    assert intent.intent_id in sidecar["arrival_capture_by_parent"]
+    assert intent.intent_id not in sidecar["managed_preflight_eligibility_by_parent"]
+    assert qmt_client.place_order_calls == []
+    assert all(item.broker_called is False for item in result.results)
+    assert result.batch_status == batch.batch_status.value
+
+
 def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient() -> None:
     runtime, repo, gateway, qmt_repo = _dependent_runtime(cash=Decimal("0"))
     sell_child = _submit_dependent_sell(runtime, qmt_repo=qmt_repo, quantity=100, price=Decimal("10"))

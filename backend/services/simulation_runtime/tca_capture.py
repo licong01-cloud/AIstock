@@ -7,6 +7,7 @@ therefore excluded from plan and request identities.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal, Mapping
@@ -34,6 +35,19 @@ class TcaCaptureConfigurationError(ValueError):
     def __init__(self, reason_code: str, message: str) -> None:
         super().__init__(message)
         self.reason_code = reason_code
+
+
+class TcaCaptureDataError(ValueError):
+    """Malformed observation data that must become a durable capture error."""
+
+    def __init__(self, reason_code: str, message: str, *, field: str, raw_value: Any) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.context = {
+            "field": str(field),
+            "raw_type": type(raw_value).__name__,
+            "raw_value": _bounded_error_value(raw_value),
+        }
 
 
 class TcaBenchmarkPolicy(BaseModel):
@@ -307,14 +321,19 @@ def build_capture_error(
     context: Mapping[str, Any] | None = None,
     occurred_at: datetime | None = None,
 ) -> dict[str, Any]:
+    raw_message = str(message)
     payload = {
         "schema_version": TCA_OBSERVATION_SCHEMA_VERSION,
         "parent_intent_id": str(parent_intent_id),
         "stage": str(stage),
         "reason_code": str(reason_code),
-        "message": str(message),
-        "context": _json_safe(dict(context or {})),
+        "message": raw_message[:2048],
+        "context": _bounded_error_context(context),
         "occurred_at": _utc(occurred_at or datetime.now(UTC)).isoformat(),
+        "retryable": False,
+        "terminal": True,
+        "observation_only": True,
+        "execution_gate": False,
     }
     return {**payload, "error_sha256": canonical_json_sha256(payload)}
 
@@ -425,7 +444,11 @@ def build_decision_benchmark_capture(
         "price_unit": TCA_PRICE_UNIT,
         "benchmark_policy_version": policy.policy_version,
         "benchmark_policy_sha256": policy.policy_sha256(),
-        "strategy_decision_price": _positive_float(strategy_decision_price),
+        "strategy_decision_price": _optional_positive_float(
+            strategy_decision_price,
+            field="strategy_decision_price",
+            reason_code="ADAPTIVE_IS_TCA_STRATEGY_DECISION_PRICE_INVALID",
+        ),
         "strategy_decision_source": _optional_text(strategy_decision_source),
         "strategy_decision_time": _utc(strategy_decision_time) if strategy_decision_time is not None else None,
         "strategy_decision_quality": _optional_text(strategy_decision_quality),
@@ -500,17 +523,64 @@ def build_preflight_eligibility_capture(
     eligibility_rule_version: str = "miniqmt_event_loop_preflight_mapping_v1",
     deadline_context: Mapping[str, Any] | None = None,
 ) -> ExecutionEligibilityCapture:
+    if not isinstance(preflight_result, Mapping):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_PREFLIGHT_PAYLOAD_INVALID",
+            "preflight_result must be a mapping",
+            field="preflight_result",
+            raw_value=preflight_result,
+        )
     result = _json_safe(dict(preflight_result))
-    allowed = bool(result.get("allowed"))
+    allowed = _required_bool(
+        result.get("allowed"),
+        field="preflight_result.allowed",
+        reason_code="ADAPTIVE_IS_TCA_PREFLIGHT_ALLOWED_INVALID",
+    )
     primary_reason = _optional_text(result.get("primary_error_code"))
-    after_cash = max(int(request_quantity_after_cash), 0)
+    before_cash = _required_non_negative_int(
+        request_quantity_before_cash,
+        field="request_quantity_before_cash",
+    )
+    after_cash = _required_non_negative_int(
+        request_quantity_after_cash,
+        field="request_quantity_after_cash",
+    )
+    if after_cash > before_cash:
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_PREFLIGHT_QUANTITY_CONFLICT",
+            "request_quantity_after_cash cannot exceed request_quantity_before_cash",
+            field="preflight_quantity",
+            raw_value={"before_cash": before_cash, "after_cash": after_cash},
+        )
+    dependent_buy = _required_bool(
+        is_dependent_buy,
+        field="is_dependent_buy",
+        reason_code="ADAPTIVE_IS_TCA_PREFLIGHT_CLASSIFICATION_INVALID",
+    )
+    capacity_residual = _required_bool(
+        is_capacity_residual,
+        field="is_capacity_residual",
+        reason_code="ADAPTIVE_IS_TCA_PREFLIGHT_CLASSIFICATION_INVALID",
+    )
+    if (allowed and (dependent_buy or capacity_residual)) or (dependent_buy and capacity_residual):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_PREFLIGHT_CLASSIFICATION_CONFLICT",
+            "preflight classification flags conflict with allowed",
+            field="preflight_classification",
+            raw_value={
+                "allowed": allowed,
+                "is_dependent_buy": dependent_buy,
+                "is_capacity_residual": capacity_residual,
+            },
+        )
+    deadline = _validated_deadline_context(deadline_context)
     if allowed:
         classification = "ELIGIBLE_NOW"
         eligible_now, conditional, ineligible = after_cash, 0, 0
-    elif is_dependent_buy:
+    elif dependent_buy:
         classification = "CONDITIONAL_ELIGIBLE"
         eligible_now, conditional, ineligible = 0, after_cash, 0
-    elif is_capacity_residual:
+    elif capacity_residual:
         classification = "EXECUTION_PREFLIGHT_INELIGIBLE"
         eligible_now, conditional, ineligible = 0, 0, after_cash
     else:
@@ -521,17 +591,17 @@ def build_preflight_eligibility_capture(
         "parent_intent_id": parent_intent_id,
         "batch_id": batch_id,
         "eligibility_as_of": _utc(eligibility_as_of),
-        "managed_request_quantity_before_cash": max(int(request_quantity_before_cash), 0),
+        "managed_request_quantity_before_cash": before_cash,
         "managed_request_quantity_after_cash": after_cash,
         "eligible_now_quantity": eligible_now,
         "conditional_eligible_quantity": conditional,
         "execution_ineligible_quantity": ineligible,
         "eligibility_class": classification,
         "eligibility_rule_version": eligibility_rule_version,
-        "deadline": (deadline_context or {}).get("deadline"),
-        "deadline_quality": str((deadline_context or {}).get("quality") or "UNRESOLVED"),
-        "deadline_reason_code": _optional_text((deadline_context or {}).get("reason_code")),
-        "schedule_window": _json_safe(dict((deadline_context or {}).get("schedule_window") or {})),
+        "deadline": deadline["deadline"],
+        "deadline_quality": deadline["quality"],
+        "deadline_reason_code": deadline["reason_code"],
+        "schedule_window": deadline["schedule_window"],
         "primary_reason_code": primary_reason,
         "dependency_parent_ids": tuple(sorted({str(item) for item in dependency_parent_ids if str(item).strip()})),
         "preflight_result": result,
@@ -548,7 +618,15 @@ def resolve_execution_deadline(*, schedule_window: Mapping[str, Any] | None, tra
         raw = window.get(key)
         if raw is None:
             continue
-        parsed = _parse_quote_time(raw, trade_date)
+        try:
+            parsed = _parse_quote_time(
+                raw,
+                trade_date,
+                field=f"schedule_window.{key}",
+                reason_code="ADAPTIVE_IS_TCA_DEADLINE_PARSE_FAILED",
+            )
+        except TcaCaptureDataError:
+            parsed = None
         if parsed is not None:
             return {
                 "deadline": parsed,
@@ -656,17 +734,37 @@ def _quote_observation(
     trade_date: date,
     received_at: datetime | None = None,
 ) -> dict[str, Any]:
+    if raw_quote is not None and not isinstance(raw_quote, Mapping):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_QUOTE_PAYLOAD_INVALID",
+            "quote evidence must be a mapping",
+            field="quote_evidence",
+            raw_value=raw_quote,
+        )
     raw = dict(raw_quote or {})
-    bid = _positive_float(_first(raw, "bid_price_1", "bidPrice1", "bid_price", "bid"))
-    ask = _positive_float(_first(raw, "ask_price_1", "askPrice1", "ask_price", "ask"))
-    if bid is None:
-        bid = _positive_float(_first_level(raw.get("bidPrice")))
-    if ask is None:
-        ask = _positive_float(_first_level(raw.get("askPrice")))
-    market_time = _parse_quote_time(_first(raw, "quote_timestamp", "market_time", "timestamp", "time", "stime", "data_time"), trade_date)
-    quote_received_at = received_at or _parse_quote_time(
-        _first(raw, "quote_received_at", "received_at", "local_received_at"),
-        trade_date,
+    bid = _optional_positive_float_alias(
+        raw,
+        field="bid_price_1",
+        aliases=("bid_price_1", "bidPrice1", "bid_price", "bid"),
+        level_alias="bidPrice",
+    )
+    ask = _optional_positive_float_alias(
+        raw,
+        field="ask_price_1",
+        aliases=("ask_price_1", "askPrice1", "ask_price", "ask"),
+        level_alias="askPrice",
+    )
+    market_time = _optional_time_alias(
+        raw,
+        field="quote_market_time",
+        aliases=("quote_timestamp", "market_time", "timestamp", "time", "stime", "data_time"),
+        trade_date=trade_date,
+    )
+    quote_received_at = _utc(received_at) if received_at is not None else _optional_time_alias(
+        raw,
+        field="quote_received_at",
+        aliases=("quote_received_at", "received_at", "local_received_at"),
+        trade_date=trade_date,
     )
     return {
         "bid_price_1": bid,
@@ -679,18 +777,38 @@ def _quote_observation(
     }
 
 
-def _parse_quote_time(value: Any, trade_date: date) -> datetime | None:
+def _parse_quote_time(
+    value: Any,
+    trade_date: date,
+    *,
+    field: str,
+    reason_code: str = "ADAPTIVE_IS_TCA_QUOTE_TIME_INVALID",
+) -> datetime | None:
     if isinstance(value, datetime):
         return _utc(value)
-    text = str(value or "").strip()
-    if not text:
+    if value is None:
         return None
+    if isinstance(value, bool):
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a supported timestamp",
+            field=field,
+            raw_value=value,
+        )
+    text = str(value).strip()
+    if not text:
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a supported timestamp",
+            field=field,
+            raw_value=value,
+        )
     normalized = text.replace("Z", "+00:00")
     try:
         if "T" in normalized or "-" in normalized:
             return _utc(datetime.fromisoformat(normalized))
     except ValueError:
-        return None
+        pass
     for fmt in ("%Y%m%d%H%M%S", "%Y%m%d%H%M%S%f"):
         try:
             return datetime.strptime(normalized, fmt).replace(tzinfo=UTC)
@@ -701,7 +819,12 @@ def _parse_quote_time(value: Any, trade_date: date) -> datetime | None:
             return datetime.combine(trade_date, datetime.strptime(normalized, fmt).time(), tzinfo=UTC)
         except ValueError:
             continue
-    return None
+    raise TcaCaptureDataError(
+        reason_code,
+        f"{field} must be a supported timestamp",
+        field=field,
+        raw_value=value,
+    )
 
 
 def _utc(value: datetime) -> datetime:
@@ -724,12 +847,207 @@ def _first_level(value: Any) -> Any:
     return value[0] if isinstance(value, (list, tuple)) and value else value
 
 
-def _positive_float(value: Any) -> float | None:
+def _optional_positive_float(
+    value: Any,
+    *,
+    field: str,
+    reason_code: str,
+) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a positive finite number",
+            field=field,
+            raw_value=value,
+        )
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a positive finite number",
+            field=field,
+            raw_value=value,
+        ) from exc
+    if not math.isfinite(number) or number <= 0:
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a positive finite number",
+            field=field,
+            raw_value=value,
+        )
+    return number
+
+
+def _optional_positive_float_alias(
+    payload: Mapping[str, Any],
+    *,
+    field: str,
+    aliases: tuple[str, ...],
+    level_alias: str,
+) -> float | None:
+    raw_aliases = _provided_aliases(payload, aliases=aliases, level_alias=level_alias)
+    parsed = {
+        alias: _optional_positive_float(
+            value,
+            field=f"{field}.{alias}",
+            reason_code="ADAPTIVE_IS_TCA_QUOTE_PRICE_INVALID",
+        )
+        for alias, value in raw_aliases.items()
+    }
+    values = [value for value in parsed.values() if value is not None]
+    if not values:
         return None
-    return number if number > 0 else None
+    if any(value != values[0] for value in values[1:]):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_QUOTE_PRICE_ALIAS_CONFLICT",
+            f"{field} aliases disagree",
+            field=field,
+            raw_value=raw_aliases,
+        )
+    return values[0]
+
+
+def _optional_time_alias(
+    payload: Mapping[str, Any],
+    *,
+    field: str,
+    aliases: tuple[str, ...],
+    trade_date: date,
+) -> datetime | None:
+    raw_aliases = _provided_aliases(payload, aliases=aliases)
+    parsed = {
+        alias: _parse_quote_time(value, trade_date, field=f"{field}.{alias}")
+        for alias, value in raw_aliases.items()
+    }
+    values = [value for value in parsed.values() if value is not None]
+    if not values:
+        return None
+    if any(value != values[0] for value in values[1:]):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_QUOTE_TIME_ALIAS_CONFLICT",
+            f"{field} aliases disagree",
+            field=field,
+            raw_value=raw_aliases,
+        )
+    return values[0]
+
+
+def _provided_aliases(
+    payload: Mapping[str, Any],
+    *,
+    aliases: tuple[str, ...],
+    level_alias: str | None = None,
+) -> dict[str, Any]:
+    provided = {alias: payload[alias] for alias in aliases if alias in payload and payload[alias] is not None}
+    if level_alias is not None and level_alias in payload and payload[level_alias] is not None:
+        raw_level = payload[level_alias]
+        if isinstance(raw_level, (list, tuple)) and not raw_level:
+            return provided
+        provided[level_alias] = _first_level(raw_level)
+    return provided
+
+
+def _required_bool(value: Any, *, field: str, reason_code: str) -> bool:
+    if not isinstance(value, bool):
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a boolean",
+            field=field,
+            raw_value=value,
+        )
+    return value
+
+
+def _required_non_negative_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_PREFLIGHT_QUANTITY_INVALID",
+            f"{field} must be a non-negative integer",
+            field=field,
+            raw_value=value,
+        )
+    return value
+
+
+def _validated_deadline_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {
+            "deadline": None,
+            "quality": "UNRESOLVED",
+            "reason_code": "ADAPTIVE_IS_TCA_DEADLINE_UNRESOLVED",
+            "schedule_window": {},
+        }
+    if not isinstance(value, Mapping):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_DEADLINE_STATUS_INVALID",
+            "deadline_context must be a mapping",
+            field="deadline_context",
+            raw_value=value,
+        )
+    quality = value.get("quality")
+    if quality not in {"RESOLVED", "UNRESOLVED"}:
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_DEADLINE_STATUS_INVALID",
+            "deadline_context.quality is invalid",
+            field="deadline_context.quality",
+            raw_value=quality,
+        )
+    deadline = value.get("deadline")
+    reason_code = _optional_text(value.get("reason_code"))
+    if quality == "RESOLVED":
+        if not isinstance(deadline, datetime) or reason_code is not None:
+            raise TcaCaptureDataError(
+                "ADAPTIVE_IS_TCA_DEADLINE_STATUS_INVALID",
+                "resolved deadline_context requires a datetime deadline and no reason_code",
+                field="deadline_context",
+                raw_value=value,
+            )
+        normalized_deadline = _utc(deadline)
+    else:
+        if deadline is not None or reason_code is None:
+            raise TcaCaptureDataError(
+                "ADAPTIVE_IS_TCA_DEADLINE_STATUS_INVALID",
+                "unresolved deadline_context requires no deadline and a reason_code",
+                field="deadline_context",
+                raw_value=value,
+            )
+        normalized_deadline = None
+    schedule_window = value.get("schedule_window")
+    if schedule_window is None:
+        schedule_window = {}
+    if not isinstance(schedule_window, Mapping):
+        raise TcaCaptureDataError(
+            "ADAPTIVE_IS_TCA_DEADLINE_STATUS_INVALID",
+            "deadline_context.schedule_window must be a mapping",
+            field="deadline_context.schedule_window",
+            raw_value=schedule_window,
+        )
+    return {
+        "deadline": normalized_deadline,
+        "quality": quality,
+        "reason_code": reason_code,
+        "schedule_window": _json_safe(dict(schedule_window)),
+    }
+
+
+def _bounded_error_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    return str(value)[:512]
+
+
+def _bounded_error_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(context, Mapping):
+        return {}
+    return {
+        str(key)[:64]: _bounded_error_value(value)
+        for key, value in list(context.items())[:20]
+    }
 
 
 def _optional_text(value: Any) -> str | None:
