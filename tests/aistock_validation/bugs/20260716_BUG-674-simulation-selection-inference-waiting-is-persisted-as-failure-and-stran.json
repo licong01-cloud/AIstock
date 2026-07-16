@@ -31,8 +31,8 @@
   "expected": "异步推理等待必须是显式非终态，不得覆盖已有有效 selection/plan 或记为业务失败；future 完成后由后续 tick 原子消费，超时才形成 typed failure，状态 API 必须暴露 in-flight identity 和 age。",
   "first_seen_at": "2026-07-16T07:19:34.430971Z",
   "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c7790b9d2aa855992f3bd312d3e54201e767229e",
+  "fixed_at": "2026-07-16T10:12:27.160206Z",
   "github_issue_number": 2218,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2218",
   "last_seen_at": "2026-07-16T07:19:34.430971Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2226",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "3e315fe8b0fc754f97da925f",
     "source_event_id": "FE-20260716-3e315fe8b0fc"
   },
+  "validation_evidence": [
+    "PR #2226 all required checks passed",
+    "F2 validator 25 design items, 0 warnings",
+    "direct simulation blocker tests and recovery negative paths passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

@@ -32,8 +32,8 @@
   "expected": "Simulation tests must provide explicit in-memory package lifecycle authority, use the current paired observation-context callback contract, and keep controlled ops ticks on the injected in-memory scheduler with no DB/broker dependency.",
   "first_seen_at": "2026-07-16T07:56:34.722691Z",
   "fix_branch": "bug/BUG-674-simulation-selection-inference-waiting-is-persis-20260716",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c7790b9d2aa855992f3bd312d3e54201e767229e",
+  "fixed_at": "2026-07-16T10:13:08.892205Z",
   "github_issue_number": 2222,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2222",
   "last_seen_at": "2026-07-16T07:56:34.722691Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2226",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -60,6 +61,11 @@
     "fingerprint": "903a35db178145c146375656",
     "source_event_id": "FE-20260716-903a35db1781"
   },
+  "validation_evidence": [
+    "PR #2226 all required checks passed",
+    "F2 validator 25 design items, 0 warnings",
+    "direct simulation blocker tests and recovery negative paths passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
