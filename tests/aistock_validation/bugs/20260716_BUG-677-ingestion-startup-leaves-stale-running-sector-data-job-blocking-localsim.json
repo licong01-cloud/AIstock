@@ -31,8 +31,8 @@
   "expected": "Startup and schedule refresh terminalize stale running jobs with established timeout semantics and allow normal retry; fresh running jobs remain untouched.",
   "first_seen_at": "2026-07-16T07:29:56.652107Z",
   "fix_branch": "bug/BUG-677-ingestion-stale-running-sector-data-20260716",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6a88b2415077bfabacd933d104044504f8a03e16",
+  "fixed_at": "2026-07-16T10:29:26.630696Z",
   "github_issue_number": 2221,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2221",
   "last_seen_at": "2026-07-16T07:29:56.652107Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2229",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "9d2b389e01fce4f1c13a6228",
     "source_event_id": "FE-20260716-9d2b389e01fc"
   },
+  "validation_evidence": [
+    "PR #2229 all required checks passed",
+    "ingestion state reconciliation 36 passed",
+    "F2 validator 25 design items, 0 warnings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
