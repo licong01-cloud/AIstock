@@ -288,6 +288,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["controlled_ops_api"] is True
     assert scheduler["manual_tick_endpoint_enabled"] is True
     assert scheduler["scheduler_control_api_enabled"] is False
+    assert scheduler["effective_runtime_health"] == "SCHEDULER_INACTIVE"
     assert scheduler["account_slot_persistence"]["enabled"] is True
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "StaticSimulationRunContextProvider"
@@ -322,9 +323,11 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
 def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
     class _EnabledSubmitScheduler:
         def status(self) -> dict[str, object]:
-            return {
-                "scheduler": "simulation_lifecycle_scheduler",
-                "default_submit": True,
+                return {
+                    "scheduler": "simulation_lifecycle_scheduler",
+                    "running": True,
+                    "thread_alive": True,
+                    "default_submit": True,
                 "sim_binding_selection_policy": "all_non_retired",
                 "miniqmt_quote_ingress_activation": {
                     "schema_version": "miniqmt_quote_ingress_activation_v1",
@@ -349,6 +352,7 @@ def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
     assert scheduler["b0_quote_v2_controllers"]["controller_count"] == 2
     assert scheduler["selection_inference"]["in_flight_count"] == 0
     assert scheduler["miniqmt_sim_runtime"]["compiler_route_retired"] is True
+    assert scheduler["effective_runtime_health"] == "NO_CURRENT_DAY_BLOCKER"
     assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
 
 

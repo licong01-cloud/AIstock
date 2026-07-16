@@ -447,10 +447,9 @@ class SimulationRuntimeOpsService:
             "last_result_errors": last_result_errors,
             "last_error_count": len(last_result_errors),
             "current_trade_date_blockers": current_trade_date_blockers,
-            "effective_runtime_health": (
-                "BLOCKED"
-                if current_trade_date_blockers["blocker_count"] > 0
-                else "NO_CURRENT_DAY_BLOCKER"
+            "effective_runtime_health": self._effective_runtime_health(
+                status=status,
+                current_trade_date_blockers=current_trade_date_blockers,
             ),
             "default_submit": default_submit,
             "approval_states": list(status.get("approval_states") or []),
@@ -513,6 +512,18 @@ class SimulationRuntimeOpsService:
                 ),
             },
         }
+
+    @staticmethod
+    def _effective_runtime_health(
+        *,
+        status: dict[str, Any],
+        current_trade_date_blockers: dict[str, Any],
+    ) -> str:
+        if current_trade_date_blockers["blocker_count"] > 0:
+            return "BLOCKED"
+        if not bool(status.get("running", False)) or not bool(status.get("thread_alive", False)):
+            return "SCHEDULER_INACTIVE"
+        return "NO_CURRENT_DAY_BLOCKER"
 
     def _current_trade_date_blockers(
         self,
