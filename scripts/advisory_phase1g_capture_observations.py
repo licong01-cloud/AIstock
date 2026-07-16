@@ -12,40 +12,28 @@ from pathlib import Path
 import sys
 from typing import Any
 
-import psycopg2
-import psycopg2.extras
+import psycopg2  # noqa: F401  # Kept for the existing CLI offline-verification contract.
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from backend.services.advisory_phase0a.policy import (
-    canonical_json_sha256,
     canonical_json_text,
 )
-from backend.services.advisory_phase1.capture_foundation import (
-    CaptureBatchStatus,
-    PostgresCaptureBatchRepository,
-)
-from backend.services.advisory_phase1.observation_capture_postgres import (
-    PostgresObservationCaptureRepository,
-)
-from backend.services.advisory_phase1.phase1g_artifact_ref import (
-    Phase1GArtifactRootBinding,
-    Phase1GImmutableArtifactResolver,
+from backend.services.advisory_phase1.phase1g_command_factory import (
+    build_phase1g_command_context,
+    verify_phase1g_attempt_database,
+    verify_phase1g_target_attempt_database,
 )
 from backend.services.advisory_phase1.phase1g_contract import (
     ATTEMPT_RECEIPT_SCHEMA_VERSION,
     BATCH_RECEIPT_SCHEMA_VERSION,
-    DEFAULT_CAPTURE_POLICY_REGISTRY,
-    PHASE1E_EXECUTION_PLAN_LAYOUT_POLICY,
-    PHASE1F2_RELEASE_RECEIPT_LAYOUT_POLICY,
     Phase1GAttemptReceipt,
     Phase1GBatchAttemptReceipt,
     Phase1GCaptureResult,
     Phase1GExecutionBatchPlan,
     Phase1GExecutionBatchRequest,
-    Phase1GInputArtifactKind,
     Phase1GOutputArtifactKind,
 )
 from backend.services.advisory_phase1.phase1g_result_store import Phase1GResultStore
@@ -57,13 +45,6 @@ from backend.services.advisory_phase1.phase1g_service import (
     Phase1GService,
 )
 from backend.services.advisory_phase1.release_schema_contract import TargetLabel
-from backend.services.advisory_phase1.source_revision_postgres import (
-    PostgresSourceRevisionRepository,
-)
-from backend.services.advisory_phase1.trace_outbox import (
-    PostgresTraceOutboxRepository,
-    TraceDeliveryEventType,
-)
 
 
 LOGGER = logging.getLogger("advisory_phase1g_capture_observations")
@@ -124,43 +105,13 @@ def _target_label(value: str) -> TargetLabel:
 
 def _service(args: argparse.Namespace) -> Phase1GService:
     target_label = _target_label(args.target_db)
-    config = Phase1GExactTargetConnectionResolver(
-        env_file=args.env_file
-    ).resolve(target_label=target_label)
-    result_root = args.result_root.expanduser().resolve(strict=True)
-    if not result_root.is_dir():
-        raise ValueError("result root must be an existing external directory")
-    resolver = Phase1GImmutableArtifactResolver(
-        bindings=(
-            Phase1GArtifactRootBinding(
-                artifact_kind=Phase1GInputArtifactKind.PHASE1F2_RELEASE_RECEIPT,
-                root=args.release_receipt_root,
-                expected_store_policy_hash=str(
-                    PHASE1F2_RELEASE_RECEIPT_LAYOUT_POLICY.layout_policy_hash
-                ),
-            ),
-            Phase1GArtifactRootBinding(
-                artifact_kind=Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN,
-                root=args.phase1e_artifact_root,
-                expected_store_policy_hash=str(
-                    PHASE1E_EXECUTION_PLAN_LAYOUT_POLICY.layout_policy_hash
-                ),
-            ),
-        )
-    )
-
-    def connect() -> Any:
-        connection = psycopg2.connect(**config.connect_kwargs())
-        connection.autocommit = False
-        return connection
-
-    return Phase1GService(
-        connection_config=config,
-        transaction_connection_factory=connect,
-        readonly_connection_factory=connect,
-        artifact_resolver=resolver,
-        result_store=Phase1GResultStore(root=result_root),
-    )
+    return build_phase1g_command_context(
+        env_file=args.env_file,
+        target_label=target_label,
+        release_receipt_root=args.release_receipt_root,
+        phase1e_artifact_root=args.phase1e_artifact_root,
+        result_root=args.result_root,
+    ).service
 
 
 def _emit(document: Any) -> None:
@@ -261,24 +212,11 @@ def _verify_attempt_db(
     config = Phase1GExactTargetConnectionResolver(
         env_file=args.env_file
     ).resolve(target_label=target_label)
-    if isinstance(receipt, Phase1GBatchAttemptReceipt):
-        for ref in receipt.target_attempt_refs:
-            stored = result_store.load_by_identity(
-                kind=Phase1GOutputArtifactKind.ATTEMPT_RECEIPT,
-                identity=ref.attempt_receipt_hash,
-            )
-            if not isinstance(stored, Phase1GAttemptReceipt):
-                raise ValueError("batch target attempt reference has wrong type")
-            if (
-                stored.target_request_hash != ref.target_request_hash
-                or stored.target_plan_hash != ref.target_plan_hash
-                or stored.operation_status is not ref.operation_status
-                or stored.capture_result_hash != ref.capture_result_hash
-            ):
-                raise ValueError("batch target attempt reference is divergent")
-            _verify_target_attempt_db(stored, result_store, config.connect_kwargs())
-        return
-    _verify_target_attempt_db(receipt, result_store, config.connect_kwargs())
+    verify_phase1g_attempt_database(
+        receipt=receipt,
+        result_store=result_store,
+        connection_config=config,
+    )
 
 
 def _verify_target_attempt_db(
@@ -286,101 +224,11 @@ def _verify_target_attempt_db(
     result_store: Phase1GResultStore,
     connect_kwargs: dict[str, Any],
 ) -> None:
-    if receipt.capture_result_ref is None:
-        return
-    stored = result_store.load(receipt.capture_result_ref)
-    if not isinstance(stored, Phase1GCaptureResult):
-        raise ValueError("target attempt result reference has wrong type")
-    connection = psycopg2.connect(**connect_kwargs)
-    try:
-        connection.set_session(
-            readonly=True, autocommit=False, isolation_level="REPEATABLE READ"
-        )
-        with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                (str(DEFAULT_CAPTURE_POLICY_REGISTRY.statement_timeout_ms),),
-            )
-            cur.execute(
-                "SELECT set_config('lock_timeout', %s, true)",
-                (str(DEFAULT_CAPTURE_POLICY_REGISTRY.lock_timeout_ms),),
-            )
-            chain = PostgresCaptureBatchRepository.read_request_chain_exact_readonly(
-                cur, stored.capture_request_hash
-            )
-            matching = tuple(
-                item
-                for item in chain
-                if item.request.capture_batch_id == stored.capture_batch_id
-            )
-            if len(matching) != 1:
-                raise ValueError("result capture batch is absent or duplicated")
-            batch = matching[0]
-            if (
-                batch.status is not CaptureBatchStatus.COMPLETE
-                or batch.capture_attempt_no != stored.capture_attempt_no
-                or batch.capture_receipt_hash != stored.capture_receipt_hash
-                or batch.membership_count != stored.membership_count
-                or batch.membership_hash != stored.membership_hash
-                or batch.request.binding.control_binding_event_hash
-                != stored.control_binding_event_hash
-            ):
-                raise ValueError("result differs from COMPLETE capture batch")
-            memberships = PostgresCaptureBatchRepository.read_memberships_exact_readonly(
-                cur, stored.capture_batch_id
-            )
-            membership_payload = [item.model_dump(mode="json") for item in memberships]
-            if (
-                len(memberships) != stored.membership_count
-                or canonical_json_sha256(membership_payload) != stored.membership_hash
-            ):
-                raise ValueError("result capture memberships are divergent")
-            source = PostgresSourceRevisionRepository.read_exact_readonly(
-                cur, stored.source_revision_set_hash
-            )
-            if source.source_revision_set_id != stored.source_revision_set_id:
-                raise ValueError("result source revision set is divergent")
-            for mapping in stored.selected_observation_mappings:
-                outbox = PostgresTraceOutboxRepository.read_exact_by_hash_readonly(
-                    cur, mapping.trace_content_hash
-                )
-                if outbox.trace_outbox_id != mapping.trace_outbox_id:
-                    raise ValueError("result trace outbox mapping is divergent")
-                bundle = PostgresObservationCaptureRepository.read_observation_rows_exact_readonly(
-                    cur,
-                    observation_version_id=mapping.observation_version_id,
-                )
-                if (
-                    bundle.canonical_signal_header["canonical_signal_id"]
-                    != mapping.canonical_signal_id
-                    or
-                    bundle.observation_version["observation_content_hash"]
-                    != mapping.observation_content_hash
-                    or bundle.lineage_identity["lineage_id"] != mapping.lineage_id
-                    or bundle.lineage_identity["lineage_content_hash"]
-                    != mapping.lineage_content_hash
-                    or canonical_json_sha256(
-                        [row["content_hash"] for row in bundle.stage_evidence_rows]
-                    )
-                    != mapping.stage_evidence_bundle_hash
-                ):
-                    raise ValueError("result observation mapping is divergent")
-                delivery = PostgresTraceOutboxRepository.read_delivery_chain_exact_readonly(
-                    cur, mapping.trace_outbox_id
-                )
-                if not any(
-                    item.request.event_type
-                    is TraceDeliveryEventType.OBSERVATION_WRITTEN
-                    and item.request.payload.get("observation_version_id")
-                    == mapping.observation_version_id
-                    and item.request.payload.get("observation_content_hash")
-                    == mapping.observation_content_hash
-                    for item in delivery
-                ):
-                    raise ValueError("result observation delivery is missing")
-        connection.rollback()
-    finally:
-        connection.close()
+    verify_phase1g_target_attempt_database(
+        receipt=receipt,
+        result_store=result_store,
+        connect_kwargs=connect_kwargs,
+    )
 
 
 def _error_document(command: str, exc: Exception) -> dict[str, Any]:

@@ -27,8 +27,8 @@ Phase 1 自有表和仓库外制品目录。
 当前状态：
 
 ```text
-design_status = g4_detailed_design_ready_after_g3_merge_2026_07_15
-implementation_status = g1_merged_pr_2158_g2_merged_pr_2167_g3_merged_pr_2178_g4_not_started
+design_status = g5_detailed_design_ready_after_g4_merge_2026_07_16
+implementation_status = g1_g4_merged_g5_code_complete_l0_l2_passed_pending_review_and_real_dev_l3_l4
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
@@ -37,9 +37,12 @@ phase1f2_standalone_f2_design = validated_and_merged_2026_07_15
 phase1f2_dev_apply_receipt = 0770cc350efc5740e563b59601be54328228dce364e7a316f5c8399415ac5fe4
 phase1f2_production_apply_receipt = c9191c4c28becae8cc4424c7bdb825fc61b2480c297fc944a8d84cd02a032a7e
 phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
-phase1g_code_start_state = ready_for_g4_implementation_after_design_acceptance
+phase1g_code_start_state = g5_code_complete_pending_user_review
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
-dev_advisory_program_count = 0_as_of_2026_07_14
+g5_detailed_design = advisory_phase1g_g5_dev_evidence_f2_design_20260716.md
+g5_dev_input_inventory = not_run
+g5_l3_transactional_dev = not_run
+g5_l4_persistent_dev = not_run
 phase1g_dev_dml = not_executed
 production_dml = none
 runtime_activation = none
@@ -51,7 +54,7 @@ Phase 1G代码必须基于Phase 1F.2 scope-aware schema实现。Phase 1F.1的详
 plan/apply/new-verify/new-exact-reapply，两个目标均为exact v2 `COMPATIBLE`。Phase 1F.2随后通过PR #2144
 和BUG修复PR #2146/#2150完成scope-aware outbox/gap identity，并在DEV与production完成
 plan/apply/new-verify/new-exact-reapply，两个目标均为exact v3 `COMPATIBLE/downstream_ready=true`。
-G0技术前置已经满足，可进入G1-G4代码、disposable PostgreSQL和事务型DEV rollback验证；真实persistent
+G0-G4已经完成代码合入和disposable PostgreSQL验证，可进入G5代码和事务型DEV rollback验证；真实persistent
 DEV L4仍必须等待single Alpha与原生multi Alpha的
 immutable DSE/receipt。禁止用fixture、复制、手写DSE或replay假装完成真实L4。
 
@@ -1194,13 +1197,21 @@ G4详细设计已于2026-07-15完成缺陷修订并通过一致性复查，冻�
 结果完全独立；existing chain复用persisted binding且零额外binding DML；不同时间生成的合法release receipts按
 distinct hash独立验证，不设置batch-wide相等门禁；capture duration/statement/lock bounds全部消费；DB COMPLETE、
 result/attempt/batch store failure均按真实事实恢复，不引入hidden retry、global pool、角色、审批、授权或备份
-门禁。当前仅为`design_ready / implementation_not_started`，未执行G4 DML或runtime activation。
+门禁。G4代码已由PR #2191合入，merge commit为
+`81c8d85e3b23493dc502a6f4c632603ae2fea1f3`；F-800至F-840实现、直接相关测试和GitHub CI均通过。
+该状态未执行DEV/production DML或runtime activation，也不代表G5完成。
 
 ### G5：DEV Evidence
 
+- 唯一实施级详细设计：`advisory_phase1g_g5_dev_evidence_f2_design_20260716.md`；
 - transactional DEV zero-residue validation；
 - real dual-track inputs存在时执行 persistent L4；不存在则准确保留 pending状态；
 - 更新实现矩阵和父级文档。
+
+G5详细设计冻结F-841至F-878：先做read-only inventory，再通过validation-only owner transaction执行完整G4图并
+physical rollback/fresh readback证明零残留；L4只使用真实持久dual-track输入和正常G4短事务。当前代码与L0-L2已完成，
+disposable PostgreSQL已跑通完整G4 rollback-only与single/native-multi persistent双轨；真实DEV inventory、L3、L4均未执行，
+不得以L2冒充真实DEV evidence。
 
 每批必须完整实现自己的设计条目，不得以 placeholder/in-memory-only/fixture-only交付冒充完成。
 
@@ -1310,9 +1321,9 @@ result/attempt/batch store failure均按真实事实恢复，不引入hidden ret
 4. F2 validator、文档引用和`git diff --check`通过。
 5. 无额外角色、审批、授权、备份、shared runtime或DDL设计。
 
-Phase 1G业务代码开始条件已经满足：G0 Phase 1F.2独立设计、代码、disposable PostgreSQL矩阵以及
-DEV/production plan/apply/new-verify/new-exact-reapply均已完成。可直接进入G1-G4，不需要角色、审批或
-人工业务门禁。真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable DSE/receipt。
+Phase 1G G5代码开始条件已经满足：G0 Phase 1F.2和G1-G4均已合入，G4直接相关矩阵与GitHub CI通过。
+下一步按G5详细设计实现inventory、rollback coordinator和DEV evidence receipts，不需要角色、审批或人工业务门禁。
+真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable DSE/receipt。
 
 Phase 1G分批代码可请求合入的条件：
 
@@ -1321,8 +1332,8 @@ Phase 1G分批代码可请求合入的条件：
 3. 没有用fixture/in-memory-only结果冒充persistent real input完成或越级声明后续G批次完成。
 4. production state准确报告，代码合入不执行生产DDL/DML或runtime activation。
 
-Phase 1G整体代码完成条件仍为G0-G4完整实现、L0-L2与transactional DEV zero-residue验证通过；分批
-合入只是隔离已完成契约基础，不降低整个功能或persistent DEV验收标准。
+Phase 1G整体代码完成条件仍为G0-G5实现和L0-L2通过；DEV evidence完成还要求transactional DEV zero-residue
+与真实persistent dual-track L4分别通过。分批合入不降低整个功能或persistent DEV验收标准。
 
 Phase 1G功能完成条件：真实single/multi Alpha persistent DEV L4均成功、exact rerun一致，并产生可供
 Phase 1H消费的immutable receipts。若真实输入仍缺失，只能报告

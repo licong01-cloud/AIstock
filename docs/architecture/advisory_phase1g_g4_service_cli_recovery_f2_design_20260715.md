@@ -28,18 +28,18 @@ Phase 1G result root。
 
 ~~~text
 design_tier = F2
-design_status = design_ready_after_defect_remediation_2026_07_15
-implementation_status = implementation_complete_pending_user_merge_confirmation
+design_status = implemented_and_merged_2026_07_16
+implementation_status = merged_pr_2191_merge_commit_81c8d85e3b23493dc502a6f4c632603ae2fea1f3
 g3_dependency = merged_pr_2178_merge_commit_71d3486d
 ddl_pending = none
-dml_pending = none_for_design
-dev_validation = disposable_postgresql_only_no_dev_database_dml
+dml_pending = none_for_g4_delivery
+dev_validation = disposable_postgresql_l2_passed_no_dev_database_dml
 production_dml = not_executed
 runtime_activation = none
 role_or_approval_gate = none
 ~~~
 
-本文冻结 G4 的实现范围和验收语义，不表示 G4 代码、G5 DEV evidence、Phase 1G 整体功能或生产运行已经完成。
+本文冻结的G4代码已由PR #2191合入；该事实不表示G5 DEV evidence、Phase 1G整体功能或生产运行已经完成。
 
 ## 2. 目标
 
