@@ -29,8 +29,8 @@
   "expected": "AIstock monitoring scripts perform no GPU, VRAM, NVML, CUDA allocator, or nvidia-smi resource queries; V25 monitor remains useful through process, log, output, and evaluation status only.",
   "first_seen_at": "2026-07-16T19:19:31.489439Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ef297d78c46c918439aa589ca66cf18d33b9b220",
+  "fixed_at": "2026-07-16T19:34:51.148822Z",
   "github_issue_number": 2248,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2248",
   "last_seen_at": "2026-07-16T19:19:31.489439Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2249",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "rl_execution"
   ],
@@ -58,6 +59,11 @@
     "fingerprint": "821ac13c99c8c515fafa3b0b",
     "source_event_id": "FE-20260716-821ac13c99c8"
   },
+  "validation_evidence": [
+    "local ignored v25_monitor.sh GPU section removed; no nvidia-smi or GPU/VRAM query remains",
+    "WSL bash -n v25_monitor.sh passed",
+    "nox l0, validation_module_registry_l0 and CI passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
