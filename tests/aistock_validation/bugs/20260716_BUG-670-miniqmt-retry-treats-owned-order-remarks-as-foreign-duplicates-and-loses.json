@@ -31,8 +31,8 @@
   "expected": "Runtime-owned duplicate remarks resolve through idempotent readback and reconciliation without a second broker call; foreign duplicates fail loudly. Strategy-slot T+1 availability is reconstructed from authoritative broker and ledger lineage before preflight.",
   "first_seen_at": "2026-07-16T02:26:38.480059Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dbe8b4bb8c76f278c80f89417a9e99436c162231",
+  "fixed_at": "2026-07-16T06:35:45.483734Z",
   "github_issue_number": 2209,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2209",
   "last_seen_at": "2026-07-16T02:26:38.480059Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2214",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +60,13 @@
     "fingerprint": "9902b3550ebb7034870c3441",
     "source_event_id": "FE-20260716-9902b3550ebb"
   },
+  "validation_evidence": [
+    "supplement direct matrix -> 10 passed",
+    "wait fingerprint tamper recovery -> 1 passed",
+    "nox l0 -> passed blocking=0",
+    "nox validation_module_registry_l0 -> 8 passed",
+    "PR #2214 required CI -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

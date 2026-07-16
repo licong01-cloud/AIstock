@@ -33,8 +33,8 @@
   "expected": "Read-only diagnostics expose one canonical runtime authority with durable ack, freshness, callback progress, writer health, controller health, gateway and OMS state; legacy status is explicitly retired or labeled non-authoritative.",
   "first_seen_at": "2026-07-16T02:28:07.739843Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dbe8b4bb8c76f278c80f89417a9e99436c162231",
+  "fixed_at": "2026-07-16T06:36:38.777948Z",
   "github_issue_number": 2211,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2211",
   "last_seen_at": "2026-07-16T02:28:07.739843Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2214",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -61,6 +62,13 @@
     "fingerprint": "f83c7cc20428b220311762cb",
     "source_event_id": "FE-20260716-f83c7cc20428"
   },
+  "validation_evidence": [
+    "supplement direct matrix -> 10 passed",
+    "wait fingerprint tamper recovery -> 1 passed",
+    "nox l0 -> passed blocking=0",
+    "nox validation_module_registry_l0 -> 8 passed",
+    "PR #2214 required CI -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
