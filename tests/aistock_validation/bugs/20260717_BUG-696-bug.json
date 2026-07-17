@@ -40,8 +40,8 @@
   "expected": "只有可绑定commit和plan/test结果的轻量receipt可作为通过证据；人工门禁明确标记manual而非enabled自动测试；依赖更新验证实际依赖；纯收集/历史计数不计入质量通过；保持最小本地门而不重复运行宽矩阵。",
   "first_seen_at": "2026-07-17T03:22:23.195540Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f8fca6d79193b14fe7d738084d4d62b1be145d2f",
+  "fixed_at": "2026-07-17T17:28:33.722723Z",
   "github_issue_number": 2277,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2277",
   "last_seen_at": "2026-07-17T03:22:23.195540Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2324",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -72,6 +73,9 @@
     "fingerprint": "22bfcbb7a8e883160583c6de",
     "source_event_id": "FE-20260717-22bfcbb7a8e8"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 37 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
