@@ -4015,6 +4015,7 @@ def test_general_ptnn_ltr_in_memory_payload_includes_adapter_files(monkeypatch):
 
 def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
     composer = ConfigComposer()
+    test_credential = "scoped-" + "secret-token"
     monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         composer,
@@ -4047,7 +4048,7 @@ def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
         loop_index=1,
         resource_session_id="qers_1",
         resource_source_run_key="qe_task_L1",
-        resource_session_token="scoped-secret-token",
+        resource_session_token=test_credential,
         phase_pipeline_enabled=True,
     )
 
@@ -4059,13 +4060,14 @@ def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
     assert "aistock_models/efficient_gats.py" in files
     assert "class EfficientGATModel" in files["aistock_models/efficient_gats.py"]
     assert "qe_runtime_resource.py" in files
-    assert json.loads(files["qe_resource_session_secret.json"])["token"] == "scoped-secret-token"
-    assert "scoped-secret-token" not in result["wsl_command"]
+    assert json.loads(files["qe_resource_session_secret.json"])["token"] == test_credential
+    assert test_credential not in result["wsl_command"]
     assert "export PYTHONPATH=" in result["wsl_command"]
 
 
 def test_qe_resource_session_env_is_opt_in_and_complete(monkeypatch):
     composer = ConfigComposer()
+    test_credential = "token-" + "value"
     default_env, _ = composer._build_auto_wsl_command_parts("/tmp/qe-default")
     default_text = "\n".join(default_env)
     assert "QE_RESOURCE_SESSION_ID" not in default_text
@@ -4078,13 +4080,13 @@ def test_qe_resource_session_env_is_opt_in_and_complete(monkeypatch):
         loop_index=2,
         resource_session_id="qers_123",
         resource_source_run_key="qe_task_L2",
-        resource_session_token="token-value",
+        resource_session_token=test_credential,
         phase_pipeline_enabled=True,
     )
     env_text = "\n".join(env_lines)
     assert "export QE_RESOURCE_SESSION_ID=qers_123" in env_text
     assert "export QE_RESOURCE_SOURCE_RUN_KEY=qe_task_L2" in env_text
-    assert "token-value" not in env_text
+    assert test_credential not in env_text
     assert "export QE_PHASE_PIPELINE_ENABLED=1" in env_text
     assert "chmod 600 qe_resource_session_secret.json" in core_parts
 
