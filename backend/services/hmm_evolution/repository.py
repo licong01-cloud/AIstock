@@ -13,7 +13,9 @@ from psycopg2.extras import Json, RealDictCursor
 from backend.db.pg_pool import get_conn
 
 from .errors import (
+    BatchNotFoundError,
     CandidateNotFoundError,
+    EvaluationNotFoundError,
     IdempotencyConflictError,
     InvalidStateTransitionError,
     SchemaUnavailableError,
@@ -455,14 +457,42 @@ class HMMEvolutionRepository:
                 )
                 batch = cursor.fetchone()
                 if batch is None:
-                    raise InvalidStateTransitionError(
+                    raise BatchNotFoundError(
                         "batch was not found",
                         context={"batch_id": batch_id},
                     )
                 cursor.execute(
                     """
-                    SELECT * FROM hmm_evolution.batch_test_item
-                    WHERE batch_id = %s ORDER BY ordinal ASC
+                    SELECT item.*,
+                           candidate.display_name AS candidate_display_name,
+                           candidate.source_type AS candidate_source_type,
+                           candidate.lifecycle_status AS candidate_lifecycle_status,
+                           evaluation.status AS evaluation_status,
+                           evaluation.label_horizon_days,
+                           evaluation.as_of_date,
+                           evaluation.window_start,
+                           evaluation.window_end,
+                           evaluation.trading_days_count,
+                           evaluation.changed_day_count,
+                           evaluation.label_comparable_day_count,
+                           evaluation.db_comparable_day_count,
+                           evaluation.replacement_count,
+                           evaluation.primary_coverage_ratio,
+                           evaluation.net_label_return,
+                           evaluation.net_db_10d,
+                           evaluation.positive_net_label_day_ratio,
+                           evaluation.evidence_quality,
+                           evaluation.warnings_json,
+                           evaluation.error_message AS evaluation_error_message,
+                           evaluation.reason_code AS evaluation_reason_code,
+                           evaluation.started_at AS evaluation_started_at,
+                           evaluation.completed_at AS evaluation_completed_at
+                    FROM hmm_evolution.batch_test_item AS item
+                    JOIN hmm_evolution.candidate AS candidate
+                      ON candidate.candidate_id = item.candidate_id
+                    JOIN hmm_evolution.offline_evaluation AS evaluation
+                      ON evaluation.eval_id = item.eval_id
+                    WHERE item.batch_id = %s ORDER BY item.ordinal ASC
                     """,
                     (batch_id,),
                 )
@@ -470,6 +500,60 @@ class HMMEvolutionRepository:
         payload = dict(batch)
         payload["items"] = items
         return payload
+
+    def get_evaluation(self, eval_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT evaluation.*,
+                           candidate.display_name AS candidate_display_name,
+                           candidate.source_type AS candidate_source_type,
+                           candidate.lifecycle_status AS candidate_lifecycle_status
+                    FROM hmm_evolution.offline_evaluation AS evaluation
+                    JOIN hmm_evolution.candidate AS candidate
+                      ON candidate.candidate_id = evaluation.candidate_id
+                    WHERE evaluation.eval_id = %s
+                    """,
+                    (eval_id,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise EvaluationNotFoundError(
+                "evaluation was not found",
+                context={"eval_id": eval_id},
+            )
+        return dict(row)
+
+    def list_evaluations(
+        self,
+        *,
+        candidate_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500 or offset < 0:
+            raise ValueError("evaluation pagination is out of range")
+        where = "WHERE evaluation.candidate_id = %s" if candidate_id else ""
+        params: list[Any] = [candidate_id] if candidate_id else []
+        params.extend((limit, offset))
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT evaluation.*,
+                           candidate.display_name AS candidate_display_name,
+                           candidate.source_type AS candidate_source_type
+                    FROM hmm_evolution.offline_evaluation AS evaluation
+                    JOIN hmm_evolution.candidate AS candidate
+                      ON candidate.candidate_id = evaluation.candidate_id
+                    {where}
+                    ORDER BY evaluation.created_at DESC, evaluation.eval_id ASC
+                    LIMIT %s OFFSET %s
+                    """,  # noqa: S608 - where is selected from one fixed clause.
+                    tuple(params),
+                )
+                return [dict(row) for row in cursor.fetchall()]
 
     def list_batches(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500 or offset < 0:
@@ -715,7 +799,7 @@ class HMMEvolutionRepository:
                 )
                 batch = cursor.fetchone()
                 if batch is None:
-                    raise InvalidStateTransitionError(
+                    raise BatchNotFoundError(
                         "batch was not found", context={"batch_id": batch_id}
                     )
                 if batch["status"] in TERMINAL_BATCH_STATUSES:
@@ -869,7 +953,12 @@ class HMMEvolutionRepository:
                     (batch_id,),
                 )
                 original = cursor.fetchone()
-                if original is None or original["status"] not in TERMINAL_BATCH_STATUSES:
+                if original is None:
+                    raise BatchNotFoundError(
+                        "batch was not found",
+                        context={"batch_id": batch_id},
+                    )
+                if original["status"] not in TERMINAL_BATCH_STATUSES:
                     raise InvalidStateTransitionError(
                         "retry requires a terminal source batch",
                         context={"batch_id": batch_id},

@@ -401,6 +401,17 @@ def get_model_path(snapshot_id: str):
     return {"model_path": path}
 
 
+# Keep main.py unchanged while exposing the independent research API beside
+# the existing /hmm-training prefix.  Rebinding happens only after every
+# training route above has been registered on the original router.
+_training_router = router
+from . import hmm_evolution as _hmm_evolution  # noqa: E402
+
+router = APIRouter()
+router.include_router(_training_router)
+router.include_router(_hmm_evolution.router)
+
+
 
 # ---------------------------------------------------------------------------
 # APScheduler 滚动训练调度 (Task 8.2)

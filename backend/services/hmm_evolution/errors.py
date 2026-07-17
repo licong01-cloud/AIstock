@@ -149,6 +149,11 @@ class QEAssetCatalogIncompleteError(HMMEvolutionError):
     http_status = 503
 
 
+class QEAssetTooLargeError(HMMEvolutionError):
+    reason_code = "hmm_evolution_qe_asset_too_large"
+    http_status = 413
+
+
 class ArtifactManifestInvalidError(HMMEvolutionError):
     reason_code = "hmm_evolution_artifact_manifest_invalid"
     http_status = 422
@@ -194,6 +199,16 @@ class CandidateNotFoundError(HMMEvolutionError):
     http_status = 404
 
 
+class BatchNotFoundError(HMMEvolutionError):
+    reason_code = "hmm_evolution_batch_not_found"
+    http_status = 404
+
+
+class EvaluationNotFoundError(HMMEvolutionError):
+    reason_code = "hmm_evolution_evaluation_not_found"
+    http_status = 404
+
+
 class InvalidStateTransitionError(HMMEvolutionError):
     reason_code = "hmm_evolution_invalid_state_transition"
     http_status = 409
@@ -211,4 +226,9 @@ class StaleFencingTokenError(HMMEvolutionError):
 
 class SchemaUnavailableError(HMMEvolutionError):
     reason_code = "hmm_evolution_schema_unavailable"
+    http_status = 503
+
+
+class RuntimeDisabledError(HMMEvolutionError):
+    reason_code = "hmm_evolution_runtime_disabled"
     http_status = 503
