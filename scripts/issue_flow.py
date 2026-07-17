@@ -1046,6 +1046,36 @@ def _has_design_acceptance_matrix(*values: str) -> bool:
     return any(re.search(pattern, combined, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _infer_pr_body_allowed_scope(pr_body: str) -> list[str]:
+    """Read a narrow, auditable Markdown scope section from feature PR metadata."""
+
+    lines = str(pr_body or "").splitlines()
+    in_scope_section = False
+    scope: list[str] = []
+    for line in lines:
+        heading = re.match(r"^\s*#{2,6}\s+(.+?)\s*$", line)
+        if heading:
+            title = heading.group(1).strip().lower().replace("_", " ")
+            in_scope_section = title == "allowed write scope"
+            continue
+        if not in_scope_section:
+            continue
+        item = re.match(r"^\s*[-*]\s+(.+?)\s*$", line)
+        if item is None:
+            continue
+        candidate = item.group(1).strip().strip("`").replace("\\", "/")
+        if (
+            not candidate
+            or candidate in {"*", "**", "/"}
+            or candidate.startswith("/")
+            or re.match(r"^[a-zA-Z]:/", candidate)
+            or any(part == ".." for part in candidate.split("/"))
+        ):
+            continue
+        scope.append(candidate)
+    return _unique_strings(scope)
+
+
 def _normalize_severity(value: Any) -> str | None:
     if value is None:
         return None
@@ -1070,6 +1100,7 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
     commit_subjects = _git_output(["log", "--format=%s%n%b", f"{base}...{head}"], check=False)
     pr_title = os.environ.get("AISTOCK_PR_TITLE", "")
     pr_body = os.environ.get("AISTOCK_PR_BODY", "")
+    pr_body_allowed_scope = _infer_pr_body_allowed_scope(pr_body)
     bug_json_paths = [
         path
         for path in changed_files
@@ -1118,6 +1149,7 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
     inferred_scope: list[str] = []
     for record in bug_records:
         inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
+    inferred_scope.extend(pr_body_allowed_scope)
     if bug_json_paths:
         inferred_scope.extend(bug_json_paths)
         inferred_scope.append("tests/aistock_validation/bugs/**")
@@ -1135,6 +1167,7 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "bug_id_signals": bug_id_signals,
         "closing_issue_refs": _infer_closing_issue_refs_from_text(pr_title, pr_body, commit_subjects),
         "inferred_allowed_scope": _unique_strings(inferred_scope),
+        "pr_body_allowed_scope": pr_body_allowed_scope,
         "severity_signals": _unique_strings(bug_record_severity_signals + pr_text_severity_signals),
         "bug_record_severity_signals": bug_record_severity_signals,
         "pr_text_severity_signals": pr_text_severity_signals,
@@ -1381,7 +1414,15 @@ def build_pr_quality(
     scope = record_scope or inferred_scope
     if scope:
         scope_result = scope_check(changed_files, [str(item) for item in scope])
-        scope_result["status_source"] = "issue_record" if record_scope else "inferred_from_bug_json"
+        if record_scope:
+            status_source = "issue_record"
+        elif inferred.get("bug_json_paths") and inferred.get("pr_body_allowed_scope"):
+            status_source = "inferred_from_bug_json_and_pr_body"
+        elif inferred.get("bug_json_paths"):
+            status_source = "inferred_from_bug_json"
+        else:
+            status_source = "inferred_from_pr_body"
+        scope_result["status_source"] = status_source
     elif issue_record:
         scope_result = {
             "status": "missing_scope",
@@ -1423,6 +1464,7 @@ def build_pr_quality(
             "branch": inferred["branch"],
             "bug_json_paths": inferred["bug_json_paths"],
             "pr_metadata_present": inferred["pr_metadata_present"],
+            "pr_body_allowed_scope": inferred["pr_body_allowed_scope"],
             "severity_signals": inferred["severity_signals"],
             "bug_record_severity_signals": inferred["bug_record_severity_signals"],
             "pr_text_severity_signals": inferred["pr_text_severity_signals"],
