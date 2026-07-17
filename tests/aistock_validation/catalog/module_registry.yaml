@@ -87,6 +87,15 @@ modules:
     test_plans:
       required_on_change: [l0, qe_archive_backend]
       recommended: [qe_archive_l3, qe_archive_data_quality]
+  - module_id: miniqmt_execution_runtime
+    display_name: MiniQMT Execution Runtime
+    module_type: product_feature
+    risk_level: critical
+    description: Canonical MiniQMT event-loop execution, durable parent and child state, real tick driving, and broker synchronization.
+    description_zh: 覆盖 MiniQMT 唯一 event-loop 执行链路、持久化 parent/child 状态、真实 tick 驱动和 broker 同步。
+    test_plans:
+      required_on_change: [l0, miniqmt_execution_runtime_l2]
+      recommended: [miniqmt_sim_stub_l3]
   - module_id: paper_v2
     display_name: Paper Trading v2
     module_type: product_feature

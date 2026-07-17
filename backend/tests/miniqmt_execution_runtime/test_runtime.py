@@ -711,7 +711,7 @@ def test_event_loop_durable_batch_replay_rejects_corruption_without_shift_or_pad
     assert len(qmt_client.place_order_calls) == initial_broker_calls
 
 
-def test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch() -> None:
+def test_event_loop_submit_no_child_order_persists_explicit_pending_batch_without_silent_success() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
     client = MiniQMTExecutionRuntimeClient(
         repository=repo,
@@ -719,31 +719,56 @@ def test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch() ->
         runtime_kind="event_loop",
     )
 
-    with pytest.raises(BrokerSubmitError) as exc_info:
-        client.submit_event_loop_vnpy_parent_intents(
-            parent_intents=[intent],
-            policy_context=_event_loop_policy(
-                "TWAP_LITE_MINIQMT",
-                {"time": 60, "interval": 60},
-            ),
-            account_group_id="acct_event_loop",
-            trade_date=TRADE_DATE,
-            runtime_config_hash="runtime_hash_event_loop_no_child",
-            runtime_id="mqrt_event_loop_no_child",
-            strategy_slot_id="slot_event_loop",
-            qmt_client=qmt_client,
-            strategy_name="strategy_event_loop",
-            order_remark_prefix="evtloop",
-            account_id="acct_event_loop",
-        )
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=_event_loop_policy(
+            "TWAP_LITE_MINIQMT",
+            {"time": 60, "interval": 60},
+        ),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_no_child",
+        runtime_id="mqrt_event_loop_no_child",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
 
-    context = exc_info.value.context
-    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER"
-    assert context["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
-    assert context["broker_called"] is False
-    assert context["submitted_intents"] == 0
-    assert context["failed_intents"] == 1
-    assert context["missing_parent_intent_ids"] == [intent.intent_id]
+    payload = result.to_dict()
+    pending_result = result.results[0]
+    batch = qmt_repo.get_order_batch(result.batch_id or "")
+    algo_instances = repo.list_algo_instances("mqrt_event_loop_no_child", active_only=False)
+    child_orders = repo.list_child_orders("mqrt_event_loop_no_child", active_only=False)
+
+    assert result.success is True
+    assert result.total == 1
+    assert result.succeeded == 0
+    assert result.failed == 0
+    assert result.batch_status == OrderBatchStatus.SUBMITTING.value
+    assert result.preflight_passed is True
+    assert result.compensation_required is False
+    assert payload["pending"] == 1
+    assert payload["pending_child_trigger_count"] == 1
+    assert payload["triggered_child_order_count"] == 0
+    assert pending_result.success is False
+    assert pending_result.preflight.allowed is True
+    assert pending_result.preflight.errors == ()
+    assert pending_result.broker_called is False
+    assert pending_result.qmt_order_id is None
+    assert "pending tick trigger" in str(pending_result.broker_message).lower()
+    assert batch is not None
+    assert batch.batch_status is OrderBatchStatus.SUBMITTING
+    assert batch.metadata["event_loop_pending"] is True
+    assert batch.metadata["event_loop_pending_count"] == 1
+    assert batch.metadata["triggered_child_order_count"] == 0
+    assert batch.metadata["broker_called"] is False
+    assert batch.result_json["results"] == [pending_result.to_dict()]
+    assert len(algo_instances) == 1
+    assert algo_instances[0].status is MiniQMTAlgoInstanceStatus.ACTIVE
+    assert algo_instances[0].parent_intent_id == intent.intent_id
+    assert child_orders == []
     assert qmt_client.place_order_calls == []
 
 

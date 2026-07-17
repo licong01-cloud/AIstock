@@ -160,9 +160,27 @@ def test_plan_runtime_and_algo_readback_preserve_the_same_assignment() -> None:
     assert parsed.canonical_payload() == plan_quote_control["assignments"][0]
 
 
-def test_historical_binding_without_quote_control_preserves_legacy_plan_identity() -> None:
-    _release, _binding, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.MINIQMT_SIM)
+def test_compiled_miniqmt_plan_preserves_exact_b0_quote_control_identity() -> None:
+    _release, binding, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.MINIQMT_SIM)
 
-    assert "quote_control" not in plan.plan_payload_json
-    assert all("quote_control_assignment" not in intent.metadata for intent in plan.intents)
+    quote_control = plan.plan_payload_json["quote_control"]
+    assert binding.binding_config_json[QUOTE_CONTROL_BINDING_KEY] == {
+        "schema_version": QUOTE_CONTROL_BINDING_SCHEMA_VERSION,
+        "control_revision": ControlRevision.B0_QUOTE_V2.value,
+    }
+    assert quote_control["binding"] == binding.binding_config_json[QUOTE_CONTROL_BINDING_KEY]
+    assignments_by_parent = {
+        assignment["parent_intent_id"]: assignment for assignment in quote_control["assignments"]
+    }
+    assert set(assignments_by_parent) == {intent.intent_id for intent in plan.intents}
+    assert all(
+        intent.metadata["quote_control_assignment"] == assignments_by_parent[intent.intent_id]
+        for intent in plan.intents
+    )
+    assert all(
+        assignment["control_revision"] == ControlRevision.B0_QUOTE_V2.value
+        and assignment["binding_id"] == binding.binding_id
+        and assignment["binding_hash"] == binding.binding_hash
+        for assignment in assignments_by_parent.values()
+    )
     assert canonical_json_sha256(plan.plan_payload_json) == plan.plan_hash
