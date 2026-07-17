@@ -34,8 +34,8 @@
   "expected": "选择任一分类时按 watchlist_item_categories 的真实 added_at、entry_date_snapshot、entry_price_snapshot 展示和计算；全部分类视图不以初次入池作为分类收益；不得静默回退。",
   "first_seen_at": "2026-07-17T05:23:13.983623Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "940894c8ca872359af1a88ef35219d8f7cba1a0c",
+  "fixed_at": "2026-07-17T06:41:58.360631Z",
   "github_issue_number": 2292,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2292",
   "last_seen_at": "2026-07-17T05:23:13.983623Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2303",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "watchlist"
   ],
@@ -94,6 +95,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "local focused matrix: 13 pytest passed; tsc, lint, ruff, Playwright 3 passed; l0 and module registry passed; PR CI 19 passed"
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {

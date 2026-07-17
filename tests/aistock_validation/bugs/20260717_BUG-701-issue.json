@@ -32,8 +32,8 @@
   "expected": "选择任意支持字段和升降序后，当前分类完整列表按刷新后的有效值稳定排序；加入时间按当前分类加入时间；重复关系不产生重复 React key；每个字段有可执行行顺序验收。",
   "first_seen_at": "2026-07-17T05:24:47.593902Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "940894c8ca872359af1a88ef35219d8f7cba1a0c",
+  "fixed_at": "2026-07-17T06:42:05.314396Z",
   "github_issue_number": 2294,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2294",
   "last_seen_at": "2026-07-17T05:24:47.593902Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2303",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "watchlist"
   ],
@@ -91,6 +92,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "local focused matrix: 13 pytest passed; tsc, lint, ruff, Playwright 3 passed; l0 and module registry passed; PR CI 19 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
