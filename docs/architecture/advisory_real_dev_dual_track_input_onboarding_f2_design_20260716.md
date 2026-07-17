@@ -24,7 +24,7 @@ scheduler 或审批系统。
 
 ```text
 design_status = design_ready
-o4_design_revision_status = updated_20260718_pending_user_merge_confirmation
+o4_design_revision_status = revised_20260718_admitted_input_projection_no_secondary_package_validation
 o1_implementation_status = merged_pr_2231
 o2_implementation_status = merged_pr_2261_runtime_validated
 o3_implementation_status = merged_pr_2351_l0_l2_and_design_compliance_verified
@@ -37,7 +37,9 @@ o3_real_dev_persistent_execution = not_executed
 o3_statement_coverage = 84_percent
 o3_branch_coverage = 74_percent
 o3_feature_workflow_validation = f2_pass_38_of_38_zero_warning
-o4_o5_implementation_status = not_started
+o4_design_feature_workflow_validation = f2_pass_39_of_39_zero_warning
+o4_implementation_status = development_started_not_merged
+o5_implementation_status = not_started
 dev_database = real_dual_track_package_closure_imported
 production_database = read_only_source_only
 production_ddl = none_for_this_design
@@ -157,6 +159,11 @@ portable bundle只读取StrategyPackage数据库身份和资产闭包。DEV证�
 AdvisoryProgram与Selection producer，并显式注入DEV repositories；Advisory service模块、Phase1E/G5和现有运行时
 均不得import该编排脚本或形成反向依赖。编排不得修改Selection算法、validator、排名、过滤或target构造。
 
+O1/O2 对 portable bundle 的 row/blob SHA readback只证明跨库复制内容与已经准入的source package一致，属于一次性传输
+完整性校验，不是重新执行package admission、资产健康检查或模型可用性判定。DEV package closure导入并完成fresh readback后，
+O3/O4以及今后每日荐股不得再次执行这组asset closure/blob validation；它们只消费dated binding、frozen manifest identity和
+§7.9.1 的纯input projection。
+
 ### 5.4 Data boundary
 
 import 只允许以下固定关系，并且只允许 request 闭包中的 exact rows：
@@ -188,7 +195,8 @@ explicit source package ids + target DEV Program specs
   -> one DEV transaction: package closure INSERT-or-compare only
   -> fresh DEV readback receipt
   -> normal DEV AdvisoryProgram service creates Program + dated binding
-  -> before completed decision cutoff: build pre-observation scope from historical request/package/binding/preflight
+  -> project exact source inputs from admitted manifest metadata only; no package revalidation or asset loading
+  -> before completed decision cutoff: build pre-observation scope from historical request/package/binding/input projection
   -> after real DEV ingestion and before cutoff: Phase 1D observer appends physical source facts
   -> normal DEV Selection producer creates DSE v2 with ADVISORY_RUN context
   -> existing historical research runner on exact DEV connection
@@ -399,6 +407,8 @@ build_request_hash
 `program_dates[]` 从 O3 receipt 的逐 Program 结果逐项生成；不能只依据顶层 batch status，也不能按 package 名称、
 当前 binding、当前 enabled 状态或目录内容补全。`COMPLETE` 条目必须具有完整historical Program identity；非 COMPLETE
 条目保留原始status/reasons并进入最终bundle的`IDENTITY_PENDING/BLOCKED` Program unit，但不得生成伪造的Phase1E request。
+`Phase1ERealInputBuildRequest` 本身必须以 `real_input_build_request` kind 写入 O4 CAS；其 ref/hash 是后续
+`Phase1ERealInputBundle` 的直接依赖，不得用 `phase1e_batch_request`、手写路径或仅有 hash 的占位对象替代。
 
 ### 7.9 `AdvisorySourceMappingRegistry`
 
@@ -455,11 +465,76 @@ multi-day window必须展开为有序daily requirements，不使用一个聚合w
 state/audit/hash冲突时blocked。capacity probe遇到无`trade_date`列的as-of source时使用registry的nullable
 `capacity_date_column`和bounded sample policy，不得硬编码查询`trade_date`或把该source静默跳过。
 
+### 7.9.1 `StrategyPackageAdvisoryInputProjectionV1`
+
+O4 在 prospective Selection 前需要 exact single/native-multi leg factor order 与 required window，但该需求不得演变为
+策略包二次准入、资产复验或新的运行门禁。实现固定增加一个纯只读、无 I/O 的
+`StrategyPackageAdvisoryInputProjectionV1`：
+
+```text
+schema_version = strategy_package_advisory_input_projection_v1
+projection_source = ADMITTED_MANIFEST_ONLY
+package_id/manifest_sha256/alpha_mode
+selection_query_contract_id/version/hash
+legs[] {
+  alpha_component_id
+  factor_order[]
+  factor_order_hash
+  required_window
+  window_resolution = trading_day
+  alpha158_alias_set_hash
+  dynamic_factor_ref_set_hash
+}
+projection_hash
+```
+
+唯一输入是 dated binding 已解析到的、数据库中已经入库并完成 StrategyPackage 准入的 typed frozen manifest。投影只读取：
+
+- single Alpha：`manifest.runtime_assets.alpha158.aliases`、`manifest.factor_set[].factor_name/factor_id` 与唯一
+  `alpha_component` 的 factor refs；
+- native multi Alpha：parent manifest 的 `alpha_components[].lineage.factor_artifact_refs`、parent `factor_set`，以及
+  已持久化 multi leg `runtime_assets.alpha158.aliases`；
+- frozen provider/query contract 与纯函数 `backend.data_service.preprocessor.get_required_data_window`。
+
+factor order的确定性规则固定如下，不允许排序、取集合、按名称猜测或跨腿合并：
+
+1. single Alpha：按manifest保存顺序连接`runtime_assets.alpha158.aliases`和`factor_set[].factor_name`；
+2. native multi：每腿按该leg持久化runtime metadata中的Alpha158 alias顺序，再按component
+   `lineage.factor_artifact_refs`声明顺序解析parent `factor_set`中的exact factor；
+3. 任一ref缺失、ambiguous或产生duplicate factor时形成当前Program/date的projection错误，不改package状态；
+4. 每腿独立调用`get_required_data_window(factor_order)`，禁止用父包最大值、最小值、平均值或其它腿结果代替。
+
+投影内部可以使用本文件定义的strict typed DTO解析上述已持久化字段；该字段级解析只防止静默缺失或歧义，不是
+StrategyPackage validator、asset validation或package health判定。
+
+现有 package freeze 已把 Alpha158 alias 列表、factor identity 和 native multi leg runtime metadata写入 frozen manifest，
+因此当前已入库的单 Alpha 和原生多 Alpha父包可以直接产生投影，不需要 DDL、资产回读、模型文件解析、workspace
+materialization或重新执行包验证。投影实现不得调用：
+
+```text
+package validator / package health / runtime_asset_admission_status
+asset store get/readback / blob sha recompute / package closure recompute
+model loader / frozen runtime self-check / live inference preflight / live inference
+multi_alpha_live execution / Selection producer / HMM / Paper / simulation
+```
+
+该投影只是把已准入 manifest 中已经存在的输入结构转换为 Advisory-owned typed DTO，不重新判断 package 是否可用，
+不改变 package status、enabled 状态、binding、asset 或 admission receipt，也不能阻断 Selection、模拟盘、Paper 或其它
+Program。若 frozen manifest 本身缺少形成 exact input projection 所需的已持久化字段，只对当前 Advisory Program/date
+返回 `ADVISORY_INPUT_PROJECTION_UNAVAILABLE`；若同一字段存在互相矛盾的已持久化 identity，则返回
+`ADVISORY_INPUT_PROJECTION_CONFLICT`。两者都是显式输入数据错误，不是策略包准入结果、审批或人工门禁；其它 Program继续执行。
+
+该纯投影允许新增在 `backend/services/strategy_package/advisory_input_projection.py`，但文件只能 import typed manifest model、
+canonical hash utility与`get_required_data_window`，不能 import repository、asset store、validator、health、inference或 Selection。除该文件及其直接
+单元测试外，StrategyPackage其它路径继续冻结。Advisory Phase 1/Phase 1E只消费序列化后的 projection DTO，不 import
+StrategyPackage runtime。
+
 ### 7.10 `AdvisorySourceObservationScopeRequest`
 
 source event必须在decision cutoff前真实形成，因此observer不能等待DSE生成后才决定观察哪些数据。O4在运行
-prospective Selection之前，使用O3 historical request中的Program spec、dated binding、已导入package manifest、
-Selection公开的纯规范化/preflight结果和source mapping registry构造预观察request：
+prospective Selection之前，使用O3 historical request中的Program spec、dated binding、
+`StrategyPackageAdvisoryInputProjectionV1`、Selection纯 runtime-config normalization结果和source mapping registry构造
+预观察request。该过程不得调用 StrategyPackage preflight、validator、asset loader或模型：
 
 ```text
 schema_version = advisory_source_observation_scope_request_v1
@@ -484,7 +559,7 @@ observation_scope_hash
 
 每个leg的`required_window`必须由exact factor order调用当前推理共用的canonical纯函数
 `backend.data_service.preprocessor.get_required_data_window`计算，并把helper版本/source hash冻结为`window_policy_ref/hash`；
-standalone adapter可以调用该纯函数，Advisory service和Phase1E不得import`inference_engine`或StrategyPackage runtime。
+input projection可以调用该纯函数，Advisory service和Phase1E不得import`inference_engine`或StrategyPackage runtime。
 query role集合来自frozen provider/query contract，不按模型类型或package名称推断。
 
 该request只使用运行Selection所需且在执行前已经确定的配置，不执行模型、不产生候选，也不读取未来DSE。observer按其
@@ -708,6 +783,8 @@ Program和合法dated binding，再通过现有SelectionCenterService/StrategyPa
 `TDX_DB_DEV_*` connection factory，不得通过production backend API、`backend.main`或global pool运行。
 StrategyPackage runtime和asset resolver同样显式注入O2生成的target DEV package asset store，禁止使用production或
 当前常驻backend的默认asset root。
+该调用是策略包已经准入后的正常推理执行，不在执行前增加package validator、health、runtime self-check、asset closure
+revalidation或其它package gate；推理自身读取模型/因子资产属于既有执行语义，不得包装为新的荐股前置验证阶段。
 
 固定流程：
 
@@ -718,7 +795,8 @@ StrategyPackage runtime和asset resolver同样显式注入O2生成的target DEV 
    生效日过去，否则正向流程不可达。decision date最终必须是binding生效后已经完成的交易日，不得改日期语义。
 3. prospective Selection对每个Program/package独立运行，必须产生唯一DSE v2、artifact v2和完整stage/source receipts；
    v1、capture failed或incomplete evidence不能继续。
-4. read-only preflight验证exact dated binding和唯一DSE v2；正常runner对各Program独立事务执行并产生正式receipt。
+4. read-only evidence lookup核对exact dated binding和唯一DSE v2；该步骤不重新验证package资产；正常runner对各Program
+   独立事务执行并产生正式receipt。
 5. 同request exact rerun返回相同business identities，不产生第二份published事实。
 6. 单Program `WAITING_INPUT/FAILED`不阻断其他Program，但batch receipt准确保留逐Program状态。
 7. 每个`COMPLETE` Program独立形成Phase 1E Program input unit；双轨 cohort 状态只有在所选single/native-multi均
@@ -760,8 +838,9 @@ standalone DEV observer CLI；不新增scheduler、worker或startup hook。obser
 完整 G5 正向路径需要至少一个 Program/date 的 required source events满足
 `formal_available_at <= decision_cutoff`。实现必须支持：
 
-1. 在prospective Selection前，由package/binding/normalized preflight和`AdvisorySourceMappingRegistry`构造
-   `AdvisorySourceObservationScopeRequest`；
+1. 在prospective Selection前，由dated binding、admitted-manifest-only input projection、Selection config normalization和
+   `AdvisorySourceMappingRegistry`构造`AdvisorySourceObservationScopeRequest`；该步骤不调用任何 package validator、
+   health、asset loader、model loader、preflight或inference；
 2. observer按该request先记录physical inputs的真实DEV ingestion完成事实；
 3. 后续由现有Selection Center正常产生一个完成历史日的DSE；
 4. actual DSE receipts/分腿window与pre-observation request逐字段reconcile；
@@ -779,10 +858,11 @@ observer在decision cutoff之后首次观察到的真实event仍可append并保�
 
 ### 11.3 Source requirement registry
 
-registry builder只从 typed pre-observation request、actual DSE input context/source receipts、parent/component manifest、
-frozen query registry和`AdvisorySourceMappingRegistry`派生。实现按以下顺序工作：
+registry builder只从 typed pre-observation request、actual DSE input context/source receipts、
+`StrategyPackageAdvisoryInputProjectionV1`、frozen query registry和`AdvisorySourceMappingRegistry`派生。实现按以下顺序工作：
 
-1. 验证DSE、artifact与manifest frozen identity一致；不重新验证package资产或执行模型；
+1. 核对DSE、artifact与input projection中已持久化的package/manifest identity一致；该核对只证明当前Advisory证据引用同一
+   已准入package，不重新验证package资产、不改变package可用状态，也不执行模型；
 2. single Alpha读取DSE顶层window lineage；native multi从`per_leg_window_lineage`读取每腿独立
    `window_start_date/required_window/window_resolution/window_lineage_hash`；
 3. 每个source receipt必须匹配pre-observation request和mapping registry中的exact role/dataset/query id/version/window；
@@ -913,15 +993,19 @@ backend/services/advisory_phase1/source_capacity.py
 backend/services/advisory_phase1/readiness_plan.py
 backend/services/advisory_phase1/readiness_plan_postgres.py
 backend/tests/advisory_phase1/
+backend/services/strategy_package/advisory_input_projection.py
+backend/tests/strategy_package/test_advisory_input_projection.py
 ```
 
 `source_observer.py`只允许增加O4所需的versioned physical query templates/mapping-compatible typed contracts；
 `source_capacity.py`只允许additive v2 request/receipt与v1兼容读取；`readiness_plan.py`只允许要求O4生成的exact identity、
 消费v2 workload和保持逐Program独立；`readiness_plan_postgres.py`只允许database identity校验和既有read-only projection
 wiring。既有v1调用、Selection、Paper、模拟盘和其它Phase1调用的业务结果必须保持不变，并有直接回归测试。
-若现有公开pure normalization/preflight不能在Selection前提供exact logical input/query/window/leg contract，必须停止O4B并
-先修订本文；不得解析模型文件猜测window、运行一次模型探路、修改共享StrategyPackage/Selection模块，或先生成DSE再
-回填pre-observation request。
+`advisory_input_projection.py`是唯一允许新增的StrategyPackage共享文件，只能从已经准入的typed frozen manifest生成
+`StrategyPackageAdvisoryInputProjectionV1`；不得调用或包装现有 preflight/validator/health/asset store/model loader/
+inference，也不得重新计算package资产闭包。其新增不改变StrategyPackage admission、Selection、Paper或模拟盘行为。
+不得解析模型文件猜测window、运行一次模型探路、修改其它共享StrategyPackage/Selection模块，或先生成DSE再回填
+pre-observation request。
 
 上述其它修改只允许增加exact connection/root injection和typed output wiring，不改变既有业务判定。standalone脚本通过
 `historical_onboarding.py`组合现有`AdvisoryProgramService`、`SelectionCenterService`、
@@ -937,7 +1021,7 @@ wiring。既有v1调用、Selection、Paper、模拟盘和其它Phase1调用的�
 backend/main.py
 backend/routers/
 backend/services/selection_center/
-backend/services/strategy_package/
+backend/services/strategy_package/  # except additive pure advisory_input_projection.py
 backend/services/simulation_runtime/
 backend/services/paper_trading*/
 backend/services/quantevolver/
@@ -1007,8 +1091,9 @@ unexpected traceback只写后台日志。
 - historical runner继续使用既有business key和逐Program独立事务，不改变其重试/恢复语义。
 - historical request/receipt CAS和Phase0A audit directory CAS都必须使用atomic no-replace、文件集合闭包校验和逐文件
   exact readback；并发发布不能使用`Path.replace()`覆盖已存在identity，额外文件或目录同样视为冲突。
-- O4 CAS固定增加`source_mapping_registry`、`source_observation_scope_request`、`source_requirement_registry`、
-  `capacity_policy`、`capacity_request`、`capacity_receipt`、`program_input`、`input_bundle`和`phase1e_batch_request` kinds。
+- O4 CAS固定增加`real_input_build_request`、`source_mapping_registry`、`source_observation_scope_request`、
+  `source_requirement_registry`、`capacity_policy`、`capacity_request`、`capacity_receipt`、`program_input`、`input_bundle`和
+  `phase1e_batch_request` kinds。
   每个kind具有固定namespace、typed envelope、semantic hash、file hash和dependency refs；禁止把这些对象作为无类型JSON
   写到任意路径。
 - 同一Program/date相同build request并发必须收敛到相同`program_input_hash`；不同Program从不共享可变临时状态。batch
@@ -1023,6 +1108,8 @@ unexpected traceback只写后台日志。
   symlink/reparse/latest pointer。
 - 不复制账户、资金、订单、持仓、Paper、simulation、QE实验或其他无关数据。
 - O4 query registry只含固定SELECT template和typed bind slots；不得接收用户SQL、表名、列名、任意URI或runtime loader。
+- StrategyPackage input projection只读取调用方已提供的typed frozen manifest对象，不打开asset URI/path、不读取blob、
+  不访问package repository、不运行asset/admission validation，也不把投影结果写回package或binding。
 - capacity probe读取的Parquet路径必须来自DEV Advisory snapshot rows并通过root containment、记录size和footer metadata
   readback；不得遍历目录、读取QE/Qlib/backtest/Paper文件，缺失时返回PARTIAL而不是改读其它数据源。
 
@@ -1047,8 +1134,10 @@ historical runner、audit target resolver、双轨exact retry和formal receipts�
 
 实现F-906至F-911，内部顺序固定如下：
 
-1. O4A contracts/CAS：build request、source mapping registry、capacity v2、Program input unit、bundle和artifact kinds；
-2. O4B target-aware observer：真实DSE role到physical requirement映射、显式DEV factory、去除enable/prod/process-env路径；
+1. O4A contracts/CAS：build request、`real_input_build_request` artifact kind、source mapping registry、capacity v2、Program
+   input unit、bundle和其余artifact kinds；
+2. O4B admitted-input projection + target-aware observer：从typed frozen manifest纯投影single/native-multi分腿factor order/window，
+   不复验package资产；随后完成真实DSE role到physical requirement映射、显式DEV factory和去除enable/prod/process-env路径；
 3. O4C registry/capacity builder：分腿window、逐Program workload、capacity policy和DEV read-only probe；
 4. O4D Phase1E input/compile：逐Program audit/handoff/source resolution、immutable refs、mixed batch和full readback；
 5. O4E direct regression：v1 compatibility、frozen module isolation、真实DEV read-only/pending/ready验证。
@@ -1072,6 +1161,9 @@ readiness替代。source不成熟时逐Program准确pending，mapping/hash/ident
 - 扫描禁止DDL、UPDATE、DELETE、TRUNCATE、COPY FROM arbitrary relation、session replication bypass；
 - 扫描角色、审批、授权、backup、force、skip、hardcoded credential/host/port；
 - 扫描并直接断言O4 CLI不存在observer enable flag、`--target-db prod`、缺失env fallback或global-pool调用；
+- AST直接断言`advisory_input_projection.py`除typed manifest model、canonical hash utility和window helper外，不import
+  repository、asset store、validator、health、inference、Selection、Paper或simulation，且不包含文件/网络/数据库I/O；
+  除该文件外StrategyPackage frozen path零修改；
 - source mapping registry中的每个physical template必须属于固定SELECT allowlist，且当前DSE五类logical input全覆盖；
 - v1 capacity/readiness public contract import和既有调用保持兼容，O4只使用v2；
 - `python scripts/aistock_feature_workflow.py validate --design <path> --tier F2`。
@@ -1087,8 +1179,10 @@ readiness替代。source不成熟时逐Program准确pending，mapping/hash/ident
   `IDENTITY_PENDING/IDENTITY_COMPLETE_SOURCE_PENDING/SOURCE_READY_CAPACITY_PARTIAL/FULL_READY/BLOCKED`计划状态表、mixed batch和
   batch-independent Program hash；
 - 当前真实DSE role/dataset/query version到physical requirements的golden mapping；unknown role/version明确失败；
-- pre-observation request由package/binding/preflight确定且不依赖未来DSE；actual DSE role/window/leg reconciliation一致通过，
-  任一差异blocked且不补写历史event；
+- admitted-manifest-only projection对single/native-multi分别输出exact factor order与独立required window；测试通过monkeypatch
+  证明package validator、health、asset store、model loader、preflight和inference即使被设置为调用即失败也不会触发；
+- pre-observation request由package/binding/input projection确定且不依赖未来DSE；actual DSE role/window/leg reconciliation
+  一致通过，任一差异blocked且不补写历史event；
 - pre-observation required window与canonical factor-order helper、code release和actual DSE window lineage parity；
 - daily window逐交易日展开、as-of snapshot与derived PIT universe upstream audit/build-state closure正反例；
 - native multi每腿不同window、同style不同candidate depth、多个single/native-multi Program workload无损表达；
@@ -1121,14 +1215,17 @@ repository消费。禁止复制fixture artifact、手工构造DSE或把package h
 7. concurrent same bundle与different bundle；
 8. 正常DEV Program/binding创建、prospective DSE v2生产、historical runner双轨、一个Program失败隔离、exact retry；
 9. Phase1E input至少覆盖all-ready、all-pending、ready+pending、ready+blocked、全部scope失败和plan-count-zero；
-10. 真实O3 single/native-multi在Selection前形成pre-observation request，Selection后DSE source receipts经mapping
+10. 真实O3 single/native-multi先从已准入frozen manifest形成纯input projection，再在Selection前形成pre-observation
+    request；整个projection过程零资产读取、零package validation、零模型执行；Selection后DSE source receipts经mapping
     registry展开并逐字段reconcile，分腿window与query closure完整readback；
 11. observer template v2 daily/as-of/derived policy、无trade_date source capacity sample和PIT universe upstream closure；
 12. capacity v2覆盖同style不同depth、多style、多日期，v1 existing tests保持不变；
 13. env文件缺失、DEV identity drift、production target尝试、默认factory触发均明确失败且零写入；
 14. 无SEALED snapshot时PARTIAL/bounded staging，加入合法Advisory SEALED snapshot后重新probe为MEASURED；测试文件只在
     临时Advisory CAS，禁止引用QE/Qlib/backtest/Paper路径；
-15. container/database销毁，不连接真实DEV/production。
+15. 当前已导入的single/native-multi manifest fixture直接生成projection与observation request，不需要migration、package
+    重新入库或asset backfill；
+16. container/database销毁，不连接真实DEV/production。
 
 ### 18.4 L3 real DEV rollback validation
 
@@ -1138,13 +1235,16 @@ repository消费。禁止复制fixture artifact、手工构造DSE或把package h
 O4本身不新增import DML。O4 L3先对真实DEV执行build request inventory、source mapping、capacity probe和Phase1E compile
 read-only smoke；observer append验证如需新增event，必须使用真实已完成ingestion且在transaction rollback可证明的专用
 测试partition，不能回填时间或清理既有event。无法形成cutoff前真实event时，L3预期结果就是逐Programpending，不伪造ready。
+L3必须直接读取当前DEV已导入的exact single/native-multi frozen manifest并生成input projection，记录package row/status/binding
+前后hash完全不变，同时用sentinel证明validator、health、asset store、model loader、preflight和inference零调用。
 
 ### 18.5 L4 real DEV persistent validation
 
 1. production只读package export和offline verify；
 2. DEV persistent package import与fresh full readback；
 3. exact rerun零DML；
-4. 正常DEV service产生Program/dated binding、DSE v2和single/native-multi formal receipt；
+4. 当前已准入single/native-multi manifest无需资产复验直接产生input projection；正常DEV service随后产生Program/dated
+   binding、DSE v2和single/native-multi formal receipt；
 5. audit/handoff/source mapping/source registry/capacity v2/input bundle/Phase1E计划完整且Program独立；
 6. 至少验证一个真实pending Program不会阻断其它FULL_READY Program；若当前没有cutoff前source event，则保留pending证据，
    不把环境限制写成代码完成；
@@ -1164,6 +1264,7 @@ read-only smoke；observer append验证如需新增event，必须使用真实已
 | prospective Selection改变排名 | 业务语义漂移 | 复用现有producer；候选parity hash作为验收oracle |
 | source时间被回填猜测 | PIT泄漏 | observer只追加真实observed事实；不成熟保持pending |
 | DSE逻辑dataset直接当物理表 | source闭包缺失或查询错误 | versioned source mapping registry逐项展开virtual query依赖；unknown mapping明确pending/blocked |
+| O4为取得factor order再次运行包preflight或读取资产 | 已入库可用包被荐股二次阻断，且影响共享运行链 | admitted-manifest-only纯投影；禁止validator/health/asset/model/inference调用，结果不写回package状态 |
 | 一个Program pending污染整个batch | 多包独立荐股被错误阻断 | ProgramInputUnit是readiness authority；batch只聚合统计 |
 | 同style不同candidate depth被平均/取最大 | 容量低估、高估或hash漂移 | capacity v2逐Program workload，无lossy aggregation |
 | env缺失退回process/global pool | 误连production或错误DEV | O4 CLI强制存在env文件、固定DEV、逐connection identity核验 |
@@ -1303,13 +1404,13 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   process/global-pool fallback。
 - F-907：逐Program identity/source/capacity/plan状态准确，mixed batch不把PARTIAL冒充FULL_READY，也不因一个Program失败
   阻断其它FULL_READY Program。
-- F-908：pre-observation request在Selection前由typed package/binding/preflight和versioned mapping形成；Selection后source
-  registry从actual DSE receipt/input context、manifest、query registry逐字段reconcile派生；真实五类logical input全覆盖，
-  多Alpha每腿window独立，无generic/default window或事后回填。
+- F-908：pre-observation request在Selection前由dated binding、admitted-manifest-only typed input projection、Selection config
+  normalization和versioned mapping形成；Selection后source registry从actual DSE receipt/input context、projection、query
+  registry逐字段reconcile派生；真实五类logical input全覆盖，多Alpha每腿window独立，无generic/default window或事后回填。
 - F-909：capacity v2逐Program表达style/depth/horizon/source workload，业务值来自exact Program/policy，测量来自DEV
   capacity probe；无SEALED时仅允许规定的bounded staging bootstrap。
-- F-910：Phase1E build request、Program input、全部policy/registry/capacity/batch refs immutable、explicit、可定位且hash
-  closed，无latest或只有hash没有artifact ref。
+- F-910：Phase1E build request使用独立`real_input_build_request` kind；Program input、全部policy/registry/capacity/batch refs
+  immutable、explicit、可定位且hash closed，无latest、kind冒充或只有hash没有artifact ref。
 - F-911：Phase1E计划single/native-multi parent/component和多Program独立；expected identity字段强制完整，mixed/all-failed/
   zero-plan状态显式且非成功不静默。
 - F-912：G5只消费source-ready计划，pending保持零DML。
@@ -1317,6 +1418,8 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 - F-914：无角色、RBAC、审批、授权、备份、force、skip、enable flag、production target selector或人工数据库修改。
 - F-915：无API/UI/scheduler/startup/runtime activation/production DDL/DML。
 - F-916：状态分别报告code、bundle、DEV import、historical receipt、Phase1E、G5 L3/L4和production。
+- F-917：荐股O4只从已准入frozen manifest做纯输入投影，不调用package validator/health/asset/model/preflight/inference，
+  不改变package/binding状态，不影响Selection、模拟盘、Paper或其它Program；合法现有single/native-multi包自动通过正向路径。
 
 ## 24. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1351,15 +1454,16 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-905 | §10、§15 | Phase0A audit/handoff read-only projection、CAS闭包与full-readback；`backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py` | verified_l0_l1 | none |
 | F-906 | §11.1、§13 | observer real-ingestion/no-copy/no-backdate、explicit DEV identity、no-enable/no-prod/no-fallback；`backend/tests/advisory_dev_input_onboarding/test_o4_source_observer.py` | design_ready | none |
 | F-907 | §7.12、§11.2、§12 | per-Program state table、mixed batch、pending/blocked/no-fake-ready；`backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py` | design_ready | none |
-| F-908 | §7.9-7.10、§11.2-11.3 | pre-observation/actual-DSE reconciliation、logical-to-physical closure和分腿window；`backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py` | design_ready | none |
+| F-908 | §7.9-7.10、§11.2-11.3 | admitted-manifest input projection、pre-observation/actual-DSE reconciliation、logical-to-physical closure和分腿window；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py` | design_ready | none |
 | F-909 | §7.11、§11.4 | heterogeneous Program workload、capacity policy/probe、bounded bootstrap和v1兼容；`backend/tests/advisory_dev_input_onboarding/test_o4_capacity_v2.py` | design_ready | none |
-| F-910 | §7.8、§7.12、§12、§15 | build request/all refs/CAS kinds/dependency hash/full-readback；`backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py` | design_ready | none |
+| F-910 | §7.8、§7.12、§12、§15 | dedicated build-request kind、all refs/CAS kinds/dependency hash/full-readback；`backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py` | design_ready | none |
 | F-911 | §7.12、§12 | expected identities、single/native-multi/multi-Program parity、all-failed/zero-plan；`backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py` | design_ready | none |
 | F-912 | §11.2、§12 | G5 pending zero-DML and source-ready inventory；`backend/tests/advisory_phase1/test_phase1g_dev_inventory.py` | design_ready | none |
 | F-913 | §17 O5、§22 | existing G5 contract parity and L3/L4 evidence；`backend/tests/advisory_phase1/test_phase1g_service.py` | design_ready | none |
 | F-914 | §4、§11.1、§13、§21 | role/approval/backup/force/skip/enable/prod-selector scan；`backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py` | design_ready | none |
 | F-915 | §4、§21 | API/UI/scheduler/startup/production-impact scan；`backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py` | design_ready | none |
 | F-916 | §1、§21、§26 | separated state reporting assertions；`backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py` | design_ready | none |
+| F-917 | §7.9.1、§11.2、§13、§18 | no-secondary-validation import/call denylist、existing single/native-multi positive projection、package/Selection/simulation zero-diff；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py` | design_ready | none |
 
 本矩阵的 `gap_or_exception` 只记录设计偏差或验收例外，不记录尚未执行的环境层验证。代码、数据库和运行证据的
 完成状态以本文开头的独立状态字段为准；`verified_l0_l2` 不代表真实 production/DEV 执行已完成。
@@ -1373,9 +1477,12 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   partial/insufficient、all-failed、zero-plan和unexpected均有稳定reason/exit/log；mixed batch不得隐藏失败scope。
 - `no_business_semantic_drift`：DSE v2由正常Selection生产，不转换v1、不修改排名；Program、package、multi-alpha leg、
   lookback/window、candidate depth和plan hash均独立，不融合Program，不改策略包、荐股、模拟盘或交易语义。
+- `no_duplicate_package_gate`：O4只把已准入frozen manifest投影为输入DTO，不调用validator/health/asset/model/preflight/
+  inference，不重新判断package可用性；projection或Advisory evidence错误不写回package/binding状态，也不影响其它模块。
 - `no_unrequested_gate_or_approval`：无角色、审批、授权、备份、force、skip、observer enable flag、production target选择或
   acknowledgement；显式request/command是数据与动作输入，不是人工审批记录。
-- `positive_path_satisfiable`：现有production双轨package可导入DEV；正常future-effective binding、真实source event和
+- `positive_path_satisfiable`：现有production双轨package可导入DEV；已准入manifest内现有Alpha158 aliases、factor refs和
+  multi-leg runtime metadata足以零资产回读形成input projection；正常future-effective binding、真实source event和
   prospective DSE v2可到Phase1E及G5 L3/L4。
 - `exact_database_truth`：所有连接来自显式env并核验database identity；production永远只读，DEV写关系固定。
 - `research_isolation`：全部输出research-only、execution-prohibited，不产生交易输入。
@@ -1385,14 +1492,16 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 
 本文可标记 `design_ready` 的条件：
 
-1. F-879至F-916全部有前后一致的设计与验证映射。
+1. F-879至F-917全部有前后一致的设计与验证映射。
 2. 父级Phase 0A.2、Phase 1E、G5的输入/状态/退出条件引用本文且不互相矛盾。
-3. 没有全库refresh、fixture、手写receipt、共享runtime import或source猜测路径。
+3. 没有全库refresh、fixture、手写receipt、共享runtime执行或source猜测路径；唯一StrategyPackage改动是无I/O纯input
+   projection，不形成资产复验或包准入门禁。
 4. O4 build request、source mapping、capacity v2、Program input和CAS dependency closure全部有typed contract与逐字段权威来源。
 5. 所有失败均显式，mixed Program、首次capacity bootstrap和source-ready均有正向可达路径。
 6. 无额外角色、审批、授权、备份、enable flag、production selector或人工数据库修改设计。
 7. F2 validator、文档引用、`git diff --check`通过。
 
-本次设计修订合入后，代码阶段从尚未实现的O4A开始并按O4A至O4E执行；O1-O3保持已合入状态，O5不得提前开始。
+本次设计修订合入后，代码阶段继续完成O4A的dedicated build-request kind，再按修订后的O4B admitted-input projection与
+target-aware observer、O4C-O4E执行；O1-O3保持已合入状态，O5不得提前开始。
 不得把O4 contracts、pending验证或bounded staging描述为Phase 1E/G5完整完成。
 \n
