@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { getEvaluation, HMMApiError } from "@/lib/hmm-evolution/api";
 import type { EvaluationDetail } from "@/lib/hmm-research/contracts";
@@ -10,7 +10,13 @@ import EvidencePanel from "@/components/hmm-research/EvidencePanel";
 import HMMResearchShell from "@/components/hmm-research/HMMResearchShell";
 import StatusBadge from "@/components/hmm-research/StatusBadge";
 import VisibleErrorState from "@/components/hmm-research/VisibleErrorState";
+import DailyMetricChart from "@/components/hmm-evolution/DailyMetricChart";
 import styles from "@/components/hmm-research/hmm-research.module.css";
+
+const POLL_FAST_MS = 3_000;
+const POLL_SLOW_MS = 10_000;
+const POLL_BACKOFF_AFTER_MS = 60_000;
+const POLL_TIMEOUT_MS = 15 * 60_000;
 
 type DailySummary = {
   date: string;
@@ -23,27 +29,52 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
   const [evaluation, setEvaluation] = useState<EvaluationDetail | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
+  const [stale, setStale] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const pollStartedAt = useRef<number | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
     setError(null);
-    setLoading(true);
+    if (!background) setLoading(true);
     try {
       setEvaluation(await getEvaluation(evalId));
+      setStale(false);
+      setLastUpdatedAt(new Date().toISOString());
     } catch (nextError) {
       setError(nextError);
+      setStale(background);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [evalId]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!evaluation || TERMINAL_EVALUATION_STATUSES.has(evaluation.status)) return;
-    const timer = setTimeout(() => void load(), 3_000);
+    if (!evaluation || TERMINAL_EVALUATION_STATUSES.has(evaluation.status)) {
+      pollStartedAt.current = null;
+      return;
+    }
+    if (pollStartedAt.current === null) pollStartedAt.current = Date.now();
+    const elapsed = Date.now() - pollStartedAt.current;
+    if (elapsed >= POLL_TIMEOUT_MS) {
+      setStale(true);
+      setError(new HMMApiError({
+        error_code: "HMM_EVOLUTION_CLIENT_TIMEOUT",
+        reason_code: "hmm_evolution_client_polling_timeout",
+        message: "评估自动轮询已达到 15 分钟上限，页面保留最后一次数据并停止自动请求。",
+        context: { retry_condition: "核对 worker 与 durable state 后手动刷新。" },
+      }, 504));
+      return;
+    }
+    const delay = elapsed >= POLL_BACKOFF_AFTER_MS ? POLL_SLOW_MS : POLL_FAST_MS;
+    const timer = setTimeout(() => void load(true), delay);
     return () => clearTimeout(timer);
   }, [evaluation, load]);
 
-  const dailySummary = useMemo(() => extractDailySummary(evaluation?.metrics_json), [evaluation]);
+  const dailySummaryState = useMemo(
+    () => validateDailySummary(evaluation?.metrics_json, evaluation?.status),
+    [evaluation],
+  );
 
   return (
     <HMMResearchShell>
@@ -55,10 +86,11 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
             <h1 className={styles.title}>评估 {evalId}</h1>
             <p className={styles.heroCopy}>结构化展示输入身份、动态标签 horizon、数据水位、结果与失败原因，不直接输出原始 payload。</p>
           </div>
-          <div className={styles.panelActions}>{evaluation ? <StatusBadge status={evaluation.status} /> : null}<button type="button" className={styles.button} onClick={() => void load()}><RefreshCw size={14} />刷新</button></div>
+          <div className={styles.panelActions}>{evaluation ? <StatusBadge status={evaluation.status} /> : null}<button type="button" className={styles.button} onClick={() => void load(false)}><RefreshCw size={14} />刷新</button></div>
         </div>
         {loading ? <div className={styles.loadingState}>正在加载评估证据；失败会显式终止。</div> : null}
-        {error ? <VisibleErrorState error={error} onRetry={() => void load()} /> : null}
+        {error ? <VisibleErrorState error={error} onRetry={() => void load(false)} /> : null}
+        {stale && evaluation ? <div className={`${styles.notice} ${styles.noticeWarning}`}>当前显示最后一次成功数据（{formatDateTime(lastUpdatedAt)}），手动刷新成功前不得视为最新状态。</div> : null}
         {evaluation ? (
           <div className={styles.stack}>
             <section className={styles.metricsGrid}>
@@ -108,7 +140,11 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
 
             <section className={styles.panel}>
               <div className={styles.panelHeader}><div><h2 className={styles.panelTitle}>逐日替换摘要</h2><div className={styles.panelSubtitle}>只展示业务字段；replacement samples 与原始 payload 不在主视图直显</div></div></div>
-              <div className={styles.panelBodyTable}><DailySummaryTable rows={dailySummary} horizon={evaluation.label_horizon_days} /></div>
+              <div className={styles.panelBody}>
+                {dailySummaryState.error ? <VisibleErrorState error={dailySummaryState.error} title="逐日结果契约错误" /> : null}
+                {!dailySummaryState.error ? <DailyMetricChart rows={dailySummaryState.rows} horizon={evaluation.label_horizon_days} /> : null}
+              </div>
+              {!dailySummaryState.error ? <div className={styles.panelBodyTable}><DailySummaryTable rows={dailySummaryState.rows} horizon={evaluation.label_horizon_days} /></div> : null}
             </section>
           </div>
         ) : null}
@@ -122,20 +158,49 @@ function DailySummaryTable({ rows, horizon }: { rows: DailySummary[]; horizon: n
   return <table className={styles.table}><thead><tr><th>交易日</th><th>替换数量</th><th>净标签收益 · {horizon}D</th><th>Net DB 10D</th></tr></thead><tbody>{rows.map((row) => <tr key={row.date}><td>{row.date}</td><td>{row.replacement_count}</td><td>{formatPercent(row.daily_net_label)}</td><td>{formatPercent(row.daily_net_db_10d)}</td></tr>)}</tbody></table>;
 }
 
-function extractDailySummary(metrics: Record<string, unknown> | null | undefined): DailySummary[] {
+function validateDailySummary(
+  metrics: Record<string, unknown> | null | undefined,
+  status: string | undefined,
+): { rows: DailySummary[]; error: HMMApiError | null } {
   const rows = metrics?.daily_summary;
-  if (!Array.isArray(rows)) return [];
-  return rows.flatMap((row) => {
-    if (!row || typeof row !== "object") return [];
+  if (rows === undefined && status !== "succeeded") {
+    return { rows: [], error: null };
+  }
+  if (!Array.isArray(rows)) {
+    return { rows: [], error: dailySummaryContractError("metrics_json.daily_summary 必须是数组") };
+  }
+  const parsed: DailySummary[] = [];
+  for (const [index, row] of rows.entries()) {
+    if (!row || typeof row !== "object") {
+      return { rows: [], error: dailySummaryContractError(`第 ${index + 1} 行不是对象`) };
+    }
     const value = row as Record<string, unknown>;
-    if (typeof value.date !== "string" || typeof value.replacement_count !== "number") return [];
-    return [{
+    if (typeof value.date !== "string" || typeof value.replacement_count !== "number") {
+      return { rows: [], error: dailySummaryContractError(`第 ${index + 1} 行缺少 date 或 replacement_count`) };
+    }
+    if (
+      (value.daily_net_label !== null && typeof value.daily_net_label !== "number")
+      || (value.daily_net_db_10d !== null && typeof value.daily_net_db_10d !== "number")
+    ) {
+      return { rows: [], error: dailySummaryContractError(`第 ${index + 1} 行收益字段类型错误`) };
+    }
+    parsed.push({
       date: value.date,
       replacement_count: value.replacement_count,
       daily_net_label: typeof value.daily_net_label === "number" ? value.daily_net_label : null,
       daily_net_db_10d: typeof value.daily_net_db_10d === "number" ? value.daily_net_db_10d : null,
-    }];
-  });
+    });
+  }
+  return { rows: parsed, error: null };
+}
+
+function dailySummaryContractError(message: string): HMMApiError {
+  return new HMMApiError({
+    error_code: "HMM_EVOLUTION_CLIENT_CONTRACT_ERROR",
+    reason_code: "hmm_evolution_client_invalid_daily_summary",
+    message,
+    context: { retry_condition: "修复 evaluator/API daily_summary 契约后重新加载。" },
+  }, 502);
 }
 
 function warningSummary(warnings: Array<Record<string, unknown>>): string {

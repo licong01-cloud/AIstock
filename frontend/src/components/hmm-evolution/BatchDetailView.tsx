@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, RefreshCw, StopCircle } from "lucide-react";
-import { cancelBatch, getBatch, retryFailedBatch } from "@/lib/hmm-evolution/api";
+import { cancelBatch, getBatch, HMMApiError, retryFailedBatch } from "@/lib/hmm-evolution/api";
 import type { BatchDetail, BatchItem } from "@/lib/hmm-research/contracts";
 import { TERMINAL_BATCH_STATUSES } from "@/lib/hmm-research/contracts";
 import EvidencePanel from "@/components/hmm-research/EvidencePanel";
@@ -12,28 +12,55 @@ import StatusBadge from "@/components/hmm-research/StatusBadge";
 import VisibleErrorState from "@/components/hmm-research/VisibleErrorState";
 import styles from "@/components/hmm-research/hmm-research.module.css";
 
+const POLL_FAST_MS = 3_000;
+const POLL_SLOW_MS = 10_000;
+const POLL_BACKOFF_AFTER_MS = 60_000;
+const POLL_TIMEOUT_MS = 15 * 60_000;
+
 export default function BatchDetailView({ batchId }: { batchId: string }) {
   const [batch, setBatch] = useState<BatchDetail | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
+  const [stale, setStale] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const pollStartedAt = useRef<number | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
     setError(null);
-    setLoading(true);
+    if (!background) setLoading(true);
     try {
       setBatch(await getBatch(batchId));
+      setStale(false);
+      setLastUpdatedAt(new Date().toISOString());
     } catch (nextError) {
       setError(nextError);
+      setStale(background);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [batchId]);
 
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    if (!batch || TERMINAL_BATCH_STATUSES.has(batch.status)) return;
-    const timer = setTimeout(() => void load(), 3_000);
+    if (!batch || TERMINAL_BATCH_STATUSES.has(batch.status)) {
+      pollStartedAt.current = null;
+      return;
+    }
+    if (pollStartedAt.current === null) pollStartedAt.current = Date.now();
+    const elapsed = Date.now() - pollStartedAt.current;
+    if (elapsed >= POLL_TIMEOUT_MS) {
+      setStale(true);
+      setError(new HMMApiError({
+        error_code: "HMM_EVOLUTION_CLIENT_TIMEOUT",
+        reason_code: "hmm_evolution_client_polling_timeout",
+        message: "批次自动轮询已达到 15 分钟上限，页面保留最后一次数据并停止自动请求。",
+        context: { retry_condition: "核对 worker 与 durable state 后手动刷新。" },
+      }, 504));
+      return;
+    }
+    const delay = elapsed >= POLL_BACKOFF_AFTER_MS ? POLL_SLOW_MS : POLL_FAST_MS;
+    const timer = setTimeout(() => void load(true), delay);
     return () => clearTimeout(timer);
   }, [batch, load]);
 
@@ -72,14 +99,15 @@ export default function BatchDetailView({ batchId }: { batchId: string }) {
           </div>
           <div className={styles.panelActions}>
             {batch ? <StatusBadge status={batch.status} /> : null}
-            <button type="button" className={styles.button} onClick={() => void load()}><RefreshCw size={14} />刷新</button>
+            <button type="button" className={styles.button} onClick={() => void load(false)}><RefreshCw size={14} />刷新</button>
             {batch && !TERMINAL_BATCH_STATUSES.has(batch.status) ? <button type="button" className={`${styles.button} ${styles.buttonDanger}`} onClick={() => void onCancel()}><StopCircle size={14} />取消</button> : null}
             {batch && ["partial_failed", "failed", "timed_out"].includes(batch.status) ? <button type="button" className={`${styles.button} ${styles.buttonSoft}`} onClick={() => void onRetry()}>仅重试失败项</button> : null}
           </div>
         </div>
 
         {loading ? <div className={styles.loadingState}>正在加载批次证据；失败会显式终止。</div> : null}
-        {error ? <VisibleErrorState error={error} onRetry={() => void load()} /> : null}
+        {error ? <VisibleErrorState error={error} onRetry={() => void load(false)} /> : null}
+        {stale && batch ? <div className={`${styles.notice} ${styles.noticeWarning}`}>当前显示最后一次成功数据（{formatDateTime(lastUpdatedAt)}），自动轮询已暂停；手动刷新成功前不得视为最新状态。</div> : null}
         {batch ? (
           <div className={styles.stack}>
             <section className={styles.metricsGrid}>
@@ -88,6 +116,13 @@ export default function BatchDetailView({ batchId }: { batchId: string }) {
               <Metric label="失败 / 超时" value={`${batch.failed_count} / ${batch.timed_out_count}`} note="失败不会被空集合掩盖" className={styles.metricAmber} />
               <Metric label="Top-3" value={String(batch.items.filter((item) => item.is_top3).length)} note="研究推荐，需 QE 终审" className={styles.metricSlate} />
             </section>
+
+            {batch.items.some((item) => item.evidence_quality === "degraded") ? (
+              <div className={`${styles.notice} ${styles.noticeWarning}`}>
+                <strong>批次包含降级证据</strong>
+                <span>{batch.items.filter((item) => item.evidence_quality === "degraded").length} 个候选的日期覆盖或行情证据不完整；请进入对应 evaluation 查看受影响范围与 warning。</span>
+              </div>
+            ) : null}
 
             <section className={styles.panel}>
               <div className={styles.panelHeader}><div><h2 className={styles.panelTitle}>候选项目</h2><div className={styles.panelSubtitle}>所有候选均保留，未排名不等于淘汰</div></div></div>
