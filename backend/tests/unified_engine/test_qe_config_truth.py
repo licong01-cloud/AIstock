@@ -2240,6 +2240,7 @@ def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
 
 def test_efficient_gats_seed_respects_model_config_module_path():
     yaml_text = _base_yaml(model_info=_efficient_gats_model_info())
+    conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
 
     assert "class: EfficientGATs" in yaml_text
     assert "module_path: aistock_models.efficient_gats" in yaml_text
@@ -2248,6 +2249,10 @@ def test_efficient_gats_seed_respects_model_config_module_path():
     assert "class: TSDatasetH" in yaml_text
     assert "step_len: 20" in yaml_text
     assert "d_feat: {{ num_features }}" in yaml_text
+    model_kwargs = conf["task"]["model"]["kwargs"]
+    assert model_kwargs["gats_attention_query_chunk_size"] == 512
+    assert model_kwargs["gpu_cooperative_yield_every_days"] == 1
+    assert model_kwargs["gpu_cooperative_yield_ms"] == 2.0
 
 
 def test_catalog_get_model_info_preserves_efficient_gats_model_config(monkeypatch):
@@ -2353,6 +2358,42 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
         "gats_industry_embedding_dim",
     ):
         assert key not in strategy_kwargs
+
+
+def test_efficient_gats_cooperative_execution_overrides_route_only_to_model_kwargs():
+    yaml_text = _base_yaml(
+        model_info=_efficient_gats_model_info(),
+        custom_params={
+            "gats_attention_query_chunk_size": 256,
+            "gpu_cooperative_yield_every_days": 3,
+            "gpu_cooperative_yield_ms": 1.5,
+        },
+    )
+    conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    model = conf["task"]["model"]
+    strategy_kwargs = conf["port_analysis_config"]["strategy"]["kwargs"]
+    assert model["class"] == "EfficientGATs"
+    assert model["kwargs"]["gats_attention_query_chunk_size"] == 256
+    assert model["kwargs"]["gpu_cooperative_yield_every_days"] == 3
+    assert model["kwargs"]["gpu_cooperative_yield_ms"] == 1.5
+    for key in (
+        "gats_attention_query_chunk_size",
+        "gpu_cooperative_yield_every_days",
+        "gpu_cooperative_yield_ms",
+    ):
+        assert key not in strategy_kwargs
+
+
+def test_efficient_gats_cooperative_execution_params_fail_loud_for_other_models():
+    with pytest.raises(
+        ValueError,
+        match="reason_code=efficient_gats_execution_params_require_efficient_gats",
+    ):
+        _base_yaml(
+            model_info=_gats_model_info(),
+            custom_params={"gats_attention_query_chunk_size": 256},
+        )
 
 
 def test_gats_v25_minute_execution_config_remains_daily_signal_nested_executor():
@@ -2493,6 +2534,101 @@ def test_efficient_gats_attention_is_numerically_identical_to_naive():
             efficient_model.cal_attention(hidden, hidden),
             atol=1e-5,
         )
+
+
+@pytest.mark.parametrize("adjacency_mode", ["off", "industry_bias"])
+def test_efficient_gats_query_chunking_preserves_forward_gradients_and_optimizer_update(adjacency_mode):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    torch.manual_seed(20260718)
+    common = {
+        "d_feat": 4,
+        "hidden_size": 6,
+        "num_layers": 1,
+        "dropout": 0.0,
+        "base_model": "GRU",
+        "gats_adjacency_mode": adjacency_mode,
+        "gats_industry_gamma_init": 0.7,
+        "gats_industry_embedding": "on",
+        "gats_industry_embedding_dim": 3,
+    }
+    dense = efficient_gats.EfficientGATModel(
+        **common,
+        gats_attention_query_chunk_size=0,
+    )
+    chunked = efficient_gats.EfficientGATModel(
+        **common,
+        gats_attention_query_chunk_size=3,
+    )
+    chunked.load_state_dict(dense.state_dict())
+
+    dense_input = torch.randn(11, 5, 4, requires_grad=True)
+    chunked_input = dense_input.detach().clone().requires_grad_(True)
+    industry_ids = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 200], dtype=torch.long)
+    labels = torch.randn(11)
+
+    dense_pred = dense(dense_input, industry_ids=industry_ids)
+    chunked_pred = chunked(chunked_input, industry_ids=industry_ids)
+    assert torch.allclose(dense_pred, chunked_pred, atol=1e-6, rtol=1e-5)
+
+    dense_loss = torch.mean((dense_pred - labels) ** 2)
+    chunked_loss = torch.mean((chunked_pred - labels) ** 2)
+    dense_loss.backward()
+    chunked_loss.backward()
+
+    assert torch.allclose(dense_input.grad, chunked_input.grad, atol=1e-6, rtol=1e-5)
+    for (dense_name, dense_param), (chunked_name, chunked_param) in zip(
+        dense.named_parameters(),
+        chunked.named_parameters(),
+    ):
+        assert dense_name == chunked_name
+        assert dense_param.grad is not None
+        assert chunked_param.grad is not None
+        assert torch.allclose(dense_param.grad, chunked_param.grad, atol=1e-6, rtol=1e-5), dense_name
+
+    torch.nn.utils.clip_grad_value_(dense.parameters(), 3.0)
+    torch.nn.utils.clip_grad_value_(chunked.parameters(), 3.0)
+    dense_optimizer = torch.optim.SGD(dense.parameters(), lr=0.01)
+    chunked_optimizer = torch.optim.SGD(chunked.parameters(), lr=0.01)
+    dense_optimizer.step()
+    chunked_optimizer.step()
+    for key, dense_value in dense.state_dict().items():
+        assert torch.allclose(dense_value, chunked.state_dict()[key], atol=1e-6, rtol=1e-5), key
+
+
+def test_efficient_gats_query_chunking_bounds_softmax_rows_without_splitting_keys():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    model = efficient_gats.EfficientGATModel(
+        d_feat=4,
+        hidden_size=6,
+        num_layers=1,
+        dropout=0.0,
+        gats_attention_query_chunk_size=3,
+    )
+    softmax_shapes = []
+    handle = model.softmax.register_forward_pre_hook(
+        lambda _module, args: softmax_shapes.append(tuple(args[0].shape))
+    )
+    try:
+        pred = model(torch.randn(11, 5, 4))
+    finally:
+        handle.remove()
+
+    assert pred.shape == (11,)
+    assert softmax_shapes == [(3, 11), (3, 11), (3, 11), (2, 11)]
+    assert model.last_attention_weight is None
+    assert model.last_attention_execution == {
+        "mode": "query_chunked",
+        "rows": 11,
+        "columns": 11,
+        "query_chunk_size": 3,
+        "chunk_count": 4,
+    }
 
 
 def test_efficient_gats_industry_bias_increases_same_industry_attention_without_masking_cross_industry():
@@ -2889,6 +3025,85 @@ def test_efficient_gats_gpu_resident_train_epoch_has_no_per_batch_to(monkeypatch
     model.train_epoch(resident)
 
     assert calls == []
+
+
+def test_efficient_gats_cooperative_gpu_yield_is_fixed_and_performs_no_resource_query(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_cooperative_yield_every_days=2,
+        gpu_cooperative_yield_ms=3.5,
+    )
+    calls = []
+    model.device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: calls.append(("sync", str(device))))
+    monkeypatch.setattr(efficient_gats.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+    monkeypatch.setattr(
+        torch.cuda,
+        "mem_get_info",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("resource query forbidden")),
+    )
+
+    results = [model._maybe_cooperative_gpu_yield(day) for day in range(1, 6)]
+
+    assert results == [False, True, False, True, False]
+    assert calls == [
+        ("sync", "cuda:0"),
+        ("sleep", 0.0035),
+        ("sync", "cuda:0"),
+        ("sleep", 0.0035),
+    ]
+
+
+def test_efficient_gats_test_epoch_disables_autograd(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+    resident = _resident_segment_for_test(model, dataset.prepare("train"), torch)
+    original_forward = model.GAT_model.forward
+    grad_enabled = []
+
+    def _assert_no_grad(*args, **kwargs):
+        grad_enabled.append(torch.is_grad_enabled())
+        return original_forward(*args, **kwargs)
+
+    monkeypatch.setattr(model.GAT_model, "forward", _assert_no_grad)
+    model.test_epoch(resident)
+
+    assert grad_enabled
+    assert grad_enabled == [False] * len(grad_enabled)
 
 
 def test_efficient_gats_gpu_resident_activation_performs_no_vram_query(monkeypatch):

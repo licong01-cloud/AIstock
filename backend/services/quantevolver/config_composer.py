@@ -45,6 +45,11 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
 _GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
+_EFFICIENT_GATS_EXECUTION_DEFAULTS = {
+    "gats_attention_query_chunk_size": 512,
+    "gpu_cooperative_yield_every_days": 1,
+    "gpu_cooperative_yield_ms": 2.0,
+}
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
@@ -3057,6 +3062,9 @@ class ConfigComposer:
                         if key in hp and isinstance(hp[key], str):
                             hp[key] = float(hp[key])
                     model_kwargs.update(hp)
+                if model_class == "EfficientGATs":
+                    for key, value in _EFFICIENT_GATS_EXECUTION_DEFAULTS.items():
+                        model_kwargs.setdefault(key, value)
             elif "PTNN" in model_type or "NN" in model_type:
                 # 无源代码的 GeneralPTNN：必须在 model_hyperparameters 中提供 pt_model_uri
                 model_class = "GeneralPTNN"
@@ -3299,6 +3307,7 @@ class ConfigComposer:
             "gats_adjacency_mode", "gats_industry_gamma_init",
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
+        _EFFICIENT_GATS_HP_KEYS = _GATS_HP_KEYS | set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
@@ -3341,10 +3350,17 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
+            efficient_gats_execution_keys = set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
+            invalid_efficient_gats_keys = efficient_gats_execution_keys & set(custom_params)
+            if invalid_efficient_gats_keys and model_class != "EfficientGATs":
+                raise ValueError(
+                    "reason_code=efficient_gats_execution_params_require_efficient_gats: "
+                    f"model_class={model_class!r} keys={sorted(invalid_efficient_gats_keys)}"
+                )
             hp_keys = set()
             if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 hp_keys = _PTNN_HP_KEYS
@@ -3358,7 +3374,9 @@ class ConfigComposer:
                 hp_keys = _TABPFN_HP_KEYS
             elif model_class in ("LinearModel",):
                 hp_keys = _LINEAR_HP_KEYS
-            elif model_class in _GATS_MODEL_CLASSES:
+            elif model_class == "EfficientGATs":
+                hp_keys = _EFFICIENT_GATS_HP_KEYS
+            elif model_class == "GATs":
                 hp_keys = _GATS_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
             if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
