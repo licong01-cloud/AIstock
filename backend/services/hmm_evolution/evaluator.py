@@ -283,7 +283,7 @@ def evaluate_candidate(
     missing_sector_symbols: set[str] = set()
     missing_coefficient_occurrences = 0
     missing_coefficient_pairs: set[tuple[date, str]] = set()
-    neutral_fallback_replacements = 0
+    neutral_coefficient_replacements = 0
     coefficient_values: list[float] = []
 
     for index, trade_date in enumerate(frozen_dates, start=1):
@@ -335,7 +335,7 @@ def evaluate_candidate(
                 row = indexed.loc[symbol]
                 fallback_reason = row["fallback_reason"]
                 if isinstance(fallback_reason, str):
-                    neutral_fallback_replacements += 1
+                    neutral_coefficient_replacements += 1
                 record = {
                     "date": trade_date.isoformat(),
                     "symbol": symbol,
@@ -461,6 +461,28 @@ def evaluate_candidate(
         replacement_rows,
         key=lambda item: (-abs(int(item["rank_delta"])), str(item["date"]), str(item["symbol"])),
     )[:100]
+    missing_sector_occurrence_ratio = missing_sector_occurrences / len(pred)
+    mapped_occurrence_count = len(pred) - missing_sector_occurrences
+    missing_coefficient_occurrence_ratio: float | None = None
+    if mapped_occurrence_count > 0:
+        missing_coefficient_occurrence_ratio = (
+            missing_coefficient_occurrences / mapped_occurrence_count
+        )
+    neutral_coefficient_replacement_ratio: float | None = None
+    if replacement_rows:
+        neutral_coefficient_replacement_ratio = (
+            neutral_coefficient_replacements / len(replacement_rows)
+        )
+    coefficient_min: float | None = None
+    coefficient_max: float | None = None
+    if coefficient_values:
+        coefficient_min = min(coefficient_values)
+        coefficient_max = max(coefficient_values)
+    db_comparable_day_count = 0
+    db_day_coverage_ratio: float | None = None
+    if market_forward_return_mode == "required":
+        db_comparable_day_count = len(db_comparable)
+        db_day_coverage_ratio = db_coverage
     metrics = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "metric_version": METRIC_VERSION,
@@ -470,34 +492,24 @@ def evaluate_candidate(
         "trading_days_count": len(frozen_dates),
         "changed_day_count": changed_day_count,
         "label_comparable_day_count": len(label_comparable),
-        "db_comparable_day_count": len(db_comparable) if market_forward_return_mode == "required" else 0,
+        "db_comparable_day_count": db_comparable_day_count,
         "replacement_count": len(replacement_rows),
         "label_day_coverage_ratio": label_coverage,
-        "db_day_coverage_ratio": db_coverage if market_forward_return_mode == "required" else None,
+        "db_day_coverage_ratio": db_day_coverage_ratio,
         "primary_coverage_ratio": label_coverage,
         "net_label_return": net_label_return,
         "net_db_10d": net_db_10d,
         "positive_net_label_day_ratio": positive_net_label_day_ratio,
         "missing_sector_occurrence_count": missing_sector_occurrences,
         "missing_sector_unique_symbol_count": len(missing_sector_symbols),
-        "missing_sector_occurrence_ratio": (
-            missing_sector_occurrences / len(pred) if len(pred) else None
-        ),
+        "missing_sector_occurrence_ratio": missing_sector_occurrence_ratio,
         "missing_coefficient_occurrence_count": missing_coefficient_occurrences,
         "missing_coefficient_unique_date_sector_count": len(missing_coefficient_pairs),
-        "missing_coefficient_occurrence_ratio": (
-            missing_coefficient_occurrences / (len(pred) - missing_sector_occurrences)
-            if len(pred) > missing_sector_occurrences
-            else None
-        ),
-        "neutral_fallback_replacement_count": neutral_fallback_replacements,
-        "neutral_fallback_replacement_ratio": (
-            neutral_fallback_replacements / len(replacement_rows)
-            if replacement_rows
-            else None
-        ),
-        "coefficient_min": min(coefficient_values) if coefficient_values else None,
-        "coefficient_max": max(coefficient_values) if coefficient_values else None,
+        "missing_coefficient_occurrence_ratio": missing_coefficient_occurrence_ratio,
+        "neutral_coefficient_replacement_count": neutral_coefficient_replacements,
+        "neutral_coefficient_replacement_ratio": neutral_coefficient_replacement_ratio,
+        "coefficient_min": coefficient_min,
+        "coefficient_max": coefficient_max,
         "daily_summary": daily_rows,
         "replacement_samples": durable_samples,
     }
@@ -512,7 +524,7 @@ def evaluate_candidate(
         "trading_days_count": len(frozen_dates),
         "changed_day_count": changed_day_count,
         "label_comparable_day_count": len(label_comparable),
-        "db_comparable_day_count": len(db_comparable) if market_forward_return_mode == "required" else 0,
+        "db_comparable_day_count": db_comparable_day_count,
         "replacement_count": len(replacement_rows),
         "primary_coverage_ratio": label_coverage,
         "net_label_return": net_label_return,
