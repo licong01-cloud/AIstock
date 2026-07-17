@@ -609,15 +609,19 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     }
 
     assert verdict["name"] == "CI verdict"
+    assert sum(job.get("name") == "CI verdict" for job in jobs.values()) == 1
     assert verdict["if"] == "always()"
     assert set(verdict["needs"]) == expected_needs
     run = str(verdict["steps"][0]["run"])
+    assert '"classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"' in run
+    for lane in ("docs", "backend", "frontend", "go", "workflow", "prompt", "registrar"):
+        assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
     assert 'result" != "success"' in run
     assert 'result" != "skipped"' in run
     assert "CI verdict failed" in run
 
     classify_steps = jobs["classify-changes"]["steps"]
-    install = next(step for step in classify_steps if step.get("name") == "Install classifier catalog dependency")
+    install = next(step for step in classify_steps if step.get("name") == "Install change-classifier dependency")
     assert "pyyaml" in install["run"]
 
 

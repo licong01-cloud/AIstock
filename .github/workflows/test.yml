@@ -44,9 +44,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install classifier catalog dependency
-        run: python -m pip install --disable-pip-version-check pyyaml
-
       - name: Build changed-file list
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
