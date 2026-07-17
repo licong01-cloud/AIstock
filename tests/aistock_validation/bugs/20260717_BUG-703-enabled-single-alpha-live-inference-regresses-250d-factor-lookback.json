@@ -37,8 +37,8 @@
   "expected": "Strict live inference derives sufficient trading-calendar lookback for every declared 250d factor and produces an authoritative selection artifact when database history exists.",
   "first_seen_at": "2026-07-17T05:54:43.217710Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f3a9429b3a347dcbb6c46826ec83d2c6591263ca",
+  "fixed_at": "2026-07-17T06:12:19.552222Z",
   "github_issue_number": 2296,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2296",
   "last_seen_at": "2026-07-17T05:54:43.217710Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2297",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "54de01da4fbdfaf287b91ca9",
     "source_event_id": "FE-20260717-54de01da4fbd"
   },
+  "validation_evidence": [
+    "focused inference window matrix 13 passed; PR 2297 required CI passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
