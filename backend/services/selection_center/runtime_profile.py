@@ -12,7 +12,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from backend.services.trading_core.errors import (
     HMMRuntimeUnavailableError,
@@ -21,6 +21,7 @@ from backend.services.trading_core.errors import (
 from backend.services.stock_universe_pit_service import (
     StockUniversePitError,
     require_live_st_pit_universe_key,
+    require_qe_immutable_st_pit_universe_key,
 )
 
 
@@ -154,9 +155,14 @@ class RuntimeRiskPolicyProfile(BaseModel):
 
     @field_validator("st_universe_key")
     @classmethod
-    def _require_live_st_pit_namespace(cls, value: str) -> str:
+    def _require_st_pit_namespace(cls, value: str, info: ValidationInfo) -> str:
+        validation_scope = str((info.context or {}).get("st_pit_namespace_scope") or "live").strip()
         try:
-            return require_live_st_pit_universe_key(value)
+            if validation_scope == "live":
+                return require_live_st_pit_universe_key(value)
+            if validation_scope == "qe_immutable":
+                return require_qe_immutable_st_pit_universe_key(value)
+            raise ValueError(f"unsupported st_pit_namespace_scope: {validation_scope}")
         except StockUniversePitError as exc:
             raise ValueError(str(exc)) from exc
 
