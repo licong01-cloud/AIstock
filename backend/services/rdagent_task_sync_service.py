@@ -1272,7 +1272,7 @@ class RDAgentTaskSyncService:
                             processed_dynamic_factors.append(parsed[1])
                         else:
                             processed_dynamic_factors.append(df)
-                    except:
+                    except Exception:
                         processed_dynamic_factors.append(df)
                 else:
                     processed_dynamic_factors.append(df)
