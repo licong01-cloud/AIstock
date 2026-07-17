@@ -18,6 +18,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     NativeMultiComponentRef,
     OnboardingBlobRef,
     PortableAdvisoryEvidenceBundle,
+    PortableManifestProjectionEvidence,
     PortableRelationRowSet,
     RealDevOnboardingRequest,
     RealDevOnboardingError,
@@ -28,6 +29,28 @@ from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardi
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+
+
+def _projection(package_id: str, digest: str) -> PortableManifestProjectionEvidence:
+    return PortableManifestProjectionEvidence(
+        package_id=package_id,
+        source_manifest_sha256=digest,
+        portable_manifest_sha256=digest,
+        removed_source_provenance_hash=SHA_C,
+        runtime_asset_closure_hash=SHA_C,
+        alpha_component_closure_hash=SHA_C,
+    )
+
+
+def _package_ref(package_id: str, digest: str, alpha_mode: AlphaMode) -> BundlePackageRef:
+    return BundlePackageRef(
+        package_id=package_id,
+        manifest_sha256=digest,
+        source_manifest_sha256=digest,
+        removed_source_row_provenance_hash=SHA_C,
+        alpha_mode=alpha_mode,
+        projection=_projection(package_id, digest),
+    )
 
 
 def _component(alpha_id: str, *, window: str) -> AlphaComponentEvidence:
@@ -136,8 +159,8 @@ def test_bundle_accepts_distinct_native_component_windows_and_exact_graph(
         source_database_identity_hash=SHA_C,
         export_snapshot_identity="snapshot:1",
         package_refs=(
-            BundlePackageRef(package_id="pkg_single", manifest_sha256=SHA_A, alpha_mode=AlphaMode.SINGLE),
-            BundlePackageRef(package_id="pkg_multi", manifest_sha256=SHA_B, alpha_mode=AlphaMode.MULTI),
+            _package_ref("pkg_single", SHA_A, AlphaMode.SINGLE),
+            _package_ref("pkg_multi", SHA_B, AlphaMode.MULTI),
         ),
         native_multi_component_refs=(c1, c2),
         relation_row_sets=_row_sets(),
@@ -164,8 +187,8 @@ def test_bundle_rejects_missing_dependency_edge(onboarding_request: RealDevOnboa
             source_database_identity_hash=SHA_C,
             export_snapshot_identity="snapshot:1",
             package_refs=(
-                BundlePackageRef(package_id="pkg_single", manifest_sha256=SHA_A, alpha_mode=AlphaMode.SINGLE),
-                BundlePackageRef(package_id="pkg_multi", manifest_sha256=SHA_B, alpha_mode=AlphaMode.MULTI),
+                _package_ref("pkg_single", SHA_A, AlphaMode.SINGLE),
+                _package_ref("pkg_multi", SHA_B, AlphaMode.MULTI),
             ),
             native_multi_component_refs=(
                 NativeMultiComponentRef(parent_package_id="pkg_multi", component=_component("a", window="20d")),
@@ -208,8 +231,8 @@ def test_bundle_offline_verification_reads_every_blob_and_detects_tamper(
         source_database_identity_hash=SHA_C,
         export_snapshot_identity="snapshot:blob-readback",
         package_refs=(
-            BundlePackageRef(package_id="pkg_single", manifest_sha256=SHA_A, alpha_mode=AlphaMode.SINGLE),
-            BundlePackageRef(package_id="pkg_multi", manifest_sha256=SHA_B, alpha_mode=AlphaMode.MULTI),
+            _package_ref("pkg_single", SHA_A, AlphaMode.SINGLE),
+            _package_ref("pkg_multi", SHA_B, AlphaMode.MULTI),
         ),
         native_multi_component_refs=(
             NativeMultiComponentRef(parent_package_id="pkg_multi", component=_component("a", window="5d")),

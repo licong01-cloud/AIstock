@@ -99,6 +99,18 @@ def _parser() -> argparse.ArgumentParser:
     import_dev.add_argument("--source-package-asset-root", required=True, type=Path)
     import_dev.add_argument("--target-package-asset-root", required=True, type=Path)
 
+    rollback_dev = subparsers.add_parser(
+        "validate-dev-rollback",
+        help="execute the exact DEV importer and prove physical rollback with fresh readback",
+    )
+    rollback_dev.add_argument("--bundle-ref", required=True, type=Path)
+    rollback_dev.add_argument("--plan", required=True, type=Path)
+    rollback_dev.add_argument("--env-file", required=True, type=Path)
+    rollback_dev.add_argument("--release-receipt-root", required=True, type=Path)
+    rollback_dev.add_argument("--evidence-root", required=True, type=Path)
+    rollback_dev.add_argument("--source-package-asset-root", required=True, type=Path)
+    rollback_dev.add_argument("--target-package-asset-root", required=True, type=Path)
+
     verify_import = subparsers.add_parser("verify-import", help="freshly verify a completed DEV package import")
     verify_import.add_argument("--bundle-ref", required=True, type=Path)
     verify_import.add_argument("--receipt", required=True, type=Path)
@@ -258,6 +270,24 @@ def _import_dev(args: argparse.Namespace) -> int:
     return EXIT_STATE_UNKNOWN if receipt.commit_outcome is ImportCommitOutcome.STATE_UNKNOWN else EXIT_SUCCESS
 
 
+def _validate_dev_rollback(args: argparse.Namespace) -> int:
+    store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
+    bundle, bundle_ref = _load_bundle(store=store, ref_path=args.bundle_ref)
+    supplied_plan = RealDevImportPlan.model_validate(_read_json(args.plan))
+    receipt = RealDevPackageImporter().validate_rollback(
+        bundle=bundle,
+        bundle_ref=bundle_ref,
+        supplied_plan=supplied_plan,
+        evidence_store=store,
+        env_file=args.env_file,
+        release_receipt_root=args.release_receipt_root,
+        source_package_asset_root=args.source_package_asset_root,
+        target_package_asset_root=args.target_package_asset_root,
+    )
+    _emit(receipt)
+    return EXIT_SUCCESS
+
+
 def _verify_import(args: argparse.Namespace) -> int:
     store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
     bundle, bundle_ref = _load_bundle(store=store, ref_path=args.bundle_ref)
@@ -338,6 +368,8 @@ def main(argv: list[str] | None = None) -> int:
             return _plan_import(args)
         if args.command == "import-dev":
             return _import_dev(args)
+        if args.command == "validate-dev-rollback":
+            return _validate_dev_rollback(args)
         if args.command == "verify-import":
             return _verify_import(args)
         if args.command == "verify-evidence":
