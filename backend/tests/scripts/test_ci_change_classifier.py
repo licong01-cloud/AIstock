@@ -45,7 +45,7 @@ def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     assert payload["pr_quality_required"] is True
 
 
-def test_open_bug_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
+def test_open_bug_registry_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="open")
 
@@ -54,12 +54,13 @@ def test_open_bug_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
-    assert payload["backend_required"] is True
+    assert payload["classification"] == "bug_registry_metadata_only"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
     assert any("status=open" in reason for reason in payload["reasons"])
 
 
-def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
+def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="fixed")
 
@@ -71,10 +72,11 @@ def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
-    assert payload["backend_required"] is True
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
     assert payload["non_bug_registry_files"] == ["scripts/aistock_issue_workflow.py"]
-    assert payload["backend_sessions"] == list(classifier.BACKEND_MATRIX_SESSIONS)
+    assert payload["backend_sessions"] == []
+    assert payload["workflow_validation_required"] is True
 
 
 def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
@@ -83,7 +85,7 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
+    assert payload["classification"] == "targeted_ci_required"
     assert payload["backend_required"] is True
     assert payload["backend_sessions"] == ["paper_v2_backend"]
 
@@ -114,6 +116,55 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     )
 
     assert hmm_payload["backend_sessions"] == ["hmm_data_source_backend"]
+
+    simulation_payload = classifier.classify_changed_files(
+        ["backend/services/simulation_runtime/ops.py"],
+        repo_root=tmp_path,
+    )
+
+    assert simulation_payload["backend_sessions"] == ["simulation_core_l2"]
+    assert simulation_payload["unmapped_code_files"] == []
+
+
+def test_unmapped_backend_code_blocks_instead_of_running_unrelated_matrix(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/infra/qmt_client.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "unmapped_code_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
+
+
+def test_frontend_and_go_changes_use_language_gates_without_backend_matrix(tmp_path: Path) -> None:
+    frontend = classifier.classify_changed_files(
+        ["frontend/src/app/watchlist/page.tsx"],
+        repo_root=tmp_path,
+    )
+    assert frontend["classification"] == "frontend_ci_required"
+    assert frontend["frontend_required"] is True
+    assert frontend["backend_required"] is False
+    assert frontend["backend_sessions"] == []
+    assert frontend["obsolete_surface_removal"] is False
+
+    go = classifier.classify_changed_files(
+        ["tdx-api-main/web/server.go"],
+        repo_root=tmp_path,
+    )
+    assert go["classification"] == "go_ci_required"
+    assert go["go_required"] is True
+    assert go["backend_required"] is False
+    assert go["backend_sessions"] == []
+
+    go_docs = classifier.classify_changed_files(
+        ["tdx-api-main/web/USAGE.md"],
+        repo_root=tmp_path,
+    )
+    assert go_docs["go_required"] is False
+    assert go_docs["backend_sessions"] == []
 
 
 def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
@@ -181,7 +232,8 @@ def test_docs_controlled_keeps_normal_guardrails(tmp_path: Path) -> None:
     assert payload["classification"] == "docs_controlled"
     assert payload["docs_fast_required"] is False
     assert payload["docs_controlled_required"] is True
-    assert payload["backend_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
     assert payload["static_gate_required"] is True
 
 
@@ -372,7 +424,7 @@ def test_workflow_client_instruction_cleanup_change_skips_backend_matrix(tmp_pat
     assert payload["workflow_bug_metadata_files"] == [bug_rel]
 
 
-def test_workflow_bug_metadata_with_business_scope_keeps_backend_matrix(tmp_path: Path) -> None:
+def test_workflow_bug_metadata_selects_from_changed_files_not_future_scope(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260604_BUG-258-business-scope.json"
     bug = tmp_path / bug_rel
     _write_bug(
@@ -394,9 +446,9 @@ def test_workflow_bug_metadata_with_business_scope_keeps_backend_matrix(tmp_path
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
-    assert payload["backend_required"] is True
-    assert payload["workflow_validation_required"] is False
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
 
 
 def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) -> None:
@@ -408,12 +460,13 @@ def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
+    assert payload["classification"] == "targeted_ci_required"
     assert payload["backend_required"] is True
-    assert payload["workflow_validation_required"] is False
+    assert payload["backend_sessions"] == ["validation_center_backend"]
+    assert payload["workflow_validation_required"] is True
 
 
-def test_obsolete_surface_removal_skips_backend_matrix_and_defers_nightly(tmp_path: Path) -> None:
+def test_frontend_removal_uses_relevant_language_and_backend_gates(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260703_BUG-580-remove-obsolete-surface.json"
     _write_bug(tmp_path / bug_rel, status="open", module="strategy_package")
 
@@ -432,11 +485,12 @@ def test_obsolete_surface_removal_skips_backend_matrix_and_defers_nightly(tmp_pa
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "obsolete_surface_removal"
-    assert payload["backend_required"] is False
-    assert payload["backend_sessions"] == []
-    assert payload["obsolete_surface_removal"] is True
-    assert payload["nightly_deferred_verification"]["required"] is True
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["paper_v2_backend"]
+    assert payload["frontend_required"] is True
+    assert payload["obsolete_surface_removal"] is False
+    assert payload["nightly_deferred_verification"]["required"] is False
 
 
 def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
@@ -454,11 +508,24 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
         "steps.classify.outputs.backend_sessions }}"
     )
+    assert jobs["classify-changes"]["outputs"]["frontend_required"].endswith(
+        "steps.classify.outputs.frontend_required }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["go_required"].endswith(
+        "steps.classify.outputs.go_required }}"
+    )
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
     assert jobs["backend-tests"]["strategy"]["matrix"]["session"] == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     assert jobs["workflow-validation-tests"]["if"] == (
         "needs.classify-changes.outputs.workflow_validation_required == 'true'"
     )
+    assert jobs["frontend-quality"]["if"] == "needs.classify-changes.outputs.frontend_required == 'true'"
+    frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
+    assert "npm exec tsc" in frontend_runs
+    assert "npm run lint" in frontend_runs
+    assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
+    go_runs = "\n".join(str(step.get("run", "")) for step in jobs["tdx-go-tests"]["steps"])
+    assert "go test ./..." in go_runs
     prompt_eval = jobs["prompt-evaluation"]
     assert prompt_eval["if"] == "needs.classify-changes.outputs.prompt_evaluation_required == 'true'"
     prompt_eval_run_steps = "\n".join(str(step.get("run", "")) for step in prompt_eval["steps"])
@@ -570,7 +637,7 @@ def test_semgrep_uses_registry_sync_fast_lane() -> None:
     assert "registry_sync == '1'" in str(no_op["if"])
 
 
-def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
+def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
     allocator.parent.mkdir(parents=True, exist_ok=True)
     allocator.write_text(json.dumps({"last_allocated": 191}), encoding="utf-8")
@@ -580,8 +647,9 @@ def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "full_ci_required"
-    assert payload["backend_required"] is True
+    assert payload["classification"] == "bug_registry_metadata_only"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
     assert any("allocator" in reason for reason in payload["reasons"])
 
 
@@ -608,6 +676,32 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
     assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
     assert "prompt_evaluation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"
+
+
+def test_cli_blocks_unmapped_code_and_writes_diagnostics(tmp_path: Path, capsys) -> None:
+    out = tmp_path / "summary.json"
+    github_out = tmp_path / "github_output.txt"
+
+    assert classifier.main([
+        "--repo-root",
+        str(tmp_path),
+        "--changed-file",
+        "backend/infra/qmt_client.py",
+        "--output-json",
+        str(out),
+        "--github-output",
+        str(github_out),
+    ]) == 2
+
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
+    github_payload = github_out.read_text(encoding="utf-8")
+    assert "classification=unmapped_code_blocked" in github_payload
+    assert 'unmapped_code_files=["backend/infra/qmt_client.py"]' in github_payload
+    stdout_payload = json.loads(capsys.readouterr().out)
+    assert stdout_payload["workflow_gate"] == "blocked"
+    assert stdout_payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
 
 
 def test_workflow_instruction_skill_changes_use_focused_fast_lane(tmp_path: Path) -> None:
