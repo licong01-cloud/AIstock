@@ -285,6 +285,11 @@ def test_recompute_shared_batch_uses_item_truth_and_releases_lease() -> None:
 class _EmptyClaimRepository:
     def __init__(self) -> None:
         self.release_args: dict[str, Any] | None = None
+        self.reaper_calls = 0
+
+    def mark_expired_leases_timed_out(self):
+        self.reaper_calls += 1
+        return {"evaluations": 0, "batches": 0}
 
     def claim_batch(self, **kwargs):
         return {
@@ -316,12 +321,38 @@ def test_worker_releases_batch_when_shared_evaluation_is_claimed_elsewhere() -> 
     )
 
     assert worker.run_once() is True
+    assert repository.reaper_calls == 1
     assert repository.release_args == {
         "batch_id": "hmmb_shared",
         "owner_id": "worker-1",
         "fencing_token": 4,
         "expected_row_version": 9,
     }
+
+
+class _NoBatchRepository:
+    def __init__(self) -> None:
+        self.reaper_calls = 0
+
+    def mark_expired_leases_timed_out(self):
+        self.reaper_calls += 1
+        return {"evaluations": 1, "batches": 1}
+
+    def claim_batch(self, **_kwargs):
+        return None
+
+
+def test_worker_reaps_expired_leases_before_looking_for_new_work() -> None:
+    repository = _NoBatchRepository()
+    worker = HMMEvolutionWorker(
+        repository,  # type: ignore[arg-type]
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker"),
+        executor=_Executor(),
+    )
+
+    assert worker.run_once() is False
+    assert repository.reaper_calls == 1
 
 
 def test_batch_recommendations_persist_only_on_batch_items() -> None:

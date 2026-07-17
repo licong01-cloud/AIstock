@@ -70,6 +70,10 @@ class HMMEvolutionWorker:
         """Claim one durable batch/evaluation only after explicit runtime activation."""
 
         self.assert_runnable()
+        # Recovery is part of every worker cycle, not an optional maintenance
+        # command.  A crashed process must leave durable rows that the next
+        # worker can terminalize before it claims more work.
+        self._repository.mark_expired_leases_timed_out()
         batch = self._repository.claim_batch(
             owner_id=self._owner_id,
             lease_seconds=self._config.lease.lease_seconds,
