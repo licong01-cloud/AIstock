@@ -1483,6 +1483,40 @@ def test_scheduler_resolves_model_aware_gpu_training_policy(monkeypatch):
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy(None) == "parallel"
 
 
+def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    policies = {"gat-model": "exclusive", "lstm-model": "parallel"}
+    calls = []
+
+    def _resolve(model_id):
+        calls.append(model_id)
+        return policies[model_id]
+
+    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_policy", _resolve)
+
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="gat-model",
+        requested_phase_pipeline=False,
+        full_train=True,
+    ) == ("exclusive", True)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="lstm-model",
+        requested_phase_pipeline=False,
+        full_train=True,
+    ) == ("parallel", False)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="lstm-model",
+        requested_phase_pipeline=True,
+        full_train=True,
+    ) == ("parallel", True)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="gat-model",
+        requested_phase_pipeline=True,
+        full_train=False,
+    ) == ("parallel", False)
+    assert calls == ["gat-model", "lstm-model", "lstm-model"]
+
+
 def test_scheduler_atomically_reserves_policy_specific_gpu_phase_sessions(monkeypatch):
     scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
     requested = []
@@ -2396,6 +2430,29 @@ def test_efficient_gats_cooperative_execution_params_fail_loud_for_other_models(
         )
 
 
+@pytest.mark.parametrize(
+    "removed_key",
+    [
+        "gpu_resident_vram_margin_bytes",
+        "gpu_resident_working_memory_multiplier",
+        "gpu_phase_release_tolerance_bytes",
+    ],
+)
+def test_removed_gpu_resource_options_fail_during_config_composition(removed_key):
+    with pytest.raises(ValueError, match="reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED"):
+        _base_yaml(
+            model_info=_efficient_gats_model_info(),
+            custom_params={removed_key: 1},
+        )
+
+
+def test_removed_gpu_resource_options_in_model_catalog_fail_during_config_composition():
+    model_info = _efficient_gats_model_info()
+    model_info["model_hyperparameters"]["gpu_resident_vram_margin_bytes"] = 1
+    with pytest.raises(ValueError, match="reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED"):
+        _base_yaml(model_info=model_info)
+
+
 def test_gats_v25_minute_execution_config_remains_daily_signal_nested_executor():
     yaml_text = _base_yaml(
         model_info=_gats_model_info(),
@@ -2628,7 +2685,41 @@ def test_efficient_gats_query_chunking_bounds_softmax_rows_without_splitting_key
         "columns": 11,
         "query_chunk_size": 3,
         "chunk_count": 4,
+        "autograd_recompute": True,
     }
+
+
+def test_efficient_gats_query_chunking_does_not_save_attention_blocks_for_backward():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    model = efficient_gats.EfficientGATModel(
+        d_feat=4,
+        hidden_size=6,
+        num_layers=1,
+        dropout=0.0,
+        gats_adjacency_mode="industry_bias",
+        gats_industry_gamma_init=0.7,
+        gats_industry_embedding="on",
+        gats_industry_embedding_dim=3,
+        gats_attention_query_chunk_size=3,
+    )
+    model.train()
+    saved_shapes = []
+
+    def _pack(tensor):
+        saved_shapes.append(tuple(tensor.shape))
+        return tensor
+
+    industry_ids = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 200], dtype=torch.long)
+    with torch.autograd.graph.saved_tensors_hooks(_pack, lambda tensor: tensor):
+        pred = model(torch.randn(11, 5, 4), industry_ids=industry_ids)
+        loss = pred.square().mean()
+
+    assert (3, 11) not in saved_shapes
+    assert (2, 11) not in saved_shapes
+    loss.backward()
 
 
 def test_efficient_gats_industry_bias_increases_same_industry_attention_without_masking_cross_industry():
@@ -3138,10 +3229,106 @@ def test_efficient_gats_gpu_resident_activation_performs_no_vram_query(monkeypat
     monkeypatch.setattr(torch.cuda, "memory_reserved", _forbidden)
     monkeypatch.setattr(torch.cuda, "memory_allocated", _forbidden)
     assert model._can_activate_gpu_resident([resident_cpu]) is True
-    assert model.gpu_resident_last_fallback is None
+    assert model.gpu_resident_last_error is None
 
 
-def test_efficient_gats_legacy_resource_options_are_explicitly_ignored(capsys):
+def test_efficient_gats_legacy_resource_options_fail_loud():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+    with pytest.raises(ValueError, match="reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED"):
+        efficient_gats.EfficientGATs(
+            d_feat=dataset.d_feat,
+            hidden_size=4,
+            num_layers=1,
+            dropout=0.0,
+            n_epochs=1,
+            lr=0.01,
+            metric="loss",
+            early_stop=1,
+            base_model="GRU",
+            GPU=-1,
+            n_jobs=0,
+            seed=7,
+            gpu_resident=True,
+            gpu_resident_vram_margin_bytes=123,
+            gpu_resident_working_memory_multiplier=9,
+            gpu_phase_release_tolerance_bytes=128,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason_code"),
+    [
+        ({"gats_attention_query_chunk_size": 0}, "attention_query_chunk_size_invalid"),
+        ({"gpu_cooperative_yield_every_days": 0}, "gpu_cooperative_yield_config_invalid"),
+        ({"gpu_cooperative_yield_ms": 0}, "gpu_cooperative_yield_config_invalid"),
+    ],
+)
+def test_efficient_gats_cooperative_execution_cannot_be_disabled(kwargs, reason_code):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+    with pytest.raises(ValueError, match=reason_code):
+        efficient_gats.EfficientGATs(
+            d_feat=dataset.d_feat,
+            hidden_size=4,
+            num_layers=1,
+            dropout=0.0,
+            n_epochs=1,
+            lr=0.01,
+            metric="loss",
+            early_stop=1,
+            base_model="GRU",
+            GPU=-1,
+            n_jobs=0,
+            seed=7,
+            **kwargs,
+        )
+
+
+def test_efficient_gats_gpu_resident_boolean_strings_are_strictly_parsed():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident="false",
+        gpu_resident_shuffle_days="off",
+    )
+    assert model.gpu_resident is False
+    assert model.gpu_resident_shuffle_days is False
+
+    with pytest.raises(ValueError, match="efficient_gats_gpu_resident_invalid"):
+        efficient_gats.EfficientGATs(
+            d_feat=dataset.d_feat,
+            hidden_size=4,
+            num_layers=1,
+            dropout=0.0,
+            n_epochs=1,
+            lr=0.01,
+            metric="loss",
+            early_stop=1,
+            base_model="GRU",
+            GPU=-1,
+            n_jobs=0,
+            seed=7,
+            gpu_resident="sometimes",
+        )
+
+
+def test_efficient_gats_gpu_resident_requires_cuda_instead_of_downgrading():
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     efficient_gats = _import_efficient_gats_module()
     dataset = _MiniGatsDataset()
@@ -3159,14 +3346,111 @@ def test_efficient_gats_legacy_resource_options_are_explicitly_ignored(capsys):
         n_jobs=0,
         seed=7,
         gpu_resident=True,
-        gpu_resident_vram_margin_bytes=123,
-        gpu_resident_working_memory_multiplier=9,
-        gpu_phase_release_tolerance_bytes=128,
     )
-    output = capsys.readouterr().out
-    assert "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED" in output
-    assert not hasattr(model, "gpu_phase_release_tolerance_bytes")
-    assert not hasattr(model, "gpu_resident_vram_margin_bytes")
+
+    with pytest.raises(RuntimeError, match="efficient_gats_gpu_resident_not_cuda"):
+        model._can_activate_gpu_resident([])
+    assert model.gpu_resident_last_error["reason_code"] == "efficient_gats_gpu_resident_not_cuda"
+
+
+def test_efficient_gats_gpu_resident_preload_failure_does_not_fallback(monkeypatch, tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+    monkeypatch.setattr(model, "_can_activate_gpu_resident", lambda _segments: True)
+    monkeypatch.setattr(
+        model,
+        "_move_segment_to_gpu",
+        lambda _segment: (_ for _ in ()).throw(RuntimeError("simulated preload failure")),
+    )
+    monkeypatch.setattr(
+        model,
+        "_fit_streaming",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("streaming fallback must not run")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="efficient_gats_gpu_resident_preload_failed"):
+        model.fit(
+            dataset,
+            evals_result={},
+            save_path=str(tmp_path / "must-not-be-written.pt"),
+        )
+
+
+def test_efficient_gats_industry_provider_body_type_error_is_not_swallowed():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+
+    def _broken_provider(_segment, _index, _segment_name):
+        raise TypeError("provider-body-failure")
+
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_industry_id_provider=_broken_provider,
+    )
+    segment = dataset.prepare("train")
+    index = segment.get_index()
+    with pytest.raises(TypeError, match="provider-body-failure"):
+        model._provider_industry_values(segment, index, segment_name="train")
+
+
+def test_efficient_gats_industry_provider_signature_adaptation_remains_supported():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+
+    def _index_only_provider(index):
+        return ["801010"] * len(index)
+
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_industry_id_provider=_index_only_provider,
+    )
+    segment = dataset.prepare("train")
+    index = segment.get_index()
+    assert model._provider_industry_values(segment, index, segment_name="train") == [
+        "801010"
+    ] * len(index)
 
 
 def test_efficient_gats_gpu_resident_predict_uses_lifecycle_without_resource_queries(monkeypatch):

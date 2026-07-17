@@ -93,6 +93,30 @@ def resolve_gpu_training_policy(model_info: Mapping[str, Any] | None) -> str:
     return explicit or GPU_TRAINING_POLICY_PARALLEL
 
 
+def resolve_gpu_phase_pipeline_enabled(
+    *,
+    requested: bool,
+    full_train: bool,
+    policy: str,
+) -> bool:
+    """Require durable phase tracking whenever a full-train model is exclusive.
+
+    The operator toggle controls optional train/backtest pipelining for parallel
+    models.  It must not disable the exclusive lease required by GAT-family
+    training, because doing so would permit concurrent GAT GPU phases.
+    """
+
+    normalized = str(policy or "").strip().lower()
+    if normalized not in GPU_TRAINING_POLICIES:
+        raise QEGPUTrainingPolicyError(
+            GPU_TRAINING_POLICY_INVALID_REASON,
+            f"unsupported gpu_training_policy={policy!r}",
+        )
+    if not full_train:
+        return False
+    return bool(requested) or normalized == GPU_TRAINING_POLICY_EXCLUSIVE
+
+
 @dataclass
 class GPUPhaseLease:
     """One idempotently releasable shared or exclusive gate lease."""

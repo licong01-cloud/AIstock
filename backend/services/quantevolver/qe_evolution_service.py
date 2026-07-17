@@ -33,6 +33,7 @@ from .qe_gpu_training_policy import (
     GPUPhaseLease,
     GPU_TRAINING_POLICY_PARALLEL,
     ModelAwareGPUPhaseGate,
+    resolve_gpu_phase_pipeline_enabled,
     resolve_gpu_training_policy,
 )
 from .node_execution import (
@@ -226,6 +227,23 @@ class AutoEvolutionScheduler:
 
         model_info = ConfigComposer()._get_model_info(model_id)
         return resolve_gpu_training_policy(model_info or {"model_id": model_id})
+
+    def _resolve_gpu_execution_contract(
+        self,
+        *,
+        model_id: str | None,
+        requested_phase_pipeline: bool,
+        full_train: bool,
+    ) -> tuple[str, bool]:
+        policy = GPU_TRAINING_POLICY_PARALLEL
+        if full_train:
+            policy = self._resolve_model_gpu_training_policy(model_id)
+        phase_pipeline_enabled = resolve_gpu_phase_pipeline_enabled(
+            requested=requested_phase_pipeline,
+            full_train=full_train,
+            policy=policy,
+        )
+        return policy, phase_pipeline_enabled
 
     async def _acquire_gpu_phase_lease(self, node_id: str, policy: str) -> GPUPhaseLease:
         """Acquire the process-wide fair gate; DB reservation is performed separately."""
@@ -3974,6 +3992,7 @@ class AutoEvolutionScheduler:
         retry_gpu_lease = None
         retry_resource_waiter_started = False
         retry_phase_pipeline_enabled = False
+        retry_requested_phase_pipeline = False
         retry_gpu_training_policy = GPU_TRAINING_POLICY_PARALLEL
         if task.get("task_type") == "custom_evo":
             retry_strategy_config = self._parse_custom_evo_strategy_config(
@@ -3984,9 +4003,9 @@ class AutoEvolutionScheduler:
                 retry_strategy_config.get("resource_telemetry_enabled", False),
                 context=f"retry:{task_id}:Loop{loop_index}",
             )
-            retry_phase_pipeline_enabled = bool(
+            retry_requested_phase_pipeline = bool(
                 retry_strategy_config.get("phase_pipeline_enabled", False)
-            ) and retry_mode_name == QE_LOOP_RETRY_MODE_FULL_TRAIN
+            )
 
         # 5. 使用统一引擎重新 compose 并提交
         try:
@@ -3997,8 +4016,24 @@ class AutoEvolutionScheduler:
             task_for_retry = dict(task)
             task_for_retry["node_id"] = effective_node_id
             cfg = build_config_from_retry_loop(config, task_for_retry, experiment_name=f"{task_id}/{loop_id}")
+            retry_full_train = retry_mode_name == QE_LOOP_RETRY_MODE_FULL_TRAIN
+            retry_gpu_training_policy, retry_phase_pipeline_enabled = (
+                self._resolve_gpu_execution_contract(
+                    model_id=cfg.model_id,
+                    requested_phase_pipeline=retry_requested_phase_pipeline,
+                    full_train=retry_full_train,
+                )
+            )
             if retry_phase_pipeline_enabled:
-                retry_gpu_training_policy = self._resolve_model_gpu_training_policy(cfg.model_id)
+                if not retry_requested_phase_pipeline:
+                    logger.info(
+                        "QE exclusive GPU policy forced durable phase tracking for retry: "
+                        "task=%s Loop%s model=%s policy=%s",
+                        task_id,
+                        loop_index,
+                        cfg.model_id,
+                        retry_gpu_training_policy,
+                    )
                 retry_gpu_lease, retry_resource_session = await self._reserve_gpu_phase_session(
                     service=retry_resource_service,
                     task_id=task_id,
@@ -6785,7 +6820,7 @@ class AutoEvolutionScheduler:
         )
         requested_phase_pipeline = bool(strategy_config.get("phase_pipeline_enabled", False))
         full_train_requested = not (bool(loop_config.get("backtest_only")) and not force_full_train)
-        phase_pipeline_enabled = requested_phase_pipeline and full_train_requested
+        phase_pipeline_enabled = False
 
         resource_service = QEResourcePhaseService()
         resource_session = None
@@ -6808,8 +6843,21 @@ class AutoEvolutionScheduler:
                 task=task,
                 experiment_name=experiment_name,
             )
+            gpu_training_policy, phase_pipeline_enabled = self._resolve_gpu_execution_contract(
+                model_id=cfg.model_id,
+                requested_phase_pipeline=requested_phase_pipeline,
+                full_train=full_train_requested,
+            )
             if phase_pipeline_enabled:
-                gpu_training_policy = self._resolve_model_gpu_training_policy(cfg.model_id)
+                if not requested_phase_pipeline:
+                    logger.info(
+                        "QE exclusive GPU policy forced durable phase tracking: "
+                        "task=%s Loop%s model=%s policy=%s",
+                        task_id,
+                        loop_index,
+                        cfg.model_id,
+                        gpu_training_policy,
+                    )
                 gpu_phase_lease, resource_session = await self._reserve_gpu_phase_session(
                     service=resource_service,
                     task_id=task_id,

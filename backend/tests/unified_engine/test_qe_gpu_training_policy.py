@@ -11,6 +11,7 @@ from backend.services.quantevolver.qe_gpu_training_policy import (
     GPU_TRAINING_POLICY_PARALLEL,
     ModelAwareGPUPhaseGate,
     QEGPUTrainingPolicyError,
+    resolve_gpu_phase_pipeline_enabled,
     resolve_gpu_training_policy,
 )
 
@@ -66,6 +67,41 @@ def test_invalid_policy_fails_fast():
                 "model_name": "LSTM",
                 "model_config": {"gpu_training_policy": "auto"},
             }
+        )
+    assert exc_info.value.reason_code == GPU_TRAINING_POLICY_INVALID_REASON
+
+
+@pytest.mark.parametrize(
+    ("requested", "full_train", "policy", "expected"),
+    [
+        (False, True, GPU_TRAINING_POLICY_EXCLUSIVE, True),
+        (False, True, GPU_TRAINING_POLICY_PARALLEL, False),
+        (True, True, GPU_TRAINING_POLICY_PARALLEL, True),
+        (True, False, GPU_TRAINING_POLICY_EXCLUSIVE, False),
+    ],
+)
+def test_phase_pipeline_cannot_disable_exclusive_full_train_lease(
+    requested,
+    full_train,
+    policy,
+    expected,
+):
+    assert (
+        resolve_gpu_phase_pipeline_enabled(
+            requested=requested,
+            full_train=full_train,
+            policy=policy,
+        )
+        is expected
+    )
+
+
+def test_phase_pipeline_policy_validation_fails_fast():
+    with pytest.raises(QEGPUTrainingPolicyError) as exc_info:
+        resolve_gpu_phase_pipeline_enabled(
+            requested=False,
+            full_train=True,
+            policy="auto",
         )
     assert exc_info.value.reason_code == GPU_TRAINING_POLICY_INVALID_REASON
 

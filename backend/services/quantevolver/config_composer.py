@@ -50,6 +50,11 @@ _EFFICIENT_GATS_EXECUTION_DEFAULTS = {
     "gpu_cooperative_yield_every_days": 1,
     "gpu_cooperative_yield_ms": 2.0,
 }
+_REMOVED_GATS_RESOURCE_OPTIONS = {
+    "gpu_resident_vram_margin_bytes",
+    "gpu_resident_working_memory_multiplier",
+    "gpu_phase_release_tolerance_bytes",
+}
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
@@ -3062,6 +3067,14 @@ class ConfigComposer:
                         if key in hp and isinstance(hp[key], str):
                             hp[key] = float(hp[key])
                     model_kwargs.update(hp)
+                removed_resource_options = sorted(
+                    _REMOVED_GATS_RESOURCE_OPTIONS & set(model_kwargs)
+                )
+                if removed_resource_options:
+                    raise ValueError(
+                        "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED: "
+                        f"unsupported_options={removed_resource_options}"
+                    )
                 if model_class == "EfficientGATs":
                     for key, value in _EFFICIENT_GATS_EXECUTION_DEFAULTS.items():
                         model_kwargs.setdefault(key, value)
@@ -3302,8 +3315,6 @@ class ConfigComposer:
             "metric", "early_stop", "loss", "base_model", "model_path",
             "optimizer", "GPU", "n_jobs", "seed", "batch_size",
             "weight_decay", "gpu_resident", "gpu_resident_shuffle_days",
-            "gpu_resident_vram_margin_bytes",
-            "gpu_resident_working_memory_multiplier",
             "gats_adjacency_mode", "gats_industry_gamma_init",
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
@@ -3350,10 +3361,18 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
+            removed_resource_options = sorted(
+                _REMOVED_GATS_RESOURCE_OPTIONS & set(custom_params)
+            )
+            if removed_resource_options:
+                raise ValueError(
+                    "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED: "
+                    f"unsupported_options={removed_resource_options}"
+                )
             efficient_gats_execution_keys = set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
             invalid_efficient_gats_keys = efficient_gats_execution_keys & set(custom_params)
             if invalid_efficient_gats_keys and model_class != "EfficientGATs":
