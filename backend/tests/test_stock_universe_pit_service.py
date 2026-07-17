@@ -8,14 +8,44 @@ import pytest
 from scripts import build_stock_universe_pit_spans as pit_builder
 
 from backend.services.stock_universe_pit_service import (
+    DEFAULT_ST_PIT_UNIVERSE_KEY,
     DEFAULT_ST_PIT_RULE_VERSION,
     StockUniversePitError,
     StockUniversePitService,
     _fingerprint_sha256,
+    require_live_st_pit_universe_key,
+    require_qe_immutable_st_pit_universe_key,
 )
 
 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
+
+
+def test_st_pit_namespace_contract_is_bidirectional() -> None:
+    assert require_live_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY) == DEFAULT_ST_PIT_UNIVERSE_KEY
+    assert require_qe_immutable_st_pit_universe_key(QE_SNAPSHOT_KEY) == QE_SNAPSHOT_KEY
+
+    with pytest.raises(StockUniversePitError, match="live Selection/Paper/simulation"):
+        require_live_st_pit_universe_key(QE_SNAPSHOT_KEY)
+    with pytest.raises(StockUniversePitError, match="QE ST PIT must use an immutable"):
+        require_qe_immutable_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY)
+
+
+def test_live_st_pit_service_paths_reject_qe_namespace_before_database_access() -> None:
+    service = StockUniversePitService()
+
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        service.mark_dirty(reason="test", universe_key=QE_SNAPSHOT_KEY)
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        service.ensure_st_pit_universe(universe_key=QE_SNAPSHOT_KEY)
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        service.rebuild_st_pit_universe(universe_key=QE_SNAPSHOT_KEY)
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        service.get_eligible_codes(
+            trade_date=dt.date(2026, 6, 30),
+            universe_key=QE_SNAPSHOT_KEY,
+            ensure=False,
+        )
 
 
 def _ready_immutable_state() -> dict[str, object]:
@@ -43,7 +73,7 @@ def test_immutable_dataset_snapshot_reuses_existing_state_without_source_refresh
     )
     monkeypatch.setattr(
         service,
-        "rebuild_st_pit_universe",
+        "_rebuild_st_pit_universe",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("immutable snapshot must not rebuild")),
     )
 
@@ -65,7 +95,7 @@ def test_immutable_dataset_snapshot_bootstraps_only_a_missing_exact_key(monkeypa
     monkeypatch.setattr(service, "ensure_tables", lambda: None)
     monkeypatch.setattr(service, "get_status", lambda **_kwargs: next(states))
     monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: source)
-    monkeypatch.setattr(service, "rebuild_st_pit_universe", lambda **kwargs: captured.update(kwargs) or {})
+    monkeypatch.setattr(service, "_rebuild_st_pit_universe", lambda **kwargs: captured.update(kwargs) or {})
 
     result = service.ensure_immutable_dataset_snapshot(
         universe_key=QE_SNAPSHOT_KEY,
@@ -88,7 +118,7 @@ def test_immutable_dataset_snapshot_never_repairs_or_extends_existing_key(monkey
     monkeypatch.setattr(service, "get_status", lambda **_kwargs: invalid_state)
     monkeypatch.setattr(
         service,
-        "rebuild_st_pit_universe",
+        "_rebuild_st_pit_universe",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("existing immutable key must never rebuild")),
     )
 
@@ -198,7 +228,7 @@ def test_rebuild_lock_loser_waits_across_initial_missing_state(monkeypatch) -> N
     monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: LockConnection())
 
     result = service.rebuild_st_pit_universe(
-        universe_key=QE_SNAPSHOT_KEY,
+        universe_key=DEFAULT_ST_PIT_UNIVERSE_KEY,
         start_date=dt.date(2018, 8, 1),
         end_date=dt.date(2026, 6, 30),
         source_fingerprint={"fingerprint_end_date": "2026-06-30"},

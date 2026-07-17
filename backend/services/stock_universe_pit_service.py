@@ -32,6 +32,30 @@ class StockUniversePitError(RuntimeError):
     """Raised when the ST PIT derived universe cannot be prepared."""
 
 
+def require_live_st_pit_universe_key(universe_key: str) -> str:
+    """Require the single authoritative rolling PIT namespace used by live consumers."""
+
+    normalized = str(universe_key or "").strip()
+    if normalized != DEFAULT_ST_PIT_UNIVERSE_KEY:
+        raise StockUniversePitError(
+            "live Selection/Paper/simulation ST PIT must use the authoritative rolling universe "
+            f"{DEFAULT_ST_PIT_UNIVERSE_KEY!r}; received {normalized!r}"
+        )
+    return normalized
+
+
+def require_qe_immutable_st_pit_universe_key(universe_key: str) -> str:
+    """Require a dataset-pinned namespace reserved for QE/backtest consumers."""
+
+    normalized = str(universe_key or "").strip()
+    if not normalized.startswith(IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX):
+        raise StockUniversePitError(
+            "QE ST PIT must use an immutable dataset namespace starting with "
+            f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX!r}; received {normalized!r}"
+        )
+    return normalized
+
+
 def _json_dumps(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str, sort_keys=True)
 
@@ -268,11 +292,7 @@ class StockUniversePitService:
         new dataset contract id.
         """
 
-        if not universe_key.startswith(IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX):
-            raise ValueError(
-                "immutable QE ST PIT universe key must start with "
-                f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX!r}: {universe_key!r}"
-            )
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if end_date < start_date:
             raise ValueError(f"ST PIT snapshot end date {end_date} is earlier than {start_date}")
 
@@ -286,7 +306,7 @@ class StockUniversePitService:
                 )
             source = self.compute_source_fingerprint(end_date=end_date)
             source_sha = _fingerprint_sha256(source)
-            self.rebuild_st_pit_universe(
+            self._rebuild_st_pit_universe(
                 universe_key=universe_key,
                 start_date=start_date,
                 end_date=end_date,
@@ -377,6 +397,7 @@ class StockUniversePitService:
         source_dataset: str | None = None,
         universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
     ) -> dict[str, Any]:
+        universe_key = require_live_st_pit_universe_key(universe_key)
         self.ensure_tables()
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -503,6 +524,7 @@ class StockUniversePitService:
         refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
         lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
     ) -> dict[str, Any]:
+        universe_key = require_live_st_pit_universe_key(universe_key)
         refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
         requested_end = end_date or self.resolve_default_end_date()
@@ -593,6 +615,36 @@ class StockUniversePitService:
             }
 
     def rebuild_st_pit_universe(
+        self,
+        *,
+        universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
+        start_date: dt.date = DEFAULT_ST_PIT_START_DATE,
+        end_date: dt.date | None = None,
+        rule_version: str = DEFAULT_ST_PIT_RULE_VERSION,
+        source_fingerprint: Optional[dict[str, Any]] = None,
+        source_fingerprint_sha256: Optional[str] = None,
+        write_mode: str = "replace",
+        incremental_from: dt.date | None = None,
+        skip_if_ready: bool = False,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        universe_key = require_live_st_pit_universe_key(universe_key)
+        return self._rebuild_st_pit_universe(
+            universe_key=universe_key,
+            start_date=start_date,
+            end_date=end_date,
+            rule_version=rule_version,
+            source_fingerprint=source_fingerprint,
+            source_fingerprint_sha256=source_fingerprint_sha256,
+            write_mode=write_mode,
+            incremental_from=incremental_from,
+            skip_if_ready=skip_if_ready,
+            refresh_policy=refresh_policy,
+            lock_wait_seconds=lock_wait_seconds,
+        )
+
+    def _rebuild_st_pit_universe(
         self,
         *,
         universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
@@ -842,6 +894,7 @@ class StockUniversePitService:
         universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
         ensure: bool = True,
     ) -> list[str]:
+        universe_key = require_live_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_st_pit_universe(
                 universe_key=universe_key,

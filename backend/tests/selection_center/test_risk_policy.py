@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from backend.services.selection_center.models import SelectionCandidate
-from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
+from backend.services.selection_center.risk_policy import (
+    RiskDecision,
+    StPitRiskDecisionProvider,
+    StockRiskPolicyService,
+)
 from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
+from backend.services.stock_universe_pit_service import StockUniversePitError
 from backend.services.trading_core.models import PositionLot
 
 
@@ -102,3 +109,31 @@ def test_runtime_risk_policy_profile_accepts_future_score_overlay_shape() -> Non
     assert profile.enabled is True
     assert profile.providers == ["st_pit"]
     assert profile.score_overlay.enabled is True
+
+
+def test_runtime_risk_policy_profile_rejects_qe_backtest_pit_namespace() -> None:
+    with pytest.raises(ValueError, match="live Selection/Paper/simulation"):
+        RuntimeRiskPolicyProfile.model_validate(
+            {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "st_universe_key": "shsz_st_pit_qe_dataset_contract_v1",
+            }
+        )
+
+
+def test_st_pit_provider_rejects_qe_namespace_even_if_profile_validation_is_bypassed() -> None:
+    profile = RuntimeRiskPolicyProfile.model_construct(
+        enabled=True,
+        providers=["st_pit"],
+        st_universe_key="shsz_st_pit_qe_dataset_contract_v1",
+        strict_data_ready=False,
+        hard_actions=["block_buy", "force_exit"],
+    )
+
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        StPitRiskDecisionProvider().evaluate(
+            symbols=["000001.SZ"],
+            trade_date=date(2026, 7, 17),
+            profile=profile,
+        )
