@@ -391,9 +391,6 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
         def list_fillable_targets(self, **_kwargs):
             return [target]
 
-        def mark_reconciled(self, target_id, **kwargs):
-            calls.append(("reconciled", target_id, kwargs))
-
         def record_attempt(self, record):
             calls.append(("attempt", record.status, record.target_id, record.trigger_source))
             return {"attempt_id": "attempt-1"}
@@ -408,7 +405,7 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     scheduler._check_dataset_recovered = lambda dataset, expected_date=None: SimpleNamespace(
         status="ok", dataset=dataset, expected_date=expected_date
     )
-    scheduler._acknowledge_reconciled_target_alerts = lambda **kwargs: calls.append(("ack", kwargs))
+    scheduler._reconcile_recovered_target_state = lambda **kwargs: calls.append(("reconcile_state", kwargs))
     scheduler._enqueue_target_retry = lambda **_kwargs: (_ for _ in ()).throw(
         AssertionError("covered target must not submit a job")
     )
@@ -416,12 +413,16 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     submitted = scheduler._reconcile_due_data_sync_targets()
 
     assert submitted == []
-    assert calls[0][0:2] == ("reconciled", "target-1")
-    assert calls[1] == (
-        "ack",
-        {"dataset": "index_daily", "target_id": "target-1", "target_date": target_date},
+    assert calls[0] == (
+        "reconcile_state",
+        {
+            "dataset": "index_daily",
+            "target_id": "target-1",
+            "target_date": target_date,
+            "context": {"precheck": "already_recovered", "expected_date": "2026-07-13"},
+        },
     )
-    assert calls[2] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
+    assert calls[1] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
 
 
 def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
@@ -670,9 +671,6 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
             return None
 
     class _TargetRepo:
-        def mark_reconciled(self, target_id, **kwargs):
-            calls.append(("target", target_id, kwargs))
-
         def record_attempt(self, record):
             calls.append(("attempt", record.status, record.target_id))
             return {"attempt_id": "attempt-1"}
@@ -685,43 +683,129 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     scheduler._check_dataset_recovered = lambda _dataset, expected_date=None: SimpleNamespace(
         status="ok", expected_date=expected_date
     )
-    scheduler._acknowledge_reconciled_target_alerts = lambda **kwargs: calls.append(("ack", kwargs))
+    scheduler._reconcile_recovered_target_state = lambda **kwargs: calls.append(("reconcile_state", kwargs))
 
+    job_id = str(uuid.uuid4())
     scheduler._finalize_data_sync_target_retry(
         _Future(),
         target_id="target-1",
         dataset="cyq_perf",
         mode="incremental",
-        options={"job_id": str(uuid.uuid4()), "triggered_by": "unit"},
+        options={"job_id": job_id, "triggered_by": "unit"},
     )
 
-    assert calls[0][0] == "target"
-    assert calls[0][1] == "target-1"
-    assert calls[0][2]["context"]["finalizer"] == "data_sync_target_retry"
-    assert calls[1] == (
-        "ack",
-        {"dataset": "cyq_perf", "target_id": "target-1", "target_date": dt.date(2026, 5, 18)},
+    assert calls[0] == (
+        "reconcile_state",
+        {
+            "dataset": "cyq_perf",
+            "target_id": "target-1",
+            "target_date": dt.date(2026, 5, 18),
+            "context": {
+                "mode": "incremental",
+                "job_id": job_id,
+                "triggered_by": "unit",
+                "finalizer": "data_sync_target_retry",
+                "health_dataset": "cyq_perf",
+                "schedule_dataset": "cyq_perf",
+            },
+        },
     )
-    assert calls[2] == ("attempt", "reconciled", "target-1")
+    assert calls[1] == ("attempt", "reconciled", "target-1")
 
 
-def test_recovered_target_acknowledges_matching_alerts_across_days():
+def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
-    calls = []
-    scheduler._execute = lambda sql, params=(): calls.append((sql, params))
+    executions = []
+    transaction_args = []
 
-    scheduler._acknowledge_reconciled_target_alerts(
+    class _Cursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=()):
+            executions.append((sql, params))
+            if "UPDATE market.data_sync_targets" in sql:
+                self.rowcount = 2
+            elif "UPDATE market.data_alerts" in sql:
+                self.rowcount = 2
+            else:
+                self.rowcount = 0
+
+        def fetchall(self):
+            return [
+                {"target_id": "target-original"},
+                {"target_id": "target-delayed"},
+                {"target_id": "target-auto"},
+            ]
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return _Cursor()
+
+    def _get_conn(**kwargs):
+        transaction_args.append(kwargs)
+        return _Connection()
+
+    monkeypatch.setattr(scheduler_module, "get_conn", _get_conn)
+
+    result = scheduler._reconcile_recovered_target_state(
         dataset="sector_data",
         target_id="target-original",
         target_date=dt.date(2026, 7, 15),
+        context={"precheck": "already_recovered"},
     )
 
-    assert len(calls) == 1
-    sql, params = calls[0]
-    assert "details->>'target_id' = %s" in sql
-    assert "details->>'target_date' = %s" in sql
-    assert "created_at >= CURRENT_DATE" not in sql
-    assert params == ("sector_data", "target-original", "2026-07-15", "2026-07-15")
+    assert transaction_args == [{"autocommit": False, "manage_transaction": True}]
+    assert result == {"targets_reconciled": 2, "alerts_acknowledged": 2}
+    select_sql, select_params = executions[0]
+    assert "data_source = 'readiness_gate'" in select_sql
+    assert select_params == (
+        "target-original",
+        dt.date(2026, 7, 15),
+        "sector_data",
+        dt.date(2026, 7, 15),
+    )
+    target_sql, target_params = executions[1]
+    assert "blocked_at = NULL" in target_sql
+    assert target_params[1] == ["target-original", "target-delayed", "target-auto"]
+    alert_sql, alert_params = executions[2]
+    assert "alert_type = 'retry_exhausted'" in alert_sql
+    assert "details->>'target_id' = ANY(%s)" in alert_sql
+    assert alert_params == (
+        "sector_data",
+        ["target-original", "target-delayed", "target-auto"],
+    )
+
+
+def test_recovered_target_state_failure_is_not_silently_ignored(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    class _BrokenConnection:
+        def __enter__(self):
+            raise RuntimeError("db unavailable")
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_kwargs: _BrokenConnection())
+
+    with pytest.raises(RuntimeError, match="db unavailable"):
+        scheduler._reconcile_recovered_target_state(
+            dataset="sector_data",
+            target_id="target-original",
+            target_date=dt.date(2026, 7, 15),
+        )
 
 
 def test_delayed_retry_persists_target_before_timer(monkeypatch):
@@ -1045,6 +1129,70 @@ def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monke
     assert any(call[0] == "retry" for call in calls)
     assert all(call[1][0] is None for call in calls if call[0] == "submit")
     assert not any(call[0] == "final" for call in calls)
+    assert not any(call[0] == "alert" for call in calls)
+
+
+def test_auto_retry_recovery_reconciles_target_family_before_reporting_success(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 5, 18, 12, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._target_date_for_retry = lambda _dataset: dt.date(2026, 5, 18)
+    scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
+    scheduler._compute_auto_range = lambda _dataset: (dt.date(2026, 5, 18), dt.date(2026, 5, 18))
+    scheduler._submit_ingestion = lambda *args, **kwargs: calls.append(("submit", args, kwargs))
+    scheduler._check_dataset_recovered = lambda _dataset: SimpleNamespace(status="ok", coverage_pct=100)
+    scheduler._fetchall = lambda sql, params=(): []
+    scheduler._schedule_map_for_enabled_datasets = lambda: {
+        "cyq_perf": {"schedule_id": "schedule-1", "mode": "incremental"}
+    }
+    scheduler._record_retry_target = lambda *args, **kwargs: "target-1"
+    scheduler._reconcile_recovered_target_state = lambda **kwargs: calls.append(("reconcile_state", kwargs))
+    scheduler._flush_final_data_sync_alerts = lambda targets: calls.append(("alert", targets))
+    scheduler._execute = lambda sql, params=(): None
+    scheduler._tracker = SimpleNamespace(get_future=lambda key: None)
+    scheduler._db_cfg = {}
+
+    class _Checker:
+        def __init__(self, _db_cfg):
+            pass
+
+        def check_all(self):
+            return [
+                SimpleNamespace(
+                    dataset="cyq_perf",
+                    status="stale",
+                    is_fresh=False,
+                    max_date=dt.date(2026, 5, 17),
+                    expected_date=dt.date(2026, 5, 18),
+                    coverage_pct=0,
+                    gaps=[],
+                    failure_category="audit_missing",
+                    source_dataset=None,
+                )
+            ]
+
+    monkeypatch.setattr(scheduler_module, "AuditBackedDataHealthChecker", _Checker)
+    monkeypatch.setattr(scheduler_module.time, "sleep", lambda _seconds: None)
+
+    scheduler._run_auto_retry_stale(
+        run_id=uuid.uuid4(),
+        schedule_id=None,
+        triggered_by="unit",
+        options={"datasets": ["cyq_perf"]},
+    )
+
+    reconcile = next(call[1] for call in calls if call[0] == "reconcile_state")
+    assert reconcile == {
+        "dataset": "cyq_perf",
+        "target_id": "target-1",
+        "target_date": dt.date(2026, 5, 18),
+        "context": {"triggered_by": "auto_retry", "attempt": 1},
+    }
     assert not any(call[0] == "alert" for call in calls)
 
 

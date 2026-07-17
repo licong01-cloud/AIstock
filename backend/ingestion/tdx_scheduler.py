@@ -1006,11 +1006,11 @@ class TDXScheduler:
                     "precheck": "already_recovered",
                     "expected_date": target_date.isoformat() if target_date else None,
                 }
-                repo.mark_reconciled(target_id, context=metadata)
-                self._acknowledge_reconciled_target_alerts(
+                self._reconcile_recovered_target_state(
                     dataset=health_dataset,
                     target_id=target_id,
                     target_date=target_date,
+                    context=metadata,
                 )
                 repo.record_attempt(
                     DataSyncAttemptRecord(
@@ -1914,11 +1914,11 @@ class TDXScheduler:
         }
         try:
             if recovered:
-                repo.mark_reconciled(target_id, context=metadata)
-                self._acknowledge_reconciled_target_alerts(
+                self._reconcile_recovered_target_state(
                     dataset=health_dataset,
                     target_id=target_id,
                     target_date=target_date,
+                    context=metadata,
                 )
                 repo.record_attempt(
                     DataSyncAttemptRecord(
@@ -1985,40 +1985,77 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: failed to finalize %s/%s target %s: %s", dataset, mode, target_id, exc)
 
-    def _acknowledge_reconciled_target_alerts(
+    def _reconcile_recovered_target_state(
         self,
         *,
         dataset: str,
         target_id: str | None,
         target_date: dt.date | None,
-    ) -> None:
-        """Close alerts for a recovered target even when recovery crosses midnight."""
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, int]:
+        """Atomically reconcile a readiness-target family and its retry alerts."""
 
         dataset_key = str(dataset or "").strip().lower()
         target_id_key = str(target_id or "").strip()
-        target_date_text = target_date.isoformat() if target_date else None
-        if not dataset_key or (not target_id_key and target_date_text is None):
-            return
-        try:
-            # A target-date match also closes duplicate retry targets for the same work.
-            self._execute(
-                """UPDATE market.data_alerts
-                      SET acknowledged = TRUE, ack_at = NOW()
-                    WHERE dataset = %s
-                      AND acknowledged = FALSE
-                      AND (
-                           details->>'target_id' = %s
-                           OR (%s IS NOT NULL AND details->>'target_date' = %s)
-                      )""",
-                (dataset_key, target_id_key, target_date_text, target_date_text),
-            )
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning(
-                "target recovery: failed to acknowledge alerts for %s/%s: %s",
-                dataset_key,
-                target_date_text,
-                exc,
-            )
+        if not dataset_key or (not target_id_key and target_date is None):
+            raise ValueError("recovered target reconciliation requires dataset and target identity")
+
+        metadata_patch = {
+            "recovery_reconciliation": "readiness_target_family_v1",
+            "reconciled_by_target_id": target_id_key or None,
+            **dict(context or {}),
+        }
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                cur.execute(
+                    """SELECT target_id
+                         FROM market.data_sync_targets
+                        WHERE target_id = %s
+                           OR (
+                                %s IS NOT NULL
+                                AND lower(dataset) = %s
+                                AND target_date = %s
+                                AND data_source = 'readiness_gate'
+                           )
+                        FOR UPDATE""",
+                    (target_id_key, target_date, dataset_key, target_date),
+                )
+                family_ids = [str(row["target_id"]) for row in cur.fetchall()]
+                if target_id_key and target_id_key not in family_ids:
+                    raise ValueError(f"data sync target not found: {target_id_key}")
+                if not family_ids:
+                    return {"targets_reconciled": 0, "alerts_acknowledged": 0}
+
+                cur.execute(
+                    """UPDATE market.data_sync_targets
+                          SET target_status = 'reconciled',
+                              next_retry_at = NULL,
+                              last_error_message = NULL,
+                              metadata = metadata || %s::jsonb,
+                              updated_at = NOW(),
+                              reconciled_at = COALESCE(reconciled_at, NOW()),
+                              blocked_at = NULL
+                        WHERE target_id = ANY(%s)
+                          AND target_status <> 'reconciled'""",
+                    (pgx.Json(metadata_patch, dumps=_json_dump), family_ids),
+                )
+                targets_reconciled = int(cur.rowcount or 0)
+
+                cur.execute(
+                    """UPDATE market.data_alerts
+                          SET acknowledged = TRUE, ack_at = NOW()
+                        WHERE dataset = %s
+                          AND alert_type = 'retry_exhausted'
+                          AND acknowledged = FALSE
+                          AND details->>'target_id' = ANY(%s)""",
+                    (dataset_key, family_ids),
+                )
+                alerts_acknowledged = int(cur.rowcount or 0)
+
+        return {
+            "targets_reconciled": targets_reconciled,
+            "alerts_acknowledged": alerts_acknowledged,
+        }
 
     def _flush_final_data_sync_alerts(self, targets: List[Dict[str, Any]]) -> Dict[str, int]:
         alerts = []
@@ -3477,7 +3514,6 @@ class TDXScheduler:
                     attempt = 0
                     recovered = False
                     delayed_no_update = False
-                    target_date = None
                     while attempt < _MAX_RETRY_ATTEMPTS and not recovered and not delayed_no_update:
                         _log.info("auto-retry L%d: %s attempt %d/%d (reason: job=%s, max=%s)",
                                   layer_idx, ds, attempt + 1, _MAX_RETRY_ATTEMPTS,
@@ -3486,6 +3522,7 @@ class TDXScheduler:
                         # Submit ingestion
                         retry_opts: Dict[str, Any] = {"triggered_by": "auto_retry"}
                         target_id = None
+                        target_date = None
                         try:
                             target_date = self._target_date_for_retry(ds) or latest_trading
                             if target_date is not None:
@@ -3553,22 +3590,29 @@ class TDXScheduler:
                             r = self._check_dataset_recovered(ds)
                             if r is not None:
                                 if r.status == "ok":
-                                    recovered = True
                                     _log.info("auto-retry L%d: %s RECOVERED on attempt %d",
                                               layer_idx, ds, attempt + 1)
-                                    if target_id:
-                                        try:
-                                            DataSyncTargetRepository().mark_reconciled(
-                                                target_id,
-                                                context={"triggered_by": "auto_retry", "attempt": attempt + 1},
-                                            )
-                                        except Exception as target_exc:  # noqa: BLE001
-                                            _log.warning("auto-retry: failed to close recovered target for %s: %s", ds, target_exc)
-                                    self._acknowledge_reconciled_target_alerts(
-                                        dataset=ds,
-                                        target_id=target_id,
-                                        target_date=target_date,
-                                    )
+                                    try:
+                                        self._reconcile_recovered_target_state(
+                                            dataset=ds,
+                                            target_id=target_id,
+                                            target_date=target_date,
+                                            context={"triggered_by": "auto_retry", "attempt": attempt + 1},
+                                        )
+                                    except Exception as target_exc:  # noqa: BLE001
+                                        recovered = True
+                                        entry["retry_status"] = "recovery_state_failed"
+                                        entry["retry_attempts"] = attempt + 1
+                                        errors.append({
+                                            "dataset": ds,
+                                            "error": f"recovery state reconciliation failed: {target_exc}",
+                                        })
+                                        _log.exception(
+                                            "auto-retry: recovered data but failed to reconcile target state for %s",
+                                            ds,
+                                        )
+                                        break
+                                    recovered = True
                                     retried.append(ds)
                                     entry["retry_status"] = "recovered"
                                     entry["retry_attempts"] = attempt + 1
