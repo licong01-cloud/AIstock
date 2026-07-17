@@ -35,8 +35,8 @@
   "expected": "Validate resolved paths and names, require trusted remote manifest fields, use atomic writes and process-safe locking, fail closed before deserialization, bound cache size/TTL/lifecycle, and make cleanup root/reparse safe.",
   "first_seen_at": "2026-07-17T01:41:39.370566Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "75a2addb9cfef1d1b665d1c43b8ae20a9c293d23",
+  "fixed_at": "2026-07-17T02:54:12.666452Z",
   "github_issue_number": 2257,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2257",
   "last_seen_at": "2026-07-17T01:41:39.370566Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2270",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "404a0f642ae9671170c49574",
     "source_event_id": "FE-20260717-404a0f642ae9"
   },
+  "validation_evidence": [
+    "CI: 17 passed, 0 failed, mergeStateStatus CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
