@@ -1,0 +1,182 @@
+{
+  "actual": "BUG-742 through BUG-749 are fixed and their Issues are CLOSED, but every canonical BUG JSON has closed_at null because single and batch close-sync omit the field.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260717_BUG-742-hmm-evolution-batch-worker-ignores-candidate-concurrency-and-reloads-sha.json",
+    "tests/aistock_validation/bugs/20260717_BUG-743-hmm-evolution-expired-leases-are-never-reaped-and-running-jobs-cannot-re.json",
+    "tests/aistock_validation/bugs/20260717_BUG-744-hmm-evolution-qe-asset-reads-ignore-task-authoritative-compute-node.json",
+    "tests/aistock_validation/bugs/20260717_BUG-745-hmm-evolution-qe-asset-content-endpoint-can-expose-secrets-and-absolute.json",
+    "tests/aistock_validation/bugs/20260717_BUG-746-hmm-evolution-qe-asset-browser-truncates-catalogs-and-lacks-schema-aware.json",
+    "tests/aistock_validation/bugs/20260717_BUG-747-hmm-evolution-ui-silently-drops-malformed-results-and-can-poll-terminall.json",
+    "tests/aistock_validation/bugs/20260717_BUG-748-hmm-evolution-request-retries-lose-idempotency-and-unexpected-failures-l.json",
+    "tests/aistock_validation/bugs/20260717_BUG-749-hmm-evolution-design-acceptance-documents-overstate-recovery-and-remain.json",
+    "tests/aistock_validation/bugs/20260717_BUG-750-close-sync-fixed-path-leaves-closed-at-null-for-single-and-batch-afterca.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-750",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-17T21:14:36.771043Z",
+  "description": "BUG-742 through BUG-749 are fixed and their Issues are CLOSED, but every canonical BUG JSON has closed_at null because single and batch close-sync omit the field.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260717-29aa95cde8b2",
+      "timestamp": "2026-07-17T21:14:36.771040Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #2405 and main commit 3e0a633c1972477a5fc48da994fcb10dd11fb9d7"
+  ],
+  "expected": "Single and batch close-sync must persist closed_at from the merged source PR timestamp while preserving fixed_at as the finalizer execution timestamp; current BUG-742 through BUG-749 records must be backfilled without touching the historical fixed backlog.",
+  "first_seen_at": "2026-07-17T21:14:36.771043Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2406,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2406",
+  "last_seen_at": "2026-07-17T21:14:36.771043Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rtk rg -n closed_at scripts/aistock_issue_workflow.py",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "close-sync fixed path leaves closed_at null for single and batch aftercare",
+  "trigger_condition": {
+    "fingerprint": "29aa95cde8b2e47b74d17151",
+    "source_event_id": "FE-20260717-29aa95cde8b2"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
