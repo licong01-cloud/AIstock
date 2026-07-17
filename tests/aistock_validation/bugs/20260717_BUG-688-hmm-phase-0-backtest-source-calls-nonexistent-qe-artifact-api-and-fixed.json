@@ -32,8 +32,8 @@
   "expected": "Resolve task/loop to the authoritative compute node, call an existing QE workspace file API for the strict artifact allowlist, enforce timeouts, and close internally owned clients.",
   "first_seen_at": "2026-07-17T01:39:21.869434Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "df196a68c22c0e3eb11e1a9408e597ba94b25e91",
+  "fixed_at": "2026-07-17T01:58:17.462565Z",
   "github_issue_number": 2255,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2255",
   "last_seen_at": "2026-07-17T01:39:21.869434Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2260",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "c68afd7ca97c2884243883ef",
     "source_event_id": "FE-20260717-c68afd7ca97c"
   },
+  "validation_evidence": [
+    "targeted pytest 13 passed 1 integration skipped; ruff passed; nox l0 passed; validation_module_registry_l0 passed; CI CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
