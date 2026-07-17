@@ -2,6 +2,8 @@
   "actual": "The diagnostic calls get_workspace_file for conf.yaml and writes it under the local artifact directory.",
   "allowed_write_scope": [
     "scripts/diagnostics/hmm_offline_diagnostic.py",
+    "backend/tests/hmm_evolution/test_legacy_diagnostic.py",
+    "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
     "tests/aistock_validation/bugs/20260717_BUG-737-hmm-offline-diagnostic-downloads-forbidden-qe-configuration-artifacts.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
