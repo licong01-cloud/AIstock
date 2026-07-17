@@ -8824,6 +8824,17 @@ def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     return str(merge_commit or "") or None
 
 
+def _closed_at_from_pr_check(pr_check: dict[str, Any] | None) -> str:
+    """Use the authoritative source PR merge time, or the explicit skip-check time."""
+
+    pr = (pr_check or {}).get("pr") or {}
+    if isinstance(pr, dict):
+        merged_at = str(pr.get("mergedAt") or "").strip()
+        if merged_at:
+            return merged_at
+    return _utc_now()
+
+
 def _pr_head_oid_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     pr = (pr_check or {}).get("pr") or {}
     if not isinstance(pr, dict):
@@ -10658,10 +10669,12 @@ def build_close_sync_plan(
         started = time.monotonic()
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
         merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
+        closed_at = _closed_at_from_pr_check(pr_check)
         updated = dict(record)
         updated.update(
             {
                 "status": "fixed",
+                "closed_at": closed_at,
                 "fixed_at": _utc_now(),
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
@@ -10811,6 +10824,7 @@ def build_close_sync_batch_plan(
     started = time.monotonic()
     pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
     merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
+    closed_at = _closed_at_from_pr_check(pr_check)
     updated_paths: list[str] = []
     github_syncs: dict[str, Any] = {}
     for item, record, source_path, _missing in target_pairs:
@@ -10818,6 +10832,7 @@ def build_close_sync_batch_plan(
         updated.update(
             {
                 "status": "fixed",
+                "closed_at": closed_at,
                 "fixed_at": _utc_now(),
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
