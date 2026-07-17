@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/mcp/modules/qe_experiment.py",
     "backend/tests/mcp/test_domain_modules.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260717_BUG-730-qe-mcp-loop-rerun.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260717-2665da6c5d43",
       "timestamp": "2026-07-17T10:31:24.083782Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR CI proved QE MCP paths were unmapped_code_blocked; add the classifier and its direct test so the existing qe_data_contract_backend lane covers the changed MCP wrapper and contract test.",
+      "timestamp": "2026-07-17T10:48:00Z"
     }
   ],
   "evidence_uris": [
