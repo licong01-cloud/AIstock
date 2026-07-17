@@ -143,3 +143,20 @@ backend/tests/hmm_data_source/
 - Phase 1 开发前必须保存一次当前 authoritative QE loop + read-only DB 的 integration receipt。
 - 若 QE producer 尚未发布可信 artifact manifest，cold download 应失败；不得回退到无 manifest pickle。
 - 任何性能结论必须引用 JUnit durations、输入行数和冷/热缓存条件，不在文档中写未经测量的固定秒数。
+
+## Phase 0 readiness helper
+
+`scripts/deploy_hmm_data_source.py` 已退役原有建用户、GRANT、建 schema 和修改
+`.gitignore` 的行为。默认命令只输出 plan；唯一允许的 apply 动作是幂等创建 repo
+`tmp/` 下的 cache 目录：
+
+```powershell
+rtk python scripts/deploy_hmm_data_source.py plan --json
+rtk python scripts/deploy_hmm_data_source.py verify --json
+rtk python scripts/deploy_hmm_data_source.py bootstrap-cache `
+  --apply --confirm phase0-cache-only --json
+```
+
+Phase 0 不需要数据库 DDL。Phase 1 的 `hmm_evolution.*` / `hmm_risk.*` 必须由独立、
+带 PostgreSQL `COMMENT ON`、幂等复跑证据和 production DDL gate 的 Python bootstrap
+交付，不得恢复本 helper 中的角色/权限/DDL 逻辑。
