@@ -39,8 +39,8 @@
   "expected": "Selection Center and simulation share live ST PIT and reject all QE/backtest PIT namespaces.",
   "first_seen_at": "2026-07-17T04:54:57.854139Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5ede866cc8b892923f2c3f9136c37785352ff848",
+  "fixed_at": "2026-07-17T05:18:01.611584Z",
   "github_issue_number": 2286,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2286",
   "last_seen_at": "2026-07-17T04:54:57.854139Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2289",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "selection_center"
   ],
@@ -68,6 +69,9 @@
     "fingerprint": "5e2f83008bb509c71297e2b4",
     "source_event_id": "FE-20260717-5e2f83008bb5"
   },
+  "validation_evidence": [
+    "focused tests 34 passed; CI paper_v2_backend and qe_data_contract_backend passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
