@@ -179,6 +179,7 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     replayed = asyncio.run(
         adapter.load_evaluation(
             evaluation={
+                "eval_id": "hmme_single",
                 "evaluation_spec": spec.model_dump(mode="json"),
                 "source_manifest": plan.source_manifest,
             },
@@ -190,21 +191,52 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     assert replayed.evaluation_dates == (trade_date,)
     assert replayed.market_returns is not None
     assert checkpoints == [
-        "before_candidate_artifact",
-        "after_candidate_artifact",
-        "after_shared_inputs",
-        "before_market_returns",
-        "after_market_returns",
+        "before_shared_source_inputs",
+        "after_shared_source_inputs",
+        "before_shared_market_returns",
+        "after_shared_market_returns",
+        "before_candidate_artifact_hmme_single",
+        "after_candidate_artifact_hmme_single",
     ]
     assert market_repository.watermark_calls == 1
     assert market_repository.return_calls == 2
 
+    batch_replayed = asyncio.run(
+        adapter.load_batch_evaluations(
+            evaluations=(
+                (
+                    {
+                        "eval_id": "hmme_batch_1",
+                        "evaluation_spec": spec.model_dump(mode="json"),
+                        "source_manifest": plan.source_manifest,
+                    },
+                    candidate,
+                ),
+                (
+                    {
+                        "eval_id": "hmme_batch_2",
+                        "evaluation_spec": spec.model_dump(mode="json"),
+                        "source_manifest": plan.source_manifest,
+                    },
+                    candidate,
+                ),
+            ),
+            candidate_concurrency=2,
+        )
+    )
+    assert set(batch_replayed.inputs_by_eval_id) == {"hmme_batch_1", "hmme_batch_2"}
+    assert batch_replayed.errors_by_eval_id == {}
+    assert preferences == [
+        "prediction_store_first",
+        "prediction_store_only",
+        "prediction_store_only",
+    ]
+    assert market_repository.return_calls == 3
+
 
 def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_path) -> None:
     trade_date = date(2026, 1, 5)
-    predictions = pd.DataFrame(
-        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
-    )
+    predictions = pd.DataFrame([(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"])
     labels = pd.DataFrame(
         [(trade_date, "A", 10, 0.1)],
         columns=["trade_date", "symbol", "horizon_days", "future_return"],
@@ -222,9 +254,7 @@ def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_
         encoding="utf-8",
     )
     resolver = CandidateArtifactResolver(artifact_roots={"research": root})
-    preview = resolver.preview_configured_local(
-        root_alias="research", relative_path="candidate.json"
-    )
+    preview = resolver.preview_configured_local(root_alias="research", relative_path="candidate.json")
     now = datetime.now(timezone.utc)
     candidate = CandidateRecord(
         candidate_id=preview.candidate_id,
@@ -274,9 +304,7 @@ def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_
 
 def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
     trade_date = date(2026, 1, 5)
-    predictions = pd.DataFrame(
-        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
-    )
+    predictions = pd.DataFrame([(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"])
     labels = pd.DataFrame(
         [(trade_date, "A", 10, 0.1)],
         columns=["trade_date", "symbol", "horizon_days", "future_return"],
@@ -294,9 +322,7 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
         encoding="utf-8",
     )
     resolver = CandidateArtifactResolver(artifact_roots={"research": root})
-    preview = resolver.preview_configured_local(
-        root_alias="research", relative_path="candidate.json"
-    )
+    preview = resolver.preview_configured_local(root_alias="research", relative_path="candidate.json")
     now = datetime.now(timezone.utc)
     candidate = CandidateRecord(
         candidate_id=preview.candidate_id,
@@ -331,9 +357,10 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
 
     with pytest.raises(ArtifactHashMismatchError, match="receipt changed"):
         asyncio.run(
-            adapter.load_evaluation(
-                evaluation={
-                    "evaluation_spec": spec.model_dump(mode="json"),
+                adapter.load_evaluation(
+                    evaluation={
+                        "eval_id": "hmme_receipt_drift",
+                        "evaluation_spec": spec.model_dump(mode="json"),
                     "source_manifest": prepared.plans[0].source_manifest,
                 },
                 candidate=candidate,

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
+from threading import Lock
+import time
 from typing import Any
 
 import pytest
 
 from backend.services.hmm_evolution import repository as repository_module
 from backend.services.hmm_evolution.errors import IdempotencyConflictError
+from backend.services.hmm_evolution.input_adapter import BatchExecutionInputs
 from backend.services.hmm_evolution.models import (
     CandidateCoverage,
     CandidateManifest,
@@ -282,6 +285,47 @@ def test_recompute_shared_batch_uses_item_truth_and_releases_lease() -> None:
     assert update_params[7:11] == (True, True, True, True)
 
 
+def test_finalize_worker_cycle_requeues_remaining_items_and_releases_lease() -> None:
+    repository, cursor = _repository(
+        [
+            {
+                "contains": "status IN ('running', 'cancel_requested')",
+                "one": {
+                    "batch_id": "hmmb_shared",
+                    "status": "running",
+                    "owner_id": "worker-1",
+                },
+            },
+            {"contains": "WHERE eval_id = ANY", "all": [{"batch_id": "hmmb_shared"}]},
+            {
+                "contains": "GROUP BY item_status",
+                "all": [
+                    {"item_status": "succeeded", "count": 2},
+                    {"item_status": "queued", "count": 1},
+                ],
+            },
+            {"contains": "AS has_queued_evaluation", "one": {"has_queued_evaluation": True}},
+            {
+                "contains": "UPDATE hmm_evolution.batch_test_run",
+                "one": {"batch_id": "hmmb_shared", "status": "queued", "owner_id": None},
+            },
+        ]
+    )
+
+    batch = repository.finalize_worker_cycle(
+        batch_id="hmmb_shared",
+        eval_ids=["eval-1", "eval-2"],
+        owner_id="worker-1",
+        fencing_token=5,
+        expected_row_version=12,
+    )
+
+    assert batch["status"] == "queued"
+    update_params = cursor.queries[-1][1]
+    assert update_params[0] == "queued"
+    assert update_params[7:11] == (False, True, True, True)
+
+
 class _EmptyClaimRepository:
     def __init__(self) -> None:
         self.release_args: dict[str, Any] | None = None
@@ -355,6 +399,109 @@ def test_worker_reaps_expired_leases_before_looking_for_new_work() -> None:
     assert repository.reaper_calls == 1
 
 
+class _ConcurrentRepository:
+    def __init__(self) -> None:
+        self.batch_version = 1
+        self.eval_versions = {"eval-1": 1, "eval-2": 1, "eval-3": 1}
+        self.pending = ["eval-1", "eval-2", "eval-3"]
+        self.finalize_args: dict[str, Any] | None = None
+        self.lock = Lock()
+
+    def mark_expired_leases_timed_out(self):
+        return {"evaluations": 0, "batches": 0}
+
+    def claim_batch(self, **_kwargs):
+        return {
+            "batch_id": "batch-1",
+            "fencing_token": 5,
+            "row_version": self.batch_version,
+            "status": "running",
+        }
+
+    def claim_evaluation(self, **_kwargs):
+        if not self.pending:
+            return None
+        eval_id = self.pending.pop(0)
+        return {
+            "eval_id": eval_id,
+            "candidate_id": f"candidate-{eval_id}",
+            "fencing_token": 7,
+            "row_version": self.eval_versions[eval_id],
+        }
+
+    def heartbeat_batch(self, **kwargs):
+        with self.lock:
+            self.batch_version += 1
+            return {
+                "batch_id": kwargs["batch_id"],
+                "fencing_token": kwargs["fencing_token"],
+                "row_version": self.batch_version,
+                "status": "running",
+            }
+
+    def heartbeat_evaluation(self, **kwargs):
+        with self.lock:
+            eval_id = kwargs["eval_id"]
+            self.eval_versions[eval_id] += 1
+            return {
+                "eval_id": eval_id,
+                "fencing_token": kwargs["fencing_token"],
+                "row_version": self.eval_versions[eval_id],
+                "cancel_requested_at": None,
+            }
+
+    def finalize_worker_cycle(self, **kwargs):
+        self.finalize_args = kwargs
+        return {"batch_id": kwargs["batch_id"], "status": "queued"}
+
+
+class _ConcurrentExecutor:
+    def __init__(self) -> None:
+        self.prepared_count = 0
+        self.active = 0
+        self.max_active = 0
+        self.lock = Lock()
+
+    def prepare_batch_inputs(self, **kwargs):
+        self.prepared_count += 1
+        assert kwargs["candidate_concurrency"] == 2
+        kwargs["checkpoint"]("shared-inputs")
+        return BatchExecutionInputs(
+            inputs_by_eval_id={item["eval_id"]: object() for item in kwargs["evaluations"]},
+            errors_by_eval_id={},
+        )
+
+    def execute_and_finalize(self, **kwargs):
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        kwargs["checkpoint"]("candidate")
+        time.sleep(0.03)
+        with self.lock:
+            self.active -= 1
+
+    def fail_preparation(self, **_kwargs):  # pragma: no cover - success path only.
+        raise AssertionError("preparation must not fail")
+
+
+def test_worker_uses_shared_inputs_and_bounded_candidate_concurrency() -> None:
+    repository = _ConcurrentRepository()
+    executor = _ConcurrentExecutor()
+    worker = HMMEvolutionWorker(
+        repository,  # type: ignore[arg-type]
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker", candidate_concurrency=2),
+        executor=executor,
+    )
+
+    assert worker.run_once() is True
+    assert executor.prepared_count == 1
+    assert executor.max_active == 2
+    assert repository.pending == ["eval-3"]
+    assert repository.finalize_args is not None
+    assert repository.finalize_args["eval_ids"] == ["eval-1", "eval-2"]
+
+
 def test_batch_recommendations_persist_only_on_batch_items() -> None:
     repository, cursor = _repository(
         [
@@ -389,11 +536,7 @@ def test_batch_recommendations_persist_only_on_batch_items() -> None:
 
     repository._apply_recommendations_with_cursor(cursor, "hmmb_1")  # noqa: SLF001
 
-    update_queries = [
-        (query, params)
-        for query, params in cursor.queries
-        if "SET recommendation_score = %s" in query
-    ]
+    update_queries = [(query, params) for query, params in cursor.queries if "SET recommendation_score = %s" in query]
     assert update_queries[0][1][2] == 2
     assert update_queries[0][1][3] is True
     assert update_queries[1][1][2] == 1
