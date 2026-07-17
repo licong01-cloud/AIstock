@@ -23,6 +23,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
 from .base import HMMDataSourceInterface
+from .artifact_manifest import RemoteArtifactManifest
 from .cache_manager import ArtifactCacheManager
 from .db_repository import HMMDataRepository
 from .exceptions import DataSourceError, DateRangeError, HorizonError, DataNotFoundError
@@ -56,6 +57,9 @@ class BacktestDataSource(HMMDataSourceInterface):
         cache_dir: str = "tmp/hmm_evolution_cache/",
         qe_client: Optional[QEWorkspaceClient] = None,
         repository: Optional[HMMDataRepository] = None,
+        max_artifact_bytes: int = ArtifactCacheManager.DEFAULT_MAX_ARTIFACT_BYTES,
+        max_cache_bytes: int = ArtifactCacheManager.DEFAULT_MAX_CACHE_BYTES,
+        cache_ttl_seconds: int = ArtifactCacheManager.DEFAULT_TTL_SECONDS,
     ):
         """
         Args:
@@ -63,9 +67,17 @@ class BacktestDataSource(HMMDataSourceInterface):
             cache_dir: 缓存目录
             qe_client: QE workspace 客户端（用于测试注入）
             repository: 只读 canonical market repository（用于测试注入）
+            max_artifact_bytes: 单个 artifact 最大字节数
+            max_cache_bytes: artifact 缓存总字节上限
+            cache_ttl_seconds: 缓存有效期（秒）
         """
         self.base_loop_ref = base_loop_ref
-        self.cache_manager = ArtifactCacheManager(cache_dir)
+        self.cache_manager = ArtifactCacheManager(
+            cache_dir,
+            max_artifact_bytes=max_artifact_bytes,
+            max_cache_bytes=max_cache_bytes,
+            ttl_seconds=cache_ttl_seconds,
+        )
         # Injected clients are owned by the caller.  The default client is
         # resolved lazily from the QE task's authoritative compute node and is
         # closed by this data source.
@@ -194,7 +206,9 @@ class BacktestDataSource(HMMDataSourceInterface):
         """
         # 检查内存缓存
         if self._pred_cache is not None:
-            return self._pred_cache
+            if self.cache_manager.is_fresh(self.base_loop_ref, "pred.pkl"):
+                return self._pred_cache
+            self._pred_cache = None
 
         # 检查本地缓存
         if not self.cache_manager.is_cached(self.base_loop_ref, "pred.pkl"):
@@ -228,7 +242,9 @@ class BacktestDataSource(HMMDataSourceInterface):
         """
         # 检查内存缓存
         if self._label_cache is not None:
-            return self._label_cache
+            if self.cache_manager.is_fresh(self.base_loop_ref, "label.pkl"):
+                return self._label_cache
+            self._label_cache = None
 
         # 检查本地缓存
         if not self.cache_manager.is_cached(self.base_loop_ref, "label.pkl"):
@@ -290,6 +306,15 @@ class BacktestDataSource(HMMDataSourceInterface):
                 loop_name=loop_name,
                 artifact_name=artifact_name,
             )
+            remote_manifest, remote_manifest_path = (
+                await self._resolve_remote_artifact_manifest(
+                    client,
+                    task_id=task_id,
+                    loop_name=loop_name,
+                    artifact_name=artifact_name,
+                    artifact_path=artifact_path,
+                )
+            )
 
             # 下载 artifact（带重试）
             artifact_bytes = await self._download_with_retry(
@@ -305,9 +330,16 @@ class BacktestDataSource(HMMDataSourceInterface):
                 artifact_name,
                 artifact_bytes,
                 metadata={
+                    "source": "qe_workspace",
                     "task_id": task_id,
                     "loop_name": loop_name,
                     "workspace_path": artifact_path,
+                    "remote_manifest_path": remote_manifest_path,
+                    "remote_schema_version": remote_manifest.schema_version,
+                    "remote_sha256": remote_manifest.sha256,
+                    "remote_size_bytes": remote_manifest.size_bytes,
+                    "remote_row_count": remote_manifest.row_count,
+                    "remote_quality_status": remote_manifest.quality_status,
                 },
             )
 
@@ -452,6 +484,43 @@ class BacktestDataSource(HMMDataSourceInterface):
         raise DataSourceError(
             f"QE recorder metadata unavailable for task={task_id}, "
             f"loop={loop_name}: {attempts}"
+        )
+
+    @staticmethod
+    async def _resolve_remote_artifact_manifest(
+        client: QEWorkspaceClient,
+        *,
+        task_id: str,
+        loop_name: str,
+        artifact_name: str,
+        artifact_path: str,
+    ) -> tuple[RemoteArtifactManifest, str]:
+        """Load and validate the QE-authoritative manifest before downloading bytes."""
+        attempts: dict[str, str] = {}
+        manifest_paths = (
+            f"{artifact_path}.manifest.json",
+            "hmm_artifact_manifest.json",
+            "qe_completion_payload.json",
+        )
+        for manifest_path in manifest_paths:
+            try:
+                payload: Any = await client.get_workspace_file(
+                    task_id,
+                    loop_name,
+                    manifest_path,
+                )
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                manifest = RemoteArtifactManifest.from_remote_payload(
+                    payload,
+                    artifact_name=artifact_name,
+                )
+                return manifest, manifest_path
+            except Exception as exc:
+                attempts[manifest_path] = f"{type(exc).__name__}: {exc}"
+        raise DataSourceError(
+            f"Trusted remote artifact manifest unavailable for task={task_id}, "
+            f"loop={loop_name}, artifact={artifact_name}: {attempts}"
         )
 
     def _normalize_prediction_data(self, pred_obj: any) -> pd.DataFrame:

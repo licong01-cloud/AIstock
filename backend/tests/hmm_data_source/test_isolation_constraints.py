@@ -86,14 +86,21 @@ class TestIsolationConstraints:
         """验证缓存目录完全隔离"""
         # 创建缓存管理器
         cache_dir = tmp_path / "hmm_evolution_cache"
-        cache_manager = ArtifactCacheManager(str(cache_dir))
+        cache_manager = ArtifactCacheManager(
+            str(cache_dir), allow_test_fixtures=True
+        )
 
         # 保存数据
-        cache_manager.save_artifact("qe_test/Loop1", "pred.pkl", b"test_data")
+        cache_manager.save_artifact(
+            "qe_test/Loop1",
+            "pred.pkl",
+            b"test_data",
+            metadata={"source": "test_fixture"},
+        )
 
         # 验证缓存只在指定目录
         assert cache_dir.exists()
-        assert (cache_dir / "qe_test_Loop1" / "pred.pkl").exists()
+        assert cache_manager.get_artifact_path("qe_test/Loop1", "pred.pkl").exists()
 
         # 验证没有污染其他目录
         parent_dir = tmp_path
@@ -132,8 +139,9 @@ class TestIsolationConstraints:
         source_file = Path("backend/services/hmm_data_source/backtest_source.py")
         content = source_file.read_text(encoding="utf-8")
 
-        # 只允许调用 download_artifact
-        assert 'download_artifact' in content
+        # 只允许通过现有 workspace 文件下载契约读取 allowlisted artifact
+        assert 'download_workspace_file_bytes' in content
+        assert '.download_artifact(' not in content
 
         # 禁止调用配置 API
         forbidden_api_calls = [
