@@ -129,7 +129,16 @@ BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("paper_v2_backend", ("backend/services/paper_trading_v2/**", "backend/routers/paper_v2.py", "backend/services/selection_center/**", "backend/routers/selection_center.py", "backend/services/strategy_package/**", "backend/routers/strategy_package*.py", "backend/tests/paper_trading_v2/**", "backend/tests/selection_center/**", "backend/tests/strategy_package/**")),
     ("miniqmt_execution_runtime_l2", ("backend/services/miniqmt_execution_runtime/**", "backend/tests/miniqmt_execution_runtime/**")),
     ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
-    ("qe_data_contract_backend", ("backend/services/quantevolver/**", "backend/routers/quantevolver*.py", "backend/tests/unified_engine/test_qe_*.py")),
+    (
+        "qe_data_contract_backend",
+        (
+            "backend/services/quantevolver/**",
+            "backend/routers/quantevolver*.py",
+            "backend/mcp/modules/qe_experiment.py",
+            "backend/tests/unified_engine/test_qe_*.py",
+            "backend/tests/mcp/test_domain_modules.py",
+        ),
+    ),
     ("hmm_data_source_backend", ("backend/services/hmm_data_source/**", "backend/tests/hmm_data_source/**")),
     (
         "hmm_evolution_backend",

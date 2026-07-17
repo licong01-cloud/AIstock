@@ -110,6 +110,17 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_data_contract_backend"]
 
+    qe_mcp_payload = classifier.classify_changed_files(
+        [
+            "backend/mcp/modules/qe_experiment.py",
+            "backend/tests/mcp/test_domain_modules.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_mcp_payload["backend_sessions"] == ["qe_data_contract_backend"]
+    assert qe_mcp_payload["unmapped_code_files"] == []
+
     hmm_payload = classifier.classify_changed_files(
         ["backend/services/hmm_data_source/cache_manager.py"],
         repo_root=tmp_path,

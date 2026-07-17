@@ -339,6 +339,61 @@ def register(registry: "ModuleRegistry") -> None:
 
     client = registry.client()
 
+    def resolve_custom_evo_mutation_node_scope(
+        *,
+        task_id: str,
+        node_id: str | None,
+        node_parallelism: dict[str, int] | None,
+    ) -> tuple[str | None, dict[str, int] | None]:
+        current_config: Mapping[str, Any] = {}
+        if node_id is None or node_parallelism is None:
+            payload = client.get(
+                f"/quantevolver/evolution/tasks/{task_id}/custom-evo-config"
+            )
+            candidate = payload.get("data", payload) if isinstance(payload, Mapping) else None
+            if not isinstance(candidate, Mapping):
+                raise ValueError(
+                    "QE custom_evo mutation cannot preserve node scope because the current config response is invalid"
+                )
+            current_config = candidate
+
+        current_node_id = str(current_config.get("node_id") or "").strip() or None
+        resolved_node_id = node_id
+        if resolved_node_id is None:
+            resolved_node_id = current_node_id
+            if resolved_node_id is None:
+                raise ValueError(
+                    "QE custom_evo mutation cannot preserve node_id because the current config has no node_id"
+                )
+        safe_node = registry.sanitize(resolved_node_id, "node_id")
+
+        if (
+            node_id is not None
+            and node_parallelism is None
+            and current_node_id is not None
+            and safe_node != current_node_id
+        ):
+            raise ValueError(
+                "node_parallelism is required when changing a custom_evo mutation to a different node_id"
+            )
+
+        resolved_parallelism: Any = node_parallelism
+        if resolved_parallelism is None:
+            resolved_parallelism = current_config.get("node_parallelism")
+            if resolved_parallelism is None:
+                resolved_parallelism = {safe_node: 1}
+
+        errors: list[str] = []
+        normalized_parallelism = _validate_node_parallelism(
+            loops=[],
+            task_node_id=safe_node,
+            node_parallelism=resolved_parallelism,
+            errors=errors,
+        )
+        if errors:
+            raise ValueError("QE config validation failed: " + "; ".join(errors))
+        return safe_node, normalized_parallelism
+
     @registry.mcp.tool(name="qe_experiment_list")
     def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False, detail: str = "summary") -> Any:
         _require_detail(detail)
@@ -536,33 +591,47 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_rerun_loop_confirmed")
-    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
         registry.confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
         loop_payload = dict(loop or {})
         _ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
         safe = registry.sanitize(task_id, "task_id")
+        safe_node, normalized_parallelism = resolve_custom_evo_mutation_node_scope(
+            task_id=safe,
+            node_id=node_id,
+            node_parallelism=node_parallelism,
+        )
         return client.post(
             f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/rerun",
             {
                 "loop": loop_payload,
                 "confirm_delete_old_result": True,
+                "node_id": safe_node,
+                "node_parallelism": normalized_parallelism,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
                 "resource_telemetry_enabled": False,
             },
         )
 
     @registry.mcp.tool(name="qe_custom_evo_append_loops_confirmed")
-    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
         registry.confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
         loop_payloads = [dict(loop or {}) for loop in (loops or [])]
         for idx, loop in enumerate(loop_payloads, start=1):
             _ensure_loop_fixed_seed(loop, context=f"qe_custom_evo_append_loops_confirmed.loops[{idx}]")
         safe = registry.sanitize(task_id, "task_id")
+        safe_node, normalized_parallelism = resolve_custom_evo_mutation_node_scope(
+            task_id=safe,
+            node_id=node_id,
+            node_parallelism=node_parallelism,
+        )
         return client.post(
             f"/quantevolver/evolution/tasks/{safe}/custom-loops/append",
             {
                 "loops": loop_payloads,
                 "ack_failed_loop_warning": True,
+                "node_id": safe_node,
+                "node_parallelism": normalized_parallelism,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
                 "resource_telemetry_enabled": False,
             },
