@@ -46,7 +46,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_cash_fit_runs_sells_before_buys_and_skips_cash_residual",
+  "reproduce_command": "python -m pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_runs_sells_before_buys_and_preserves_dependent_orders",
   "required_verification": [
     "l0",
     "paper_v2_backend"

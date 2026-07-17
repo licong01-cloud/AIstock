@@ -11,7 +11,7 @@ Each test wires:
 Coverage (>=5 distinct integration scenarios):
     1. Single market BUY -> filled -> event log shape + position update
     2. Multi-intent batch (3 BUY orders) -> aggregated event log + run summary
-    3. Limit BUY rejected by ledger (insufficient cash) -> ORDER_REJECTED path
+    3. BUY waiting for capital (insufficient cash) -> durable submitted order
     4. Cancel-after-partial -> CancelAck accepted=False on terminal handle
     5. SimGateway lifecycle invariant: cannot send order before connect /
        after close
@@ -21,7 +21,6 @@ Coverage (>=5 distinct integration scenarios):
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,7 +39,6 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
-    BrokerRejectedError,
     DataUnavailableError,
 )
 from backend.services.trading_core.models import (
@@ -258,9 +256,9 @@ def test_e2e_multi_intent_batch_aggregates(tmp_path: Path) -> None:
     assert set(positions.keys()) == {"600000.SH", "600519.SH", "000001.SZ"}
 
 
-def test_e2e_ledger_reject_on_insufficient_cash(tmp_path: Path) -> None:
+def test_e2e_insufficient_cash_keeps_order_waiting_for_capital(tmp_path: Path) -> None:
     """Scenario 3: BUY 1000 shares of a 10x-priced stock with only 1k cash
-    -> ledger rejects -> ORDER_REJECTED in event log, runner does not crash."""
+    remains submitted with explicit capital-dependency evidence."""
     backend, gateway, runner, event_log, portfolio_id = _wire(
         tmp_path=tmp_path,
         initial_cash=1_000.0,  # too small to cover any 100-lot at price 10
@@ -272,20 +270,39 @@ def test_e2e_ledger_reject_on_insufficient_cash(tmp_path: Path) -> None:
         quantity=1000,
     )
     result = runner.run_intents([intent])
-    gateway.close()
 
     assert result.failed is False
-    assert len(result.handles) == 0
-    assert intent.intent_id in result.rejected_intents
+    assert len(result.handles) == 1
+    assert result.statuses[0].state == "pending"
+    assert result.statuses[0].filled_quantity == 0
+    assert result.rejected_intents == []
+
+    snapshot = backend.export_execution_snapshot(handles=result.handles)
+    assert snapshot["fills"] == ()
+    assert snapshot["cash_entries"] == ()
+    assert snapshot["positions"] == {}
+    order = snapshot["orders"][0]
+    assert order.status.value == "SUBMITTED"
+    capital_dependency = order.metadata["local_sim_capital_dependency"]
+    assert capital_dependency == {
+        "schema_version": "local_sim_capital_dependency_order_v1",
+        "status": "CAPITAL_LIMITED",
+        "attempted_quantity": 1000,
+        "accepted_quantity": 0,
+        "waiting_quantity": 1000,
+        "available_cash_after_accepted_fills": 1000.0,
+        "capital_authority": "LocalSim ledger cash after committed sell fills",
+    }
 
     records = event_log.read_all()
     types = [r.event_type for r in records]
-    assert DaemonEventType.ORDER_REJECTED in types
-    rej = next(r for r in records if r.event_type == DaemonEventType.ORDER_REJECTED)
-    assert rej.intent_id == intent.intent_id
-    assert "error_code" in rej.payload
-    # Run completes despite the rejection.
+    assert DaemonEventType.ORDER_REJECTED not in types
+    submitted = next(r for r in records if r.event_type == DaemonEventType.ORDER_SUBMITTED)
+    assert submitted.intent_id == intent.intent_id
+    assert submitted.payload["state"] == "pending"
+    assert submitted.payload["filled_quantity"] == 0
     assert types[-1] == DaemonEventType.RUN_COMPLETED
+    gateway.close()
 
 
 def test_e2e_data_unavailable_raises_connectivity(tmp_path: Path) -> None:

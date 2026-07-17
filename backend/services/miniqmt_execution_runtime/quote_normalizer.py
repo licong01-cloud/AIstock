@@ -424,7 +424,27 @@ def _resolve_depth_arrays(
         raise quote_contract_error(QuoteContractReasonCode.DEPTH_SCHEMA_INVALID, "all four five-level arrays are required together")
     bid_prices, bid_volumes, ask_prices, ask_volumes = resolved
     assert bid_prices is not None and bid_volumes is not None and ask_prices is not None and ask_volumes is not None
+    bid_prices = _normalize_empty_depth_prices(bid_prices, bid_volumes)
+    ask_prices = _normalize_empty_depth_prices(ask_prices, ask_volumes)
     return bid_prices, bid_volumes, ask_prices, ask_volumes
+
+
+def _normalize_empty_depth_prices(
+    prices: tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None, Decimal | None],
+    quantities: tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None, Decimal | None],
+) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
+    """Normalize xtquant's exact ``0 price + 0 quantity`` empty-level carrier.
+
+    A zero price with a positive quantity remains zero and is rejected later by
+    the strict depth validator.  This keeps a legitimate one-sided book
+    distinct from malformed or fabricated depth.
+    """
+
+    normalized = [
+        None if price == 0 and quantity in {None, Decimal(0)} else price
+        for price, quantity in zip(prices, quantities, strict=True)
+    ]
+    return tuple(normalized)  # type: ignore[return-value]
 
 
 def _convert_depth_quantities(

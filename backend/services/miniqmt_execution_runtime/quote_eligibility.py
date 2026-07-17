@@ -800,7 +800,7 @@ class ActionQuoteEvaluator:
                 stage=stage,
                 diagnostics=(detail,),
             )
-        if _registered_openint_phase(quote) is None:
+        if quote.openint_status is not None and _registered_openint_phase(quote) is None:
             return self._failure(
                 request=request,
                 context=context,

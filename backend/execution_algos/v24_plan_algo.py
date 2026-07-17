@@ -116,7 +116,11 @@ class V24PlanAlgo(BaseExecutionAlgo):
         if state.step >= self._executor.WARMUP and getattr(self._executor, "_current_plan", None) is None:
             raise V24PlanUnavailableError("V24_PLAN failed to generate a plan")
 
-        step_qty = self._round_lot(int(remaining * float(frac)))
+        step_qty = self._round_lot(
+            int(remaining * float(frac)),
+            symbol=state.symbol,
+            side=state.side,
+        )
         if state.step >= len(close_arr) - 1:
             step_qty = remaining
         step_qty = min(step_qty, remaining)

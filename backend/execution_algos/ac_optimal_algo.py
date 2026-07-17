@@ -62,7 +62,9 @@ class ACOptimalAlgo(BaseExecutionAlgo):
                 frac = ratio_t - ratio_t1
                 step_qty = int(state.total_quantity * frac)
 
-            step_qty = self._round_lot(step_qty)
+            step_qty = self._round_lot(
+                step_qty, symbol=state.symbol, side=state.side
+            )
             step_qty = min(step_qty, remaining)
 
         if step_qty <= 0:

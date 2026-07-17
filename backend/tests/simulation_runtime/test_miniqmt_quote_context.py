@@ -210,6 +210,33 @@ def test_runtime_clock_advance_uses_paired_sample_without_provider_io() -> None:
     assert store.snapshot() is advanced
 
 
+def test_equivalent_authority_preload_reuses_calendar_and_symbol_identity() -> None:
+    store = QuoteEvaluationContextStore()
+    providers = _Providers()
+    adapter = _adapter(store, providers)
+    original = adapter.preload(
+        symbol_specs=[_spec()],
+        policy=_policy(),
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=100_000_000,
+        clock_domain_id=MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
+    )
+
+    refreshed = adapter.preload(
+        symbol_specs=[_spec()],
+        policy=_policy(),
+        clock_at_utc=datetime(2026, 7, 12, 1, 31, tzinfo=UTC),
+        clock_monotonic_ns=60_100_000_000,
+        clock_domain_id=MINIQMT_QUOTE_CLOCK_DOMAIN_ID,
+    )
+
+    assert refreshed.clock.clock_event_id != original.clock.clock_event_id
+    assert refreshed.calendar_snapshot_set is original.calendar_snapshot_set
+    assert refreshed.symbol_context("000001.SZ") is original.symbol_context("000001.SZ")
+    assert refreshed.continuity_generation == original.continuity_generation
+    assert refreshed.continuity_valid is True
+
+
 def test_provider_failure_is_loud_and_does_not_publish_partial_context() -> None:
     store = QuoteEvaluationContextStore()
     providers = _Providers()

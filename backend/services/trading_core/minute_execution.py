@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from .errors import DataUnavailableError, ExecutionAlgoError, UnsupportedFeatureError
+from backend.execution_algos.board_lot import round_to_board_lot
+
+from .errors import DataUnavailableError, ExecutionAlgoError
 from .execution_algo_adapter import ExecutionAlgoAdapter
 from .models import Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderStatus
 from .oms import OMS
@@ -86,8 +88,11 @@ class MinuteExecutionEngine:
                     events.append(self._no_fill_event(current_order, algo, bar.bar_time))
                 continue
             if max_participation_rate is not None:
-                max_qty = int(bar.volume * max_participation_rate)
-                max_qty = (max_qty // 100) * 100
+                max_qty = round_to_board_lot(
+                    int(bar.volume * max_participation_rate),
+                    order.symbol,
+                    side=order.side.value,
+                )
                 if max_qty <= 0:
                     raise ExecutionAlgoError(
                         "max_participation_rate leaves no executable round lot",
@@ -256,8 +261,11 @@ class MinuteExecutionEngine:
                     )
                 continue
             if max_participation_rate is not None:
-                max_qty = int(bar.volume * max_participation_rate)
-                max_qty = (max_qty // 100) * 100
+                max_qty = round_to_board_lot(
+                    int(bar.volume * max_participation_rate),
+                    order.symbol,
+                    side=order.side.value,
+                )
                 if max_qty <= 0:
                     raise ExecutionAlgoError(
                         "max_participation_rate leaves no executable round lot",

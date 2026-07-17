@@ -1,45 +1,50 @@
 {
-  "actual": "Missing or temporarily empty TDX quote can permanently remove target deltas; all-blocked plans return PRE_TRADE_BLOCKED with daily run SUCCEEDED.",
+  "actual": "BaseExecutionAlgo rounds all quantities to 100 shares and ExecutionAlgoAdapter rejects the changed quantity.",
   "allowed_write_scope": [
-    "backend/services/simulation_runtime/scheduler.py",
-    "backend/services/simulation_runtime/lifecycle.py",
-    "backend/services/simulation_runtime/decision.py",
-    "backend/services/paper_trading_v2/market_data.py",
-    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/execution_algos/base_algo.py",
+    "backend/execution_algos/board_lot.py",
+    "backend/execution_algos/twap_algo.py",
+    "backend/execution_algos/vwap_algo.py",
+    "backend/execution_algos/ac_optimal_algo.py",
+    "backend/execution_algos/pov_algo.py",
+    "backend/execution_algos/sbb_ema_algo.py",
+    "backend/execution_algos/v24_plan_algo.py",
+    "backend/execution_algos/v25_two_stage_algo.py",
+    "backend/services/trading_core/execution_algo_adapter.py",
+    "backend/services/trading_core/minute_execution.py",
+    "backend/tests/trading_core/test_minute_execution.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
-    "backend/tests/paper_trading_v2/test_localsim_backend.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
-    "tests/aistock_validation/bugs/20260717_BUG-711-localsim-transient-pretrade-quote-gate-deletes-intents-and-reports-false.json",
+    "tests/aistock_validation/bugs/20260717_BUG-717-localsim-legacy-minute-algorithms-reject-valid-star-board-lot-quantities.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-711",
+  "bug_id": "BUG-717",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-17T06:49:49.312944Z",
-  "description": "Missing or temporarily empty TDX quote can permanently remove target deltas; all-blocked plans return PRE_TRADE_BLOCKED with daily run SUCCEEDED.",
+  "created_at": "2026-07-17T07:32:58.667281Z",
+  "description": "BaseExecutionAlgo rounds all quantities to 100 shares and ExecutionAlgoAdapter rejects the changed quantity.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260717-4b536e64a982",
-      "timestamp": "2026-07-17T06:49:49.312933Z"
+      "note": "Promoted from IC-20260717-6c1f25ca6895",
+      "timestamp": "2026-07-17T07:32:58.667278Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Selection/Target/Rebalance preserve frozen direction and quantity; execution data unavailability becomes an explicit recoverable LocalSIM waiting state, never a successful zero-side-effect terminal run.",
-  "first_seen_at": "2026-07-17T06:49:49.312944Z",
+  "expected": "Trading Core validated board-lot quantity remains authoritative; minute algorithms preserve valid main-board, ChiNext, STAR and sell-residual quantities without implicit rounding or business-semantic drift.",
+  "first_seen_at": "2026-07-17T07:32:58.667281Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 2313,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2313",
-  "last_seen_at": "2026-07-17T06:49:49.312944Z",
+  "github_issue_number": 2323,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2323",
+  "last_seen_at": "2026-07-17T07:32:58.667281Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -47,7 +52,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_preserves_localsim_intent_when_transient_quote_is_blocked",
+  "reproduce_command": "python -m pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_runs_sells_before_buys_and_preserves_dependent_orders",
   "required_verification": [
     "l0",
     "paper_v2_backend"
@@ -59,10 +64,10 @@
   "suspected_modules": [
     "simulation_runtime"
   ],
-  "title": "LocalSIM transient pretrade quote gate deletes intents and reports false success",
+  "title": "LocalSIM legacy minute algorithms reject valid STAR board-lot quantities",
   "trigger_condition": {
-    "fingerprint": "4b536e64a982ab8313a2b32e",
-    "source_event_id": "FE-20260717-4b536e64a982"
+    "fingerprint": "6c1f25ca68958742abfaca89",
+    "source_event_id": "FE-20260717-6c1f25ca6895"
   },
   "verification_budget": {
     "budget": "standard",

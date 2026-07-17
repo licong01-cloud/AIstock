@@ -11,11 +11,11 @@ from backend.services.trading_core.oms import OMS
 from backend.services.paper_trading_v2.models import OrderExecutionState
 
 
-def make_order(quantity: int = 600):
+def make_order(quantity: int = 600, *, symbol: str = "000001.SZ"):
     intent = OrderIntent(
         package_id="pkg_1",
         portfolio_id="paper_1",
-        symbol="000001.SZ",
+        symbol=symbol,
         side=OrderSide.BUY,
         quantity=quantity,
         target_trade_date=date(2024, 1, 2),
@@ -23,11 +23,16 @@ def make_order(quantity: int = 600):
     return OMS().create_order(intent)
 
 
-def make_bars(count: int = 3, volume: int = 10000) -> list[MinuteBar]:
+def make_bars(
+    count: int = 3,
+    volume: int = 10000,
+    *,
+    symbol: str = "000001.SZ",
+) -> list[MinuteBar]:
     start = datetime(2024, 1, 2, 9, 31)
     return [
         MinuteBar(
-            symbol="000001.SZ",
+            symbol=symbol,
             bar_time=start + timedelta(minutes=i),
             open=10.0 + i * 0.01,
             high=10.2 + i * 0.01,
@@ -57,6 +62,40 @@ def test_minute_execution_twap_fills_order() -> None:
     assert sum(fill.quantity for fill in fills) == 600
     assert len(fills) == 3
     assert len(events) == 3
+
+
+def test_minute_execution_preserves_valid_star_board_lot_quantity() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=201, symbol="688001.SH")
+
+    final_order, fills, events = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(6, symbol="688001.SH"),
+        algo_code="TWAP",
+        algo_config={"split_count": 6},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert final_order.quantity == 201
+    assert [fill.quantity for fill in fills] == [201]
+    assert len(events) == 1
+
+
+def test_minute_execution_participation_limit_uses_star_increment() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=201, symbol="688001.SH")
+
+    final_order, fills, _ = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(1, volume=10_000, symbol="688001.SH"),
+        algo_code="CLOSE_PRICE",
+        algo_config={"max_participation_rate": 0.0201},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in fills] == [201]
 
 
 def test_minute_execution_requires_minute_bars() -> None:

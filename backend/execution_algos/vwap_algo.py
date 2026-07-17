@@ -43,7 +43,9 @@ class VWAPAlgo(BaseExecutionAlgo):
             else:
                 weight = volume_profile[state.step] / total_vol
                 step_qty = int(state.total_quantity * weight)
-                step_qty = self._round_lot(step_qty)
+                step_qty = self._round_lot(
+                    step_qty, symbol=state.symbol, side=state.side
+                )
                 step_qty = min(step_qty, remaining)
                 # 最后一个 bar 强制执行剩余
                 if state.step >= total_bars - 1:

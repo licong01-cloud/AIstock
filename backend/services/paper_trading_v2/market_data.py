@@ -8,13 +8,15 @@ the run.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hashlib
 import json
-from typing import Any, Callable, Iterator, Protocol
+from types import MappingProxyType
+from typing import Any, Callable, Iterator, Mapping, Protocol
 
 import requests
 
@@ -121,6 +123,119 @@ class MinuteExecutionMarketInput:
     source: MinuteDataSource
     minute_bars: list[MinuteBar]
     market_context: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LocalSimMarketSnapshotV1:
+    """One immutable LocalSIM market-data view for a scheduler tick.
+
+    Each unique symbol is loaded at most once for the snapshot.  Successful
+    inputs and explicit typed failures are carried together so a broker can
+    isolate one symbol without refetching or silently replacing its data.
+    """
+
+    trade_date: date
+    as_of_time: datetime
+    source: MinuteDataSource
+    market_inputs: Mapping[str, MinuteExecutionMarketInput]
+    errors: Mapping[str, Mapping[str, Any]]
+    schema_version: str = "local_sim_market_snapshot_v1"
+    snapshot_id: str = ""
+    snapshot_hash: str = ""
+
+    def __post_init__(self) -> None:
+        if self.source != MinuteDataSource.TDX_REALTIME:
+            raise ValueError("LocalSimMarketSnapshotV1 requires TDX_REALTIME")
+        normalized_inputs = {
+            str(symbol): MinuteExecutionMarketInput(
+                symbol=item.symbol,
+                trade_date=item.trade_date,
+                source=item.source,
+                minute_bars=tuple(bar.model_copy(deep=True) for bar in item.minute_bars),
+                market_context=_freeze_local_sim_snapshot_value(item.market_context),
+            )
+            for symbol, item in self.market_inputs.items()
+        }
+        normalized_errors = {
+            str(symbol): _freeze_local_sim_snapshot_value(payload)
+            for symbol, payload in self.errors.items()
+        }
+        overlap = set(normalized_inputs).intersection(normalized_errors)
+        if overlap:
+            raise ValueError(f"LocalSimMarketSnapshotV1 symbol has both input and error: {sorted(overlap)}")
+        for symbol, item in normalized_inputs.items():
+            if (
+                item.symbol != symbol
+                or item.trade_date != self.trade_date
+                or item.source != self.source
+            ):
+                raise ValueError(f"LocalSimMarketSnapshotV1 input identity mismatch for {symbol}")
+        payload = {
+            "schema_version": self.schema_version,
+            "trade_date": self.trade_date.isoformat(),
+            "as_of_time": self.as_of_time.isoformat(),
+            "source": self.source.value,
+            "market_inputs": {
+                symbol: {
+                    "bars": [bar.model_dump(mode="json") for bar in item.minute_bars],
+                    "market_context": _local_sim_snapshot_json_value(item.market_context),
+                }
+                for symbol, item in sorted(normalized_inputs.items())
+            },
+            "errors": {
+                symbol: _local_sim_snapshot_json_value(error)
+                for symbol, error in sorted(normalized_errors.items())
+            },
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        if self.snapshot_hash and self.snapshot_hash != digest:
+            raise ValueError("LocalSimMarketSnapshotV1 snapshot_hash mismatch")
+        expected_id = f"lsmd_{digest}"
+        if self.snapshot_id and self.snapshot_id != expected_id:
+            raise ValueError("LocalSimMarketSnapshotV1 snapshot_id mismatch")
+        object.__setattr__(self, "market_inputs", MappingProxyType(normalized_inputs))
+        object.__setattr__(self, "errors", MappingProxyType(normalized_errors))
+        object.__setattr__(self, "snapshot_hash", digest)
+        object.__setattr__(self, "snapshot_id", expected_id)
+
+
+def _freeze_local_sim_snapshot_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {
+                str(key): _freeze_local_sim_snapshot_value(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_local_sim_snapshot_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(
+            sorted(
+                (_freeze_local_sim_snapshot_value(item) for item in value),
+                key=repr,
+            )
+        )
+    return deepcopy(value)
+
+
+def _local_sim_snapshot_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _local_sim_snapshot_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_local_sim_snapshot_json_value(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 @dataclass(frozen=True)

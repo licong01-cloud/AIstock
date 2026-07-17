@@ -91,9 +91,14 @@ class SBBEMAAlgo(BaseExecutionAlgo):
         # 基础量 = TWAP 均匀拆分
         base_qty = state.total_quantity / self.split_count
         step_qty = int(base_qty * multiplier)
-        step_qty = self._round_lot(step_qty)
+        step_qty = self._round_lot(
+            step_qty, symbol=state.symbol, side=state.side
+        )
         step_qty = min(step_qty, remaining)
-        step_qty = max(step_qty, self._round_lot(100))  # 至少 100 股
+        step_qty = max(
+            step_qty,
+            self._round_lot(100, symbol=state.symbol, side=state.side),
+        )
         step_qty = min(step_qty, remaining)
 
         # 最后一步强制执行剩余

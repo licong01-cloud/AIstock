@@ -1091,11 +1091,14 @@ class SimulationDailyRun(BaseModel):
 
 class LocalSimExecutionRuntimeStatus(str, Enum):
     WAITING_FOR_CAUSAL_BAR = "WAITING_FOR_CAUSAL_BAR"
+    WAITING_FOR_MARKET_DATA = "WAITING_FOR_MARKET_DATA"
+    WAITING_FOR_CAPITAL = "WAITING_FOR_CAPITAL"
     ACTIVE = "ACTIVE"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     EXPIRED_WITH_RESIDUAL = "EXPIRED_WITH_RESIDUAL"
+    FAILED_TERMINAL = "FAILED_TERMINAL"
 
 
 class LocalSimMarketMarkProvenance(str, Enum):
@@ -1245,6 +1248,7 @@ LOCAL_SIM_TERMINAL_RUNTIME_STATUSES = frozenset(
         LocalSimExecutionRuntimeStatus.CANCELLED,
         LocalSimExecutionRuntimeStatus.REJECTED,
         LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
+        LocalSimExecutionRuntimeStatus.FAILED_TERMINAL,
     }
 )
 
@@ -1287,6 +1291,8 @@ class LocalSimExecutionStateV1(BaseModel):
     latest_position_sequence: int = Field(default=0, ge=0)
     terminal_reason: str | None = None
     residual_classification: str | None = None
+    waiting_reason_code: str | None = None
+    waiting_context: dict[str, Any] | None = None
     sequence: int = Field(default=0, ge=0)
     idempotency_key: str
     state_hash: str = ""
@@ -1322,6 +1328,14 @@ class LocalSimExecutionStateV1(BaseModel):
                 raise ValueError("EXPIRED_WITH_RESIDUAL requires remaining quantity")
             if not self.terminal_reason or not self.residual_classification:
                 raise ValueError("EXPIRED_WITH_RESIDUAL requires terminal reason and residual classification")
+        if self.runtime_status in {
+            LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_DATA,
+            LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL,
+        } and not self.waiting_reason_code:
+            raise ValueError(f"{self.runtime_status.value} requires waiting_reason_code")
+        if self.runtime_status == LocalSimExecutionRuntimeStatus.FAILED_TERMINAL:
+            if not self.terminal_reason or not self.residual_classification:
+                raise ValueError("FAILED_TERMINAL requires terminal reason and residual classification")
         expected_hash = local_sim_execution_state_hash(self)
         if self.state_hash and self.state_hash != expected_hash:
             raise ValueError("state_hash does not match LocalSimExecutionStateV1 payload")

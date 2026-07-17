@@ -271,7 +271,11 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             if remaining_weight <= 1e-8:
                 raise V25TwoStageUnavailableError("V25_TWO_STAGE remaining plan weight is zero")
             frac = float(self._plan[cur_step]) / remaining_weight
-            step_qty = self._round_lot(int(remaining * frac))
+            step_qty = self._round_lot(
+                int(remaining * frac),
+                symbol=state.symbol,
+                side=state.side,
+            )
             step_qty = min(step_qty, remaining)
             reason = f"V25_TWO_STAGE step {state.step + 1}/{horizon}"
 
