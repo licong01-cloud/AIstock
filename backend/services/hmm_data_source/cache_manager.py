@@ -410,6 +410,11 @@ class ArtifactCacheManager:
             raise CacheError(f"artifact cache entry expired: {artifact_name} for {loop_ref}")
         return manifest
 
+    def get_artifact_manifest(self, loop_ref: str, artifact_name: str) -> ArtifactManifest:
+        """Return the verified cache manifest without exposing a filesystem path."""
+
+        return self._load_manifest(loop_ref, artifact_name).model_copy(deep=True)
+
     def load_artifact(
         self,
         loop_ref: str,

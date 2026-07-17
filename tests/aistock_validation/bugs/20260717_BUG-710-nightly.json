@@ -1,59 +1,54 @@
 {
-  "actual": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "actual": "nightly.yml固定L3模块且discovery allowlist不含simulation、QMT、Research Assistant、MiniQMT等；最近五次workflow均failure。",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
+    ".github/workflows/nightly.yml",
+    "scripts/nightly_discovery_input_pack.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
-    "scripts/issue_flow.py",
-    "backend/tests/scripts/test_issue_flow.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "backend/services/validation/plan_catalog.py",
-    "scripts/ci_change_classifier.py",
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    "tests/aistock_validation/bugs/20260717_BUG-695-ci.json",
+    "tests/aistock_validation/bugs/20260717_BUG-710-nightly.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-695",
+  "bug_id": "BUG-710",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-17T03:21:00.851800Z",
-  "description": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "created_at": "2026-07-17T06:49:25.935839Z",
+  "description": "nightly.yml固定L3模块且discovery allowlist不含simulation、QMT、Research Assistant、MiniQMT等；最近五次workflow均failure。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260717-19398cbd8f0b",
-      "timestamp": "2026-07-17T03:21:00.851797Z"
+      "note": "Promoted from IC-20260717-99403d468ec1",
+      "timestamp": "2026-07-17T06:49:25.935834Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/pull/2269"
+    "https://github.com/licong01-cloud/AIstock/actions/runs/29530683441"
   ],
-  "expected": "模块归属、required/recommended计划和CI matrix由同一目录生成；启用计划必须至少被一个模块引用；simulation_runtime等关键模块能选择直接测试；目录一致性测试阻止新的孤儿计划。",
-  "first_seen_at": "2026-07-17T03:21:00.851800Z",
+  "expected": "Nightly以最近一次成功水位到当前main的merged changes为输入，经统一ownership和test plan选择相关模块；同一计划每天最多执行一次；固定基础健康门与变更相关计划分离；连续失败会阻止宣称deferred verification已完成。",
+  "first_seen_at": "2026-07-17T06:49:25.935839Z",
   "fix_branch": null,
-  "fix_commit": "4b7f75ef006936e9cfa24ba225bc9d2c80f4947f",
-  "fixed_at": "2026-07-17T15:13:35.208767Z",
-  "github_issue_number": 2276,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2276",
-  "last_seen_at": "2026-07-17T03:21:00.851800Z",
+  "fix_commit": "1fecc7219fb10523e83f87c2f0ee8ebec0bda81e",
+  "fixed_at": "2026-07-17T15:49:07.359442Z",
+  "github_issue_number": 2312,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2312",
+  "last_seen_at": "2026-07-17T06:49:25.935839Z",
   "module": "validation",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2338",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2369",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/issue_flow.py validation-select --changed-file backend/services/simulation_runtime/ops.py",
+  "reproduce_command": "gh run list --workflow nightly.yml --limit 5",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0",
     "guardrail_changed_files",
     "validation_center_backend",
     "validation_catalog_integrity"
@@ -65,13 +60,13 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "模块测试目录与CI选择器双轨导致测试计划不可达和错误选择",
+  "title": "Nightly未按当日合并模块选择相关计划且连续失败无法承担延期验证",
   "trigger_condition": {
-    "fingerprint": "19398cbd8f0b5dbfec65e8f2",
-    "source_event_id": "FE-20260717-19398cbd8f0b"
+    "fingerprint": "99403d468ec1899fc009528b",
+    "source_event_id": "FE-20260717-99403d468ec1"
   },
   "validation_evidence": [
-    "PR #2338 required checks passed; merge commit 4b7f75ef006936e9cfa24ba225bc9d2c80f4947f"
+    "PR #2369 required checks passed; merge commit 1fecc7219fb10523e83f87c2f0ee8ebec0bda81e"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -116,7 +111,6 @@
     ],
     "premerge_required_plans": [
       "l0",
-      "validation_module_registry_l0",
       "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
@@ -180,7 +174,6 @@
       ],
       "premerge_required_plans": [
         "l0",
-        "validation_module_registry_l0",
         "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",

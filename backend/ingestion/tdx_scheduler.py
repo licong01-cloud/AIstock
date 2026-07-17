@@ -2070,12 +2070,15 @@ class TDXScheduler:
                         continue
                     family_target_id = str(target["target_id"])
                     cur.execute(
-                        """SELECT COALESCE(MAX(attempt_no), 0) + 1
+                        """SELECT COALESCE(MAX(attempt_no), 0) + 1 AS next_attempt_no
                              FROM market.data_sync_attempts
                             WHERE target_id = %s""",
                         (family_target_id,),
                     )
-                    attempt_no = int(cur.fetchone()[0])
+                    attempt_row = cur.fetchone()
+                    if not attempt_row or attempt_row.get("next_attempt_no") is None:
+                        raise RuntimeError(f"failed to allocate next attempt number for target {family_target_id}")
+                    attempt_no = int(attempt_row["next_attempt_no"])
                     attempt_id = f"dsa_{uuid.uuid4().hex}"
                     cur.execute(
                         """INSERT INTO market.data_sync_attempts

@@ -1,89 +1,77 @@
 {
-  "actual": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "actual": "Nested mappings can be changed without model reconstruction and spec_hash changes.",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
-    "tests/aistock_validation/catalog/test_plans.yaml",
-    "scripts/issue_flow.py",
-    "backend/tests/scripts/test_issue_flow.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "backend/services/validation/plan_catalog.py",
-    "scripts/ci_change_classifier.py",
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    "tests/aistock_validation/bugs/20260717_BUG-695-ci.json",
+    "backend/services/hmm_evolution/models.py",
+    "backend/tests/hmm_evolution/test_repository_integration.py",
+    "backend/tests/hmm_evolution/test_service.py",
+    "tests/aistock_validation/bugs/20260717_BUG-738-hmm-evolution-frozen-identity-models-allow-nested-manifest-mutation-and.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-695",
+  "bug_id": "BUG-738",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-17T03:21:00.851800Z",
-  "description": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "created_at": "2026-07-17T15:35:00.836776Z",
+  "description": "Nested mappings can be changed without model reconstruction and spec_hash changes.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260717-19398cbd8f0b",
-      "timestamp": "2026-07-17T03:21:00.851797Z"
+      "note": "Promoted from IC-20260717-ddc401c9e6a7",
+      "timestamp": "2026-07-17T15:35:00.836770Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/pull/2269"
+    "P1-B F-007 frozen durable identity contract"
   ],
-  "expected": "模块归属、required/recommended计划和CI matrix由同一目录生成；启用计划必须至少被一个模块引用；simulation_runtime等关键模块能选择直接测试；目录一致性测试阻止新的孤儿计划。",
-  "first_seen_at": "2026-07-17T03:21:00.851800Z",
+  "expected": "Identity payloads are deeply immutable and hashes remain stable for the model lifetime.",
+  "first_seen_at": "2026-07-17T15:35:00.836776Z",
   "fix_branch": null,
-  "fix_commit": "4b7f75ef006936e9cfa24ba225bc9d2c80f4947f",
-  "fixed_at": "2026-07-17T15:13:35.208767Z",
-  "github_issue_number": 2276,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2276",
-  "last_seen_at": "2026-07-17T03:21:00.851800Z",
-  "module": "validation",
+  "fix_commit": "fbe897b82d40121dec9e8e8755c0fc3560a3e71e",
+  "fixed_at": "2026-07-17T15:55:17.147313Z",
+  "github_issue_number": 2366,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2366",
+  "last_seen_at": "2026-07-17T15:35:00.836776Z",
+  "module": "hmm_evolution",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2338",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2367",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/issue_flow.py validation-select --changed-file backend/services/simulation_runtime/ops.py",
+  "reproduce_command": "python -m pytest backend/tests/hmm_evolution/test_service.py -q",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0",
-    "guardrail_changed_files",
-    "validation_center_backend",
-    "validation_catalog_integrity"
+    "hmm_evolution_backend"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "validation"
+    "hmm_evolution"
   ],
-  "title": "模块测试目录与CI选择器双轨导致测试计划不可达和错误选择",
+  "title": "HMM Evolution frozen identity models allow nested manifest mutation and hash drift",
   "trigger_condition": {
-    "fingerprint": "19398cbd8f0b5dbfec65e8f2",
-    "source_event_id": "FE-20260717-19398cbd8f0b"
+    "fingerprint": "ddc401c9e6a76930dbf93d2e",
+    "source_event_id": "FE-20260717-ddc401c9e6a7"
   },
   "validation_evidence": [
-    "PR #2338 required checks passed; merge commit 4b7f75ef006936e9cfa24ba225bc9d2c80f4947f"
+    "70 passed, 1 skipped; Ruff and diff-check passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "validation",
-        "validation_center",
-        "validation_catalog_integrity"
+        "hmm_evolution"
       ],
       "plans": [
-        "validation_center_backend",
-        "validation_catalog_integrity"
+        "hmm_evolution_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -115,16 +103,14 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0",
-      "validation_module_registry_l0",
-      "guardrail_changed_files"
+      "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -132,8 +118,6 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -141,13 +125,10 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "validation",
-          "validation_center",
-          "validation_catalog_integrity"
+          "hmm_evolution"
         ],
         "plans": [
-          "validation_center_backend",
-          "validation_catalog_integrity"
+          "hmm_evolution_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -179,9 +160,7 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0",
-        "validation_module_registry_l0",
-        "guardrail_changed_files"
+        "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

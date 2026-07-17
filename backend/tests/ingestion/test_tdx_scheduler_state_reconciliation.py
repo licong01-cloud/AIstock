@@ -783,7 +783,7 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
             ]
 
         def fetchone(self):
-            return (2,)
+            return {"next_attempt_no": 2}
 
     class _Connection:
         def __enter__(self):
@@ -828,6 +828,9 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
     assert target_params[2] in {"target-delayed", "target-auto"}
     insert_attempts = [sql for sql, _params in executions if "INSERT INTO market.data_sync_attempts" in sql]
     assert len(insert_attempts) == 2
+    attempt_number_queries = [sql for sql, _params in executions if "MAX(attempt_no)" in sql]
+    assert len(attempt_number_queries) == 2
+    assert all("AS next_attempt_no" in sql for sql in attempt_number_queries)
     alert_sql, alert_params = next(
         (sql, params) for sql, params in executions if "UPDATE market.data_alerts" in sql
     )

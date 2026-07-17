@@ -1,90 +1,90 @@
 {
-  "actual": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "actual": "Recovery sweep raises KeyError: 0 before writes and repeats on later scheduler sweeps.",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
     "tests/aistock_validation/catalog/test_plans.yaml",
-    "scripts/issue_flow.py",
-    "backend/tests/scripts/test_issue_flow.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "backend/services/validation/plan_catalog.py",
-    "scripts/ci_change_classifier.py",
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    "tests/aistock_validation/bugs/20260717_BUG-695-ci.json",
+    "tests/aistock_validation/bugs/20260717_BUG-735-local-data-realdictcursor-tuple-indexing-breaks-recovered-target-reconci.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-695",
+  "bug_id": "BUG-735",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-17T03:21:00.851800Z",
-  "description": "75个模块、55个计划与少量CI规则双轨维护；至少16个计划无模块引用，simulation计划不可达。",
+  "created_at": "2026-07-17T15:26:26.958887Z",
+  "description": "Recovery sweep raises KeyError: 0 before writes and repeats on later scheduler sweeps.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added module_registry.yaml and test_plans.yaml so local_data scheduler changes route to the existing data_sync_autonomy_backend CI lane.",
+      "timestamp": "2026-07-17T15:47:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added backend/ingestion/tdx_scheduler.py after mapping the production scheduler to local_data in the ownership catalog.",
+      "timestamp": "2026-07-17T15:34:00Z"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260717-19398cbd8f0b",
-      "timestamp": "2026-07-17T03:21:00.851797Z"
+      "note": "Promoted from IC-20260717-4196adaebed5",
+      "timestamp": "2026-07-17T15:26:26.958881Z"
     }
   ],
-  "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/pull/2269"
-  ],
-  "expected": "模块归属、required/recommended计划和CI matrix由同一目录生成；启用计划必须至少被一个模块引用；simulation_runtime等关键模块能选择直接测试；目录一致性测试阻止新的孤儿计划。",
-  "first_seen_at": "2026-07-17T03:21:00.851800Z",
+  "evidence_uris": [],
+  "expected": "Recovered targets transition to reconciled and matching retry_exhausted alerts are acknowledged.",
+  "first_seen_at": "2026-07-17T15:26:26.958887Z",
   "fix_branch": null,
-  "fix_commit": "4b7f75ef006936e9cfa24ba225bc9d2c80f4947f",
-  "fixed_at": "2026-07-17T15:13:35.208767Z",
-  "github_issue_number": 2276,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2276",
-  "last_seen_at": "2026-07-17T03:21:00.851800Z",
-  "module": "validation",
+  "fix_commit": "bd6b15d6376075429383bd718efd115df0ebd907",
+  "fixed_at": "2026-07-17T16:19:14.000538Z",
+  "github_issue_number": 2362,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2362",
+  "last_seen_at": "2026-07-17T15:26:26.958887Z",
+  "module": "local_data",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2338",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2372",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/issue_flow.py validation-select --changed-file backend/services/simulation_runtime/ops.py",
+  "reproduce_command": "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts -q",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0",
-    "guardrail_changed_files",
-    "validation_center_backend",
-    "validation_catalog_integrity"
+    "validation_module_registry_l0"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "validation"
+    "local_data"
   ],
-  "title": "模块测试目录与CI选择器双轨导致测试计划不可达和错误选择",
+  "title": "[local_data] RealDictCursor tuple indexing breaks recovered target reconciliation",
   "trigger_condition": {
-    "fingerprint": "19398cbd8f0b5dbfec65e8f2",
-    "source_event_id": "FE-20260717-19398cbd8f0b"
+    "fingerprint": "4196adaebed5678d9dd5ad51",
+    "source_event_id": "FE-20260717-4196adaebed5"
   },
   "validation_evidence": [
-    "PR #2338 required checks passed; merge commit 4b7f75ef006936e9cfa24ba225bc9d2c80f4947f"
+    "PR #2372 required checks -> passed",
+    "nox -s data_sync_autonomy_backend -> 130 passed",
+    "nox -s validation_module_registry_l0 l0 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "validation",
-        "validation_center",
-        "validation_catalog_integrity"
+        "local_data"
       ],
-      "plans": [
-        "validation_center_backend",
-        "validation_catalog_integrity"
-      ],
+      "plans": [],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
@@ -116,15 +116,14 @@
     ],
     "premerge_required_plans": [
       "l0",
-      "validation_module_registry_l0",
-      "guardrail_changed_files"
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -132,8 +131,6 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -141,14 +138,9 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "validation",
-          "validation_center",
-          "validation_catalog_integrity"
+          "local_data"
         ],
-        "plans": [
-          "validation_center_backend",
-          "validation_catalog_integrity"
-        ],
+        "plans": [],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
@@ -180,8 +172,7 @@
       ],
       "premerge_required_plans": [
         "l0",
-        "validation_module_registry_l0",
-        "guardrail_changed_files"
+        "validation_module_registry_l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

@@ -159,6 +159,36 @@ class ArtifactHashMismatchError(HMMEvolutionError):
     http_status = 422
 
 
+class LabelHorizonMismatchError(HMMEvolutionError):
+    reason_code = "hmm_evolution_label_horizon_mismatch"
+    http_status = 422
+
+
+class NoCommonDatesError(HMMEvolutionError):
+    reason_code = "hmm_evolution_no_common_dates"
+    http_status = 422
+
+
+class CoefficientDateCoverageEmptyError(HMMEvolutionError):
+    reason_code = "hmm_evolution_coefficient_date_coverage_empty"
+    http_status = 422
+
+
+class SourceUnavailableError(HMMEvolutionError):
+    reason_code = "hmm_evolution_source_unavailable"
+    http_status = 503
+
+
+class MarketDataUnavailableError(HMMEvolutionError):
+    reason_code = "hmm_evolution_market_data_unavailable"
+    http_status = 503
+
+
+class EvaluationCancelledError(HMMEvolutionError):
+    reason_code = "hmm_evolution_evaluation_cancelled"
+    http_status = 409
+
+
 class CandidateNotFoundError(HMMEvolutionError):
     reason_code = "hmm_evolution_candidate_not_found"
     http_status = 404

@@ -180,7 +180,7 @@ def test_cross_source_alias_is_accepted_after_atomic_candidate_conflict() -> Non
 
     assert created is False
     assert candidate.manifest_hash == primary.manifest_hash
-    assert candidate.source_ref["aliases"] == [alias.manifest.source_ref]
+    assert candidate.source_ref["aliases"] == (alias.manifest.source_ref,)
     assert cursor.steps == []
 
 
@@ -322,3 +322,50 @@ def test_worker_releases_batch_when_shared_evaluation_is_claimed_elsewhere() -> 
         "fencing_token": 4,
         "expected_row_version": 9,
     }
+
+
+def test_batch_recommendations_persist_only_on_batch_items() -> None:
+    repository, cursor = _repository(
+        [
+            {
+                "contains": "SELECT recommendation_version",
+                "one": {"recommendation_version": "hmm_recommendation_v1"},
+            },
+            {
+                "contains": "JOIN hmm_evolution.offline_evaluation",
+                "all": [
+                    {
+                        "candidate_id": "c_low",
+                        "net_label_return": 0.01,
+                        "net_db_10d": 0.02,
+                        "positive_net_label_day_ratio": 0.4,
+                        "primary_coverage_ratio": 0.8,
+                    },
+                    {
+                        "candidate_id": "c_high",
+                        "net_label_return": 0.03,
+                        "net_db_10d": 0.04,
+                        "positive_net_label_day_ratio": 0.8,
+                        "primary_coverage_ratio": 1.0,
+                    },
+                ],
+            },
+            {"contains": "recommendation_score = NULL"},
+            {"contains": "SET recommendation_score", "one": {"candidate_id": "c_low"}},
+            {"contains": "SET recommendation_score", "one": {"candidate_id": "c_high"}},
+        ]
+    )
+
+    repository._apply_recommendations_with_cursor(cursor, "hmmb_1")  # noqa: SLF001
+
+    update_queries = [
+        (query, params)
+        for query, params in cursor.queries
+        if "SET recommendation_score = %s" in query
+    ]
+    assert update_queries[0][1][2] == 2
+    assert update_queries[0][1][3] is True
+    assert update_queries[1][1][2] == 1
+    assert update_queries[1][1][3] is True
+    assert all("UPDATE hmm_evolution.offline_evaluation" not in query for query, _ in cursor.queries)
+    assert cursor.steps == []

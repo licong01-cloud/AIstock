@@ -273,12 +273,7 @@ class BacktestDataSource(HMMDataSourceInterface):
             # 缓存到内存
             self._pred_cache = df
             self._pred_cache_source = "qe_workspace_cache"
-            self._artifact_source_info["pred.pkl"] = {
-                "source": "qe_workspace_cache",
-                "artifact_name": "pred.pkl",
-                "loop_ref": self.base_loop_ref,
-                "cache_path": str(self.cache_manager.get_artifact_path(self.base_loop_ref, "pred.pkl")),
-            }
+            self._artifact_source_info["pred.pkl"] = self._cache_source_info("pred.pkl")
 
             return df
 
@@ -330,12 +325,7 @@ class BacktestDataSource(HMMDataSourceInterface):
             # 缓存到内存
             self._label_cache = df
             self._label_cache_source = "qe_workspace_cache"
-            self._artifact_source_info["label.pkl"] = {
-                "source": "qe_workspace_cache",
-                "artifact_name": "label.pkl",
-                "loop_ref": self.base_loop_ref,
-                "cache_path": str(self.cache_manager.get_artifact_path(self.base_loop_ref, "label.pkl")),
-            }
+            self._artifact_source_info["label.pkl"] = self._cache_source_info("label.pkl")
 
             return df
 
@@ -395,6 +385,27 @@ class BacktestDataSource(HMMDataSourceInterface):
             "zero_copy": True,
         }
         return artifact_obj
+
+    def _cache_source_info(self, artifact_name: str) -> dict[str, Any]:
+        manifest = self.cache_manager.get_artifact_manifest(self.base_loop_ref, artifact_name)
+        provenance = manifest.provenance
+        return {
+            "source": "qe_workspace_cache",
+            "artifact_name": artifact_name,
+            "loop_ref": self.base_loop_ref,
+            "uri": (
+                f"qe://{provenance.task_id}/{provenance.loop_name}/{provenance.workspace_path}"
+                if provenance.source == "qe_workspace"
+                else f"cache://{manifest.cache_key}/{artifact_name}"
+            ),
+            "sha256": manifest.sha256,
+            "size_bytes": manifest.file_size,
+            "row_count": provenance.remote_row_count,
+            "remote_schema_version": provenance.remote_schema_version,
+            "trust_level": "trusted_computational_input",
+            "zero_copy": False,
+            "fallback": self.artifact_source_preference == "prediction_store_first",
+        }
 
     async def _download_artifact(self, artifact_name: str):
         """
