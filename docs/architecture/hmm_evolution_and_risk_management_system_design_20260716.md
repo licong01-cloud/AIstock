@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.3
+> **版本**: v1.4
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-17
-> **状态**: Phase 0 已完成代码、CI、Prediction Store 零副本与受控只读 DB 外部验收；Phase 1 implementation unlocked
+> **状态**: Phase 0 已完成外部验收；Phase 1 实现级详细设计已完成，可按 P1-A/P1-B/P1-C 实施
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -202,85 +202,41 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 
 **目标**: 在固定历史输入上快速评估 HMM overlay，批量给出 top-3 研究推荐，最终有效性仍由 QE 终审。
 
+**实现级权威**:
+
+- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v1.0。
+
 **数据库 Schema**:
-```sql
--- backend/db/init_hmm_evolution_schema.py
 
-CREATE SCHEMA IF NOT EXISTS hmm_evolution;
-
-CREATE TABLE hmm_evolution.candidate (
-    candidate_id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    artifact_manifest JSONB NOT NULL,
-    algorithm_version TEXT NOT NULL,
-    lifecycle_status TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE hmm_evolution.batch_test_run (
-    batch_id TEXT PRIMARY KEY,
-    request_hash TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,
-    candidate_count INT NOT NULL,
-    heartbeat_at TIMESTAMPTZ,
-    error_code TEXT,
-    error_context JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at TIMESTAMPTZ
-);
-
-CREATE TABLE hmm_evolution.offline_evaluation (
-    eval_id TEXT PRIMARY KEY,
-    batch_id TEXT REFERENCES hmm_evolution.batch_test_run(batch_id),
-    candidate_id TEXT NOT NULL REFERENCES hmm_evolution.candidate(candidate_id),
-    base_loop_ref TEXT NOT NULL,
-    source_manifest JSONB NOT NULL,
-    evaluation_spec JSONB NOT NULL,
-    evaluator_version TEXT NOT NULL,
-    input_hash TEXT NOT NULL,
-    as_of_date DATE NOT NULL,
-    window_start DATE NOT NULL,
-    window_end DATE NOT NULL,
-    universe_id TEXT NOT NULL,
-    topk INT NOT NULL,
-    trading_days_count INT NOT NULL,
-    coverage_ratio DOUBLE PRECISION NOT NULL,
-    net_label_10d DOUBLE PRECISION,
-    net_db_10d DOUBLE PRECISION,
-    positive_net_label_day_ratio DOUBLE PRECISION,
-    replacement_count INT NOT NULL,
-    recommendation_score DOUBLE PRECISION,
-    recommendation_rank INT,
-    status TEXT NOT NULL,
-    error_code TEXT,
-    error_context JSONB,
-    started_at TIMESTAMPTZ,
-    heartbeat_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(candidate_id, input_hash, evaluator_version)
-);
-```
+- `hmm_evolution.schema_version`：bootstrap/version 审计；
+- `hmm_evolution.candidate`：内容寻址的 coefficient 候选与 lifecycle；
+- `hmm_evolution.offline_evaluation`：与 batch 解耦的可重放评估、lease/fencing 和指标；
+- `hmm_evolution.batch_test_run`：请求幂等、heartbeat、取消、超时和汇总状态；
+- `hmm_evolution.batch_test_item`：batch/candidate/evaluation 关联以及 batch-relative 推荐分数和排名。
 
 实际 bootstrap 必须为全部 schema/table/column 添加 `COMMENT ON`，并在事务内幂等执行；业务 service 不得隐式建表。
 
 **评估契约**:
 
 - v1 计算基准来自 `scripts/diagnostics/hmm_offline_diagnostic.py::compute_replacements`：同一交易日对 raw score 与 HMM-adjusted score 使用稳定排序，比较 raw TopK 与 adjusted TopK 的 entered/dropped 集合。
-- `net_label_10d` 为逐日 `mean(entered label_10d) - mean(dropped label_10d)` 的均值；必须同时保存有效日数、覆盖率和正值日比例。
+- `net_label_return` 为逐日 `mean(entered label) - mean(dropped label)` 的均值；必须同时保存显式 `label_horizon_days`、有效日数、覆盖率和正值日比例。仅 horizon=10 时可显示别名 `net_label_10d`。
 - `net_db_10d` 使用 `market.kline_daily_raw.close_li` 按交易日序列计算 10 个交易日远期收益，禁止自然日 shift。
-- `recommendation_score` 的归一化、权重、缺失值和并列规则必须作为版本化 `evaluation_spec` 提交；未批准前不得用临时公式生成 top-3。
+- `hmm_recommendation_v1` 使用 batch 内 percentile、版本化权重、缺失值重归一化和稳定并列规则；分数与排名存于 `batch_test_item`，不污染可复用 evaluation。
 - top-3 是研究推荐，不自动提交 QE、不修改生产配置、不淘汰未入选方向。
 - 每次结果必须可由 `source_manifest + candidate manifest + evaluation_spec + evaluator_version + input_hash` 重放。
 
 **API 端点**:
 ```
+POST /api/v1/hmm-evolution/candidates/preview
+POST /api/v1/hmm-evolution/candidates
+GET  /api/v1/hmm-evolution/candidates
 POST /api/v1/hmm-evolution/evaluate
 POST /api/v1/hmm-evolution/batch
 GET  /api/v1/hmm-evolution/evaluations/{eval_id}
+GET  /api/v1/hmm-evolution/batches
 GET  /api/v1/hmm-evolution/batches/{batch_id}
 POST /api/v1/hmm-evolution/batches/{batch_id}/cancel
+POST /api/v1/hmm-evolution/batches/{batch_id}/retry-failed
 ```
 
 **验收标准**:
@@ -522,10 +478,14 @@ backend/
     
     hmm_evolution/
       __init__.py
+      candidate_artifact.py
+      errors.py
       service.py
       evaluator.py
       scorer.py
       models.py
+      repository.py
+      worker.py
     
     hmm_risk/
       __init__.py
@@ -551,12 +511,16 @@ frontend/
     app/
       hmm-evolution/
         page.tsx
-        [evalId]/page.tsx
-        components/
+        batches/[batchId]/page.tsx
+        evaluations/[evalId]/page.tsx
       hmm-risk/
         page.tsx
         alerts/[alertId]/page.tsx
         components/
+    components/
+      hmm-evolution/
+    lib/
+      hmm-evolution/api.ts
     lib/navigation/nav-groups.ts       # 明确导航入口和中文标签
 
 backend/tests/
@@ -568,6 +532,7 @@ backend/tests/
 docs/
   architecture/
     hmm_evolution_and_risk_management_system_design_20260716.md  # 本文档
+    hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md
 ```
 
 ### 5.2 不污染规范
@@ -687,7 +652,7 @@ docs/
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v1.3 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
+本表记录 v1.4 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -696,11 +661,11 @@ docs/
 | F-003 | `realtime_source.py`; `models.py`; BUG-689/#2266 | candidate identity、隐式 latest 拒绝、filter contract tests | verified | 无 |
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
 | F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计/验收清单；本验收 PR | `hmm_data_source_backend`、coverage/JUnit、4-test read-only integration、compact timing/RSS receipt | verified | 无 |
-| F-006 | 目标：hmm_evolution.candidate bootstrap/repository | 目标：schema/comment/repository test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
-| F-007 | 目标：versioned evaluator | 目标：fixture oracle + replay hash | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
-| F-008 | 目标：batch/evaluation job state machine | 目标：幂等/heartbeat/cancel/failure test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
-| F-009 | 目标：recommendation scorer | 目标：版本/并列/缺失/无副作用 test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
-| F-010 | 目标：API、UI、导航 | 目标：API contract + UI E2E/截图 | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
+| F-006 | Phase 1 详细设计 §6/§10/§11；目标 candidate bootstrap/repository | 目标：schema/comment/manifest/path/hash/lifecycle/write-allowlist tests | approved_by_user_for_implementation | 实现证据由 P1-A PR 回填 |
+| F-007 | Phase 1 详细设计 §7/§8；目标 versioned evaluator | 目标：旧诊断 oracle + tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-008 | Phase 1 详细设计 §10～§13；目标 batch/evaluation/item state machine | 目标：幂等/lease/fencing/heartbeat/cancel/retry/shared/partial failure tests | approved_by_user_for_implementation | 实现证据由 P1-A/P1-B PR 回填 |
+| F-009 | Phase 1 详细设计 §9；目标 `hmm_recommendation_v1` | 目标：percentile/版本/并列/缺失/top-3/无副作用 tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-010 | Phase 1 详细设计 §14/§15；目标 API、UI、导航 | 目标：API contract + 真实 UI/动态 horizon/错误/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 | F-011 | 目标：hmm_risk alert state machine | 目标：watermark/dedupe/revision test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
 | F-012 | 目标：advisory-only service boundary | 目标：Selection/Paper/QMT 无副作用 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
 | F-013 | 目标：risk evidence/report | 目标：指标、样本量、分阶段稳定性 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
@@ -732,6 +697,7 @@ docs/
 
 ### 14.1 参考文档
 
+- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` - Phase 1 实现级详细设计
 - `docs/architecture/research_pipeline_and_mcp_gateway_design_v2.md` - Research Pipeline 架构
 - `docs/analysis/hmm_offline_diagnostic_qe_20260502_131502_9b54.md` - 离线诊断示例
 - `docs/analysis/hmm_risk_gate_validation_20260517.md` - 风险门控验证
@@ -747,6 +713,7 @@ docs/
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.4 | 2026-07-17 | 完成 Phase 1 实现级详细设计；拆分 reusable evaluation 与 batch-relative ranking；显式 label horizon；批准 `hmm_recommendation_v1` |
 | v1.3 | 2026-07-17 | 完成高收益 QE Prediction Store-only + 强制只读 DB/PIT sector 外部验收；F-001/F-002 更新为 verified，Phase 1 解锁 |
 | v1.2 | 2026-07-17 | 增加 Prediction Store 零副本复用、显式 fallback 与真实 store-only smoke |
 | v1.1 | 2026-07-17 | 增补 F2 scope/non-goals/DAI/矩阵/发布回滚/生产门禁；Phase 0 改为 hardening 前置 gate；收紧 Phase 1-3 隔离语义 |

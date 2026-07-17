@@ -1,7 +1,7 @@
 # HMM 演进与风险管理隔离约束
 
 > 版本：v2.0（2026-07-17）<br>
-> 权威上位设计：`hmm_evolution_and_risk_management_system_design_20260716.md` v1.1。
+> 权威上位设计：`hmm_evolution_and_risk_management_system_design_20260716.md` v1.4。
 
 ## 1. 核心定义
 

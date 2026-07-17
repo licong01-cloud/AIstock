@@ -2,7 +2,7 @@
 
 > 版本：v2.2（2026-07-17 controlled external acceptance 版）<br>
 > 状态：实现、单元/contract CI、Prediction Store 零副本与受控只读 DB/PIT sector integration 均已验收。<br>
-> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.3。<br>
+> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.4。<br>
 > 运行权威：`backend/services/hmm_data_source/README.md`。
 
 本文替代 2026-07-16 初稿中的伪 async DB、旧 market 表、隐式 latest snapshot、无
