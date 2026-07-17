@@ -1,6 +1,7 @@
 {
   "actual": "TypeError: _patch_strategy_package_data_window.<locals>.fetch_static() got an unexpected keyword argument 'max_natural_days'.",
   "allowed_write_scope": [
+    "backend/tests/test_strategy_package_live_inference_window_patch.py",
     "scripts/strategy_package_live_inference.py",
     "tests/aistock_validation/bugs/20260717_BUG-705-wsl-strategy-package-data-window-patch-rejects-inference-max-natural-day.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

@@ -98,7 +98,9 @@ def _patch_strategy_package_data_window() -> None:
     from backend.data_service import qe_data_service
     from backend.data_service import timescaledb_adapter
 
-    def fetch_static(universe, start_date, end_date):
+    def fetch_static(universe, start_date, end_date, max_natural_days: int | None = 180):
+        # The inference engine already resolved the authoritative trading-day
+        # window. Keep the shared adapter signature without truncating it again.
         return qe_data_service.build_static_factors(
             universe,
             start_date,
