@@ -1,7 +1,7 @@
 # HMM 数据源抽象层
 
 > Phase 0 hardening 与 Prediction Store 零副本收尾<br>
-> 状态：代码契约、专用 CI 和 Prediction Store 真实只读 smoke 已建立；Phase 1 仍需受控只读 DB integration receipt 后解锁。
+> 状态：代码契约、专用 CI、Prediction Store 零副本和受控只读 DB/PIT sector integration 均已验收；Phase 1 implementation unlocked。
 
 ## 边界
 
@@ -132,8 +132,10 @@ $env:HMM_TEST_AS_OF_DATE = "YYYY-MM-DD"
 rtk python -m nox -s hmm_data_source_readonly_integration
 ```
 
-该 session 只执行 SELECT 和 QE artifact 读取，不运行服务、不执行 INSERT/UPDATE/DELETE/DDL。
-缺少显式开关或可重放坐标时拒绝运行；不得使用硬编码旧 task 作为通过证据。
+该 session 绑定 canonical Prediction Store，使用 `prediction_store_only`，并给 DB
+repository 注入 `REPEATABLE READ + transaction_read_only=on` 的连接 factory。它只执行
+SELECT 和 QE artifact 读取，不运行服务、不执行 INSERT/UPDATE/DELETE/DDL。缺少显式开关
+或可重放坐标时拒绝运行；不得使用硬编码旧 task 作为通过证据。
 
 ## 测试目录
 
@@ -149,11 +151,14 @@ backend/tests/hmm_data_source/
 
 异步测试由本目录 `conftest.py` 使用 `asyncio.run()` 驱动；integration 默认跳过。
 
-## 已知门禁
+## Phase 0 外部验收状态
 
 - 普通单元/contract CI 通过不等于真实 QE/DB smoke 已通过。
-- Prediction Store 零副本真实 smoke 已覆盖当前 authoritative QE loop 的 prediction；
-  Phase 1 开发前仍必须保存一次 read-only DB 与 sector mapping integration receipt。
+- 2026-07-17 已使用 `qe_20260706_013235_bbd4/Loop8`、
+  `as_of_date=2026-07-17` 完成受控 integration：4 passed；DB completed date
+  `2026-07-16`；PIT mapping 5,864 symbols / 131 L2 codes；transaction read-only。
+- Store prediction 2,260,161 rows，`zero_copy=true`，未创建 HMM cache 副本；该任务为
+  h20，仅作为 prediction/data-source receipt，不作为 10 日 label 证据。
 - 若 QE producer 尚未发布可信 artifact manifest，cold download 应失败；不得回退到无 manifest pickle。
 - 任何性能结论必须引用 JUnit durations、输入行数和冷/热缓存条件，不在文档中写未经测量的固定秒数。
 

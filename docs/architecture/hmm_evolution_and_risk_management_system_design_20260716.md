@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.2
+> **版本**: v1.3
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-17
-> **状态**: Phase 0 代码与 Prediction Store 零副本收尾完成；受控只读 DB integration receipt 前禁止进入 Phase 1 实施
+> **状态**: Phase 0 已完成代码、CI、Prediction Store 零副本与受控只读 DB 外部验收；Phase 1 implementation unlocked
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -74,9 +74,12 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 
 ### 1.6 当前实现状态与进入 Phase 1 的前置条件
 
-PR #2227（merge `5cae5861853bd4be4a07699fb332224c2bdf54c2`）只代表 Phase 0 代码已进入 main，**不代表真实路径验收完成**。当前已知 hardening 阻塞项包括 QE 下载客户端契约、同步 DB 连接适配、canonical market schema、snapshot 过滤、可信 artifact manifest、缓存边界、Realtime 单测及真实集成证据。
+PR #2227（merge `5cae5861853bd4be4a07699fb332224c2bdf54c2`）只代表最初的
+Phase 0 代码进入 main；BUG-688～BUG-692 和 #2285 已完成运行契约、canonical schema、
+artifact/cache、CI 与 Prediction Store 零副本 hardening。2026-07-17 又以当前高收益
+QE loop 和强制只读 DB transaction 完成外部 integration receipt。
 
-Phase 1 开发前必须同时满足：
+Phase 1 开发前的四项前置条件现均已满足：
 
 1. Prediction Store 零副本真实 smoke 与两种数据源的受控只读 DB/QE smoke 均通过，且无生产 DB 写入。
 2. HMM 数据源相关单元测试进入专用 CI/nox plan，不再依赖无关 `qe_data_contract_backend`。
@@ -178,8 +181,8 @@ backend/services/hmm_data_source/
   models.py            # Pydantic models
 ```
 
-**当前状态**: Phase 0 hardening 与 Prediction Store 零副本路径已实现；受控只读 DB
-integration receipt 仍是进入 Phase 1 的最后阻塞项。
+**当前状态**: Phase 0 hardening、Prediction Store 零副本路径和受控只读 DB/PIT sector
+integration receipt 已完成；Phase 1 implementation unlocked。
 
 **验收标准**:
 - [x] 回测数据源优先按 task/LoopN 只读解析 Prediction Store content-addressed blob，
@@ -190,7 +193,9 @@ integration receipt 仍是进入 Phase 1 的最后阻塞项。
 - [x] artifact 具有可信 manifest、SHA256、行数、schema version、来源任务与质量状态。
 - [x] workspace fallback cache 路径不可越界，写入原子化，具备跨进程互斥、TTL/max-size/clear 生命周期。
 - [x] Realtime、Backtest、cache、isolation、integration 测试进入专用 CI 计划。
-- [ ] 当前授权只读 DB 上的 trading-calendar/PIT sector integration receipt。
+- [x] 当前授权 DB transaction 强制 `read_only=on`；以
+  `qe_20260706_013235_bbd4/Loop8`、`as_of_date=2026-07-17` 完成
+  trading-calendar/PIT sector integration receipt（4 passed）。
 
 ---
 ### Phase 1: HMM 离线评估与演进实验室（Week 2-3）
@@ -682,15 +687,15 @@ docs/
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v1.1 设计已获用户授权进入实施；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
+本表记录 v1.3 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | `backtest_source.py`; `prediction_store_resolver.py`; BUG-688/#2260; 本收尾 PR | `test_backtest_source.py` Prediction Store zero-copy/MultiIndex/corruption/fallback；真实 `qe_20260715_104922_001d/Loop1` prediction-store-only smoke | verified_local; approved_by_user_for_implementation | 受控只读 DB/QE 组合 integration receipt 待执行 |
-| F-002 | `db_repository.py`; `realtime_source.py`; BUG-689/#2266 | canonical schema/交易日/PIT repository contract tests | verified_local; approved_by_user_for_implementation | 受控只读 DB integration receipt 待执行 |
+| F-001 | `backtest_source.py`; `prediction_store_resolver.py`; BUG-688/#2260; #2285；本验收 PR | unit contract + `qe_20260706_013235_bbd4/Loop8` prediction-store-only external receipt；2,260,161 rows；zero-copy/no HMM cache；h20 label 不作为 10 日 label 证据 | verified | 无 |
+| F-002 | `db_repository.py`; `realtime_source.py`; BUG-689/#2266；本验收 PR | read-only transaction assertion；`as_of=2026-07-17`；completed date `2026-07-16`；PIT mapping 5,864 symbols / 131 L2 codes；Backtest/Realtime parity | verified | 无 |
 | F-003 | `realtime_source.py`; `models.py`; BUG-689/#2266 | candidate identity、隐式 latest 拒绝、filter contract tests | verified | 无 |
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
-| F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计 | `hmm_data_source_backend`、coverage/JUnit、真实 store-only compact receipt | verified | 无 |
+| F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计/验收清单；本验收 PR | `hmm_data_source_backend`、coverage/JUnit、4-test read-only integration、compact timing/RSS receipt | verified | 无 |
 | F-006 | 目标：hmm_evolution.candidate bootstrap/repository | 目标：schema/comment/repository test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
 | F-007 | 目标：versioned evaluator | 目标：fixture oracle + replay hash | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
 | F-008 | 目标：batch/evaluation job state machine | 目标：幂等/heartbeat/cancel/failure test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
@@ -742,6 +747,8 @@ docs/
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.3 | 2026-07-17 | 完成高收益 QE Prediction Store-only + 强制只读 DB/PIT sector 外部验收；F-001/F-002 更新为 verified，Phase 1 解锁 |
+| v1.2 | 2026-07-17 | 增加 Prediction Store 零副本复用、显式 fallback 与真实 store-only smoke |
 | v1.1 | 2026-07-17 | 增补 F2 scope/non-goals/DAI/矩阵/发布回滚/生产门禁；Phase 0 改为 hardening 前置 gate；收紧 Phase 1-3 隔离语义 |
 | v1.0 | 2026-07-16 | 初始版本，定义 Phase 0-3 |
 

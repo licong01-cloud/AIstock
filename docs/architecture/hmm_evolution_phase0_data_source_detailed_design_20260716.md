@@ -1,8 +1,8 @@
 # HMM 演进系统 Phase 0 数据源详细设计
 
-> 版本：v2.1（2026-07-17 Prediction Store 零副本收尾版）<br>
-> 状态：实现、单元/contract CI 与真实 Prediction Store 只读 smoke 已完成；受控只读 DB integration receipt 待执行。<br>
-> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.2。<br>
+> 版本：v2.2（2026-07-17 controlled external acceptance 版）<br>
+> 状态：实现、单元/contract CI、Prediction Store 零副本与受控只读 DB/PIT sector integration 均已验收。<br>
+> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.3。<br>
 > 运行权威：`backend/services/hmm_data_source/README.md`。
 
 本文替代 2026-07-16 初稿中的伪 async DB、旧 market 表、隐式 latest snapshot、无
@@ -139,8 +139,10 @@ service 通过 `asyncio.to_thread()` 调用，不使用 `async with` 伪装异�
 - `HMM_TEST_QE_LOOP_REF=<task>/<loop>`；
 - `HMM_TEST_AS_OF_DATE=YYYY-MM-DD`。
 
-只执行 QE 文件读取和 DB SELECT，不运行 DML/DDL。缺任一坐标直接拒绝，不允许硬编码旧 task
-或“全部 skip 也算通过”。
+session 将 Prediction Store root 绑定到 canonical repo，backtest 使用
+`prediction_store_only`；DB repository factory 使用 `REPEATABLE READ` 且强制
+`transaction_read_only=on`。只执行 QE artifact 读取和 DB SELECT，不运行 DML/DDL。
+缺任一坐标直接拒绝，不允许硬编码旧 task 或“全部 skip 也算通过”。
 
 此外保留不访问 DB/workspace 的 Prediction Store-only smoke：显式设置
 `artifact_source_preference=prediction_store_only`，断言真实 loop 可读取、source receipt
@@ -171,10 +173,12 @@ Phase 1 schema 必须单独交付幂等 Python bootstrap、完整 `COMMENT ON`�
 | 专用测试/coverage/CI 路由 | BUG-691 / #2273 | 已合入 |
 | unsafe deploy helper/文档收敛 | BUG-692 | 本次修复 |
 | Prediction Store 零副本复用 | Phase 0 收尾 PR | 本次实现；真实 prediction smoke 通过 |
+| controlled external acceptance | 本验收 PR | 高收益 QE Loop8 + read-only DB/PIT sector；4 passed |
 
-本地/CI contract 与真实 Prediction Store-only smoke 已通过不等于 DB 外部依赖已验收。
-Phase 1 的剩余阻塞项是一次配置好的只读 DB trading-calendar/PIT sector integration receipt；
-不得用 Prediction Store 通过替代该证据。
+最终 receipt 使用 `qe_20260706_013235_bbd4/Loop8` 和 `as_of_date=2026-07-17`：
+Prediction Store 2,260,161 rows、zero-copy/no HMM cache；DB completed date
+`2026-07-16`，PIT mapping 5,864 symbols / 131 L2 codes，transaction read-only。
+Phase 0 已 externally accepted，Phase 1 implementation unlocked。
 
 ## 10. Phase 1 接入原则
 

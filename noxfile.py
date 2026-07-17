@@ -2875,6 +2875,10 @@ def hmm_data_source_readonly_integration(session: nox.Session) -> None:
         )
     evidence_dir = ROOT / "tmp" / "validation" / "hmm_data_source"
     evidence_dir.mkdir(parents=True, exist_ok=True)
+    prediction_store_root = os.environ.get(
+        "AISTOCK_PREDICTION_STORE_ROOT",
+        str(CANONICAL_ROOT / "rdagent_assets" / "prediction_store"),
+    )
     session.run(
         sys.executable,
         "-m",
@@ -2888,7 +2892,7 @@ def hmm_data_source_readonly_integration(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env(),
+        env=_env({"AISTOCK_PREDICTION_STORE_ROOT": prediction_store_root}),
         external=True,
     )
 

@@ -10,16 +10,44 @@ hmm_data_source 测试包的本地配置。
 import asyncio
 import inspect
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
+from typing import Any, Iterator
 
 import pytest
+
+from backend.db.pg_pool import get_conn
+from backend.services.hmm_data_source.db_repository import HMMDataRepository
 
 
 @dataclass(frozen=True)
 class HMMReadonlyIntegrationConfig:
     qe_loop_ref: str
     as_of_date: date
+
+
+@contextmanager
+def _readonly_conn_factory() -> Iterator[Any]:
+    """Yield a transaction that PostgreSQL itself enforces as read-only."""
+
+    with get_conn(autocommit=False, manage_transaction=True) as conn:
+        conn.set_session(
+            readonly=True,
+            autocommit=False,
+            isolation_level="REPEATABLE READ",
+        )
+        yield conn
+
+
+@pytest.fixture
+def hmm_readonly_conn_factory():
+    return _readonly_conn_factory
+
+
+@pytest.fixture
+def hmm_readonly_repository() -> HMMDataRepository:
+    return HMMDataRepository(conn_factory=_readonly_conn_factory)
 
 
 @pytest.fixture
