@@ -1,8 +1,8 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.2
+> **版本**：v1.3
 > **日期**：2026-07-17
-> **状态**：P1-A foundation 已完成外部验收；P1-B/P1-C 待实现；runtime activation 未启用
+> **状态**：P1-A 已验收；P1-B evaluator/scorer 核心已实现，旧诊断迁移与受控 benchmark 待完成；P1-C 待实现；runtime activation 未启用
 > **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.6
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
@@ -1024,14 +1024,16 @@ frontend/src/lib/navigation/nav-groups.ts
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `backend/tests/hmm_evolution/`；RD-Agent catalog API tests；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt；runtime rollout 状态见 §17.4.1/§21 | verified | 无 |
-| F-007 | 本文 §7、§8；目标 `hmm_evolution/evaluator.py` | 目标：旧诊断 oracle、asset trust、latest-common watermark、tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py` | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle}.py`；非并列旧诊断 oracle、显式 tie-break、h10/h20/mixed horizon、latest-common/read-only transaction、交易日 forward return、coverage/warning、deterministic result hash；HMM/Data Source matrix：166 passed / 7 skipped | approved_by_user_for_implementation | 核心计算与回放契约已实现；旧诊断脚本仍需通过 BUG-736/BUG-737 移除硬编码凭据、静默异常与 QE config 下载，并切换到唯一 pure evaluator；真实 benchmark 属 P1-C 外部验收 |
 | F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | unit state-machine suite；`test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify；P1-B/worker rollout 状态见 §18/§21 | verified | 无 |
-| F-009 | 本文 §9；目标 `hmm_evolution/scorer.py` | 目标：percentile/weight/missing/tie/top-3/no-side-effect tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
 | F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、页面、导航 | 目标：API contract、真实 UI、asset browser、中文/动态 horizon/degraded warning/error/截图证据 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 
 ## 24. 设计结论
 
 P1-A 的 QE 全资产只读 reader、candidate identity、schema 和 durable state machine 已完成
-源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。下一交付段为 P1-B
-pure evaluator + recommendation scorer。worker/API/UI 尚未启用，P1-B/P1-C 未完成，因此不得
-把本次收尾表述为整个 Phase 1 完成。
+源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。P1-B 已实现 pure
+evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只读 repository、durable
+executor 与 batch-relative recommendation scorer；F-009 已验证。F-007 仍以 BUG-736/BUG-737
+跟踪旧诊断唯一计算路径迁移，P1-C 负责受控 benchmark、API/UI 与外部验收。生产 worker/API/UI
+均未启用，不得把当前状态表述为整个 Phase 1 完成。
