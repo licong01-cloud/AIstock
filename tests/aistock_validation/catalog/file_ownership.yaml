@@ -169,6 +169,16 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: QE service code is shared by single experiments and evolution flows.
+  - rule_id: qe_mcp_data_contract
+    priority: 100
+    include:
+      - backend/mcp/modules/qe_experiment.py
+      - backend/tests/mcp/test_domain_modules.py
+    primary_module: qe.data_completeness
+    impact_modules: [qe.core]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: QE MCP payload and domain-module contracts validate experiment data completeness.
   - rule_id: qe_frontend
     priority: 80
     include:

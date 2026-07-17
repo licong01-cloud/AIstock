@@ -319,6 +319,7 @@ plans:
     level: L2
     command_key: nox_hmm_evolution_backend
     nox_session: hmm_evolution_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
