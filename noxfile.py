@@ -2804,6 +2804,77 @@ def qe_data_contract_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def hmm_data_source_backend(session: nox.Session) -> None:
+    """Run HMM Phase 0 source, cache, isolation, and contract tests."""
+    evidence_dir = ROOT / "tmp" / "validation" / "hmm_data_source"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = evidence_dir / "coverage.xml"
+    coverage_data = evidence_dir / ".coverage"
+    junit_xml = evidence_dir / "junit.xml"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/hmm_data_source",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/hmm_data_source",
+        "-m",
+        "not integration",
+        "--cov=backend.services.hmm_data_source",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        "--cov-report=term-missing",
+        "--cov-fail-under=70",
+        "--durations=10",
+        f"--junitxml={junit_xml}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def hmm_data_source_readonly_integration(session: nox.Session) -> None:
+    """Run explicitly authorized read-only DB/QE smoke; never writes or runs DDL."""
+    required_env = (
+        "AISTOCK_HMM_READONLY_INTEGRATION",
+        "HMM_TEST_QE_LOOP_REF",
+        "HMM_TEST_AS_OF_DATE",
+    )
+    missing = [name for name in required_env if not os.environ.get(name, "").strip()]
+    if os.environ.get("AISTOCK_HMM_READONLY_INTEGRATION") != "1" or missing:
+        session.error(
+            "set AISTOCK_HMM_READONLY_INTEGRATION=1, HMM_TEST_QE_LOOP_REF, "
+            f"and HMM_TEST_AS_OF_DATE to authorize the smoke; missing={missing}"
+        )
+    evidence_dir = ROOT / "tmp" / "validation" / "hmm_data_source"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/hmm_data_source/test_integration.py",
+        "--run-integration",
+        "-m",
+        "integration",
+        "--durations=10",
+        f"--junitxml={evidence_dir / 'readonly-integration.xml'}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env(),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_archive_data_quality(session: nox.Session) -> None:
     """Run read-only QE archive DB metadata and schema smoke checks."""
     args = [
