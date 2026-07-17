@@ -34,8 +34,8 @@
   "expected": "Validate exact batch mapping key/embedded batch_id, batch_status, result_json, metadata, results cardinality, per-result intent identity and boolean/count types before replay or persistence; legitimate no-child ticks may keep batch_results empty, but any supplied malformed or conflicting durable batch evidence must fail with stable typed context before overwrite and without changing Selection, B0 tick, order, quantity, child or broker semantics.",
   "first_seen_at": "2026-07-16T17:15:09.695417Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d77870d98fc5af3e1828012945ce45268f4f2e15",
+  "fixed_at": "2026-07-17T01:25:28.970308Z",
   "github_issue_number": 2243,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2243",
   "last_seen_at": "2026-07-16T17:15:09.695417Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2245",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "ea5ffe24f039cb5d4deef826",
     "source_event_id": "FE-20260716-ea5ffe24f039"
   },
+  "validation_evidence": [
+    "PR #2245 CI 17 passed 0 failed; BUG-683 new direct 34 passed; scheduler related 18 passed; client event-loop 24 passed plus one exact-main baseline failure; Ruff py_compile diff-check CodeGraph-UA F2 l0 registry PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
