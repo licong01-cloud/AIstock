@@ -30,8 +30,8 @@
   "expected": "Calendar/clock remains the phase authority; openint is optional cross-evidence and absence does not block execution, while conflicting registered evidence still fails loudly.",
   "first_seen_at": "2026-07-17T06:46:38.630122Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "21128d6961dc5d260b9daba312e8b3197a278b5d",
+  "fixed_at": "2026-07-17T14:48:12.190385Z",
   "github_issue_number": 2307,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2307",
   "last_seen_at": "2026-07-17T06:46:38.630122Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2325",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "46be1725c209c1487eebfaf7",
     "source_event_id": "FE-20260717-46be1725c209"
   },
+  "validation_evidence": [
+    "PR #2325 required CI -> 12 success, 5 expected skipped, 0 failed or pending",
+    "latest-origin-main related regression matrix -> 107 passed; focused mark reuse -> 1 passed",
+    "DESIGN-COMPLIANCE-001 -> passed all four controls; F2 validator -> 33/33, 0 warnings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

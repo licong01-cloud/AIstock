@@ -44,8 +44,8 @@
   "expected": "Original target intents remain durable; dependent buys wait for authoritative cash entries, resume automatically as cash is released, survive restart and become residual only after the close policy terminalizes them.",
   "first_seen_at": "2026-07-17T06:51:32.901579Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "21128d6961dc5d260b9daba312e8b3197a278b5d",
+  "fixed_at": "2026-07-17T14:48:12.252800Z",
   "github_issue_number": 2317,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2317",
   "last_seen_at": "2026-07-17T06:51:32.901579Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2325",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -73,6 +74,11 @@
     "fingerprint": "294bb1b35f34217df9b68757",
     "source_event_id": "FE-20260717-294bb1b35f34"
   },
+  "validation_evidence": [
+    "PR #2325 required CI -> 12 success, 5 expected skipped, 0 failed or pending",
+    "latest-origin-main related regression matrix -> 107 passed; focused mark reuse -> 1 passed",
+    "DESIGN-COMPLIANCE-001 -> passed all four controls; F2 validator -> 33/33, 0 warnings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
