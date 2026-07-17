@@ -30,8 +30,8 @@
   "expected": "任意PR只有在分类器、最小公共门、所属模块测试及适用的前端、Go、依赖、workflow门全部成功后ci-verdict才成功；跳过必须是分类器明确允许；main必须要求该check。",
   "first_seen_at": "2026-07-17T06:48:32.576857Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7eea7050fd5d0d5d59c9dea13db7d6ffd5716296",
+  "fixed_at": "2026-07-17T16:33:36.829005Z",
   "github_issue_number": 2309,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2309",
   "last_seen_at": "2026-07-17T06:48:32.576857Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2340",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,10 @@
     "fingerprint": "09895950ffba47f3d7ea2ca6",
     "source_event_id": "FE-20260717-09895950ffba"
   },
+  "validation_evidence": [
+    "PR #2340 CI verdict -> success",
+    "local required gates -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
