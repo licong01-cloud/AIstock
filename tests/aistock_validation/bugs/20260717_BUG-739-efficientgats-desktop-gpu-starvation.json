@@ -56,8 +56,8 @@
   "expected": "A single GAT loop remains desktop-responsive while preserving dense full-market attention and training semantics; exclusive GAT training is durable even when the optional phase-pipeline toggle is false; GPU-resident and provider failures are fail-fast; checkpointed query chunks reduce saved Autograd storage without changing forward, gradient, optimizer-update, or fixed-seed fit/predict results.",
   "first_seen_at": "2026-07-17T16:17:35.537211Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3f41b4a0c2bed313db9f79284084f8caa70d2778",
+  "fixed_at": "2026-07-17T18:36:45.020545Z",
   "github_issue_number": 2374,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2374",
   "last_seen_at": "2026-07-17T16:17:35.537211Z",
@@ -65,6 +65,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2380",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -76,7 +77,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -85,6 +86,9 @@
     "fingerprint": "78ca6903f5bcff6ad86435ed",
     "source_event_id": "FE-20260717-78ca6903f5bc"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
