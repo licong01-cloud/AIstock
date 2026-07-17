@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from scripts import llm_provider_adapter  # noqa: E402
 from scripts import nightly_discovery_input_pack  # noqa: E402
+from scripts import issue_flow  # noqa: E402
 
 REPORT_SCHEMA_VERSION = "aistock_nightly_adaptive_scheduler_report_v1"
 FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
@@ -31,6 +32,8 @@ STATUS_FAILURE_MODULES = {
     "paper_v2_live": ["paper_v2_live"],
     "code_intelligence": ["validation.runner"],
 }
+BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
+CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -67,6 +70,61 @@ def collect_changed_files(
         base_ref=base_ref,
         root=root,
     )
+
+
+def build_nightly_execution_plan(
+    changed_files: list[str],
+    *,
+    full_run: bool = False,
+    watermark: str | None = None,
+    head_commit: str | None = None,
+) -> dict[str, Any]:
+    normalized = unique_values([nightly_discovery_input_pack.normalize_repo_path(path) for path in changed_files])
+    selection = issue_flow.select_validation(normalized)
+    ownership = selection.get("ownership") or {}
+    unmatched_code = [
+        path for path in ownership.get("unmatched_files") or [] if str(path).lower().endswith(CODE_SUFFIXES)
+    ]
+    if unmatched_code:
+        raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
+
+    plans = issue_flow._plans_by_key()
+    plan_keys = list(BASELINE_NIGHTLY_PLAN_KEYS)
+    if full_run:
+        plan_keys.extend(
+            key
+            for key, plan in plans.items()
+            if plan.get("enabled", True) and plan.get("runner_enabled") and plan.get("nox_session")
+        )
+    else:
+        plan_keys.extend(selection.get("required_plans") or [])
+        plan_keys.extend(selection.get("recommended_plans") or [])
+
+    selected_plan_keys: list[str] = []
+    selected_sessions: list[str] = []
+    for key in unique_values(plan_keys):
+        plan = plans.get(key) or {}
+        session = str(plan.get("nox_session") or "").strip()
+        if not session or not plan.get("enabled", True) or not plan.get("runner_enabled", False):
+            continue
+        selected_plan_keys.append(key)
+        if session not in selected_sessions:
+            selected_sessions.append(session)
+    return {
+        "schema_version": "aistock_nightly_execution_plan_v1",
+        "watermark": watermark,
+        "head_commit": head_commit,
+        "changed_files": normalized,
+        "changed_files_count": len(normalized),
+        "full_run": full_run,
+        "selected_plan_keys": selected_plan_keys,
+        "selected_sessions": selected_sessions,
+        "impacted_modules": selection.get("impacted_modules") or [],
+        "unmatched_code_files": unmatched_code,
+        "advance_watermark_on_success_only": True,
+        "retry_window_on_failure": True,
+        "workflow_gate": "passed",
+    }
 
 
 def _canonical_status_key(raw_key: str) -> str | None:
@@ -322,6 +380,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--changed-file", action="append", default=None)
     parser.add_argument("--changed-files-file")
     parser.add_argument("--base-ref")
+    parser.add_argument("--watermark")
+    parser.add_argument("--head-commit")
+    parser.add_argument("--full-run", action="store_true")
+    parser.add_argument("--plan-selection-output")
     parser.add_argument("--status-json")
     parser.add_argument("--status", action="append", default=None, help="Nightly status as key=value; may be repeated.")
     parser.add_argument("--codegraph-freshness-json")
@@ -359,6 +421,16 @@ def main(argv: list[str] | None = None) -> int:
             base_ref=args.base_ref,
             root=ROOT,
         )
+        execution_plan = build_nightly_execution_plan(
+            changed_files,
+            full_run=args.full_run,
+            watermark=args.watermark,
+            head_commit=args.head_commit,
+        )
+        if args.plan_selection_output:
+            plan_path = Path(args.plan_selection_output)
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(execution_plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         statuses = collect_statuses(
             status_json=Path(args.status_json) if args.status_json else None,
             inline_statuses=args.status,
@@ -382,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             invoke_llm=args.invoke_llm,
             fallback_on_llm_error=not args.fail_on_llm_error,
         )
+        report["nightly_execution"] = execution_plan
     except Exception as exc:
         report = {
             "schema_version": REPORT_SCHEMA_VERSION,
