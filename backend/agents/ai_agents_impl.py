@@ -12,7 +12,7 @@ next_app.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Tuple
 import threading
 import time
@@ -643,7 +643,7 @@ class StockAnalysisAgents:
         results["_meta"] = {
             "enabled_agents": {k: flags[k] for k in flags},
             "errors": errors,
-            "finished_at": datetime.utcnow().isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
         }
 
         debug_logger.info(

@@ -12,7 +12,7 @@ avoid introducing any provisional or simplified behaviour.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -75,7 +75,7 @@ def infer_arima_for_symbol(
 def main() -> None:
     args = _parse_args()
 
-    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.utcnow()
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone.utc)
     horizons: List[str] = args.horizon or ["next_1d"]
     cfg = ARIMAPredictionConfig()
     infer_arima_for_symbol(
