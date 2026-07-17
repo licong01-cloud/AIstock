@@ -10,6 +10,7 @@
     "noxfile.py",
     "scripts/ci_change_classifier.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
     "tests/aistock_validation/bugs/20260717_BUG-713-l0.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],

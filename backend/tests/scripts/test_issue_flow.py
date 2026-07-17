@@ -923,7 +923,7 @@ def test_open_source_tooling_configs_are_parseable() -> None:
         assert loaded["jobs"]
 
 
-def test_pr_quality_semgrep_scans_changed_files_only() -> None:
+def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
     setup_steps = [
@@ -945,13 +945,16 @@ def test_pr_quality_semgrep_scans_changed_files_only() -> None:
         for step in steps
         if isinstance(step, dict) and str(step.get("name") or "").startswith("Semgrep AIstock guardrails")
     ]
-    assert len(semgrep_steps) == 1
+    assert semgrep_steps == []
 
-    run = str(semgrep_steps[0]["run"])
+    semgrep_workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
+    dedicated_steps = semgrep_workflow["jobs"]["semgrep"]["steps"]
+    run_step = next(step for step in dedicated_steps if step.get("name") == "Run Semgrep")
+    run = str(run_step["run"])
     assert "git diff --name-only --diff-filter=ACMRT" in run
-    assert "semgrep_changed_files.txt" in run
-    assert "xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep" in run
-    assert "semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json ." not in run
+    assert "tmp/validation/semgrep/semgrep_changed_files.txt" in run
+    assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
+    assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
     assert '"paths":{"scanned":[]}' in run
 
 
