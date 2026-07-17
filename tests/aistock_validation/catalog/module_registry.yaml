@@ -136,6 +136,15 @@ modules:
     ui_routes: [/paper-v2/model-hmm]
     test_plans:
       required_on_change: [l0]
+  - module_id: hmm.evolution
+    display_name: HMM Evolution Research
+    parent_module: hmm
+    module_type: data_pipeline
+    risk_level: high
+    description: Isolated HMM candidate registry, offline evaluation identity, durable batch state, and read-only QE asset contracts.
+    description_zh: 覆盖隔离的 HMM 候选注册、离线评估身份、持久批次状态机和 QE 实验资产只读契约，不控制模拟盘或生产交易。
+    test_plans:
+      required_on_change: [l0, hmm_evolution_backend]
   - module_id: factor_library
     display_name: Factor library
     module_type: product_feature
