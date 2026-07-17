@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-728",
-  "closed_at": null,
+  "closed_at": "2026-07-17T10:13:47Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "带 Design Acceptance Matrix 的 feature PR 可在 PR body 声明显式窄化 Allowed write scope；pr-check 应将其与变更 BUG JSON scope 合并并记录 scope_source，仍拒绝未声明文件。",
   "first_seen_at": "2026-07-17T10:03:45.611494Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bc16008dd2a17aa9e59d94988e3f9e6efb95f645",
+  "fixed_at": "2026-07-17T10:17:48.326165Z",
   "github_issue_number": 2339,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2339",
   "last_seen_at": "2026-07-17T10:03:45.611494Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2320",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_center"
   ],
@@ -59,6 +60,10 @@
     "fingerprint": "a3867525824535665e3d446c",
     "source_event_id": "FE-20260717-a38675258245"
   },
+  "validation_evidence": [
+    "PR #2320 current head CI: 13 passed, 0 failed; mergeable MERGEABLE/CLEAN",
+    "Local: hmm_evolution_backend 63 passed at 70.45%; validation_center_backend 477 passed; L0/catalog/classifier/issue_flow/F2 gates passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
