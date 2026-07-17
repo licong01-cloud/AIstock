@@ -1,11 +1,11 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.0
+> **版本**：v1.1
 > **日期**：2026-07-17
 > **状态**：implementation-ready design；Phase 1 代码尚未实现
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.4
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.5
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
-> **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.0
+> **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
 > **Design Acceptance Index**：复用总体蓝图 `F-006`～`F-010`
 
@@ -30,9 +30,10 @@ entered/dropped 集合，并使用 label 或 market forward return 衡量替换�
 API service。
 
 Phase 1 要把其中的纯计算语义抽取成可重放、可批量执行、可取消、可审计的研究服务，
-同时保持以下边界：
+并允许研究人员只读查看 QE 实验的全部资产以及数据库中的最新共同完成行情水位，同时保持
+以下边界：
 
-- 只读消费 Phase 0 标准化输入；
+- pred/label 继续消费 Phase 0 标准化输入；其它 QE 实验资产通过独立只读 reader 访问；
 - 只写 `hmm_evolution.*`；
 - top-3 仅为研究推荐，最终有效性由 QE 终审；
 - 不生成、替换或修改任何生产 HMM、QE、Selection、Paper、QMT 状态。
@@ -42,20 +43,25 @@ Phase 1 要把其中的纯计算语义抽取成可重放、可批量执行、可
 Phase 1 v1 包含：
 
 1. 注册和审计预计算 HMM coefficient 候选；
-2. 在固定 QE loop、日期窗口、universe、TopK 和显式 label horizon 上执行离线评估；
-3. 可选且显式地使用 canonical market 数据计算 10 个交易日 forward return；
-4. 批量评估 10+ 候选，复用同一份 pred/label 输入；
-5. 持久化候选、评估、批次、状态、heartbeat、错误和推荐证据；
-6. 提供真实 API、中文 UI、导航入口和高级调试抽屉；
-7. 提供单评估、批评估、失败重试、取消和结果复用语义；
-8. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
+2. 通过只读 asset catalog/reader 查看 QE task/loop 的全部实验资产；
+3. 在固定 QE loop、日期窗口、universe、TopK 和显式 label horizon 上执行离线评估；
+4. 显式读取 canonical DB 的最新共同完成行情水位或指定 as-of，计算 10 个交易日 forward return；
+5. 批量评估 10+ 候选，复用同一份 pred/label 输入；
+6. 持久化候选、评估、批次、状态、heartbeat、错误和推荐证据；
+7. 提供真实 API、中文 UI、导航入口和高级调试抽屉；
+8. 提供单评估、批评估、失败重试、取消和结果复用语义；
+9. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
 
 ## 3. Non-goals（非目标与硬边界）
 
 - 不训练 HMM；训练与滚动训练属于 Phase 3。
 - 不自动生成缺失 coefficient artifact；缺失即结构化失败。
-- 不下载 QE YAML/JSON/TOML 配置，也不把 HMM coefficient 加入 Phase 0 的
-  `pred.pkl` / `label.pkl` workspace 白名单。
+- 不修改、删除、清理、终止或重跑 QE task/loop；只读资产接口不得调用 QE client 的
+  create/kill/cleanup 类方法。
+- QE 配置、日志、模型参数、报告和其它资产可以只读查看与取证，但不得自动执行、导入为生产
+  配置或绕过 parser/trust contract 直接参与计算。
+- 不修改 Phase 0 已验收的 pred/label 自动反序列化白名单；Phase 1 的全资产 reader 是独立
+  read-only evidence contract。
 - 不修改 `model_train_configs`、`model_train_snapshots`、`strategy_packages`、
   `paper_v2.*`、Selection、Advisory、MiniQMT 或 QMT。
 - 不调用 `selection_center/hmm_risk_gate.py`；该模块输出 `can_buy=False`，不是纯分析契约。
@@ -74,6 +80,35 @@ Phase 1 v1 包含：
 | `no_business_semantic_drift` | 结果仅为研究分析；不产生 `RiskDecision`、`can_buy`、订单、配置变更或生产 snapshot 变更。 |
 | `no_unrequested_gate_or_approval` | 推荐公式不包含淘汰阈值；所有成功候选均展示，证据不足者标记为未排名，不宣告方向无效。 |
 
+### 4.1 禁止简化版交付
+
+- 禁止把只建 schema、只写 repository、只做 backend、只画静态页面或只跑 mock 视为 Phase 1 完成。
+- 禁止使用 POC、placeholder scorer、硬编码 top-3、静态成功响应或临时 JSON 代替真实 evaluator/worker/API/UI。
+- 禁止省略 QE 全资产只读 reader、latest-common market watermark、durable 状态机、结构化错误或
+  Design Acceptance Matrix 中任一承诺项。
+- 分阶段 PR 可以只交付 P1-A/P1-B/P1-C 中明确的一段，但只能报告该设计子集完成，不得提前
+  宣称 Phase 1 整体完成。
+
+### 4.2 门禁与审批最小化
+
+- 只有生产 DDL 和首次生产 runtime activation 属于基础设施变更，需要明确操作授权。
+- candidate 注册、QE 资产只读查看、离线评估、批处理、重试、取消和 top-3 查看不新增审批流。
+- 并发上限、路径 containment、manifest 校验、lease/fencing、完整性校验属于技术安全约束，
+  不是研究方向门禁。
+- runtime flag 是部署配置和 kill switch，不得实现成多层产品审批或人工签字链。
+- coverage、推荐分数、历史一致性和数据新鲜度只作为证据展示，不设置未经设计批准的通过阈值。
+
+### 4.3 本轮设计审核结论
+
+| 审核项 | 原设计风险 | v1.1 处置 |
+|---|---|---|
+| QE 资产读取 | 只覆盖 pred/label 与两类 coefficient，低于研究所需只读范围 | 增加全资产 reader；inspection 范围与 computational trust 分离；真实 node complete catalog 为 F-006 验收 |
+| 最新行情 | 只有显式 date 字段，容易被实现成 `date.today()` 动态漂移 | 增加 `latest_common_completed`，入队解析并固化 watermark/PIT coverage |
+| 过度门禁 | strict-full 默认、approved-local 命名和多段 activation 容易演化成审批链 | 默认共同日期证据模式；configured source；只保留 DDL/首次 activation 操作授权 |
+| 静默错误 | neutral fallback 和缺失指标重加权可能只在 JSON 内可见 | 强制 evidence_quality/warnings，主 UI badge，未知异常 fail，不允许空集合假成功 |
+| 简化交付 | 原表有原则但缺少具体禁止清单 | 明确禁止 schema/backend/mock/static/placeholder/POC 冒充 Phase 1 完成 |
+| Phase 0 对齐 | 扩大 QE 读取可能误改 Phase 0 whitelist | 全资产 reader 独立实现；Phase 0 pred/label 信任、cache、zero-copy 契约保持不变 |
+
 ## 5. Architecture（架构）
 
 ```text
@@ -91,6 +126,7 @@ HMMEvolutionService
    └── HMMEvolutionRepository           # only hmm_evolution.* writes
         │
         ├── BacktestDataSource           # Phase 0 pred/label, read-only
+        ├── QEExperimentAssetReader       # all QE assets, read-only evidence
         ├── HMMMarketReturnRepository    # canonical market SELECT only
         ├── CandidateArtifactResolver    # precomputed coefficient, no generation
         └── PostgreSQL hmm_evolution.*
@@ -118,24 +154,55 @@ Phase 1 代码允许的 DB DML 目标固定为：
 
 任何其它 schema/table 写入均 fail closed。market/QE 访问只允许 SELECT。
 
+### 5.3 QE 实验全资产只读边界
+
+`QEExperimentAssetReader` 复用现有 `QEWorkspaceClient.get_workspace_file()`、
+`download_workspace_file_bytes()` 和 Prediction Store / QE archive manifest 查询能力，但只暴露
+list/read/stat，不暴露 create/run/kill/cleanup/delete。
+
+当前 AIstock `QEWorkspaceClient` 只有“已知相对路径读取”，没有完整 workspace list/stat client
+binding。P1-A 必须补齐只读 `list_workspace_files()` / `stat_workspace_file()` 契约；若远端节点尚无
+对应 endpoint，则需在 QE node 侧同步增加安全、非递归穿透的只读 manifest/list API。只聚合
+Prediction Store manifest 或猜测常见文件名时必须标记 `catalog_completeness=partial`，不得宣称
+“全部资产已可见”。F-006 只有在真实 node 上验证 `catalog_completeness=complete` 后才算实现。
+
+读取范围包括但不限于：pred/label、HMM coefficient、模型参数、metrics、portfolio report、
+日志、文本/JSON/YAML 配置、recorder metadata 和其它 task/loop 产物。读取范围宽，计算信任
+范围仍必须显式：
+
+- `inspection_only`：任何安全相对路径资产可只读查看、hash 和作为证据引用，不自动反序列化或执行；
+- `trusted_computational_input`：只有具备 SHA/size/content type/schema/parser receipt 的已声明资产
+  才能进入 evaluator；
+- Prediction Store 命中优先零副本；缺失时可读 workspace；已存在但损坏的 manifest/blob 不得
+  以 workspace fallback 掩盖；
+- workspace 资产没有可信 manifest 时仍可 inspection-only 读取，但必须标记
+  `trust_level=unverified_evidence`，不得进入评分计算；
+- 读取 bytes 默认在内存或受控临时流中完成，不为每个实验固化额外永久副本；
+- 所有访问记录 task/loop/path/source/SHA/size/trust level，API 不返回 token、密码或本机绝对路径。
+- 资产目录枚举必须通过 node API，Windows backend 不直接扫描、挂载或复制 QE worker filesystem。
+
 ## 6. Contracts：候选身份与 artifact 契约
 
 ### 6.1 候选来源
 
-Phase 1 v1 只批准两类来源：
+Phase 1 v1 支持三类 coefficient 来源：
 
 1. `existing_snapshot_coefficients`
    - 请求提供 `snapshot_id` 和明确 `coefficient_artifact_name`；
    - 只读查询 snapshot 的 `status/model_path/config_id`；
    - snapshot 必须处于 completed/ready 类状态；
    - 只读取已存在 coefficient JSON，不调用生成接口，不读取或复制训练配置。
-2. `approved_local_coefficients`
+2. `configured_local_coefficients`
    - 请求提供 `root_alias` 和规范化相对路径；
-   - `root_alias` 来自 operator 配置 `HMM_EVOLUTION_ARTIFACT_ROOTS_JSON`；
-   - 拒绝绝对路径、`..`、反斜杠逃逸、symlink/reparse 穿透和未批准 root。
+   - `root_alias` 来自部署配置 `HMM_EVOLUTION_ARTIFACT_ROOTS_JSON`；
+   - 拒绝绝对路径、`..`、反斜杠逃逸、symlink/reparse 穿透和未配置 root。
+3. `qe_experiment_coefficients`
+   - 请求提供 task/loop 和规范化 asset path；
+   - 通过 `QEExperimentAssetReader` 只读获取；
+   - 只有 trusted manifest 与 coefficient parser contract 均通过时才可登记为 candidate；
+   - inspection-only/unverified asset 可以查看，但不能进入 evaluator。
 
-Phase 1 v1 不支持 `qe_workspace_coefficients`。未来如需支持，必须另行扩展可信 manifest 和
-下载白名单，不得借用诊断脚本直接下载。
+上述扩展不改变 Phase 0 的 pred/label whitelist；它是 Phase 1 单独的只读 asset contract。
 
 ### 6.2 coefficient payload 最低契约
 
@@ -231,11 +298,11 @@ candidate_id = "hmmc_" + sha256(canonical_json(identity_payload))[0:24]
   "base_loop_ref": "<task_id>/LoopN",
   "window_start": "YYYY-MM-DD",
   "window_end": "YYYY-MM-DD",
-  "as_of_date": "YYYY-MM-DD",
+  "as_of": {"policy": "latest_common_completed", "requested_date": null},
   "label_horizon_days": 20,
   "universe": {"type": "prediction_artifact_all"},
   "topk": 50,
-  "date_coverage_policy": "strict_full",
+  "date_coverage_policy": "batch_common_intersection_with_evidence",
   "missing_sector_policy": "neutral_with_evidence",
   "market_forward_return": {
     "mode": "required",
@@ -248,7 +315,8 @@ candidate_id = "hmmc_" + sha256(canonical_json(identity_payload))[0:24]
 ```
 
 v1 universe 只支持 `prediction_artifact_all`。后续自定义股票池必须记录有序 symbol list hash，
-不得只记录显示名称。
+不得只记录显示名称。`as_of.policy` 支持 `explicit` 和 `latest_common_completed`；后者在请求入队
+时解析一次并冻结为 `resolved_as_of_date`，不得在 worker 执行时再次漂移。
 
 ### 7.2 label horizon
 
@@ -262,13 +330,16 @@ v1 universe 只支持 `prediction_artifact_all`。后续自定义股票池必须
 
 `hmm_evaluation_source_manifest_v1` 必须包含：
 
-- pred/label 的 source、URI、SHA256、row count、zero-copy/fallback 决策；
+- pred/label 与其它被引用 QE assets 的 source、URI、SHA256、size、row count（如适用）、
+  trust level、zero-copy/fallback 决策；
 - base loop、task、loop、实际日期范围和 label horizon；
 - 排序后的 universe hash、symbol count；
 - candidate ID、candidate manifest hash、artifact SHA；
-- 启用 DB 10 日收益时的 as-of、calendar range、price row count、字段名
+- 启用 DB 10 日收益时的 requested policy、resolved as-of、各数据集 max date、共同完成水位、
+  calendar range、price row count、字段名
   `market.kline_daily_raw.close_li` 和只读 transaction receipt；
-- 不包含密码、token、原始绝对路径或下载的配置内容。
+- `warnings`、`evidence_quality` 和所有 neutral/missing/degraded 计数；
+- 不包含密码、token、原始绝对路径或配置文件正文；配置正文只通过受控 asset content API 展示。
 
 ### 7.4 canonical hash
 
@@ -320,8 +391,13 @@ Phase 1 service 不复制诊断脚本的 DB 连接、下载、文件写入或报
 - missing coefficient sector count/ratio；
 - neutral fallback replacement count。
 
-若整个窗口 sector mapping 为空、coefficient 与 prediction 无任何共同日期，或
-`date_coverage_policy=strict_full` 下存在缺失日期，评估失败，不能返回中性成功。
+任何 neutral fallback 都必须使 `evidence_quality=degraded`，写入结构化 `warnings` 并在 API/UI
+主视图可见，不能只藏在调试 JSON。若整个窗口 sector mapping 为空或 coefficient 与 prediction
+无任何共同日期，评估失败，不能返回中性成功。
+
+`batch_common_intersection_with_evidence` 先计算同批候选、pred 和 label 的共同日期集合，再用
+同一集合评估全部候选；丢弃日期、原始覆盖率和共同覆盖率全部记录。`strict_full` 作为调用方
+显式选择的复现模式保留，但不是默认研究门禁。
 
 ### 8.4 指标定义
 
@@ -344,6 +420,7 @@ daily_net_db_10d = mean(entered valid db_ret_10d) - mean(dropped valid db_ret_10
 - `db_day_coverage_ratio = db_comparable_day_count / changed_day_count`；
 - `primary_coverage_ratio`：推荐公式按 label coverage 使用；
 - sector fallback、coefficient min/max、daily replacement summary。
+- `evidence_quality=complete|degraded|insufficient` 和结构化 `warnings`。
 
 若 `changed_day_count=0`，评估可以 `succeeded`，但 efficacy 指标为 null、推荐分数为 null，
 UI 显示“该候选在此窗口未改变 TopK”，不得显示为收益 0 或通过门禁。
@@ -357,6 +434,13 @@ UI 显示“该候选在此窗口未改变 TopK”，不得显示为收益 0 或
 - `mode=required` 时 DB 不可用或覆盖不足导致零 comparable day，评估失败；
 - `mode=disabled` 时不查询 DB，`net_db_10d=null`，source manifest 明确记录 disabled；
 - 不提供 silent best-effort 模式。
+
+最新行情读取使用 `latest_common_completed`：分别解析 `market.trading_calendar`、
+`market.kline_daily_raw` 以及本次显式启用的其它日频数据集最大完成日期，选择共同完成水位；
+`market.sw_index_member` 按该日期验证 PIT 映射覆盖率，不伪造日频 max date。该日期在请求入队
+时固化为 `resolved_as_of_date` 并进入 input hash。禁止直接使用
+`date.today()`、`CURRENT_DATE` 或 worker 开始执行时的动态“最新”。Phase 1 v1 读取日线最新
+共同完成数据，不把盘中未完成 bar 当成完整日线。
 
 ### 8.6 结果体积
 
@@ -394,7 +478,8 @@ evidence_confidence = available_weight
 ```
 
 至少 `net_label_return` 或 `net_db_10d` 有一个非 null 才生成 score；只有 coverage 的候选
-保持未排名，但仍完整展示。缺失指标按剩余权重归一化，不填 0、不假装失败。
+保持未排名，但仍完整展示。缺失指标按剩余权重归一化，不填 0、不假装失败；只要发生权重
+重归一化，`evidence_quality` 至少为 degraded，排行榜必须显示缺失组件和实际 available weight。
 
 ### 9.3 排名与 top-3
 
@@ -439,7 +524,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 | `manifest_hash` | CHAR(64) | UNIQUE, NOT NULL |
 | `display_name` | TEXT | NOT NULL |
 | `description` | TEXT | nullable |
-| `source_type` | TEXT | approved two-value CHECK |
+| `source_type` | TEXT | supported three-value CHECK |
 | `source_ref` | JSONB | NOT NULL |
 | `artifact_manifest` | JSONB | NOT NULL |
 | `algorithm_version` | TEXT | NOT NULL |
@@ -462,7 +547,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 | window | `as_of_date`、`window_start/end`、`label_horizon_days`、`universe_id/hash`、`topk` |
 | state | `status`、`attempt_count`、`owner_id`、`fencing_token`、`lease_expires_at`、`heartbeat_at`、`cancel_requested_at`、`row_version` |
 | counts | `trading_days_count`、`changed_day_count`、label/DB comparable days、`replacement_count` |
-| metrics | `primary_coverage_ratio`、`net_label_return`、`net_db_10d`、`positive_net_label_day_ratio`、`metrics_json`、`result_hash` |
+| metrics | `primary_coverage_ratio`、`net_label_return`、`net_db_10d`、`positive_net_label_day_ratio`、`evidence_quality`、`warnings_json`、`metrics_json`、`result_hash` |
 | error | `error_code`、`reason_code`、`error_message`、`error_context` |
 | time | `queued_at`、`started_at`、`completed_at`、`created_at`、`updated_at` |
 
@@ -511,6 +596,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 backend/services/hmm_evolution/
 ├── models.py
 ├── errors.py
+├── qe_asset_reader.py
 ├── candidate_artifact.py
 ├── evaluator.py
 ├── scorer.py
@@ -529,6 +615,10 @@ Repository 必须提供：
 - `complete_evaluation()` / `fail_evaluation()` / `cancel_evaluation()`；
 - `request_batch_cancel()` / `recompute_batch_state()` / `apply_recommendation()`；
 - `create_retry_batch()`，只重建 failed/cancelled/timed_out item。
+
+Repository 和 service 禁止裸 `except:`，禁止捕获 `Exception` 后返回空 dict/list、默认 0、默认
+neutral 或成功状态。边界层如需捕获未知异常，必须保留 exception chaining、映射稳定 reason
+code、记录 trace id，并将任务置为 failed；cleanup 次级失败作为 warning 附加，不能覆盖主错误。
 
 每次 transaction 只完成一个状态变化和必要的相邻行更新。外部 artifact/market I/O 不得
 持有 DB transaction。
@@ -594,7 +684,7 @@ Prediction Store 命中继续零副本读取原 artifact，不创建 Phase 1 永
 
 ### 13.2 并发
 
-- 默认候选并发 2，operator 可配置 1..4；这是资源保护，不是研究方向门禁；
+- 默认候选并发 2，部署配置可调整 1..4；这是资源保护，不是研究方向门禁或审批；
 - 同一 worker 内共享 input bundle，禁止为每个 candidate 复制完整 pred/label；
 - market forward return 对 batch 的 replacement symbol/date 并集批量查询并按 candidate 切分；
 - 不使用无界 process pool。
@@ -611,7 +701,7 @@ artifact source、冷/热缓存、各阶段耗时、峰值 RSS、并发和结果
 
 验收基准：
 
-- 单候选在批准基准上冷输入 <10 分钟；
+- 单候选在标准验收基准上冷输入 <10 分钟；
 - 10 候选共享输入且受限并发 <30 分钟；
 - 未在指定基准和硬件测量时只能报告 pending，不能用小 fixture 宣称性能完成。
 
@@ -629,7 +719,18 @@ Router prefix：`/api/v1/hmm-evolution`。
 | GET | `/candidates/{candidate_id}` | manifest、coverage、历史摘要 |
 | POST | `/candidates/{candidate_id}/retire` | 软退役，不删除历史 |
 
-### 14.2 evaluation/batch
+### 14.2 QE asset read-only
+
+| 方法 | 路径 | 语义 |
+|---|---|---|
+| GET | `/qe-assets/{task_id}/{loop_name}` | 列出全部可见实验资产与 trust level |
+| GET | `/qe-assets/{task_id}/{loop_name}/stat` | 指定安全相对路径的 metadata/hash |
+| GET | `/qe-assets/{task_id}/{loop_name}/content` | 受大小限制的 text/JSON 或原始 bytes stream；只读 |
+
+asset API 必须拒绝绝对路径、路径穿越和 QE mutation method；大文件使用 stream/Range，不整文件
+读入 API 进程内存。配置资产可查看但不提供“应用/执行/导入”按钮。
+
+### 14.3 evaluation/batch
 
 | 方法 | 路径 | 语义 |
 |---|---|---|
@@ -641,7 +742,7 @@ Router prefix：`/api/v1/hmm-evolution`。
 | POST | `/batches/{batch_id}/cancel` | 幂等取消请求 |
 | POST | `/batches/{batch_id}/retry-failed` | 新 batch/generation，只重试失败项 |
 
-### 14.3 response envelope
+### 14.4 response envelope
 
 成功：
 
@@ -661,15 +762,15 @@ Router prefix：`/api/v1/hmm-evolution`。
 }
 ```
 
-### 14.4 HTTP / reason code
+### 14.5 HTTP / reason code
 
 | HTTP | reason code 示例 |
 |---:|---|
-| 400 | invalid_spec / duplicate_candidate / unsupported_source |
+| 400 | invalid_spec / duplicate_candidate / unsupported_source / unsafe_asset_path |
 | 404 | candidate_not_found / batch_not_found / evaluation_not_found |
 | 409 | idempotency_conflict / invalid_state_transition / retry_not_available |
 | 422 | artifact_manifest_invalid / label_horizon_mismatch / no_common_dates |
-| 503 | schema_unavailable / source_unavailable / market_data_unavailable |
+| 503 | schema_unavailable / source_unavailable / qe_asset_unavailable / market_data_unavailable |
 | 504 | evaluation_timed_out |
 
 稳定 reason code 统一以 `hmm_evolution_` 开头。`context` 不返回秘密、绝对路径或大 payload。
@@ -686,10 +787,11 @@ Router prefix：`/api/v1/hmm-evolution`。
 ### 15.2 总览结构
 
 1. 候选库：名称、来源、coverage、hash 短码、lifecycle；
-2. 新建评估：base loop、日期、label horizon、TopK、DB 10 日收益模式、候选多选；
-3. 运行中批次：进度、heartbeat、耗时、取消；
-4. 历史排行榜：推荐分数、证据置信度、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；
-5. top-3 卡片明确标注“研究推荐，需 QE 终审”。
+2. QE 资产浏览：task/loop 资产目录、来源、hash、trust level 和受控内容预览；
+3. 新建评估：base loop、日期/as-of policy、label horizon、TopK、DB 10 日收益模式、候选多选；
+4. 运行中批次：进度、heartbeat、耗时、取消；
+5. 历史排行榜：推荐分数、证据置信度、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；
+6. top-3 卡片明确标注“研究推荐，需 QE 终审”。
 
 ### 15.3 详情与错误
 
@@ -698,6 +800,7 @@ Router prefix：`/api/v1/hmm-evolution`。
 - `changed_day_count=0` 显示“未改变 TopK”，不显示绿色 0 收益；
 - h20 标签动态显示 20 交易日；
 - failed/timed_out 显示稳定 reason code、中文解释、可重试条件；
+- degraded evidence、neutral fallback、缺失指标重加权和共同日期裁剪必须在主表显示 warning badge；
 - polling 初始 3 秒，60 秒后退避到 10 秒，terminal 后停止；不引入 WebSocket。
 
 ### 15.4 客户端文件
@@ -719,9 +822,12 @@ frontend/src/lib/navigation/nav-groups.ts
 |---|---|
 | candidate artifact 缺失/hash 改变 | candidate 标 invalid，评估失败；不生成替代 artifact |
 | Prediction Store manifest 损坏 | 继承 Phase 0 fail loud，不 fallback 掩盖 |
+| QE 任意资产路径不安全或读取失败 | 400/503 + reason code；不得返回空内容假成功 |
+| QE asset 只有 unverified evidence | 可查看；不得进入 evaluator/scorer |
 | label horizon 不一致 | 422；不重命名、不截断 |
 | coefficient/pred 无共同日期 | 422 no_common_dates |
-| strict window 日期缺失 | 422 coefficient_date_coverage_incomplete |
+| 共同日期集合为空 | 422 coefficient_date_coverage_empty |
+| 共同日期裁剪 | succeeded/degraded + 主视图 warning，不静默 |
 | market DB 不可用且 mode=required | failed + market_data_unavailable |
 | 无 TopK 替换 | succeeded + unranked，不伪造 0 收益 |
 | worker 崩溃/lease 过期 | timed_out；旧 fencing token 不得提交 |
@@ -729,6 +835,7 @@ frontend/src/lib/navigation/nav-groups.ts
 | cancel 与 complete 竞争 | CAS/fencing 决定唯一 terminal 状态 |
 | schema 未部署 | API 503 schema_unavailable；不得隐式 DDL |
 | 推荐指标缺失 | 按可用权重归一化；无 efficacy 指标则 unranked |
+| 未知异常 | failed + chained exception/trace/reason；不得返回 `{}`、`[]` 或默认 neutral |
 
 ## 17. Verification Plan（验证方案）
 
@@ -739,12 +846,16 @@ frontend/src/lib/navigation/nav-groups.ts
 - drift 检测必须失败；
 - repository 状态迁移、CAS、fencing、idempotency、shared evaluation、retry 和取消测试；
 - SQL write-target guard 断言仅 `hmm_evolution.*`。
+- QE asset reader 断言只调用 list/read/stat，mutation method 通过 fake client 明确 fail；真实 node
+  integration 必须证明 catalog completeness=complete，partial manifest 不得冒充全资产；
+- config/log/model/report 等多类型资产均可 inspection-only 读取，未经信任不得进入 evaluator。
 
 ### 17.2 evaluator/scorer
 
 - 非并列 fixture 与旧 `compute_replacements` entered/dropped/daily net 对齐；
 - 并列 fixture 验证 symbol tie-break；
 - label horizon 10/20、混合 horizon、NaN/Infinity、缺 mapping、缺 date、无替换；
+- common-date intersection、degraded warning 主动暴露、strict explicit mode；
 - DB 10 交易日使用交易日历，不使用自然日；
 - day-weighted 聚合、coverage denominator、结果 hash；
 - scorer percentile、singleton、并列、缺失、top-3 少于 3、无淘汰副作用。
@@ -753,7 +864,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - Pydantic request/response contract 与 reason code 测试；
 - 202/idempotent 200/409 conflict/取消/retry；
-- UI 真实 API mock server contract test、中文文案、动态 horizon、空状态、失败状态；
+- UI 真实 API mock server contract test、中文文案、动态 horizon、QE asset browser、degraded warning、空状态、失败状态；
 - 安全验证端口使用 `backend.validation_app` 扩展或专用 test app，不启 8001/3000/19080；
 - UI E2E/截图交给 Validation Center，不能用静态 grep 代替。
 
@@ -761,7 +872,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - 使用 Phase 0 已验收高收益 loop 作为输入复用证明；h20 标签按 h20 展示；
 - 至少 10 个历史 HMM case 与 QE 结果做方向/排序对照；差异仅记录为 evidence；
-- 记录 performance receipt、Prediction Store zero-copy、DB transaction read-only；
+- 记录 performance receipt、Prediction Store zero-copy、QE 全资产只读 access receipt、DB transaction read-only 与 latest-common watermark；
 - 任何 production DDL、worker activation 或服务运行未获批时明确报告 pending。
 
 ### 17.5 DESIGN-COMPLIANCE-001
@@ -769,7 +880,7 @@ frontend/src/lib/navigation/nav-groups.ts
 每个实现 PR 逐项检查：
 
 - 是否交付该 PR 承诺的完整设计子集；
-- 是否存在 broad except、中性 fallback 或静态成功；
+- 是否存在 bare/broad except、空集合假成功、中性 fallback 隐藏、静态成功或 warning 只藏调试 JSON；
 - 是否触碰 QE/Paper/Selection/QMT/生产 snapshot；
 - 是否新增本文未批准的阈值、审批或研究淘汰规则。
 
@@ -781,7 +892,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - Python bootstrap + comments + verify；
 - Pydantic models/errors；
-- candidate artifact preview/registry；
+- QE 全资产只读 reader、candidate artifact preview/registry；
 - repository、batch/evaluation/item 状态机、lease/fencing/idempotency/retry/cancel；
 - worker skeleton，不启生产 runtime。
 
@@ -806,7 +917,7 @@ frontend/src/lib/navigation/nav-groups.ts
 - worker CLI 与受控启用方式；
 - `/hmm-evolution` 页面、详情、导航；
 - 真实 API/UI 证据、10-case 对照和性能验收；
-- 生产 runtime 是否启用由独立 GO 决定。
+- 生产 runtime 首次启用需要一次操作授权；启用后正常研究操作不再增加审批门。
 
 每个 PR 必须只承诺自身可验证子集，并更新总体蓝图 Design Acceptance Matrix 的真实引用。
 
@@ -816,17 +927,19 @@ frontend/src/lib/navigation/nav-groups.ts
 
 1. 合入 P1-A 代码但不执行生产 DDL；
 2. 在开发/验证 DB 显式 bootstrap、复跑和 drift verify；
-3. 用户批准 production DDL 后执行并保存 receipt；
+3. 获得生产 DDL 操作授权后执行并保存 receipt；
 4. 合入 P1-B，使用人工 worker CLI 做受控 benchmark；
 5. 合入 P1-C，先在安全验证 app/UI 完成验收；
-6. 用户批准后分别启用 API、worker 和导航；三者不是同一状态。
+6. 获得一次生产 runtime activation 操作授权后按部署配置启用；API/worker/nav 状态分别记录，
+   但不得衍生三套产品审批流。
 
 ### 19.2 activation flags
 
-- `HMM_EVOLUTION_API_ENABLED=false` 默认；
-- `HMM_EVOLUTION_WORKER_ENABLED=false` 默认；
+- `HMM_EVOLUTION_RUNTIME_MODE=disabled|api_only|api_worker`，默认 disabled；
 - `NEXT_PUBLIC_HMM_EVOLUTION_ENABLED=false` 默认；
 - artifact roots 为空时 candidate local source 不可用，不回退任意路径。
+
+上述配置是 deployment switch/kill switch，不是候选注册、评估或推荐的业务审批条件。
 
 ### 19.3 rollback
 
@@ -855,39 +968,39 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | pending，需显式 GO | noop | noop |
+| `production_ddl_gate` | noop | pending，需生产 DDL 操作授权 | noop | noop |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
-| `runtime_activation_gate` | noop | pending | pending | pending，独立 GO |
+| `runtime_activation_gate` | noop | pending | pending | pending，首次生产启用需一次操作授权；不新增业务审批流 |
 | `data_write_gate` | docs only | 仅 hmm_evolution.* | 仅评估结果 | 同左 |
 | `service_start_gate` | noop | 禁止自动启动 | 禁止自动启动 | 安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
 
 ## 22. Design Acceptance Index（设计验收索引）
 
-- **F-006 Phase 1 独立候选注册表**：内容寻址 candidate、可信 coefficient manifest、
-  research-only lifecycle、只写 `hmm_evolution.*`。
-- **F-007 Phase 1 评估可重放**：显式 horizon、source/candidate/spec/evaluator hash、稳定排序、
-  交易日 forward return 和 result hash。
+- **F-006 Phase 1 独立候选注册表**：QE 全资产只读 reader、内容寻址 candidate、可信
+  coefficient manifest、research-only lifecycle、只写 `hmm_evolution.*`。
+- **F-007 Phase 1 评估可重放**：显式 horizon、QE asset trust receipt、latest-common watermark、
+  source/candidate/spec/evaluator hash、稳定排序、交易日 forward return 和 result hash。
 - **F-008 Phase 1 批处理状态机**：batch/evaluation/item 分层、幂等、lease、fencing、heartbeat、
   取消、超时、重试、shared result 和 partial failure。
 - **F-009 Phase 1 推荐语义**：`hmm_recommendation_v1` 版本化、batch-relative、无淘汰阈值、
   top-3 仅为 QE 终审前研究推荐。
-- **F-010 Phase 1 API/UI**：真实 candidate/evaluation/batch API、中文实验室、动态 horizon、
-  可读错误、高级调试抽屉和 QuantEvolver 导航入口。
+- **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文实验室、动态
+  horizon、主视图 degraded warning、可读错误、高级调试抽屉和 QuantEvolver 导航入口。
 
 ## 23. Design Acceptance Matrix（设计验收矩阵）
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-006 | 本文 §6、§10、§11；目标 `init_hmm_evolution_schema.py`、candidate registry/repository | 目标：manifest/path/hash/lifecycle/bootstrap/comment/write-allowlist tests | approved_by_user_for_implementation | 实现证据由 P1-A PR 回填 |
-| F-007 | 本文 §7、§8；目标 `hmm_evolution/evaluator.py` | 目标：旧诊断 oracle、tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-006 | 本文 §5.3、§6、§10、§11；目标 QE asset reader、`init_hmm_evolution_schema.py`、candidate registry/repository | 目标：真实 node complete catalog/all-asset read-only/mutation-refusal/manifest/path/hash/lifecycle/bootstrap/comment/write-allowlist tests | approved_by_user_for_implementation | 实现证据由 P1-A PR 回填 |
+| F-007 | 本文 §7、§8；目标 `hmm_evolution/evaluator.py` | 目标：旧诊断 oracle、asset trust、latest-common watermark、tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
 | F-008 | 本文 §10～§13；目标 batch/evaluation/item repository + worker | 目标：idempotency/lease/fencing/heartbeat/cancel/retry/shared/partial failure tests | approved_by_user_for_implementation | 实现证据由 P1-A/P1-B PR 回填 |
 | F-009 | 本文 §9；目标 `hmm_evolution/scorer.py` | 目标：percentile/weight/missing/tie/top-3/no-side-effect tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
-| F-010 | 本文 §14、§15；目标 router、API client、页面、导航 | 目标：API contract、真实 UI、中文/动态 horizon/error/截图证据 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
+| F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、页面、导航 | 目标：API contract、真实 UI、asset browser、中文/动态 horizon/degraded warning/error/截图证据 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 
 ## 24. 设计结论
 
-Phase 1 可以按 P1-A → P1-B → P1-C 开始实现。最优先是 P1-A，因为 candidate identity、
-schema 和 durable state machine 是 evaluator/API/UI 的共同地基。当前只完成设计，不代表
-schema 已部署、worker 已启用、API/UI 已运行或 Phase 1 已验收。
+Phase 1 可以按 P1-A → P1-B → P1-C 开始实现。最优先是 P1-A，因为 QE 全资产只读 reader、
+candidate identity、schema 和 durable state machine 是 evaluator/API/UI 的共同地基。当前只
+完成设计，不代表 schema 已部署、worker 已启用、API/UI 已运行或 Phase 1 已验收。
