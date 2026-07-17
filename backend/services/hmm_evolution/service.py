@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -11,10 +12,13 @@ from .models import (
     BatchItemStatus,
     CandidateLifecycle,
     CandidatePreview,
+    CandidateRecord,
+    EvaluationSpec,
     EvaluationPlan,
     EvaluationStatus,
     canonical_json_sha256,
 )
+from .input_adapter import HMMEvaluationInputAdapter
 from .repository import HMMEvolutionRepository
 
 
@@ -26,9 +30,63 @@ class HMMEvolutionService:
         repository: HMMEvolutionRepository,
         *,
         artifact_resolver: CandidateArtifactResolver | None = None,
+        input_adapter: HMMEvaluationInputAdapter | None = None,
     ) -> None:
         self._repository = repository
         self._artifact_resolver = artifact_resolver
+        self._input_adapter = input_adapter
+
+    def get_candidate(self, candidate_id: str) -> CandidateRecord:
+        return self._repository.get_candidate(candidate_id)
+
+    def list_candidates(
+        self,
+        *,
+        lifecycle_status: CandidateLifecycle | None = None,
+        source_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[CandidateRecord]:
+        return self._repository.list_candidates(
+            lifecycle_status=lifecycle_status,
+            source_type=source_type,
+            limit=limit,
+            offset=offset,
+        )
+
+    def retire_candidate(self, candidate_id: str, *, expected_row_version: int) -> CandidateRecord:
+        return self._repository.retire_candidate(
+            candidate_id,
+            expected_row_version=expected_row_version,
+        )
+
+    def get_evaluation(self, eval_id: str) -> dict[str, Any]:
+        return self._repository.get_evaluation(eval_id)
+
+    def list_evaluations(
+        self,
+        *,
+        candidate_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return self._repository.list_evaluations(
+            candidate_id=candidate_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def get_batch(self, batch_id: str) -> dict[str, Any]:
+        return self._repository.get_batch(batch_id)
+
+    def list_batches(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return self._repository.list_batches(limit=limit, offset=offset)
+
+    def request_batch_cancel(self, *, batch_id: str, requested_by: str) -> dict[str, Any]:
+        return self._repository.request_batch_cancel(
+            batch_id=batch_id,
+            requested_by=requested_by,
+        )
 
     def register_candidate(
         self,
@@ -164,6 +222,39 @@ class HMMEvolutionService:
         return self._repository.create_or_get_batch(
             request_hash=request_hash,
             items=items,
+            recommendation_spec=recommendation_spec,
+            recommendation_version=recommendation_version,
+            created_by=created_by,
+            idempotency_key=idempotency_key,
+        )
+
+    async def prepare_and_create_batch(
+        self,
+        *,
+        candidate_ids: Sequence[str],
+        evaluation_spec: EvaluationSpec,
+        recommendation_spec: Mapping[str, Any],
+        recommendation_version: str,
+        created_by: str,
+        idempotency_key: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        if self._input_adapter is None:
+            raise InvalidSpecError("HMM evaluation input adapter is not configured")
+        normalized_ids = [str(candidate_id or "").strip() for candidate_id in candidate_ids]
+        if any(not candidate_id for candidate_id in normalized_ids):
+            raise InvalidSpecError("candidate IDs must be non-empty")
+        if len(normalized_ids) != len(set(normalized_ids)):
+            raise InvalidSpecError("an HMM evaluation batch cannot contain duplicate candidates")
+        candidates = await asyncio.to_thread(
+            lambda: [self._repository.get_candidate(candidate_id) for candidate_id in normalized_ids]
+        )
+        prepared = await self._input_adapter.prepare_batch(
+            candidates=candidates,
+            evaluation_spec=evaluation_spec,
+        )
+        return await asyncio.to_thread(
+            self.create_batch,
+            plans=prepared.plans,
             recommendation_spec=recommendation_spec,
             recommendation_version=recommendation_version,
             created_by=created_by,

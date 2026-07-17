@@ -1,6 +1,6 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.5
+> **版本**：v1.6
 > **日期**：2026-07-17
 > **状态**：P1-A 已验收；P1-B evaluator/scorer 与旧诊断唯一计算路径迁移已实现，受控 benchmark 归 P1-C；P1-C 待实现；runtime activation 未启用
 > **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.8
@@ -1122,11 +1122,11 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `backend/tests/hmm_evolution/`；RD-Agent catalog API tests；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt；runtime rollout 状态见 §17.4.1/§21 | verified | 无 |
+| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt见 §17.4.1 | verified | 无 |
 | F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py` | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；非并列旧诊断 oracle、显式 tie-break、h10/h20/mixed horizon、latest-common/read-only transaction、交易日 forward return、coverage/warning、deterministic result hash；BUG-736/BUG-737 回归覆盖无硬编码凭据、无宽泛异常吞错、无 QE config 下载、Phase 0 缓存复用与 canonical market repository；HMM/Data Source matrix：178 passed / 8 skipped；新核心模块 line coverage 86.76%、branch coverage 70.31%；真实 dev PostgreSQL：空行情 fail-loud + forward-return SQL/只读事务 smoke 1 passed | verified | 无 |
-| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | unit state-machine suite；`test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify；P1-B/worker rollout 状态见 §18/§21 | verified | 无 |
+| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | `python -m pytest backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_worker.py -q`；`backend/tests/hmm_evolution/test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify | verified | 无 |
 | F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
-| F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、HMM research shell、页面与导航 | 目标：真实 API/UI、schema-aware asset view、中文/动态 horizon、固定证据区、empty/degraded/failed/stale/timeout、无 Paper v2/抽屉/raw JSON/死 tab、可访问性/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填；演示 HTML 不是完成证据 |
+| F-010 | 本文 §14、§15；`backend/routers/hmm_evolution.py`、`backend/services/hmm_evolution/runtime.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/{app/hmm-evolution,components/hmm-evolution,components/hmm-research,lib/hmm-evolution,lib/hmm-research}`、feature-flagged navigation | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_worker_cli.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；`frontend/tests/hmm-evolution/hmm-evolution.spec.ts` 待安全端口外部验证；artifact: `frontend/.next/BUILD_ID`（本地生产构建） | approved_by_user_for_implementation | API/UI/worker 源码与本地 contract/build 已实现；真实 API 页面截图、10-case 对照、性能 benchmark 和首次 runtime activation 仍待外部验收，未宣称 F-010 verified |
 
 ## 24. 设计结论
 
@@ -1141,5 +1141,6 @@ worker/API/UI 均未启用，不得把当前状态表述为整个 Phase 1 完成
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v1.6 | 2026-07-18 | 回填 P1-C API/UI/worker 实现路径、本地 contract/TypeScript/Next build 证据和仍待完成的真实 UI/10-case/性能外部验收；将 F-006/F-008 测试证据改为 feature validator 可核验命令 |
 | v1.5 | 2026-07-18 | 固化用户确认的三页签最终信息架构和风险热力图默认首页；Phase 1 只激活真实演进页；以固定证据区/独立详情页替代抽屉和 raw JSON；补 UI 状态机、失败语义、legacy guard、可访问性和四项 DESIGN-COMPLIANCE-001 审核 |
 | v1.4 | 2026-07-17 | 回填 P1-B evaluator/scorer、旧诊断唯一计算路径迁移、真实验证证据和 P1-C 剩余范围 |

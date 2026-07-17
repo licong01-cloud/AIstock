@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -130,13 +131,15 @@ class HMMEvaluationInputAdapter:
         market_read: MarketReturnRead | None = None
         market_returns: pd.DataFrame | None = None
         if market_mode == "required":
-            market_watermark = self._market_repository.resolve_watermark(
+            market_watermark = await asyncio.to_thread(
+                self._market_repository.resolve_watermark,
                 policy=str(evaluation_spec.as_of["policy"]),
                 requested_date=requested_date,
             )
             resolved_as_of_date = market_watermark.resolved_as_of_date
             symbols = sorted({str(item).strip() for item in predictions["symbol"] if str(item).strip()})
-            market_read = self._market_repository.read_forward_returns(
+            market_read = await asyncio.to_thread(
+                self._market_repository.read_forward_returns,
                 symbols=symbols,
                 trade_dates=date_plan.evaluation_dates,
                 horizon_trading_days=int(

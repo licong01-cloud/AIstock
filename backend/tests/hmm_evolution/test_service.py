@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -266,3 +268,33 @@ def test_batch_request_hash_preserves_candidate_to_spec_binding() -> None:
     first, swapped, reordered = repository.request_hashes
     assert first != swapped
     assert first == reordered
+
+
+def test_prepare_and_create_batch_uses_real_input_adapter_plans() -> None:
+    candidate_a = _candidate("hmmc_a", artifact_sha256="a" * 64)
+    candidate_b = _candidate("hmmc_b", artifact_sha256="b" * 64)
+    repository = _MultiRepository([candidate_a, candidate_b])
+
+    class _InputAdapter:
+        async def prepare_batch(self, *, candidates, evaluation_spec):
+            assert [candidate.candidate_id for candidate in candidates] == ["hmmc_a", "hmmc_b"]
+            return SimpleNamespace(
+                plans=tuple(_plan(candidate, topk=evaluation_spec.topk) for candidate in candidates)
+            )
+
+    service = HMMEvolutionService(  # type: ignore[arg-type]
+        repository,
+        input_adapter=_InputAdapter(),
+    )
+    batch, created = asyncio.run(
+        service.prepare_and_create_batch(
+            candidate_ids=["hmmc_a", "hmmc_b"],
+            evaluation_spec=_plan(candidate_a).evaluation_spec,
+            recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+            recommendation_version="hmm_recommendation_v1",
+            created_by="tester",
+        )
+    )
+    assert created is True
+    assert batch["batch_id"] == "hmmb_1"
+    assert repository.eval_index == 2
