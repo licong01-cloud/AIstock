@@ -2,7 +2,11 @@
   "actual": "qe_20260716_011004_21b2_L5/L7/L9及qe_20260716_045612_4ddd_L4已成功sync enhanced metrics，但evolution archive回填仍显示metric_count=32、curve_count=0、trade_count=0、factor_importance_count=0且缺backtest_window。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260717_BUG-702-qe.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/quantevolver.py",
+    "backend/services/qe_archive/source_assembler.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/unified_engine/test_qe_evolution_metrics_sync.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-702",
