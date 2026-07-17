@@ -237,7 +237,9 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/requirements/pr-quality.txt",
             ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
+            "scripts/aistock_validation_catalog_integrity.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
+            "backend/tests/test_validation_catalog_integrity.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
             "docs/codex_project_memory.md",
         ],
@@ -248,6 +250,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
     assert payload["prompt_evaluation_required"] is False
+    assert payload["unmapped_code_files"] == []
 
 
 def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
