@@ -39,6 +39,8 @@ FORBIDDEN_IMPORT_PREFIXES = (
 def test_onboarding_service_has_no_shared_runtime_imports() -> None:
     service_root = Path(__file__).resolve().parents[2] / "services" / "advisory_dev_input_onboarding"
     for path in service_root.glob("*.py"):
+        if path.name == "historical_onboarding.py":
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
         imported: list[str] = []
         for node in ast.walk(tree):
@@ -47,6 +49,31 @@ def test_onboarding_service_has_no_shared_runtime_imports() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.append(node.module)
         assert not [name for name in imported if name.startswith(FORBIDDEN_IMPORT_PREFIXES)], path.name
+
+
+def test_historical_onboarding_imports_shared_selection_only_from_standalone_adapter() -> None:
+    path = Path(__file__).resolve().parents[2] / "services" / "advisory_dev_input_onboarding" / "historical_onboarding.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+    forbidden = (
+        "backend.main",
+        "backend.db.pg_pool",
+        "backend.routers",
+        "backend.services.paper_trading",
+        "backend.services.quantevolver",
+        "backend.services.rdagent",
+        "backend.qlib_exporter",
+        "backend.infra.qmt",
+    )
+    assert not [name for name in imported if name.startswith(forbidden)]
+    source = path.read_text(encoding="utf-8-sig")
+    assert "localhost" not in source
+    assert "127.0.0.1" not in source
 
 
 def test_verify_evidence_cli_full_readback_and_tamper_exit(

@@ -27,7 +27,7 @@ append-only DEV业务事实。本次代码实现只完成 L0-L2；真实 DEV inv
 design_tier = F2
 design_status = design_ready_after_interface_and_consistency_audit_2026_07_16
 design_audit_status = passed_no_open_design_gap_2026_07_16
-implementation_status = code_complete_l0_l2_passed_pending_real_dev_l3_l4
+implementation_status = merged_pr_2217_l0_l2_passed_pending_real_dev_l3_l4
 implementation_audit_status = passed_design_compliance_review_after_logic_fixes_2026_07_16
 local_static_validation = compileall_pass_ruff_pass_diff_check_pass
 local_phase1g_regression = 182_passed_1_skipped
@@ -35,7 +35,7 @@ local_g5_targeted_regression = 47_passed
 disposable_postgresql_l2 = 2_passed
 feature_workflow_validation = f2_pass_38_of_38_zero_warning
 g4_dependency = merged_pr_2191_merge_commit_81c8d85e3b23493dc502a6f4c632603ae2fea1f3
-dev_input_inventory = not_run
+dev_input_inventory = completed_l3_source_pending_2026_07_16
 l3_transactional_dev = not_run
 l4_persistent_dev = not_run
 production_ddl = noop
