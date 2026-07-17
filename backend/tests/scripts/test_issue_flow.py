@@ -314,6 +314,19 @@ def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: py
     assert "ra_phase7_full_accept" in ra_payload["recommended_plans"]
 
 
+def test_validation_select_reaches_simulation_runtime_direct_plan(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--changed-file",
+        "backend/services/simulation_runtime/ops.py",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["primary_modules"] == ["simulation_runtime"]
+    assert payload["ownership"]["unmatched_files"] == []
+    assert payload["required_plans"] == ["l0", "simulation_core_l2"]
+
+
 def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",

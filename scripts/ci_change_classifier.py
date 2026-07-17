@@ -1,11 +1,17 @@
 ﻿from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
@@ -67,6 +73,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
+    "backend/tests/test_validation_catalog_integrity.py",
     "backend/services/validation/plan_catalog.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
@@ -87,6 +94,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_validation_catalog_integrity.py",
     "scripts/aistock_guardrail_scan.py",
     "scripts/bug_registry_metadata_check.py",
     "scripts/ci_change_classifier.py",
@@ -112,68 +120,6 @@ PROMPT_EVALUATION_FILES = {
     "configs/validation/llm_triage.yaml",
     "scripts/llm_provider_adapter.py",
 }
-BACKEND_MATRIX_SESSIONS = (
-    "paper_v2_backend",
-    "miniqmt_execution_runtime_l2",
-    "qe_archive_backend",
-    "model_registry_backend",
-    "market_regime_label",
-    "rl_execution_smoke",
-    "validation_center_backend",
-    "qe_data_contract_backend",
-    "hmm_data_source_backend",
-    "hmm_evolution_backend",
-    "simulation_core_l2",
-)
-BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "paper_v2_backend",
-        (
-            "backend/services/paper_trading_v2/**",
-            "backend/routers/paper_v2.py",
-            "backend/services/selection_center/**",
-            "backend/routers/selection_center.py",
-            "backend/services/strategy_package/**",
-            "backend/routers/strategy_package*.py",
-            "backend/execution_algos/**",
-            "backend/services/trading_core/execution_algo_adapter.py",
-            "backend/services/trading_core/minute_execution.py",
-            "backend/tests/paper_trading_v2/**",
-            "backend/tests/selection_center/**",
-            "backend/tests/strategy_package/**",
-            "backend/tests/trading_core/test_execution_algo_capabilities.py",
-            "backend/tests/trading_core/test_minute_execution.py",
-            "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
-            "backend/tests/trading_core/test_v25_execution_contract.py",
-        ),
-    ),
-    ("miniqmt_execution_runtime_l2", ("backend/services/miniqmt_execution_runtime/**", "backend/tests/miniqmt_execution_runtime/**")),
-    ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
-    (
-        "qe_data_contract_backend",
-        (
-            "backend/services/quantevolver/**",
-            "backend/routers/quantevolver*.py",
-            "backend/mcp/modules/qe_experiment.py",
-            "backend/tests/unified_engine/test_qe_*.py",
-            "backend/tests/mcp/test_domain_modules.py",
-        ),
-    ),
-    ("hmm_data_source_backend", ("backend/services/hmm_data_source/**", "backend/tests/hmm_data_source/**")),
-    (
-        "hmm_evolution_backend",
-        (
-            "backend/services/hmm_evolution/**",
-            "backend/db/init_hmm_evolution_schema.py",
-            "backend/tests/hmm_evolution/**",
-        ),
-    ),
-    ("simulation_core_l2", ("backend/services/simulation_runtime/**", "backend/routers/simulation_runtime.py", "backend/tests/simulation_runtime/**")),
-    ("model_registry_backend", ("backend/services/model_registry/**", "backend/routers/model_registry*.py", "backend/tests/model_registry/**", "backend/tests/test_model_registry*.py")),
-    ("market_regime_label", ("backend/services/market_regime/**", "backend/routers/market_regime*.py", "backend/tests/market_regime/**", "backend/tests/test_market_regime*.py")),
-    ("rl_execution_smoke", ("backend/services/rl_execution/**", "backend/routers/rl_execution.py", "backend/tests/test_rl_execution_module_visibility.py")),
-    ("validation_center_backend", ("backend/services/validation/**", "backend/routers/validation.py", "backend/tests/test_validation*.py", "backend/tests/scripts/test_*validation*.py", "tests/aistock_validation/catalog/**")),
-)
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {
     "frontend/package.json",
@@ -241,16 +187,37 @@ def _prompt_evaluation_required(path: str) -> bool:
     return path in PROMPT_EVALUATION_FILES or path.startswith(PROMPT_EVALUATION_PATH_PREFIXES)
 
 
-def _selected_backend_sessions(paths: list[str]) -> list[str]:
-    selected: list[str] = []
-    for session, patterns in BACKEND_SESSION_RULES:
-        if any(fnmatch.fnmatch(path, pattern) for path in paths for pattern in patterns):
-            selected.append(session)
-    return [session for session in BACKEND_MATRIX_SESSIONS if session in selected]
+def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
+    sessions: list[str] = []
+    for plan_key in selection.get("required_plans") or []:
+        plan = plans.get(str(plan_key)) or {}
+        session = str(plan.get("nox_session") or "").strip()
+        ci_enabled = bool(plan.get("ci_enabled", plan.get("enabled", True)))
+        if plan.get("ci_lane") != "backend" or not ci_enabled or not session or session in sessions:
+            continue
+        sessions.append(session)
+    return sessions
 
 
-def _matches_backend_session(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for _, patterns in BACKEND_SESSION_RULES for pattern in patterns)
+def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
+    plans = flow._plans_by_key()
+    selection = flow.select_validation(paths)
+    sessions = _backend_sessions_from_selection(selection, plans)
+    mapped_files: list[str] = []
+    unmapped_files: list[str] = []
+    for path in paths:
+        path_selection = flow.select_validation([path])
+        if _backend_sessions_from_selection(path_selection, plans):
+            mapped_files.append(path)
+        elif _is_code_path(path):
+            unmapped_files.append(path)
+    return {
+        "backend_sessions": sessions,
+        "mapped_files": mapped_files,
+        "unmapped_code_files": unmapped_files,
+        "impacted_modules": selection.get("impacted_modules") or [],
+        "required_plans": selection.get("required_plans") or [],
+    }
 
 
 def _is_frontend_path(path: str) -> bool:
@@ -406,13 +373,10 @@ def classify_changed_files(
         for path in non_bug_registry_files
         if path not in workflow_fast_files and path not in frontend_files and path not in go_files and not _is_docs_path(path)
     ]
-    backend_sessions = _selected_backend_sessions(business_files)
-    mapped_backend_files = [path for path in business_files if _matches_backend_session(path)]
-    unmapped_code_files = [
-        path
-        for path in business_files
-        if _is_code_path(path) and path not in mapped_backend_files
-    ]
+    catalog_selection = _catalog_backend_selection(business_files)
+    backend_sessions = catalog_selection["backend_sessions"]
+    mapped_backend_files = catalog_selection["mapped_files"]
+    unmapped_code_files = catalog_selection["unmapped_code_files"]
     if unmapped_code_files:
         blocking.append(
             "unmapped executable code must declare a direct CI test mapping: "
@@ -494,6 +458,9 @@ def classify_changed_files(
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "backend_sessions": backend_sessions,
+        "backend_plan_keys": catalog_selection["required_plans"],
+        "catalog_impacted_modules": catalog_selection["impacted_modules"],
+        "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,
         "frontend_files": frontend_files,
         "go_required": go_required,

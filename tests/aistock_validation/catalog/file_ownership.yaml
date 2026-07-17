@@ -163,11 +163,22 @@ rules:
     include:
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
+      - backend/tests/unified_engine/test_qe_*.py
     primary_module: qe.core
     impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness]
     layer: backend_service
     risk_level: high
     ownership_reason: QE service code is shared by single experiments and evolution flows.
+  - rule_id: qe_mcp_data_contract
+    priority: 100
+    include:
+      - backend/mcp/modules/qe_experiment.py
+      - backend/tests/mcp/test_domain_modules.py
+    primary_module: qe.data_completeness
+    impact_modules: [qe.core]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: QE MCP payload and domain-module contracts validate experiment data completeness.
   - rule_id: qe_frontend
     priority: 80
     include:
@@ -209,6 +220,7 @@ rules:
     include:
       - backend/services/paper_trading_v2/**
       - backend/routers/paper_v2.py
+      - backend/tests/paper_trading_v2/**
       - frontend/src/app/paper-v2/**
       - frontend/tests/paper-v2/**
     primary_module: paper_v2
@@ -234,6 +246,17 @@ rules:
     layer: backend_test
     risk_level: critical
     ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
+  - rule_id: simulation_runtime_core
+    priority: 96
+    include:
+      - backend/services/simulation_runtime/**
+      - backend/routers/simulation_runtime.py
+      - backend/tests/simulation_runtime/**
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
   - rule_id: qmt_infra
     priority: 85
     include:
@@ -249,6 +272,7 @@ rules:
     include:
       - backend/services/selection_center/**
       - backend/routers/selection_center.py
+      - backend/tests/selection_center/**
     primary_module: selection_center
     impact_modules: [paper_v2, strategy_package, hmm]
     layer: backend_service
@@ -274,6 +298,7 @@ rules:
     include:
       - backend/services/strategy_package/**
       - backend/routers/strategy_package*.py
+      - backend/tests/strategy_package/**
       - docs/contracts/strategy_package*.md
     primary_module: strategy_package
     impact_modules: [paper_v2, selection_center, qe.single_experiment]
@@ -338,7 +363,9 @@ rules:
     priority: 75
     include:
       - backend/services/hmm_*.py
+      - backend/services/hmm_data_source/**
       - backend/routers/hmm*.py
+      - backend/tests/hmm_data_source/**
       - scripts/hmm_*.py
       - scripts/diagnostics/hmm_*.py
     primary_module: hmm
@@ -789,6 +816,7 @@ rules:
       - backend/routers/model_registry*.py
       - backend/migrations/model_registry_*.sql
       - backend/tests/model_registry/**
+      - backend/tests/test_model_registry*.py
     primary_module: model_registry
     impact_modules: [strategy_package, qe.archive, validation.center]
     layer: backend_service
@@ -798,6 +826,10 @@ rules:
     priority: 80
     include:
       - backend/db/init_market_regime_label_*.sql
+      - backend/services/market_regime/**
+      - backend/routers/market_regime*.py
+      - backend/tests/market_regime/**
+      - backend/tests/test_market_regime*.py
       - scripts/regime_label_*.py
       - backend/tests/market/test_regime_label.py
       - docs/operations/regime_label_cron_example.md

@@ -96,6 +96,16 @@ modules:
     test_plans:
       required_on_change: [l0, miniqmt_execution_runtime_l2]
       recommended: [miniqmt_sim_stub_l3]
+  - module_id: simulation_runtime
+    display_name: Unified simulation runtime
+    parent_module: paper_v2
+    module_type: product_feature
+    risk_level: critical
+    description: Shared LocalSim and MiniQMT simulation lifecycle, operations, scheduling, and backend contracts.
+    description_zh: Unified LocalSim and MiniQMT simulation lifecycle, operations, scheduling, and backend contracts.
+    test_plans:
+      required_on_change: [l0, simulation_core_l2]
+      recommended: [localsim_unattended_l3, simulation_runtime_ops_ui, simulation_dual_backend_l4, miniqmt_sim_trading_hours_l5]
   - module_id: paper_v2
     display_name: Paper Trading v2
     module_type: product_feature
@@ -135,7 +145,7 @@ modules:
     description_zh: 覆盖 HMM 训练、快照、系数预计算、滚动更新以及 QE/Paper 运行时调整。
     ui_routes: [/paper-v2/model-hmm]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, hmm_data_source_backend]
   - module_id: hmm.evolution
     display_name: HMM Evolution Research
     parent_module: hmm
@@ -203,6 +213,7 @@ modules:
     ui_routes: [/local-data, /qlib]
     test_plans:
       required_on_change: [l0]
+      recommended: [data_sync_autonomy_backend]
   - module_id: analysis
     display_name: Stock analysis
     module_type: product_feature
@@ -322,7 +333,7 @@ modules:
     description_zh: 覆盖工具调用循环、工具结果回灌、接地回答生成与失败恢复。
     test_plans:
       required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend]
-      recommended: [research_assistant_mcp_contract]
+      recommended: [research_assistant_mcp_contract, ra_phase3_react_grounding]
   - module_id: research_assistant.evidence_guard
     display_name: Research Assistant Evidence Guard
     parent_module: research_assistant
@@ -498,7 +509,7 @@ modules:
     ui_routes: [/validation-center]
     test_plans:
       required_on_change: [l0, validation_center_backend]
-      recommended: [validation_center_ui, validation_center_real_port_ui]
+      recommended: [validation_center_ui, validation_center_real_port_ui, validation_center_live_readonly]
   - module_id: validation.runner
     display_name: Validation runner
     parent_module: validation
@@ -508,6 +519,23 @@ modules:
     description_zh: 覆盖受控 nox runner、测试计划白名单、执行记录、日志和自动归档。
     test_plans:
       required_on_change: [l0, validation_catalog_integrity, validation_center_backend]
+  - module_id: validation.workflow_automation
+    display_name: Validation workflow automation
+    parent_module: validation
+    module_type: technical_layer
+    risk_level: medium
+    description: CI and Nightly discovery, issue intake, code intelligence, drift audits, and failure candidate automation.
+    description_zh: 覆盖 CI 与 Nightly 发现、问题接入、代码智能、漂移审计和失败候选自动化。
+    test_plans:
+      required_on_change: [l0]
+      recommended:
+        - validation_workflow_automation
+        - validation_discovery_issue_intake_readonly
+        - workflow_discovery_root_clean_guard
+        - code_intelligence_discovery_affected_tests_quality
+        - validation_center_discovery_run_record_integrity
+        - validation_semantic_drift_discovery_readonly
+        - nightly_bug_candidate_queue
   - module_id: validation.coverage
     display_name: Validation coverage
     parent_module: validation

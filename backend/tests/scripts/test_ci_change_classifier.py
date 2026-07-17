@@ -108,7 +108,7 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert qe_payload["backend_sessions"] == ["qe_data_contract_backend"]
+    assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
     qe_mcp_payload = classifier.classify_changed_files(
         [
@@ -179,6 +179,19 @@ def test_unmapped_backend_code_blocks_instead_of_running_unrelated_matrix(tmp_pa
     assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
 
 
+def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
+    source = Path("scripts/ci_change_classifier.py").read_text(encoding="utf-8")
+    payload = classifier.classify_changed_files(
+        ["backend/services/simulation_runtime/ops.py"],
+        repo_root=tmp_path,
+    )
+
+    assert "BACKEND_SESSION_RULES" not in source
+    assert payload["catalog_impacted_modules"][0] == "simulation_runtime"
+    assert payload["backend_plan_keys"] == ["l0", "simulation_core_l2"]
+    assert payload["backend_sessions"] == ["simulation_core_l2"]
+
+
 def test_frontend_and_go_changes_use_language_gates_without_backend_matrix(tmp_path: Path) -> None:
     frontend = classifier.classify_changed_files(
         ["frontend/src/app/watchlist/page.tsx"],
@@ -224,7 +237,9 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/requirements/pr-quality.txt",
             ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
+            "scripts/aistock_validation_catalog_integrity.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
+            "backend/tests/test_validation_catalog_integrity.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
             "docs/codex_project_memory.md",
         ],
@@ -235,6 +250,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
     assert payload["prompt_evaluation_required"] is False
+    assert payload["unmapped_code_files"] == []
 
 
 def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
