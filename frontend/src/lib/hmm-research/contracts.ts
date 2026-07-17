@@ -96,6 +96,22 @@ export interface QEAssetCatalog {
   warnings: string[];
 }
 
+export interface QEAssetTextContent {
+  content_kind: "bounded_text" | "bounded_text_range";
+  text: string;
+  schema_kind: "json" | "text" | "partial_text";
+  redaction_count: number;
+  receipt?: {
+    sha256: string;
+    size_bytes?: number;
+  };
+  range?: {
+    start: number;
+    end: number;
+    total_size_bytes: number;
+  };
+}
+
 export interface EvaluationSpecPayload {
   schema_version: "hmm_evaluation_spec_v1";
   base_loop_ref: string;

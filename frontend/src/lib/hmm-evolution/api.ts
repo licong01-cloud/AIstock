@@ -11,6 +11,7 @@ import type {
   EvaluationSpecPayload,
   QEAssetCatalog,
   QEAssetEntry,
+  QEAssetTextContent,
 } from "@/lib/hmm-research/contracts";
 
 const API_BASE = (
@@ -194,6 +195,20 @@ export async function createBatch(payload: {
     body: JSON.stringify(payload),
     headers: { "Idempotency-Key": idempotencyKey },
   }, 120_000);
+}
+
+export function readQEAssetText(
+  taskId: string,
+  loopName: string,
+  relativePath: string,
+  range?: { start: number; end: number },
+): Promise<QEAssetTextContent> {
+  return request(
+    `/qe-assets/${encodeURIComponent(taskId)}/${encodeURIComponent(loopName)}/content?path=${encodeURIComponent(relativePath)}`,
+    range
+      ? { headers: { Range: `bytes=${range.start}-${range.end}` } }
+      : {},
+  );
 }
 
 export function cancelBatch(batchId: string): Promise<BatchSummary> {

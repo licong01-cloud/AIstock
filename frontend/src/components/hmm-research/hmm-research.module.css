@@ -255,6 +255,33 @@
 .summaryCell { padding: 10px; border: 1px solid var(--hmm-line); border-radius: 10px; background: #fafcfb; }
 .summaryLabel { color: var(--hmm-muted); font-size: 10px; }
 .summaryValue { margin-top: 5px; font-size: 13px; font-weight: 750; }
+.assetToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0 10px; }
+.assetSearch { display: flex; flex: 1; align-items: center; gap: 8px; max-width: 560px; padding: 9px 11px; border: 1px solid var(--hmm-line); border-radius: 10px; background: #fff; }
+.assetSearch:focus-within { border-color: #6fa88f; box-shadow: 0 0 0 3px rgba(35, 108, 79, .09); }
+.assetSearch input { width: 100%; border: 0; outline: 0; color: var(--hmm-text); background: transparent; font: inherit; }
+.paginationBar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.assetInspection { display: grid; gap: 14px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hmm-line); }
+.assetContentCard { overflow: hidden; border: 1px solid var(--hmm-line); border-radius: 12px; background: #fff; }
+.assetContentCard > .panelHeader { border-bottom: 1px solid var(--hmm-line); }
+.schemaGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 14px; }
+.textPreview { max-height: 430px; overflow: auto; padding: 8px 0; background: #f7faf8; }
+.textLine { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; min-height: 24px; padding: 3px 12px; color: #31453d; font-size: 11px; }
+.textLine:hover { background: #edf4f0; }
+.textLine > span { color: #89958f; text-align: right; user-select: none; }
+.textLine code { overflow-wrap: anywhere; white-space: pre-wrap; font-family: "SFMono-Regular", Consolas, monospace; }
+.chartWrap { padding: 8px 0 2px; }
+.chartLegend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 8px; color: var(--hmm-muted); font-size: 11px; }
+.chartLegend span { display: inline-flex; align-items: center; gap: 7px; }
+.chartLegend i { width: 18px; height: 3px; border-radius: 99px; }
+.chartLegendLabel { background: #23805f; }
+.chartLegendDb { background: #347d91; }
+.metricChart { display: block; width: 100%; min-height: 240px; }
+.chartGrid { stroke: #e8eeeb; stroke-width: 1; }
+.chartZero { stroke: #9aa8a2; stroke-dasharray: 5 5; stroke-width: 1.2; }
+.chartLineLabel, .chartLineDb { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.5; }
+.chartLineLabel { stroke: #23805f; }
+.chartLineDb { stroke: #347d91; }
+.chartAxisText { fill: #718079; font-size: 10px; }
 .muted { color: var(--hmm-muted); }
 .positive { color: #187553; font-weight: 750; }
 .negative { color: #b84945; font-weight: 750; }
@@ -275,6 +302,7 @@
   .metricsGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .evolutionLayout { grid-template-columns: 1fr; }
   .formGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schemaGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -283,5 +311,8 @@
   .hero { align-items: flex-start; flex-direction: column; }
   .metricsGrid, .detailGrid, .checkboxGrid { grid-template-columns: 1fr; }
   .formGrid, .assetGrid { grid-template-columns: 1fr; }
+  .assetToolbar { align-items: stretch; flex-direction: column; }
+  .assetSearch { max-width: none; }
+  .schemaGrid { grid-template-columns: 1fr; }
   .fieldWide, .fieldFull { grid-column: auto; }
 }
