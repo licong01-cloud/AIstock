@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.6
+> **版本**: v1.8
 > **日期**: 2026-07-16  
-> **修订日期**: 2026-07-17
-> **状态**: Phase 0 已完成；Phase 1 P1-A foundation 已完成外部验收，P1-B/P1-C 待实现，runtime activation 未启用
+> **修订日期**: 2026-07-18
+> **状态**: Phase 0 已完成；Phase 1 P1-A/P1-B 已完成，P1-C API/UI 与受控 benchmark 待实现；HMM 研究工作台 UI 方案已确认，runtime activation 未启用
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -24,12 +24,12 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 
 ### 1.2 核心目标
 
-**Phase 0-3 目标**:
-- ✅ 离线快速评估：10 分钟评估一个 HMM 版本（vs 6-12 小时 QE）
-- ✅ 批量对比筛选：同时测试 10+ 个候选，自动推荐 top-3
-- ✅ 风险预警可视化：每日板块风险预警 + 状态热力图
-- ✅ 滚动训练自动化：定期重训 HMM，保持模型时效性
-- ✅ 数据环境隔离：研发用回测数据，生产用 t-1 实时数据
+**Phase 0-3 目标与当前状态**:
+- 🟡 离线快速评估：evaluator/replay 核心已实现；标准基准上的单候选 <10 分钟验收待 P1-C。
+- 🟡 批量对比筛选：batch-relative scorer/top-3 核心已实现；10+ 候选真实 benchmark 待 P1-C。
+- ⬜ 风险预警可视化：每日板块风险预警 + 状态热力图由 Phase 2 交付。
+- ⬜ 滚动训练自动化：研究候选滚动训练与时效性监控由 Phase 3 交付。
+- ✅ 数据环境隔离：Phase 0 数据源、Phase 1 source manifest 与只读 market repository 已完成。
 
 **Phase 4+ 目标** (待独立设计):
 - 接入 QE 和模拟盘（需独立审批）
@@ -94,6 +94,16 @@ Phase 1 开发前的四项前置条件现均已满足：
 3. artifact manifest、路径边界、原子写、缓存生命周期和反序列化信任边界完成直接测试。
 4. 本文 Design Acceptance Index 中 `F-001` 至 `F-005` 均有实现与证据。
 
+Phase 1 当前进度：
+
+- P1-A 已完成 QE 全资产只读 reader、candidate registry、Python schema bootstrap、durable
+  repository/state machine 与生产 schema verify；runtime 默认关闭。
+- P1-B 已由 PR #2373（merge `b7d59e6a0209d94c71b28ea58008973e43dc16d1`）实现
+  versioned evaluator、input adapter、latest-common/交易日 market repository、durable executor 和
+  `hmm_recommendation_v1` scorer；BUG-736/BUG-737 由 PR #2377（merge
+  `8372d043afc1a47fc1c8cd341c70adccc2b236c9`）完成旧诊断唯一计算路径迁移。
+- F-007/F-009 已验证；P1-C 的 worker CLI、真实 API/UI、10-case 对照和性能 benchmark 尚未完成。
+
 ---
 
 ## 2. 总体架构
@@ -104,10 +114,10 @@ Phase 1 开发前的四项前置条件现均已满足：
 ┌─────────────────────────────────────────────────────────────────┐
 │                    前端 UI 层（三大模块）                           │
 ├─────────────────────────────────────────────────────────────────┤
-│  HMM Evolution Lab    │  HMM Risk Monitor   │  Research Pipeline │
-│  - 快速评估            │  - 风险预警面板       │  Inspector        │
-│  - 候选对比            │  - 板块热力图         │  - 实验追踪        │
-│  - 批量测试            │  - 历史事件追踪       │  - 对比可视化      │
+│  HMM Evolution Lab    │  HMM Risk Monitor   │  Research Training │
+│  - 快速评估            │  - 风险预警面板       │  - 滚动窗口预览     │
+│  - 候选对比            │  - 板块状态热力图     │  - 时效性监控       │
+│  - 批量测试            │  - 历史事件追踪       │  - 研究训练任务     │
 └─────────────────────────────────────────────────────────────────┘
                                  ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -141,7 +151,37 @@ Phase 1 开发前的四项前置条件现均已满足：
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 数据流隔离设计
+### 2.2 HMM 研究工作台 UI 信息架构
+
+2026-07-18 用户已确认最终 UI 方案：
+
+- 统一研究工作台包含“演进实验室 / 板块风险 / 滚动训练”三个一级页签；
+- 最终态主入口 `/hmm` 默认进入 `/hmm-risk` 板块风险热力图；
+- 板块风险页采用状态热力图、今日预警、固定详情区和状态分布，不使用抽屉式列表；
+- 新模块不得复用 `paper-v2.css`、`pv2-*` 或
+  `frontend/src/components/paper-v2/*`；基础组件采用 shadcn-compatible tokens；
+- 视觉采用已确认的浅色研究工作台：neutral surface、深绿色 primary；HMM state 使用
+  trending=绿色、neutral=灰色、fading=琥珀色，HIGH/OPPORTUNITY 通过红色/青色 severity accent
+  表达。正式实现必须使用语义 token，不散落页面级硬编码色值；
+- 页面不得直接显示原始 JSON、manifest/spec/error dump。审计信息必须转换为中文指标、
+  结构化键值、证据表和独立详情页；未知结构化资产只显示 metadata/trust/hash 和“不支持可视化”状态，
+  不以 raw dump 兜底；
+- 页面必须具备 loading、empty、degraded、failed、stale 和 terminal 状态。图表依赖加载失败、
+  API 失败或数据缺失必须显示稳定 reason code、中文说明和重试条件，不得永久 loading、空白或
+  `console.error` 后继续；
+- 三个页签按 Phase 真实完成情况注册。未实现模块不得以 disabled tab、静态截图、mock 数据或死页
+  冒充可用；Phase 2 的 F-011～F-013 完成后才将 `/hmm` 默认入口切换到 `/hmm-risk`。
+
+目标路由：
+
+| 路由 | 页面职责 | 激活条件 |
+|---|---|---|
+| `/hmm` | HMM 研究主入口，最终重定向 `/hmm-risk` | Phase 2 风险页真实 API/UI 验收通过 |
+| `/hmm-evolution` | 候选、评估、批次和 top-3 研究推荐 | P1-C / F-010 验收通过 |
+| `/hmm-risk` | L1/L2 板块状态热力图、预警、固定详情和状态分布 | F-011～F-013 验收通过 |
+| `/hmm-research-training` | 滚动窗口、时效性、研究训练任务和隔离边界 | F-014 验收通过 |
+
+### 2.3 数据流隔离设计
 
 ```python
 # 数据源枚举
@@ -216,7 +256,7 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 
 **实现级权威**:
 
-- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v1.1。
+- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v1.4。
 
 **数据库 Schema**:
 
@@ -238,7 +278,16 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 - `hmm_recommendation_v1` 使用 batch 内 percentile、版本化权重、缺失值重归一化和稳定并列规则；分数与排名存于 `batch_test_item`，不污染可复用 evaluation。
 - top-3 是研究推荐，不自动提交 QE、不修改生产配置、不淘汰未入选方向。
 - 每次结果必须可由 `source_manifest + candidate manifest + evaluation_spec + evaluator_version + input_hash` 重放。
-- neutral fallback、共同日期裁剪和缺失指标重加权必须标记 degraded 并在主 UI 可见，禁止只藏调试 JSON。
+- neutral fallback、共同日期裁剪和缺失指标重加权必须标记 degraded 并在主 UI 可见；
+  不得只写日志、只返回技术 context 或依赖 raw JSON 才能识别。
+
+**当前实现状态**:
+
+- P1-A/P1-B 后端基础、evaluator、executor、source manifest、market repository 和 scorer 已合入 main。
+- 旧 `hmm_offline_diagnostic.py` 已复用唯一 evaluator/Phase 0 缓存/canonical 只读行情 repository，
+  不再包含硬编码 DB 凭据、QE config 下载或宽泛异常吞错。
+- API 端点、`/hmm-evolution` UI、人工 worker CLI 和真实 benchmark 仍属于 P1-C，当前不存在
+  生产 runtime activation。
 
 **API 端点**:
 ```
@@ -262,7 +311,8 @@ POST /api/v1/hmm-evolution/batches/{batch_id}/retry-failed
 - [ ] 批量 10 个候选复用只读输入、限制并发，在同一基准上 < 30 分钟。
 - [ ] 结果可重放，失败具有结构化错误、heartbeat、取消和幂等语义。
 - [ ] 与至少 10 个历史 QE case 做方向性/排序一致性对照；差异只作为证据，不作为未经批准的淘汰门禁。
-- [ ] 前端以中文表格、指标卡和对比图为主，原始 JSON 仅放高级调试抽屉。
+- [ ] 前端以中文表格、指标卡、对比图、固定证据区和独立详情页为主；不使用 Paper v2
+  视觉依赖、抽屉式列表或原始 JSON/manifest/error dump 作为信息界面。
 
 ---
 
@@ -274,23 +324,84 @@ POST /api/v1/hmm-evolution/batches/{batch_id}/retry-failed
 ```sql
 CREATE SCHEMA IF NOT EXISTS hmm_risk;
 
-CREATE TABLE hmm_risk.daily_alert (
-    alert_id TEXT PRIMARY KEY,
+CREATE TABLE hmm_risk.sector_state_timeline (
+    state_id TEXT PRIMARY KEY,
     trade_date DATE NOT NULL,
     as_of_date DATE NOT NULL,
     candidate_id TEXT NOT NULL,
+    sector_level TEXT NOT NULL CHECK (sector_level IN ('L1', 'L2')),
     sector_code TEXT NOT NULL,
-    hmm_state TEXT NOT NULL,
-    severity TEXT NOT NULL,
+    hmm_state TEXT NOT NULL CHECK (hmm_state IN ('trending', 'neutral', 'fading')),
+    state_confidence DOUBLE PRECISION NULL CHECK (
+        state_confidence IS NULL OR state_confidence BETWEEN 0.0 AND 1.0
+    ),
+    confidence_definition_version TEXT NULL,
+    transition_type TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK (severity IN ('NONE', 'HIGH', 'MEDIUM', 'OPPORTUNITY')),
+    rule_version TEXT NOT NULL,
+    mapping_snapshot_hash TEXT NOT NULL,
+    source_manifest JSONB NOT NULL,
+    evidence JSONB NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    revision INT NOT NULL DEFAULT 1,
+    supersedes_state_id TEXT NULL REFERENCES hmm_risk.sector_state_timeline(state_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (dedupe_key, revision)
+);
+
+CREATE TABLE hmm_risk.daily_alert (
+    alert_id TEXT PRIMARY KEY,
+    state_id TEXT NOT NULL REFERENCES hmm_risk.sector_state_timeline(state_id),
+    trade_date DATE NOT NULL,
+    as_of_date DATE NOT NULL,
+    candidate_id TEXT NOT NULL,
+    sector_level TEXT NOT NULL CHECK (sector_level IN ('L1', 'L2')),
+    sector_code TEXT NOT NULL,
+    hmm_state TEXT NOT NULL CHECK (hmm_state IN ('trending', 'neutral', 'fading')),
+    severity TEXT NOT NULL CHECK (severity IN ('HIGH', 'MEDIUM', 'OPPORTUNITY')),
     transition_type TEXT NOT NULL,
     rule_version TEXT NOT NULL,
     source_manifest JSONB NOT NULL,
     evidence JSONB NOT NULL,
-    dedupe_key TEXT NOT NULL UNIQUE,
+    dedupe_key TEXT NOT NULL,
     revision INT NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    supersedes_alert_id TEXT NULL REFERENCES hmm_risk.daily_alert(alert_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (dedupe_key, revision)
+);
+
+CREATE TABLE hmm_risk.risk_event (
+    event_id TEXT PRIMARY KEY,
+    candidate_id TEXT NOT NULL,
+    sector_level TEXT NOT NULL CHECK (sector_level IN ('L1', 'L2')),
+    sector_code TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+    opened_trade_date DATE NOT NULL,
+    last_trade_date DATE NOT NULL,
+    resolved_trade_date DATE NULL,
+    rule_version TEXT NOT NULL,
+    first_alert_id TEXT NOT NULL REFERENCES hmm_risk.daily_alert(alert_id),
+    latest_alert_id TEXT NOT NULL REFERENCES hmm_risk.daily_alert(alert_id),
+    evidence_summary JSONB NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    revision INT NOT NULL DEFAULT 1,
+    supersedes_event_id TEXT NULL REFERENCES hmm_risk.risk_event(event_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (dedupe_key, revision)
 );
 ```
+
+`sector_state_timeline` 是热力图的权威数据源；`daily_alert` 只保存满足规则的当日预警；
+`risk_event` 聚合连续多日事件生命周期。三者不得相互替代或由前端临时推导持久化事实。
+迟到数据必须插入 `revision+1` 并通过 `supersedes_*` 指向上一版；读取当前态取同一 dedupe key
+最大 revision，禁止原地覆盖历史证据。
+
+`hmm_state` 仅允许 `trending/neutral/fading`。`severity` 是基于前后状态和规则版本得到的
+`NONE/HIGH/MEDIUM/OPPORTUNITY`，不是第四种 HMM 状态。`state_confidence` 仅在候选产物提供
+可验证的状态概率或经批准的版本化定义时写入；否则必须为 null，并在 UI 显示“未提供”，不得从
+severity、收益、颜色或任意 score 拼出伪置信度。
 
 **预警语义**:
 
@@ -299,10 +410,50 @@ CREATE TABLE hmm_risk.daily_alert (
 - 可以复用 `hmm_risk_gate_v1` 的 artifact 解析与状态计算，不得复用会生成 `RiskDecision(can_buy=False)` 的 Selection provider。
 - 每日任务必须先校验 market/sector/候选 coefficient 的共同完成水位；缺数据时记录 failed/partial 和 reason code，不得用中性状态或旧日结果伪装成功。
 - 同一 `candidate + trade_date + sector + rule_version` 幂等；迟到数据通过 revision 重算并保留历史，不覆盖审计轨迹。
+- L1/L2 归属使用 `as_of_date` 对应的 PIT 申万映射和 `mapping_snapshot_hash`；不得用当前成员关系
+  回填历史热力图。
+
+**API 端点**:
+
+```text
+GET  /api/v1/hmm-risk/overview
+GET  /api/v1/hmm-risk/heatmap?sector_level=L1&start_date=...&end_date=...&candidate_id=...
+GET  /api/v1/hmm-risk/alerts?trade_date=...&sector_level=L1&candidate_id=...
+GET  /api/v1/hmm-risk/sectors/{sector_code}/timeline
+GET  /api/v1/hmm-risk/events/{event_id}
+POST /api/v1/hmm-risk/jobs/daily/preview
+POST /api/v1/hmm-risk/jobs/daily/run
+```
+
+preview 为零写入；run 只写 `hmm_risk.*`，必须幂等并由受控 runner/worker 执行。普通页面读取不增加
+审批或确认链。
+
+**UI 契约**:
+
+- `/hmm-risk` 是最终 HMM 工作台默认首页，顶部保留“演进实验室 / 板块风险 / 滚动训练”三个
+  一级页签；只有已完成真实 API/UI 验收的页签才注册为可用导航。
+- 主视图按申万 L1/L2 切换，默认显示最近 7 个完整交易日；热力图行是板块、列是交易日，
+  基础填充色只表达 `trending/neutral/fading`，单元格数字在 `state_confidence` 非 null 时表达
+  状态置信度。HIGH/MEDIUM/OPPORTUNITY 使用边框、角标和文字表达，不得伪装成新的 HMM 状态。
+  颜色不是唯一语义载体，必须同时提供文字、图例和可访问标签。
+- “状态热力图”是分类状态的图形化表达，不新增或暗示交易吸引力、资金强弱、可买性或
+  未经定义的 `heat_score`。若未来增加独立板块热度指标，必须先定义数据源、公式、版本和验证，
+  不得从 severity/confidence 临时拼接。
+- 点击热力图单元格在页面下方固定详情区更新 sector、trade date、candidate、state、confidence、
+  transition、rule version、watermark、revision 和可读解释；不打开抽屉或侧滑列表。
+- 今日预警使用页面内卡片/表格，固定展示 HIGH/MEDIUM/OPPORTUNITY、证据完整度和原因；
+  详情使用独立路由或固定页面区域，不显示 raw evidence JSON。
+- 顶部固定显示共同数据水位、candidate、rule version 和研究分析声明；数据不足时热力图整体
+  进入 degraded/failed 状态并标明缺失域，不用旧日数据或 neutral 色块伪装成功。
+- 图表 renderer 加载失败时显示 `hmm_risk_chart_renderer_unavailable`、中文原因和重试动作；
+  可同时展示同一响应的结构化状态表作为可访问证据，但不得把表格 fallback 标记为热力图成功。
 
 **验收标准**:
 - [ ] 日度预警任务可重跑、可审计、可解释，失败不影响 Selection/Paper/QMT。
 - [ ] 热力图显示数据水位、candidate、rule version、状态置信度和缺失原因。
+- [ ] 申万 L1/L2、最近 7 日、单元格选择、固定详情区、今日预警和状态分布均由真实 API 数据驱动；
+  禁止用静态矩阵、mock-only 页面或硬编码预警冒充完成。
+- [ ] renderer/API/数据失败均有可见 reason code、中文解释和终止状态；不得永久 loading 或空白。
 - [ ] UI 明示“仅供研究分析，不构成交易决策”。
 - [ ] 风险回测报告展示命中率、误报、漏报、样本量和分阶段稳定性，不设置未经批准的保护率硬门禁。
 
@@ -350,12 +501,14 @@ class HMMRollingTrainScheduler:
     async def check_model_staleness(
         self,
         candidate_id: str,
-        max_age_days: int = 90,
+        latest_common_completed_trade_date: date,
+        staleness_policy_id: str,
     ) -> StalenessReport:
         """
-        检查模型时效性：
-        - 训练截止日期 vs 当前日期
-        - 如果超过阈值，标记为 stale
+        按版本化策略检查模型时效性：
+        - candidate 训练数据截止交易日 vs latest common completed trade date
+        - 计算完成交易日年龄，不使用 worker 当前自然日
+        - 返回 freshness evidence；不自动触发生产替换或研究淘汰
         """
 ```
 
@@ -365,11 +518,25 @@ class HMMRollingTrainScheduler:
 - 既有 Paper v2 设计规定 rolling retraining 为用户触发。若要启用无人值守月度调度，必须在 Phase 3 实施前提交并批准单独的调度语义修订，明确 scheduler ownership、leader election、misfire、重入、重试、取消和停用开关。
 - schedule、candidate template、训练窗口和资源池必须来自独立 DB 配置；禁止在脚本中硬编码生产 config id 或 cron。
 - 调度器失败只能影响独立研究任务；不得阻塞或改变 QE、Selection、Paper、MiniQMT。
+- staleness 使用 candidate 的训练数据 watermark 与本次固化的 latest-common completed trade date；
+  阈值属于版本化展示/调度策略，不得用 `date.today()`、自然日差或硬编码 90 天作为研究淘汰门禁。
+
+**UI 契约**:
+
+- `/hmm-research-training` 展示模型时效性、滚动窗口预览、研究训练任务、失败原因和隔离边界；
+  不复用 `/paper-v2/model-hmm` 页面、`hmmTrainingApi` 的生产写入 contract 或 legacy 组件。
+- 页面必须明确区分“只读窗口预览”“人工触发研究训练”“未来自动调度”和“生产模型状态”；
+  研究训练完成只产生 `research_only` candidate，不出现“替换生产模型”或“应用到 Paper”动作。
+- 训练任务失败显示 durable status、reason code、最近 heartbeat、失败阶段和可重试条件；
+  不将日志异常、worker 退出或 artifact 缺失显示为完成或空结果。
+- 自动调度未批准或未启用时显示明确的运行态状态，不提供假开关、不可用按钮或静态任务列表。
 
 **验收标准**:
 - [ ] 纯计划函数按真实交易日生成可重放窗口。
 - [ ] 训练任务具备幂等键、heartbeat、超时、取消、失败上下文和并发上限。
 - [ ] 新产物只进入独立 candidate registry，默认状态为 `research_only`。
+- [ ] 研究训练 UI 使用真实 planner/task/candidate API，窗口、时效性和任务状态与持久化证据一致；
+  禁止复制 Paper v2 写入路径或用静态计划冒充可执行训练。
 - [ ] 未获得调度语义修订批准前，只交付预览与人工触发，不启用自动 cron。
 
 ---
@@ -530,6 +697,8 @@ scripts/
 frontend/
   src/
     app/
+      hmm/
+        page.tsx                         # Phase 2 验收后默认重定向 /hmm-risk
       hmm-evolution/
         page.tsx
         batches/[batchId]/page.tsx
@@ -537,11 +706,25 @@ frontend/
       hmm-risk/
         page.tsx
         alerts/[alertId]/page.tsx
-        components/
+      hmm-research-training/
+        page.tsx
     components/
+      hmm-research/
+        HMMResearchNavigation.tsx
+        EvidencePanel.tsx
+        VisibleErrorState.tsx
       hmm-evolution/
+      hmm-risk/
+        SectorStateHeatmap.tsx
+        SectorStateDetail.tsx
+        DailyAlertList.tsx
+      hmm-research-training/
     lib/
+      hmm-research/
+        contracts.ts
       hmm-evolution/api.ts
+      hmm-risk/api.ts
+      hmm-research-training/api.ts
     lib/navigation/nav-groups.ts       # 明确导航入口和中文标签
 
 backend/tests/
@@ -567,6 +750,7 @@ docs/
 **临时文件**:
 - `tmp/hmm_evolution_cache/` - QE artifact 缓存
 - `.codex_tmp/hmm_offline_diag/` - 离线诊断临时文件
+- `tmp/handoff/hmm-ui-demo-*` - 用户确认前的静态 UI 演示；不得被正式页面 import 或作为验收证据
 
 **禁止写入**:
 - `docs/handoff/local/` - 仅本地临时文件
@@ -586,6 +770,9 @@ docs/
 | artifact 损坏或来源不可信 | HIGH | MEDIUM | 可信 manifest、原子写、来源校验、路径边界、fail-fast |
 | 风险预警误报率高 | MEDIUM | MEDIUM | 展示样本量/误报/漏报/分阶段稳定性，不干预交易 |
 | 滚动训练重复或越权写生产表 | HIGH | MEDIUM | 独立 registry、幂等任务、DB 最小权限、写表 allowlist |
+| 状态热力图被误解为交易热度或买卖建议 | HIGH | MEDIUM | 明确色相=HMM 状态、数字=置信度；不定义隐式 heat score，不输出 can_buy |
+| 图表依赖加载失败后永久 loading | MEDIUM | MEDIUM | 可见 reason code、终止状态、重试和结构化表证据；禁止 console-only error |
+| 分阶段上线产生死页或静态占位 | MEDIUM | MEDIUM | 路由/页签按验收项真实注册，未完成模块不展示、不以 mock 冒充 |
 
 ### 6.2 业务风险
 
@@ -639,12 +826,16 @@ docs/
   universe、算法版本、指标定义和 hash 足以复算同一结果。
 - **F-008 Phase 1 批处理状态机**：幂等、heartbeat、取消、超时、并发上限、部分失败和结构化错误完整。
 - **F-009 Phase 1 推荐语义**：top-3 仅为研究推荐，公式版本化，不自动淘汰方向或修改 QE/Paper。
-- **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文业务视图、主视图
-  degraded warning、可读错误和高级调试抽屉完整，导航入口可达。
+- **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文演进实验室、共享
+  HMM 研究导航、动态 horizon、主视图 degraded warning、固定证据区和独立详情页完整；禁止
+  Paper v2 依赖、抽屉式列表和 raw JSON 主视图。
 - **F-011 Phase 2 预警状态机**：共同数据水位、规则版本、dedupe/revision、解释证据和迟到数据重算完整。
 - **F-012 Phase 2 advisory-only**：无 `RiskDecision`、`can_buy`、订单、持仓、配置或调仓副作用。
-- **F-013 Phase 2 风险分析证据**：命中、误报、漏报、样本量和阶段稳定性完整，不擅自新增硬门禁。
-- **F-014 Phase 3 独立训练候选**：只复用纯滚动窗口计划，训练产物仅进入独立 registry，默认 `research_only`。
+- **F-013 Phase 2 风险分析与 UI 证据**：`/hmm-risk` 为最终默认首页，L1/L2 状态热力图、
+  今日预警、固定详情、状态分布、命中/误报/漏报/样本量和阶段稳定性完整；状态/置信度/severity
+  语义分离，不擅自新增 heat score 或硬门禁。
+- **F-014 Phase 3 独立训练候选与 UI**：只复用纯滚动窗口计划，训练产物仅进入独立 registry，
+  默认 `research_only`；训练页真实展示窗口、时效性、任务状态和隔离边界，不复用 Paper v2 写入路径。
 - **F-015 Phase 3 调度安全**：人工触发默认不变；自动调度需独立批准，并具备 ownership、leader、misfire、重入和停用语义。
 - **F-016 全阶段隔离与生产边界**：不修改既有 QE/Paper/StrategyPackage/生产 snapshot，不启服务、不隐式 DDL，生产门禁逐 PR 明确。
 
@@ -654,12 +845,16 @@ docs/
 2. **P0-B artifact/cache hardening**：处理 F-004，并补可信 manifest 与容量边界。
 3. **P0-C 验证与文档收敛**：处理 F-005，修正文档、专用 CI、受控 smoke 和 benchmark。
 4. **P1-A asset/schema/repository（已完成外部验收）**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
-5. **P1-B evaluator**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；不得复制其中硬编码连接或临时 I/O。
-6. **P1-C API/UI**：交付 F-010，并完成真实 API/UI 验证。
+5. **P1-B evaluator（已完成）**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；旧诊断已迁到唯一 evaluator。
+6. **P1-C API/UI（下一阶段）**：交付 F-010、人工 worker CLI、10-case/性能 benchmark，并完成真实 API/UI 验证。
 7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
 8. **P3 研究训练**：先交付 F-014；F-015 自动调度部分等待独立语义批准。
 
 每个实现 PR 只承担一个可验证子集，并在 PR body 中列设计项、实现引用、验证证据、生产门禁与未批准缺口。Phase 0 BUG 修复走 issue workflow；Phase 1-3 新能力走 feature workflow。
+
+本文对 Phase 2/3 给出跨阶段权威边界和已确认 UI 契约，但尚不等于 Phase 2/3 的实现级详细设计已完成。
+开始对应代码前必须补充 schema/repository/state machine/API/worker/UI/test 的从属详细设计并通过 F2
+validator；这是防止简化版和业务语义偏移的设计完整性要求，不是每次研究操作的产品审批流。
 
 ## 10. Verification Plan（验证方案）
 
@@ -672,11 +867,15 @@ docs/
 - **风险副作用测试**：调用 Phase 2 API/job 后断言 Selection/Paper/QMT 表和 `RiskDecision` 输出不变。
 - **滚动训练隔离测试**：DB 写表 allowlist 仅含 `hmm_evolution.*`；生产 config/snapshot 表写权限撤销时研究训练仍能正确失败并保留审计。
 - **UI 证据**：安全验证端口上的真实 API 页面/E2E 或截图；不得启用 8001/3000/19080。
+- **UI 信息架构证据**：断言最终 `/hmm` 默认 `/hmm-risk`、三个一级页签、L1/L2、7 日热力图、
+  固定详情区、预警和训练隔离页面；未实现阶段不得注册死页或静态占位。
+- **UI 失败证据**：renderer load、API 4xx/5xx、empty/degraded/stale、polling timeout 和 reason code
+  均有可见终止态；不得依赖控制台、抽屉或 raw JSON 才能定位。
 - **广域回归**：交给 Validation Center/CI/nightly 去重执行；本地只保留直接修复点最小门。
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v1.5 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
+本表记录 v1.8 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -686,14 +885,14 @@ docs/
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
 | F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计/验收清单；本验收 PR | `hmm_data_source_backend`、coverage/JUnit、4-test read-only integration、compact timing/RSS receipt | verified | 无 |
 | F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；AIstock QE asset reader + candidate bootstrap/repository；RD-Agent PR #4 complete catalog endpoint | 真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label 原位只读 receipt；unit isolation/manifest/path/hash/write-allowlist；生产 schema verify；runtime rollout 状态见 §13 | verified | 无 |
-| F-007 | Phase 1 详细设计 §7/§8；目标 versioned evaluator | 目标：旧诊断 oracle + asset trust/latest-common/tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-007 | Phase 1 详细设计 §7/§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py`；PR #2373/#2377 | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；tie/h10/h20/mixed horizon/latest-common/read-only transaction/coverage/result hash；HMM/Data Source matrix 178 passed / 8 skipped；dev PostgreSQL read-only smoke | verified | 无 |
 | F-008 | Phase 1 详细设计 §10～§13；durable batch/evaluation/item repository + disabled worker skeleton | unit state-machine suite；真实 dev PostgreSQL 8-worker idempotency/single-claim/CAS/fencing/heartbeat/lease-timeout；生产 drift verify；P1-B/P1-C 状态见 §9/§13 | verified | 无 |
-| F-009 | Phase 1 详细设计 §9；目标 `hmm_recommendation_v1` | 目标：percentile/版本/并列/缺失/top-3/无副作用 tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
-| F-010 | Phase 1 详细设计 §14/§15；目标 QE asset/candidate/evaluation/batch API、UI、导航 | 目标：API contract + 真实 UI/asset browser/动态 horizon/degraded warning/错误/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
+| F-009 | Phase 1 详细设计 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；PR #2373 | `test_scorer.py`、repository integration；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3；排名仅写 batch item，无淘汰阈值或交易副作用 | verified | 无 |
+| F-010 | Phase 1 详细设计 §14/§15；目标 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI | 目标：真实 API/UI、asset schema-aware view、动态 horizon、固定证据区、degraded/error/timeout、无 Paper v2/抽屉/raw JSON、E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填；风险/训练页不得用静态占位冒充完成 |
 | F-011 | 目标：hmm_risk alert state machine | 目标：watermark/dedupe/revision test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
 | F-012 | 目标：advisory-only service boundary | 目标：Selection/Paper/QMT 无副作用 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
-| F-013 | 目标：risk evidence/report | 目标：指标、样本量、分阶段稳定性 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
-| F-014 | 目标：research-only rolling candidate | 目标：DB write allowlist + artifact test | approved_by_user_for_implementation | 实现证据由 Phase 3 PR 回填 |
+| F-013 | 本文 §2.2/Phase 2 UI 契约；目标 risk evidence/report + `/hmm-risk` 默认首页 | 目标：真实 L1/L2/7 日 heatmap、固定详情、预警、状态分布、renderer/error、指标/样本量/阶段稳定性 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填；不新增交易 heat score |
+| F-014 | 本文 Phase 3 UI/隔离契约；目标 research-only rolling candidate + `/hmm-research-training` | 目标：DB write allowlist、planner/artifact、真实窗口/时效性/任务 UI、无生产 snapshot 写入 test | approved_by_user_for_implementation | 实现证据由 Phase 3 PR 回填 |
 | F-015 | 目标：manual-first scheduler contract | 目标：ownership/misfire/reentry/disable test | approved_by_user_for_implementation | 自动调度实现仍需独立用户批准 |
 | F-016 | 目标：全阶段 isolation guard | 目标：scope/production-gate/side-effect evidence | approved_by_user_for_implementation | 实现证据由各阶段 PR 回填 |
 
@@ -717,9 +916,9 @@ docs/
 - `data_write_gate`：只允许 `hmm_evolution.*`、`hmm_risk.*`；其它 schema 写入为 fail-closed。
 - `design_compliance_gate`：每个实现 PR 必须执行 DESIGN-COMPLIANCE-001，四项控制均有证据：`no_simplified_delivery`、`no_silent_error`、`no_business_semantic_drift`、`no_unrequested_gate_or_approval`。
 
-当前 P1-A gate receipt（2026-07-17）：`production_ddl_gate=applied_and_verified`
+当前 P1-A/P1-B gate receipt（2026-07-18）：`production_ddl_gate=applied_and_verified`
 （`hmm_evolution_v1`：5 tables / 115 columns / 41 constraints / 7 non-constraint
-indexes，业务表为空）；`runtime_activation_gate=pending`；dependency gates 均为 `noop`。
+indexes，业务表为空）；P1-B 未新增 DDL/依赖；`runtime_activation_gate=pending`；dependency gates 均为 `noop`。
 
 ---
 
@@ -743,6 +942,8 @@ indexes，业务表为空）；`runtime_activation_gate=pending`；dependency ga
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.8 | 2026-07-18 | 固化用户确认的 HMM 研究工作台：三个一级页签、最终默认风险热力图、固定详情区；禁止 Paper v2 风格、抽屉式列表和 raw JSON 展示；补 Phase 2/3 UI、失败态与分阶段真实激活契约 |
+| v1.7 | 2026-07-18 | 同步 P1-B 实际完成状态：回填 PR #2373/#2377、F-007/F-009 验证证据、旧诊断唯一计算路径迁移和 P1-C 剩余边界；runtime 仍未启用 |
 | v1.6 | 2026-07-17 | 完成 P1-A 收尾：repository 受管事务、真实 dev PostgreSQL 并发/CAS/lease 验收、RD-Agent 全资产只读目录 PR #4、真实 Loop8 pred/label 零副本 receipt、生产 schema gate 回填 |
 | v1.5 | 2026-07-17 | 完成研究隔离复审：允许 QE 全资产只读、固化 latest-common market watermark、移除多余审批语义、强化 degraded warning 与禁止简化版 |
 | v1.4 | 2026-07-17 | 完成 Phase 1 实现级详细设计；拆分 reusable evaluation 与 batch-relative ranking；显式 label horizon；批准 `hmm_recommendation_v1` |

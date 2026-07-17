@@ -1,9 +1,9 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.4
+> **版本**：v1.5
 > **日期**：2026-07-17
 > **状态**：P1-A 已验收；P1-B evaluator/scorer 与旧诊断唯一计算路径迁移已实现，受控 benchmark 归 P1-C；P1-C 待实现；runtime activation 未启用
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.6
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.8
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -49,7 +49,7 @@ Phase 1 v1 包含：
 4. 显式读取 canonical DB 的最新共同完成行情水位或指定 as-of，计算 10 个交易日 forward return；
 5. 批量评估 10+ 候选，复用同一份 pred/label 输入；
 6. 持久化候选、评估、批次、状态、heartbeat、错误和推荐证据；
-7. 提供真实 API、中文 UI、导航入口和高级调试抽屉；
+7. 提供真实 API、中文 UI、HMM 研究工作台导航、固定证据区和独立详情页；
 8. 提供单评估、批评估、失败重试、取消和结果复用语义；
 9. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
 
@@ -77,7 +77,7 @@ Phase 1 v1 包含：
 | 控制 | Phase 1 设计要求 |
 |---|---|
 | `no_simplified_delivery` | schema、repository、状态机、纯 evaluator、scorer、API、UI 和验证证据必须按 F-006～F-010 逐项完成后才可报告 Phase 1 完成。 |
-| `no_silent_error` | 缺 artifact、hash 不符、horizon 不符、无共同日期、DB 数据不足、lease 丢失和取消均返回稳定 reason code，不返回中性成功。 |
+| `no_silent_error` | 缺 artifact、hash 不符、horizon 不符、无共同日期、DB 数据不足、lease 丢失、取消、图表加载失败和 polling 超时均返回稳定 reason code，不返回中性成功、永久 loading 或空白。 |
 | `no_business_semantic_drift` | 结果仅为研究分析；不产生 `RiskDecision`、`can_buy`、订单、配置变更或生产 snapshot 变更。 |
 | `no_unrequested_gate_or_approval` | 推荐公式不包含淘汰阈值；所有成功候选均展示，证据不足者标记为未排名，不宣告方向无效。 |
 
@@ -101,14 +101,28 @@ Phase 1 v1 包含：
 
 ### 4.3 本轮设计审核结论
 
-| 审核项 | 原设计风险 | v1.1 处置 |
+| 审核项 | 原设计风险 | v1.5 处置 |
 |---|---|---|
 | QE 资产读取 | 只覆盖 pred/label 与两类 coefficient，低于研究所需只读范围 | 增加全资产 reader；inspection 范围与 computational trust 分离；真实 node complete catalog 为 F-006 验收 |
 | 最新行情 | 只有显式 date 字段，容易被实现成 `date.today()` 动态漂移 | 增加 `latest_common_completed`，入队解析并固化 watermark/PIT coverage |
 | 过度门禁 | strict-full 默认、approved-local 命名和多段 activation 容易演化成审批链 | 默认共同日期证据模式；configured source；只保留 DDL/首次 activation 操作授权 |
-| 静默错误 | neutral fallback 和缺失指标重加权可能只在 JSON 内可见 | 强制 evidence_quality/warnings，主 UI badge，未知异常 fail，不允许空集合假成功 |
+| 静默错误 | neutral fallback、缺失指标重加权或图表加载失败可能只在日志/context 内可见 | 强制 evidence_quality/warnings、固定错误区、reason code 和 terminal state；未知异常 fail，不允许空集合假成功 |
 | 简化交付 | 原表有原则但缺少具体禁止清单 | 明确禁止 schema/backend/mock/static/placeholder/POC 冒充 Phase 1 完成 |
 | Phase 0 对齐 | 扩大 QE 读取可能误改 Phase 0 whitelist | 全资产 reader 独立实现；Phase 0 pred/label 信任、cache、zero-copy 契约保持不变 |
+| UI 业务语义 | “热力图/热度”可能被误解为交易吸引力，三阶段 tab 可能被静态占位 | 状态、置信度、severity 分离；Phase 1 只激活真实演进页，风险/训练页按后续验收真实注册 |
+| Legacy UI 泄漏 | 直接复用 `/paper-v2/model-hmm` 会带入生产写入语义和 `pv2-*` 视觉 | 新建 HMM research shell；禁止 Paper v2 组件、抽屉式列表和 raw JSON 主视图 |
+
+### 4.4 2026-07-18 全面设计合规复核
+
+| P0 控制 | 设计级结论 | 证据与剩余边界 |
+|---|---|---|
+| `no_simplified_delivery` | PASS | F-006～F-010 仍逐项验收；P1-C 必须包含真实 API、worker CLI、完整 UI 状态、10-case 与性能证据；演示 HTML、静态页面和未实现 tab 明确不算完成。 |
+| `no_silent_error` | PASS | API/repository、polling、component/renderer、empty/degraded/stale/timeout 均有显式状态与 reason code；禁止 console-only、raw context-only、永久 loading 和空集合假成功。 |
+| `no_business_semantic_drift` | PASS | top-3 仍为 QE 终审前研究推荐；horizon、candidate、watermark 和 evidence identity 保持；不调用 risk gate、不写生产 snapshot、不产生 can_buy/订单。 |
+| `no_unrequested_gate_or_approval` | PASS | 仅生产 DDL 与首次 runtime activation 需要操作授权；候选、评估、批处理、重试、取消、证据查看不新增审批链或淘汰阈值。 |
+
+本结论只表示 v1.5 **设计文本**已消除已知 P0 缺口，不表示 F-010 实现完成。F-010 在真实代码、
+API/UI、E2E、benchmark 和外部证据回填前继续保持 `approved_by_user_for_implementation`。
 
 ## 5. Architecture（架构）
 
@@ -731,6 +745,10 @@ Router prefix：`/api/v1/hmm-evolution`。
 asset API 必须拒绝绝对路径、路径穿越和 QE mutation method；大文件使用 stream/Range，不整文件
 读入 API 进程内存。配置资产可查看但不提供“应用/执行/导入”按钮。
 
+`/content` 是受控只读传输 contract，不授权 UI 直接 dump JSON/YAML。前端必须先根据 media type、
+schema id 和 trust level 选择专用摘要/表格；未知结构化格式只展示 metadata 和“不支持可视化”。
+禁止因为缺少 renderer 就把原始 JSON 作为默认 fallback。
+
 ### 14.3 evaluation/batch
 
 | 方法 | 路径 | 语义 |
@@ -778,44 +796,99 @@ asset API 必须拒绝绝对路径、路径穿越和 QE mutation method；大文
 
 ## 15. UI Contracts
 
-### 15.1 页面与导航
+### 15.1 用户确认的最终信息架构
 
-- `/hmm-evolution`：实验室总览；
-- `/hmm-evolution/batches/[batchId]`：批次详情；
-- `/hmm-evolution/evaluations/[evalId]`：评估证据详情；
-- 导航放在 `QuantEvolver` 分组，标签“🧭 HMM 演进实验室”，不放入 Paper Trading v2。
+2026-07-18 用户确认：
 
-### 15.2 总览结构
+1. 保留“演进实验室 / 板块风险 / 滚动训练”三个一级页签；
+2. 接受状态热力图、页面内今日预警和下方固定详情区；
+3. 最终 HMM 主入口默认进入“板块风险”热力图。
 
-1. 候选库：名称、来源、coverage、hash 短码、lifecycle；
-2. QE 资产浏览：task/loop 资产目录、来源、hash、trust level 和受控内容预览；
-3. 新建评估：base loop、日期/as-of policy、label horizon、TopK、DB 10 日收益模式、候选多选；
-4. 运行中批次：进度、heartbeat、耗时、取消；
-5. 历史排行榜：推荐分数、证据置信度、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；
-6. top-3 卡片明确标注“研究推荐，需 QE 终审”。
+最终路由与阶段激活：
 
-### 15.3 详情与错误
+| 路由 | 职责 | 当前阶段交付 |
+|---|---|---|
+| `/hmm` | Phase 2 完成后重定向 `/hmm-risk` | P1-C 不注册误导性默认入口 |
+| `/hmm-evolution` | 候选、评估、批次、排行榜、top-3 | P1-C 必须完整交付 |
+| `/hmm-evolution/batches/[batchId]` | 批次状态、项目结果、失败与推荐证据 | P1-C 必须完整交付 |
+| `/hmm-evolution/evaluations/[evalId]` | 单次评估的结构化证据详情 | P1-C 必须完整交付 |
+| `/hmm-risk` | L1/L2 状态热力图、预警、固定详情、状态分布 | 总体蓝图 Phase 2 验收通过后 |
+| `/hmm-research-training` | 窗口、时效性、研究训练任务、隔离边界 | 总体蓝图 Phase 3 验收通过后 |
 
-- 主视图使用中文指标卡、表格和逐日折线；
-- 原始 manifest/spec/hash/error context 放高级调试抽屉；
-- `changed_day_count=0` 显示“未改变 TopK”，不显示绿色 0 收益；
-- h20 标签动态显示 20 交易日；
-- failed/timed_out 显示稳定 reason code、中文解释、可重试条件；
-- degraded evidence、neutral fallback、缺失指标重加权和共同日期裁剪必须在主表显示 warning badge；
-- polling 初始 3 秒，60 秒后退避到 10 秒，terminal 后停止；不引入 WebSocket。
+P1-C 可以建立可扩展的 `HMMResearchNavigation` 外壳，但只展示已通过真实 API/UI 验收的
+“演进实验室”入口。风险和滚动训练不得以 disabled tab、静态截图、mock 数据、空路由或“敬请期待”
+冒充可用功能；后续 Phase 验收通过后再注册对应页签。最终三个页签启用后，点击 HMM 主导航默认进入
+`/hmm-risk`。
 
-### 15.4 客户端文件
+### 15.2 演进实验室总览
+
+1. **候选库**：名称、来源、coverage、hash 短码、lifecycle；
+2. **QE 资产浏览**：task/loop 资产目录、来源、hash、trust level 和 schema-aware 摘要；
+3. **新建评估**：base loop、日期/as-of policy、label horizon、TopK、DB 10 日收益模式、候选多选；
+4. **运行中批次**：进度、heartbeat、耗时、取消和 item 级状态；
+5. **历史排行榜**：推荐分数、证据置信度、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；
+6. **top-3 研究推荐**：明确标注“研究推荐，需 QE 终审”，未入选候选仍完整展示；
+7. **证据质量**：watermark、candidate/source/evaluator version、degraded warnings 在主视图可见。
+
+### 15.3 固定证据区、独立详情页与结构化资产查看
+
+- 主视图使用中文指标卡、表格、进度、逐日折线和固定证据区；详情页保持页面路由，不使用抽屉、
+  侧滑列表或悬浮 JSON 面板。
+- manifest/spec/hash/error context 必须转成明确字段分组，例如“输入身份 / 数据水位 / 计算版本 /
+  证据质量 / 失败原因”；hash 可复制但不得把整个 payload dump 到页面。
+- QE JSON/YAML 资产不得直接渲染原始文件。已知 schema 使用字段摘要、表格或专用可视化；未知 schema
+  仅显示 filename、media type、size、hash、trust level 和“不支持可视化”，不得 raw dump 兜底。
+- 普通 text/log 资产只允许在独立资产检查页做大小受限、明确标注来源的只读文本查看；不能混入
+  候选、评估或推荐主视图，也不能提供执行、导入或应用动作。
+- `changed_day_count=0` 显示“未改变 TopK”，不显示绿色 0 收益或成功门禁；h20 动态显示
+  “20 交易日”，不得误写成 10 日收益。
+
+### 15.4 加载、空态、降级、失败和轮询
+
+| 状态 | 页面行为 |
+|---|---|
+| loading | 显示有界 skeleton 和正在加载的资源名；超过客户端阈值进入 timed-out，不无限旋转 |
+| empty | 说明“无候选/无批次/无结果”的具体原因与下一步，不返回空白成功 |
+| degraded | 主视图显示 warning、受影响指标、裁剪范围和可用证据；不只写技术 context |
+| failed/timed_out | 固定错误区显示 reason code、中文解释、trace id、失败阶段和可重试条件 |
+| stale | 显示数据水位、期望水位和陈旧范围；不得自动使用旧结果冒充最新 |
+| terminal | 停止 polling，保持最终审计状态；成功、partial_failed、failed、cancelled 明确区分 |
+
+- polling 初始 3 秒，60 秒后退避到 10 秒，terminal 后停止；本阶段不引入 WebSocket。
+- API/renderer Promise rejection 必须进入可见 failed 状态；禁止仅 `console.error`、吞异常后保留 loading、
+  返回 `{}`/`[]` 或静态成功。
+- P1-C 不需要热力图 renderer；未来共享 chart loader 必须具备
+  `renderer_loading/renderer_failed/renderer_ready` 显式状态，不能沿用现有 console-only 动态加载模式。
+
+### 15.5 视觉与交互规范
+
+- 使用 shadcn-compatible tokens、清晰的 card/table/badge/button/form 边界和适合研究数据的密度；
+- 采用用户确认的浅色研究工作台：neutral surface、深绿色 primary、绿色/灰色/琥珀色状态色，
+  红色与青色只作为 HIGH/OPPORTUNITY 的 severity accent；正式实现使用
+  `--hmm-state-trending`、`--hmm-state-neutral`、`--hmm-state-fading`、
+  `--hmm-severity-high`、`--hmm-severity-opportunity` 等语义 token，不在页面散落硬编码色值；
+- 禁止复用 `paper-v2.css`、`pv2-*`、`frontend/src/components/paper-v2/*` 或
+  `/paper-v2/model-hmm` 页面布局；
+- 禁止抽屉式列表、右侧滑出详情、raw JSON 文件直显；长内容进入独立详情页；
+- 颜色不能是唯一状态载体，badge、文字和 aria label 必须同步；
+- UI 不出现“通过生产门禁”“允许交易”“替换生产模型”等未获批准的动作或暗示。
+
+### 15.6 客户端文件
 
 目标：
 
 ```text
 frontend/src/app/hmm-evolution/
+frontend/src/components/hmm-research/HMMResearchNavigation.tsx
+frontend/src/components/hmm-research/EvidencePanel.tsx
+frontend/src/components/hmm-research/VisibleErrorState.tsx
 frontend/src/components/hmm-evolution/
+frontend/src/lib/hmm-research/contracts.ts
 frontend/src/lib/hmm-evolution/api.ts
 frontend/src/lib/navigation/nav-groups.ts
 ```
 
-不复用 legacy Paper v2 页面依赖；共享通用基础组件时不得带入交易动作。
+共享组件只承载研究信息和可见失败状态，不得带入交易动作、生产 snapshot 写入或 Paper v2 API contract。
 
 ## 16. Failure Modes（失败模式与处置）
 
@@ -837,6 +910,10 @@ frontend/src/lib/navigation/nav-groups.ts
 | schema 未部署 | API 503 schema_unavailable；不得隐式 DDL |
 | 推荐指标缺失 | 按可用权重归一化；无 efficacy 指标则 unranked |
 | 未知异常 | failed + chained exception/trace/reason；不得返回 `{}`、`[]` 或默认 neutral |
+| UI API 返回成功但业务集合为空 | 显式 empty reason 与查询条件；不得显示完成卡或空白排行榜 |
+| chart/component 动态加载失败 | visible failed + reason code + retry；不得只写 console 或永久 loading |
+| JSON/YAML 无专用 renderer | 仅显示 metadata/trust/hash 和不支持可视化；不得 raw dump 兜底 |
+| 风险/训练 Phase 未验收 | 不注册对应 tab/route；不得静态占位、假开关或 mock 页面冒充功能 |
 
 ## 17. Verification Plan（验证方案）
 
@@ -865,7 +942,15 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - Pydantic request/response contract 与 reason code 测试；
 - 202/idempotent 200/409 conflict/取消/retry；
-- UI 真实 API mock server contract test、中文文案、动态 horizon、QE asset browser、degraded warning、空状态、失败状态；
+- UI 使用契约级 test server 驱动真实 API client，覆盖中文文案、动态 horizon、QE asset schema-aware
+  view、固定证据区、degraded warning、empty/failed/stale/timed-out 和 terminal polling；
+- 断言 P1-C 仅注册已完成的演进页；未完成的 `/hmm-risk`、`/hmm-research-training` 不得出现
+  disabled tab、空路由、静态占位或 mock-only 页面；
+- changed-file guard 断言无 `paper-v2.css`、`pv2-*`、`frontend/src/components/paper-v2/*`、
+  抽屉式列表和 raw JSON 主视图；
+- component rejection/renderer load error 必须进入 `VisibleErrorState`，reason code、中文解释、trace id
+  和 retry condition 可见；不得依赖 console 或无限 loading；
+- keyboard、focus、aria label 和非颜色状态标识测试；长详情通过独立路由访问，不使用 drawer；
 - 安全验证端口使用 `backend.validation_app` 扩展或专用 test app，不启 8001/3000/19080；
 - UI E2E/截图交给 Validation Center，不能用静态 grep 代替。
 
@@ -908,10 +993,16 @@ frontend/src/lib/navigation/nav-groups.ts
 
 每个实现 PR 逐项检查：
 
-- 是否交付该 PR 承诺的完整设计子集；
-- 是否存在 bare/broad except、空集合假成功、中性 fallback 隐藏、静态成功或 warning 只藏调试 JSON；
-- 是否触碰 QE/Paper/Selection/QMT/生产 snapshot；
-- 是否新增本文未批准的阈值、审批或研究淘汰规则。
+- `no_simplified_delivery`：是否交付 PR 承诺的完整 API/UI/worker/benchmark 子集；是否存在
+  backend-only、mock-only、静态页面、死 tab、placeholder 或演示文件进入正式实现；
+- `no_silent_error`：是否存在 bare/broad except、空集合假成功、中性 fallback 隐藏、
+  console-only error、永久 loading、静态成功或 warning 只藏技术 context/raw JSON；
+- `no_business_semantic_drift`：是否保持 state/confidence/severity/score/horizon 身份，是否触碰
+  QE/Paper/Selection/QMT/生产 snapshot，是否把热力图解释成交易热度或买卖建议；
+- `no_unrequested_gate_or_approval`：是否新增本文未批准的阈值、审批、确认链或研究淘汰规则；
+  runtime switch 仍仅是部署开关，不是每次评估的产品审批。
+
+四项必须分别给出实现引用与验证证据；任何一项为 gap 时，不得请求合入或标记 F-010 verified。
 
 ## 18. Implementation Plan（实施方案）
 
@@ -946,7 +1037,9 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - candidate/evaluation/batch API；
 - worker CLI 与受控启用方式；
-- `/hmm-evolution` 页面、详情、导航；
+- `/hmm-evolution` 页面、批次/评估详情、固定证据区和 HMM research navigation shell；
+- schema-aware QE asset view、完整 loading/empty/degraded/failed/stale/terminal 状态；
+- 禁止 Paper v2 依赖、抽屉式列表、raw JSON 主视图和未实现风险/训练 tab；
 - 真实 API/UI 证据、10-case 对照和性能验收；
 - 生产 runtime 首次启用需要一次操作授权；启用后正常研究操作不再增加审批门。
 
@@ -960,7 +1053,7 @@ frontend/src/lib/navigation/nav-groups.ts
 2. 在开发/验证 DB 显式 bootstrap、复跑和 drift verify；
 3. 获得生产 DDL 操作授权后执行并保存 receipt；
 4. 合入 P1-B，使用人工 worker CLI 做受控 benchmark；
-5. 合入 P1-C，先在安全验证 app/UI 完成验收；
+5. 合入 P1-C，先在安全验证 app/UI 完成演进页、证据区、错误状态和导航激活边界验收；
 6. 获得一次生产 runtime activation 操作授权后按部署配置启用；API/worker/nav 状态分别记录，
    但不得衍生三套产品审批流。
 
@@ -994,6 +1087,10 @@ frontend/src/lib/navigation/nav-groups.ts
 | 推荐公式变成淘汰门禁 | 无阈值；所有候选展示；top-3 明示 QE 终审 |
 | Phase 1 越权读写生产状态 | source resolver 只读；repository write allowlist；副作用测试 |
 | schema/code/runtime 状态混淆 | 分开报告 merge、DDL、activation、external acceptance |
+| Paper v2 视觉/生产语义泄漏 | changed-file import/class guard + 独立 HMM research shell |
+| raw JSON 或抽屉替代业务视图 | schema-aware fields、固定证据区、独立详情页；未知结构不直接展示 |
+| 未实现 Phase tab 被静态占位 | 导航按验收项注册；P1-C 只激活演进页 |
+| UI 错误被 console/permanent loading 吞掉 | VisibleErrorState + reason code + terminal polling tests |
 
 ## 21. Production Gates（生产门禁）
 
@@ -1017,8 +1114,9 @@ frontend/src/lib/navigation/nav-groups.ts
   取消、超时、重试、shared result 和 partial failure。
 - **F-009 Phase 1 推荐语义**：`hmm_recommendation_v1` 版本化、batch-relative、无淘汰阈值、
   top-3 仅为 QE 终审前研究推荐。
-- **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文实验室、动态
-  horizon、主视图 degraded warning、可读错误、高级调试抽屉和 QuantEvolver 导航入口。
+- **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文演进实验室、
+  HMM research navigation shell、动态 horizon、schema-aware asset view、主视图 degraded warning、
+  固定证据区、独立详情页和可见终止错误；禁止 Paper v2、抽屉式列表、raw JSON 主视图和未实现 tab。
 
 ## 23. Design Acceptance Matrix（设计验收矩阵）
 
@@ -1028,7 +1126,7 @@ frontend/src/lib/navigation/nav-groups.ts
 | F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py` | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；非并列旧诊断 oracle、显式 tie-break、h10/h20/mixed horizon、latest-common/read-only transaction、交易日 forward return、coverage/warning、deterministic result hash；BUG-736/BUG-737 回归覆盖无硬编码凭据、无宽泛异常吞错、无 QE config 下载、Phase 0 缓存复用与 canonical market repository；HMM/Data Source matrix：178 passed / 8 skipped；新核心模块 line coverage 86.76%、branch coverage 70.31%；真实 dev PostgreSQL：空行情 fail-loud + forward-return SQL/只读事务 smoke 1 passed | verified | 无 |
 | F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | unit state-machine suite；`test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify；P1-B/worker rollout 状态见 §18/§21 | verified | 无 |
 | F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
-| F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、页面、导航 | 目标：API contract、真实 UI、asset browser、中文/动态 horizon/degraded warning/error/截图证据 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
+| F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、HMM research shell、页面与导航 | 目标：真实 API/UI、schema-aware asset view、中文/动态 horizon、固定证据区、empty/degraded/failed/stale/timeout、无 Paper v2/抽屉/raw JSON/死 tab、可访问性/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填；演示 HTML 不是完成证据 |
 
 ## 24. 设计结论
 
@@ -1038,3 +1136,10 @@ evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只�
 executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算
 路径迁移；F-007/F-009 已验证。P1-C 仍负责受控 benchmark、API/UI 与外部验收。生产
 worker/API/UI 均未启用，不得把当前状态表述为整个 Phase 1 完成。
+
+## 25. 变更记录
+
+| 版本 | 日期 | 变更内容 |
+|---|---|---|
+| v1.5 | 2026-07-18 | 固化用户确认的三页签最终信息架构和风险热力图默认首页；Phase 1 只激活真实演进页；以固定证据区/独立详情页替代抽屉和 raw JSON；补 UI 状态机、失败语义、legacy guard、可访问性和四项 DESIGN-COMPLIANCE-001 审核 |
+| v1.4 | 2026-07-17 | 回填 P1-B evaluator/scorer、旧诊断唯一计算路径迁移、真实验证证据和 P1-C 剩余范围 |
