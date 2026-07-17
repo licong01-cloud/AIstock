@@ -65,6 +65,58 @@ class QEWorkspaceClient:
                 base = row["api_base_url"].rstrip("/")
                 return cls(base_url=f"{base}/api/v1/qe_workspace")
 
+    @classmethod
+    def for_task_loop(cls, task_id: str, loop_id: str | None = None) -> "QEWorkspaceClient":
+        """Resolve the authoritative QE compute node for one task/loop.
+
+        Loop-level placement wins when it is present.  Otherwise the task's
+        node is authoritative.  Missing task/node metadata is an explicit
+        contract failure; callers must never fall back to localhost or a
+        process-wide default node.
+        """
+
+        normalized_task_id = str(task_id or "").strip()
+        normalized_loop_id = str(loop_id or "").strip()
+        if not normalized_task_id:
+            raise ValueError("QE task_id is required for workspace node resolution")
+
+        from ...db.pg_pool import get_conn
+        from psycopg2.extras import RealDictCursor
+
+        full_loop_id = (
+            normalized_loop_id
+            if normalized_loop_id.startswith(f"{normalized_task_id}_")
+            else f"{normalized_task_id}_{normalized_loop_id}"
+        )
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(NULLIF(l.node_id, ''), NULLIF(t.node_id, '')) AS node_id
+                    FROM qe_evolution_tasks t
+                    LEFT JOIN qe_evolution_loops l
+                      ON l.task_id = t.task_id
+                     AND (%s <> '' AND l.loop_id IN (%s, %s))
+                    WHERE t.task_id = %s
+                    ORDER BY CASE WHEN NULLIF(l.node_id, '') IS NOT NULL THEN 0 ELSE 1 END
+                    LIMIT 1
+                    """,
+                    (
+                        normalized_loop_id,
+                        normalized_loop_id,
+                        full_loop_id,
+                        normalized_task_id,
+                    ),
+                )
+                row = cur.fetchone()
+        node_id = str(row["node_id"] or "").strip() if row else ""
+        if not node_id:
+            raise ValueError(
+                f"QE task/loop has no authoritative compute node: "
+                f"task={normalized_task_id} loop={normalized_loop_id or '<task>'}"
+            )
+        return cls.for_node(node_id)
+
     async def close(self):
         """显式关闭内部 httpx 客户端，释放连接池资源。"""
         await self.client.aclose()
