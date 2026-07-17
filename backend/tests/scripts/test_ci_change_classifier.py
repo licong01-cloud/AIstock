@@ -117,6 +117,18 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert hmm_payload["backend_sessions"] == ["hmm_data_source_backend"]
 
+    hmm_evolution_payload = classifier.classify_changed_files(
+        [
+            "backend/services/hmm_evolution/repository.py",
+            "backend/db/init_hmm_evolution_schema.py",
+            "backend/tests/hmm_evolution/test_service.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert hmm_evolution_payload["backend_sessions"] == ["hmm_evolution_backend"]
+    assert hmm_evolution_payload["unmapped_code_files"] == []
+
     simulation_payload = classifier.classify_changed_files(
         ["backend/services/simulation_runtime/ops.py"],
         repo_root=tmp_path,

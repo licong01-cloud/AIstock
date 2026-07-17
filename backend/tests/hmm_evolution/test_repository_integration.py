@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from typing import Any
+
+import pytest
+
+from backend.services.hmm_evolution.errors import IdempotencyConflictError
+from backend.services.hmm_evolution.models import (
+    CandidateCoverage,
+    CandidateManifest,
+    CandidatePreview,
+    CandidateSourceType,
+    CoefficientStats,
+)
+from backend.services.hmm_evolution.repository import HMMEvolutionRepository
+from backend.services.hmm_evolution.worker import (
+    HMMEvolutionWorker,
+    WorkerConfig,
+)
+
+
+class _ScriptedCursor:
+    def __init__(self, steps: list[dict[str, Any]]) -> None:
+        self.steps = list(steps)
+        self.current: dict[str, Any] = {}
+        self.queries: list[tuple[str, Any]] = []
+        self.rowcount = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query: str, params: Any = None) -> None:
+        normalized = " ".join(query.split())
+        self.queries.append((normalized, params))
+        if not self.steps:
+            raise AssertionError(f"unexpected SQL: {normalized}")
+        self.current = self.steps.pop(0)
+        expected = self.current.get("contains")
+        if expected is not None:
+            assert expected in normalized
+        self.rowcount = int(self.current.get("rowcount", 0))
+
+    def fetchone(self):
+        return self.current.get("one")
+
+    def fetchall(self):
+        return self.current.get("all", [])
+
+
+class _Connection:
+    def __init__(self, cursor: _ScriptedCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self, **kwargs):
+        return self._cursor
+
+
+def _repository(steps: list[dict[str, Any]]) -> tuple[HMMEvolutionRepository, _ScriptedCursor]:
+    cursor = _ScriptedCursor(steps)
+    return HMMEvolutionRepository(lambda: _Connection(cursor)), cursor
+
+
+def _preview(
+    *,
+    source_type: CandidateSourceType,
+    source_ref: dict[str, Any],
+    artifact_uri: str,
+) -> CandidatePreview:
+    manifest = CandidateManifest(
+        source_type=source_type,
+        source_ref=source_ref,
+        artifact_uri=artifact_uri,
+        artifact_sha256="a" * 64,
+        size_bytes=100,
+        detected_format="hmm_sector_coefficients_legacy_v1",
+        coverage=CandidateCoverage(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 2),
+            date_count=2,
+            sector_count_min=1,
+            sector_count_max=2,
+            stock_sector_map_count=2,
+        ),
+        coefficient_stats=CoefficientStats(min=0.9, max=1.2),
+    )
+    return CandidatePreview(
+        candidate_id=manifest.candidate_id,
+        manifest_hash=manifest.manifest_hash,
+        manifest=manifest,
+    )
+
+
+def _candidate_row(preview: CandidatePreview) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    return {
+        "candidate_id": preview.candidate_id,
+        "manifest_hash": preview.manifest_hash,
+        "display_name": "candidate",
+        "description": None,
+        "source_type": preview.manifest.source_type.value,
+        "source_ref": dict(preview.manifest.source_ref),
+        "artifact_manifest": preview.manifest.model_dump(mode="json"),
+        "algorithm_version": preview.manifest.algorithm_version,
+        "lifecycle_status": "research_only",
+        "invalid_reason_code": None,
+        "invalid_context": None,
+        "created_by": "tester",
+        "row_version": 1,
+        "created_at": now,
+        "updated_at": now,
+        "retired_at": None,
+    }
+
+
+def test_cross_source_alias_is_accepted_after_atomic_candidate_conflict() -> None:
+    primary = _preview(
+        source_type=CandidateSourceType.CONFIGURED_LOCAL,
+        source_ref={"root_alias": "research", "relative_path": "candidate.json"},
+        artifact_uri="configured-local://research/candidate.json",
+    )
+    alias = _preview(
+        source_type=CandidateSourceType.EXISTING_SNAPSHOT,
+        source_ref={"snapshot_id": "snapshot-1", "artifact_name": "candidate.json"},
+        artifact_uri="snapshot://snapshot-1/candidate.json",
+    )
+    assert primary.candidate_id == alias.candidate_id
+    assert primary.manifest_hash != alias.manifest_hash
+    existing = _candidate_row(primary)
+    updated = dict(existing)
+    updated["source_ref"] = {
+        **existing["source_ref"],
+        "aliases": [alias.manifest.source_ref],
+    }
+    updated["row_version"] = 2
+    repository, cursor = _repository(
+        [
+            {"contains": "ON CONFLICT DO NOTHING", "one": None},
+            {"contains": "WHERE candidate_id = %s OR manifest_hash = %s", "one": existing},
+            {"contains": "UPDATE hmm_evolution.candidate", "one": updated},
+        ]
+    )
+
+    candidate, created = repository.register_candidate(
+        alias,
+        display_name="candidate alias",
+        description=None,
+        created_by="tester",
+    )
+
+    assert created is False
+    assert candidate.manifest_hash == primary.manifest_hash
+    assert candidate.source_ref["aliases"] == [alias.manifest.source_ref]
+    assert cursor.steps == []
+
+
+def test_evaluation_create_or_get_uses_atomic_unique_insert() -> None:
+    existing = {
+        "eval_id": "hmme_existing",
+        "logical_evaluation_key": "a" * 64,
+        "run_generation": 1,
+        "status": "queued",
+    }
+    repository, cursor = _repository(
+        [
+            {"contains": "ON CONFLICT (logical_evaluation_key, run_generation) DO NOTHING", "one": None},
+            {"contains": "ORDER BY run_generation DESC", "one": existing},
+        ]
+    )
+
+    row, created = repository.create_or_get_evaluation(
+        candidate_id="hmmc_test",
+        logical_evaluation_key="a" * 64,
+        base_loop_ref="qe_task/Loop8",
+        source_manifest={"source": "test"},
+        source_manifest_hash="b" * 64,
+        candidate_manifest_hash="c" * 64,
+        evaluation_spec={"window": "test"},
+        evaluation_spec_hash="d" * 64,
+        evaluator_version="v1",
+        as_of_date=date(2026, 4, 15),
+        window_start=date(2026, 1, 1),
+        window_end=date(2026, 3, 31),
+        label_horizon_days=20,
+        universe_id="prediction_artifact_all",
+        universe_hash="e" * 64,
+        topk=50,
+    )
+
+    assert created is False
+    assert row["eval_id"] == "hmme_existing"
+    assert cursor.steps == []
+
+
+def test_batch_atomic_insert_preserves_idempotency_conflict_semantics() -> None:
+    repository, cursor = _repository(
+        [
+            {"contains": "ON CONFLICT DO NOTHING", "one": None},
+            {
+                "contains": "WHERE idempotency_key = %s",
+                "one": {"batch_id": "hmmb_existing", "request_hash": "f" * 64},
+            },
+        ]
+    )
+
+    with pytest.raises(IdempotencyConflictError, match="different request"):
+        repository.create_or_get_batch(
+            request_hash="a" * 64,
+            items=[
+                {
+                    "candidate_id": "hmmc_test",
+                    "eval_id": "hmme_test",
+                    "item_status": "queued",
+                }
+            ],
+            recommendation_spec={"schema_version": "v1"},
+            recommendation_version="v1",
+            created_by="tester",
+            idempotency_key="same-key",
+        )
+    assert cursor.steps == []
+
+
+def test_recompute_shared_batch_uses_item_truth_and_releases_lease() -> None:
+    repository, cursor = _repository(
+        [
+            {
+                "contains": "WHERE batch_id = %s FOR UPDATE",
+                "one": {"batch_id": "hmmb_shared", "status": "running"},
+            },
+            {
+                "contains": "GROUP BY item_status",
+                "all": [{"item_status": "succeeded", "count": 1}],
+            },
+            {"contains": "AS has_queued_evaluation", "one": {"has_queued_evaluation": False}},
+            {
+                "contains": "UPDATE hmm_evolution.batch_test_run",
+                "one": {"batch_id": "hmmb_shared", "status": "completed", "owner_id": None},
+            },
+        ]
+    )
+
+    batch = repository._recompute_batch_state_with_cursor(
+        cursor,
+        "hmmb_shared",
+        release_lease=True,
+    )
+
+    assert batch["status"] == "completed"
+    update_params = cursor.queries[-1][1]
+    assert update_params[0] == "completed"
+    assert update_params[7:11] == (True, True, True, True)
+
+
+class _EmptyClaimRepository:
+    def __init__(self) -> None:
+        self.release_args: dict[str, Any] | None = None
+
+    def claim_batch(self, **kwargs):
+        return {
+            "batch_id": "hmmb_shared",
+            "fencing_token": 4,
+            "row_version": 9,
+        }
+
+    def claim_evaluation(self, **kwargs):
+        return None
+
+    def release_batch_after_empty_claim(self, **kwargs):
+        self.release_args = kwargs
+        return {"batch_id": kwargs["batch_id"], "status": "running"}
+
+
+class _Executor:
+    def execute_and_finalize(self, **kwargs):  # pragma: no cover - no evaluation exists.
+        raise AssertionError("executor must not run without a claimed evaluation")
+
+
+def test_worker_releases_batch_when_shared_evaluation_is_claimed_elsewhere() -> None:
+    repository = _EmptyClaimRepository()
+    worker = HMMEvolutionWorker(
+        repository,  # type: ignore[arg-type]
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker"),
+        executor=_Executor(),
+    )
+
+    assert worker.run_once() is True
+    assert repository.release_args == {
+        "batch_id": "hmmb_shared",
+        "owner_id": "worker-1",
+        "fencing_token": 4,
+        "expected_row_version": 9,
+    }

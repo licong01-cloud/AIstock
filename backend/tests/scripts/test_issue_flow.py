@@ -468,6 +468,91 @@ def test_pr_check_infers_linkage_from_pr_metadata(
     assert summary["linkage_inference"]["status"] == "inferred"
 
 
+def test_pr_check_merges_feature_pr_body_scope_with_changed_bug_scopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = (
+        tmp_path
+        / "tests"
+        / "aistock_validation"
+        / "bugs"
+        / "20260717_BUG-728-mixed-feature-scope.json"
+    )
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-728",
+                "github_issue_number": 2339,
+                "severity": "P1",
+                "allowed_write_scope": [
+                    "scripts/issue_flow.py",
+                    "tests/aistock_validation/bugs/**",
+                ],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "feat: T3 mixed feature and BUG fixes")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## Design Acceptance Matrix\n"
+        "- F-001: pass\n\n"
+        "## Allowed write scope\n"
+        "- `backend/services/hmm_evolution/**`\n"
+        "- `docs/architecture/hmm_evolution_design.md`\n"
+        "- `../outside`\n"
+        "- `**`\n\n"
+        "## Validation\n"
+        "- pytest -> passed\n\n"
+        "## Production gates\n"
+        "- production_ddl_gate: noop\n"
+        "- production_frontend_dependency_gate: noop\n"
+        "- production_backend_dependency_gate: noop\n"
+        "Closes #2339\n",
+    )
+    monkeypatch.setattr(
+        flow,
+        "_git_output",
+        lambda args, cwd=flow.REPO_ROOT, check=True: (
+            "feature/hmm-evolution" if args[:2] == ["branch", "--show-current"] else ""
+        ),
+    )
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "backend/services/hmm_evolution/repository.py",
+            "--changed-file",
+            "docs/architecture/hmm_evolution_design.md",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260717_BUG-728-mixed-feature-scope.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert summary["scope_check"]["status"] == "passed"
+    assert (
+        summary["scope_check"]["status_source"]
+        == "inferred_from_bug_json_and_pr_body"
+    )
+    assert summary["linkage_inference"]["pr_body_allowed_scope"] == [
+        "backend/services/hmm_evolution/**",
+        "docs/architecture/hmm_evolution_design.md",
+    ]
+    assert summary["p0p1_evidence_gate"]["workflow_gate"] == "passed"
+
+
 def test_pr_check_does_not_use_stale_history_when_diff_log_is_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -309,6 +309,17 @@ rules:
     layer: platform_configuration
     risk_level: high
     ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
+  - rule_id: hmm_evolution_services
+    priority: 90
+    include:
+      - backend/services/hmm_evolution/**
+      - backend/db/init_hmm_evolution_schema.py
+      - backend/tests/hmm_evolution/**
+    primary_module: hmm.evolution
+    impact_modules: [hmm, qe.core]
+    layer: research_data_pipeline
+    risk_level: high
+    ownership_reason: HMM Evolution is an isolated research state machine with explicit read-only QE inputs and a dedicated backend validation plan.
   - rule_id: hmm_services
     priority: 75
     include:

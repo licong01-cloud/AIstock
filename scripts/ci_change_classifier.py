@@ -122,6 +122,7 @@ BACKEND_MATRIX_SESSIONS = (
     "validation_center_backend",
     "qe_data_contract_backend",
     "hmm_data_source_backend",
+    "hmm_evolution_backend",
     "simulation_core_l2",
 )
 BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -130,6 +131,14 @@ BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
     ("qe_data_contract_backend", ("backend/services/quantevolver/**", "backend/routers/quantevolver*.py", "backend/tests/unified_engine/test_qe_*.py")),
     ("hmm_data_source_backend", ("backend/services/hmm_data_source/**", "backend/tests/hmm_data_source/**")),
+    (
+        "hmm_evolution_backend",
+        (
+            "backend/services/hmm_evolution/**",
+            "backend/db/init_hmm_evolution_schema.py",
+            "backend/tests/hmm_evolution/**",
+        ),
+    ),
     ("simulation_core_l2", ("backend/services/simulation_runtime/**", "backend/routers/simulation_runtime.py", "backend/tests/simulation_runtime/**")),
     ("model_registry_backend", ("backend/services/model_registry/**", "backend/routers/model_registry*.py", "backend/tests/model_registry/**", "backend/tests/test_model_registry*.py")),
     ("market_regime_label", ("backend/services/market_regime/**", "backend/routers/market_regime*.py", "backend/tests/market_regime/**", "backend/tests/test_market_regime*.py")),
