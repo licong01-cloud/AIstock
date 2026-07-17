@@ -61,6 +61,14 @@ PASS_STATUS_MARKERS = {
     "通过",
 }
 
+ACTIONABLE_EVIDENCE_RE = re.compile(
+    r"(?:validation-receipt:|(?:python\s+-m\s+)?pytest\b[^\r\n]*(?:backend/tests|frontend/tests|tests)/\S+|"
+    r"(?:python\s+-m\s+)?nox\s+-s\s+\S+|"
+    r"playwright\s+test\s+\S+|go\s+test(?:\s+\S+)?|npm\s+(?:run|exec|test)\s+\S+|"
+    r"(?:backend/tests|frontend/tests|tests)/\S+\.(?:py|ts|tsx|json)|artifact:\s*\S+)",
+    re.IGNORECASE,
+)
+
 REQUIRED_SECTION_GROUPS = {
     "F0": [
         ("feature_card", ("feature card", "功能卡")),
@@ -298,6 +306,11 @@ def _is_approved_status(status: str, gap: str) -> bool:
     return _contains_approved_marker(status) or _contains_approved_marker(gap)
 
 
+def _has_actionable_evidence(value: str) -> bool:
+    normalized = value.replace("`", "").strip()
+    return bool(ACTIONABLE_EVIDENCE_RE.search(normalized))
+
+
 def _line_is_guardrail_statement(line: str) -> bool:
     normalized = _normalize_text(line)
     return any(
@@ -404,6 +417,15 @@ def validate_feature_artifacts(
                         path=str(acceptance_path),
                     )
                 )
+        evidence = row.get("test_or_evidence", "")
+        if not _is_empty_marker(evidence) and not _has_actionable_evidence(evidence):
+            result.findings.append(
+                ValidationFinding(
+                    code="acceptance_evidence_not_verifiable",
+                    message=f"{item} must reference a concrete test command, test path, artifact, or validation receipt.",
+                    path=str(acceptance_path),
+                )
+            )
         status = row.get("status", "")
         gap = row.get("gap_or_exception", "")
         normalized_status = _normalize_text(status)

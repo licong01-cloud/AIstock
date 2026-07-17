@@ -708,10 +708,66 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
     assert "l0" in ready["required_verification"]
+    assert ready["validation_receipts"][0]["schema_version"] == "aistock_validation_receipt_v1"
+    assert ready["validation_receipts"][0]["evidence_kind"] == "nox"
+    assert ready["validation_receipts"][0]["plan"] == "l0"
+    assert len(ready["validation_receipts"][0]["receipt_id"]) == 16
     assert "artifact_metrics" not in ready
     assert ready["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
     assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_rejects_unstructured_or_failed_validation_evidence(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+
+    for evidence in [
+        "arbitrary-text",
+        "custom validator -> passed",
+        "python -m pytest -> passed",
+        "python -m nox -s l0 -> failed",
+    ]:
+        assert workflow.main([
+            "finish",
+            "--issue-json",
+            str(issue),
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            "--validation-evidence",
+            evidence,
+        ]) == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["workflow_gate"] == "blocked"
+        assert payload["closure_ready"] is False
+        assert payload["validation_receipts"] == []
+        assert payload["validation_evidence_errors"]
+
+
+def test_validation_receipt_binds_allowlisted_command_to_current_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "abcdef1234567890abcdef1234567890abcdef12")
+
+    receipts, errors = workflow._build_validation_receipts(
+        ["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 30 passed"],
+        root=isolated_workflow_root,
+    )
+
+    assert errors == []
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert receipt["schema_version"] == "aistock_validation_receipt_v1"
+    assert receipt["commit"] == "abcdef1234567890abcdef1234567890abcdef12"
+    assert receipt["command"] == "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q"
+    assert receipt["result"] == "30 passed"
+    assert receipt["status"] == "passed"
+    assert receipt["evidence_kind"] == "pytest"
+    assert receipt["plan"] is None
+    assert len(receipt["receipt_id"]) == 16
 
 
 def test_finish_plan_only_can_draft_pr_body_without_evidence(

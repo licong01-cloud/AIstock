@@ -39,8 +39,8 @@ VALID_F0_CARD = """
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | scripts/aistock_feature_workflow.py | pytest targeted test | verified | - |
-| F-002 | backend/tests/scripts/test_aistock_feature_workflow.py | pytest targeted test | done | - |
+| F-001 | scripts/aistock_feature_workflow.py | python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q | verified | - |
+| F-002 | backend/tests/scripts/test_aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | done | - |
 
 ## Verification
 
@@ -85,8 +85,8 @@ Feature delivery needs a design-based check.
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | scripts/aistock_feature_workflow.py | unit test | verified | - |
-| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |
+| F-001 | scripts/aistock_feature_workflow.py | python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q | verified | - |
+| F-002 | scripts/aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | completed | - |
 
 ## Risks
 
@@ -137,7 +137,7 @@ Cross-module features need stronger review.
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | scripts/aistock_feature_workflow.py | pytest | pass | - |
+| F-001 | scripts/aistock_feature_workflow.py | python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q | pass | - |
 
 ## Rollout / Rollback
 
@@ -197,8 +197,8 @@ def test_acceptance_matrix_with_unapproved_gap_fails(tmp_path: Path) -> None:
     design = _write(
         tmp_path / "gap.md",
         VALID_F1_DOC.replace(
-            "| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |",
-            "| F-002 | scripts/aistock_feature_workflow.py | unit test | partial | follow later |",
+            "| F-002 | scripts/aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | completed | - |",
+            "| F-002 | scripts/aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | partial | follow later |",
         ),
     )
 
@@ -214,14 +214,46 @@ def test_user_approved_deviation_is_allowed(tmp_path: Path) -> None:
     design = _write(
         tmp_path / "approved_gap.md",
         VALID_F1_DOC.replace(
-            "| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |",
-            "| F-002 | scripts/aistock_feature_workflow.py | unit test | approved_by_user | user approved deviation: deferred by scope |",
+            "| F-002 | scripts/aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | completed | - |",
+            "| F-002 | scripts/aistock_feature_workflow.py | backend/tests/scripts/test_aistock_feature_workflow.py | approved_by_user | user approved deviation: deferred by scope |",
         ),
     )
 
     result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
 
     assert result.ok
+
+
+def test_acceptance_matrix_rejects_generic_evidence_text(tmp_path: Path) -> None:
+    workflow = _load_module()
+    design = _write(
+        tmp_path / "generic_evidence.md",
+        VALID_F1_DOC.replace(
+            "python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q",
+            "unit test",
+        ),
+    )
+
+    result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
+
+    assert not result.ok
+    assert any(finding.code == "acceptance_evidence_not_verifiable" for finding in result.findings)
+
+
+def test_acceptance_matrix_rejects_production_source_as_test_evidence(tmp_path: Path) -> None:
+    workflow = _load_module()
+    design = _write(
+        tmp_path / "source_only_evidence.md",
+        VALID_F1_DOC.replace(
+            "python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q",
+            "backend/services/validation/plan_catalog.py",
+        ),
+    )
+
+    result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
+
+    assert not result.ok
+    assert any(finding.code == "acceptance_evidence_not_verifiable" for finding in result.findings)
 
 
 def test_simplified_or_mock_only_completion_language_fails(tmp_path: Path) -> None:
@@ -303,7 +335,7 @@ def test_feature_entrypoint_prompts_keep_non_feature_tasks_off_feature_lane() ->
         encoding="utf-8"
     )
 
-    assert "confirmed as real feature delivery" in fix_command
-    assert "workflow policy, docs, audit, cleanup, or analysis" in fix_command
+    assert "only for AIstock BUG/GitHub Issue work" in fix_command
+    assert "Use docs, feature, read-only, merge-aftercare, or validation-delegation commands" in fix_command
     assert "Use this skill only for confirmed AIstock feature delivery" in feature_agent
     assert "BUG fixes, workflow policy work, docs cleanup, audits, or generic analysis" in feature_agent

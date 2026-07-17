@@ -24,6 +24,25 @@ MODULE_REGISTRY = CATALOG_ROOT / "module_registry.yaml"
 FILE_OWNERSHIP = CATALOG_ROOT / "file_ownership.yaml"
 TEST_PLANS = CATALOG_ROOT / "test_plans.yaml"
 PR_COMMENT_MAX_CHARS = 55000
+VALIDATION_RECEIPT_RE = re.compile(
+    r"validation-receipt:\s+id=[0-9a-f]{16}\s+commit=[0-9a-f]{7,40}\s+"
+    r"kind=[a-z0-9_-]+\s+plan=[a-z0-9_.-]+\s+status=passed\s+"
+    r"command=`[^`\r\n]+`\s+result=`[^`\r\n]+`",
+    re.IGNORECASE,
+)
+VALIDATION_RECEIPT_KINDS = {
+    "compile",
+    "diff_check",
+    "feature_validation",
+    "frontend",
+    "go",
+    "nox",
+    "pytest",
+    "ruff",
+    "workflow_smoke",
+}
+VALIDATION_RECEIPT_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
+VALIDATION_RECEIPT_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 TIER_COMPLEXITY_THRESHOLDS = {
     "changed_files_t2": 8,
     "changed_files_t3": 20,
@@ -91,6 +110,22 @@ ISSUE_FORM_LABEL_ALIASES = {
 
 class IssueFlowError(ValueError):
     """Raised when issue-flow input cannot satisfy AIstock workflow contracts."""
+
+
+def _has_validation_receipt(value: Any) -> bool:
+    if isinstance(value, dict):
+        result = str(value.get("result") or "")
+        return (
+            value.get("schema_version") == "aistock_validation_receipt_v1"
+            and value.get("status") == "passed"
+            and bool(re.fullmatch(r"[0-9a-f]{16}", str(value.get("receipt_id") or ""), re.IGNORECASE))
+            and bool(re.fullmatch(r"[0-9a-f]{7,40}", str(value.get("commit") or ""), re.IGNORECASE))
+            and str(value.get("evidence_kind") or "") in VALIDATION_RECEIPT_KINDS
+            and bool(str(value.get("command") or "").strip())
+            and bool(VALIDATION_RECEIPT_PASS_RE.search(result))
+            and not VALIDATION_RECEIPT_FAIL_RE.search(result)
+        )
+    return bool(VALIDATION_RECEIPT_RE.search(str(value or "")))
 
 
 def _utc_now() -> str:
@@ -1171,10 +1206,12 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "severity_signals": _unique_strings(bug_record_severity_signals + pr_text_severity_signals),
         "bug_record_severity_signals": bug_record_severity_signals,
         "pr_text_severity_signals": pr_text_severity_signals,
-        "pr_body_validation_evidence": bool(
-            re.search(r"(validation evidence|validation_evidence|nox|pytest|passed|success)", pr_body, flags=re.IGNORECASE)
+        "pr_body_validation_evidence": _has_validation_receipt(pr_body),
+        "bug_record_validation_evidence": any(
+            any(_has_validation_receipt(item) for item in _as_list(record.get("validation_receipts")))
+            or any(_has_validation_receipt(item) for item in _as_list(record.get("validation_evidence")))
+            for record in bug_records
         ),
-        "bug_record_validation_evidence": any(bool(_as_list(record.get("validation_evidence"))) for record in bug_records),
         "pr_body_production_gates": all(key in pr_body for key in production_gate_keys),
         "bug_record_production_gates": any(all(record.get(key) for key in production_gate_keys) for record in bug_records),
         "task_tier_signals": _infer_task_tiers_from_text(branch, commit_subjects, pr_title, pr_body),
