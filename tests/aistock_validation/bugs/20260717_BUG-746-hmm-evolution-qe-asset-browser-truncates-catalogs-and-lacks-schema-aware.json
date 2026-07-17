@@ -5,6 +5,8 @@
     "frontend/src/components/hmm-evolution/QEAssetBrowser.tsx",
     "frontend/src/lib/hmm-evolution/api.ts",
     "frontend/src/lib/hmm-evolution/types.ts",
+    "frontend/src/lib/hmm-research/contracts.ts",
+    "frontend/src/components/hmm-research/hmm-research.module.css",
     "frontend/tests/hmm-evolution",
     "backend/routers/hmm_evolution.py",
     "backend/tests/hmm_evolution",

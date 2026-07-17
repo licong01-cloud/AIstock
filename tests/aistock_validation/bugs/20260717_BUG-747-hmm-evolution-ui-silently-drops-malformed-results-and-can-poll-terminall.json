@@ -7,6 +7,8 @@
     "frontend/src/components/hmm-evolution/DailyMetricChart.tsx",
     "frontend/src/lib/hmm-evolution/api.ts",
     "frontend/src/lib/hmm-evolution/types.ts",
+    "frontend/src/lib/hmm-research/contracts.ts",
+    "frontend/src/components/hmm-research/hmm-research.module.css",
     "frontend/tests/hmm-evolution",
     "frontend/src/app/hmm-evolution/hmm-evolution.css",
     "tests/aistock_validation/bugs/20260717_BUG-747-hmm-evolution-ui-silently-drops-malformed-results-and-can-poll-terminall.json",
