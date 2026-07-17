@@ -8837,6 +8837,28 @@ def test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices() -> None:
     assert exc_info.value.context["reason_code"] == "LOCALSIM_MARK_PROVIDER_UNAVAILABLE"
 
 
+def test_scheduler_previous_localsim_marks_distinguishes_missing_from_malformed_outbox() -> None:
+    missing = SimpleNamespace(run_id="run_marks_missing", run_payload_json={})
+    assert SimulationLifecycleScheduler._previous_local_sim_mark_records(missing) == {}
+
+    malformed_payloads = [
+        {"local_sim_projection_outbox_v1": "invalid"},
+        {"local_sim_projection_outbox_v1": {"projection_payload": "invalid"}},
+        {"local_sim_projection_outbox_v1": {"projection_payload": {"marks": "invalid"}}},
+    ]
+    expected_layers = [
+        "local_sim_projection_outbox_v1",
+        "projection_payload",
+        "marks",
+    ]
+    for payload, expected_layer in zip(malformed_payloads, expected_layers, strict=True):
+        run = SimpleNamespace(run_id=f"run_marks_{expected_layer}", run_payload_json=payload)
+        with pytest.raises(DataUnavailableError) as exc_info:
+            SimulationLifecycleScheduler._previous_local_sim_mark_records(run)
+        assert exc_info.value.context["reason_code"] == "LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID"
+        assert exc_info.value.context["layer"] == expected_layer
+
+
 def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance() -> None:
     release, _, _, _ = _release_and_bindings(qmt_only=False)
     position = PositionLot(
@@ -8916,6 +8938,17 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
     assert suspended.as_of_time == datetime(2026, 5, 20, 15, 0)
     assert suspended.source == "test.previous_close"
     assert suspended.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        broker.load_authoritative_position_marks(
+            symbols=(position.symbol,),
+            trade_date=TRADE_DATE,
+            as_of_time=as_of_time,
+            pre_trade_tradability={
+                position.symbol: {"suspend_status": {"is_suspended": "true"}}
+            },
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID"
 
 
 def test_scheduler_localsim_economic_transaction_rolls_back_both_repositories() -> None:

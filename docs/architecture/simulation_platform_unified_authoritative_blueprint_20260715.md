@@ -293,7 +293,9 @@ snapshot_id/hash = sha256(
 )
 ```
 
-同一 cadence 内每个 unique symbol 只允许调用 provider 和完整 stream validation 一次；所有 intent、execution state 和 position mark 必须复用这份 snapshot。下一 cadence 使用新的 `as_of_time` 生成新 snapshot 并一次性加载全部 active symbols，不能永久复用旧 bars，也不能因为逐 intent 懒加载而重复读取前序 symbol。snapshot 的 `market_inputs` 与 `errors` 必须互斥且覆盖请求 symbol；identity/hash/readback 不一致 typed failure。
+同一 cadence 内每个 unique symbol 只允许调用 provider 和完整 stream validation 一次；所有 intent、execution state 和 position mark 必须复用这份 snapshot。cadence 开始时必须冻结完整 symbol 集合：全部 active execution symbols 与 passive held-position symbols 的并集。下一 cadence 使用新的 `as_of_time` 生成新 snapshot 并一次性加载该并集，不能永久复用旧 bars，也不能因为逐 intent/逐 mark 懒加载而重复读取前序 symbol。相同 `trade_date + as_of_time` 的 snapshot 不允许动态扩容；请求未覆盖 symbol 必须以 `LOCALSIM_MARKET_SNAPSHOT_SYMBOL_MISSING` fail loud，不能重新抓取并悄悄改写 snapshot。snapshot 的 `market_inputs` 与 `errors` 必须互斥且覆盖冻结集合；identity/hash/readback 不一致 typed failure。
+
+`LocalSimMarketSnapshotV1` 的 hash 输入只允许 canonical JSON-like 类型：string-key mapping、list/tuple、string、boolean、integer、finite float、finite `Decimal`、date/datetime、enum 和 null。禁止 `default=str`、set、任意 object、NaN/Infinity、非字符串 key 或依赖对象 `repr` 的 hash；相同语义但 key 插入顺序不同必须得到相同 `snapshot_id/hash`。`suspend_status.is_suspended` 必须是 canonical boolean；字符串、数字、truthy alias 或 malformed object 都是 typed schema failure，不得转真/转假。
 
 校验所有权与频率固定如下：
 
@@ -320,9 +322,13 @@ Selection/Target 构建 LocalSIM broker-neutral plan 时不得消费 same-day qu
 
 当前时点 bars 用尽、只有部分成交、只有 order 没有 fill/cash、或写入了部分表，都不得返回成功。
 
-`WAITING_FOR_MARKET_DATA`、`WAITING_FOR_CAPITAL` 和 `WAITING_FOR_CAUSAL_BAR` 都是非终态；只要任一 state 仍处于这些状态，run 必须保持 `INTRADAY_RUNNING`。`FAILED_TERMINAL` 仅用于确定性、不可重试的 symbol-level 数据完整性冲突，并必须形成 `local_sim_terminal_failure_v1`。资金不足不得转换成 `BrokerRejectedError` 后整批回滚：可负担数量按权威 ledger/fee model 成交，未负担数量保留在 state/order 的 `local_sim_capital_dependency_order_v1`；后续卖出 cash entry 到达自动继续。只有完整收盘 policy 后仍未完成，或历史闭日 broker execution 已穷尽全部权威分钟/现金事实，才形成 `localsim_historical_residual_v1`；纯资金残差使用 `PERSISTED_WITH_CAPACITY_RESIDUAL`，其它历史/收盘 schedule 残差使用 `PERSISTED_WITH_RESIDUAL`，且不得沿用 `CAPACITY_RESIDUAL_SKIPPED` 或“计划期跳单”语义。
+`WAITING_FOR_MARKET_DATA`、`WAITING_FOR_MARKET_STATE`、`WAITING_FOR_CAPITAL` 和 `WAITING_FOR_CAUSAL_BAR` 都是非终态；只要任一 state 仍处于这些状态，run 必须保持 `INTRADAY_RUNNING`。权威 `suspend_status.is_suspended=true` 且当日不存在分钟 bar 时，盘中使用 `WAITING_FOR_MARKET_STATE / LOCALSIM_SUSPENDED_NO_BAR`，不得伪造 0-volume bar、拒单或报 `LOCALSIM_CLOSE_BAR_MISSING`；15:00 后以 `EXPIRED_WITH_RESIDUAL / MARKET_SESSION_CLOSED_SUSPENDED / SUSPENDED_AT_CLOSE` 显式终结剩余数量。非停牌且 closing bar 缺失仍必须 `LOCALSIM_CLOSE_BAR_MISSING` fail loud。`FAILED_TERMINAL` 仅用于确定性、不可重试的 symbol-level 数据完整性冲突，并必须形成 `local_sim_terminal_failure_v1`。资金不足不得转换成 `BrokerRejectedError` 后整批回滚：可负担数量按权威 ledger/fee model 成交，未负担数量保留在 state/order 的 `local_sim_capital_dependency_order_v1`；后续卖出 cash entry 到达自动继续。SELL 仍先于 BUY；同一 side 内必须严格保持 frozen `ExecutionPlan.intents` 的相对顺序，重启恢复也按 plan 顺序重建 broker records，不能按 symbol/intent_id 字典序改写资金竞争结果。只有完整收盘 policy 后仍未完成，或历史闭日 broker execution 已穷尽全部权威分钟/现金事实，才形成 `localsim_historical_residual_v1`；纯资金残差使用 `PERSISTED_WITH_CAPACITY_RESIDUAL`，其它历史/收盘 schedule 残差使用 `PERSISTED_WITH_RESIDUAL`，且不得沿用 `CAPACITY_RESIDUAL_SKIPPED` 或“计划期跳单”语义。
 
 Trading Core 已验证的 order quantity 是板块手数权威。symbol-aware 分钟算法和 participation sizing 必须调用统一 board-lot rule；不得把科创板合法 `>=200` 且按 1 股递增的数量、创业板/主板整手或合法 SELL residual 再按硬编码 100 股改写。算法若改变已验证 order total，必须 fail loud；正确实现应在 core 中生成合法 child quantity，而不是在 LocalSIM adapter 静默截断 target。
+
+legacy runner 的 run-level 状态不能把非终态 order 包装成成功。只要任一 handle 为 `pending` 或 `partial_filled`，必须返回 `terminal=false`、列出 `pending_handle_ids` 并写 `paper.daemon.run_pending`；只有全部 handle terminal 且所有 intent 已完成处理时才写 `paper.daemon.run_completed`。pending 不是 failure，也不是 completed，不新增人工确认或恢复门禁。
+
+VWAP 必须消费显式、非空、finite、非负且总和大于零的 authoritative `volume_profile`；profile 缺失、为空、类型非法、含负值/NaN/Infinity、总和为零或在 remaining quantity 完成前耗尽，统一通过 `ExecutionAlgoError` 携带 `VWAP_VOLUME_PROFILE_INVALID`、algo/order/symbol/bar context fail loud。禁止退化为“第一根 bar 全量成交”、TWAP、均匀拆分或其它默认业务 fallback；在真实 profile 接入前，显式选择 VWAP 的 LocalSIM run 必须拒绝该 order 并保留完整 cause context。
 
 ### 5.5 LocalSIM transaction/outbox contract
 
@@ -362,6 +368,8 @@ P0-B 的现行持久化 schema 固定为：
 `reference_price`、`limit_price`、order price、fill-independent plan price 不能作为 position mark fallback。
 
 持久化 mark 使用 `LocalSimMarketMarkV1`，必须带 `source`、实际行情 `as_of_time`、`provenance` 和 `mark_hash`。支持的 provenance 为 `REALTIME_MINUTE_CLOSE`、`HISTORICAL_MINUTE_CLOSE`、`SUSPENDED_PREV_CLOSE`；非有限值、非正值、未知 source、晚于 account snapshot 的 mark 或无法由上一交易日 close 证明的停牌价格均 typed failure。scheduler 只能调用 LocalSIM broker 的 `load_authoritative_position_marks`，由 broker 从本次执行使用的同一 `PaperV2MinuteMarketDataProvider` 读取截至 snapshot time 的最后一个真实分钟 close；停牌时必须调用 authoritative `PreviousCloseProvider`。通用 `current_prices`、`price_by_symbol` 仅用于 target/order 构建，不得转译成 position mark 或伪造 provenance。
+
+当 realtime source 发生已注册的 transient failure 且存在同交易日、同 symbol/source/provenance、时间不晚于 snapshot 的前一 durable mark 时，可以复用其价格，但必须生成新的 mark hash，并完整记录 `reuse_reason_code=LOCALSIM_REALTIME_MARK_REUSED_AFTER_TRANSIENT_SOURCE_FAILURE`、`source_error_reason_code` 与 `reused_from_mark_hash`；不得原样返回旧 mark 造成无痕 fallback。`local_sim_projection_outbox_v1` 完全缺失表示尚无 previous marks；一旦 key 存在，其 outbox、`projection_payload`、`marks` 任何层级 malformed 都必须 `LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID`，不得当作空 marks 静默继续。
 
 ### 5.7 MiniQMT control assignment contract
 
@@ -737,15 +745,15 @@ operator runbook 与同一 schema/阈值/reason 对齐；source/CI/merge、depen
 - `BUG-706`：MiniQMT `openInt/open_interest` 缺失不再阻断普通股票 quote；字段存在但未知/冲突仍 fail loud；
 - `BUG-707`：calendar/symbol authority 等价 refresh 复用原 context 与 generation，仅 timestamp/load-time 变化不再制造 context drift；
 - `BUG-709`：zero-price/zero-quantity 五档占位规范为空档，BUY/SELL 分别按 ask/bid 对手盘判定，非法零价正量仍拒绝；
-- `BUG-711`：LocalSIM plan 不再用 transient same-day quote 删除 intent；运行时由 `WAITING_FOR_MARKET_DATA`/market-state 接管；
+- `BUG-711`：LocalSIM plan 不再用 transient same-day quote 删除 intent；运行时由 `WAITING_FOR_MARKET_DATA`/`WAITING_FOR_MARKET_STATE` 接管；停牌无 bar 盘中等待、收盘形成 `SUSPENDED_AT_CLOSE` residual，非停牌缺 close bar 继续 fail loud；
 - `BUG-712`：单 symbol provider/integrity failure 不回滚健康 symbol，确定性冲突形成 symbol-level terminal fact；
-- `BUG-714`：每 cadence 生成一个 `LocalSimMarketSnapshotV1`，每 unique symbol provider/stream validation 一次，intent 与 mark 共用，下一 cadence 刷新；
-- `BUG-715`：计划保留全部 BUY，SELL-first 后依据 authoritative ledger cash 部分成交或 `WAITING_FOR_CAPITAL`，卖出回款后自动恢复；历史闭日仅以 broker cash-fit 形成显式 residual；
-- `BUG-717`：symbol-aware 分钟算法和 participation cap 使用统一 board-lot authority，不再把合法科创板 201 股改写为 200。
+- `BUG-714`：每 cadence 生成一个 `LocalSimMarketSnapshotV1`，冻结 active execution + passive position symbol 并集，每 unique symbol provider/stream validation 一次，intent 与 mark 共用且禁止 same-cadence lazy expansion；hash 只接受严格 canonical/finite schema；malformed previous outbox fail loud，transient mark reuse 写完整原因与 lineage；
+- `BUG-715`：计划保留全部 BUY，SELL-first 后依据 authoritative ledger cash 部分成交或 `WAITING_FOR_CAPITAL`，卖出回款后自动恢复；同 side 保持 plan 相对顺序且恢复不按字典序重排；历史闭日仅以 broker cash-fit 形成显式 residual；legacy runner 对 pending/partial handle 写 `RUN_PENDING`，不再伪报 `RUN_COMPLETED`；
+- `BUG-717`：symbol-aware 分钟算法和 participation cap 使用统一 board-lot authority，不再把合法科创板 201 股改写为 200；VWAP 缺失 authoritative volume profile 时 typed fail loud，禁止第一 bar 全量成交 fallback。
 
 本批次不执行 DDL/DML/config，不调用生产 broker，不重启服务。source implementation、PR/CI/merge、用户重启和正常交易日 LocalSIM/MiniQMT readback继续独立记录；任何 direct test 通过都不冒充 runtime activated。
 
-最终合并 direct matrix 覆盖 MiniQMT 三文件、LocalSIM broker 全文件、Trading Core minute/V25 契约及 13 个 scheduler fix-point，共 `169 passed`；Ruff、`git diff --check`、F2 validator、`l0`、`validation_module_registry_l0` 均通过。广泛 `paper_v2_backend` 与跨模块 business-flow 由 PR CI/Validation Center/nightly 按任务卡委派执行。
+原批次 direct matrix 覆盖 MiniQMT 三文件、LocalSIM broker 全文件、Trading Core minute/V25 契约及 13 个 scheduler fix-point，共 `169 passed`。严格复核补充修复后的最终本地 related matrix 为 `107 passed`，并在 mark reuse schema 最终收紧后重跑对应 nodeid `1 passed`；覆盖 LocalSIM broker、Trading Core minute、daemon lifecycle/outbox 及 scheduler mark/cash fix-point。Ruff、`git diff --check`、F2 validator 33/33、`l0`、`validation_module_registry_l0` 已重新通过。广泛 `paper_v2_backend`、simulation/MiniQMT 与跨模块 business-flow 由 PR CI/Validation Center/nightly 按任务卡委派执行。
 
 ### P1-A：Phase 0B B0 baseline observation
 
@@ -763,9 +771,11 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - frozen release/binding/hash 和 unchanged manifest roll-forward；
 - LocalSIM minute state、duplicate/out-of-order/cross-day bars；
 - 240-minute schedule、partial fill、停牌/涨跌停、odd lot/T+1；
-- LocalSIM transient quote 不删 intent、per-symbol failure isolation、每 cadence 每 symbol 一次 snapshot/validation/mark reuse；
-- LocalSIM SELL-first、BUY `WAITING_FOR_CAPITAL`、卖出回款自动续跑、历史 cash residual terminalization；
-- 主板/创业板/科创板与 SELL residual 的算法 init、child fill、participation board-lot 一致性；
+- LocalSIM transient quote 不删 intent、停牌无 bar 的等待/收盘 residual、非停牌 close-bar missing fail-loud、per-symbol failure isolation；
+- 每 cadence active+position symbol 并集只读一次、same-cadence missing-symbol 不 refetch、snapshot canonical hash/unsupported/non-finite 反例、mark reuse lineage 与 malformed outbox 反例；
+- LocalSIM SELL-first、同 side plan-relative order、restart restore order、BUY `WAITING_FOR_CAPITAL`、卖出回款自动续跑、历史 cash residual terminalization；
+- legacy runner `RUN_PENDING`/`RUN_COMPLETED` 互斥及 pending handle identity；
+- 主板/创业板/科创板与 SELL residual 的 TWAP/VWAP/AC/POV/SBB/V24/V25 init、child fill、participation board-lot 一致性；VWAP missing/invalid/exhausted profile typed failure和 valid profile 正路径；
 - MiniQMT real tick projection、B0_V2 revision、no minute synthesis；
 - MiniQMT openInt missing/present-invalid、等价 authority refresh generation、zero placeholder/单边盘口正反路径；
 - strict invalid count/time/price/error contract。
@@ -878,9 +888,9 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-028` | MiniQMT 零价零量盘口占位规范为空档，交易方向仅消费真实对手盘且不合成深度 |
 | `F-029` | LocalSIM transient quote/market state 不作为 broker-neutral intent admission gate |
 | `F-030` | LocalSIM 单 symbol 数据故障隔离，健康 symbol 继续且完整性冲突显式终态 |
-| `F-031` | LocalSIM 每 cadence 每 unique symbol 一次 immutable market snapshot/validation，并由 execution/mark 共用 |
-| `F-032` | LocalSIM dependent BUY 保留、等待真实卖出回款并自动恢复，残差只在权威终结点形成 |
-| `F-033` | symbol-aware 分钟算法与 participation 使用统一板块手数 authority，不硬编码 100 股改写合法订单 |
+| `F-031` | LocalSIM 每 cadence 冻结 active execution + passive position symbol 并集；每 unique symbol 一次 immutable snapshot/validation，execution/mark 共用且禁止 lazy expansion；hash/schema/previous outbox/mark reuse evidence fail loud |
+| `F-032` | LocalSIM dependent BUY 保留、等待真实卖出回款并自动恢复；SELL-first 且同 side 保持 plan/restart 相对顺序；pending runner 不得伪报 completed；停牌/普通 residual 只在权威终结点形成 |
+| `F-033` | symbol-aware 分钟算法与 participation 使用统一板块手数 authority，不硬编码 100 股改写合法订单；VWAP 无 authoritative profile 不得降级为全量或其它算法 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -900,7 +910,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-012` | §5.4 terminal contract | unclosed intent/residual negative tests | design_ready | none |
 | `F-013` | §5.5；`PaperTradingV2Repository.local_sim_economic_transaction`；`SimulationRuntimeRepository.stage_local_sim_economic_commit` | PostgreSQL single-connection commit/rollback、InMemory cross-repository rollback、economic receipt/state/outbox readback tests | implemented_verified | none |
 | `F-014` | §5.2、§5.5；`LocalSimEconomicReceiptV1`、`LocalSimProjectionOutboxV1`、`LocalSimProjectionReceiptV1` | same-bar restart dedupe、CAS、connection retry max-3、business-conflict terminal、projection readback recovery、tamper/schema fail-loud tests | implemented_verified | none |
-| `F-015` | §5.6；`LocalSimMarketMarkV1`；`LocalSimBackend.load_authoritative_position_marks`；`_local_sim_position_marks` | generic price/plan fallback rejection、realtime/historical/suspended as-of/source/provenance/hash validation tests | implemented_verified | none |
+| `F-015` | §5.6；`LocalSimMarketMarkV1`；`LocalSimBackend.load_authoritative_position_marks`；`_local_sim_position_marks` | generic price/plan fallback rejection、realtime/historical/suspended as-of/source/provenance/hash、transient reuse reason/lineage/new-hash、malformed previous outbox fail-loud tests | implemented_verified | none |
 | `F-016` | §4.4、§5.8；`B0QuoteV2ControllerFactory.prepare_assignment_transition` | real `WHOLE_QUOTE_CALLBACK` scheduler integration、empty/non-empty assignment transition、route owner tests | implemented_verified | explicitly approved production-state separation：正常交易日 production runtime evidence 仍按 `F-024` 单独记录；不表示 source 未完成或 runtime 已激活 |
 | `F-017` | §5.7、§9 P0-C；`RebalanceIntentService`、`ExecutionPlanCompiler`、`PaperTradingV2Service.create_live_approval_candidate` | frozen target/dropped-position reference identity、new/live-candidate binding、new parent、no LEGACY fallback tests | implemented_verified | explicitly approved production-state separation：production binding migration DML 尚未执行；不表示 source 未完成或 migration 已执行 |
 | `F-018` | §6.2、§6.4..6.9 migration sequence；`MiniQMTRouteMigrationService` | active parent/child/open-order/conflict/overflow zero-write、transaction/rollback/retry/readback/idempotency tests | implemented_verified | explicitly approved production-state separation：operator 仅完成 source；production dry-run/apply/readback 尚未执行 |
@@ -916,15 +926,15 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-028` | §4.4 directional depth；`quote_normalizer.py` | zero/zero empty、zero/positive invalid、BUY ask-only/SELL bid-only direct tests | implemented_verified | none |
 | `F-029` | §4.3、§5.3 validation ownership；scheduler broker-neutral planning | transient quote blocked holding retains SELL intent and no pre-trade deletion direct test | implemented_verified | none |
 | `F-030` | §4.3 symbol isolation；`LocalSimExecutionStateV1` | unavailable symbol waits while healthy symbol fills；payload conflict terminalizes only affected state | implemented_verified | none |
-| `F-031` | §5.3 `LocalSimMarketSnapshotV1`；LocalSim broker snapshot builder | bind/tick provider call count、same-snapshot mark reuse、next-cadence refresh direct tests | implemented_verified | none |
-| `F-032` | §4.3、§5.4 capital dependency；LocalSim ledger cash-fit | realtime partial/wait/resume、historical sell-funded completion、explicit close/historical residual direct tests | implemented_verified | none |
-| `F-033` | §5.4 Trading Core board-lot authority；execution algos/minute engine | STAR 201 TWAP and participation cap、LocalSIM historical plan execution direct tests | implemented_verified | none |
+| `F-031` | §5.3 `LocalSimMarketSnapshotV1`；LocalSim broker snapshot builder；§5.6 mark/outbox | active+passive symbol cadence call count、same-snapshot mark reuse、next-cadence refresh、same-cadence no-expansion/no-refetch、canonical hash order stability、unsupported/non-finite schema、reuse lineage、malformed outbox direct tests | implemented_verified | none |
+| `F-032` | §4.3、§5.4 capital dependency/terminal/runner；LocalSim ledger cash-fit | realtime partial/wait/resume、plan-relative BUY cash competition、restore order、suspended no-bar wait/close residual、non-suspended missing-close negative、historical sell-funded/residual、RUN_PENDING-not-completed direct tests | implemented_verified | none |
+| `F-033` | §5.4 Trading Core board-lot/VWAP authority；execution algos/minute engine | main-board/STAR TWAP/VWAP/AC/POV/SBB init、STAR 201 TWAP and participation cap、V24 unavailable asset fail-loud、VWAP missing/invalid profile negative and valid profile、LocalSIM no-profile rejection direct tests | implemented_verified | none |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
 状态枚举：`IMPLEMENTED_VERIFIED`、`REPAIR_REQUIRED`、`EVIDENCE_REFRESH_REQUIRED`、`DESIGN_ONLY`、`HISTORICAL_RETIRED`。本表记录当前摘要；详细历史以 Git/PR/BUG/CI 为准。
 
-| Progress ID | Acceptance IDs | Current state after this PR（base `origin/main@1f4f7461`） | Evidence | Status | Next implementation slice |
+| Progress ID | Acceptance IDs | Current state after this PR（base `origin/main@99f1899c`） | Evidence | Status | Next implementation slice |
 | --- | --- | --- | --- | --- | --- |
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
@@ -961,11 +971,11 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-033` | `F-026,024` | BUG-706 已将 MiniQMT openInt 收敛为 optional cross-evidence；缺失不再拒绝普通股票 quote，已提供未知值仍明确 invalid | BUG-706 / issue #2307；MiniQMT 三文件 direct matrix 73 passed；Ruff/F2/L0/registry/diff-check pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；合入和重启后再观察真实 quote |
 | `SIM-P-034` | `F-027,024` | BUG-707 已使等价 calendar/symbol authority refresh 复用原 context/generation，仅 observation timestamp 变化不再制造漂移 | BUG-707 / issue #2308；MiniQMT 三文件 direct matrix 73 passed；Ruff/F2/L0/registry/diff-check pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；正常交易时段只读观察 generation 稳定性 |
 | `SIM-P-035` | `F-028,024` | BUG-709 已把 exact zero-price/zero-quantity 深度规范为空档，保留 zero-price/positive-quantity invalid，并按 BUY ask/SELL bid 方向判定 | BUG-709 / issue #2311；MiniQMT 三文件 direct matrix 73 passed；Ruff/F2/L0/registry/diff-check pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；正常交易时段观察真实单边盘口 |
-| `SIM-P-036` | `F-029,024` | BUG-711 已删除 LocalSIM plan 阶段 transient quote intent gate；broker-neutral intent 保留，动态 market state 由执行 cadence 处理 | BUG-711 / issue #2313；最终合并 direct matrix 169 passed；Ruff/F2/L0/registry/diff-check pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；重启后核对当日 plan/intents 不再被 quote 删除 |
-| `SIM-P-037` | `F-030,024` | BUG-712 已把 LocalSIM provider/stream failure 隔离到 symbol state；健康 symbol 继续，确定性 payload conflict 形成 `FAILED_TERMINAL` order/state/event | BUG-712 / issue #2314；最终合并 direct matrix 169 passed；Ruff/F2/L0/registry/diff-check pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；重启后核对多 symbol run 隔离事实 |
-| `SIM-P-038` | `F-031,024` | BUG-714 已建立 immutable `LocalSimMarketSnapshotV1`；每 cadence 每 unique symbol provider/stream validation 一次，intent/mark 共用，下一 cadence 刷新 | BUG-714 / issue #2316；最终合并 direct matrix 169 passed，含 nested freeze/hash/cadence call count；Ruff/F2/L0/registry pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；重启后核对 provider cadence 与 bar 推进 |
-| `SIM-P-039` | `F-032,024` | BUG-715 已保留全部 BUY，SELL-first 后按 ledger cash 部分成交或等待卖出回款；实时自动续跑，历史任意未完成 order 形成分类 residual，旧 plan skip/partial false-success route 已删除 | BUG-715 / issue #2317；最终合并 direct matrix 169 passed；广泛 `paper_v2_backend` 委派 PR CI/Validation Center/nightly | IMPLEMENTED_VERIFIED | 创建 PR/CI；重启后核对 WAITING_FOR_CAPITAL/自动恢复/收盘 residual |
-| `SIM-P-040` | `F-033,024` | BUG-717 已让 symbol-aware legacy minute algorithms 与 participation cap 使用统一板块手数 authority，合法科创板 201 股不再被改写 | BUG-717 / issue #2323；最终合并 direct matrix 169 passed（含 minute execution 8、V25 contracts 34）；Ruff/F2/L0/registry pass | IMPLEMENTED_VERIFIED | 创建 PR/CI；不执行 DDL/DML/config/restart/broker call |
+| `SIM-P-036` | `F-029,024` | BUG-711 已删除 LocalSIM plan 阶段 transient quote intent gate；broker-neutral intent 保留；停牌无 bar 使用自动等待/收盘 residual，非停牌缺 close bar 继续 fail loud | BUG-711 / issue #2313；补充 related matrix `107 passed`，含停牌/普通 close 及 canonical suspension schema 正反 direct tests | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；合入和用户重启后核对当日 plan/intents 与停牌 state |
+| `SIM-P-037` | `F-030,024` | BUG-712 已把 LocalSIM provider/stream failure 隔离到 symbol state；健康 symbol 继续，确定性 payload conflict 形成 `FAILED_TERMINAL` order/state/event | BUG-712 / issue #2314；原批次 direct matrix `169 passed`，补充 related matrix `107 passed` | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；合入和用户重启后核对多 symbol run 隔离事实 |
+| `SIM-P-038` | `F-031,024` | BUG-714 已建立 immutable `LocalSimMarketSnapshotV1`；每 cadence 冻结 active execution + passive positions 并集，每 unique symbol 只读/验证一次并由 intent/mark 共用；same-cadence 禁止扩容；hash、previous outbox 和 mark reuse evidence 均严格可重建 | BUG-714 / issue #2316；补充 related matrix `107 passed`，含 cadence union/no-refetch、canonical hash、unsupported/non-finite、mark lineage、malformed outbox 正反 direct tests | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；合入和用户重启后核对 provider cadence、snapshot identity 与 mark lineage |
+| `SIM-P-039` | `F-032,024` | BUG-715 已保留全部 BUY，SELL-first 后按 ledger cash 部分成交或等待卖出回款；同 side 保持 plan 顺序且 restart restore 不按字典序重排；legacy runner 对 pending/partial 写 `RUN_PENDING`，不再伪报 completed | BUG-715 / issue #2317；补充 related matrix `107 passed`，含 plan-priority cash competition、wait/resume、restore-order source、RUN_PENDING/full lifecycle 正反 direct tests；广泛 `paper_v2_backend` 委派 PR CI/Validation Center/nightly | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；合入和用户重启后核对 WAITING_FOR_CAPITAL/自动恢复/收盘 residual，不执行人工确认 |
+| `SIM-P-040` | `F-033,024` | BUG-717 已让 symbol-aware legacy minute algorithms 与 participation cap 使用统一板块手数 authority，合法科创板 201 股不再被改写；VWAP 缺少/非法 authoritative volume profile 时 typed fail loud，不再首 bar 全量 fallback | BUG-717 / issue #2323；补充 related matrix `107 passed`，含 TWAP/VWAP/AC/POV/SBB main-board+STAR init、VWAP profile 正反、LocalSIM rejection、V24 missing-asset fail-loud；V25 contracts 继续由既有 direct/CI 覆盖 | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；不执行 DDL/DML/config/restart/broker call |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -1103,11 +1113,11 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 
 | Control | Review result | Implementation evidence |
 | --- | --- | --- |
-| `no_simplified_delivery` | pass | MiniQMT optional cross-evidence、stable authority generation、directional depth 与 LocalSIM immutable cadence snapshot、逐 symbol 状态、资金等待/自动恢复、历史 residual、统一板块手数均有产品实现和正反 direct oracle；未用删除 intent、默认 quote/cash、mock-only 或一次性成功代替 |
-| `no_silent_error` | pass | 已提供但未知 openInt、零价正量、bar identity/payload/duplicate/order conflict、snapshot identity、cash residual、algorithm quantity mismatch 仍明确 typed/state failure；provider/persistence 异常不被 `pass`、空集合或假成功吞掉 |
-| `no_business_semantic_drift` | pass | Selection/Target、方向、目标数量、T+1、涨跌停、停牌、B0 tick source 和唯一 broker route不变；删除的是 transient quote 二次 intent gate 和硬编码 100 股偏移，执行仍只消费真实 minute/tick/ledger 事实 |
-| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、业务开关或 execution gate；WAITING 状态和 diagnostics 均由既有 scheduler 自动推进/恢复 |
-| `production state separation` | pass | 本批次只修改 source/test/蓝图/BUG 元数据；未执行 DDL/DML/config、未调用生产 broker、未重启服务，PR/CI/merge 与用户重启后的正常交易日 readback 分开记录 |
+| `no_simplified_delivery` | pass | MiniQMT optional cross-evidence、stable authority generation、directional depth 与 LocalSIM 停牌无 bar 状态机、active+passive cadence snapshot、strict canonical hash、mark reuse lineage、plan-relative cash competition、daemon pending lifecycle、VWAP authoritative profile 和统一板块手数均有产品实现与正反 direct oracle；未用删除 intent、默认 quote/cash/profile、mock-only、首 bar 全量或一次性成功代替 |
+| `no_silent_error` | pass | 已提供但未知 openInt、零价正量、bar identity/payload/duplicate/order conflict、snapshot scope/schema/hash、malformed previous outbox、非 boolean suspension、mark transient reuse、cash residual、pending handle、VWAP profile 和 algorithm quantity mismatch 均有明确 typed/state/event evidence；provider/persistence/runner 异常不被 `pass`、空集合、truthy 转换、旧 mark 原样返回或 `RUN_COMPLETED` 假成功吞掉 |
+| `no_business_semantic_drift` | pass | Selection/Target、方向、目标数量、T+1、涨跌停、停牌、B0 tick source 和唯一 broker route 不变；停牌仍不产生 synthetic bar，SELL-first 不变且 BUY 恢复 plan 相对顺序，VWAP 只在真实 profile 存在时执行；删除的是 transient quote 二次 intent gate、symbol 字典序资金偏移、硬编码 100 股和无 profile 全量 fallback |
+| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、业务开关或 execution gate；`WAITING_FOR_MARKET_STATE`、`WAITING_FOR_CAPITAL`、`RUN_PENDING` 和 diagnostics 均由既有 scheduler/runner 自动推进或在下一 cadence 恢复，不要求 operator 解锁 |
+| `production state separation` | pass | 本批次只修改 source/test/蓝图/BUG workflow task-card；未执行 DDL/DML/config、未调用生产 broker、未重启服务，PR #2325/CI/merge 与用户重启后的正常交易日 readback 分开记录 |
 
 ## 17. Definition of Done
 

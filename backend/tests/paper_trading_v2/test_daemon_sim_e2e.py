@@ -200,8 +200,10 @@ def test_e2e_single_market_buy_emits_full_lifecycle(tmp_path: Path) -> None:
     gateway.close()
 
     assert result.failed is False
+    assert result.terminal is True
+    assert result.pending_handle_ids == []
     assert len(result.handles) == 1
-    assert result.statuses[0].state in {"filled", "partial_filled"}
+    assert result.statuses[0].state == "filled"
     assert len(result.rejected_intents) == 0
 
     records = event_log.read_all()
@@ -272,10 +274,12 @@ def test_e2e_insufficient_cash_keeps_order_waiting_for_capital(tmp_path: Path) -
     result = runner.run_intents([intent])
 
     assert result.failed is False
+    assert result.terminal is False
     assert len(result.handles) == 1
     assert result.statuses[0].state == "pending"
     assert result.statuses[0].filled_quantity == 0
     assert result.rejected_intents == []
+    assert result.pending_handle_ids == [result.handles[0].handle_id]
 
     snapshot = backend.export_execution_snapshot(handles=result.handles)
     assert snapshot["fills"] == ()
@@ -301,7 +305,11 @@ def test_e2e_insufficient_cash_keeps_order_waiting_for_capital(tmp_path: Path) -
     assert submitted.intent_id == intent.intent_id
     assert submitted.payload["state"] == "pending"
     assert submitted.payload["filled_quantity"] == 0
-    assert types[-1] == DaemonEventType.RUN_COMPLETED
+    assert types[-1] == DaemonEventType.RUN_PENDING
+    assert DaemonEventType.RUN_COMPLETED not in types
+    pending = records[-1]
+    assert pending.payload["terminal"] is False
+    assert pending.payload["pending_handle_ids"] == [result.handles[0].handle_id]
     gateway.close()
 
 

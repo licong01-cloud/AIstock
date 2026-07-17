@@ -82,6 +82,7 @@ class MinuteExecutionEngine:
                 state=state,
                 bar=bar,
                 market_context=context,
+                order_id=current_order.order_id,
             )
             if step_fill is None:
                 if market_state_aware and getattr(algo, "_last_no_fill_reason", None):
@@ -247,6 +248,7 @@ class MinuteExecutionEngine:
                 state=state,
                 bar=bar,
                 market_context=context,
+                order_id=current_order.order_id,
             )
             processed_time = bar.bar_time
             if step_fill is None:

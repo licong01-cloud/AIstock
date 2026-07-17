@@ -12,7 +12,9 @@
     "backend/execution_algos/v25_two_stage_algo.py",
     "backend/services/trading_core/execution_algo_adapter.py",
     "backend/services/trading_core/minute_execution.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
     "backend/tests/trading_core/test_minute_execution.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260717_BUG-717-localsim-legacy-minute-algorithms-reject-valid-star-board-lot-quantities.json",
@@ -34,6 +36,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260717-6c1f25ca6895",
       "timestamp": "2026-07-17T07:32:58.667278Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001 audit requires LocalSIM propagation of typed VWAP profile failures.",
+      "timestamp": "2026-07-17T12:26:49.237510Z"
     }
   ],
   "evidence_uris": [],

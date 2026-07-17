@@ -17,7 +17,7 @@ Failure semantics (per ``feedback_no_silent_errors``):
 * PG write fails AND SQLite write fails -> the original SQLite exception
   propagates (no silent swallow). PG error is logged before re-raise.
 
-The 9 canonical event-type names follow ``paper.daemon.<event>`` and are
+The 10 canonical event-type names follow ``paper.daemon.<event>`` and are
 mapped onto the existing ``DaemonEventType`` enum members so existing call
 sites (sim_runner.py) stay unchanged.
 
@@ -72,6 +72,7 @@ PAPER_DAEMON_EVENT_TYPE_NAMES: dict[str, str] = {
     "ORDER_REJECTED": "paper.daemon.order_rejected",
     "ORDER_CANCELLED": "paper.daemon.order_cancelled",
     "POSITION_UPDATED": "paper.daemon.position_updated",
+    "RUN_PENDING": "paper.daemon.run_pending",
     "RUN_COMPLETED": "paper.daemon.run_completed",
     "RUN_FAILED": "paper.daemon.run_failed",
 }
@@ -153,6 +154,7 @@ class DaemonEventType(str, Enum):
     ORDER_REJECTED = "ORDER_REJECTED"
     ORDER_CANCELLED = "ORDER_CANCELLED"
     POSITION_UPDATED = "POSITION_UPDATED"
+    RUN_PENDING = "RUN_PENDING"
     RUN_COMPLETED = "RUN_COMPLETED"
     RUN_FAILED = "RUN_FAILED"
 

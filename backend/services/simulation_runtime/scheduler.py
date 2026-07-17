@@ -32,6 +32,7 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
     PreTradeTradabilityProvider,
     fetch_tdx_realtime_quotes,
+    pre_trade_tradability_is_suspended,
 )
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -8610,13 +8611,9 @@ class SimulationLifecycleScheduler:
                         "snapshot_time": snapshot_time.isoformat(),
                     },
                 )
-            tradability = dict(context.pre_trade_tradability.get(symbol) or {})
-            suspend_payload = dict(tradability.get("suspend_status") or {})
-            suspended = bool(
-                tradability.get("is_suspended")
-                or tradability.get("suspended")
-                or tradability.get("suspend_d")
-                or suspend_payload.get("is_suspended")
+            suspended = pre_trade_tradability_is_suspended(
+                context.pre_trade_tradability.get(symbol),
+                symbol=symbol,
             )
             if suspended:
                 if (
@@ -8660,15 +8657,38 @@ class SimulationLifecycleScheduler:
 
     @staticmethod
     def _previous_local_sim_mark_records(run: SimulationDailyRun) -> dict[str, dict[str, Any]]:
-        raw_outbox = run.run_payload_json.get("local_sim_projection_outbox_v1")
-        if not isinstance(raw_outbox, dict):
+        if "local_sim_projection_outbox_v1" not in run.run_payload_json:
             return {}
+        raw_outbox = run.run_payload_json["local_sim_projection_outbox_v1"]
+        if not isinstance(raw_outbox, dict):
+            raise DataUnavailableError(
+                "LocalSim previous projection outbox payload is invalid",
+                context={
+                    "reason_code": "LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID",
+                    "run_id": run.run_id,
+                    "layer": "local_sim_projection_outbox_v1",
+                },
+            )
         projection_payload = raw_outbox.get("projection_payload")
         if not isinstance(projection_payload, dict):
-            return {}
+            raise DataUnavailableError(
+                "LocalSim previous projection payload is invalid",
+                context={
+                    "reason_code": "LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID",
+                    "run_id": run.run_id,
+                    "layer": "projection_payload",
+                },
+            )
         raw_marks = projection_payload.get("marks")
         if not isinstance(raw_marks, list):
-            return {}
+            raise DataUnavailableError(
+                "LocalSim previous market mark collection is invalid",
+                context={
+                    "reason_code": "LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID",
+                    "run_id": run.run_id,
+                    "layer": "marks",
+                },
+            )
         records: dict[str, dict[str, Any]] = {}
         for raw in raw_marks:
             if not isinstance(raw, dict):
@@ -10339,7 +10359,8 @@ class SimulationLifecycleScheduler:
                          "binding_id": binding.binding_id, "plan_id": plan.plan_id},
             )
         binder(plan=plan, as_of_time=scheduler_time(as_of_time))
-        for intent_id in sorted(expected_intents):
+        for intent in plan.intents:
+            intent_id = intent.intent_id
             state = by_intent[intent_id]
             if state.plan_id != plan.plan_id or state.binding_id != binding.binding_id:
                 raise DataUnavailableError(

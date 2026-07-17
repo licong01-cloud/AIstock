@@ -2,6 +2,7 @@
   "actual": "Missing or temporarily empty TDX quote can permanently remove target deltas; all-blocked plans return PRE_TRADE_BLOCKED with daily run SUCCEEDED.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/models.py",
     "backend/services/simulation_runtime/lifecycle.py",
     "backend/services/simulation_runtime/decision.py",
     "backend/services/paper_trading_v2/market_data.py",
@@ -29,6 +30,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260717-4b536e64a982",
       "timestamp": "2026-07-17T06:49:49.312933Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001 audit requires explicit WAITING_FOR_MARKET_STATE schema support.",
+      "timestamp": "2026-07-17T12:26:49.237510Z"
     }
   ],
   "evidence_uris": [],

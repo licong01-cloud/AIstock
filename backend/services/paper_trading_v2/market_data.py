@@ -15,6 +15,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hashlib
 import json
+import math
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping, Protocol
 
@@ -187,8 +188,15 @@ class LocalSimMarketSnapshotV1:
                 for symbol, error in sorted(normalized_errors.items())
             },
         }
+        canonical_payload = _local_sim_snapshot_json_value(payload)
         digest = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            json.dumps(
+                canonical_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
         ).hexdigest()
         if self.snapshot_hash and self.snapshot_hash != digest:
             raise ValueError("LocalSimMarketSnapshotV1 snapshot_hash mismatch")
@@ -203,28 +211,44 @@ class LocalSimMarketSnapshotV1:
 
 def _freeze_local_sim_snapshot_value(value: Any) -> Any:
     if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            raise TypeError(
+                "LocalSimMarketSnapshotV1 mappings require string keys; "
+                f"got {type(invalid_keys[0]).__name__}"
+            )
         return MappingProxyType(
             {
-                str(key): _freeze_local_sim_snapshot_value(item)
+                key: _freeze_local_sim_snapshot_value(item)
                 for key, item in value.items()
             }
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_local_sim_snapshot_value(item) for item in value)
-    if isinstance(value, set):
-        return tuple(
-            sorted(
-                (_freeze_local_sim_snapshot_value(item) for item in value),
-                key=repr,
-            )
-        )
-    return deepcopy(value)
+    if isinstance(value, Enum):
+        return _freeze_local_sim_snapshot_value(value.value)
+    if isinstance(value, (datetime, date, Decimal, str, bool, int)) or value is None:
+        return deepcopy(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("LocalSimMarketSnapshotV1 numeric values must be finite")
+        return value
+    raise TypeError(
+        "LocalSimMarketSnapshotV1 only accepts canonical JSON-like values; "
+        f"got {type(value).__name__}"
+    )
 
 
 def _local_sim_snapshot_json_value(value: Any) -> Any:
     if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            raise TypeError(
+                "LocalSimMarketSnapshotV1 mappings require string keys; "
+                f"got {type(invalid_keys[0]).__name__}"
+            )
         return {
-            str(key): _local_sim_snapshot_json_value(item)
+            key: _local_sim_snapshot_json_value(item)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
@@ -232,10 +256,21 @@ def _local_sim_snapshot_json_value(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("LocalSimMarketSnapshotV1 Decimal values must be finite")
         return str(value)
     if isinstance(value, Enum):
-        return value.value
-    return value
+        return _local_sim_snapshot_json_value(value.value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("LocalSimMarketSnapshotV1 numeric values must be finite")
+        return value
+    if isinstance(value, (str, bool, int)) or value is None:
+        return value
+    raise TypeError(
+        "LocalSimMarketSnapshotV1 only accepts canonical JSON-like values; "
+        f"got {type(value).__name__}"
+    )
 
 
 @dataclass(frozen=True)
@@ -273,6 +308,54 @@ class PreTradeTradabilityStatus:
             "suspend_status": self.suspend_status,
             "quote_evidence": self.quote_evidence,
         }
+
+
+def pre_trade_tradability_is_suspended(
+    tradability: Mapping[str, Any] | None,
+    *,
+    symbol: str,
+) -> bool:
+    """Read canonical suspension evidence without truthy coercion or aliases."""
+
+    if not tradability:
+        return False
+    if "suspend_status" not in tradability:
+        legacy_keys = sorted(
+            key
+            for key in ("is_suspended", "suspended", "suspend_d")
+            if key in tradability
+        )
+        if not legacy_keys:
+            return False
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence uses a non-canonical schema",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "legacy_keys": legacy_keys,
+            },
+        )
+    suspend_status = tradability.get("suspend_status")
+    if not isinstance(suspend_status, Mapping):
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence must be an object",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "suspend_status_type": type(suspend_status).__name__,
+            },
+        )
+    is_suspended = suspend_status.get("is_suspended")
+    if not isinstance(is_suspended, bool):
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence requires a boolean is_suspended",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "is_suspended_type": type(is_suspended).__name__,
+            },
+        )
+    return is_suspended
 
 
 @dataclass(frozen=True)

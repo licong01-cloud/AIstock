@@ -38,9 +38,11 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteExecutionMarketInput,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerMarketSourceMismatchError,
+    BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
     RiskRuleError,
@@ -346,9 +348,11 @@ def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None
         },
     )
     backend.configure_execution_runtime(run_id="run_causal_unit", binding_id="binding_causal_unit")
+    intent = _buy_intent(backend)
     plan = SimpleNamespace(
         plan_id="plan_causal_unit",
         target_trade_date=TRADE_DATE,
+        intents=(intent,),
         plan_payload_json={
             "local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1",
@@ -358,7 +362,7 @@ def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None
     )
 
     backend.bind_execution_plan(plan=plan, as_of_time=as_of)
-    handle = backend.submit_order_intent(_buy_intent(backend))
+    handle = backend.submit_order_intent(intent)
     snapshot = backend.export_execution_snapshot(handles=[handle])
 
     assert len(snapshot["fills"]) == 1
@@ -374,17 +378,19 @@ def test_localsim_realtime_submission_persists_waiting_state_before_first_causal
     as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
     backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
     backend.configure_execution_runtime(run_id="run_waiting_unit", binding_id="binding_waiting_unit")
+    intent = _buy_intent(backend)
     backend.bind_execution_plan(
         plan=SimpleNamespace(
             plan_id="plan_waiting_unit",
             target_trade_date=TRADE_DATE,
+            intents=(intent,),
             plan_payload_json={"local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": as_of.isoformat()
             }},
         ),
         as_of_time=as_of,
     )
-    handle = backend.submit_order_intent(_buy_intent(backend))
+    handle = backend.submit_order_intent(intent)
     snapshot = backend.export_execution_snapshot(handles=[handle])
     assert backend.query_status(handle).state == "pending"
     assert snapshot["fills"] == ()
@@ -409,14 +415,16 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
         provider=provider, execution_policy=streaming_policy,
     )
     first.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
+    intent = _buy_intent(first, quantity=10_000)
     plan = SimpleNamespace(
         plan_id="plan_stream_restart", target_trade_date=TRADE_DATE,
+        intents=(intent,),
         plan_payload_json={"local_sim_execution_causality": {
             "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": cursor.isoformat()
         }},
     )
     first.bind_execution_plan(plan=plan, as_of_time=first_as_of)
-    first_handle = first.submit_order_intent(_buy_intent(first, quantity=10_000))
+    first_handle = first.submit_order_intent(intent)
     first_snapshot = first.export_execution_snapshot(handles=[first_handle])
     first_state = first_snapshot["execution_states"][0]
     first_order = first_snapshot["orders"][0]
@@ -555,6 +563,160 @@ def test_realtime_market_snapshot_freezes_nested_payload_and_hash_identity() -> 
     assert snapshot.market_inputs["000001.SZ"].market_context["suspend_status"]["is_suspended"] is False
     with pytest.raises(TypeError):
         snapshot.errors["000002.SZ"]["context"]["attempt"] = 2
+
+
+def test_realtime_market_snapshot_hash_is_canonical_and_rejects_unsupported_values() -> None:
+    raw_input = _make_market_input("000001.SZ", bar_count=1)
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    first_input = replace(
+        raw_input,
+        source=MinuteDataSource.TDX_REALTIME,
+        market_context={
+            "data_source": MinuteDataSource.TDX_REALTIME,
+            "trade_date": TRADE_DATE,
+            "ratio": Decimal("0.10"),
+            "nested": {"b": 2, "a": 1},
+        },
+    )
+    second_input = replace(
+        raw_input,
+        source=MinuteDataSource.TDX_REALTIME,
+        market_context={
+            "nested": {"a": 1, "b": 2},
+            "ratio": Decimal("0.10"),
+            "trade_date": TRADE_DATE,
+            "data_source": MinuteDataSource.TDX_REALTIME,
+        },
+    )
+    first = LocalSimMarketSnapshotV1(
+        trade_date=TRADE_DATE,
+        as_of_time=as_of,
+        source=MinuteDataSource.TDX_REALTIME,
+        market_inputs={"000001.SZ": first_input},
+        errors={},
+    )
+    second = LocalSimMarketSnapshotV1(
+        trade_date=TRADE_DATE,
+        as_of_time=as_of,
+        source=MinuteDataSource.TDX_REALTIME,
+        market_inputs={"000001.SZ": second_input},
+        errors={},
+    )
+    assert first.snapshot_hash == second.snapshot_hash
+    assert first.snapshot_id == second.snapshot_id
+
+    for invalid_value in (object(), {"not", "ordered"}, float("nan"), float("inf")):
+        with pytest.raises((TypeError, ValueError)):
+            LocalSimMarketSnapshotV1(
+                trade_date=TRADE_DATE,
+                as_of_time=as_of,
+                source=MinuteDataSource.TDX_REALTIME,
+                market_inputs={
+                    "000001.SZ": replace(
+                        first_input,
+                        market_context={"invalid": invalid_value},
+                    )
+                },
+                errors={},
+            )
+
+
+def test_realtime_market_snapshot_does_not_expand_or_refetch_within_cadence() -> None:
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={
+            "000001.SZ": _make_market_input("000001.SZ", bar_count=1),
+            "000002.SZ": _make_market_input("000002.SZ", bar_count=1),
+        }
+    )
+    backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
+    backend.configure_execution_runtime(run_id="run_snapshot_fixed", binding_id="binding_snapshot_fixed")
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    intent = _buy_intent(backend, symbol="000001.SZ")
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_snapshot_fixed",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+                }
+            },
+        ),
+        as_of_time=as_of,
+    )
+    assert len(provider.calls) == 1
+
+    with pytest.raises(BrokerConnectivityError) as exc_info:
+        backend._load_realtime_market_input(
+            symbol="000002.SZ",
+            trade_date=TRADE_DATE,
+            as_of_time=as_of,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_MARKET_SNAPSHOT_SYMBOL_MISSING"
+    assert len(provider.calls) == 1
+
+
+def test_realtime_next_cadence_snapshot_covers_active_orders_and_passive_positions_once() -> None:
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={
+            "000001.SZ": _make_market_input("000001.SZ", bar_count=3),
+            "000002.SZ": _make_market_input("000002.SZ", bar_count=3),
+        }
+    )
+    passive_position = PositionLot(
+        portfolio_id="paper_local_p1",
+        symbol="000002.SZ",
+        quantity=100,
+        available_quantity=100,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    backend, _, _ = _build_backend(
+        initial_cash=1_000_000,
+        initial_positions={"000002.SZ": passive_position},
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_snapshot_union",
+            "policy_sha256": "sha_snapshot_union",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 4}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_snapshot_union", binding_id="binding_snapshot_union")
+    first_as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    intent = _buy_intent(backend, symbol="000001.SZ", quantity=1000)
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_snapshot_union",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "eligible_bar_after": first_as_of.replace(hour=9, minute=30).isoformat(),
+                }
+            },
+        ),
+        as_of_time=first_as_of,
+    )
+    backend.submit_order_intent(intent)
+    assert [call["symbol"] for call in provider.calls] == ["000001.SZ", "000002.SZ"]
+
+    second_as_of = first_as_of + timedelta(minutes=1)
+    handles = backend.advance_realtime_execution(as_of_time=second_as_of)
+    backend.load_authoritative_position_marks(
+        symbols=backend.query_positions(),
+        trade_date=TRADE_DATE,
+        as_of_time=second_as_of,
+        pre_trade_tradability={},
+    )
+    assert [call["symbol"] for call in provider.calls] == [
+        "000001.SZ",
+        "000002.SZ",
+        "000001.SZ",
+        "000002.SZ",
+    ]
+    assert handles
 
 
 def test_one_symbol_market_data_failure_does_not_rollback_healthy_intent() -> None:
@@ -769,16 +931,17 @@ def test_localsim_close_terminalizes_remaining_schedule_with_explicit_residual()
         },
     )
     backend.configure_execution_runtime(run_id="run_close_residual", binding_id="binding_close_residual")
+    intent = _buy_intent(backend, quantity=10_000)
     backend.bind_execution_plan(
         plan=SimpleNamespace(
-            plan_id="plan_close_residual", target_trade_date=TRADE_DATE,
+            plan_id="plan_close_residual", target_trade_date=TRADE_DATE, intents=(intent,),
             plan_payload_json={"local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1",
                 "eligible_bar_after": closing_bar.bar_time.replace(hour=14, minute=59).isoformat(),
             }},
         ), as_of_time=as_of,
     )
-    handle = backend.submit_order_intent(_buy_intent(backend, quantity=10_000))
+    handle = backend.submit_order_intent(intent)
     state = backend.export_execution_snapshot(handles=[handle])["execution_states"][0]
     assert state.runtime_status.value == "EXPIRED_WITH_RESIDUAL"
     assert state.remaining_quantity > 0
@@ -800,9 +963,10 @@ def test_localsim_post_close_fails_loud_when_closing_bar_is_missing() -> None:
         },
     )
     backend.configure_execution_runtime(run_id="run_missing_close", binding_id="binding_missing_close")
+    intent = _buy_intent(backend, quantity=10_000)
     backend.bind_execution_plan(
         plan=SimpleNamespace(
-            plan_id="plan_missing_close", target_trade_date=TRADE_DATE,
+            plan_id="plan_missing_close", target_trade_date=TRADE_DATE, intents=(intent,),
             plan_payload_json={"local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1",
                 "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time()).replace(
@@ -812,8 +976,165 @@ def test_localsim_post_close_fails_loud_when_closing_bar_is_missing() -> None:
         ), as_of_time=as_of,
     )
     with pytest.raises(BrokerConnectivityError) as exc_info:
-        backend.submit_order_intent(_buy_intent(backend, quantity=10_000))
+        backend.submit_order_intent(intent)
     assert exc_info.value.context["reason_code"] == "LOCALSIM_CLOSE_BAR_MISSING"
+
+
+def test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual() -> None:
+    suspended_input = replace(
+        _make_market_input("000001.SZ", bar_count=0),
+        market_context={
+            "data_source": MinuteDataSource.TDX_REALTIME.value,
+            "suspend_status": {
+                "is_suspended": True,
+                "source": "market.suspend_d",
+            },
+        },
+    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": suspended_input})
+    backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
+    backend.configure_execution_runtime(run_id="run_suspended", binding_id="binding_suspended")
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=10)
+    intent = _buy_intent(backend, quantity=100)
+    plan = SimpleNamespace(
+        plan_id="plan_suspended",
+        target_trade_date=TRADE_DATE,
+        intents=(intent,),
+        plan_payload_json={
+            "local_sim_execution_causality": {
+                "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+            }
+        },
+    )
+    backend.bind_execution_plan(plan=plan, as_of_time=as_of)
+    handle = backend.submit_order_intent(intent)
+    waiting = backend.export_execution_snapshot(handles=[handle])["execution_states"][0]
+    assert waiting.runtime_status.value == "WAITING_FOR_MARKET_STATE"
+    assert waiting.waiting_reason_code == "LOCALSIM_SUSPENDED_NO_BAR"
+    assert waiting.remaining_quantity == 100
+
+    closed = backend.advance_realtime_execution(
+        as_of_time=datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=15, minute=1)
+    )
+    terminal = backend.export_execution_snapshot(handles=closed)["execution_states"][0]
+    assert terminal.runtime_status.value == "EXPIRED_WITH_RESIDUAL"
+    assert terminal.terminal_reason == "MARKET_SESSION_CLOSED_SUSPENDED"
+    assert terminal.residual_classification == "SUSPENDED_AT_CLOSE"
+    assert terminal.remaining_quantity == 100
+
+
+def test_localsim_rejects_malformed_realtime_suspension_evidence() -> None:
+    malformed = replace(
+        _make_market_input("000001.SZ", bar_count=0),
+        market_context={
+            "data_source": MinuteDataSource.TDX_REALTIME.value,
+            "suspend_status": {"is_suspended": "true"},
+        },
+    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": malformed})
+    backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
+    backend.configure_execution_runtime(run_id="run_bad_suspend", binding_id="binding_bad_suspend")
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=10)
+    intent = _buy_intent(backend)
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_bad_suspend",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+                }
+            },
+        ),
+        as_of_time=as_of,
+    )
+    with pytest.raises(BrokerConnectivityError) as exc_info:
+        backend.submit_order_intent(intent)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_SUSPEND_STATUS_SCHEMA_INVALID"
+
+
+def test_localsim_realtime_buy_priority_preserves_plan_order_with_limited_cash() -> None:
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={
+            "000001.SZ": _make_market_input("000001.SZ", bar_count=1),
+            "000002.SZ": _make_market_input("000002.SZ", bar_count=1),
+        }
+    )
+    backend, _, _ = _build_backend(
+        initial_cash=1_500,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_plan_priority",
+            "policy_sha256": "sha_plan_priority",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 1}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_plan_priority", binding_id="binding_plan_priority")
+    cursor = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30)
+    first_buy = _buy_intent(backend, symbol="000002.SZ", quantity=100)
+    second_buy = _buy_intent(backend, symbol="000001.SZ", quantity=100)
+    plan = SimpleNamespace(
+        plan_id="plan_priority",
+        target_trade_date=TRADE_DATE,
+        intents=(first_buy, second_buy),
+        plan_payload_json={
+            "local_sim_execution_causality": {"eligible_bar_after": cursor.isoformat()}
+        },
+    )
+    backend.bind_execution_plan(plan=plan, as_of_time=cursor)
+    backend.submit_order_intent(first_buy)
+    backend.submit_order_intent(second_buy)
+
+    handles = backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=1))
+    snapshot = backend.export_execution_snapshot(handles=handles)
+    states = {state.symbol: state for state in snapshot["execution_states"]}
+    assert [fill.symbol for fill in snapshot["fills"]] == ["000002.SZ"]
+    assert states["000002.SZ"].runtime_status.value == "FILLED"
+    assert states["000001.SZ"].runtime_status.value == "WAITING_FOR_CAPITAL"
+
+
+def test_localsim_reused_realtime_mark_has_explicit_failure_evidence_and_new_hash() -> None:
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=3)}
+    )
+    backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
+    first_as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=32)
+    first = backend.load_authoritative_position_marks(
+        symbols=("000001.SZ",),
+        trade_date=TRADE_DATE,
+        as_of_time=first_as_of,
+        pre_trade_tradability={},
+    )["000001.SZ"]
+    provider.unavailable_symbols.add("000001.SZ")
+    second = backend.load_authoritative_position_marks(
+        symbols=("000001.SZ",),
+        trade_date=TRADE_DATE,
+        as_of_time=first_as_of + timedelta(minutes=1),
+        pre_trade_tradability={},
+        previous_marks={"000001.SZ": first.model_dump(mode="json")},
+    )["000001.SZ"]
+
+    assert isinstance(second, LocalSimMarketMarkV1)
+    assert second.price == first.price
+    assert second.as_of_time == first.as_of_time
+    assert second.reuse_reason_code == "LOCALSIM_REALTIME_MARK_REUSED_AFTER_TRANSIENT_SOURCE_FAILURE"
+    assert second.source_error_reason_code == "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
+    assert second.reused_from_mark_hash == first.mark_hash
+    assert second.mark_hash != first.mark_hash
+
+    with pytest.raises(ValueError, match="reuse_reason_code cannot be blank"):
+        LocalSimMarketMarkV1(
+            symbol=first.symbol,
+            price=first.price,
+            as_of_time=first.as_of_time,
+            source=first.source,
+            provenance=first.provenance,
+            reuse_reason_code=" ",
+            source_error_reason_code="LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
+            reused_from_mark_hash=first.mark_hash,
+        )
 
 
 def test_localsim_plan_batch_rolls_back_all_orders_and_callbacks_on_later_failure() -> None:
@@ -848,6 +1169,22 @@ def test_localsim_single_order_keeps_affordable_fill_and_records_capital_residua
     order = snapshot["orders"][0]
     assert order.status == OrderStatus.PARTIALLY_FILLED
     assert order.metadata["local_sim_capital_dependency"]["waiting_quantity"] == 100
+
+
+def test_localsim_vwap_rejects_missing_authoritative_volume_profile_without_fallback() -> None:
+    backend, _, _ = _build_backend(
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_vwap_no_profile",
+            "policy_sha256": "sha_vwap_no_profile",
+            "policy_json": {"algo_code": "VWAP", "algo_config": {}},
+        }
+    )
+    with pytest.raises(BrokerRejectedError) as exc_info:
+        backend.submit_order_intent(_buy_intent(backend, quantity=600))
+    assert exc_info.value.context["cause_code"] == "EXECUTION_ALGO_ERROR"
+    assert exc_info.value.context["cause_context"]["reason_code"] == "VWAP_VOLUME_PROFILE_INVALID"
+    assert "authoritative volume_profile" in exc_info.value.context["cause_context"]["cause"]
+    assert backend.export_execution_snapshot()["fills"] == ()
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
     assert_broker_market_source_match,
+    pre_trade_tradability_is_suspended,
 )
 from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
 from backend.services.strategy_package.models import StrategyPackageManifest
@@ -319,7 +320,10 @@ class LocalSimBackend(BrokerBackend):
             )
         if active_records:
             self._prepare_realtime_market_snapshot(
-                symbols=(record.order.symbol for record in active_records),
+                symbols={
+                    *(record.order.symbol for record in active_records),
+                    *self._ledger.positions,
+                },
                 trade_date=next(iter(trade_dates)),
                 as_of_time=as_of_time,
             )
@@ -330,7 +334,7 @@ class LocalSimBackend(BrokerBackend):
                 self._ledger.cash_entries = []
                 ordered_records = sorted(
                     self._records.values(),
-                    key=lambda item: (item.order.side != OrderSide.SELL, item.order.symbol, item.order.intent_id),
+                    key=lambda item: item.order.side != OrderSide.SELL,
                 )
                 for record in ordered_records:
                     record.fills = []
@@ -442,9 +446,30 @@ class LocalSimBackend(BrokerBackend):
                                 ),
                                 waiting_context=capital_wait,
                             )
+                    elif (
+                        not market_input.minute_bars
+                        and as_of_time.time() < time(15, 0)
+                        and self._realtime_market_is_suspended(
+                            market_context=market_input.market_context,
+                            symbol=record.order.symbol,
+                            trade_date=state.trade_date,
+                        )
+                    ):
+                        record.execution_state = self._waiting_execution_state(
+                            state=record.execution_state,
+                            runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
+                            reason_code="LOCALSIM_SUSPENDED_NO_BAR",
+                            context={
+                                "symbol": record.order.symbol,
+                                "trade_date": state.trade_date.isoformat(),
+                                "observed_until": as_of_time.isoformat(),
+                                "suspend_status": dict(market_input.market_context["suspend_status"]),
+                            },
+                        )
                     record.execution_state = self._expire_residual_after_complete_close(
                         state=record.execution_state,
                         observed_bars=market_input.minute_bars,
+                        market_context=market_input.market_context,
                         as_of_time=as_of_time,
                         increment_sequence=not bool(new_bars),
                     )
@@ -688,10 +713,31 @@ class LocalSimBackend(BrokerBackend):
                             )
                     else:
                         final_order, fills, events = order, [], []
+                        if (
+                            market_input is not None
+                            and self._scheduler_as_of_time.time() < time(15, 0)
+                            and self._realtime_market_is_suspended(
+                                market_context=market_input.market_context,
+                                symbol=intent.symbol,
+                                trade_date=intent.target_trade_date,
+                            )
+                        ):
+                            execution_state = self._waiting_execution_state(
+                                state=execution_state,
+                                runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
+                                reason_code="LOCALSIM_SUSPENDED_NO_BAR",
+                                context={
+                                    "symbol": intent.symbol,
+                                    "trade_date": intent.target_trade_date.isoformat(),
+                                    "observed_until": self._scheduler_as_of_time.isoformat(),
+                                    "suspend_status": dict(market_input.market_context["suspend_status"]),
+                                },
+                            )
                     if market_input is not None:
                         execution_state = self._expire_residual_after_complete_close(
                             state=execution_state,
                             observed_bars=market_input.minute_bars,
+                            market_context=market_input.market_context,
                             as_of_time=self._scheduler_as_of_time,
                             increment_sequence=not bool(market_input.minute_bars),
                         )
@@ -748,6 +794,7 @@ class LocalSimBackend(BrokerBackend):
                         "quantity": intent.quantity,
                         "cause": exc.message,
                         "cause_code": exc.error_code,
+                        "cause_context": dict(exc.context or {}),
                     },
                 ) from exc
 
@@ -1013,14 +1060,18 @@ class LocalSimBackend(BrokerBackend):
                 },
             )
         records: dict[str, LocalSimMarketMarkV1] = {}
-        for symbol in sorted({str(item or "").strip() for item in symbols if str(item or "").strip()}):
-            tradability = dict(pre_trade_tradability.get(symbol) or {})
-            suspend_payload = dict(tradability.get("suspend_status") or {})
-            suspended = bool(
-                tradability.get("is_suspended")
-                or tradability.get("suspended")
-                or tradability.get("suspend_d")
-                or suspend_payload.get("is_suspended")
+        normalized_symbols = sorted({str(item or "").strip() for item in symbols if str(item or "").strip()})
+        if self._data_source == MinuteDataSource.TDX_REALTIME and normalized_symbols:
+            self._prepare_realtime_market_snapshot(
+                symbols=normalized_symbols,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            )
+        for symbol in normalized_symbols:
+            tradability = pre_trade_tradability.get(symbol)
+            suspended = pre_trade_tradability_is_suspended(
+                tradability,
+                symbol=symbol,
             )
             if suspended:
                 previous_close_provider = getattr(self._market_data_provider, "previous_close_provider", None)
@@ -1086,7 +1137,19 @@ class LocalSimBackend(BrokerBackend):
                                 "trade_date": trade_date.isoformat(),
                             },
                         )
-                    records[symbol] = previous
+                    error_context = dict(getattr(exc, "context", None) or {})
+                    source_reason = str(
+                        error_context.get("reason_code")
+                        or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
+                    )
+                    records[symbol] = previous.model_copy(
+                        update={
+                            "reuse_reason_code": "LOCALSIM_REALTIME_MARK_REUSED_AFTER_TRANSIENT_SOURCE_FAILURE",
+                            "source_error_reason_code": source_reason,
+                            "reused_from_mark_hash": previous.mark_hash,
+                            "mark_hash": "",
+                        }
+                    )
                     continue
                 provenance = LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
             elif self._data_source == MinuteDataSource.DB_HISTORICAL:
@@ -1206,9 +1269,22 @@ class LocalSimBackend(BrokerBackend):
             current is not None
             and current.trade_date == trade_date
             and current.as_of_time == as_of_time
-            and set(current.market_inputs).union(current.errors) == set(normalized)
         ):
-            return current
+            current_symbols = set(current.market_inputs).union(current.errors)
+            requested_symbols = set(normalized)
+            if requested_symbols.issubset(current_symbols):
+                return current
+            raise BrokerConnectivityError(
+                "LocalSim realtime market snapshot coverage is immutable within one cadence",
+                context={
+                    "reason_code": "LOCALSIM_MARKET_SNAPSHOT_SYMBOL_MISSING",
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat(),
+                    "snapshot_id": current.snapshot_id,
+                    "snapshot_symbols": sorted(current_symbols),
+                    "missing_symbols": sorted(requested_symbols - current_symbols),
+                },
+            )
         market_inputs: dict[str, Any] = {}
         errors: dict[str, dict[str, Any]] = {}
         for symbol in normalized:
@@ -1238,25 +1314,33 @@ class LocalSimBackend(BrokerBackend):
     def _load_realtime_market_input(self, *, symbol: str, trade_date: Any, as_of_time: datetime) -> Any:
         snapshot = self._market_snapshot
         if snapshot is None or snapshot.trade_date != trade_date or snapshot.as_of_time != as_of_time:
-            snapshot = self._prepare_realtime_market_snapshot(
-                symbols=(symbol,),
-                trade_date=trade_date,
-                as_of_time=as_of_time,
+            raise BrokerConnectivityError(
+                "LocalSim realtime market snapshot is not prepared for the requested cadence",
+                context={
+                    "reason_code": "LOCALSIM_MARKET_SNAPSHOT_SCOPE_MISSING",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat(),
+                    "snapshot_trade_date": snapshot.trade_date.isoformat() if snapshot else None,
+                    "snapshot_as_of_time": snapshot.as_of_time.isoformat() if snapshot else None,
+                },
             )
         market_input = snapshot.market_inputs.get(symbol)
         if market_input is not None:
             return market_input
         error = snapshot.errors.get(symbol)
         if error is None:
-            snapshot = self._prepare_realtime_market_snapshot(
-                symbols=(*snapshot.market_inputs, *snapshot.errors, symbol),
-                trade_date=trade_date,
-                as_of_time=as_of_time,
+            raise BrokerConnectivityError(
+                "LocalSim realtime market snapshot does not cover the requested symbol",
+                context={
+                    "reason_code": "LOCALSIM_MARKET_SNAPSHOT_SYMBOL_MISSING",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat(),
+                    "snapshot_id": snapshot.snapshot_id,
+                    "snapshot_symbols": sorted(set(snapshot.market_inputs).union(snapshot.errors)),
+                },
             )
-            market_input = snapshot.market_inputs.get(symbol)
-            if market_input is not None:
-                return market_input
-            error = snapshot.errors.get(symbol)
         assert error is not None
         raise BrokerConnectivityError(
             str(error.get("message") or "LocalSim realtime market data is unavailable"),
@@ -1569,7 +1653,41 @@ class LocalSimBackend(BrokerBackend):
             "LOCALSIM_MINUTE_BAR_DUPLICATE",
             "LOCALSIM_MINUTE_BAR_OUT_OF_ORDER",
             "LOCALSIM_LAST_APPLIED_BAR_PAYLOAD_CONFLICT",
+            "LOCALSIM_MARKET_SNAPSHOT_SCOPE_MISSING",
+            "LOCALSIM_MARKET_SNAPSHOT_SYMBOL_MISSING",
+            "LOCALSIM_SUSPEND_STATUS_SCHEMA_INVALID",
         }
+
+    @staticmethod
+    def _realtime_market_is_suspended(
+        *,
+        market_context: Mapping[str, Any],
+        symbol: str,
+        trade_date: date,
+    ) -> bool:
+        suspend_status = market_context.get("suspend_status")
+        if not isinstance(suspend_status, Mapping):
+            raise BrokerConnectivityError(
+                "LocalSim realtime market input has no valid suspension evidence",
+                context={
+                    "reason_code": "LOCALSIM_SUSPEND_STATUS_SCHEMA_INVALID",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "suspend_status_type": type(suspend_status).__name__,
+                },
+            )
+        is_suspended = suspend_status.get("is_suspended")
+        if not isinstance(is_suspended, bool):
+            raise BrokerConnectivityError(
+                "LocalSim realtime suspension evidence requires a boolean is_suspended",
+                context={
+                    "reason_code": "LOCALSIM_SUSPEND_STATUS_SCHEMA_INVALID",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "is_suspended_type": type(is_suspended).__name__,
+                },
+            )
+        return is_suspended
 
     def _fit_buy_fills_to_available_cash(
         self,
@@ -1689,30 +1807,47 @@ class LocalSimBackend(BrokerBackend):
 
     def _expire_residual_after_complete_close(
         self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any],
-        as_of_time: datetime, increment_sequence: bool,
+        market_context: Mapping[str, Any], as_of_time: datetime, increment_sequence: bool,
     ) -> LocalSimExecutionStateV1:
         if state.is_terminal or as_of_time.time() < time(15, 0):
             return state
         latest_bar_time = max((bar.bar_time for bar in observed_bars), default=None)
         if latest_bar_time is None or latest_bar_time.time() < time(15, 0):
-            raise BrokerConnectivityError(
-                "LocalSim cannot terminalize residual before the closing minute is observed",
-                context={
-                    "reason_code": "LOCALSIM_CLOSE_BAR_MISSING",
-                    "state_id": state.state_id,
-                    "symbol": state.symbol,
-                    "trade_date": state.trade_date.isoformat(),
-                    "latest_bar_time": latest_bar_time.isoformat() if latest_bar_time else None,
-                    "observed_until": as_of_time.isoformat(),
-                },
+            suspended = self._realtime_market_is_suspended(
+                market_context=market_context,
+                symbol=state.symbol,
+                trade_date=state.trade_date,
             )
+            if not suspended:
+                raise BrokerConnectivityError(
+                    "LocalSim cannot terminalize residual before the closing minute is observed",
+                    context={
+                        "reason_code": "LOCALSIM_CLOSE_BAR_MISSING",
+                        "state_id": state.state_id,
+                        "symbol": state.symbol,
+                        "trade_date": state.trade_date.isoformat(),
+                        "latest_bar_time": latest_bar_time.isoformat() if latest_bar_time else None,
+                        "observed_until": as_of_time.isoformat(),
+                    },
+                )
         payload = state.model_dump(mode="python")
         sequence = state.sequence + (1 if increment_sequence else 0)
+        suspended_without_close = latest_bar_time is None or latest_bar_time.time() < time(15, 0)
         payload.update(
             {
                 "runtime_status": LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
-                "terminal_reason": "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY",
-                "residual_classification": "SCHEDULE_RESIDUAL_AT_CLOSE",
+                "terminal_reason": (
+                    "MARKET_SESSION_CLOSED_SUSPENDED"
+                    if suspended_without_close
+                    else "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY"
+                ),
+                "residual_classification": (
+                    "SUSPENDED_AT_CLOSE"
+                    if suspended_without_close
+                    else "SCHEDULE_RESIDUAL_AT_CLOSE"
+                ),
+                "waiting_reason_code": None,
+                "waiting_context": None,
                 "sequence": sequence,
                 "idempotency_key": canonical_json_sha256(
                     ["localsim_state_transition_v1", state.state_id, sequence, "EXPIRED_WITH_RESIDUAL"]
