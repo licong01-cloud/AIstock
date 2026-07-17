@@ -31,8 +31,8 @@
   "expected": "QE配置编译必须显式使用QE immutable ST PIT校验上下文，只接受当前数据集固定key；Selection/Paper/模拟盘继续默认只接受shsz_st_pit_active_v1，两个命名空间不得互相放宽或回退。",
   "first_seen_at": "2026-07-17T06:15:14.465035Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8e38bcc3d0eee4d2b7372d64af6721ef7773f6bf",
+  "fixed_at": "2026-07-17T07:05:42.415326Z",
   "github_issue_number": 2300,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2300",
   "last_seen_at": "2026-07-17T06:15:14.465035Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2302",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "e69e76f4865b019cdf1da9c1",
     "source_event_id": "FE-20260717-e69e76f4865b"
   },
+  "validation_evidence": [
+    "targeted pytest -> 128 passed, 24 skipped; ruff -> passed; py_compile -> passed; git diff --check -> passed; GitHub CI -> green"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
