@@ -3102,6 +3102,8 @@ class SimulationLifecycleScheduler:
             package_status_cache=package_status_cache,
             lifecycle_skips=lifecycle_skips,
             blocked_binding_keys=blocked_binding_keys,
+            created_by=created_by,
+            raise_on_error=raise_on_error,
         )
         results: list[SimulationSchedulerBindingResult] = list(lifecycle_skips)
         eod_terminalized_run_ids = {
@@ -4869,18 +4871,36 @@ class SimulationLifecycleScheduler:
         package_status_cache: dict[str, PackageStatus],
         lifecycle_skips: list[SimulationSchedulerBindingResult],
         blocked_binding_keys: set[tuple[str, SimulationBrokerBackend]],
+        created_by: str,
+        raise_on_error: bool,
     ) -> list[SimulationReleaseBinding]:
         if release_id is not None:
             return bindings
 
         bindings = self._without_superseded_unattended_bindings(bindings)
-        bindings = [
-            self._rebase_unattended_binding_to_authoritative_manifest(
-                binding=binding,
-                trade_date=trade_date,
-            )
-            for binding in bindings
-        ]
+        rebased_bindings: list[SimulationReleaseBinding] = []
+        for binding in bindings:
+            try:
+                rebased_bindings.append(
+                    self._rebase_unattended_binding_to_authoritative_manifest(
+                        binding=binding,
+                        trade_date=trade_date,
+                    )
+                )
+            except RuntimeConfigInvalidError as exc:
+                if not self._isolate_invalid_miniqmt_roll_forward_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    created_by=created_by,
+                    exc=exc,
+                    phase="MANIFEST_REBASE",
+                    lifecycle_skips=lifecycle_skips,
+                    blocked_binding_keys=blocked_binding_keys,
+                    raise_on_error=raise_on_error,
+                ):
+                    raise
+        bindings = rebased_bindings
 
         remaining_slots = limit - len(bindings)
         if remaining_slots <= 0:
@@ -4913,8 +4933,29 @@ class SimulationLifecycleScheduler:
                     continue
                 if not self._binding_can_roll_forward(source=source, trade_date=trade_date):
                     continue
-                roll_forwarded.append(self._roll_forward_unattended_binding(source=source, trade_date=trade_date))
-                existing_keys.add((source.strategy_id, source.broker_backend))
+                binding_key = (source.strategy_id, source.broker_backend)
+                try:
+                    rolled_binding = self._roll_forward_unattended_binding(
+                        source=source,
+                        trade_date=trade_date,
+                    )
+                except RuntimeConfigInvalidError as exc:
+                    if not self._isolate_invalid_miniqmt_roll_forward_binding(
+                        binding=source,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        created_by=created_by,
+                        exc=exc,
+                        phase="EXPIRED_BINDING_ROLL_FORWARD",
+                        lifecycle_skips=lifecycle_skips,
+                        blocked_binding_keys=blocked_binding_keys,
+                        raise_on_error=raise_on_error,
+                    ):
+                        raise
+                    existing_keys.add(binding_key)
+                    continue
+                roll_forwarded.append(rolled_binding)
+                existing_keys.add(binding_key)
                 if len(roll_forwarded) >= remaining_slots:
                     break
 
@@ -4923,6 +4964,49 @@ class SimulationLifecycleScheduler:
         combined = [*bindings, *roll_forwarded]
         combined.sort(key=lambda item: (item.created_at, item.binding_id), reverse=True)
         return combined[:limit]
+
+    def _isolate_invalid_miniqmt_roll_forward_binding(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        created_by: str,
+        exc: RuntimeConfigInvalidError,
+        phase: str,
+        lifecycle_skips: list[SimulationSchedulerBindingResult],
+        blocked_binding_keys: set[tuple[str, SimulationBrokerBackend]],
+        raise_on_error: bool,
+    ) -> bool:
+        context = self._exception_context(exc)
+        if context.get("reason_code") != "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED":
+            return False
+        if raise_on_error:
+            raise exc
+        lifecycle_skips.append(
+            self._record_pre_run_binding_failure_result(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+                created_by=created_by,
+                exc=exc,
+            )
+        )
+        blocked_binding_keys.add((binding.strategy_id, binding.broker_backend))
+        logger.error(
+            "Invalid MiniQMT roll-forward binding isolated without starving valid bindings",
+            extra={
+                "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                "phase": phase,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "broker_backend": binding.broker_backend.value,
+                "trade_date": trade_date.isoformat(),
+                "broker_called": False,
+                "legacy_fallback": False,
+            },
+        )
+        return True
 
     @staticmethod
     def _without_superseded_unattended_bindings(
@@ -5063,6 +5147,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         authoritative_manifest_sha256: str | None = None,
     ) -> SimulationReleaseBinding:
+        miniqmt_quote_control = self._validated_unattended_roll_forward_quote_control(source=source)
         source_release = self.repository.get_strategy_runtime_release(source.release_id)
         resolved_manifest_sha256 = authoritative_manifest_sha256 or self._authoritative_package_manifest_sha256(
             package_id=source_release.package_id,
@@ -5124,11 +5209,7 @@ class SimulationLifecycleScheduler:
             order_remark_prefix=source.order_remark_prefix,
             approval_state=source.approval_state,
             binding_metadata=binding_metadata,
-            miniqmt_quote_control=(
-                dict(source.binding_config_json["miniqmt_quote_control"])
-                if isinstance(source.binding_config_json.get("miniqmt_quote_control"), dict)
-                else None
-            ),
+            miniqmt_quote_control=miniqmt_quote_control,
             effective_from=trade_date,
             effective_to=trade_date,
             created_by=created_by,
@@ -5137,6 +5218,47 @@ class SimulationLifecycleScheduler:
                 f"on {trade_date.isoformat()}."
             ),
         )
+
+    @staticmethod
+    def _validated_unattended_roll_forward_quote_control(
+        *,
+        source: SimulationReleaseBinding,
+    ) -> dict[str, Any] | None:
+        if source.broker_backend is not SimulationBrokerBackend.MINIQMT_SIM:
+            return None
+
+        from backend.execution_algos.adaptive_is.contracts import ControlRevision
+        from backend.services.miniqmt_execution_runtime.b0_quote_v2 import QuoteControlBindingV1
+
+        try:
+            quote_control = QuoteControlBindingV1.from_binding_config(source.binding_config_json)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT unattended roll-forward requires an exact B0_QUOTE_V2 source binding",
+                context={
+                    "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                    "stage": "SIMULATION_UNATTENDED_ROLL_FORWARD_PREFLIGHT",
+                    "binding_id": source.binding_id,
+                    "strategy_id": source.strategy_id,
+                    "broker_backend": source.broker_backend.value,
+                    "legacy_fallback": False,
+                },
+            ) from exc
+        if quote_control.control_revision is not ControlRevision.B0_QUOTE_V2:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT unattended roll-forward cannot continue a LEGACY_B0 source binding",
+                context={
+                    "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                    "stage": "SIMULATION_UNATTENDED_ROLL_FORWARD_PREFLIGHT",
+                    "binding_id": source.binding_id,
+                    "strategy_id": source.strategy_id,
+                    "broker_backend": source.broker_backend.value,
+                    "control_revision": quote_control.control_revision.value,
+                    "required_control_revision": ControlRevision.B0_QUOTE_V2.value,
+                    "legacy_fallback": False,
+                },
+            )
+        return quote_control.canonical_payload()
 
     @staticmethod
     def _roll_forward_created_by(backend: SimulationBrokerBackend) -> str:
