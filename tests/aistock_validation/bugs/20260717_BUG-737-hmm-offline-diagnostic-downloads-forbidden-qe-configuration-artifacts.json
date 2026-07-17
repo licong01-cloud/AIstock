@@ -31,8 +31,8 @@
   "expected": "Diagnostics read only approved computational artifacts and never download or persist QE configuration content.",
   "first_seen_at": "2026-07-17T15:31:29.281332Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8372d043afc1a47fc1c8cd341c70adccc2b236c9",
+  "fixed_at": "2026-07-17T16:48:03.872623Z",
   "github_issue_number": 2365,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2365",
   "last_seen_at": "2026-07-17T15:31:29.281332Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2377",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm_evolution"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "e1f342e2132b0a3fbe681efe",
     "source_event_id": "FE-20260717-e1f342e2132b"
   },
+  "validation_evidence": [
+    "PR #2377 CI PASS; 178 passed, 8 skipped; Ruff PASS; F2 design validation PASS; guardrail P1 blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
