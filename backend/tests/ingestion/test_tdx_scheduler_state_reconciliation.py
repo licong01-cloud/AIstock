@@ -331,11 +331,49 @@ def test_refresh_schedules_reconciles_due_sync_targets():
     scheduler._reconcile_stale_queued_ingestion_jobs = lambda: calls.append("stale_queued")
     scheduler._fetchall = lambda sql, params=(): []
     scheduler._update_jobs = lambda testing, ingestion: calls.append(("jobs", list(testing), list(ingestion)))
+    scheduler._reconcile_recovered_final_targets = lambda: calls.append("final_recovery")
     scheduler._reconcile_due_data_sync_targets = lambda: calls.append("due")
 
     scheduler.refresh_schedules()
 
-    assert calls == ["stale_running", "stale_queued", ("jobs", [], []), "due"]
+    assert calls == ["stale_running", "stale_queued", ("jobs", [], []), "final_recovery", "due"]
+
+
+def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    fixed_now = dt.datetime(2026, 7, 17, 2, 0, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: fixed_now)
+    scheduler._fetchall = lambda sql, params=(): [
+        {
+            "target_id": "target-sector-old",
+            "dataset": "sector_data",
+            "target_date": dt.date(2026, 7, 15),
+        },
+        {
+            "target_id": "target-other-stale",
+            "dataset": "cyq_perf",
+            "target_date": dt.date(2026, 7, 15),
+        },
+    ]
+    scheduler._check_dataset_recovered = lambda dataset, target_date: SimpleNamespace(
+        status="ok" if dataset == "sector_data" else "stale",
+        expected_date=target_date,
+    )
+    scheduler._reconcile_recovered_target_state = lambda **kwargs: calls.append(kwargs)
+
+    assert scheduler._reconcile_recovered_final_targets() == ["target-sector-old"]
+    assert calls == [
+        {
+            "dataset": "sector_data",
+            "target_id": "target-sector-old",
+            "target_date": dt.date(2026, 7, 15),
+            "trigger_source": "data_sync_target_final_recovery_sweep",
+            "finished_at": fixed_now,
+            "context": {"precheck": "historical_target_already_recovered"},
+        }
+    ]
+    assert scheduler._reconcile_recovered_final_targets() == []
 
 
 def test_recent_submission_keeps_running_job_visible_outside_recent_window():
@@ -379,6 +417,7 @@ def test_recent_submission_can_exclude_current_delayed_job():
 def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
+    fixed_now = dt.datetime(2026, 7, 13, 16, 0, tzinfo=dt.timezone.utc)
     target_date = dt.date(2026, 7, 13)
     target = {
         "target_id": "target-1",
@@ -391,14 +430,11 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
         def list_fillable_targets(self, **_kwargs):
             return [target]
 
-        def record_attempt(self, record):
-            calls.append(("attempt", record.status, record.target_id, record.trigger_source))
-            return {"attempt_id": "attempt-1"}
-
         def claim_fillable_target(self, *_args, **_kwargs):
             raise AssertionError("covered target must not be leased")
 
     monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(scheduler_module, "_now", lambda: fixed_now)
     scheduler._schedule_map_for_enabled_datasets = lambda: {
         "index_daily": {"schedule_id": "schedule-1", "mode": "incremental"}
     }
@@ -419,10 +455,11 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
             "dataset": "index_daily",
             "target_id": "target-1",
             "target_date": target_date,
+            "trigger_source": "data_sync_target_precheck",
+            "finished_at": fixed_now,
             "context": {"precheck": "already_recovered", "expected_date": "2026-07-13"},
         },
     )
-    assert calls[1] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
 
 
 def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
@@ -665,17 +702,17 @@ def test_audit_checker_uses_physical_fallback_for_stale_explicit_target_date():
 def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
+    fixed_now = dt.datetime(2026, 5, 18, 12, 0, tzinfo=dt.timezone.utc)
 
     class _Future:
         def exception(self):
             return None
 
     class _TargetRepo:
-        def record_attempt(self, record):
-            calls.append(("attempt", record.status, record.target_id))
-            return {"attempt_id": "attempt-1"}
+        pass
 
     monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _TargetRepo())
+    monkeypatch.setattr(scheduler_module, "_now", lambda: fixed_now)
     scheduler._target_date_for_retry = lambda _dataset, _options=None: dt.date(2026, 5, 18)
     scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
         2026, 5, 18, 23, 30, tzinfo=dt.timezone.utc
@@ -700,6 +737,9 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
             "dataset": "cyq_perf",
             "target_id": "target-1",
             "target_date": dt.date(2026, 5, 18),
+            "trigger_source": "data_sync_target_retry",
+            "job_id": job_id,
+            "finished_at": fixed_now,
             "context": {
                 "mode": "incremental",
                 "job_id": job_id,
@@ -710,7 +750,6 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
             },
         },
     )
-    assert calls[1] == ("attempt", "reconciled", "target-1")
 
 
 def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(monkeypatch):
@@ -730,7 +769,7 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
         def execute(self, sql, params=()):
             executions.append((sql, params))
             if "UPDATE market.data_sync_targets" in sql:
-                self.rowcount = 2
+                self.rowcount = 1
             elif "UPDATE market.data_alerts" in sql:
                 self.rowcount = 2
             else:
@@ -738,10 +777,13 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
 
         def fetchall(self):
             return [
-                {"target_id": "target-original"},
-                {"target_id": "target-delayed"},
-                {"target_id": "target-auto"},
+                {"target_id": "target-original", "target_status": "reconciled"},
+                {"target_id": "target-delayed", "target_status": "final_blocked"},
+                {"target_id": "target-auto", "target_status": "final_blocked"},
             ]
+
+        def fetchone(self):
+            return (2,)
 
     class _Connection:
         def __enter__(self):
@@ -763,6 +805,8 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
         dataset="sector_data",
         target_id="target-original",
         target_date=dt.date(2026, 7, 15),
+        trigger_source="unit_recovery",
+        finished_at=dt.datetime(2026, 7, 16, 22, 23, tzinfo=dt.timezone.utc),
         context={"precheck": "already_recovered"},
     )
 
@@ -776,10 +820,17 @@ def test_recovered_target_reconciles_readiness_family_and_matching_retry_alerts(
         "sector_data",
         dt.date(2026, 7, 15),
     )
-    target_sql, target_params = executions[1]
+    target_sql, target_params = next(
+        (sql, params) for sql, params in executions if "UPDATE market.data_sync_targets" in sql
+    )
     assert "blocked_at = NULL" in target_sql
-    assert target_params[1] == ["target-original", "target-delayed", "target-auto"]
-    alert_sql, alert_params = executions[2]
+    assert "last_attempt_status = 'reconciled'" in target_sql
+    assert target_params[2] in {"target-delayed", "target-auto"}
+    insert_attempts = [sql for sql, _params in executions if "INSERT INTO market.data_sync_attempts" in sql]
+    assert len(insert_attempts) == 2
+    alert_sql, alert_params = next(
+        (sql, params) for sql, params in executions if "UPDATE market.data_alerts" in sql
+    )
     assert "alert_type = 'retry_exhausted'" in alert_sql
     assert "details->>'target_id' = ANY(%s)" in alert_sql
     assert alert_params == (
@@ -805,6 +856,7 @@ def test_recovered_target_state_failure_is_not_silently_ignored(monkeypatch):
             dataset="sector_data",
             target_id="target-original",
             target_date=dt.date(2026, 7, 15),
+            trigger_source="unit_recovery",
         )
 
 
@@ -1191,6 +1243,9 @@ def test_auto_retry_recovery_reconciles_target_family_before_reporting_success(m
         "dataset": "cyq_perf",
         "target_id": "target-1",
         "target_date": dt.date(2026, 5, 18),
+        "trigger_source": "data_sync_target_auto_retry",
+        "job_id": reconcile["job_id"],
+        "finished_at": scheduler_module._now(),
         "context": {"triggered_by": "auto_retry", "attempt": 1},
     }
     assert not any(call[0] == "alert" for call in calls)

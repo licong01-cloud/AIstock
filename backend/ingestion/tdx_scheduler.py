@@ -931,6 +931,10 @@ class TDXScheduler:
         self._last_schedule_hygiene_findings = findings
         self._update_jobs(testing, ingestion)
         try:
+            self._reconcile_recovered_final_targets()
+        except Exception:  # noqa: BLE001 - durable final targets remain available for the next sweep.
+            _logger.exception("final data sync target recovery sweep failed")
+        try:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
@@ -963,6 +967,49 @@ class TDXScheduler:
             if explicit_owner:
                 return explicit_owner
         return _AUTO_RETRY_SCHEDULE_ALIASES.get(health_dataset, health_dataset)
+
+    def _reconcile_recovered_final_targets(self) -> List[str]:
+        """Recheck final readiness targets so historical recovered families self-heal."""
+
+        now = _now()
+        last_sweep = getattr(self, "_last_final_target_recovery_sweep", None)
+        if last_sweep is not None and now - last_sweep < dt.timedelta(minutes=10):
+            return []
+        self._last_final_target_recovery_sweep = now
+        candidates = self._fetchall(
+            """SELECT DISTINCT ON (dataset, target_date)
+                      target_id, dataset, target_date
+                 FROM market.data_sync_targets
+                WHERE target_status = 'final_blocked'
+                  AND data_source = 'readiness_gate'
+                  AND target_date IS NOT NULL
+                ORDER BY dataset, target_date DESC, updated_at DESC
+                LIMIT 100"""
+        )
+        reconciled: List[str] = []
+        for target in candidates:
+            dataset = str(target.get("dataset") or "").strip().lower()
+            target_id = str(target.get("target_id") or "").strip()
+            target_date = self._coerce_target_date(target.get("target_date"))
+            if not dataset or not target_id or target_date is None:
+                continue
+            try:
+                readiness = self._check_dataset_recovered(dataset, target_date)
+            except Exception as exc:  # noqa: BLE001 - one dataset must not block the sweep.
+                _logger.warning("final target recovery precheck failed for %s/%s: %s", dataset, target_date, exc)
+                continue
+            if readiness is None or getattr(readiness, "status", None) != "ok":
+                continue
+            self._reconcile_recovered_target_state(
+                dataset=dataset,
+                target_id=target_id,
+                target_date=target_date,
+                trigger_source="data_sync_target_final_recovery_sweep",
+                finished_at=now,
+                context={"precheck": "historical_target_already_recovered"},
+            )
+            reconciled.append(target_id)
+        return reconciled
 
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
@@ -1010,16 +1057,9 @@ class TDXScheduler:
                     dataset=health_dataset,
                     target_id=target_id,
                     target_date=target_date,
+                    trigger_source="data_sync_target_precheck",
+                    finished_at=now,
                     context=metadata,
-                )
-                repo.record_attempt(
-                    DataSyncAttemptRecord(
-                        target_id=target_id,
-                        status="reconciled",
-                        trigger_source="data_sync_target_precheck",
-                        finished_at=now,
-                        context_json=metadata,
-                    )
                 )
                 continue
 
@@ -1918,17 +1958,10 @@ class TDXScheduler:
                     dataset=health_dataset,
                     target_id=target_id,
                     target_date=target_date,
+                    trigger_source="data_sync_target_retry",
+                    job_id=options.get("job_id"),
+                    finished_at=now,
                     context=metadata,
-                )
-                repo.record_attempt(
-                    DataSyncAttemptRecord(
-                        target_id=target_id,
-                        status="reconciled",
-                        trigger_source="data_sync_target_retry",
-                        job_id=options.get("job_id"),
-                        finished_at=now,
-                        context_json=metadata,
-                    )
                 )
                 return
 
@@ -1991,6 +2024,9 @@ class TDXScheduler:
         dataset: str,
         target_id: str | None,
         target_date: dt.date | None,
+        trigger_source: str,
+        job_id: str | None = None,
+        finished_at: dt.datetime | None = None,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, int]:
         """Atomically reconcile a readiness-target family and its retry alerts."""
@@ -2005,10 +2041,11 @@ class TDXScheduler:
             "reconciled_by_target_id": target_id_key or None,
             **dict(context or {}),
         }
+        finished_at = finished_at or _now()
         with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
                 cur.execute(
-                    """SELECT target_id
+                    """SELECT target_id, target_status
                          FROM market.data_sync_targets
                         WHERE target_id = %s
                            OR (
@@ -2020,26 +2057,63 @@ class TDXScheduler:
                         FOR UPDATE""",
                     (target_id_key, target_date, dataset_key, target_date),
                 )
-                family_ids = [str(row["target_id"]) for row in cur.fetchall()]
+                family = [dict(row) for row in cur.fetchall()]
+                family_ids = [str(row["target_id"]) for row in family]
                 if target_id_key and target_id_key not in family_ids:
                     raise ValueError(f"data sync target not found: {target_id_key}")
                 if not family_ids:
                     return {"targets_reconciled": 0, "alerts_acknowledged": 0}
 
-                cur.execute(
-                    """UPDATE market.data_sync_targets
-                          SET target_status = 'reconciled',
-                              next_retry_at = NULL,
-                              last_error_message = NULL,
-                              metadata = metadata || %s::jsonb,
-                              updated_at = NOW(),
-                              reconciled_at = COALESCE(reconciled_at, NOW()),
-                              blocked_at = NULL
-                        WHERE target_id = ANY(%s)
-                          AND target_status <> 'reconciled'""",
-                    (pgx.Json(metadata_patch, dumps=_json_dump), family_ids),
-                )
-                targets_reconciled = int(cur.rowcount or 0)
+                targets_reconciled = 0
+                for target in family:
+                    if str(target.get("target_status") or "") == "reconciled":
+                        continue
+                    family_target_id = str(target["target_id"])
+                    cur.execute(
+                        """SELECT COALESCE(MAX(attempt_no), 0) + 1
+                             FROM market.data_sync_attempts
+                            WHERE target_id = %s""",
+                        (family_target_id,),
+                    )
+                    attempt_no = int(cur.fetchone()[0])
+                    attempt_id = f"dsa_{uuid.uuid4().hex}"
+                    cur.execute(
+                        """INSERT INTO market.data_sync_attempts
+                                  (attempt_id, target_id, attempt_no, status, trigger_source,
+                                   job_id, finished_at, context_json)
+                           VALUES (%s, %s, %s, 'reconciled', %s, %s, %s, %s)""",
+                        (
+                            attempt_id,
+                            family_target_id,
+                            attempt_no,
+                            trigger_source,
+                            job_id,
+                            finished_at,
+                            pgx.Json(metadata_patch, dumps=_json_dump),
+                        ),
+                    )
+                    cur.execute(
+                        """UPDATE market.data_sync_targets
+                              SET target_status = 'reconciled',
+                                  next_retry_at = NULL,
+                                  attempt_count = attempt_count + 1,
+                                  last_attempt_id = %s,
+                                  last_attempt_status = 'reconciled',
+                                  last_error_message = NULL,
+                                  metadata = metadata || %s::jsonb,
+                                  updated_at = NOW(),
+                                  reconciled_at = NOW(),
+                                  blocked_at = NULL
+                            WHERE target_id = %s""",
+                        (
+                            attempt_id,
+                            pgx.Json(metadata_patch, dumps=_json_dump),
+                            family_target_id,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError(f"data sync target not found during reconciliation: {family_target_id}")
+                    targets_reconciled += 1
 
                 cur.execute(
                     """UPDATE market.data_alerts
@@ -3597,6 +3671,9 @@ class TDXScheduler:
                                             dataset=ds,
                                             target_id=target_id,
                                             target_date=target_date,
+                                            trigger_source="data_sync_target_auto_retry",
+                                            job_id=retry_opts.get("job_id"),
+                                            finished_at=_now(),
                                             context={"triggered_by": "auto_retry", "attempt": attempt + 1},
                                         )
                                     except Exception as target_exc:  # noqa: BLE001
