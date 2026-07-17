@@ -1,0 +1,169 @@
+{
+  "actual": "worker.run_once executes one evaluation synchronously; scripts/hmm_evolution_worker.py loops sequentially; input_adapter.load_evaluation reloads common inputs for every candidate.",
+  "allowed_write_scope": [
+    "backend/services/hmm_evolution/worker.py",
+    "backend/services/hmm_evolution/input_adapter.py",
+    "backend/services/hmm_evolution/service.py",
+    "backend/services/hmm_evolution/executor.py",
+    "backend/tests/hmm_evolution",
+    "tests/aistock_validation/bugs/20260717_BUG-742-hmm-evolution-batch-worker-ignores-candidate-concurrency-and-reloads-sha.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-742",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-17T19:44:50.616173Z",
+  "description": "worker.run_once executes one evaluation synchronously; scripts/hmm_evolution_worker.py loops sequentially; input_adapter.load_evaluation reloads common inputs for every candidate.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260717-eebf71727afd",
+      "timestamp": "2026-07-17T19:44:50.616170Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #2389 post-merge design compliance review"
+  ],
+  "expected": "One batch must load prediction, label, candidate coefficients and market data once, execute candidates with configured concurrency 1..4 (default 2), preserve deterministic result ordering, and meet the approved performance path without changing QE assets.",
+  "first_seen_at": "2026-07-17T19:44:50.616173Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2394,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2394",
+  "last_seen_at": "2026-07-17T19:44:50.616173Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rtk rg -n 'candidate_concurrency|load_evaluation|run_once' backend/services/hmm_evolution scripts/hmm_evolution_worker.py",
+  "required_verification": [
+    "l0",
+    "hmm_evolution_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "HMM Evolution batch worker ignores candidate_concurrency and reloads shared inputs per evaluation",
+  "trigger_condition": {
+    "fingerprint": "eebf71727afd3a841ee235e5",
+    "source_event_id": "FE-20260717-eebf71727afd"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "hmm_evolution"
+      ],
+      "plans": [
+        "hmm_evolution_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "hmm_evolution"
+        ],
+        "plans": [
+          "hmm_evolution_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
