@@ -30,8 +30,8 @@
   "expected": "Historical replay uses the same DB-backed active-holding market hydration as daily review, completes when prices exist, and never re-enters a symbol during the same review that exited it.",
   "first_seen_at": "2026-07-17T07:27:36.560342Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0d44382df10c8b931869b456bc537a2aa03243da",
+  "fixed_at": "2026-07-17T08:30:32.646232Z",
   "github_issue_number": 2321,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2321",
   "last_seen_at": "2026-07-17T07:27:36.560342Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2322",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -58,6 +59,11 @@
     "fingerprint": "cbcdf1e632a0474501c3faf4",
     "source_event_id": "FE-20260717-cbcdf1e632a0"
   },
+  "validation_evidence": [
+    "targeted replay invariants -> 3 passed",
+    "advisory service tests -> 22 passed",
+    "PR 2322 required CI matrix -> 19 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
