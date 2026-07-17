@@ -16,7 +16,6 @@ from . import rdagent
 from . import rdagent_templates
 from . import stock_universe
 from . import tdx_blocks
-from . import hmm_evolution
 
 __all__ = [
     "health",
@@ -40,5 +39,4 @@ __all__ = [
     "quantevolver",
     "quantevolver_evolution",
     "hmm_training",
-    "hmm_evolution",
 ]
