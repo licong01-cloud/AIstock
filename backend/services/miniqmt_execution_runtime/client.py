@@ -1237,14 +1237,10 @@ class MiniQMTExecutionRuntimeClient:
                     },
                 )
             requests = tuple(_event_loop_requests_from_batch(batch))
-            stored_results = tuple(
-                _result_from_dict(item)
-                for item in (batch.result_json or {}).get("results", ())
-                if isinstance(item, dict)
-            )
+            stored_results = _event_loop_results_from_batch(batch, requests=requests)
             results_by_parent = {
                 parent_id: result
-                for request, result in zip(requests, stored_results, strict=False)
+                for request, result in zip(requests, stored_results, strict=True)
                 if (parent_id := _parent_id_from_request(request))
             }
             results_by_parent.update(parent_results)
@@ -1269,11 +1265,33 @@ class MiniQMTExecutionRuntimeClient:
                 source=source,
             )
             latest = get_batch(batch_id)
+            if latest is None:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop tick driver batch disappeared after durable upsert",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_READBACK_MISSING",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                        "runtime_id": runtime_id,
+                        "qmt_batch_id": batch_id,
+                    },
+                )
+            if not isinstance(latest.result_json, dict) or not isinstance(latest.metadata, dict):
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop tick driver batch readback has an invalid carrier",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                        "runtime_id": runtime_id,
+                        "qmt_batch_id": batch_id,
+                        "result_json_type": type(latest.result_json).__name__,
+                        "metadata_type": type(latest.metadata).__name__,
+                    },
+                )
             updated[batch_id] = {
                 "batch_id": batch_id,
-                "batch_status": latest.batch_status.value if latest is not None else None,
-                "result_json": dict(latest.result_json or {}) if latest is not None else {},
-                "metadata": dict(latest.metadata or {}) if latest is not None else {},
+                "batch_status": latest.batch_status.value,
+                "result_json": dict(latest.result_json),
+                "metadata": dict(latest.metadata),
             }
         return updated
 
@@ -1290,10 +1308,8 @@ class MiniQMTExecutionRuntimeClient:
         if batch is None:
             return None
         requests = tuple(_event_loop_requests_from_batch(batch))
-        stored_results = tuple(
-            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
-        )
-        for request, result in zip(requests, stored_results, strict=False):
+        stored_results = _event_loop_results_from_batch(batch, requests=requests)
+        for request, result in zip(requests, stored_results, strict=True):
             if _parent_id_from_request(request) == parent_intent_id:
                 return result.preflight
         return None
@@ -1607,12 +1623,30 @@ class MiniQMTExecutionRuntimeClient:
         if batch is None:
             return None
         stored_requests = _event_loop_requests_from_batch(batch)
-        if not stored_requests:
-            return None
-        stored_results = tuple(
-            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
-        )
-        metadata = batch.metadata if isinstance(batch.metadata, dict) else {}
+        stored_results = _event_loop_results_from_batch(batch, requests=stored_requests)
+        if request_count != len(stored_requests):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop durable batch request cardinality conflicts with the active request set",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_CARDINALITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_EXISTING_BATCH_REPLAY",
+                    "qmt_batch_id": batch.batch_id,
+                    "active_request_count": request_count,
+                    "durable_request_count": len(stored_requests),
+                },
+            )
+        if not isinstance(batch.metadata, dict):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop durable batch metadata must be a mapping",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_EXISTING_BATCH_REPLAY",
+                    "qmt_batch_id": batch.batch_id,
+                    "field_path": "metadata",
+                    "value_type": type(batch.metadata).__name__,
+                },
+            )
+        metadata = batch.metadata
         effective_batch_id = batch.batch_id
         if batch.batch_status == OrderBatchStatus.PARTIAL and metadata.get("dependent_buy_deferred"):
             return self._event_loop_dependent_buy_retry_result(
@@ -1636,22 +1670,7 @@ class MiniQMTExecutionRuntimeClient:
             and not any(result.broker_called for result in stored_results)
         ):
             return None
-        results = stored_results or tuple(_event_loop_result_from_existing_intent(intent) for intent in intents)
-        if not results:
-            return None
-        total = max(request_count, len(results))
-        if len(results) != total:
-            results = tuple(results) + tuple(
-                ManagedOrderSubmitResult(
-                    False,
-                    None,
-                    None,
-                    "stored event_loop batch result missing item",
-                    OrderPreflightResult(False, (), None, Decimal("0"), Decimal("0"), Decimal("0"), None),
-                    False,
-                )
-                for _ in range(total - len(results))
-            )
+        results = stored_results
         return MiniQMTEventLoopPreflightResult(
             batch_id=effective_batch_id,
             retry_of_batch_id=effective_batch_id,
@@ -1894,11 +1913,7 @@ class MiniQMTExecutionRuntimeClient:
         batch: OrderBatchRecord,
         managed_order_service: QmtManagedOrderService | None,
     ) -> MiniQMTEventLoopPreflightResult | None:
-        stored_results = tuple(
-            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
-        )
-        if len(stored_results) != len(requests):
-            return None
+        stored_results = _event_loop_results_from_batch(batch, requests=requests)
         results = list(stored_results)
         retry_indexes = [
             index
@@ -3119,12 +3134,427 @@ def _parent_id_from_request(request: ManagedOrderRequest) -> str:
 
 
 def _event_loop_requests_from_batch(batch: OrderBatchRecord) -> list[ManagedOrderRequest]:
-    orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
-    if not isinstance(orders, list):
-        return []
-    return _batch_submission_order(
-        [_managed_request_from_payload(order) for order in orders if isinstance(order, dict)]
+    if not isinstance(batch.request_json, dict):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable batch request_json must be a mapping",
+            field_path="request_json",
+            value=batch.request_json,
+        )
+    orders = batch.request_json.get("orders")
+    if not isinstance(orders, list) or not orders:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable batch orders must be a non-empty list",
+            field_path="request_json.orders",
+            value=orders,
+        )
+    requests: list[ManagedOrderRequest] = []
+    seen_parent_ids: set[str] = set()
+    for index, raw_order in enumerate(orders):
+        if not isinstance(raw_order, dict):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable batch order row must be a mapping",
+                field_path=f"request_json.orders[{index}]",
+                value=raw_order,
+            )
+        raw_metadata = raw_order.get("metadata")
+        if not isinstance(raw_metadata, dict):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable batch order metadata must be a mapping",
+                field_path=f"request_json.orders[{index}].metadata",
+                value=raw_metadata,
+            )
+        _validate_event_loop_durable_request_row(
+            batch=batch,
+            raw_order=raw_order,
+            raw_metadata=raw_metadata,
+            index=index,
+        )
+        embedded_batch_id = raw_metadata.get("qmt_batch_id")
+        if not isinstance(embedded_batch_id, str) or embedded_batch_id.strip() != batch.batch_id:
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable request is linked to a different batch",
+                field_path=f"request_json.orders[{index}].metadata.qmt_batch_id",
+                value=embedded_batch_id,
+                expected=batch.batch_id,
+            )
+        try:
+            request = _managed_request_from_payload(raw_order)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable batch order row is invalid",
+                field_path=f"request_json.orders[{index}]",
+                value=raw_order,
+            ) from exc
+        parent_id = _parent_id_from_request(request)
+        if not parent_id or parent_id in seen_parent_ids:
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable batch parent identity is missing or duplicated",
+                field_path=f"request_json.orders[{index}].metadata.runtime_parent_intent_id",
+                value=parent_id or None,
+            )
+        seen_parent_ids.add(parent_id)
+        requests.append(request)
+    return _batch_submission_order(requests)
+
+
+def _validate_event_loop_durable_request_row(
+    *,
+    batch: OrderBatchRecord,
+    raw_order: dict[str, Any],
+    raw_metadata: dict[str, Any],
+    index: int,
+) -> None:
+    prefix = f"request_json.orders[{index}]"
+    for field_name in ("account_id", "strategy_name", "symbol", "side", "order_remark", "trade_date", "mode"):
+        value = raw_order.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message=f"MiniQMT event_loop durable request {field_name} must be a non-empty string",
+                field_path=f"{prefix}.{field_name}",
+                value=value,
+            )
+    try:
+        date.fromisoformat(raw_order["trade_date"])
+    except ValueError as exc:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable request trade_date is invalid",
+            field_path=f"{prefix}.trade_date",
+            value=raw_order["trade_date"],
+        ) from exc
+    for field_name in ("order_type", "quantity", "price_type"):
+        value = raw_order.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message=f"MiniQMT event_loop durable request {field_name} must be a positive integer",
+                field_path=f"{prefix}.{field_name}",
+                value=value,
+            )
+    raw_price = raw_order.get("price")
+    if isinstance(raw_price, bool) or not isinstance(raw_price, (str, int, float, Decimal)):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable request price must be a finite non-negative number",
+            field_path=f"{prefix}.price",
+            value=raw_price,
+        )
+    try:
+        parsed_price = Decimal(str(raw_price))
+    except (ArithmeticError, ValueError) as exc:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable request price must be a finite non-negative number",
+            field_path=f"{prefix}.price",
+            value=raw_price,
+        ) from exc
+    if not parsed_price.is_finite() or parsed_price < 0:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable request price must be a finite non-negative number",
+            field_path=f"{prefix}.price",
+            value=raw_price,
+        )
+    raw_target_weight = raw_order.get("target_weight")
+    if raw_target_weight is not None:
+        if isinstance(raw_target_weight, bool) or not isinstance(raw_target_weight, (str, int, float, Decimal)):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable request target_weight must be null or finite",
+                field_path=f"{prefix}.target_weight",
+                value=raw_target_weight,
+            )
+        try:
+            parsed_weight = Decimal(str(raw_target_weight))
+        except (ArithmeticError, ValueError) as exc:
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable request target_weight must be null or finite",
+                field_path=f"{prefix}.target_weight",
+                value=raw_target_weight,
+            ) from exc
+        if not parsed_weight.is_finite():
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable request target_weight must be null or finite",
+                field_path=f"{prefix}.target_weight",
+                value=raw_target_weight,
+            )
+    parent_aliases = {
+        key: raw_metadata[key]
+        for key in ("runtime_parent_intent_id", "execution_plan_intent_id")
+        if key in raw_metadata and raw_metadata[key] is not None
+    }
+    if not parent_aliases or any(not isinstance(value, str) or not value.strip() for value in parent_aliases.values()):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable request requires a non-empty parent identity",
+            field_path=f"{prefix}.metadata.runtime_parent_intent_id",
+            value=parent_aliases,
+        )
+    normalized_parent_ids = {value.strip() for value in parent_aliases.values()}
+    if len(normalized_parent_ids) != 1:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable request parent identity aliases conflict",
+            field_path=f"{prefix}.metadata",
+            value=parent_aliases,
+        )
+
+
+def _event_loop_results_from_batch(
+    batch: OrderBatchRecord,
+    *,
+    requests: list[ManagedOrderRequest] | tuple[ManagedOrderRequest, ...],
+) -> tuple[ManagedOrderSubmitResult, ...]:
+    if not isinstance(batch.result_json, dict):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable batch result_json must be a mapping",
+            field_path="result_json",
+            value=batch.result_json,
+        )
+    raw_results = batch.result_json.get("results")
+    if not isinstance(raw_results, list):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable batch results must be a list",
+            field_path="result_json.results",
+            value=raw_results,
+        )
+    if len(raw_results) != len(requests):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_CARDINALITY_CONFLICT",
+            message="MiniQMT event_loop durable request/result cardinality conflicts",
+            field_path="result_json.results",
+            value=len(raw_results),
+            expected=len(requests),
+        )
+    parsed: list[ManagedOrderSubmitResult] = []
+    for index, (request, raw_result) in enumerate(zip(requests, raw_results, strict=True)):
+        if not isinstance(raw_result, dict):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable result row must be a mapping",
+                field_path=f"result_json.results[{index}]",
+                value=raw_result,
+            )
+        _validate_event_loop_durable_result_row(
+            batch=batch,
+            request=request,
+            raw_result=raw_result,
+            index=index,
+        )
+        parsed.append(_result_from_dict(raw_result))
+    return tuple(parsed)
+
+
+def _validate_event_loop_durable_result_row(
+    *,
+    batch: OrderBatchRecord,
+    request: ManagedOrderRequest,
+    raw_result: dict[str, Any],
+    index: int,
+) -> None:
+    prefix = f"result_json.results[{index}]"
+    for field_name in ("success", "broker_called"):
+        if not isinstance(raw_result.get(field_name), bool):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message=f"MiniQMT event_loop durable result {field_name} must be a boolean",
+                field_path=f"{prefix}.{field_name}",
+                value=raw_result.get(field_name),
+            )
+    for field_name in ("intent_id", "qmt_order_id"):
+        value = raw_result.get(field_name)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message=f"MiniQMT event_loop durable result {field_name} must be null or a non-empty string",
+                field_path=f"{prefix}.{field_name}",
+                value=value,
+            )
+    expected_parent_id = _parent_id_from_request(request)
+    intent_id = raw_result.get("intent_id")
+    if intent_id is not None and intent_id != expected_parent_id:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable result intent identity conflicts with its request",
+            field_path=f"{prefix}.intent_id",
+            value=intent_id,
+            expected=expected_parent_id,
+        )
+    if raw_result["success"] is True and (
+        intent_id != expected_parent_id
+        or raw_result.get("qmt_order_id") is None
+        or raw_result["broker_called"] is not True
+    ):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop successful durable result lacks accepted broker identity",
+            field_path=prefix,
+            value={
+                "intent_id": intent_id,
+                "qmt_order_id": raw_result.get("qmt_order_id"),
+                "broker_called": raw_result["broker_called"],
+            },
+        )
+    if raw_result["broker_called"] is False and raw_result.get("qmt_order_id") is not None:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop no-broker durable result cannot carry qmt_order_id",
+            field_path=f"{prefix}.qmt_order_id",
+            value=raw_result.get("qmt_order_id"),
+        )
+    if not isinstance(raw_result.get("broker_message"), str):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable result broker_message must be a string",
+            field_path=f"{prefix}.broker_message",
+            value=raw_result.get("broker_message"),
+        )
+    preflight = raw_result.get("preflight")
+    if not isinstance(preflight, dict) or not isinstance(preflight.get("allowed"), bool):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable preflight must be a mapping with an exact boolean allowed",
+            field_path=f"{prefix}.preflight",
+            value=preflight,
+        )
+    errors = preflight.get("errors")
+    if not isinstance(errors, list):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable preflight errors must be a list",
+            field_path=f"{prefix}.preflight.errors",
+            value=errors,
+        )
+    for error_index, error in enumerate(errors):
+        if (
+            not isinstance(error, dict)
+            or not isinstance(error.get("code"), str)
+            or not isinstance(error.get("message"), str)
+            or not isinstance(error.get("context"), dict)
+        ):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable preflight error row is invalid",
+                field_path=f"{prefix}.preflight.errors[{error_index}]",
+                value=error,
+            )
+    strategy_id = preflight.get("strategy_id")
+    if strategy_id is not None and (not isinstance(strategy_id, str) or not strategy_id.strip()):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable preflight strategy_id must be null or a non-empty string",
+            field_path=f"{prefix}.preflight.strategy_id",
+            value=strategy_id,
+        )
+    for field_name in ("estimated_notional", "estimated_fee", "freeze_amount"):
+        _validate_event_loop_durable_number(
+            batch=batch,
+            value=preflight.get(field_name),
+            field_path=f"{prefix}.preflight.{field_name}",
+            allow_none=False,
+        )
+    _validate_event_loop_durable_number(
+        batch=batch,
+        value=preflight.get("available_cash"),
+        field_path=f"{prefix}.preflight.available_cash",
+        allow_none=True,
     )
+    for field_name in ("strategy_available_sell_quantity", "pending_sell_quantity", "broker_can_sell"):
+        value = preflight.get(field_name)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+                message="MiniQMT event_loop durable preflight quantity must be null or a non-negative integer",
+                field_path=f"{prefix}.preflight.{field_name}",
+                value=value,
+            )
+
+
+def _validate_event_loop_durable_number(
+    *,
+    batch: OrderBatchRecord,
+    value: Any,
+    field_path: str,
+    allow_none: bool,
+) -> None:
+    if value is None and allow_none:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            message="MiniQMT event_loop durable preflight amount must be a finite number",
+            field_path=field_path,
+            value=value,
+        )
+
+
+def _event_loop_durable_batch_error(
+    *,
+    batch: OrderBatchRecord,
+    reason_code: str,
+    message: str,
+    field_path: str,
+    value: Any,
+    expected: Any | None = None,
+) -> BrokerSubmitError:
+    context = {
+        "reason_code": reason_code,
+        "stage": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY",
+        "qmt_batch_id": batch.batch_id,
+        "field_path": field_path,
+        "value_type": type(value).__name__,
+    }
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        context["value"] = value
+    if expected is not None:
+        context["expected"] = expected
+    return BrokerSubmitError(message, context=context)
 
 
 def _logical_batch_id_for_event_loop_batch(batch: OrderBatchRecord) -> str | None:

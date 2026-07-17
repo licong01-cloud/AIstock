@@ -8870,6 +8870,212 @@ class SimulationLifecycleScheduler:
             counts["pending_algo_count"],
         )
 
+    @classmethod
+    def _validated_miniqmt_tick_driver_batch_results(
+        cls,
+        result_payload: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        raw_batch_results = result_payload.get("batch_results")
+        if not isinstance(raw_batch_results, dict):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver result batch_results contract is invalid",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "batch_results",
+                    "value_type": type(raw_batch_results).__name__,
+                },
+            )
+        validated: dict[str, dict[str, Any]] = {}
+        for raw_batch_id, raw_batch in raw_batch_results.items():
+            if not isinstance(raw_batch_id, str) or not raw_batch_id.strip():
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result key must be a non-empty string",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": "batch_results.<key>",
+                        "value_type": type(raw_batch_id).__name__,
+                    },
+                )
+            batch_id = raw_batch_id.strip()
+            field_prefix = f"batch_results.{batch_id}"
+            if not isinstance(raw_batch, dict):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result row must be a mapping",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": field_prefix,
+                        "value_type": type(raw_batch).__name__,
+                    },
+                )
+            embedded_batch_id = raw_batch.get("batch_id")
+            if not isinstance(embedded_batch_id, str) or embedded_batch_id.strip() != batch_id:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result identity conflicts with its mapping key",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": f"{field_prefix}.batch_id",
+                        "mapping_batch_id": batch_id,
+                        "embedded_batch_id": embedded_batch_id,
+                    },
+                )
+            batch_status = cls._validated_miniqmt_tick_driver_batch_status(
+                raw_batch.get("batch_status"),
+                field_path=f"{field_prefix}.batch_status",
+            )
+            result_json = raw_batch.get("result_json")
+            metadata = raw_batch.get("metadata")
+            if not isinstance(result_json, dict) or not isinstance(metadata, dict):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result carriers must be mappings",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": field_prefix,
+                        "result_json_type": type(result_json).__name__,
+                        "metadata_type": type(metadata).__name__,
+                    },
+                )
+            cls._validated_miniqmt_tick_driver_result_rows(
+                result_json.get("results"),
+                field_path=f"{field_prefix}.result_json.results",
+            )
+            validated[batch_id] = {
+                "batch_id": batch_id,
+                "batch_status": batch_status,
+                "result_json": dict(result_json),
+                "metadata": dict(metadata),
+            }
+        return validated
+
+    @staticmethod
+    def _validated_miniqmt_tick_driver_batch_status(value: Any, *, field_path: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver batch status must be a non-empty string",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": field_path,
+                    "value_type": type(value).__name__,
+                },
+            )
+        normalized = value.strip().upper()
+        try:
+            return OrderBatchStatus(normalized).value
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver batch status is unsupported",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": field_path,
+                    "value": value,
+                },
+            ) from exc
+
+    @staticmethod
+    def _validated_miniqmt_tick_driver_result_rows(value: Any, *, field_path: str) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver batch results must be a list",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": field_path,
+                    "value_type": type(value).__name__,
+                },
+            )
+        validated: list[dict[str, Any]] = []
+        for index, raw_result in enumerate(value):
+            if not isinstance(raw_result, dict):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result item must be a mapping",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": f"{field_path}[{index}]",
+                        "value_type": type(raw_result).__name__,
+                    },
+                )
+            for boolean_field in ("success", "broker_called"):
+                if not isinstance(raw_result.get(boolean_field), bool):
+                    raise RuntimeConfigInvalidError(
+                        "MiniQMT tick-driver batch result boolean is invalid",
+                        context={
+                            "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                            "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                            "field_path": f"{field_path}[{index}].{boolean_field}",
+                            "value_type": type(raw_result.get(boolean_field)).__name__,
+                        },
+                    )
+            for identity_field in ("intent_id", "qmt_order_id"):
+                identity_value = raw_result.get(identity_field)
+                if identity_value is not None and (
+                    not isinstance(identity_value, str) or not identity_value.strip()
+                ):
+                    raise RuntimeConfigInvalidError(
+                        "MiniQMT tick-driver batch result identity is invalid",
+                        context={
+                            "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                            "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                            "field_path": f"{field_path}[{index}].{identity_field}",
+                            "value_type": type(identity_value).__name__,
+                        },
+                    )
+            if raw_result["success"] is True and (
+                raw_result.get("intent_id") is None
+                or raw_result.get("qmt_order_id") is None
+                or raw_result["broker_called"] is not True
+            ):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT successful tick-driver batch result lacks accepted broker identity",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": f"{field_path}[{index}]",
+                    },
+                )
+            if raw_result["broker_called"] is False and raw_result.get("qmt_order_id") is not None:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT no-broker tick-driver batch result cannot carry qmt_order_id",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": f"{field_path}[{index}].qmt_order_id",
+                    },
+                )
+            preflight = raw_result.get("preflight")
+            if not isinstance(preflight, dict) or not isinstance(preflight.get("allowed"), bool):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT tick-driver batch result preflight is invalid",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                        "field_path": f"{field_path}[{index}].preflight",
+                        "value_type": type(preflight).__name__,
+                    },
+                )
+            validated.append(dict(raw_result))
+        return validated
+
+    @staticmethod
+    def _validated_miniqmt_tick_driver_exact_counter(value: Any, *, field_path: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT tick-driver durable batch cardinality must be a non-negative integer",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": field_path,
+                    "value": value,
+                },
+            )
+        return value
+
     @staticmethod
     def _mini_qmt_event_loop_has_submitted_children(payload: dict[str, Any]) -> bool:
         for key in ("submitted_intents", "triggered_child_order_count"):
@@ -9276,29 +9482,67 @@ class SimulationLifecycleScheduler:
         result: Any,
     ) -> SimulationDailyRun:
         payload = run.run_payload_json
-        result_payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-        evidence, submitted_child_count, rejected_child_count, pending_algo_count = (
-            self._validated_miniqmt_tick_driver_result(result_payload)
-        )
-        qmt_batch_id = str(payload.get("qmt_batch_id") or "").strip()
-        raw_batch_results = result_payload.get("batch_results")
-        if not isinstance(raw_batch_results, dict):
+        raw_result_payload = result.to_dict() if hasattr(result, "to_dict") else result
+        if not isinstance(raw_result_payload, Mapping):
             raise RuntimeConfigInvalidError(
-                "MiniQMT tick-driver result batch_results contract is invalid",
+                "MiniQMT tick-driver result must be a mapping",
                 context={
                     "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
                     "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
-                    "field_path": "batch_results",
-                    "value_type": type(raw_batch_results).__name__,
+                    "field_path": "tick_driver_result",
+                    "value_type": type(raw_result_payload).__name__,
                 },
             )
-        batch_results = raw_batch_results
-        qmt_batch_result = dict(payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {})
-        previous_runtime_evidence = (
-            qmt_batch_result.get("runtime_evidence")
-            if isinstance(qmt_batch_result.get("runtime_evidence"), dict)
-            else {}
+        result_payload = dict(raw_result_payload)
+        evidence, submitted_child_count, rejected_child_count, pending_algo_count = (
+            self._validated_miniqmt_tick_driver_result(result_payload)
         )
+        batch_results = self._validated_miniqmt_tick_driver_batch_results(result_payload)
+        raw_qmt_batch_id = payload.get("qmt_batch_id")
+        if raw_qmt_batch_id in (None, ""):
+            qmt_batch_id = ""
+        elif isinstance(raw_qmt_batch_id, str) and raw_qmt_batch_id.strip():
+            qmt_batch_id = raw_qmt_batch_id.strip()
+        else:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_id must be a non-empty string when present",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_id",
+                    "value_type": type(raw_qmt_batch_id).__name__,
+                },
+            )
+        raw_qmt_batch_result = payload.get("qmt_batch_result")
+        if raw_qmt_batch_result is None:
+            qmt_batch_result: dict[str, Any] = {}
+        elif isinstance(raw_qmt_batch_result, dict):
+            qmt_batch_result = dict(raw_qmt_batch_result)
+        else:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result must be a mapping",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result",
+                    "value_type": type(raw_qmt_batch_result).__name__,
+                },
+            )
+        raw_previous_runtime_evidence = qmt_batch_result.get("runtime_evidence")
+        if raw_previous_runtime_evidence is None:
+            previous_runtime_evidence: dict[str, Any] = {}
+        elif isinstance(raw_previous_runtime_evidence, dict):
+            previous_runtime_evidence = raw_previous_runtime_evidence
+        else:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable batch runtime_evidence must be a mapping",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.runtime_evidence",
+                    "value_type": type(raw_previous_runtime_evidence).__name__,
+                },
+            )
         previous_runtime_id = str(previous_runtime_evidence.get("runtime_id") or "").strip()
         current_runtime_id = str(evidence.get("runtime_id") or "").strip()
         if previous_runtime_id and current_runtime_id != previous_runtime_id:
@@ -9312,19 +9556,157 @@ class SimulationLifecycleScheduler:
                     "result_runtime_id": current_runtime_id,
                 },
             )
-        qmt_batch_status = payload.get("qmt_batch_status")
-        if qmt_batch_id and isinstance(batch_results.get(qmt_batch_id), dict):
+        if qmt_batch_result and not qmt_batch_id:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result is missing qmt_batch_id identity",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.batch_id",
+                },
+            )
+        embedded_batch_id = qmt_batch_result.get("batch_id")
+        if qmt_batch_result and (
+            not isinstance(embedded_batch_id, str) or embedded_batch_id.strip() != qmt_batch_id
+        ):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result identity conflicts with qmt_batch_id",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.batch_id",
+                    "qmt_batch_id": qmt_batch_id or None,
+                    "result_batch_id": embedded_batch_id,
+                },
+            )
+        raw_payload_batch_status = payload.get("qmt_batch_status")
+        qmt_batch_status = (
+            self._validated_miniqmt_tick_driver_batch_status(
+                raw_payload_batch_status,
+                field_path="qmt_batch_status",
+            )
+            if raw_payload_batch_status not in (None, "")
+            else None
+        )
+        raw_result_batch_status = qmt_batch_result.get("batch_status")
+        if qmt_batch_result and raw_result_batch_status in (None, ""):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result is missing batch_status",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.batch_status",
+                },
+            )
+        result_batch_status = (
+            self._validated_miniqmt_tick_driver_batch_status(
+                raw_result_batch_status,
+                field_path="qmt_batch_result.batch_status",
+            )
+            if raw_result_batch_status not in (None, "")
+            else None
+        )
+        if qmt_batch_status is not None and result_batch_status is not None and qmt_batch_status != result_batch_status:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable batch status carriers conflict",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "qmt_batch_id": qmt_batch_id or None,
+                    "payload_batch_status": qmt_batch_status,
+                    "result_batch_status": result_batch_status,
+                },
+            )
+        if qmt_batch_status is None:
+            qmt_batch_status = result_batch_status
+        existing_result_rows: list[dict[str, Any]] | None = None
+        if qmt_batch_result and "results" not in qmt_batch_result:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result is missing results",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.results",
+                },
+            )
+        if "results" in qmt_batch_result:
+            existing_result_rows = self._validated_miniqmt_tick_driver_result_rows(
+                qmt_batch_result.get("results"),
+                field_path="qmt_batch_result.results",
+            )
+        if qmt_batch_result and "total" not in qmt_batch_result:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable qmt_batch_result is missing total cardinality",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.total",
+                },
+            )
+        for counter_key in (
+            "total",
+            "succeeded",
+            "failed",
+            "pending",
+            "triggered_child_order_count",
+            "pending_child_trigger_count",
+        ):
+            if counter_key in qmt_batch_result:
+                self._validated_miniqmt_tick_driver_exact_counter(
+                    qmt_batch_result.get(counter_key),
+                    field_path=f"qmt_batch_result.{counter_key}",
+                )
+        if (
+            existing_result_rows is not None
+            and "total" in qmt_batch_result
+            and qmt_batch_result["total"] != len(existing_result_rows)
+        ):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable batch total conflicts with result cardinality",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "qmt_batch_id": qmt_batch_id or None,
+                    "total": qmt_batch_result["total"],
+                    "result_count": len(existing_result_rows),
+                },
+            )
+        if qmt_batch_result and not isinstance(qmt_batch_result.get("success"), bool):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable batch success must be a boolean",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "qmt_batch_result.success",
+                    "value_type": type(qmt_batch_result.get("success")).__name__,
+                },
+            )
+        if "broker_called" in payload and not isinstance(payload.get("broker_called"), bool):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT durable broker_called must be a boolean",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_PERSIST",
+                    "field_path": "broker_called",
+                    "value_type": type(payload.get("broker_called")).__name__,
+                },
+            )
+        if qmt_batch_id and qmt_batch_id in batch_results:
             latest_batch = batch_results[qmt_batch_id]
-            result_json = latest_batch.get("result_json") if isinstance(latest_batch.get("result_json"), dict) else {}
-            metadata = latest_batch.get("metadata") if isinstance(latest_batch.get("metadata"), dict) else {}
-            qmt_batch_status = latest_batch.get("batch_status") or qmt_batch_status
+            result_json = latest_batch["result_json"]
+            metadata = latest_batch["metadata"]
+            qmt_batch_status = latest_batch["batch_status"]
+            latest_result_rows = self._validated_miniqmt_tick_driver_result_rows(
+                result_json.get("results"),
+                field_path=f"batch_results.{qmt_batch_id}.result_json.results",
+            )
             qmt_batch_result.update(result_json)
             qmt_batch_result.update(
                 {
                     "success": rejected_child_count == 0 and (submitted_child_count > 0 or pending_algo_count > 0),
                     "batch_id": qmt_batch_id,
                     "batch_status": qmt_batch_status,
-                    "total": int(qmt_batch_result.get("total") or len(qmt_batch_result.get("results") or [])),
+                    "total": len(latest_result_rows),
                     "succeeded": submitted_child_count,
                     "failed": rejected_child_count,
                     "pending": pending_algo_count,
@@ -9335,14 +9717,14 @@ class SimulationLifecycleScheduler:
                 }
             )
         payload_patch = {
-            "broker_called": bool(payload.get("broker_called")) or submitted_child_count > 0,
+            "broker_called": payload.get("broker_called", False) or submitted_child_count > 0,
             "submitted_intents": submitted_child_count,
             "failed_intents": rejected_child_count,
             "pending_intents": pending_algo_count,
             "miniqmt_event_loop_tick_driver": result_payload,
             "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
         }
-        if qmt_batch_status:
+        if qmt_batch_status is not None:
             payload_patch["qmt_batch_status"] = qmt_batch_status
         if qmt_batch_result:
             payload_patch["qmt_batch_result"] = qmt_batch_result

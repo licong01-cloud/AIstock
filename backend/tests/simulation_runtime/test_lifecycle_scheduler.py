@@ -6908,6 +6908,161 @@ def _tick_driver_result_payload() -> dict[str, Any]:
     }
 
 
+def _tick_driver_batch_result_row() -> dict[str, Any]:
+    return {
+        "success": False,
+        "intent_id": "parent_bug683",
+        "qmt_order_id": None,
+        "broker_message": "event_loop algo pending",
+        "broker_called": False,
+        "preflight": {"allowed": True},
+    }
+
+
+def _tick_driver_persist_fixture(*, case: str | None = None):
+    batch_id = "qmtbatch_bug683"
+    row = _tick_driver_batch_result_row()
+    result = _tick_driver_result_payload()
+    result["batch_results"] = {
+        batch_id: {
+            "batch_id": batch_id,
+            "batch_status": OrderBatchStatus.SUCCEEDED.value,
+            "result_json": {"results": [deepcopy(row)]},
+            "metadata": {"source": "simulation_runtime_event_loop_tick_driver"},
+        }
+    }
+    run_payload = {
+        "qmt_batch_id": batch_id,
+        "qmt_batch_status": OrderBatchStatus.SUCCEEDED.value,
+        "qmt_batch_result": {
+            "success": False,
+            "batch_id": batch_id,
+            "batch_status": OrderBatchStatus.SUCCEEDED.value,
+            "total": 1,
+            "results": [deepcopy(row)],
+            "runtime_evidence": {"runtime_id": "mqrt_bug680"},
+        },
+        "broker_called": False,
+        "submitted_intents": 0,
+        "failed_intents": 0,
+        "pending_intents": 1,
+    }
+    if case == "batch_id_conflict":
+        result["batch_results"][batch_id]["batch_id"] = "qmtbatch_other"
+    elif case == "invalid_status":
+        result["batch_results"][batch_id]["batch_status"] = False
+    elif case == "invalid_result_json":
+        result["batch_results"][batch_id]["result_json"] = []
+    elif case == "invalid_metadata":
+        result["batch_results"][batch_id]["metadata"] = []
+    elif case == "invalid_result_boolean":
+        result["batch_results"][batch_id]["result_json"]["results"][0]["success"] = "false"
+    elif case == "invalid_foreign_batch":
+        result["batch_results"]["qmtbatch_foreign"] = "malformed"
+    elif case == "string_total":
+        run_payload["qmt_batch_result"]["total"] = "1"
+    elif case == "total_conflict":
+        run_payload["qmt_batch_result"]["total"] = 2
+    elif case == "durable_status_invalid":
+        run_payload["qmt_batch_status"] = "NOT_A_BATCH_STATUS"
+    elif case == "broker_called_string":
+        run_payload["broker_called"] = "false"
+    elif case == "durable_batch_result_list":
+        run_payload["qmt_batch_result"] = []
+    elif case == "missing_durable_batch_id":
+        run_payload["qmt_batch_result"].pop("batch_id")
+    elif case == "missing_durable_status":
+        run_payload["qmt_batch_result"].pop("batch_status")
+    elif case == "missing_durable_results":
+        run_payload["qmt_batch_result"].pop("results")
+    elif case == "missing_durable_total":
+        run_payload["qmt_batch_result"].pop("total")
+    elif case == "missing_durable_success":
+        run_payload["qmt_batch_result"].pop("success")
+    elif case is not None:  # pragma: no cover - parameter table is closed below.
+        raise AssertionError(case)
+    release, _local_binding, qmt_binding, repository = _release_and_bindings(qmt_only=True)
+    run = SimulationDailyRun(
+        run_id=f"simrun_bug683_{case or 'valid'}",
+        trade_date=TRADE_DATE,
+        strategy_id=qmt_binding.strategy_id,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        release_id=release.release_id,
+        release_hash=release.release_hash,
+        binding_id=qmt_binding.binding_id,
+        binding_hash=qmt_binding.binding_hash,
+        account_group_id=qmt_binding.account_group_id,
+        strategy_slot_id=qmt_binding.strategy_slot_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        run_payload_json=run_payload,
+    )
+    repository.save_simulation_daily_run(run)
+    scheduler = SimulationLifecycleScheduler(repository=repository)
+    return scheduler, repository, run, result
+
+
+def test_miniqmt_tick_driver_persists_exact_valid_batch_without_defaulting() -> None:
+    scheduler, repository, run, result = _tick_driver_persist_fixture()
+    try:
+        updated = scheduler._persist_miniqmt_tick_driver_result(
+            binding=SimpleNamespace(binding_id=run.binding_id),
+            run=run,
+            plan=SimpleNamespace(plan_id="plan_bug683"),
+            result=result,
+        )
+    finally:
+        scheduler.shutdown_selection_inference(wait=True)
+
+    assert updated.run_payload_json["qmt_batch_result"]["total"] == 1
+    assert updated.run_payload_json["qmt_batch_result"]["batch_status"] == OrderBatchStatus.SUCCEEDED.value
+    assert updated.run_payload_json["qmt_batch_result"]["results"] == [_tick_driver_batch_result_row()]
+    assert repository.get_simulation_daily_run(run.run_id) == updated
+
+
+@pytest.mark.parametrize(
+    ("case", "reason_code"),
+    [
+        ("batch_id_conflict", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT"),
+        ("invalid_status", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID"),
+        ("invalid_result_json", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("invalid_metadata", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("invalid_result_boolean", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("invalid_foreign_batch", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("string_total", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_INVALID"),
+        ("total_conflict", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_CONFLICT"),
+        ("durable_status_invalid", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID"),
+        ("broker_called_string", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("durable_batch_result_list", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("missing_durable_batch_id", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_IDENTITY_CONFLICT"),
+        ("missing_durable_status", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_STATUS_INVALID"),
+        ("missing_durable_results", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+        ("missing_durable_total", "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_CARDINALITY_INVALID"),
+        ("missing_durable_success", "MINIQMT_EVENT_LOOP_TICK_DRIVER_SCHEMA_INVALID"),
+    ],
+)
+def test_miniqmt_tick_driver_rejects_malformed_batch_before_durable_overwrite(
+    case: str,
+    reason_code: str,
+) -> None:
+    scheduler, repository, run, result = _tick_driver_persist_fixture(case=case)
+    before = repository.get_simulation_daily_run(run.run_id)
+    try:
+        with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+            scheduler._persist_miniqmt_tick_driver_result(
+                binding=SimpleNamespace(binding_id=run.binding_id),
+                run=run,
+                plan=SimpleNamespace(plan_id="plan_bug683"),
+                result=result,
+            )
+    finally:
+        scheduler.shutdown_selection_inference(wait=True)
+
+    assert exc_info.value.context["reason_code"] == reason_code
+    assert repository.get_simulation_daily_run(run.run_id) == before
+
+
 def test_miniqmt_tick_driver_result_requires_exact_schema_identity_and_counts() -> None:
     evidence, submitted, rejected, pending = SimulationLifecycleScheduler._validated_miniqmt_tick_driver_result(
         _tick_driver_result_payload()

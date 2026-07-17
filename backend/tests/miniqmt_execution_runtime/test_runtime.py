@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
 import pytest
+
+import backend.services.miniqmt_execution_runtime.client as miniqmt_runtime_client
 
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
@@ -17,6 +20,7 @@ from backend.services.miniqmt_execution_runtime import (
 )
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
+    OrderBatchStatus,
     OrderLedgerRecord,
     PositionLotRecord,
     STATUS_CANCELLED,
@@ -506,6 +510,205 @@ def _event_loop_client_fixture() -> tuple[
         },
     )
     return repo, qmt_repo, _EventLoopFakeQmtClient(), intent
+
+
+def _durable_event_loop_batch_fixture():
+    repo, qmt_repo, qmt_client, first_intent = _event_loop_client_fixture()
+    second_intent = first_intent.model_copy(update={"intent_id": "intent_event_loop_buy_second"})
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[first_intent, second_intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_durable_batch",
+        runtime_id="mqrt_event_loop_durable_batch",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
+    batch = qmt_repo.get_order_batch(result.batch_id or "")
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.SUCCEEDED
+    requests = miniqmt_runtime_client._event_loop_requests_from_batch(batch)
+    assert len(requests) == 2
+    return client, qmt_repo, qmt_client, batch, requests, len(qmt_client.place_order_calls)
+
+
+def test_event_loop_valid_durable_batch_replay_preserves_request_result_identity() -> None:
+    client, _qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+
+    replay = client._event_loop_existing_batch_result(
+        batch_id=batch.batch_id,
+        requests=requests,
+        request_count=len(requests),
+        managed_order_service=None,
+    )
+
+    assert replay is not None
+    assert replay.batch_id == batch.batch_id
+    assert [item.intent_id for item in replay.results] == [
+        request.metadata["runtime_parent_intent_id"] for request in requests
+    ]
+    assert [item.broker_called for item in replay.results] == [
+        item["broker_called"] for item in batch.result_json["results"]
+    ]
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+@pytest.mark.parametrize(
+    ("case", "reason_code", "field_path"),
+    [
+        (
+            "nonmapping_result",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "result_json.results[0]",
+        ),
+        (
+            "missing_result",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_CARDINALITY_CONFLICT",
+            "result_json.results",
+        ),
+        (
+            "intent_identity",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "result_json.results[0].intent_id",
+        ),
+        (
+            "string_success",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "result_json.results[0].success",
+        ),
+        (
+            "string_allowed",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "result_json.results[0].preflight",
+        ),
+        (
+            "nonmapping_request",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "request_json.orders[0]",
+        ),
+        (
+            "request_batch_identity",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "request_json.orders[0].metadata.qmt_batch_id",
+        ),
+        (
+            "duplicate_parent",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "request_json.orders[1].metadata.runtime_parent_intent_id",
+        ),
+        (
+            "string_broker_called",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "result_json.results[0].broker_called",
+        ),
+        (
+            "string_amount",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "result_json.results[0].preflight.estimated_notional",
+        ),
+        (
+            "success_without_order_id",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "result_json.results[0]",
+        ),
+        (
+            "no_broker_with_order_id",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "result_json.results[0].qmt_order_id",
+        ),
+        (
+            "string_request_quantity",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "request_json.orders[0].quantity",
+        ),
+        (
+            "boolean_request_quantity",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "request_json.orders[0].quantity",
+        ),
+        (
+            "nonfinite_request_price",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID",
+            "request_json.orders[0].price",
+        ),
+        (
+            "parent_alias_conflict",
+            "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            "request_json.orders[0].metadata",
+        ),
+    ],
+)
+def test_event_loop_durable_batch_replay_rejects_corruption_without_shift_or_padding(
+    case: str,
+    reason_code: str,
+    field_path: str,
+) -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    request_json = deepcopy(batch.request_json)
+    result_json = deepcopy(batch.result_json)
+    raw_results = result_json["results"]
+    if case == "nonmapping_result":
+        raw_results[0] = "malformed"
+    elif case == "missing_result":
+        raw_results.pop()
+    elif case == "intent_identity":
+        raw_results[0]["intent_id"] = "parent_from_another_request"
+    elif case == "string_success":
+        raw_results[0]["success"] = "false"
+    elif case == "string_allowed":
+        raw_results[0]["preflight"]["allowed"] = "true"
+    elif case == "nonmapping_request":
+        request_json["orders"][0] = "malformed"
+    elif case == "request_batch_identity":
+        request_json["orders"][0]["metadata"]["qmt_batch_id"] = "qmtbatch_other"
+    elif case == "duplicate_parent":
+        request_json["orders"][1]["metadata"]["runtime_parent_intent_id"] = request_json["orders"][0][
+            "metadata"
+        ]["runtime_parent_intent_id"]
+    elif case == "string_broker_called":
+        raw_results[0]["broker_called"] = "true"
+    elif case == "string_amount":
+        raw_results[0]["preflight"]["estimated_notional"] = "1000"
+    elif case == "success_without_order_id":
+        raw_results[0]["success"] = True
+        raw_results[0]["broker_called"] = True
+        raw_results[0]["qmt_order_id"] = None
+    elif case == "no_broker_with_order_id":
+        raw_results[0]["success"] = False
+        raw_results[0]["broker_called"] = False
+        raw_results[0]["qmt_order_id"] = "880000001"
+    elif case == "string_request_quantity":
+        request_json["orders"][0]["quantity"] = "100"
+    elif case == "boolean_request_quantity":
+        request_json["orders"][0]["quantity"] = True
+    elif case == "nonfinite_request_price":
+        request_json["orders"][0]["price"] = float("nan")
+    elif case == "parent_alias_conflict":
+        request_json["orders"][0]["metadata"]["execution_plan_intent_id"] = "parent_other"
+    else:  # pragma: no cover - parameter table is closed above.
+        raise AssertionError(case)
+    qmt_repo.upsert_order_batch(replace(batch, request_json=request_json, result_json=result_json))
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._event_loop_existing_batch_result(
+            batch_id=batch.batch_id,
+            requests=requests,
+            request_count=len(requests),
+            managed_order_service=None,
+        )
+
+    assert exc_info.value.context["reason_code"] == reason_code
+    assert exc_info.value.context["field_path"] == field_path
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
 
 
 def test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch() -> None:
