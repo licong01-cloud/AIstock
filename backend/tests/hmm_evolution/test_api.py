@@ -52,10 +52,58 @@ class _FailingService(_Service):
         raise SchemaUnavailableError("schema missing")
 
 
+class _UnexpectedValueErrorService(_Service):
+    def list_candidates(self, **_kwargs: Any) -> list[Any]:
+        raise ValueError("internal conversion failed")
+
+
+class _Value:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _AssetReader:
+    def __init__(self, *, content_type: str, data: bytes) -> None:
+        self.content_type = content_type
+        self.data = data
+        self.read_calls = 0
+
+    async def stat_asset(self, _task_id: str, _loop_name: str, relative_path: str):
+        return SimpleNamespace(
+            relative_path=relative_path,
+            size_bytes=len(self.data),
+            sha256="a" * 64,
+            content_type=self.content_type,
+            trust_level=_Value("verified_hash"),
+            access_mode=_Value("inspection_only"),
+        )
+
+    async def read_asset(self, *_args: Any, **_kwargs: Any):
+        self.read_calls += 1
+        return SimpleNamespace(
+            data=self.data,
+            receipt=SimpleNamespace(
+                sha256="a" * 64,
+                trust_level=_Value("verified_hash"),
+                access_mode=_Value("inspection_only"),
+            ),
+        )
+
+
 def _client(service: Any) -> TestClient:
     app = FastAPI()
     app.include_router(hmm_evolution.router, prefix="/api/v1")
     app.dependency_overrides[hmm_evolution.get_runtime] = lambda: SimpleNamespace(service=service)
+    return TestClient(app)
+
+
+def _asset_client(reader: _AssetReader) -> TestClient:
+    app = FastAPI()
+    app.include_router(hmm_evolution.router, prefix="/api/v1")
+    app.dependency_overrides[hmm_evolution.get_runtime] = lambda: SimpleNamespace(
+        qe_asset_reader=reader,
+        qe_read_client=SimpleNamespace(),
+    )
     return TestClient(app)
 
 
@@ -89,6 +137,12 @@ def test_hmm_error_is_not_hidden_or_nested_under_detail() -> None:
     assert payload["reason_code"] == "hmm_evolution_schema_unavailable"
     assert "detail" not in payload
     assert payload["trace_id"]
+
+
+def test_unexpected_value_error_is_not_misclassified_as_user_input() -> None:
+    response = _client(_UnexpectedValueErrorService()).get("/api/v1/hmm-evolution/candidates")
+    assert response.status_code == 500
+    assert response.json()["reason_code"] == "hmm_evolution_unknown_error"
 
 
 def test_request_validation_has_stable_hmm_reason_code() -> None:
@@ -129,3 +183,33 @@ def test_large_asset_range_is_explicit_and_bounded() -> None:
         assert getattr(exc, "reason_code", None) == "hmm_evolution_qe_asset_too_large"
     else:  # pragma: no cover
         raise AssertionError("oversized Range unexpectedly passed")
+
+
+def test_text_asset_content_redacts_secrets_and_local_paths() -> None:
+    reader = _AssetReader(
+        content_type="text/plain",
+        data=b"password=top-secret\nworkspace=F:\\Dev\\AIstock\\private\\run.log",
+    )
+    response = _asset_client(reader).get(
+        "/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/content",
+        params={"path": "logs/run.log"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert "top-secret" not in payload["text"]
+    assert "F:\\Dev\\AIstock" not in payload["text"]
+    assert payload["redaction_count"] >= 2
+    assert reader.read_calls == 1
+
+
+def test_binary_asset_content_is_rejected_before_raw_bytes_are_returned() -> None:
+    reader = _AssetReader(content_type="application/octet-stream", data=b"secret-binary")
+    response = _asset_client(reader).get(
+        "/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/content",
+        params={"path": "artifacts/pred.pkl"},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["reason_code"] == "hmm_evolution_qe_asset_content_unsupported"
+    assert reader.read_calls == 0
