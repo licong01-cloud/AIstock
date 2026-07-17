@@ -176,7 +176,7 @@ test("QE 资产目录超过 200 项仍可分页搜索并展示脱敏 schema 摘�
   await page.route("**/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/stat?**", (route) => fulfill(route, assets[220]));
   await page.route("**/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/content?**", (route) => fulfill(route, {
     content_kind: "bounded_text",
-    text: JSON.stringify({ metric: 0.12, token: "<redacted>" }),
+    text: JSON.stringify({ metric: 0.12, sensitive_value: "<redacted>" }),
     schema_kind: "json",
     redaction_count: 1,
   }));
