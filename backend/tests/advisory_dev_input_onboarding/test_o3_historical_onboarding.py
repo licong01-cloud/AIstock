@@ -44,6 +44,7 @@ from backend.services.advisory_program import AdvisoryProgramService, InMemoryAd
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.prospective_evidence import canonical_evidence_json_sha256
 from backend.services.selection_center.risk_policy import StPitRiskDecisionProvider
+from backend.services.stock_universe_pit_service import DEFAULT_ST_PIT_UNIVERSE_KEY, StockUniversePitError
 from backend.services.selection_center.runtime_profile import (
     mark_non_trading_preview_runtime_config,
     normalize_selection_runtime_config,
@@ -545,7 +546,7 @@ def test_exact_dev_st_pit_provider_preserves_shared_decision_semantics(monkeypat
 
     profile = SimpleNamespace(
         strict_data_ready=True,
-        st_universe_key="cn_a_ex_st",
+        st_universe_key=DEFAULT_ST_PIT_UNIVERSE_KEY,
         hard_actions=["block_buy", "force_exit"],
         policy_version="v1",
     )
@@ -553,7 +554,7 @@ def test_exact_dev_st_pit_provider_preserves_shared_decision_semantics(monkeypat
         "symbols": ["000001.SZ", "000002.SZ"],
         "trade_date": date(2026, 7, 21),
         "profile": profile,
-        "current_positions": {"000002.SZ": object()},
+        "current_positions": {"000002.SZ": {"quantity": 100}},
     }
     decisions = ExactDevStPitRiskDecisionProvider(factory).evaluate(**kwargs)
     monkeypatch.setattr("backend.services.selection_center.risk_policy.get_conn", factory)
@@ -578,7 +579,7 @@ def test_exact_dev_st_pit_empty_and_readiness_failures() -> None:
 
     profile = SimpleNamespace(
         strict_data_ready=False,
-        st_universe_key="cn_a_ex_st",
+        st_universe_key=DEFAULT_ST_PIT_UNIVERSE_KEY,
         hard_actions=[],
         policy_version="v1",
     )
@@ -646,6 +647,12 @@ def test_exact_dev_st_pit_empty_and_readiness_failures() -> None:
             symbols=["000001.SZ"],
             trade_date=date(2026, 7, 21),
             profile=SimpleNamespace(**{**profile.__dict__, "strict_data_ready": False}),
+        )
+    with pytest.raises(StockUniversePitError, match="authoritative rolling universe"):
+        ExactDevStPitRiskDecisionProvider(unused_factory).evaluate(
+            symbols=["000001.SZ"],
+            trade_date=date(2026, 7, 21),
+            profile=SimpleNamespace(**{**profile.__dict__, "st_universe_key": "shsz_st_pit_qe_dataset_fixture"}),
         )
 
 

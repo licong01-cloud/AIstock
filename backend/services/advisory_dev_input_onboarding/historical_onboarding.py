@@ -91,6 +91,7 @@ from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import DbSuspendLookupProvider, TradabilityFilter
 from backend.services.simulation_runtime.repository import SimulationRuntimeRepository
 from backend.services.simulation_runtime.selection import DailySelectionSignalService, StrategyPackageSelectionService
+from backend.services.stock_universe_pit_service import require_live_st_pit_universe_key
 from backend.services.strategy_package.live_inference import (
     QEExperimentRuntimeAssetResolver,
     WslStrategyPackageInferenceProvider,
@@ -420,8 +421,9 @@ class ExactDevStPitRiskDecisionProvider:
         normalized = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
         if not normalized:
             return {}
+        universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
         if profile.strict_data_ready:
-            self._require_ready(universe_key=profile.st_universe_key, trade_date=trade_date)
+            self._require_ready(universe_key=universe_key, trade_date=trade_date)
         try:
             with self._conn_factory() as conn:
                 with conn.cursor() as cursor:
@@ -435,7 +437,7 @@ class ExactDevStPitRiskDecisionProvider:
                           AND eligible_start <= %s
                           AND eligible_end >= %s
                         """,
-                        (profile.st_universe_key, normalized, trade_date, trade_date),
+                        (universe_key, normalized, trade_date, trade_date),
                     )
                     rows = cursor.fetchall()
         except Exception as exc:
@@ -444,7 +446,7 @@ class ExactDevStPitRiskDecisionProvider:
                 context={
                     "trade_date": trade_date.isoformat(),
                     "symbol_count": len(normalized),
-                    "universe_key": profile.st_universe_key,
+                    "universe_key": universe_key,
                 },
             ) from exc
         eligible = {str(row[0]) for row in rows}
@@ -460,7 +462,7 @@ class ExactDevStPitRiskDecisionProvider:
                     source_events=[
                         {
                             "source_table": self.source_name,
-                            "universe_key": profile.st_universe_key,
+                            "universe_key": universe_key,
                             "visible_trade_date": trade_date.isoformat(),
                             "eligible_start": row[1].isoformat() if row[1] else None,
                             "eligible_end": row[2].isoformat() if row[2] else None,
@@ -483,7 +485,7 @@ class ExactDevStPitRiskDecisionProvider:
                 source_events=[
                     {
                         "source_table": self.source_name,
-                        "universe_key": profile.st_universe_key,
+                        "universe_key": universe_key,
                         "visible_trade_date": trade_date.isoformat(),
                         "event_type": "st_pit_not_eligible",
                         "risk_level": "P0_BLOCK",
