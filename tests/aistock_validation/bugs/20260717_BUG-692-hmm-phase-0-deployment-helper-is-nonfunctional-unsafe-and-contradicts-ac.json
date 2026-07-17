@@ -34,8 +34,8 @@
   "expected": "Replace or retire the unsafe helper, use an explicit idempotent commented bootstrap with configured credentials and production gates, and reconcile one authoritative Phase 0 contract plus evidence-linked acceptance status.",
   "first_seen_at": "2026-07-17T01:43:37.475144Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1b7c9361562fe71422ba6374ede72eefb9c2f05",
+  "fixed_at": "2026-07-17T03:29:53.782622Z",
   "github_issue_number": 2259,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2259",
   "last_seen_at": "2026-07-17T01:43:37.475144Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2278",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "5ad5e5cf2ca01fcf90790128",
     "source_event_id": "FE-20260717-5ad5e5cf2ca0"
   },
+  "validation_evidence": [
+    "CI: 11 passed, 0 failed, hmm_data_source_backend generated, mergeStateStatus CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
