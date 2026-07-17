@@ -69,6 +69,30 @@ def test_verify_schema_accepts_complete_structural_contract() -> None:
 
 
 @pytest.mark.parametrize(
+    ("declared", "postgres_readback"),
+    [
+        (
+            "CHECK (label_horizon_days BETWEEN 1 AND 30)",
+            "CHECK ((label_horizon_days >= 1) AND (label_horizon_days <= 30))",
+        ),
+        (
+            "CHECK (primary_coverage_ratio IS NULL OR primary_coverage_ratio BETWEEN 0 AND 1)",
+            "CHECK (((primary_coverage_ratio IS NULL) OR "
+            "((primary_coverage_ratio >= (0)::double precision) AND "
+            "(primary_coverage_ratio <= (1)::double precision))))",
+        ),
+    ],
+)
+def test_constraint_normalization_accepts_postgresql_between_rewrite(
+    declared: str,
+    postgres_readback: str,
+) -> None:
+    assert schema._normalize_sql_definition(declared) == schema._normalize_sql_definition(  # noqa: SLF001
+        postgres_readback
+    )
+
+
+@pytest.mark.parametrize(
     ("mutation", "message"),
     [
         ("column", "column drift"),

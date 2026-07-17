@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import inspect
 
 import pytest
@@ -39,6 +40,42 @@ def test_schema_contract_exposes_all_required_constraints() -> None:
     ]
     assert "batch_test_item_ordinal_key" in schema.EXPECTED_CONSTRAINTS["batch_test_item"]
     assert "candidate_source_type_ck" in schema.EXPECTED_CONSTRAINTS["candidate"]
+
+
+def test_schema_bootstrap_uses_one_managed_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, bool]] = []
+    executed: list[str] = []
+    verified: list[object] = []
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement: str) -> None:
+            executed.append(statement)
+
+    class _Connection:
+        def cursor(self):
+            return _Cursor()
+
+    connection = _Connection()
+
+    @contextmanager
+    def _get_conn(**kwargs):
+        calls.append(kwargs)
+        yield connection
+
+    monkeypatch.setattr(schema, "get_conn", _get_conn)
+    monkeypatch.setattr(schema, "verify_schema", verified.append)
+
+    schema.bootstrap_schema()
+
+    assert calls == [{"autocommit": False, "manage_transaction": True}]
+    assert executed == list(schema.iter_ddl())
+    assert verified == [connection]
 
 
 def test_repository_write_allowlist_is_exact_and_no_external_business_schema_is_written() -> None:
