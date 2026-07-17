@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+HMM_CLIENT_LIB_ROOT = REPO_ROOT / "frontend/src/lib/hmm-evolution"
 FORMAL_ROOTS = (
     REPO_ROOT / "frontend/src/app/hmm-evolution",
     REPO_ROOT / "frontend/src/components/hmm-evolution",
@@ -31,7 +32,7 @@ def test_hmm_ui_has_no_paper_v2_drawer_or_raw_payload_renderer() -> None:
     assert "<Drawer" not in combined
     assert "<pre" not in combined
     component_sources = "\n".join(
-        text for path, text in sources.items() if "src\\lib\\hmm-evolution" not in str(path)
+        text for path, text in sources.items() if HMM_CLIENT_LIB_ROOT not in path.parents
     )
     assert "JSON.stringify(" not in component_sources
 
