@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -12,6 +13,7 @@ from .errors import (
     EvaluationCancelledError,
     HMMEvolutionError,
     StaleFencingTokenError,
+    sanitized_exception_chain,
 )
 from .evaluator import evaluate_candidate
 from .input_adapter import (
@@ -21,6 +23,8 @@ from .input_adapter import (
 )
 from .models import EvaluationSpec, EvaluationStatus, LeaseConfig
 from .repository import HMMEvolutionRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -161,9 +165,13 @@ class HMMEvaluationExecutor:
                 defer_batch_recompute=defer_batch_recompute,
             )
         except Exception as exc:
+            logger.exception(
+                "unexpected HMM evaluation failure eval_id=%s",
+                evaluation.get("eval_id"),
+            )
             wrapped = HMMEvolutionError(
                 "unexpected HMM evaluation failure",
-                context={"error_type": type(exc).__name__},
+                context={"exception_chain": sanitized_exception_chain(exc)},
             )
             self._fail(
                 repository=repository,

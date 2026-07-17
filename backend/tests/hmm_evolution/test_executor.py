@@ -20,9 +20,7 @@ class _Adapter:
             raise self.error
         trade_date = date(2026, 1, 5)
         return EvaluationExecutionInputs(
-            predictions=pd.DataFrame(
-                [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
-            ),
+            predictions=pd.DataFrame([(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]),
             labels=pd.DataFrame(
                 [(trade_date, "A", 10, 0.1)],
                 columns=["trade_date", "symbol", "horizon_days", "future_return"],
@@ -150,3 +148,22 @@ def test_executor_honors_durable_cancel_checkpoint() -> None:
     assert repository.completed is None
     assert repository.failed["reason_code"] == "hmm_evolution_evaluation_cancelled"
     assert repository.failed["terminal_status"].value == "cancelled"
+
+
+def test_executor_persists_sanitized_exception_chain_for_unknown_failure(caplog) -> None:
+    repository = _Repository()
+    executor = HMMEvaluationExecutor(_Adapter(error=ValueError("bad F:/Dev/AIstock/private")))
+
+    executor.execute_and_finalize(
+        batch=_batch(),
+        evaluation=_evaluation(),
+        repository=repository,  # type: ignore[arg-type]
+        owner_id="worker-1",
+        lease=LeaseConfig(),
+    )
+
+    assert repository.completed is None
+    chain = repository.failed["error_context"]["exception_chain"]
+    assert chain[0]["error_type"] == "ValueError"
+    assert "F:/Dev/AIstock" not in chain[0]["message"]
+    assert "unexpected HMM evaluation failure" in caplog.text

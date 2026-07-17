@@ -18,6 +18,7 @@ const API_BASE = (
 ).replace(/\/+$/, "");
 
 const REQUEST_TIMEOUT_MS = 20_000;
+const IDEMPOTENCY_STORAGE_PREFIX = "aistock:hmm-evolution:intent:";
 
 export class HMMApiError extends Error {
   readonly errorCode: string;
@@ -97,6 +98,32 @@ async function request<T>(
   }
 }
 
+function canonicalizeIntent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeIntent);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalizeIntent(nested)]),
+    );
+  }
+  return value;
+}
+
+async function idempotencyKeyForIntent(scope: string, payload: unknown): Promise<string> {
+  const canonical = JSON.stringify({ scope, payload: canonicalizeIntent(payload) });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  const fingerprint = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const storageKey = `${IDEMPOTENCY_STORAGE_PREFIX}${fingerprint}`;
+  const existing = window.sessionStorage.getItem(storageKey);
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  window.sessionStorage.setItem(storageKey, created);
+  return created;
+}
+
 export function listCandidates(): Promise<CandidateRecord[]> {
   return request("/candidates?limit=200");
 }
@@ -156,15 +183,16 @@ export function getEvaluation(evalId: string): Promise<EvaluationDetail> {
   return request(`/evaluations/${encodeURIComponent(evalId)}`);
 }
 
-export function createBatch(payload: {
+export async function createBatch(payload: {
   candidate_ids: string[];
   evaluation_spec: EvaluationSpecPayload;
   created_by?: string;
 }): Promise<{ batch: BatchSummary; created: boolean }> {
+  const idempotencyKey = await idempotencyKeyForIntent("create-batch", payload);
   return request("/batch", {
     method: "POST",
     body: JSON.stringify(payload),
-    headers: { "Idempotency-Key": crypto.randomUUID() },
+    headers: { "Idempotency-Key": idempotencyKey },
   }, 120_000);
 }
 
@@ -175,10 +203,12 @@ export function cancelBatch(batchId: string): Promise<BatchSummary> {
   });
 }
 
-export function retryFailedBatch(batchId: string): Promise<BatchSummary> {
+export async function retryFailedBatch(batchId: string): Promise<BatchSummary> {
+  const payload = { created_by: "hmm_research_ui" };
+  const idempotencyKey = await idempotencyKeyForIntent(`retry-batch:${batchId}`, payload);
   return request(`/batches/${encodeURIComponent(batchId)}/retry-failed`, {
     method: "POST",
-    body: JSON.stringify({ created_by: "hmm_research_ui" }),
-    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(payload),
+    headers: { "Idempotency-Key": idempotencyKey },
   });
 }

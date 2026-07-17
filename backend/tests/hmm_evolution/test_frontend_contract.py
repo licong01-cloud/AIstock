@@ -31,9 +31,7 @@ def test_hmm_ui_has_no_paper_v2_drawer_or_raw_payload_renderer() -> None:
     assert "pv2-" not in combined
     assert "<Drawer" not in combined
     assert "<pre" not in combined
-    component_sources = "\n".join(
-        text for path, text in sources.items() if HMM_CLIENT_LIB_ROOT not in path.parents
-    )
+    component_sources = "\n".join(text for path, text in sources.items() if HMM_CLIENT_LIB_ROOT not in path.parents)
     assert "JSON.stringify(" not in component_sources
 
 
@@ -67,3 +65,11 @@ def test_ui_contains_required_real_states_and_fixed_evidence() -> None:
         "evidence_quality",
     ):
         assert required in combined
+
+
+def test_mutating_requests_reuse_session_scoped_idempotency_intents() -> None:
+    api_source = (HMM_CLIENT_LIB_ROOT / "api.ts").read_text(encoding="utf-8")
+    assert "idempotencyKeyForIntent" in api_source
+    assert "window.sessionStorage.getItem" in api_source
+    assert 'headers: { "Idempotency-Key": idempotencyKey }' in api_source
+    assert 'headers: { "Idempotency-Key": crypto.randomUUID() }' not in api_source
