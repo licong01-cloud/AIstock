@@ -28,8 +28,8 @@
   "expected": "当 dataset+target_date 的 readiness 已恢复时，同一 readiness_gate 目标族应在一个事务中全部转为 reconciled，并仅确认关联 target_id 的 retry_exhausted 告警；其他 data_source、告警类型或目标日期不得被误确认，事务失败必须保留可重试状态并输出明确错误。",
   "first_seen_at": "2026-07-17T02:02:08.273577Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dc1441b2d9b300035ebf413d62bb3921a15aa534",
+  "fixed_at": "2026-07-17T03:48:08.465356Z",
   "github_issue_number": 2263,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2263",
   "last_seen_at": "2026-07-17T02:02:08.273577Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2264",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "0c3fbca04002841eb6e2823b",
     "source_event_id": "FE-20260717-0c3fbca04002"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 43 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
