@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import simulation_runtime
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
     InMemoryMiniQMTExecutionRuntimeRepository,
@@ -22,11 +26,27 @@ def _client(
     app = FastAPI()
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     broker_gateway = gateway or FakeMiniQMTGateway()
+    effective_runtime_client = runtime_client
+    if effective_runtime_client is None:
+        strategy_ledger_repository = InMemoryQmtStrategyLedgerRepository()
+        strategy_ledger_repository.create_virtual_account(
+            VirtualAccount(
+                strategy_id="slot_alpha_router",
+                strategy_name="Router Operator Alpha",
+                display_name="Router Operator Alpha",
+                account_id="ag_minqmt_main_sim",
+                mode="SIM",
+                initial_cash=Decimal("1000000"),
+                cash=Decimal("1000000"),
+                status=VirtualAccountStatus.ENABLED,
+            )
+        )
+        effective_runtime_client = MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=strategy_ledger_repository,
+        )
     app.dependency_overrides[simulation_runtime.get_miniqmt_gateway] = lambda: broker_gateway
-    app.dependency_overrides[simulation_runtime.get_miniqmt_runtime_client] = (
-        lambda: runtime_client
-        or MiniQMTExecutionRuntimeClient(repository=InMemoryMiniQMTExecutionRuntimeRepository())
-    )
+    app.dependency_overrides[simulation_runtime.get_miniqmt_runtime_client] = lambda: effective_runtime_client
     app.dependency_overrides[simulation_runtime.get_simulation_runtime_ops_service] = (
         lambda: ops_service or SimulationRuntimeOpsService(repository=InMemorySimulationRuntimeRepository())
     )

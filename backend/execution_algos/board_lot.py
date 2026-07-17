@@ -8,8 +8,9 @@ Source rules (verified 2026-05-04):
 - STAR market (688xxx, 689xxx 科创板): >=200 shares per order, may increment by 1
   share above 200; sell-side residual below 200 must be flushed in one fill.
 
-These rules are used by V25.1 onwards. Legacy V20/V24/TWAP keep
-``BaseExecutionAlgo._round_lot`` (lot_size=100) for backward compatibility.
+These rules are authoritative for Trading Core and every symbol-aware
+execution algorithm.  A hard-coded 100-share lot is only valid for callers
+that have no security identity and are explicitly outside Trading Core.
 """
 from __future__ import annotations
 
@@ -237,7 +238,6 @@ def build_cost_aware_bucket_schedule(
         return {last_bar: legal_total}
 
     bars.sort()
-    n_actual = len(bars)
     schedule: dict[int, int] = {}
     allocated = 0
     for bar in bars[:-1]:

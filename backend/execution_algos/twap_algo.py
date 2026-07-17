@@ -41,7 +41,9 @@ class TWAPAlgo(BaseExecutionAlgo):
             expected_executed = state.total_quantity / self.split_count * (state.step + 1)
             step_qty = expected_executed - state.executed_quantity
 
-        step_qty = self._round_lot(int(step_qty))
+        step_qty = self._round_lot(
+            int(step_qty), symbol=state.symbol, side=state.side
+        )
         step_qty = min(step_qty, remaining)
 
         if step_qty <= 0:

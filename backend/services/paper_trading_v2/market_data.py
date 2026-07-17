@@ -8,13 +8,16 @@ the run.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hashlib
 import json
-from typing import Any, Callable, Iterator, Protocol
+import math
+from types import MappingProxyType
+from typing import Any, Callable, Iterator, Mapping, Protocol
 
 import requests
 
@@ -124,6 +127,153 @@ class MinuteExecutionMarketInput:
 
 
 @dataclass(frozen=True)
+class LocalSimMarketSnapshotV1:
+    """One immutable LocalSIM market-data view for a scheduler tick.
+
+    Each unique symbol is loaded at most once for the snapshot.  Successful
+    inputs and explicit typed failures are carried together so a broker can
+    isolate one symbol without refetching or silently replacing its data.
+    """
+
+    trade_date: date
+    as_of_time: datetime
+    source: MinuteDataSource
+    market_inputs: Mapping[str, MinuteExecutionMarketInput]
+    errors: Mapping[str, Mapping[str, Any]]
+    schema_version: str = "local_sim_market_snapshot_v1"
+    snapshot_id: str = ""
+    snapshot_hash: str = ""
+
+    def __post_init__(self) -> None:
+        if self.source != MinuteDataSource.TDX_REALTIME:
+            raise ValueError("LocalSimMarketSnapshotV1 requires TDX_REALTIME")
+        normalized_inputs = {
+            str(symbol): MinuteExecutionMarketInput(
+                symbol=item.symbol,
+                trade_date=item.trade_date,
+                source=item.source,
+                minute_bars=tuple(bar.model_copy(deep=True) for bar in item.minute_bars),
+                market_context=_freeze_local_sim_snapshot_value(item.market_context),
+            )
+            for symbol, item in self.market_inputs.items()
+        }
+        normalized_errors = {
+            str(symbol): _freeze_local_sim_snapshot_value(payload)
+            for symbol, payload in self.errors.items()
+        }
+        overlap = set(normalized_inputs).intersection(normalized_errors)
+        if overlap:
+            raise ValueError(f"LocalSimMarketSnapshotV1 symbol has both input and error: {sorted(overlap)}")
+        for symbol, item in normalized_inputs.items():
+            if (
+                item.symbol != symbol
+                or item.trade_date != self.trade_date
+                or item.source != self.source
+            ):
+                raise ValueError(f"LocalSimMarketSnapshotV1 input identity mismatch for {symbol}")
+        payload = {
+            "schema_version": self.schema_version,
+            "trade_date": self.trade_date.isoformat(),
+            "as_of_time": self.as_of_time.isoformat(),
+            "source": self.source.value,
+            "market_inputs": {
+                symbol: {
+                    "bars": [bar.model_dump(mode="json") for bar in item.minute_bars],
+                    "market_context": _local_sim_snapshot_json_value(item.market_context),
+                }
+                for symbol, item in sorted(normalized_inputs.items())
+            },
+            "errors": {
+                symbol: _local_sim_snapshot_json_value(error)
+                for symbol, error in sorted(normalized_errors.items())
+            },
+        }
+        canonical_payload = _local_sim_snapshot_json_value(payload)
+        digest = hashlib.sha256(
+            json.dumps(
+                canonical_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.snapshot_hash and self.snapshot_hash != digest:
+            raise ValueError("LocalSimMarketSnapshotV1 snapshot_hash mismatch")
+        expected_id = f"lsmd_{digest}"
+        if self.snapshot_id and self.snapshot_id != expected_id:
+            raise ValueError("LocalSimMarketSnapshotV1 snapshot_id mismatch")
+        object.__setattr__(self, "market_inputs", MappingProxyType(normalized_inputs))
+        object.__setattr__(self, "errors", MappingProxyType(normalized_errors))
+        object.__setattr__(self, "snapshot_hash", digest)
+        object.__setattr__(self, "snapshot_id", expected_id)
+
+
+def _freeze_local_sim_snapshot_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            raise TypeError(
+                "LocalSimMarketSnapshotV1 mappings require string keys; "
+                f"got {type(invalid_keys[0]).__name__}"
+            )
+        return MappingProxyType(
+            {
+                key: _freeze_local_sim_snapshot_value(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_local_sim_snapshot_value(item) for item in value)
+    if isinstance(value, Enum):
+        return _freeze_local_sim_snapshot_value(value.value)
+    if isinstance(value, (datetime, date, Decimal, str, bool, int)) or value is None:
+        return deepcopy(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("LocalSimMarketSnapshotV1 numeric values must be finite")
+        return value
+    raise TypeError(
+        "LocalSimMarketSnapshotV1 only accepts canonical JSON-like values; "
+        f"got {type(value).__name__}"
+    )
+
+
+def _local_sim_snapshot_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            raise TypeError(
+                "LocalSimMarketSnapshotV1 mappings require string keys; "
+                f"got {type(invalid_keys[0]).__name__}"
+            )
+        return {
+            key: _local_sim_snapshot_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_local_sim_snapshot_json_value(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("LocalSimMarketSnapshotV1 Decimal values must be finite")
+        return str(value)
+    if isinstance(value, Enum):
+        return _local_sim_snapshot_json_value(value.value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("LocalSimMarketSnapshotV1 numeric values must be finite")
+        return value
+    if isinstance(value, (str, bool, int)) or value is None:
+        return value
+    raise TypeError(
+        "LocalSimMarketSnapshotV1 only accepts canonical JSON-like values; "
+        f"got {type(value).__name__}"
+    )
+
+
+@dataclass(frozen=True)
 class DailySuspendStatus:
     """Explicit daily suspension status loaded from the authoritative source."""
 
@@ -158,6 +308,54 @@ class PreTradeTradabilityStatus:
             "suspend_status": self.suspend_status,
             "quote_evidence": self.quote_evidence,
         }
+
+
+def pre_trade_tradability_is_suspended(
+    tradability: Mapping[str, Any] | None,
+    *,
+    symbol: str,
+) -> bool:
+    """Read canonical suspension evidence without truthy coercion or aliases."""
+
+    if not tradability:
+        return False
+    if "suspend_status" not in tradability:
+        legacy_keys = sorted(
+            key
+            for key in ("is_suspended", "suspended", "suspend_d")
+            if key in tradability
+        )
+        if not legacy_keys:
+            return False
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence uses a non-canonical schema",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "legacy_keys": legacy_keys,
+            },
+        )
+    suspend_status = tradability.get("suspend_status")
+    if not isinstance(suspend_status, Mapping):
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence must be an object",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "suspend_status_type": type(suspend_status).__name__,
+            },
+        )
+    is_suspended = suspend_status.get("is_suspended")
+    if not isinstance(is_suspended, bool):
+        raise DataUnavailableError(
+            "LocalSim pre-trade suspension evidence requires a boolean is_suspended",
+            context={
+                "reason_code": "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID",
+                "symbol": symbol,
+                "is_suspended_type": type(is_suspended).__name__,
+            },
+        )
+    return is_suspended
 
 
 @dataclass(frozen=True)

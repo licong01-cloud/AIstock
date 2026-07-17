@@ -36,10 +36,28 @@ class ExecutionAlgoAdapter:
         state: Any,
         bar: MinuteBar,
         market_context: dict[str, Any],
+        order_id: str,
     ) -> StepFill | None:
         if bar.is_suspended and not bool(getattr(algo, "HANDLES_MARKET_STATE", False)):
             return None
-        result = algo.compute_step(state, bar.to_algo_bar(), market_context)
+        try:
+            result = algo.compute_step(state, bar.to_algo_bar(), market_context)
+        except ExecutionAlgoError:
+            raise
+        except Exception as exc:
+            raise ExecutionAlgoError(
+                "execution algorithm step failed",
+                context={
+                    "reason_code": str(getattr(exc, "reason_code", "EXECUTION_ALGO_STEP_FAILED")),
+                    "algo_code": getattr(algo, "ALGO_CODE", None),
+                    "order_id": order_id,
+                    "symbol": state.symbol,
+                    "bar_time": bar.bar_time.isoformat(),
+                    "cause_type": type(exc).__name__,
+                    "cause": str(exc),
+                    "cause_context": dict(getattr(exc, "context", {}) or {}),
+                },
+            ) from exc
         if result is None:
             return None
         try:

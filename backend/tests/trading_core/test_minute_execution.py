@@ -5,17 +5,18 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from backend.services.trading_core.errors import DataUnavailableError, ExecutionAlgoError, UnsupportedFeatureError
+from backend.services.trading_core.execution_algo_adapter import ExecutionAlgoAdapter
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderStatus
 from backend.services.trading_core.oms import OMS
 from backend.services.paper_trading_v2.models import OrderExecutionState
 
 
-def make_order(quantity: int = 600):
+def make_order(quantity: int = 600, *, symbol: str = "000001.SZ"):
     intent = OrderIntent(
         package_id="pkg_1",
         portfolio_id="paper_1",
-        symbol="000001.SZ",
+        symbol=symbol,
         side=OrderSide.BUY,
         quantity=quantity,
         target_trade_date=date(2024, 1, 2),
@@ -23,11 +24,16 @@ def make_order(quantity: int = 600):
     return OMS().create_order(intent)
 
 
-def make_bars(count: int = 3, volume: int = 10000) -> list[MinuteBar]:
+def make_bars(
+    count: int = 3,
+    volume: int = 10000,
+    *,
+    symbol: str = "000001.SZ",
+) -> list[MinuteBar]:
     start = datetime(2024, 1, 2, 9, 31)
     return [
         MinuteBar(
-            symbol="000001.SZ",
+            symbol=symbol,
             bar_time=start + timedelta(minutes=i),
             open=10.0 + i * 0.01,
             high=10.2 + i * 0.01,
@@ -57,6 +63,63 @@ def test_minute_execution_twap_fills_order() -> None:
     assert sum(fill.quantity for fill in fills) == 600
     assert len(fills) == 3
     assert len(events) == 3
+
+
+def test_minute_execution_preserves_valid_star_board_lot_quantity() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=201, symbol="688001.SH")
+
+    final_order, fills, events = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(6, symbol="688001.SH"),
+        algo_code="TWAP",
+        algo_config={"split_count": 6},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert final_order.quantity == 201
+    assert [fill.quantity for fill in fills] == [201]
+    assert len(events) == 1
+
+
+@pytest.mark.parametrize(
+    ("algo_code", "config"),
+    [
+        ("TWAP", {"split_count": 3}),
+        ("VWAP", {}),
+        ("AC_OPTIMAL", {"total_bars": 3}),
+        ("POV", {"target_participation": 0.05, "max_participation": 0.2}),
+        ("SBB_EMA", {"split_count": 3}),
+    ],
+)
+@pytest.mark.parametrize(("symbol", "quantity"), [("000001.SZ", 100), ("688001.SH", 201)])
+def test_legacy_execution_algorithms_preserve_trading_core_board_lot_authority(
+    algo_code: str,
+    config: dict,
+    symbol: str,
+    quantity: int,
+) -> None:
+    order = make_order(quantity=quantity, symbol=symbol)
+    _, state = ExecutionAlgoAdapter().create_state(order, algo_code, config)
+    assert state.symbol == symbol
+    assert state.total_quantity == quantity
+
+
+def test_minute_execution_participation_limit_uses_star_increment() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=201, symbol="688001.SH")
+
+    final_order, fills, _ = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(1, volume=10_000, symbol="688001.SH"),
+        algo_code="CLOSE_PRICE",
+        algo_config={"max_participation_rate": 0.0201},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in fills] == [201]
 
 
 def test_minute_execution_requires_minute_bars() -> None:
@@ -97,6 +160,49 @@ def test_minute_execution_rejects_unavailable_v24_plan_model() -> None:
                 "full_day_low": [9.8] * 31,
             },
         )
+
+
+@pytest.mark.parametrize(
+    "volume_profile",
+    [None, [], [0, 0, 0], [1, -1, 1], [1, float("nan"), 1], [1, "bad", 1]],
+)
+def test_minute_execution_vwap_fails_loud_without_valid_authoritative_profile(
+    volume_profile,
+) -> None:
+    engine = MinuteExecutionEngine()
+    market_context = {}
+    if volume_profile is not None:
+        market_context["volume_profile"] = volume_profile
+    with pytest.raises(ExecutionAlgoError) as exc_info:
+        engine.execute_order(
+            order=make_order(quantity=600),
+            minute_bars=make_bars(3),
+            algo_code="VWAP",
+            market_context=market_context,
+            allow_partial_fill=False,
+        )
+    assert exc_info.value.context["reason_code"] == "VWAP_VOLUME_PROFILE_INVALID"
+    assert exc_info.value.context["algo_code"] == "VWAP"
+    assert exc_info.value.context["order_id"]
+    assert exc_info.value.context["symbol"] == "000001.SZ"
+
+
+def test_minute_execution_vwap_uses_authoritative_profile_without_full_fill_fallback() -> None:
+    engine = MinuteExecutionEngine()
+    final_order, fills, _ = engine.execute_order(
+        order=make_order(quantity=600),
+        minute_bars=make_bars(3),
+        algo_code="VWAP",
+        market_context={"volume_profile": [1.0, 1.0, 1.0]},
+        allow_partial_fill=False,
+    )
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in fills] == [200, 200, 200]
+    assert [fill.reason for fill in fills] == [
+        "VWAP step 1/3",
+        "VWAP step 2/3",
+        "VWAP step 3/3",
+    ]
 
 
 def test_minute_execution_fails_when_participation_rate_exceeded() -> None:

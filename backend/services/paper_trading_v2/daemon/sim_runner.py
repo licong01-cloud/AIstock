@@ -8,34 +8,23 @@ Wires the existing pieces:
         --(send each OrderIntent)--> OrderHandle / Fills / position update
         --(record at every state transition)--> DaemonEventLog (SQLite)
 
-The runner is intentionally minimal: it accepts a manifest, an iterable of
-OrderIntents (caller-supplied, derived from real selection scores or test
-fixtures), and a DaemonEventLog instance. It does NOT load market data
-itself -- that comes from the ``PaperV2MinuteMarketDataProvider`` injected
-into the LocalSim constructor (or a test double).
-
-This is the MVP shape Lead's Task #35 calls for. It is **not** a long-running
-daemon -- it is a single-shot runner that drives one portfolio's order
-batch through the broker and produces an event-log audit trail.
+The runner accepts a manifest, caller-supplied OrderIntents and a durable
+DaemonEventLog. Market data remains owned by the broker-side provider; this
+adapter does not duplicate or synthesize it. The scheduler owns long-running
+cadence and restart recovery, while this bounded batch adapter records exact
+terminal, pending and failure outcomes for every submitted handle.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Iterable
 
 from backend.services.paper_trading_v2.broker import (
     FillEvent,
-    LocalSimBackend,
     OrderHandle,
     OrderHandleStatus,
     SubscriptionHandle,
-)
-from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
-    PaperV2MinuteMarketDataProvider,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import (
@@ -61,6 +50,8 @@ class SimRunResult:
     statuses: list[OrderHandleStatus] = field(default_factory=list)
     fills_received: int = 0
     rejected_intents: list[str] = field(default_factory=list)  # intent_id list
+    pending_handle_ids: list[str] = field(default_factory=list)
+    terminal: bool = False
     failed: bool = False
     failure_reason: str | None = None
 
@@ -164,12 +155,26 @@ class PaperV2SimRunner:
                     },
                 },
             )
+            result.pending_handle_ids = [
+                status.handle_id
+                for status in result.statuses
+                if status.state not in {"filled", "rejected", "cancelled"}
+            ]
+            result.terminal = not result.pending_handle_ids
+            event_type = (
+                DaemonEventType.RUN_COMPLETED
+                if result.terminal
+                else DaemonEventType.RUN_PENDING
+            )
             self._event_log.record(
-                DaemonEventType.RUN_COMPLETED,
+                event_type,
                 payload={
                     "submitted": len(result.handles),
                     "rejected": len(result.rejected_intents),
                     "fills_received": result.fills_received,
+                    "pending_handle_ids": list(result.pending_handle_ids),
+                    "pending_count": len(result.pending_handle_ids),
+                    "terminal": result.terminal,
                 },
             )
         except Exception as exc:  # noqa: BLE001 -- catch to record then re-raise

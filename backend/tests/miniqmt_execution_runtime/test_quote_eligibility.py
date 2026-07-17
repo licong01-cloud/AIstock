@@ -17,6 +17,7 @@ from backend.execution_algos.adaptive_is.contracts import (
     MarketCode,
     PriceBasis,
     QuoteSourceMethod,
+    QuoteValidationState,
     SessionSegment,
     TradabilitySnapshot,
     TradabilityState,
@@ -177,7 +178,8 @@ def _frame(
     last_price: str = "10.00",
     received_at_utc: datetime = UTC_CLOCK,
     received_monotonic_ns: int = 1_999_500_000,
-    openint: str | None = "OPEN",
+    openint: str | None = None,
+    **payload_overrides: object,
 ) -> object:
     payload: dict[str, object] = {
         "time": source_time,
@@ -188,8 +190,10 @@ def _frame(
         "askPrice": ["10.01", "10.02", None, None, None],
         "askVol": [100, 100, 0, 0, 0],
         "stockStatus": "NORMAL",
-        "openint": openint,
     }
+    if openint is not None:
+        payload["openint"] = openint
+    payload.update(payload_overrides)
     return capture_raw_quote_frame(
         payload,
         callback_symbol="000001.SZ",
@@ -502,6 +506,24 @@ def test_eligibility_precedence_is_total_and_deterministic() -> None:
     assert evaluator.evaluate(request=request, context=context, observation=domain_conflict).eligibility.state == EligibilityState.CLOCK_INVALID
 
 
+def test_openint_is_optional_cross_evidence_but_unregistered_present_value_is_loud() -> None:
+    context = _context()
+    evaluator = ActionQuoteEvaluator()
+    request = _request(policy=context.policy)
+
+    missing = evaluator.evaluate(request=request, context=context, observation=_observation(context=context))
+    assert missing.eligibility.state == EligibilityState.READY
+
+    unregistered = evaluator.evaluate(
+        request=request,
+        context=context,
+        observation=_observation(context=context, frame=_frame(openint="1")),
+    )
+    assert unregistered.eligibility.state == EligibilityState.CAPABILITY_MISSING
+    assert unregistered.eligibility.reason_code == QuoteContractReasonCode.TRADABILITY_DATA_INVALID
+    assert unregistered.diagnostics == ("OPENINT_CROSS_EVIDENCE_MISSING_OR_UNREGISTERED",)
+
+
 @pytest.mark.parametrize(("age_ms", "expected"), [(100, EligibilityState.READY), (101, EligibilityState.STALE)])
 def test_freshness_threshold_boundaries_are_fail_closed_at_plus_one_ms(age_ms: int, expected: EligibilityState) -> None:
     policy = _policy(max_receive_age_ms=100, max_source_lag_ms=100, max_exchange_age_ms=100, max_clock_age_divergence_ms=1)
@@ -572,6 +594,32 @@ def test_zero_opposite_depth_is_not_reclassified_as_a_data_error() -> None:
         request=_request(policy=context.policy), context=context, observation=replace(observation, quote=empty_ask)
     )
     assert result.eligibility.state == EligibilityState.NO_OPPOSITE_DEPTH
+
+
+def test_xtquant_zeroed_empty_side_is_normalized_and_evaluated_by_order_side() -> None:
+    context = _context()
+    observation = _observation(
+        context=context,
+        frame=_frame(
+            bidPrice=[0, 0, 0, 0, 0],
+            bidVol=[0, 0, 0, 0, 0],
+        ),
+    )
+    assert observation.quote.validation_state == QuoteValidationState.VALID
+    assert observation.quote.bid_prices == (None, None, None, None, None)
+
+    buy = ActionQuoteEvaluator().evaluate(
+        request=_request(side="BUY", policy=context.policy),
+        context=context,
+        observation=observation,
+    )
+    sell = ActionQuoteEvaluator().evaluate(
+        request=_request(side="SELL", policy=context.policy),
+        context=context,
+        observation=observation,
+    )
+    assert buy.eligibility.state == EligibilityState.READY
+    assert sell.eligibility.state == EligibilityState.NO_OPPOSITE_DEPTH
 
 
 def test_dependency_group_failure_does_not_block_unrelated_symbols() -> None:

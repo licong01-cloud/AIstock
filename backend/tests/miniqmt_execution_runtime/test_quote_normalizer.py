@@ -92,6 +92,39 @@ def test_normalizer_uses_clock_trade_date_for_compact_timestamp_and_preserves_fu
     assert quote.openint_status == "OPEN"
 
 
+def test_normalizer_converts_only_exact_zero_price_zero_quantity_levels_to_empty() -> None:
+    quote = normalize_raw_quote_frame(
+        _frame(
+            _payload(
+                bidPrice=[0, 0, 0, 0, 0],
+                bidVol=[0, 0, 0, 0, 0],
+            )
+        ),
+        clock_trade_date=date(2026, 7, 12),
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="xtdata-depth-unit-v1",
+    )
+
+    assert quote.validation_state == QuoteValidationState.VALID
+    assert quote.bid_prices == (None, None, None, None, None)
+    assert quote.bid_quantities == (0, 0, 0, 0, 0)
+    assert quote.ask_prices is not None and quote.ask_prices[0] == Decimal("10.01")
+
+
+def test_zero_price_with_positive_quantity_remains_invalid() -> None:
+    quote = normalize_raw_quote_frame(
+        _frame(_payload(bidPrice=[0, None, None, None, None], bidVol=[100, 0, 0, 0, 0])),
+        clock_trade_date=date(2026, 7, 12),
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="xtdata-depth-unit-v1",
+    )
+
+    assert quote.validation_state == QuoteValidationState.INVALID
+    assert QuoteContractReasonCode.DEPTH_SCHEMA_INVALID in quote.validation_reasons
+
+
 def test_symbol_alias_conflict_is_loud_and_never_fuzzy_matched() -> None:
     with pytest.raises(QuoteContractError) as exc_info:
         _frame(_payload(symbol="000001.SH"))

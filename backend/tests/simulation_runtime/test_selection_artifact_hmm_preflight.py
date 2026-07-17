@@ -18,6 +18,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.simulation_runtime.test_lifecycle_scheduler import (
     TRADE_DATE,
+    FakePackageRepository,
     FakeSelectionService,
     _candidate_rows,
     _position_context,
@@ -27,9 +28,13 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
 class _FailingSelectionService:
-    def __init__(self, package_id: str) -> None:
-        self.package_id = package_id
+    def __init__(self, release: Any) -> None:
+        self.package_id = release.package_id
         self.calls: list[dict[str, Any]] = []
+        self.package_repository = FakePackageRepository(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
 
     def run_selection(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
@@ -71,7 +76,7 @@ def test_scheduler_reuses_daily_selection_once_for_local_and_miniqmt_bindings() 
 def test_scheduler_reuses_failed_selection_preflight_without_repeating_hmm_sql_work() -> None:
     release, local_binding, qmt_binding, repo = _release_and_bindings()
     assert local_binding is not None
-    failing_selection = _FailingSelectionService(release.package_id)
+    failing_selection = _FailingSelectionService(release)
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=failing_selection,

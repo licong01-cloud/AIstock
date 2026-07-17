@@ -105,7 +105,7 @@ def test_emit_telemetry_default_is_local_only_no_pg_outbox(tmp_path, monkeypatch
 
     assert state["calls"] == 0
     assert executions == []
-    assert log.count() == 9
+    assert log.count() == 10
     assert log.count_unsynced() == 0
 
 
@@ -126,8 +126,8 @@ def test_emit_writes_pg_outbox_only_when_debug_sink_enabled(tmp_path, monkeypatc
     for event_type in DaemonEventType:
         log.record(event_type, sample_payload)
 
-    assert state["calls"] == 9, "expected one PG insert per of 9 event types"
-    assert len(executions) == 9
+    assert state["calls"] == 10, "expected one PG insert per of 10 event types"
+    assert len(executions) == 10
 
     # Each debug-sink insert must hit qe_archive.outbox_event with the canonical name.
     for sql, params in executions:
@@ -145,7 +145,7 @@ def test_emit_writes_pg_outbox_only_when_debug_sink_enabled(tmp_path, monkeypatc
     assert captured_types == set(PAPER_DAEMON_EVENT_TYPE_NAMES.values())
 
     # And SQLite rows are all marked synced (unsynced = 0).
-    assert log.count() == 9
+    assert log.count() == 10
     assert log.count_unsynced() == 0
 
 
@@ -334,6 +334,7 @@ def test_emit_event_type_canonical_names() -> None:
         "ORDER_REJECTED",
         "ORDER_CANCELLED",
         "POSITION_UPDATED",
+        "RUN_PENDING",
         "RUN_COMPLETED",
         "RUN_FAILED",
     }
@@ -425,7 +426,7 @@ def test_emit_daemon_event_has_routing_class_telemetry(tmp_path, monkeypatch) ->
 
 @pytest.mark.parametrize("event_type", list(DaemonEventType))
 def test_emit_all_9_daemon_events_get_telemetry(tmp_path, event_type, monkeypatch) -> None:
-    """Every one of the 9 canonical paper.daemon.* event types must stamp
+    """Every one of the 10 canonical paper.daemon.* event types must stamp
     routing_class='telemetry'.
     """
     monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
@@ -450,12 +451,12 @@ def test_emit_all_9_daemon_events_get_telemetry(tmp_path, event_type, monkeypatc
 
 
 def test_daemon_events_set_matches_canonical_names() -> None:
-    """DAEMON_EVENTS frozen set must mirror the 9 canonical paper.daemon.*
+    """DAEMON_EVENTS frozen set must mirror the 10 canonical paper.daemon.*
     names. Drift between this set and PAPER_DAEMON_EVENT_TYPE_NAMES would
     let an emit path slip through routing.
     """
     assert DAEMON_EVENTS == set(PAPER_DAEMON_EVENT_TYPE_NAMES.values())
-    assert len(DAEMON_EVENTS) == 9
+    assert len(DAEMON_EVENTS) == 10
     for canonical in DAEMON_EVENTS:
         assert canonical.startswith("paper.daemon.")
         assert _routing_class_for(canonical) == "telemetry"

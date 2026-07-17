@@ -10,6 +10,7 @@ from backend.services.simulation_runtime import (
     MiniQMTUnsupportedExecutionAlgoError,
     SimulationBrokerBackend,
 )
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.tests.simulation_runtime.test_target_rebalance_shared import _compiled_plan_for_bridge
 
 
@@ -87,8 +88,16 @@ def test_miniqmt_bridge_rejects_non_vnpy_policy_before_preview_or_submit() -> No
         managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
     )
 
-    for method_name in ("build_managed_order_requests", "preview_plan", "submit_plan"):
+    for method_name in ("build_managed_order_requests", "preview_plan"):
         with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
             getattr(bridge, method_name)(plan=plan, binding=binding)
         assert exc_info.value.error_code == "EXECUTION_PATH_NOT_CANONICAL"
         assert exc_info.value.context["inferred_algo_code"] == "CLOSE_PRICE"
+
+    with pytest.raises(RuntimeConfigInvalidError) as submit_exc_info:
+        bridge.submit_plan(plan=plan, binding=binding)
+
+    assert submit_exc_info.value.context["reason_code"] == "MINIQMT_SIM_COMPILER_ROUTE_RETIRED"
+    assert submit_exc_info.value.context["allowed_runtime_kind"] == "event_loop"
+    assert submit_exc_info.value.context["broker_called"] is False
+    assert submit_exc_info.value.context["submitted_intents"] == 0

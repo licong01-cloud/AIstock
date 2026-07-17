@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .board_lot import round_to_board_lot
+
 
 @dataclass
 class OrderState:
@@ -47,7 +49,11 @@ class BaseExecutionAlgo(ABC):
         return OrderState(
             symbol=symbol,
             side=side,
-            total_quantity=self._round_lot(total_quantity),
+            total_quantity=self._round_lot(
+                total_quantity,
+                symbol=symbol,
+                side=side,
+            ),
         )
 
     @abstractmethod
@@ -73,6 +79,14 @@ class BaseExecutionAlgo(ABC):
         return state.is_complete or state.executed_quantity >= state.total_quantity
 
     @staticmethod
-    def _round_lot(qty: int, lot_size: int = 100) -> int:
-        """A 股 100 股整手取整（向下）."""
+    def _round_lot(
+        qty: int,
+        lot_size: int = 100,
+        *,
+        symbol: str | None = None,
+        side: str = "BUY",
+    ) -> int:
+        """Use exchange board-lot rules whenever a symbol identity exists."""
+        if symbol is not None:
+            return round_to_board_lot(qty, symbol, side=side)
         return (qty // lot_size) * lot_size

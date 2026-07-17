@@ -334,7 +334,13 @@ class MiniQMTQuoteContextAuthorityAdapter:
             at_utc = ensure_utc(clock_at_utc, field_name="quote_context.clock_at_utc")
             trade_date = at_utc.astimezone(CHINA_TZ).date()
             specs = self._normalize_specs(symbol_specs)
+            previous_context = self._context_store.snapshot()
             calendar_set = self._build_calendar_snapshot_set(trade_date=trade_date, effective_at_utc=at_utc)
+            if (
+                previous_context is not None
+                and self._same_calendar_authority(previous_context.calendar_snapshot_set, calendar_set)
+            ):
+                calendar_set = previous_context.calendar_snapshot_set
             clock = build_execution_clock_event(
                 calendar_snapshot_set=calendar_set,
                 clock_at_utc=at_utc,
@@ -348,10 +354,24 @@ class MiniQMTQuoteContextAuthorityAdapter:
                 calendar_snapshot_set=calendar_set,
                 max_negative_skew_ms=policy.max_negative_skew_ms,
             )
-            symbols = {
-                spec.symbol: self._build_symbol_context(spec=spec, trade_date=trade_date, observed_at_utc=at_utc)
-                for spec in specs
-            }
+            symbols = {}
+            for spec in specs:
+                candidate = self._build_symbol_context(
+                    spec=spec,
+                    trade_date=trade_date,
+                    observed_at_utc=at_utc,
+                )
+                previous_symbol = (
+                    previous_context.symbol_context(spec.symbol)
+                    if previous_context is not None
+                    else None
+                )
+                symbols[spec.symbol] = (
+                    previous_symbol
+                    if previous_symbol is not None
+                    and self._same_symbol_authority(previous_symbol, candidate)
+                    else candidate
+                )
             context = QuoteEvaluationContext(
                 calendar_snapshot_set=calendar_set,
                 clock=clock,
@@ -374,6 +394,44 @@ class MiniQMTQuoteContextAuthorityAdapter:
             raise error from exc
         self._context_store.publish(context)
         return context
+
+    @staticmethod
+    def _same_calendar_authority(left: CalendarSnapshotSet, right: CalendarSnapshotSet) -> bool:
+        if set(left.snapshot_by_market) != set(right.snapshot_by_market):
+            return False
+        for market in left.snapshot_by_market:
+            left_snapshot = left.snapshot_by_market[market]
+            right_snapshot = right.snapshot_by_market[market]
+            if (
+                left_snapshot.calendar_id != right_snapshot.calendar_id
+                or left_snapshot.market != right_snapshot.market
+                or left_snapshot.trade_date != right_snapshot.trade_date
+                or left_snapshot.timezone != right_snapshot.timezone
+                or left_snapshot.session_segments != right_snapshot.session_segments
+                or left_snapshot.source_version != right_snapshot.source_version
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _same_symbol_authority(left: QuoteSymbolContext, right: QuoteSymbolContext) -> bool:
+        if (
+            left.symbol != right.symbol
+            or left.board != right.board
+            or left.depth_quantity_unit != right.depth_quantity_unit
+            or left.unit_evidence_version != right.unit_evidence_version
+            or left.product_type != right.product_type
+            or left.product_type_proven_equity != right.product_type_proven_equity
+            or left.authority_source_version != right.authority_source_version
+        ):
+            return False
+        if left.tradability is None or right.tradability is None:
+            return left.tradability is right.tradability
+        left_payload = dict(left.tradability.canonical_payload())
+        right_payload = dict(right.tradability.canonical_payload())
+        left_payload.pop("observed_at_utc", None)
+        right_payload.pop("observed_at_utc", None)
+        return left_payload == right_payload
 
     def advance_clock(
         self,

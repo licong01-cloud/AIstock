@@ -663,9 +663,11 @@ def _local_sim_context_with_real_broker(
     cash: float = 100_000,
     positions: dict[str, PositionLot] | None = None,
     paper_repository: InMemoryPaperTradingV2Repository | None = None,
+    execution_policy: dict[str, Any] | None = None,
 ) -> SimulationRunContext:
     manifest = _score_weighted_manifest(release)
     current_positions = dict(positions or {})
+    policy = execution_policy or _local_sim_execution_policy()
     broker = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=cash,
@@ -674,7 +676,7 @@ def _local_sim_context_with_real_broker(
         manifest=manifest,
         package_id=release.package_id,
         market_data_provider=FakeLocalSimMarketDataProvider(),
-        execution_policy=_local_sim_execution_policy(),
+        execution_policy=policy,
         initial_positions=current_positions,
     )
     return SimulationRunContext(
@@ -685,7 +687,7 @@ def _local_sim_context_with_real_broker(
             for symbol in {"000001.SZ", "688001.SH", *current_positions}
         },
         top_k=1,
-        execution_policy_payload=_local_sim_execution_policy(),
+        execution_policy_payload=policy,
         local_broker=broker,
         paper_repository=paper_repository,
         cash=cash,
@@ -2104,13 +2106,15 @@ class FakeLocalSimMarketDataProvider:
 
     def load_observed_intraday(
         self, *, symbol: str, trade_date: date, source: MinuteDataSource,
-        until_time: datetime, require_day_features: bool = False,
+        until_time: datetime, require_suspend_status: bool = False,
+        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         source_input = self.load_symbol_input(
             symbol=symbol,
             trade_date=trade_date,
             source=source,
             min_bars=6,
+            require_suspend_status=require_suspend_status,
             require_day_features=require_day_features,
         )
         return replace(
@@ -3890,7 +3894,7 @@ def test_scheduler_fails_closed_when_localsim_cash_context_is_missing() -> None:
     assert broker.submitted == []
 
 
-def test_scheduler_localsim_cash_fit_runs_sells_before_buys_and_skips_cash_residual() -> None:
+def test_scheduler_localsim_runs_sells_before_buys_and_preserves_dependent_orders() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
     positions = {
@@ -3927,18 +3931,27 @@ def test_scheduler_localsim_cash_fit_runs_sells_before_buys_and_skips_cash_resid
 
     latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
     payload = latest_run.run_payload_json["local_sim_cash_fit"]
+    assert result.failed_count == 0, (
+        result.results[0].error,
+        [
+            (intent.symbol, intent.side.value, intent.order_quantity)
+            for intent in (repo.get_execution_plan(latest_run.execution_plan_id).intents if latest_run.execution_plan_id else ())
+        ],
+    )
     submitted = result.results[0].execution_plan.intents
-    assert result.results[0].status == "LOCALSIM_CAPACITY_RESIDUAL_TERMINAL"
-    assert latest_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
-    assert latest_run.run_payload_json["last_stage"] == "FAILED_TERMINAL"
-    assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_CAPACITY_RESIDUAL"
-    assert payload["status"] == "CAPACITY_RESIDUAL_SKIPPED"
+    assert result.results[0].status == "SUBMITTED"
+    assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest_run.run_payload_json["last_stage"] == "SUCCEEDED"
+    assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED"
+    assert payload["status"] == "SELL_FIRST_DEPENDENCY_ORDERED"
     assert payload["sell_intent_count"] == 1
-    assert payload["submitted_buy_count"] == 1
-    assert payload["skipped_buy_count"] == 1
-    assert [intent.side for intent in submitted] == [OrderSide.SELL, OrderSide.BUY]
+    assert payload["buy_intent_count"] == 2
+    assert payload["dependent_buy_count"] == 2
+    assert "skipped_buy_count" not in payload
+    assert "skipped_buy_intents" not in payload
+    assert [intent.side for intent in submitted] == [OrderSide.SELL, OrderSide.BUY, OrderSide.BUY]
     assert submitted[0].symbol == "000003.SZ"
-    assert paper_repo.list_fills_for_run(latest_run.run_id)
+    assert sorted(fill["quantity"] for fill in paper_repo.list_fills_for_run(latest_run.run_id)) == [201, 1000, 1200]
     assert "000003.SZ" not in context.local_broker.query_positions()
 
 
@@ -3999,8 +4012,8 @@ def test_scheduler_rebuilds_localsim_insufficient_cash_failure_with_fresh_contex
             "000003.SZ": PositionLot(
                 portfolio_id="portfolio_rebuild_cash_fit",
                 symbol="000003.SZ",
-                quantity=1200,
-                available_quantity=1200,
+                quantity=500,
+                available_quantity=500,
                 avg_cost=10.0,
                 trade_date=TRADE_DATE - timedelta(days=1),
             )
@@ -4024,10 +4037,63 @@ def test_scheduler_rebuilds_localsim_insufficient_cash_failure_with_fresh_contex
     assert latest_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
     assert latest_run.execution_plan_id != failed_run.execution_plan_id
     assert latest_run.run_payload_json["rebuilt_failure_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
-    assert latest_run.run_payload_json["local_sim_cash_fit"]["status"] == "CAPACITY_RESIDUAL_SKIPPED"
+    assert latest_run.run_payload_json["local_sim_cash_fit"]["status"] == "SELL_FIRST_DEPENDENCY_ORDERED"
     assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_CAPACITY_RESIDUAL"
+    terminalization = latest_run.run_payload_json["local_sim_capacity_residual_terminalization"]
+    assert terminalization["reason"] == "broker_execution_cash_limited_buy_residual"
+    assert terminalization["capital_residual_count"] > 0
+    assert terminalization["schedule_residual_count"] == 0
+    assert terminalization["residual_orders"]
     assert len(fake_selection.calls) == 2
     assert paper_repo.list_fills_for_run(latest_run.run_id)
+
+
+def test_scheduler_terminalizes_historical_schedule_residual_instead_of_success() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    policy = {
+        "policy_id": "exec_policy_twap_historical_residual",
+        "policy_sha256": "exec_policy_hash_twap_historical_residual",
+        "policy_json": {
+            "algo_code": "TWAP",
+            "algo_config": {"allow_partial_fill": True, "split_count": 6},
+        },
+    }
+    context = _local_sim_context_with_real_broker(
+        portfolio_id="portfolio_historical_schedule_residual",
+        release=release,
+        cash=100_000,
+        positions={},
+        paper_repository=paper_repo,
+        execution_policy=policy,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: context}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+    latest = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    terminalization = latest.run_payload_json["local_sim_capacity_residual_terminalization"]
+
+    assert result.results[0].status == "LOCALSIM_EXECUTION_RESIDUAL_TERMINAL"
+    assert latest.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert latest.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_RESIDUAL"
+    assert terminalization["reason"] == "historical_execution_schedule_residual"
+    assert terminalization["capital_residual_count"] == 0
+    assert terminalization["schedule_residual_count"] > 0
+    assert terminalization["residual_orders"][0]["classification"] == "SCHEDULE_RESIDUAL_AT_HISTORICAL_CLOSE"
+    outbox = latest.run_payload_json["local_sim_projection_outbox_v1"]
+    assert outbox["projection_payload"]["paper_error"]["code"] == "LOCALSIM_HISTORICAL_EXECUTION_RESIDUAL"
 
 
 def test_scheduler_marks_localsim_buy_only_retry_failure_with_actionable_context() -> None:
@@ -7404,8 +7470,7 @@ def test_localsim_selection_and_plan_only_do_not_request_same_day_realtime_quote
 
     assert result.planned_count == 1
     assert provider.phase_quote_requirements == [False]
-    assert provider.tradability_quote_requirements
-    assert all(requirement is False for requirement in provider.tradability_quote_requirements)
+    assert provider.tradability_quote_requirements == []
     causality = result.results[0].execution_plan.plan_payload_json["local_sim_execution_causality"]
     assert causality["eligible_bar_after"] == "2026-05-21T09:29:59.999999+08:00"
     assert result.results[0].run.execution_plan_id == result.results[0].execution_plan.plan_id
@@ -7462,7 +7527,7 @@ def test_pre_trade_provider_internal_type_error_is_not_retried_or_silenced() -> 
     assert broken.calls == 1
 
 
-def test_localsim_submit_fetches_exact_plan_symbols_only_after_selection() -> None:
+def test_localsim_submit_does_not_request_pretrade_quote_after_selection() -> None:
     release, local_binding, _, repo = _release_and_bindings()
     assert local_binding is not None
     events: list[tuple[str, Any]] = []
@@ -7507,10 +7572,7 @@ def test_localsim_submit_fetches_exact_plan_symbols_only_after_selection() -> No
 
     assert events[0] == ("context", False)
     assert events[1] == ("selection", None)
-    assert events[2] == (
-        "quote",
-        (True, ("000001.SZ", "000003.SZ", "688001.SH")),
-    )
+    assert events == [("context", False), ("selection", None)]
 
 
 def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default(
@@ -8151,7 +8213,7 @@ def test_scheduler_no_rebalance_submission_marks_success_without_broker() -> Non
     assert result.results[0].run.run_payload_json["broker_called"] is False
 
 
-def test_scheduler_marks_pre_trade_blocked_holding_without_broker_submit() -> None:
+def test_scheduler_preserves_localsim_intent_when_transient_quote_is_blocked() -> None:
     release, local_binding, _, repo = _release_and_bindings()
     assert local_binding is not None
     blocked_position = {
@@ -8199,17 +8261,18 @@ def test_scheduler_marks_pre_trade_blocked_holding_without_broker_submit() -> No
         trade_date=TRADE_DATE,
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
-        submit=True,
+        submit=False,
     )
 
     latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
-    assert result.results[0].status == "PRE_TRADE_BLOCKED"
-    assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
-    assert latest_run.run_payload_json["broker_called"] is False
-    assert latest_run.run_payload_json["no_rebalance_required"] is False
-    assert latest_run.run_payload_json["pre_trade_blocked_order_generation"]["blocked_symbols"] == ["688689.SH"]
-    assert result.results[0].execution_plan.intents == []
-    assert result.results[0].execution_plan.trading_rule_decisions[0].reason_code == "NO_TRADABLE_REALTIME_QUOTE"
+    assert result.results[0].status == "PLANNED"
+    assert latest_run.status == SimulationDailyRunStatus.PLANNING_EXECUTION
+    assert latest_run.run_payload_json.get("broker_called", False) is False
+    assert latest_run.run_payload_json.get("no_rebalance_required", False) is False
+    assert len(result.results[0].execution_plan.intents) == 1
+    assert result.results[0].execution_plan.intents[0].symbol == "688689.SH"
+    assert result.results[0].execution_plan.intents[0].side == OrderSide.SELL
+    assert "pre_trade_blocked_order_generation" not in latest_run.run_payload_json
     assert context.local_broker.submitted == []
 
 
@@ -8774,6 +8837,28 @@ def test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices() -> None:
     assert exc_info.value.context["reason_code"] == "LOCALSIM_MARK_PROVIDER_UNAVAILABLE"
 
 
+def test_scheduler_previous_localsim_marks_distinguishes_missing_from_malformed_outbox() -> None:
+    missing = SimpleNamespace(run_id="run_marks_missing", run_payload_json={})
+    assert SimulationLifecycleScheduler._previous_local_sim_mark_records(missing) == {}
+
+    malformed_payloads = [
+        {"local_sim_projection_outbox_v1": "invalid"},
+        {"local_sim_projection_outbox_v1": {"projection_payload": "invalid"}},
+        {"local_sim_projection_outbox_v1": {"projection_payload": {"marks": "invalid"}}},
+    ]
+    expected_layers = [
+        "local_sim_projection_outbox_v1",
+        "projection_payload",
+        "marks",
+    ]
+    for payload, expected_layer in zip(malformed_payloads, expected_layers, strict=True):
+        run = SimpleNamespace(run_id=f"run_marks_{expected_layer}", run_payload_json=payload)
+        with pytest.raises(DataUnavailableError) as exc_info:
+            SimulationLifecycleScheduler._previous_local_sim_mark_records(run)
+        assert exc_info.value.context["reason_code"] == "LOCALSIM_PREVIOUS_MARK_SCHEMA_INVALID"
+        assert exc_info.value.context["layer"] == expected_layer
+
+
 def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance() -> None:
     release, _, _, _ = _release_and_bindings(qmt_only=False)
     position = PositionLot(
@@ -8853,6 +8938,17 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
     assert suspended.as_of_time == datetime(2026, 5, 20, 15, 0)
     assert suspended.source == "test.previous_close"
     assert suspended.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        broker.load_authoritative_position_marks(
+            symbols=(position.symbol,),
+            trade_date=TRADE_DATE,
+            as_of_time=as_of_time,
+            pre_trade_tradability={
+                position.symbol: {"suspend_status": {"is_suspended": "true"}}
+            },
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID"
 
 
 def test_scheduler_localsim_economic_transaction_rolls_back_both_repositories() -> None:
@@ -9163,6 +9259,62 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     assert repo.get_simulation_daily_run(run_id).run_payload_json["local_sim_economic_generation"] == 3
     terminal_fill_ids = [row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)]
     assert len(terminal_fill_ids) == len(set(terminal_fill_ids))
+
+
+def test_scheduler_localsim_waiting_for_capital_is_not_terminal_residual() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    position = PositionLot(
+        portfolio_id="portfolio_localsim_waiting_capital",
+        symbol="000003.SZ",
+        quantity=1000,
+        available_quantity=0,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_waiting_capital",
+        release=release,
+        paper_repository=paper_repo,
+        cash=0,
+        positions={position.symbol: position},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = planned.results[0].run.run_id
+    latest = repo.get_simulation_daily_run(run_id)
+    states = repo.list_local_sim_execution_states(run_id)
+
+    assert submitted.results[0].status == "LOCALSIM_INTRADAY_RUNNING", submitted.results[0].error
+    assert latest.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert any(
+        state.runtime_status.value == "WAITING_FOR_CAPITAL"
+        for state in states
+    )
+    assert "local_sim_capacity_residual_terminalization" not in latest.run_payload_json
+    outbox = latest.run_payload_json["local_sim_projection_outbox_v1"]
+    assert outbox["projection_payload"]["paper_error"] is None
 
 
 def test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile() -> None:
