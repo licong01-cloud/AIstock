@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-720",
-  "closed_at": null,
+  "closed_at": "2026-07-17T10:13:47Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "相同 artifact 内容从不同合法来源登记时返回同一 candidate，保留首次 provenance，并幂等追加来源 alias。",
   "first_seen_at": "2026-07-17T09:08:24.606436Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bc16008dd2a17aa9e59d94988e3f9e6efb95f645",
+  "fixed_at": "2026-07-17T10:15:40.959323Z",
   "github_issue_number": 2330,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2330",
   "last_seen_at": "2026-07-17T09:08:24.606436Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2320",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -58,6 +59,10 @@
     "fingerprint": "4cf3f4d5b289511b2d0c730a",
     "source_event_id": "FE-20260717-4cf3f4d5b289"
   },
+  "validation_evidence": [
+    "PR #2320 current head CI: 13 passed, 0 failed; mergeable MERGEABLE/CLEAN",
+    "Local: hmm_evolution_backend 63 passed at 70.45%; validation_center_backend 477 passed; L0/catalog/classifier/issue_flow/F2 gates passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
