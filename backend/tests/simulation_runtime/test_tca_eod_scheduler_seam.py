@@ -60,6 +60,7 @@ class _Lifecycle:
             submitted_count=0,
             failed_count=0,
             stale_terminalized_count=1,
+            stale_recovery_failed_count=0,
         )
 
 

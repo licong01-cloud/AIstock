@@ -33,6 +33,12 @@ class _StaticScheduler:
                     }
                 ],
             },
+            "selection_inference": {"authority": "unit_test_static_scheduler"},
+            "binding_watchdog": {"authority": "unit_test_static_scheduler"},
+            "miniqmt_sim_runtime": {"runtime_route": "A_EVENT_LOOP"},
+            "miniqmt_quote_context": {"authority": "unit_test_static_scheduler"},
+            "miniqmt_quote_ingress_activation": {"authority": "unit_test_static_scheduler"},
+            "b0_quote_v2_controllers": {"controllers": {}},
         }
 
 

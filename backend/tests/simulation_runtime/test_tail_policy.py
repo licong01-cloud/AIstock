@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from backend.services.paper_trading_v2.broker.base import CancelAck, OrderHandle, OrderHandleStatus
+from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
@@ -19,13 +20,19 @@ from backend.services.simulation_runtime import (
     TailHandlingPolicyService,
 )
 from backend.services.simulation_runtime.bridges import LocalSimExecutionSnapshot
-from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_runtime.models import (
+    LocalSimMarketMarkProvenance,
+    LocalSimMarketMarkV1,
+    canonical_json_sha256,
+)
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, PositionLot
+from backend.tests.simulation_runtime.test_lifecycle_scheduler import FakePackageRepository
 
 
 TRADE_DATE = date(2026, 5, 21)
+EXECUTION_TIME = datetime(2026, 5, 21, 10, 0, tzinfo=UTC)
 
 
 def _release_binding_repo():
@@ -113,6 +120,10 @@ def _evidence(release) -> DailySelectionEvidence:
 class FakeSelectionService:
     def __init__(self, release) -> None:
         self.release = release
+        self.package_repository = FakePackageRepository(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
 
     def run_selection(self, **kwargs):
         candidates = _candidates()
@@ -144,7 +155,7 @@ class TailAwareLocalBroker:
         handle = OrderHandle(
             handle_id=f"handle_{len(self.handles) + 1}",
             backend_id="local_sim",
-            submitted_at=datetime.now(UTC),
+            submitted_at=EXECUTION_TIME,
             intent_id=intent.intent_id,
         )
         self.handles.append(handle)
@@ -204,13 +215,41 @@ class TailAwareLocalBroker:
             state=state,
             filled_quantity=int(filled),
             avg_fill_price=Decimal("10") if filled else None,
-            last_event_at=datetime.now(UTC),
+            last_event_at=EXECUTION_TIME,
             rejection_reason=None,
         )
 
     def cancel(self, handle: OrderHandle) -> CancelAck:
         self.cancelled.append(handle.intent_id)
         return CancelAck(handle_id=handle.handle_id, accepted=True, reason="tail_cancel_unfilled_at_close")
+
+    def load_authoritative_position_marks(
+        self,
+        *,
+        symbols,
+        trade_date,
+        as_of_time,
+        pre_trade_tradability,
+        previous_marks=None,
+    ):
+        assert trade_date == TRADE_DATE
+        assert as_of_time.date() == TRADE_DATE
+        assert isinstance(pre_trade_tradability, dict)
+        assert isinstance(previous_marks, dict)
+        prices = {"000001.SZ": 10.0, "000002.SZ": 8.0}
+        requested_symbols = tuple(symbols)
+        unknown_symbols = sorted(set(requested_symbols) - set(prices))
+        assert unknown_symbols == []
+        return {
+            symbol: LocalSimMarketMarkV1(
+                symbol=symbol,
+                price=prices[symbol],
+                as_of_time=as_of_time,
+                source=MinuteDataSource.DB_HISTORICAL.value,
+                provenance=LocalSimMarketMarkProvenance.HISTORICAL_MINUTE_CLOSE,
+            )
+            for symbol in requested_symbols
+        }
 
     def export_execution_snapshot(self, *, handles):
         selected_handles = tuple(handles)
@@ -302,6 +341,7 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
             )
         },
         current_prices={"000002.SZ": 8.0},
+        market_data_source=MinuteDataSource.DB_HISTORICAL.value,
         tail_policy_payload={"policy": "cancel_unfilled_at_close"},
     )
     scheduler.context_provider = StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: initial_context})
@@ -319,15 +359,16 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
     broker = TailAwareLocalBroker(states)
     scheduler.context_provider = StaticSimulationRunContextProvider(
         by_binding_id={
-            binding.binding_id: SimulationRunContext(
-                portfolio_id="portfolio_tail",
-                current_positions=initial_context.current_positions,
-                current_prices=initial_context.current_prices,
-                cash=100_000.0,
-                local_broker=broker,  # type: ignore[arg-type]
-                tail_policy_payload={"policy": "cancel_unfilled_at_close"},
-                tail_policy_service=TailHandlingPolicyService(),
-            )
+                binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_tail",
+                    current_positions=initial_context.current_positions,
+                    current_prices=initial_context.current_prices,
+                    cash=100_000.0,
+                    local_broker=broker,  # type: ignore[arg-type]
+                    market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+                    tail_policy_payload={"policy": "cancel_unfilled_at_close"},
+                    tail_policy_service=TailHandlingPolicyService(),
+                )
         }
     )
 
@@ -339,7 +380,7 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
         as_of_time=datetime(2026, 5, 21, 10, 0),
     )
 
-    assert submitted.results[0].status == "TAIL_HANDLED"
+    assert submitted.results[0].status == "TAIL_HANDLED", submitted.results[0].error
     tail_payload = submitted.results[0].run.run_payload_json["tail_handling"]
     assert tail_payload["policy"] == "cancel_unfilled_at_close"
     assert tail_payload["partial_cancelled_count"] == 1
@@ -360,6 +401,7 @@ def test_tail_policy_fails_fast_when_policy_payload_is_missing() -> None:
                     current_prices={"000001.SZ": 10.0},
                     cash=100_000.0,
                     local_broker=TailAwareLocalBroker({}),  # type: ignore[arg-type]
+                    market_data_source=MinuteDataSource.DB_HISTORICAL.value,
                     tail_policy_service=TailHandlingPolicyService(),
                 )
             }
@@ -375,5 +417,5 @@ def test_tail_policy_fails_fast_when_policy_payload_is_missing() -> None:
     )
 
     assert result.failed_count == 1
-    assert result.results[0].error["type"] == RuntimeConfigInvalidError.__name__
+    assert result.results[0].error["type"] == RuntimeConfigInvalidError.__name__, result.results[0].error
     assert "TailHandlingPolicy execution requires explicit policy payload" in result.results[0].error["message"]
