@@ -17,7 +17,7 @@ import tempfile
 import shutil
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,6 +45,24 @@ LAST_STRICT_FEATURE_FILTER: dict[str, Any] | None = None
 
 def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fetch_inference_fundamental_data(
+    *,
+    universe: list[str],
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    """Load the trading-calendar window already resolved for strict inference."""
+
+    from .data_service import timescaledb_adapter
+
+    return timescaledb_adapter.fetch_fundamental_data_ts(
+        universe=universe,
+        start_date=start_date,
+        end_date=end_date,
+        max_natural_days=None,
+    )
 
 
 def _validate_qe_runtime_workspace_path(workspace_path: str) -> Path:
@@ -1448,8 +1466,7 @@ class InferenceEngine:
                 raise ValueError("获取历史数据为空")
 
             # 从数据库获取基本面+资金流数据
-            from .data_service import timescaledb_adapter
-            df_fund_raw = timescaledb_adapter.fetch_fundamental_data_ts(
+            df_fund_raw = _fetch_inference_fundamental_data(
                 universe=universe,
                 start_date=start_date.date(),
                 end_date=actual_date.date()

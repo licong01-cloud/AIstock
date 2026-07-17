@@ -114,6 +114,7 @@ def fetch_fundamental_data_ts(
     universe: List[str],
     start_date: date,
     end_date: date,
+    max_natural_days: int | None = 180,
 ) -> pd.DataFrame:
     """从 PostgreSQL (quant schema) 获取基本面与资金流数据。
     
@@ -121,11 +122,12 @@ def fetch_fundamental_data_ts(
     """
     from ..db.pg_pool import get_conn
     
-    # 优化：如果日期范围过大，强制限制为 end_date 之前的 180 天
-    # 避免加载过多历史数据导致超时（1100万行数据处理极其缓慢）
-    max_days = 180
-    if (end_date - start_date).days > max_days:
-        adjusted_start = end_date - timedelta(days=max_days)
+    # 普通调用默认限制为最近 180 个自然日，避免无边界的大范围查询。
+    # 已由交易日历精确解析窗口的推理调用可显式传入 None。
+    if max_natural_days is not None and max_natural_days <= 0:
+        raise ValueError("max_natural_days must be positive or None")
+    if max_natural_days is not None and (end_date - start_date).days > max_natural_days:
+        adjusted_start = end_date - timedelta(days=max_natural_days)
         logger.warning(f"fetch_fundamental_data_ts: start_date {start_date} too early, adjusting to {adjusted_start} to avoid timeout")
         start_date = adjusted_start
 

@@ -1,6 +1,9 @@
 {
   "actual": "POST /api/v1/selection-center/runs for trade_date 2026-07-16 with explicit auto_generate local inference fails DATA_UNAVAILABLE because m_turnover_percentile_250d is empty.",
   "allowed_write_scope": [
+    "backend/data_service/timescaledb_adapter.py",
+    "backend/inference_engine.py",
+    "backend/tests/test_timescaledb_adapter_fundamental_window.py",
     "tests/aistock_validation/bugs/20260717_BUG-703-enabled-single-alpha-live-inference-regresses-250d-factor-lookback.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -15,6 +18,12 @@
   "created_at": "2026-07-17T05:54:43.217710Z",
   "description": "POST /api/v1/selection-center/runs for trade_date 2026-07-16 with explicit auto_generate local inference fails DATA_UNAVAILABLE because m_turnover_percentile_250d is empty.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scoped the regression fix to the fundamental-data natural-day cap, the strict inference call site, and focused window-contract tests.",
+      "timestamp": "2026-07-17T14:05:00+08:00"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
