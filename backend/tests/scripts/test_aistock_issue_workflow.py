@@ -724,7 +724,12 @@ def test_finish_rejects_unstructured_or_failed_validation_evidence(
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
 
-    for evidence in ["arbitrary-text", "custom validator -> passed", "python -m nox -s l0 -> failed"]:
+    for evidence in [
+        "arbitrary-text",
+        "custom validator -> passed",
+        "python -m pytest -> passed",
+        "python -m nox -s l0 -> failed",
+    ]:
         assert workflow.main([
             "finish",
             "--issue-json",

@@ -62,9 +62,10 @@ PASS_STATUS_MARKERS = {
 }
 
 ACTIONABLE_EVIDENCE_RE = re.compile(
-    r"(?:validation-receipt:|(?:python\s+-m\s+)?pytest\s+\S+|(?:python\s+-m\s+)?nox\s+-s\s+\S+|"
+    r"(?:validation-receipt:|(?:python\s+-m\s+)?pytest\b[^\r\n]*(?:backend/tests|frontend/tests|tests)/\S+|"
+    r"(?:python\s+-m\s+)?nox\s+-s\s+\S+|"
     r"playwright\s+test\s+\S+|go\s+test(?:\s+\S+)?|npm\s+(?:run|exec|test)\s+\S+|"
-    r"(?:backend|frontend|tests?)/\S+\.(?:py|ts|tsx|json)|artifact:\s*\S+)",
+    r"(?:backend/tests|frontend/tests|tests)/\S+\.(?:py|ts|tsx|json)|artifact:\s*\S+)",
     re.IGNORECASE,
 )
 

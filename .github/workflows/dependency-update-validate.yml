@@ -53,7 +53,7 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
-          mapfile -t changed_files < <(git diff --name-only --diff-filter=ACMRT "$base_sha" "$HEAD_SHA")
+          mapfile -t changed_files < <(git diff --name-only --diff-filter=ACMRT "$base_sha...$HEAD_SHA")
           dependency_files=()
           has_frontend=false
           for file in "${changed_files[@]}"; do
@@ -118,4 +118,6 @@ jobs:
           npm run lint
 
       - name: Static gate
-        run: python -m nox -s l0
+        run: |
+          mapfile -t changed_files < tmp/validation/dependency_update/changed-files.txt
+          python -m nox -s l0 -- "${changed_files[@]}"

@@ -522,8 +522,9 @@ def test_pr_check_merges_feature_pr_body_scope_with_changed_bug_scopes(
         "- `docs/architecture/hmm_evolution_design.md`\n"
         "- `../outside`\n"
         "- `**`\n\n"
-        "## Validation\n"
-        "- pytest -> passed\n\n"
+            "## Validation\n"
+            "- validation-receipt: id=0123456789abcdef commit=abcdef1 kind=pytest plan=direct status=passed "
+            "command=`python -m pytest backend/tests/scripts/test_issue_flow.py -q` result=`passed`\n\n"
         "## Production gates\n"
         "- production_ddl_gate: noop\n"
         "- production_frontend_dependency_gate: noop\n"
@@ -1114,7 +1115,7 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 
-    assert "git diff --name-only --diff-filter=ACMRT" in runs
+    assert 'git diff --name-only --diff-filter=ACMRT "$base_sha...$HEAD_SHA"' in runs
     assert 'selection_args+=(--changed-file "$file")' in runs
     assert "--changed-file requirements.txt" not in runs
     assert 'python -m pip install --dry-run -r "$file"' in runs
@@ -1122,3 +1123,4 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     assert "npm ci" in runs
     assert "npx tsc --noEmit" in runs
     assert "npm run lint" in runs
+    assert 'python -m nox -s l0 -- "${changed_files[@]}"' in runs

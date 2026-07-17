@@ -240,6 +240,22 @@ def test_acceptance_matrix_rejects_generic_evidence_text(tmp_path: Path) -> None
     assert any(finding.code == "acceptance_evidence_not_verifiable" for finding in result.findings)
 
 
+def test_acceptance_matrix_rejects_production_source_as_test_evidence(tmp_path: Path) -> None:
+    workflow = _load_module()
+    design = _write(
+        tmp_path / "source_only_evidence.md",
+        VALID_F1_DOC.replace(
+            "python -m pytest backend/tests/scripts/test_aistock_feature_workflow.py -q",
+            "backend/services/validation/plan_catalog.py",
+        ),
+    )
+
+    result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
+
+    assert not result.ok
+    assert any(finding.code == "acceptance_evidence_not_verifiable" for finding in result.findings)
+
+
 def test_simplified_or_mock_only_completion_language_fails(tmp_path: Path) -> None:
     workflow = _load_module()
     design = _write(

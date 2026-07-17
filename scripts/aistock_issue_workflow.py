@@ -69,7 +69,13 @@ VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("nox", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
-    ("pytest", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?pytest\b", re.IGNORECASE)),
+    (
+        "pytest",
+        re.compile(
+            r"^(?:python(?:\.exe)?\s+-m\s+)?pytest\b[^\r\n]*(?:backend[/\\]tests|frontend[/\\]tests|tests)[/\\]\S+",
+            re.IGNORECASE,
+        ),
+    ),
     ("ruff", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
     ("diff_check", re.compile(r"^git\s+diff\s+--check\b", re.IGNORECASE)),
     ("compile", re.compile(r"^python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
