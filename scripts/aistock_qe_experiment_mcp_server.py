@@ -194,7 +194,7 @@ def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict
             "loop": loop_payload,
             "confirm_delete_old_result": True,
             "phase_pipeline_enabled": phase_pipeline_enabled,
-            "resource_telemetry_enabled": resource_telemetry_enabled,
+            "resource_telemetry_enabled": False,
         },
     )
 
@@ -212,7 +212,7 @@ def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any
             "loops": loop_payloads,
             "ack_failed_loop_warning": True,
             "phase_pipeline_enabled": phase_pipeline_enabled,
-            "resource_telemetry_enabled": resource_telemetry_enabled,
+            "resource_telemetry_enabled": False,
         },
     )
 

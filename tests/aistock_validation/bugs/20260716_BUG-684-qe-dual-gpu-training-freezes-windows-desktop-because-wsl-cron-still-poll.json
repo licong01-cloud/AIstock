@@ -1,0 +1,182 @@
+{
+  "actual": "Every minute cron launches WSL nvidia-smi; dual TCN training produced 70 dxg kernel errors from 01:16 to 01:52 and repeated desktop stalls. QE also samples torch.cuda allocator stats every second per loop.",
+  "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/routers/qe_archive.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_resource_phase_service.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py",
+    "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+    "backend/tests/unified_engine/test_qe_runtime_resource.py",
+    "monitoring/grafana/patch_node_exporter_dashboard.py",
+    "monitoring/textfile_collector/collect_gpu_metrics.sh",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/qe_runtime_resource.py",
+    "scripts/qrun_limit.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260716_BUG-684-qe-dual-gpu-training-freezes-windows-desktop-because-wsl-cron-still-poll.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-684",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-16T18:08:17.034558Z",
+  "description": "Every minute cron launches WSL nvidia-smi; dual TCN training produced 70 dxg kernel errors from 01:16 to 01:52 and repeated desktop stalls. QE also samples torch.cuda allocator stats every second per loop.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260716-f82752204e65",
+      "timestamp": "2026-07-16T18:08:17.034554Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20260717_011405_759a; cron collect_gpu_metrics.sh; GPU release at 2026-07-17 01:53:10"
+  ],
+  "expected": "QE training and monitoring must perform no nvidia-smi, NVML, GPU utilization, VRAM, CUDA allocator, or other resource polling; lifecycle phase transitions remain available without resource gates; current experiments continue without creating new experiments.",
+  "first_seen_at": "2026-07-16T18:08:17.034558Z",
+  "fix_branch": null,
+  "fix_commit": "6922e95e37e4663fe0456131b5853173ca01f6dc",
+  "fixed_at": "2026-07-16T19:07:25.435101Z",
+  "github_issue_number": 2244,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2244",
+  "last_seen_at": "2026-07-16T18:08:17.034558Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2246",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "journalctl -k --since '2026-07-17 01:14:00' --until '2026-07-17 01:54:00' | rg 'dxgvmb_send_sync_msg|dxgkio_query_adapter_info'; crontab -l",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE dual GPU training freezes Windows desktop because WSL cron still polls nvidia-smi",
+  "trigger_condition": {
+    "fingerprint": "f82752204e65496aaca6c40c",
+    "source_event_id": "FE-20260716-f82752204e65"
+  },
+  "validation_evidence": [
+    "core lifecycle, phase service and MCP matrix: 52 passed",
+    "custom-evo mutation and route matrix: 23 passed",
+    "QE model and scheduler fix-points: 6 passed, 3 environment skips; WSL rdagent-gpu import passed",
+    "ruff, py_compile, git diff check, nox l0 and validation_module_registry_l0 passed",
+    "CI checks clean; live WSL GPU collector disabled"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

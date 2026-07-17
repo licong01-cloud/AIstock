@@ -391,13 +391,13 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
     assert calls[3]["body"]["auto_start"] is False
     assert calls[3]["body"]["node_id"] == "node-1"
     assert calls[3]["body"]["phase_pipeline_enabled"] is True
-    assert calls[3]["body"]["resource_telemetry_enabled"] is True
+    assert calls[3]["body"]["resource_telemetry_enabled"] is False
     assert calls[4]["body"]["phase_pipeline_enabled"] is True
-    assert calls[4]["body"]["resource_telemetry_enabled"] is True
+    assert calls[4]["body"]["resource_telemetry_enabled"] is False
     assert calls[5]["body"]["phase_pipeline_enabled"] is True
-    assert calls[5]["body"]["resource_telemetry_enabled"] is True
+    assert calls[5]["body"]["resource_telemetry_enabled"] is False
     assert calls[6]["body"]["phase_pipeline_enabled"] is True
-    assert calls[6]["body"]["resource_telemetry_enabled"] is True
+    assert calls[6]["body"]["resource_telemetry_enabled"] is False
 
 
 def test_qe_runtime_first_create_paths_validate_before_http() -> None:
