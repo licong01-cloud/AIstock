@@ -26,6 +26,8 @@ def test_data_source_config_requires_explicit_realtime_candidate():
     )
 
     assert backtest.mode == "backtest"
+    assert backtest.artifact_source_preference == "prediction_store_first"
+    assert backtest.label_horizon_days == 10
     assert realtime.candidate_id == "candidate-readonly-smoke"
 
 

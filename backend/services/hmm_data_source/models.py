@@ -5,7 +5,7 @@ HMM 数据源数据模型
 """
 
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -33,6 +33,20 @@ class DataSourceConfig(BaseModel):
         ge=1,
         description="缓存有效期（秒）",
     )
+    artifact_source_preference: Literal[
+        "prediction_store_first",
+        "prediction_store_only",
+        "workspace_only",
+    ] = Field(
+        "prediction_store_first",
+        description="QE artifact 来源策略；默认复用 Prediction Store，缺失时回退 workspace",
+    )
+    label_horizon_days: int = Field(
+        10,
+        ge=1,
+        le=30,
+        description="backtest label.pkl 对应的显式 horizon",
+    )
 
     # 实时模式参数
     candidate_id: Optional[str] = Field(None, description="显式 HMM 研究候选 ID")
@@ -44,20 +58,20 @@ class DataSourceConfig(BaseModel):
     lag_days: int = Field(1, ge=1, description="完成交易日延迟数")
     max_query_days: int = Field(730, ge=1, description="单次查询最大天数")
 
-    @field_validator('mode')
+    @field_validator("mode")
     @classmethod
     def validate_mode(cls, v):
-        if v not in ['backtest', 'realtime']:
+        if v not in ["backtest", "realtime"]:
             raise ValueError(f"mode must be 'backtest' or 'realtime', got '{v}'")
         return v
 
     @model_validator(mode="after")
     def validate_backtest_config(self):
-        if self.mode == 'backtest' and not self.base_loop_ref:
+        if self.mode == "backtest" and not self.base_loop_ref:
             raise ValueError("base_loop_ref is required for backtest mode")
         if self.max_artifact_bytes > self.max_cache_bytes:
             raise ValueError("max_artifact_bytes cannot exceed max_cache_bytes")
-        if self.mode == 'realtime' and self.candidate_id is None:
+        if self.mode == "realtime" and self.candidate_id is None:
             self.candidate_id = self.snapshot_id
         return self
 

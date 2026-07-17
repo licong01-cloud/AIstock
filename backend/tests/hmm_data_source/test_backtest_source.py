@@ -14,13 +14,16 @@ BacktestDataSource 单元测试
 
 import asyncio
 import hashlib
+import io
 import json
 import pickle
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
+
+from backend.services.model_store import ModelStoreService, PredictionArtifactStore
 
 from backend.services.hmm_data_source import (
     BacktestDataSource,
@@ -43,6 +46,26 @@ def qe_provenance(payload: bytes, *, artifact_name: str, row_count: int) -> dict
         "remote_row_count": row_count,
         "remote_quality_status": "ok",
     }
+
+
+def build_prediction_store_service(
+    tmp_path,
+    *,
+    pred_obj,
+    label_obj=None,
+    task_id: str = "qe_store",
+    loop_index: int = 1,
+) -> ModelStoreService:
+    files = {"prediction": ("pred.pkl", io.BytesIO(pickle.dumps(pred_obj)))}
+    if label_obj is not None:
+        files["label"] = ("label.pkl", io.BytesIO(pickle.dumps(label_obj)))
+    store = PredictionArtifactStore(root=tmp_path / "prediction_store")
+    store.write_artifacts(
+        run_key=f"{task_id}_L{loop_index}",
+        files=files,
+        metadata={"task_id": task_id, "loop_index": loop_index},
+    )
+    return ModelStoreService(artifact_store=store)
 
 
 class TestBacktestDataSource:
@@ -78,16 +101,18 @@ class TestBacktestDataSource:
     def sample_pred_data(self):
         """样本预测数据"""
         dates = [date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)]
-        symbols = ['000001.SZ', '000002.SZ', '600000.SH']
+        symbols = ["000001.SZ", "000002.SZ", "600000.SH"]
 
         data = []
         for d in dates:
             for symbol in symbols:
-                data.append({
-                    'trade_date': d,
-                    'symbol': symbol,
-                    'score': 0.5,
-                })
+                data.append(
+                    {
+                        "trade_date": d,
+                        "symbol": symbol,
+                        "score": 0.5,
+                    }
+                )
 
         return pd.DataFrame(data)
 
@@ -95,18 +120,20 @@ class TestBacktestDataSource:
     def sample_label_data(self):
         """样本标签数据"""
         dates = [date(2024, 7, 1), date(2024, 7, 2)]
-        symbols = ['000001.SZ', '000002.SZ']
+        symbols = ["000001.SZ", "000002.SZ"]
 
         data = []
         for d in dates:
             for symbol in symbols:
-                data.append({
-                    'trade_date': d,
-                    'symbol': symbol,
-                    'horizon_days': 10,
-                    'future_return': 0.02,
-                    'label_date': date(2024, 7, 15),  # 会被重新计算
-                })
+                data.append(
+                    {
+                        "trade_date": d,
+                        "symbol": symbol,
+                        "horizon_days": 10,
+                        "future_return": 0.02,
+                        "label_date": date(2024, 7, 15),  # 会被重新计算
+                    }
+                )
 
         return pd.DataFrame(data)
 
@@ -131,9 +158,7 @@ class TestBacktestDataSource:
         )
 
         # Mock get_available_date_range
-        source.get_available_date_range = AsyncMock(
-            return_value=(date(2024, 1, 1), date(2024, 12, 31))
-        )
+        source.get_available_date_range = AsyncMock(return_value=(date(2024, 1, 1), date(2024, 12, 31)))
 
         is_valid, error_msg = await source.validate_date_range(
             start_date=date(2024, 7, 10),
@@ -179,9 +204,243 @@ class TestBacktestDataSource:
 
         # 验证数据正确
         assert len(df) > 0
-        assert 'trade_date' in df.columns
-        assert 'symbol' in df.columns
-        assert 'score' in df.columns
+        assert "trade_date" in df.columns
+        assert "symbol" in df.columns
+        assert "score" in df.columns
+
+    @pytest.mark.asyncio
+    async def test_prediction_store_first_reuses_blob_without_workspace_copy(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        sample_label_data,
+        tmp_path,
+    ):
+        cache_dir = tmp_path / "cache"
+        repository = MagicMock()
+        repository.get_nth_trading_day.side_effect = lambda trade_date, horizon: trade_date + timedelta(days=horizon)
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=sample_pred_data,
+            label_obj=sample_label_data,
+        )
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(cache_dir),
+            qe_client=mock_qe_client,
+            repository=repository,
+            model_store=model_store,
+        )
+
+        pred = await source.get_predictions(date(2024, 7, 1), date(2024, 7, 2))
+        labels = await source.get_labels(
+            date(2024, 7, 1),
+            date(2024, 7, 2),
+            horizon_days=10,
+        )
+
+        assert not pred.empty
+        assert not labels.empty
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
+        assert not source.cache_manager.is_cached("qe_store/Loop1", "pred.pkl")
+        assert not source.cache_manager.is_cached("qe_store/Loop1", "label.pkl")
+        source_info = source.get_artifact_source_info()
+        assert source_info["pred.pkl"]["source"] == "prediction_store"
+        assert source_info["pred.pkl"]["zero_copy"] is True
+        assert source_info["label.pkl"]["source"] == "prediction_store"
+        assert source_info["label.pkl"]["zero_copy"] is True
+
+    @pytest.mark.asyncio
+    async def test_prediction_store_reads_real_qlib_multiindex_shape(
+        self,
+        mock_qe_client,
+        tmp_path,
+    ):
+        index = pd.MultiIndex.from_product(
+            [
+                [pd.Timestamp("2024-07-01"), pd.Timestamp("2024-07-02")],
+                ["000001.SZ", "000002.SZ"],
+            ],
+            names=["datetime", "instrument"],
+        )
+        pred_obj = pd.DataFrame({"score": [0.4, 0.2, 0.1, 0.3]}, index=index)
+        label_obj = pd.DataFrame({"LABEL0": [0.02, -0.01, 0.03, 0.01]}, index=index)
+        repository = MagicMock()
+        repository.get_nth_trading_day.side_effect = lambda trade_date, horizon: trade_date + timedelta(days=horizon)
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=pred_obj,
+            label_obj=label_obj,
+        )
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            repository=repository,
+            model_store=model_store,
+            label_horizon_days=10,
+        )
+
+        pred = await source.get_predictions(date(2024, 7, 1), date(2024, 7, 2))
+        labels = await source.get_labels(
+            date(2024, 7, 1),
+            date(2024, 7, 2),
+            horizon_days=10,
+        )
+
+        assert list(pred.columns) == ["trade_date", "symbol", "score", "rank"]
+        assert len(pred) == 4
+        assert pred.groupby("trade_date")["rank"].min().eq(1).all()
+        assert {"trade_date", "symbol", "future_return", "horizon_days", "label_date"}.issubset(labels.columns)
+        assert set(labels["horizon_days"]) == {10}
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_prediction_store_corruption_does_not_fallback_to_workspace(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        tmp_path,
+    ):
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=sample_pred_data,
+        )
+        manifest = model_store.artifact_store.load_manifest("qe_store_L1")
+        blob = model_store.artifact_store.resolve_artifact_path(
+            manifest["uri"],
+            artifact_type="prediction",
+        )
+        blob.write_bytes(b"tampered")
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            model_store=model_store,
+        )
+
+        with pytest.raises(DataSourceError, match="manifest is corrupt"):
+            await source.get_available_date_range()
+
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_partial_manifest_target_corruption_does_not_fallback(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        sample_label_data,
+        tmp_path,
+    ):
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=sample_pred_data,
+            label_obj=sample_label_data,
+        )
+        manifest = model_store.artifact_store.load_manifest("qe_store_L1")
+        label_blob = model_store.artifact_store.resolve_artifact_path(
+            manifest["uri"],
+            artifact_type="label",
+        )
+        label_blob.write_bytes(b"tampered-label")
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            model_store=model_store,
+        )
+
+        with pytest.raises(DataSourceError, match="target artifact is present but invalid"):
+            await source.get_labels(
+                date(2024, 7, 1),
+                date(2024, 7, 2),
+                horizon_days=10,
+            )
+
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_target_artifact_uses_explicit_workspace_fallback(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        sample_label_data,
+        tmp_path,
+    ):
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=sample_pred_data,
+        )
+        mock_qe_client.download_workspace_file_bytes.return_value = pickle.dumps(sample_label_data)
+        repository = MagicMock()
+        repository.get_nth_trading_day.side_effect = lambda trade_date, horizon: trade_date + timedelta(days=horizon)
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            repository=repository,
+            model_store=model_store,
+        )
+
+        labels = await source.get_labels(
+            date(2024, 7, 1),
+            date(2024, 7, 2),
+            horizon_days=10,
+        )
+
+        assert len(labels) == len(sample_label_data)
+        mock_qe_client.download_workspace_file_bytes.assert_awaited_once_with(
+            "qe_store",
+            "Loop1",
+            "mlruns/1/abc123/artifacts/label.pkl",
+        )
+        source_info = source.get_artifact_source_info()
+        assert source_info["pred.pkl"]["source"] == "prediction_store"
+        assert source_info["label.pkl"]["source"] == "qe_workspace_cache"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_prediction_identity_fails_loud(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        tmp_path,
+    ):
+        duplicate_data = pd.concat([sample_pred_data, sample_pred_data.iloc[[0]]], ignore_index=True)
+        model_store = build_prediction_store_service(
+            tmp_path,
+            pred_obj=duplicate_data,
+        )
+        source = BacktestDataSource(
+            base_loop_ref="qe_store/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            model_store=model_store,
+        )
+
+        with pytest.raises(DataSourceError, match="duplicate identity keys"):
+            await source.get_available_date_range()
+
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_prediction_store_only_rejects_missing_artifact(
+        self,
+        mock_qe_client,
+        tmp_path,
+    ):
+        model_store = ModelStoreService(artifact_store=PredictionArtifactStore(root=tmp_path / "empty_store"))
+        source = BacktestDataSource(
+            base_loop_ref="qe_missing/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+            model_store=model_store,
+            artifact_source_preference="prediction_store_only",
+        )
+
+        with pytest.raises(DataSourceError, match="required but missing"):
+            await source.get_available_date_range()
+
+        mock_qe_client.download_workspace_file_bytes.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cache_hit_no_download(
@@ -196,6 +455,7 @@ class TestBacktestDataSource:
 
         # 预先保存到缓存
         from backend.services.hmm_data_source import ArtifactCacheManager
+
         cache_manager = ArtifactCacheManager(str(cache_dir))
         pred_bytes = pickle.dumps(sample_pred_data)
         cache_manager.save_artifact(
@@ -242,9 +502,7 @@ class TestBacktestDataSource:
             qe_client=mock_qe_client,
         )
         await source.get_predictions(date(2024, 7, 1), date(2024, 7, 2))
-        manifest_path = source.cache_manager._manifest_path(
-            "qe_test/Loop1", "pred.pkl"
-        )
+        manifest_path = source.cache_manager._manifest_path("qe_test/Loop1", "pred.pkl")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["expires_at"] = "2000-01-01T00:00:00Z"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -264,7 +522,7 @@ class TestBacktestDataSource:
 
         # Mock _load_labels_from_cache
         source._load_labels_from_cache = AsyncMock(
-            return_value=pd.DataFrame(columns=['trade_date', 'symbol', 'future_return'])
+            return_value=pd.DataFrame(columns=["trade_date", "symbol", "future_return"])
         )
 
         # 测试无效的 horizon
@@ -280,8 +538,8 @@ class TestBacktestDataSource:
         """测试板块映射查询"""
         repository = MagicMock()
         repository.get_sector_mapping.return_value = {
-            '000001.SZ': '801780.SI',
-            '600000.SH': '801192.SI',
+            "000001.SZ": "801780.SI",
+            "600000.SH": "801192.SI",
         }
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -293,8 +551,8 @@ class TestBacktestDataSource:
         mapping = await source.get_sector_mapping(date(2024, 7, 1))
 
         repository.get_sector_mapping.assert_called_once_with(date(2024, 7, 1))
-        assert mapping['000001.SZ'] == '801780.SI'
-        assert mapping['600000.SH'] == '801192.SI'
+        assert mapping["000001.SZ"] == "801780.SI"
+        assert mapping["600000.SH"] == "801192.SI"
 
     @pytest.mark.asyncio
     async def test_concurrent_download_lock(
@@ -389,10 +647,10 @@ class TestBacktestDataSourceIsolation:
         )
 
         forbidden_files = [
-            'config.json',
-            'hmm_config.yaml',
-            'strategy.toml',
-            'model_train_configs.json',
+            "config.json",
+            "hmm_config.yaml",
+            "strategy.toml",
+            "model_train_configs.json",
         ]
 
         for filename in forbidden_files:
@@ -408,9 +666,11 @@ class TestBacktestDataSourceIsolation:
         """验证白名单内的 artifact（pred.pkl/label.pkl）允许下载"""
         import pickle
 
-        sample_df = pd.DataFrame([
-            {'trade_date': date(2024, 7, 1), 'symbol': '000001.SZ', 'score': 0.5},
-        ])
+        sample_df = pd.DataFrame(
+            [
+                {"trade_date": date(2024, 7, 1), "symbol": "000001.SZ", "score": 0.5},
+            ]
+        )
         mock_qe_client = MagicMock()
         pred_bytes = pickle.dumps(sample_df)
         mock_qe_client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
@@ -448,11 +708,15 @@ class TestBacktestDataSourceIsolation:
     async def test_resolve_recorder_metadata_fallback(self, tmp_path):
         """首选 recorder ref 缺失时使用受控的 extracted metadata。"""
         client = MagicMock()
-        sample_df = pd.DataFrame([{
-                "trade_date": date(2024, 7, 1),
-                "symbol": "000001.SZ",
-                "score": 0.5,
-            }])
+        sample_df = pd.DataFrame(
+            [
+                {
+                    "trade_date": date(2024, 7, 1),
+                    "symbol": "000001.SZ",
+                    "score": 0.5,
+                }
+            ]
+        )
         pred_bytes = pickle.dumps(sample_df)
         client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
 
@@ -489,10 +753,12 @@ class TestBacktestDataSourceIsolation:
     async def test_invalid_recorder_metadata_fails_before_download(self, tmp_path):
         """Recorder identity 不能包含路径穿越片段。"""
         client = MagicMock()
-        client.get_workspace_file = AsyncMock(return_value={
-            "experiment_id": "../42",
-            "recorder_id": "abc123",
-        })
+        client.get_workspace_file = AsyncMock(
+            return_value={
+                "experiment_id": "../42",
+                "recorder_id": "abc123",
+            }
+        )
         client.download_workspace_file_bytes = AsyncMock()
 
         source = BacktestDataSource(
@@ -509,11 +775,15 @@ class TestBacktestDataSourceIsolation:
     async def test_default_client_resolves_task_node_and_is_closed(self, tmp_path):
         """未注入 client 时按任务 node_id 创建，并由 source 释放连接池。"""
         client = MagicMock()
-        sample_df = pd.DataFrame([{
-                "trade_date": date(2024, 7, 1),
-                "symbol": "000001.SZ",
-                "score": 0.5,
-            }])
+        sample_df = pd.DataFrame(
+            [
+                {
+                    "trade_date": date(2024, 7, 1),
+                    "symbol": "000001.SZ",
+                    "score": 0.5,
+                }
+            ]
+        )
         pred_bytes = pickle.dumps(sample_df)
         client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
 
@@ -586,12 +856,11 @@ class TestBacktestDataSourceIsolation:
         cache_dir.mkdir()
 
         from backend.services.hmm_data_source import ArtifactCacheManager
-        cache_manager = ArtifactCacheManager(
-            str(cache_dir), allow_test_fixtures=True
-        )
+
+        cache_manager = ArtifactCacheManager(str(cache_dir), allow_test_fixtures=True)
 
         # 验证缓存管理器只处理 .pkl 文件
-        allowed_artifacts = ['pred.pkl', 'label.pkl']
+        allowed_artifacts = ["pred.pkl", "label.pkl"]
 
         for artifact in allowed_artifacts:
             # 应该成功保存
@@ -604,5 +873,5 @@ class TestBacktestDataSourceIsolation:
 
         # 验证缓存信息
         cache_info = cache_manager.get_cache_info("qe_test/Loop1")
-        assert cache_info['cached']
-        assert len(cache_info['artifacts']) == 2
+        assert cache_info["cached"]
+        assert len(cache_info["artifacts"]) == 2

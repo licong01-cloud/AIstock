@@ -6,6 +6,7 @@ HMM 数据源抽象层
 Modules:
     base: 抽象基类 HMMDataSourceInterface
     backtest_source: 回测数据源（使用 QE artifact）
+    prediction_store_resolver: Prediction Store 零副本只读解析
     realtime_source: 实时数据源（连接 DB t-1）
     cache_manager: QE artifact 缓存管理
     models: Pydantic 数据模型
@@ -31,6 +32,10 @@ from .base import HMMDataSourceInterface
 from .backtest_source import BacktestDataSource
 from .realtime_source import RealtimeDataSource
 from .cache_manager import ArtifactCacheManager
+from .prediction_store_resolver import (
+    PredictionStoreArtifactResolver,
+    ResolvedPredictionStoreArtifact,
+)
 from .models import (
     DataSourceConfig,
     PredictionRecord,
@@ -53,7 +58,8 @@ __all__ = [
     "BacktestDataSource",
     "RealtimeDataSource",
     "ArtifactCacheManager",
-
+    "PredictionStoreArtifactResolver",
+    "ResolvedPredictionStoreArtifact",
     # 数据模型
     "DataSourceConfig",
     "PredictionRecord",
@@ -61,7 +67,6 @@ __all__ = [
     "SectorMapping",
     "DateRange",
     "CacheInfo",
-
     # 异常
     "DataSourceError",
     "DateRangeError",
