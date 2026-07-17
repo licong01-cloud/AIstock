@@ -6177,8 +6177,20 @@ def _update_experiment_status(experiment_id: str, status: str):
         conn.commit()
 
 
+def _normalize_evolution_loop_db_id(qe_task_id: Any, qe_loop_id: Any) -> tuple[str, str, int]:
+    task_id = str(qe_task_id or "").strip()
+    raw_loop_id = str(qe_loop_id or "").strip()
+    if not task_id or not raw_loop_id:
+        raise ValueError("evolution experiment is missing qe_task_id or qe_loop_id")
+    suffix = raw_loop_id[len(task_id) + 1 :] if raw_loop_id.startswith(f"{task_id}_") else raw_loop_id
+    if not suffix.lower().startswith("loop") or not suffix[4:].isdigit():
+        raise ValueError(f"invalid evolution qe_loop_id: {raw_loop_id}")
+    loop_index = int(suffix[4:])
+    return task_id, f"{task_id}_Loop{loop_index}", loop_index
+
+
 def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
-    """将 RDAgent API 返回的回测指标写入 DB（JSON + 独立列）。"""
+    """Persist metrics and keep the linked evolution-loop lineage authoritative."""
     # result_metrics JSON key -> 独立列名
     _COL_MAP = {
         "IC": "ic",
@@ -6204,15 +6216,85 @@ def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
             col_sets.append(f"{col_name} = %s")
             col_vals.append(float(v))
     extra_set = (", " + ", ".join(col_sets)) if col_sets else ""
+    evolution_link: Optional[tuple[str, str, int]] = None
+    metrics_payload = json.dumps(save_metrics, default=str, ensure_ascii=False)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT qe_task_id, qe_loop_id, loop_index, is_evolution_loop
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                FOR UPDATE
+                """,
+                (experiment_id,),
+            )
+            experiment_row = cur.fetchone()
+            if not experiment_row:
+                raise ValueError(f"experiment not found while syncing metrics: {experiment_id}")
+
+            qe_task_id, qe_loop_id, stored_loop_index, is_evolution_loop = experiment_row
             cur.execute(f"""
                 UPDATE qe_experiments
                 SET result_metrics = %s, status = 'completed', completed_at = NOW(){extra_set}
                 WHERE experiment_id = %s
-            """, [json.dumps(save_metrics, default=str)] + col_vals + [experiment_id])
+            """, [metrics_payload] + col_vals + [experiment_id])
+
+            if bool(is_evolution_loop):
+                task_id, evolution_loop_id, derived_loop_index = _normalize_evolution_loop_db_id(
+                    qe_task_id,
+                    qe_loop_id,
+                )
+                if stored_loop_index is not None and int(stored_loop_index) != derived_loop_index:
+                    raise ValueError(
+                        "evolution experiment loop_index mismatch: "
+                        f"experiment_id={experiment_id}, stored={stored_loop_index}, derived={derived_loop_index}"
+                    )
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_loops
+                    SET metrics_json = COALESCE(metrics_json, '{}'::jsonb) || %s::jsonb,
+                        experiment_id = COALESCE(experiment_id, %s),
+                        updated_at = NOW()
+                    WHERE task_id = %s AND loop_id = %s
+                    """,
+                    (metrics_payload, experiment_id, task_id, evolution_loop_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "linked qe_evolution_loops row not found while syncing metrics: "
+                        f"experiment_id={experiment_id}, task_id={task_id}, loop_id={evolution_loop_id}"
+                    )
+                evolution_link = (task_id, evolution_loop_id, derived_loop_index)
         conn.commit()
-    _archive_experiment_best_effort(experiment_id)
+    if evolution_link is not None:
+        _archive_evolution_loop_best_effort(*evolution_link)
+    else:
+        _archive_experiment_best_effort(experiment_id)
+
+
+def _archive_evolution_loop_best_effort(task_id: str, loop_id: str, loop_index: int) -> None:
+    """Refresh the existing evolution archive lineage after metrics enrichment."""
+
+    try:
+        from ..services.qe_archive.realtime_ingestion import safe_archive_loop_completed
+
+        result = safe_archive_loop_completed(task_id=task_id, loop_id=loop_id, loop_index=loop_index)
+        if result.get("error"):
+            logger.warning(
+                "QE archive realtime loop refresh reported an error: task=%s loop=%s error=%s",
+                task_id,
+                loop_id,
+                result.get("error"),
+            )
+    except Exception as exc:  # pragma: no cover - defensive isolation.
+        logger.warning(
+            "QE archive realtime loop refresh failed without changing QE status: task=%s loop=%s error=%s",
+            task_id,
+            loop_id,
+            exc,
+            exc_info=True,
+        )
 
 
 def _archive_experiment_best_effort(experiment_id: str) -> None:
