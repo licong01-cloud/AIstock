@@ -22,6 +22,7 @@ from backend.services.selection_center.prospective_evidence import (
     canonical_evidence_json_sha256,
 )
 from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
+from backend.services.stock_universe_pit_service import require_live_st_pit_universe_key
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
     DataUnavailableError,
@@ -106,8 +107,9 @@ class StPitRiskDecisionProvider:
         normalized = _normalize_symbols(symbols)
         if not normalized:
             return {}
+        universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
         if profile.strict_data_ready:
-            self._require_ready_pit_state(universe_key=profile.st_universe_key, trade_date=trade_date)
+            self._require_ready_pit_state(universe_key=universe_key, trade_date=trade_date)
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -121,7 +123,7 @@ class StPitRiskDecisionProvider:
                            AND eligible_start <= %s
                            AND eligible_end >= %s
                         """,
-                        (profile.st_universe_key, normalized, trade_date, trade_date),
+                        (universe_key, normalized, trade_date, trade_date),
                     )
                     rows = cur.fetchall()
         except Exception as exc:
@@ -130,14 +132,14 @@ class StPitRiskDecisionProvider:
                 context={
                     "trade_date": trade_date.isoformat(),
                     "symbol_count": len(normalized),
-                    "universe_key": profile.st_universe_key,
+                    "universe_key": universe_key,
                 },
             ) from exc
         eligible = {str(row[0]) for row in rows}
         span_context = {
             str(row[0]): {
                 "source_table": self.source_name,
-                "universe_key": profile.st_universe_key,
+                "universe_key": universe_key,
                 "visible_trade_date": trade_date.isoformat(),
                 "eligible_start": row[1].isoformat() if row[1] else None,
                 "eligible_end": row[2].isoformat() if row[2] else None,
@@ -169,7 +171,7 @@ class StPitRiskDecisionProvider:
                 source_events=[
                     {
                         "source_table": self.source_name,
-                        "universe_key": profile.st_universe_key,
+                        "universe_key": universe_key,
                         "visible_trade_date": trade_date.isoformat(),
                         "event_type": "st_pit_not_eligible",
                         "risk_level": "P0_BLOCK",

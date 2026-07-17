@@ -16,6 +16,7 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QE_DATASET_START_DATE,
 )
 from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+from backend.services.stock_universe_pit_service import StockUniversePitError
 
 
 def test_factor_universe_mask_service_builds_mask_from_spans(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,6 +98,23 @@ def test_factor_universe_uses_exact_qe_dataset_snapshot_without_live_refresh() -
         "rule_version": "st_pub_next_trade_restore_active_l_v1",
         "bootstrap_if_missing": True,
     }
+
+
+def test_factor_universe_rejects_live_pit_namespace() -> None:
+    with pytest.raises(StockUniversePitError, match="QE ST PIT must use an immutable"):
+        FactorUniverseMaskService().ensure_ready(
+            start_date="2020-01-01",
+            end_date="2026-06-30",
+            universe_key="shsz_st_pit_active_v1",
+        )
+
+    with pytest.raises(StockUniversePitError, match="QE ST PIT must use an immutable"):
+        FactorUniverseMaskService().load_spans(
+            start_date="2020-01-01",
+            end_date="2026-06-30",
+            universe_key="shsz_st_pit_active_v1",
+            ensure=False,
+        )
 
 
 def test_factor_universe_metadata_keeps_paper_live_policy_strict(monkeypatch: pytest.MonkeyPatch) -> None:

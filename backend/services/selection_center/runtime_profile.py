@@ -18,6 +18,10 @@ from backend.services.trading_core.errors import (
     HMMRuntimeUnavailableError,
     RuntimeConfigInvalidError,
 )
+from backend.services.stock_universe_pit_service import (
+    StockUniversePitError,
+    require_live_st_pit_universe_key,
+)
 
 
 RUNTIME_CONFIG_SCOPE_KEY = "runtime_config_scope"
@@ -138,7 +142,7 @@ class RuntimeRiskPolicyProfile(BaseModel):
     strict_data_ready: bool = True
     score_overlay: RuntimeRiskScoreOverlayProfile = Field(default_factory=RuntimeRiskScoreOverlayProfile)
 
-    @field_validator("policy_version", "st_universe_key", "event_signal_profile_id")
+    @field_validator("policy_version", "event_signal_profile_id")
     @classmethod
     def _strip_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -147,6 +151,14 @@ class RuntimeRiskPolicyProfile(BaseModel):
         if not value:
             raise ValueError("risk policy text fields cannot be empty")
         return value
+
+    @field_validator("st_universe_key")
+    @classmethod
+    def _require_live_st_pit_namespace(cls, value: str) -> str:
+        try:
+            return require_live_st_pit_universe_key(value)
+        except StockUniversePitError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("providers", "hard_actions")
     @classmethod

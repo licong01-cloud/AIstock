@@ -13,6 +13,7 @@ from ..stock_universe_pit_service import (
     DEFAULT_ST_PIT_RULE_VERSION,
     DEFAULT_ST_PIT_REFRESH_POLICY,
     StockUniversePitService,
+    require_qe_immutable_st_pit_universe_key,
 )
 from .qe_dataset_contract import (
     QE_DATASET_SIGNAL_END_DATE,
@@ -97,6 +98,7 @@ class FactorUniverseMaskService:
     ) -> dict[str, Any]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY:
             require_qe_dataset_window(start_date=start, end_date=end)
             return self._pit_service.ensure_immutable_dataset_snapshot(
@@ -106,14 +108,12 @@ class FactorUniverseMaskService:
                 rule_version=OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
                 bootstrap_if_missing=True,
             )
-        return self._pit_service.ensure_st_pit_universe(
+        return self._pit_service.ensure_immutable_dataset_snapshot(
             universe_key=universe_key,
             start_date=start,
             end_date=end,
             rule_version=OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
-            strict=strict,
-            rebuild_if_stale=True,
-            refresh_policy=refresh_policy,
+            bootstrap_if_missing=True,
         )
 
     def get_state(
@@ -121,6 +121,7 @@ class FactorUniverseMaskService:
         *,
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
     ) -> dict[str, Any]:
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         return self._pit_service.get_status(universe_key=universe_key)
 
     def metadata(
@@ -134,6 +135,7 @@ class FactorUniverseMaskService:
     ) -> dict[str, Any]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         ensure_result: dict[str, Any] | None = None
         if ensure:
             ensure_result = self.ensure_ready(
@@ -152,7 +154,7 @@ class FactorUniverseMaskService:
             start_date=start,
             end_date=end,
             refresh_policy=refresh_policy,
-            immutable=universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY,
+            immutable=True,
         ):
             raise RuntimeError(f"ST PIT universe is not ready: {state}")
         meta = FactorUniverseMetadata(
@@ -218,6 +220,7 @@ class FactorUniverseMaskService:
     ) -> list[str]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         with get_conn() as conn:
@@ -246,6 +249,7 @@ class FactorUniverseMaskService:
     ) -> list[dict[str, Any]]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         params: list[Any] = [universe_key, end, start]
@@ -284,6 +288,7 @@ class FactorUniverseMaskService:
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         ensure: bool = True,
     ) -> np.ndarray:
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         date_index = pd.DatetimeIndex(dates).normalize()
         inst_list = [_normalize_instrument(inst) for inst in instruments]
         mask = np.zeros((len(date_index), len(inst_list)), dtype=bool)
@@ -322,6 +327,7 @@ class FactorUniverseMaskService:
     ) -> pd.MultiIndex:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         params: list[Any] = [universe_key, start, end]

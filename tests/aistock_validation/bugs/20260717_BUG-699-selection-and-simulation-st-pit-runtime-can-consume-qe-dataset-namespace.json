@@ -1,6 +1,13 @@
 {
   "actual": "Live consumers accept arbitrary universe_key values, including QE immutable dataset keys.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/factor_universe_mask_service.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/selection_center/test_risk_policy.py",
+    "backend/tests/test_factor_st_pit_metrics_cache.py",
+    "backend/tests/test_stock_universe_pit_service.py",
     "tests/aistock_validation/bugs/20260717_BUG-699-selection-and-simulation-st-pit-runtime-can-consume-qe-dataset-namespace.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -15,6 +22,12 @@
   "created_at": "2026-07-17T04:54:57.854139Z",
   "description": "Live consumers accept arbitrary universe_key values, including QE immutable dataset keys.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scoped BUG-699 to the shared ST PIT namespace contract, live Selection/Paper runtime validation, QE immutable consumer boundary, and focused regression tests.",
+      "timestamp": "2026-07-17T13:10:00+08:00"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
