@@ -31,8 +31,8 @@
   "expected": "Identity payloads are deeply immutable and hashes remain stable for the model lifetime.",
   "first_seen_at": "2026-07-17T15:35:00.836776Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fbe897b82d40121dec9e8e8755c0fc3560a3e71e",
+  "fixed_at": "2026-07-17T15:55:17.147313Z",
   "github_issue_number": 2366,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2366",
   "last_seen_at": "2026-07-17T15:35:00.836776Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2367",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm_evolution"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "ddc401c9e6a76930dbf93d2e",
     "source_event_id": "FE-20260717-ddc401c9e6a7"
   },
+  "validation_evidence": [
+    "70 passed, 1 skipped; Ruff and diff-check passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
