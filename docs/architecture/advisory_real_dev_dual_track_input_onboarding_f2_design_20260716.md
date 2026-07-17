@@ -543,6 +543,7 @@ program_id/decision_trade_date
 package_id/manifest_sha256/alpha_mode/style_family
 binding_version_id/binding_payload_hash
 selection_normalized_config_hash
+strategy_package_input_projection_ref/hash
 source_mapping_registry_ref/hash
 source_query_registry_ref/hash
 window_policy_ref/hash
@@ -567,6 +568,8 @@ physical templates观察真实ingestion并append event。Selection完成后，re
 `source_read_receipts`和`artifact_input_context/per_leg_window_lineage`与该request逐字段reconcile：完全一致才允许消费
 cutoff前event；任何role、query、window或leg差异均为`SOURCE_MAPPING_CONFLICT/BLOCKED`，不得在DSE生成后补写或回填一个
 cutoff前event。这样正向顺序是可达的，同时不复制Selection算法。
+`strategy_package_input_projection_ref/hash`必须指向与当前Program/package/manifest完全一致的
+`strategy_package_input_projection` artifact；observation request不得只复制projection字段后丢失其可定位ref。
 
 ### 7.11 `Phase1ECapacityPlanningRequestV2`
 
@@ -700,6 +703,18 @@ Phase1ERealInputBundle {
 必须使用 typed artifact ref、semantic hash 与 full readback；未形成的 ref 保持 NULL 并列出 exact `missing_slots`，禁止
 空字符串、占位 hash、手写 JSON 或 latest path。`IDENTITY_COMPLETE_SOURCE_PENDING` 只允许 diagnostic/template
 operation，不得被 G5 当作 L3/L4 ready。
+
+Program unit中的O4-owned ref与artifact kind固定一一对应：
+
+| Program unit ref | exact O4 artifact kind |
+|---|---|
+| `source_requirement_set_ref` | `source_requirement_set` |
+| `capacity_program_workload_ref` | `capacity_program_workload` |
+| `capacity_coverage_ref` | `capacity_program_coverage` |
+| `phase1e_program_date_request_ref` | `phase1e_program_date_request` |
+
+不得使用registry、capacity request/receipt或batch request的ref冒充Program级artifact。每个Program级artifact都包含parent
+artifact ref/hash、Program/date identity和自身semantic hash；batch membership不进入其identity。
 
 Program readiness固定按下表派生，调用方不能自行提升或覆盖：
 
@@ -1091,9 +1106,26 @@ unexpected traceback只写后台日志。
 - historical runner继续使用既有business key和逐Program独立事务，不改变其重试/恢复语义。
 - historical request/receipt CAS和Phase0A audit directory CAS都必须使用atomic no-replace、文件集合闭包校验和逐文件
   exact readback；并发发布不能使用`Path.replace()`覆盖已存在identity，额外文件或目录同样视为冲突。
-- O4 CAS固定增加`real_input_build_request`、`source_mapping_registry`、`source_observation_scope_request`、
-  `source_requirement_registry`、`capacity_policy`、`capacity_request`、`capacity_receipt`、`program_input`、`input_bundle`和
-  `phase1e_batch_request` kinds。
+- O4 CAS固定增加以下15个kind，禁止复用其它kind冒充缺失层级：
+
+  ```text
+  real_input_build_request
+  strategy_package_input_projection
+  source_mapping_registry
+  source_observation_scope_request
+  source_requirement_registry
+  source_requirement_set
+  capacity_policy
+  capacity_request
+  capacity_program_workload
+  capacity_receipt
+  capacity_program_coverage
+  program_input
+  input_bundle
+  phase1e_program_date_request
+  phase1e_batch_request
+  ```
+
   每个kind具有固定namespace、typed envelope、semantic hash、file hash和dependency refs；禁止把这些对象作为无类型JSON
   写到任意路径。
 - 同一Program/date相同build request并发必须收敛到相同`program_input_hash`；不同Program从不共享可变临时状态。batch
@@ -1409,8 +1441,8 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   registry逐字段reconcile派生；真实五类logical input全覆盖，多Alpha每腿window独立，无generic/default window或事后回填。
 - F-909：capacity v2逐Program表达style/depth/horizon/source workload，业务值来自exact Program/policy，测量来自DEV
   capacity probe；无SEALED时仅允许规定的bounded staging bootstrap。
-- F-910：Phase1E build request使用独立`real_input_build_request` kind；Program input、全部policy/registry/capacity/batch refs
-  immutable、explicit、可定位且hash closed，无latest、kind冒充或只有hash没有artifact ref。
+- F-910：Phase1E build request、input projection、Program级requirement/workload/coverage/request和batch级artifact均使用独立
+  exact kind；全部refs immutable、explicit、可定位且hash closed，无latest、跨层kind冒充或只有hash没有artifact ref。
 - F-911：Phase1E计划single/native-multi parent/component和多Program独立；expected identity字段强制完整，mixed/all-failed/
   zero-plan状态显式且非成功不静默。
 - F-912：G5只消费source-ready计划，pending保持零DML。
@@ -1456,7 +1488,7 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-907 | §7.12、§11.2、§12 | per-Program state table、mixed batch、pending/blocked/no-fake-ready；`backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py` | design_ready | none |
 | F-908 | §7.9-7.10、§11.2-11.3 | admitted-manifest input projection、pre-observation/actual-DSE reconciliation、logical-to-physical closure和分腿window；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py` | design_ready | none |
 | F-909 | §7.11、§11.4 | heterogeneous Program workload、capacity policy/probe、bounded bootstrap和v1兼容；`backend/tests/advisory_dev_input_onboarding/test_o4_capacity_v2.py` | design_ready | none |
-| F-910 | §7.8、§7.12、§12、§15 | dedicated build-request kind、all refs/CAS kinds/dependency hash/full-readback；`backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py` | design_ready | none |
+| F-910 | §7.8、§7.10、§7.12、§12、§15 | 15-kind artifact closure、Program/batch层级ref不可互换、dependency hash/full-readback；`backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py` | design_ready | none |
 | F-911 | §7.12、§12 | expected identities、single/native-multi/multi-Program parity、all-failed/zero-plan；`backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py` | design_ready | none |
 | F-912 | §11.2、§12 | G5 pending zero-DML and source-ready inventory；`backend/tests/advisory_phase1/test_phase1g_dev_inventory.py` | design_ready | none |
 | F-913 | §17 O5、§22 | existing G5 contract parity and L3/L4 evidence；`backend/tests/advisory_phase1/test_phase1g_service.py` | design_ready | none |

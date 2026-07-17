@@ -440,7 +440,7 @@ Phase 0A 对 historical available-at/vintage 的检查只决定 `RETROSPECTIVE/G
 O4新增的`StrategyPackageAdvisoryInputProjectionV1`是上述边界的唯一共享投影。它只接收调用方已经从dated binding解析出的
 typed frozen manifest，并从已持久化`runtime_assets.alpha158.aliases`、factor identity和native multi leg metadata生成
 exact factor order/required window；不访问repository、asset store、validator、health、model或inference。Phase 1E只读取
-已序列化projection artifact，不直接import StrategyPackage模块。projection缺失或冲突只形成当前Program/date的显式
+已序列化`strategy_package_input_projection` artifact及其exact ref/hash，不直接import StrategyPackage模块。projection缺失或冲突只形成当前Program/date的显式
 Advisory输入错误，不改变package status、enabled、binding或其它模块运行。
 factor order顺序与分腿规则以子设计§7.9.1为唯一 authority，禁止排序去重、跨腿合并或用父包聚合window代替真实腿window。
 
@@ -1018,7 +1018,7 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 - F-519：实现与验证范围覆盖 pure、read-only DB、artifact store和真实 DEV双轨 E2E。
 - F-520：父蓝图、Phase 1父设计、Phase 1D真实合入状态和后续 Phase 1F-1I边界一致。
 - F-521：Phase 1E/O4只消费已准入manifest的纯输入投影，不执行StrategyPackage二次验证或资产读取；合法single/native-multi
-  Program可自动形成分腿factor order/window，projection错误不改变package状态或影响其它模块。
+  Program可自动形成分腿factor order/window并发布独立typed projection artifact；projection错误不改变package状态或影响其它模块。
 
 ## 18. Design Acceptance Matrix
 
@@ -1054,7 +1054,7 @@ DEV completion:
 | F-518 | §3.2、§7、§14-15 | approval/RBAC/backup scan；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
 | F-519 | §12-13 | L0-L4 verification matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
 | F-520 | §1-2、§15、§20 | parent status/reference diff；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
-| F-521 | §3.2、§5.4、§6、§11、§16 | no-secondary-validation AST/call denylist、single/native-multi positive projection和shared-module zero-diff；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-521 | §3.2、§5.4、§6、§11、§16 | no-secondary-validation AST/call denylist、single/native-multi projection artifact full-readback和shared-module zero-diff；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001
 
