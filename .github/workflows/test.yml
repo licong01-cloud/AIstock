@@ -31,6 +31,8 @@ jobs:
     outputs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
+      frontend_required: ${{ steps.classify.outputs.frontend_required }}
+      go_required: ${{ steps.classify.outputs.go_required }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
       workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
       docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
@@ -272,6 +274,55 @@ jobs:
             tmp/validation/
             tmp/coverage/
           if-no-files-found: ignore
+
+  frontend-quality:
+    name: Frontend quality (type + lint)
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.frontend_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Type-check changed frontend surface
+        run: npm exec tsc -- --noEmit --incremental false
+
+      - name: Lint frontend surface
+        run: npm run lint
+
+  tdx-go-tests:
+    name: TDX Go tests
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.go_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tdx-api-main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tdx-api-main/go.mod
+          cache-dependency-path: tdx-api-main/go.sum
+
+      - name: Run Go tests
+        run: go test ./...
 
   workflow-validation-tests:
     name: Workflow validation fast lane

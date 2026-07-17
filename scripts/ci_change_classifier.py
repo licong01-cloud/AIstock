@@ -29,7 +29,9 @@ DOCS_LIGHT_EXCLUDED_FILES = DOCS_CONTROLLED_FILES
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "AGENTS.md",
     ".github/workflows/issue-auto-link.yml",
+    ".github/workflows/issue-on-guardrail-fail.yml",
     ".github/workflows/issue-on-test-fail.yml",
+    ".github/workflows/codeql.yml",
     ".github/workflows/nightly.yml",
     ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",
@@ -98,7 +100,13 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/catalog/module_registry.yaml",
     "tests/aistock_validation/catalog/test_plans.yaml",
+    "noxfile.py",
+    ".pre-commit-config.yaml",
+    ".semgrep.yml",
+    "ruff.toml",
+    ".github/renovate.json",
 }
+WORKFLOW_VALIDATION_FAST_LANE_PREFIXES = ("tests/aistock_validation/catalog/",)
 PROMPT_EVALUATION_PATH_PREFIXES = ("prompt_packs/validation_llm/",)
 PROMPT_EVALUATION_FILES = {
     "configs/validation/llm_triage.yaml",
@@ -114,6 +122,7 @@ BACKEND_MATRIX_SESSIONS = (
     "validation_center_backend",
     "qe_data_contract_backend",
     "hmm_data_source_backend",
+    "simulation_core_l2",
 )
 BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("paper_v2_backend", ("backend/services/paper_trading_v2/**", "backend/routers/paper_v2.py", "backend/services/selection_center/**", "backend/routers/selection_center.py", "backend/services/strategy_package/**", "backend/routers/strategy_package*.py", "backend/tests/paper_trading_v2/**", "backend/tests/selection_center/**", "backend/tests/strategy_package/**")),
@@ -121,19 +130,25 @@ BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
     ("qe_data_contract_backend", ("backend/services/quantevolver/**", "backend/routers/quantevolver*.py", "backend/tests/unified_engine/test_qe_*.py")),
     ("hmm_data_source_backend", ("backend/services/hmm_data_source/**", "backend/tests/hmm_data_source/**")),
+    ("simulation_core_l2", ("backend/services/simulation_runtime/**", "backend/routers/simulation_runtime.py", "backend/tests/simulation_runtime/**")),
     ("model_registry_backend", ("backend/services/model_registry/**", "backend/routers/model_registry*.py", "backend/tests/model_registry/**", "backend/tests/test_model_registry*.py")),
     ("market_regime_label", ("backend/services/market_regime/**", "backend/routers/market_regime*.py", "backend/tests/market_regime/**", "backend/tests/test_market_regime*.py")),
     ("rl_execution_smoke", ("backend/services/rl_execution/**", "backend/routers/rl_execution.py", "backend/tests/test_rl_execution_module_visibility.py")),
     ("validation_center_backend", ("backend/services/validation/**", "backend/routers/validation.py", "backend/tests/test_validation*.py", "backend/tests/scripts/test_*validation*.py", "tests/aistock_validation/catalog/**")),
 )
-OBSOLETE_SURFACE_REMOVAL_PREFIXES = (
-    "frontend/src/app/",
-    "frontend/src/lib/",
-    "frontend/tests/",
-    "backend/tests/",
-    "tests/",
-)
-OBSOLETE_SURFACE_REMOVAL_FILES = {"noxfile.py"}
+FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
+FRONTEND_FILES = {
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/playwright.config.ts",
+    "frontend/playwright.paper-v2.config.ts",
+    "frontend/tsconfig.json",
+    "frontend/next.config.mjs",
+}
+GO_PATH_PREFIXES = ("tdx-api-main/",)
+GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum"}
+CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".sql", ".sh", ".ps1")
+CODE_ROOT_FILES = {"noxfile.py", "pyproject.toml", "pytest.ini"}
 
 
 def _normalize_path(value: str) -> str:
@@ -177,7 +192,11 @@ def _bug_status(path: Path) -> str | None:
 
 
 def _workflow_validation_fast_lane(path: str) -> bool:
-    return path in WORKFLOW_VALIDATION_FAST_LANE_FILES or _is_docs_fast_path(path)
+    return (
+        path in WORKFLOW_VALIDATION_FAST_LANE_FILES
+        or path.startswith(WORKFLOW_VALIDATION_FAST_LANE_PREFIXES)
+        or _is_docs_fast_path(path)
+    )
 
 
 def _prompt_evaluation_required(path: str) -> bool:
@@ -189,39 +208,34 @@ def _selected_backend_sessions(paths: list[str]) -> list[str]:
     for session, patterns in BACKEND_SESSION_RULES:
         if any(fnmatch.fnmatch(path, pattern) for path in paths for pattern in patterns):
             selected.append(session)
-    if selected:
-        return [session for session in BACKEND_MATRIX_SESSIONS if session in selected]
-    return list(BACKEND_MATRIX_SESSIONS)
+    return [session for session in BACKEND_MATRIX_SESSIONS if session in selected]
 
 
-def _is_obsolete_surface_removal_candidate(paths: list[str]) -> bool:
-    if not paths:
-        return False
-    has_removed_surface = any(
-        path.startswith("frontend/src/app/")
-        or path.startswith("frontend/tests/")
-        or path.startswith("tests/aistock_validation/catalog/")
-        for path in paths
-    )
-    if not has_removed_surface:
-        return False
-    for path in paths:
-        if path.startswith(BUG_REGISTRY_PREFIX):
-            continue
-        if path in OBSOLETE_SURFACE_REMOVAL_FILES:
-            continue
-        if path.startswith(OBSOLETE_SURFACE_REMOVAL_PREFIXES):
-            continue
-        if path in {
-            "backend/mcp/tool_manifest.py",
-            "backend/mcp/modules/strategy_packages.py",
-            "tests/mcp/test_mcp_tool_manifest.py",
-        }:
-            continue
-        if path.startswith("backend/routers/"):
-            continue
-        return False
-    return True
+def _matches_backend_session(path: str) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for _, patterns in BACKEND_SESSION_RULES for pattern in patterns)
+
+
+def _is_frontend_path(path: str) -> bool:
+    return path in FRONTEND_FILES or path.startswith(FRONTEND_PATH_PREFIXES)
+
+
+def _is_go_path(path: str) -> bool:
+    return path in GO_FILES or (path.startswith(GO_PATH_PREFIXES) and path.endswith(".go"))
+
+
+def _is_code_path(path: str) -> bool:
+    if path in CODE_ROOT_FILES:
+        return True
+    if path.startswith(".github/workflows/"):
+        return True
+    if path.startswith(("backend/", "frontend/", "scripts/", "tests/", "rl_execution/", "tdx-api-main/")):
+        return path.endswith(CODE_SUFFIXES) or Path(path).name in {
+            "package.json",
+            "package-lock.json",
+            "go.mod",
+            "go.sum",
+        }
+    return False
 
 
 def _is_bug_registry_metadata_path(path: str) -> bool:
@@ -308,10 +322,8 @@ def classify_changed_files(
     docs_controlled_only = bool(normalized) and all(_is_docs_controlled_path(path) for path in normalized)
     docs_controlled_required = any(_is_docs_controlled_path(path) for path in normalized)
     docs_only = bool(normalized) and all(_is_docs_path(path) for path in normalized)
-    obsolete_surface_removal = _is_obsolete_surface_removal_candidate(normalized)
-
     if not normalized:
-        reasons.append("no changed files detected; keep full backend CI")
+        blocking.append("no changed files detected; refusing to invent an unrelated test matrix")
     if non_bug_registry_files:
         reasons.append("non-registry files changed; check fast-lane allowlist before skipping backend matrix")
     if not bug_registry_files:
@@ -344,30 +356,42 @@ def classify_changed_files(
     if close_sync_metadata_only:
         reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
 
-    workflow_fast_trigger = any(
-        path.startswith((".github/", ".claude/", ".codex/", "configs/validation/", "prompt_packs/validation_llm/"))
-        or path.startswith("scripts/")
-        or path.startswith("backend/tests/scripts/")
-        or path.startswith("backend/services/validation/")
-        or path.startswith("tests/aistock_validation/catalog/")
+    workflow_fast_files = [
+        path
         for path in non_bug_registry_files
-    )
-    workflow_non_registry_only = (
-        bool(non_bug_registry_files)
-        and workflow_fast_trigger
-        and all(_workflow_validation_fast_lane(path) for path in non_bug_registry_files)
-    )
-    workflow_registry_metadata_only = (
-        not bug_registry_files
-        or (
-            bool(workflow_bug_metadata_files)
-            and all(path in workflow_bug_metadata_files or path in allocator_files for path in bug_registry_files)
+        if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
+    ]
+    frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
+    go_files = [path for path in non_bug_registry_files if _is_go_path(path)]
+    business_files = [
+        path
+        for path in non_bug_registry_files
+        if path not in workflow_fast_files and path not in frontend_files and path not in go_files and not _is_docs_path(path)
+    ]
+    backend_sessions = _selected_backend_sessions(business_files)
+    mapped_backend_files = [path for path in business_files if _matches_backend_session(path)]
+    unmapped_code_files = [
+        path
+        for path in business_files
+        if _is_code_path(path) and path not in mapped_backend_files
+    ]
+    if unmapped_code_files:
+        blocking.append(
+            "unmapped executable code must declare a direct CI test mapping: "
+            + ", ".join(unmapped_code_files)
         )
-    )
+
+    workflow_validation_required = bool(workflow_fast_files)
     workflow_validation_only = (
         bool(normalized)
-        and workflow_non_registry_only
-        and workflow_registry_metadata_only
+        and bool(workflow_fast_files)
+        and all(
+            path in workflow_fast_files or _is_docs_path(path)
+            for path in non_bug_registry_files
+        )
+        and not business_files
+        and not frontend_files
+        and not go_files
     )
     if workflow_validation_only:
         reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
@@ -379,22 +403,35 @@ def classify_changed_files(
         reasons.append("documentation files changed but include standards or agent instructions; keep normal guardrails")
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
-    if obsolete_surface_removal:
-        reasons.append("obsolete surface removal uses targeted static/catalog/API-contract validation; defer full business-flow suites to nightly")
+    if backend_sessions:
+        reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if frontend_files:
+        reasons.append("frontend code changed; run the single frontend type/lint gate")
+    if go_files:
+        reasons.append("TDX Go code changed; run the Go unit-test gate")
 
-    backend_required = not (close_sync_metadata_only or workflow_validation_only or docs_lite_only or obsolete_surface_removal)
-    backend_sessions = _selected_backend_sessions(normalized) if backend_required else []
+    backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
+    frontend_required = bool(frontend_files) and not docs_lite_only
+    go_required = bool(go_files) and not docs_lite_only
     classification = "full_ci_required"
-    if docs_lite_only:
+    if blocking:
+        classification = "unmapped_code_blocked"
+    elif docs_lite_only:
         classification = docs_fast_tier or _docs_lite_kind(normalized)
     elif close_sync_metadata_only:
         classification = "close_sync_metadata_only"
-    elif workflow_validation_only:
-        classification = "workflow_validation_only"
+    elif metadata_only:
+        classification = "bug_registry_metadata_only"
     elif docs_controlled_only:
         classification = "docs_controlled"
-    elif obsolete_surface_removal:
-        classification = "obsolete_surface_removal"
+    elif workflow_validation_only:
+        classification = "workflow_validation_only"
+    elif frontend_required and not backend_required and not go_required:
+        classification = "frontend_ci_required"
+    elif go_required and not backend_required and not frontend_required:
+        classification = "go_ci_required"
+    elif backend_required or frontend_required or go_required:
+        classification = "targeted_ci_required"
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -411,26 +448,30 @@ def classify_changed_files(
         "docs_controlled_required": docs_controlled_required,
         "close_sync_metadata_only": close_sync_metadata_only,
         "workflow_bug_metadata_files": workflow_bug_metadata_files,
+        "workflow_fast_files": workflow_fast_files,
         "workflow_validation_only": workflow_validation_only,
-        "workflow_validation_required": workflow_validation_only,
+        "workflow_validation_required": workflow_validation_required,
         "docs_lite_required": docs_lite_only,
         "prompt_evaluation_files": prompt_evaluation_files,
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "backend_sessions": backend_sessions,
-        "obsolete_surface_removal": obsolete_surface_removal,
+        "frontend_required": frontend_required,
+        "frontend_files": frontend_files,
+        "go_required": go_required,
+        "go_files": go_files,
+        "unmapped_code_files": unmapped_code_files,
+        "obsolete_surface_removal": False,
         "nightly_deferred_verification": {
-            "required": obsolete_surface_removal,
-            "reason": "full UI/API/business-flow regression is deduplicated in nightly for obsolete surface removal"
-            if obsolete_surface_removal
-            else None,
+            "required": False,
+            "reason": None,
         },
         "static_gate_required": not docs_lite_only,
         "pr_quality_required": True,
         "classification": classification,
         "reasons": reasons,
         "blocking": blocking,
-        "workflow_gate": "passed",
+        "workflow_gate": "blocked" if blocking else "passed",
     }
 
 
@@ -443,6 +484,9 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
     lines = [
         f"backend_required={str(payload['backend_required']).lower()}",
         f"backend_sessions={json.dumps(payload['backend_sessions'])}",
+        f"frontend_required={str(payload['frontend_required']).lower()}",
+        f"go_required={str(payload['go_required']).lower()}",
+        f"unmapped_code_files={json.dumps(payload['unmapped_code_files'])}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
         f"docs_lite_required={str(payload['docs_lite_required']).lower()}",
@@ -477,6 +521,9 @@ def main(argv: list[str] | None = None) -> int:
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
         "backend_sessions": payload["backend_sessions"],
+        "frontend_required": payload["frontend_required"],
+        "go_required": payload["go_required"],
+        "unmapped_code_files": payload["unmapped_code_files"],
         "workflow_validation_required": payload["workflow_validation_required"],
         "docs_lite_required": payload["docs_lite_required"],
         "docs_fast_required": payload["docs_fast_required"],
@@ -486,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
         "prompt_evaluation_required": payload["prompt_evaluation_required"],
         "changed_file_count": payload["changed_file_count"],
     }, ensure_ascii=False, sort_keys=True))
-    return 0
+    return 2 if payload["workflow_gate"] == "blocked" else 0
 
 
 if __name__ == "__main__":
