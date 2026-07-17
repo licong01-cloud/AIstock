@@ -27,6 +27,10 @@ class QEWorkspaceFileNotFound(RuntimeError):
         )
 
 
+class QEWorkspaceCatalogUnavailable(RuntimeError):
+    """Raised when the QE node lacks the Phase 1 read-only catalog contract."""
+
+
 class QEWorkspaceClient:
     """
     专门负责与被物理隔离的 RDAgent 端进行网络交互的客户端
@@ -286,6 +290,70 @@ class QEWorkspaceClient:
             ) from e
         except httpx.HTTPError as e:
             raise RuntimeError(f"下载 workspace 文件失败: task={task_id} loop={loop_id} file={file_path}: {e}") from e
+
+    async def list_workspace_files(self, task_id: str, loop_id: str) -> Dict[str, Any]:
+        """List a loop's complete read-only asset catalog.
+
+        The node response must explicitly declare ``catalog_completeness``.
+        Older nodes do not expose this endpoint; callers must surface that as a
+        partial/unavailable catalog instead of guessing common file names.
+        """
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files"
+        try:
+            response = await self.client.get(url, timeout=60.0)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise QEWorkspaceCatalogUnavailable(
+                    f"invalid workspace catalog response for {task_id}/{rdagent_loop_id}"
+                )
+            rows = payload.get("files")
+            if rows is None:
+                rows = payload.get("assets")
+            if not isinstance(rows, list):
+                raise QEWorkspaceCatalogUnavailable(
+                    f"invalid workspace catalog response for {task_id}/{rdagent_loop_id}"
+                )
+            if payload.get("catalog_completeness") not in {"complete", "partial"}:
+                raise QEWorkspaceCatalogUnavailable(
+                    "workspace catalog response must declare catalog_completeness"
+                )
+            return payload
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in {404, 405, 501}:
+                raise QEWorkspaceCatalogUnavailable(
+                    f"QE node has no loop asset catalog endpoint: {task_id}/{rdagent_loop_id}"
+                ) from e
+            raise RuntimeError(
+                f"list workspace files failed: task={task_id} loop={rdagent_loop_id}: {e}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise RuntimeError(
+                f"list workspace files failed: task={task_id} loop={rdagent_loop_id}: {e}"
+            ) from e
+
+    async def stat_workspace_file(
+        self, task_id: str, loop_id: str, file_path: str
+    ) -> Dict[str, Any]:
+        """Return catalog metadata for one known loop-relative asset path."""
+        payload = await self.list_workspace_files(task_id, loop_id)
+        normalized = str(file_path).replace("\\", "/")
+        rows = payload.get("files") or payload.get("assets") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_path = row.get("relative_path") or row.get("path") or row.get("filename")
+            if str(row_path or "").replace("\\", "/") == normalized:
+                result = dict(row)
+                result["catalog_completeness"] = payload["catalog_completeness"]
+                return result
+        raise QEWorkspaceFileNotFound(
+            task_id,
+            loop_id,
+            file_path,
+            f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/files",
+        )
 
     async def get_workspace_file(self, task_id: str, loop_id: str, file_path: str) -> Dict[str, Any] | str:
         """读取 workspace 中的指定文件内容。"""
