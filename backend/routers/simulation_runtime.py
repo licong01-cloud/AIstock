@@ -224,6 +224,36 @@ def get_scheduler_status(
         _raise_http(exc)
 
 
+@router.get("/platform-diagnostics")
+def get_platform_diagnostics(
+    trade_date: date | None = None,
+    binding_id: str | None = None,
+    run_id: str | None = None,
+    runtime_id: str | None = None,
+    plan_id: str | None = None,
+    limit: int = Query(100, ge=1, le=100),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    """Return bounded platform health facts without mutating feeds, runs, DB, or broker state."""
+
+    try:
+        return {
+            "ok": True,
+            **service.platform_diagnostics(
+                trade_date=trade_date,
+                binding_id=binding_id,
+                run_id=run_id,
+                runtime_id=runtime_id,
+                plan_id=plan_id,
+                limit=limit,
+                runtime_repository=runtime_repository,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/runs")
 def list_simulation_runs(
     trade_date: date | None = None,
@@ -355,7 +385,9 @@ def list_miniqmt_quote_evidence(
         payload = service.list_miniqmt_quote_evidence(
             runtime_repository=runtime_repository,
             runtime_id=_required_query_text(runtime_id, "runtime_id"),
-            market_data_id=_required_query_text(market_data_id, "market_data_id") if market_data_id is not None else None,
+            market_data_id=_required_query_text(market_data_id, "market_data_id")
+            if market_data_id is not None
+            else None,
             evidence_id=_required_query_text(evidence_id, "evidence_id") if evidence_id is not None else None,
             include_archived=include_archived,
             cursor=cursor,
