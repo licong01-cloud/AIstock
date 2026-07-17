@@ -36,8 +36,8 @@
   "expected": "One immutable tick-scoped LocalSimMarketSnapshot is loaded and validated once per unique symbol and reused by execution, cursor readback, marks and account projection without stale fallback.",
   "first_seen_at": "2026-07-17T06:51:03.233333Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "21128d6961dc5d260b9daba312e8b3197a278b5d",
+  "fixed_at": "2026-07-17T14:48:12.246252Z",
   "github_issue_number": 2316,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2316",
   "last_seen_at": "2026-07-17T06:51:03.233333Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2325",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -65,6 +66,11 @@
     "fingerprint": "4f01d66c16e8cfa731f3c9cb",
     "source_event_id": "FE-20260717-4f01d66c16e8"
   },
+  "validation_evidence": [
+    "PR #2325 required CI -> 12 success, 5 expected skipped, 0 failed or pending",
+    "latest-origin-main related regression matrix -> 107 passed; focused mark reuse -> 1 passed",
+    "DESIGN-COMPLIANCE-001 -> passed all four controls; F2 validator -> 33/33, 0 warnings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
