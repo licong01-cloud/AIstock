@@ -126,7 +126,26 @@ BACKEND_MATRIX_SESSIONS = (
     "simulation_core_l2",
 )
 BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("paper_v2_backend", ("backend/services/paper_trading_v2/**", "backend/routers/paper_v2.py", "backend/services/selection_center/**", "backend/routers/selection_center.py", "backend/services/strategy_package/**", "backend/routers/strategy_package*.py", "backend/tests/paper_trading_v2/**", "backend/tests/selection_center/**", "backend/tests/strategy_package/**")),
+    (
+        "paper_v2_backend",
+        (
+            "backend/services/paper_trading_v2/**",
+            "backend/routers/paper_v2.py",
+            "backend/services/selection_center/**",
+            "backend/routers/selection_center.py",
+            "backend/services/strategy_package/**",
+            "backend/routers/strategy_package*.py",
+            "backend/execution_algos/**",
+            "backend/services/trading_core/minute_execution.py",
+            "backend/tests/paper_trading_v2/**",
+            "backend/tests/selection_center/**",
+            "backend/tests/strategy_package/**",
+            "backend/tests/trading_core/test_execution_algo_capabilities.py",
+            "backend/tests/trading_core/test_minute_execution.py",
+            "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
+            "backend/tests/trading_core/test_v25_execution_contract.py",
+        ),
+    ),
     ("miniqmt_execution_runtime_l2", ("backend/services/miniqmt_execution_runtime/**", "backend/tests/miniqmt_execution_runtime/**")),
     ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
     (

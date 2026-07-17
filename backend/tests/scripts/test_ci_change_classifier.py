@@ -149,6 +149,22 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert simulation_payload["unmapped_code_files"] == []
 
 
+def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/execution_algos/twap_algo.py",
+            "backend/services/trading_core/minute_execution.py",
+            "backend/tests/trading_core/test_minute_execution.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["paper_v2_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_unmapped_backend_code_blocks_instead_of_running_unrelated_matrix(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/infra/qmt_client.py"],

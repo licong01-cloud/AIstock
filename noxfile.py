@@ -512,11 +512,15 @@ def guardrail_changed_files(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
-    """Run Paper v2 + Selection Center backend regression tests."""
+    """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
+        "backend/tests/trading_core/test_execution_algo_capabilities.py",
+        "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
+        "backend/tests/trading_core/test_v25_execution_contract.py",
     ]
     if _hosted_ci():
         # Hosted Linux runners have an ephemeral DB, not the pre-seeded local
