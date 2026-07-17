@@ -419,10 +419,15 @@ class RealDevPackageImporter:
                 connection.rollback()
             except Exception:
                 LOGGER.warning("advisory_dev_import_rollback_failed")
+            diagnostic = _database_exception_context(exc)
+            LOGGER.error(
+                "advisory_dev_import_transaction_failed diagnostic=%s",
+                diagnostic,
+            )
             raise RealDevOnboardingError(
                 REASON_IMPORT_TRANSACTION_FAILED,
                 "DEV package import transaction failed",
-                context={"error_type": type(exc).__name__},
+                context=diagnostic,
             ) from exc
         finally:
             if not getattr(connection, "closed", False):
@@ -455,6 +460,173 @@ class RealDevPackageImporter:
             finished_at=datetime.now(timezone.utc),
         )
 
+    def validate_rollback(
+        self,
+        *,
+        bundle: PortableAdvisoryEvidenceBundle,
+        bundle_ref: OnboardingArtifactRef,
+        supplied_plan: RealDevImportPlan,
+        evidence_store: RealDevOnboardingEvidenceStore,
+        env_file: Path,
+        release_receipt_root: Path,
+        source_package_asset_root: Path,
+        target_package_asset_root: Path,
+        started_at: datetime | None = None,
+    ) -> RealDevImportReceipt:
+        """Execute the exact DEV importer and prove physical rollback with a fresh connection."""
+
+        started = (started_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        fresh_plan = self.plan(
+            bundle=bundle,
+            bundle_ref=bundle_ref,
+            evidence_store=evidence_store,
+            env_file=env_file,
+            release_receipt_root=release_receipt_root,
+        )
+        if not _same_plan_authority(supplied_plan, fresh_plan):
+            raise RealDevOnboardingError(
+                REASON_IMPORT_PLAN_INVALID,
+                "supplied rollback plan authority differs from the fresh DEV plan",
+            )
+        if fresh_plan.status is ImportPlanStatus.CONFLICT:
+            raise RealDevOnboardingError(
+                REASON_IMPORT_PLAN_CONFLICT,
+                "DEV rollback validation plan contains immutable conflicts",
+            )
+        if fresh_plan.status is not ImportPlanStatus.EXECUTABLE:
+            raise RealDevOnboardingError(
+                REASON_IMPORT_PLAN_INVALID,
+                "DEV rollback validation requires an executable plan with real INSERT operations",
+            )
+        roots = resolve_package_asset_roots(
+            source_root=source_package_asset_root,
+            target_root=target_package_asset_root,
+        )
+        _materialize_target_blobs(
+            bundle=bundle,
+            evidence_store=evidence_store,
+            target_root=roots.target_no_replace_root,
+        )
+        target_config = self._target_config(env_file=env_file)
+        connection = _open_writable_connection(target_config, connector=self._connector)
+        transaction_id: str | None = None
+        locked_plan: RealDevImportPlan | None = None
+        rollback_completed = False
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(LOCK_SQL, (str(bundle.bundle_content_hash),))
+            locked_identity = _database_identity(connection, target_config, require_readonly=False)
+            if database_identity_hash(locked_identity) != database_identity_hash(fresh_plan.target_database_identity):
+                raise RealDevOnboardingError(
+                    REASON_IMPORT_PLAN_INVALID,
+                    "rollback transaction DEV identity differs from the plan",
+                )
+            locked_plan = build_import_plan(
+                bundle=bundle,
+                bundle_ref=bundle_ref,
+                target_database_identity=locked_identity,
+                target_rows_by_relation=_fetch_target_rows(connection, bundle),
+            )
+            if locked_plan.status is not ImportPlanStatus.EXECUTABLE or not _same_plan_authority(
+                fresh_plan, locked_plan
+            ):
+                raise RealDevOnboardingError(
+                    REASON_IMPORT_PLAN_INVALID,
+                    "DEV rows changed before rollback validation acquired its transaction lock",
+                )
+            _verify_target_blobs(bundle=bundle, target_root=roots.target_no_replace_root)
+            for operation in locked_plan.ordered_write_operations:
+                _execute_insert_and_compare(connection, operation)
+            transaction_readback = build_import_plan(
+                bundle=bundle,
+                bundle_ref=bundle_ref,
+                target_database_identity=locked_identity,
+                target_rows_by_relation=_fetch_target_rows(connection, bundle),
+            )
+            if transaction_readback.status is not ImportPlanStatus.ALREADY_PRESENT:
+                raise RealDevOnboardingError(
+                    REASON_IMPORT_READBACK_FAILED,
+                    "DEV rows do not fully match the bundle inside rollback validation",
+                )
+            _verify_target_blobs(bundle=bundle, target_root=roots.target_no_replace_root)
+            with connection.cursor() as cursor:
+                cursor.execute(TRANSACTION_ID_SQL)
+                row = cursor.fetchone()
+            transaction_id = str(row[0]) if row else None
+            if not transaction_id:
+                raise RealDevOnboardingError(
+                    REASON_IMPORT_TRANSACTION_FAILED,
+                    "DEV rollback validation transaction id is unavailable",
+                )
+            connection.rollback()
+            rollback_completed = True
+        except RealDevOnboardingError:
+            if not rollback_completed:
+                try:
+                    connection.rollback()
+                except Exception:
+                    LOGGER.warning("advisory_dev_rollback_validation_rollback_failed")
+            raise
+        except Exception as exc:
+            if not rollback_completed:
+                try:
+                    connection.rollback()
+                except Exception:
+                    LOGGER.warning("advisory_dev_rollback_validation_rollback_failed")
+            diagnostic = _database_exception_context(exc)
+            LOGGER.error(
+                "advisory_dev_rollback_validation_failed diagnostic=%s",
+                diagnostic,
+            )
+            raise RealDevOnboardingError(
+                REASON_IMPORT_TRANSACTION_FAILED,
+                "DEV rollback validation transaction failed",
+                context=diagnostic,
+            ) from exc
+        finally:
+            if not getattr(connection, "closed", False):
+                try:
+                    connection.close()
+                except Exception:
+                    LOGGER.warning("advisory_dev_rollback_validation_connection_close_failed")
+        if locked_plan is None or transaction_id is None or not rollback_completed:
+            raise RealDevOnboardingError(
+                REASON_IMPORT_TRANSACTION_FAILED,
+                "DEV rollback validation ended without complete transaction evidence",
+            )
+        post_rollback_plan = self.plan(
+            bundle=bundle,
+            bundle_ref=bundle_ref,
+            evidence_store=evidence_store,
+            env_file=env_file,
+            release_receipt_root=release_receipt_root,
+        )
+        if (
+            post_rollback_plan.status is not ImportPlanStatus.EXECUTABLE
+            or post_rollback_plan.plan_hash != fresh_plan.plan_hash
+        ):
+            raise RealDevOnboardingError(
+                REASON_IMPORT_READBACK_FAILED,
+                "fresh DEV readback found residue after rollback validation",
+            )
+        receipt = _build_receipt(
+            bundle=bundle,
+            bundle_ref=bundle_ref,
+            plan=locked_plan,
+            transaction_id=transaction_id,
+            outcome=ImportCommitOutcome.ROLLED_BACK,
+            physical_commit_count=0,
+            started_at=started,
+            finished_at=datetime.now(timezone.utc),
+            post_readback_row_hashes={relation: () for relation in RELATION_ORDER},
+        )
+        LOGGER.info(
+            "advisory_dev_rollback_validation_completed bundle_hash_prefix=%s attempted_insert_count=%s",
+            str(bundle.bundle_content_hash)[:12],
+            sum(receipt.inserted_row_counts.values()),
+        )
+        return receipt
+
     def verify_import(
         self,
         *,
@@ -470,6 +642,11 @@ class RealDevPackageImporter:
     ) -> None:
         if receipt.commit_outcome is ImportCommitOutcome.STATE_UNKNOWN:
             raise RealDevOnboardingError(REASON_IMPORT_COMMIT_STATE_UNKNOWN, "state-unknown receipt cannot pass verification")
+        if receipt.commit_outcome is ImportCommitOutcome.ROLLED_BACK:
+            raise RealDevOnboardingError(
+                REASON_IMPORT_READBACK_FAILED,
+                "rollback-only receipt cannot pass persistent import verification",
+            )
         if receipt.bundle_ref != bundle_ref or receipt.bundle_hash != bundle.bundle_content_hash:
             raise RealDevOnboardingError(REASON_IMPORT_READBACK_FAILED, "import receipt differs from the bundle")
         readback = self.plan(
@@ -721,6 +898,20 @@ def _serialized_target_rows(relation: str, rows: list[dict[str, Any]]) -> dict[s
             raise RealDevOnboardingError(REASON_IMPORT_PLAN_INVALID, "DEV readback contains duplicate natural keys")
         result[key_hash] = semantic
     return result
+
+
+def _database_exception_context(exc: Exception) -> dict[str, str]:
+    context = {"error_type": type(exc).__name__}
+    pgcode = getattr(exc, "pgcode", None)
+    if pgcode:
+        context["sqlstate"] = str(pgcode)
+    diagnostic = getattr(exc, "diag", None)
+    if diagnostic is not None:
+        for attribute in ("schema_name", "table_name", "constraint_name"):
+            value = getattr(diagnostic, attribute, None)
+            if value:
+                context[attribute] = str(value)
+    return context
 
 
 def _fetch_target_rows(connection: Any, bundle: PortableAdvisoryEvidenceBundle) -> dict[str, list[dict[str, Any]]]:

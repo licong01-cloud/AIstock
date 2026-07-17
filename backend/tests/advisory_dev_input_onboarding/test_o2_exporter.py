@@ -17,6 +17,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     RealDevOnboardingInventoryReceipt,
     RealDevOnboardingRequest,
     SourceFactEligibility,
+    deserialize_postgres_value,
 )
 from backend.services.advisory_dev_input_onboarding.dev_importer import (
     _materialize_target_blobs,
@@ -25,6 +26,7 @@ from backend.services.advisory_dev_input_onboarding.dev_importer import (
 from backend.services.advisory_dev_input_onboarding.production_projection import (
     PACKAGE_ASSET_PROVENANCE_COLUMNS,
     PACKAGE_ASSET_SEMANTIC_COLUMNS,
+    PACKAGE_EXCLUDED_SOURCE_COLUMNS,
     PACKAGE_PROVENANCE_COLUMNS,
     PACKAGE_SEMANTIC_COLUMNS,
     SQL,
@@ -121,7 +123,11 @@ def _package_row(
         "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
         "updated_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
     }
-    assert set(values) == set(PACKAGE_SEMANTIC_COLUMNS) | set(PACKAGE_PROVENANCE_COLUMNS)
+    assert set(values) == (
+        set(PACKAGE_SEMANTIC_COLUMNS)
+        | set(PACKAGE_PROVENANCE_COLUMNS)
+        | set(PACKAGE_EXCLUDED_SOURCE_COLUMNS)
+    )
     return values
 
 
@@ -150,6 +156,7 @@ def test_fixed_export_registry_and_column_contract_are_closed() -> None:
         assert normalized.startswith("SELECT ")
         assert all(token not in f" {normalized} " for token in (" INSERT ", " UPDATE ", " DELETE ", " TRUNCATE "))
     assert set(PACKAGE_SEMANTIC_COLUMNS).isdisjoint(PACKAGE_PROVENANCE_COLUMNS)
+    assert set(PACKAGE_SEMANTIC_COLUMNS).isdisjoint(PACKAGE_EXCLUDED_SOURCE_COLUMNS)
     assert set(PACKAGE_ASSET_SEMANTIC_COLUMNS).isdisjoint(PACKAGE_ASSET_PROVENANCE_COLUMNS)
 
 
@@ -204,6 +211,21 @@ def test_export_builds_real_blob_and_component_closure(
             asset_sha=digest,
         ),
     ]
+    packages[1]["manifest_json"]["backtest_context"] = {  # type: ignore[index]
+        "raw_backtest_config": {
+            "runtime_template_dir": "F:/Dev/AIstock_worktrees/legacy/template_runtime",
+        }
+    }
+    packages[1]["manifest_json"]["source"] = {  # type: ignore[index]
+        "source_type": "multi_alpha_combine_run",
+        "source_id": "source_pkg_multi",
+    }
+    packages[1]["source_type"] = "multi_alpha_combine_run"
+    packages[1]["prediction_ref_uri"] = "F:/historical/predictions.parquet"
+    packages[1]["prediction_ref_sha256"] = SHA_C
+    packages[1]["model_artifact_uri"] = "F:/historical/model.pkl"
+    packages[1]["model_artifact_sha256"] = SHA_C
+    _refreeze_package_row(packages[1])
     onboarding_request = _request_for_packages(onboarding_request, packages)
     assets = [
         {
@@ -232,6 +254,19 @@ def test_export_builds_real_blob_and_component_closure(
     assert bundle.source_database_identity_hash
     assert len(bundle.native_multi_component_refs) == 2
     assert len(bundle.artifact_blob_refs) == 2
+    multi_ref = next(item for item in bundle.package_refs if item.package_id == "pkg_multi")
+    assert multi_ref.source_manifest_sha256 != multi_ref.manifest_sha256
+    package_row_set = next(item for item in bundle.relation_row_sets if item.relation_name == "strategy_pkg.package")
+    multi_row = next(row for row in package_row_set.sorted_rows if row["package_id"] == "pkg_multi")
+    portable_manifest = deserialize_postgres_value(multi_row["manifest_json"])
+    assert "backtest_context" not in portable_manifest
+    assert "F:/Dev/AIstock_worktrees" not in str(portable_manifest)
+    assert portable_manifest["source"]["source_type"] == "candidate_strategy_package"
+    assert portable_manifest["alpha_mode"] == packages[1]["alpha_mode"]
+    assert multi_row["source_type"] == "candidate_strategy_package"
+    assert all(name not in multi_row for name in PACKAGE_EXCLUDED_SOURCE_COLUMNS)
+    assert multi_ref.projection.runtime_asset_closure_hash
+    assert multi_ref.projection.alpha_component_closure_hash
     asset_row_set = next(item for item in bundle.relation_row_sets if item.relation_name == "strategy_pkg.package_asset")
     assert len(asset_row_set.sorted_rows) == 2
     assert store.load_blob(bundle.artifact_blob_refs[0].blob_ref) == raw

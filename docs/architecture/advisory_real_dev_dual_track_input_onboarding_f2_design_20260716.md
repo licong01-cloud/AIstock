@@ -25,16 +25,16 @@ scheduler 或审批系统。
 ```text
 design_status = accepted
 o1_implementation_status = merged_pr_2231
-o2_implementation_status = code_validated_pending_review_and_merge
+o2_implementation_status = bug_686_fix_validated_pending_review_and_merge
 o3_to_o5_implementation_status = not_started
 dev_database = schema_ready_but_real_dual_track_input_absent
 production_database = read_only_source_only
 production_ddl = none_for_this_design
 production_dml = prohibited
-production_readonly_export_execution = not_run
+production_readonly_export_execution = completed_bundle_75806f83b2a5
 dev_ddl = none
-dev_import_plan_execution = not_run
-dev_import_rollback_validation = not_run
+dev_import_plan_execution = executable_plan_8da94d2f87b9
+dev_import_rollback_validation = completed_zero_residue_receipt_21f01f6aeab4
 dev_import_persistent_execution = not_run
 runtime_activation = none
 role_or_approval_gate = none
@@ -255,11 +255,11 @@ semantic字段full compare。其他relation若存在代理键，必须在冻结c
 ### 7.4 `PortableAdvisoryEvidenceBundle`
 
 ```text
-schema_version = advisory_real_dev_portable_bundle_v1
+schema_version = advisory_real_dev_portable_bundle_v2
 request
 source_database_identity_hash
 export_snapshot_identity
-package_refs[]
+package_refs[]                       # source/portable manifest hashes + projection evidence
 native_multi_component_refs[]
 relation_row_sets[]
 artifact_blob_refs[]
@@ -268,8 +268,16 @@ dependency_closure_hash
 bundle_content_hash
 ```
 
-bundle不保存密码、DSN、绝对本机路径、模型明文、DSE、Selection候选或非package闭包行。它不搬运或转换
-production DSE v1；DEV DSE v2必须由正常producer新生成。
+source package保持只读且不修改。若source manifest含有非运行的`backtest_context`、执行模型工作站路径或历史预测
+URI，exporter按冻结projection policy精确移除这些字段，并把manifest内`source.source_type`及target package行
+`source_type`投影为DEV已支持的`candidate_strategy_package`。package ID、alpha mode、alpha components和runtime asset
+refs必须前后完全一致；bundle同时冻结source manifest hash、portable manifest hash、被移除manifest内容hash、被排除
+source行字段hash、component hash和runtime asset closure hash。任一parity不成立则整体失败，不允许放宽路径扫描。
+
+`prediction_ref_uri/prediction_ref_sha256/model_artifact_uri/model_artifact_sha256`是历史输出或旧locator，不进入DEV
+relation semantic row；模型运行身份只来自portable manifest、`strategy_pkg.package_asset`和CAS blob闭包。bundle不保存
+密码、DSN、绝对本机路径、模型明文、DSE、Selection候选或非package闭包行。它不搬运或转换production DSE v1；
+DEV DSE v2必须由正常producer新生成。
 
 ### 7.5 `RealDevImportPlan`
 
@@ -302,14 +310,15 @@ write_relation_set
 post_readback_row_hashes{}
 post_dependency_closure_hash
 physical_commit_count
-commit_outcome = COMMITTED | ALREADY_PRESENT | STATE_UNKNOWN
+commit_outcome = COMMITTED | ROLLED_BACK | ALREADY_PRESENT | STATE_UNKNOWN
 started_at/finished_at
 reason_codes[]
 receipt_hash
 ```
 
-`COMMITTED` 必须完整 readback；commit response 丢失时用新连接按 exact keys 判定 committed/not-committed/
-state-unknown，不静默重试写入。
+`ROLLED_BACK`必须真实执行全部计划INSERT、事务内完整readback、物理rollback并用新连接证明所有exact key回到执行前
+计划且数据库零残留；它要求`physical_commit_count=0`，不能冒充persistent import。`COMMITTED`必须完整readback；
+commit response丢失时用新连接按exact keys判定committed/not-committed/state-unknown，不静默重试写入。
 
 ### 7.7 `Phase1ERealInputBundle`
 
@@ -337,13 +346,15 @@ PARTIAL/diagnostic plan，但不得被G5当作L3/L4 ready。
    不进入portable bundle。
 4. 验证single/native-multi package identity，并按StrategyPackage权威canonical算法从`manifest_json`重算current
    manifest hash；允许状态固定为当前Selection可见的非`RETIRED`已知生命周期，未知状态和`RETIRED`均不导出。
+   source manifest不改写；target使用冻结portable projection生成独立manifest hash，并保存source-to-portable lineage。
 5. 对 native multi parent 从 manifest 恢复全部 component package identities 和 component evidence；不同合法
    lookback/window 保持独立，不要求腿级窗口相同。
 6. 读取parent/component package和package_asset的exact闭包；runtime blob只从`factor_set`、`model_asset`、
    `runtime_assets`及`source_evidence.multi_alpha.legs[].runtime_assets/seed_runtime_assets`投影，从显式只读source
    asset root加载、逐blob SHA验证并进入bundle CAS。不得递归收集其他`source_evidence`，与Selection运行无关的
    历史输出文件不加载。
-7. 重新计算package/manifest/asset/component/policy canonical hashes，不继承source Program/binding hash作为DEV身份。
+7. target package行固定使用`candidate_strategy_package` source type；历史prediction/model locator列不复制。重新计算
+   package/manifest/asset/component/policy canonical hashes，不继承source Program/binding hash作为DEV身份。
 8. 构造dependency graph；任一必需child缺失、重复、hash不同或越界时，整个bundle不发布。
 9. bundle以`<root>/advisory/dev-onboarding/bundles/<prefix>/<bundle_hash>.json` atomic no-replace发布并
     full readback。
@@ -677,16 +688,16 @@ source不成熟时准确pending。
 
 ## 20. Rollout And Rollback / 发布与回滚
 
-### 19.1 Rollout
+### 20.1 Rollout
 
 1. 按O1-O4独立PR合入代码；代码合入不自动连接数据库。
 2. O1/O2 L0-L2通过后执行production read-only inventory/export。
-3. DEV先做rollback-only importer验证，再执行persistent exact import。
+3. DEV可在待合入代码上做rollback-only importer验证；persistent exact import必须等待对应代码合入后再执行。
 4. 正常运行DEV historical runner、audit、Phase1D和Phase1E CLI。
 5. G5 source pending保持pending；source-ready后执行L3再执行L4。
 6. O5只同步已发生事实，不把设计或低层测试写成DEV完成。
 
-### 19.2 Rollback
+### 20.2 Rollback
 
 - code rollback：停止调用新CLI，删除代码版本不删除已导入真实DEV evidence。
 - bundle：CAS不覆盖；错误bundle追加新identity，不修改旧文件。
@@ -797,11 +808,11 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-884 | §7.3 | typed PostgreSQL value serialization golden tests；PR #2231 | verified_merged | none |
 | F-885 | §7.4、§8 | single/native-multi/component-window closure tests；PR #2231 | verified_merged | none |
 | F-886 | §5.4、§8 | package/blob/component graph and mutable-row exclusion tests；PR #2231 | verified_merged | none |
-| F-887 | §7.4、§16 | credential/path/payload redaction scan；PR #2231 | verified_merged | none |
-| F-888 | §5.4、§8 | canonical manifest/lifecycle/runtime projection tests；migration-chain PostgreSQL actual readonly exporter | verified_l0_l2 | none |
+| F-887 | §7.4、§16 | credential/path/payload redaction scan；真实production只读bundle `75806f83b2a5`绝对历史locator移除且runtime closure完整 | verified_l0_l2 | none |
+| F-888 | §5.4、§8 | canonical manifest/lifecycle/runtime projection tests；source→portable lineage与`candidate_strategy_package`投影；真实DEV plan `8da94d2f87b9` | verified_l0_l2 | none |
 | F-889 | §7.5、§9.1 | `dev_importer.py`; INSERT/EXACT/CONFLICT classification tests | verified_l0_l2 | none |
 | F-890 | §9、§18.1 | fixed SQL registry/AST/forbidden statement scan | verified_l0_l2 | none |
-| F-891 | §9.2、§18.3 | production StrategyPackage migration-chain PostgreSQL 16 owner transaction/trigger rollback | verified_l0_l2 | none |
+| F-891 | §9.2、§18.3 | PostgreSQL 16 owner transaction/trigger rollback；真实DEV receipt `21f01f6aeab4`执行98次INSERT尝试、physical commit 0、fresh plan相同 | verified_l0_l2 | none |
 | F-892 | §9.2 | disposable PostgreSQL full-row insert-or-compare/readback | verified_l0_l2 | none |
 | F-893 | §9.3 | all-key committed/not-observed/state-unknown tests including preexisting-row conflict | verified_l0_l2 | none |
 | F-894 | §9.4、§15 | exact rerun zero-DML/new receipt；forged request/source/plan/count rejection | verified_l0_l2 | none |

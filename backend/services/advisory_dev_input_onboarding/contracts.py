@@ -28,11 +28,11 @@ from backend.services.advisory_phase1.release_schema_contract import DatabaseIde
 REQUEST_SCHEMA_VERSION = "advisory_real_dev_onboarding_request_v1"
 INVENTORY_QUERY_SCHEMA_VERSION = "advisory_real_dev_onboarding_inventory_query_v1"
 INVENTORY_SCHEMA_VERSION = "advisory_real_dev_onboarding_inventory_v1"
-BUNDLE_SCHEMA_VERSION = "advisory_real_dev_portable_bundle_v1"
+BUNDLE_SCHEMA_VERSION = "advisory_real_dev_portable_bundle_v2"
 ROW_SET_SCHEMA_VERSION = "advisory_real_dev_relation_row_set_v1"
 CONTRACT_SCHEMA_VERSION = "advisory_real_dev_onboarding_contract_v1"
 IMPORT_PLAN_SCHEMA_VERSION = "advisory_real_dev_import_plan_v1"
-IMPORT_RECEIPT_SCHEMA_VERSION = "advisory_real_dev_import_receipt_v1"
+IMPORT_RECEIPT_SCHEMA_VERSION = "advisory_real_dev_import_receipt_v2"
 ALLOWED_EXPORT_PACKAGE_STATUSES = frozenset(
     {
         "DRAFT",
@@ -60,6 +60,26 @@ STORE_POLICY_PAYLOAD = {
     "latest_pointer": False,
 }
 STORE_POLICY_HASH = canonical_json_sha256(STORE_POLICY_PAYLOAD)
+
+PORTABLE_MANIFEST_PROJECTION_POLICY = {
+    "schema_version": "advisory_real_dev_manifest_projection_v1",
+    "removed_manifest_paths": [
+        ["backtest_context"],
+        ["source_evidence", "custom_params", "execution_algo_params", "early_model_path"],
+        ["source_evidence", "custom_params", "execution_algo_params", "late_model_path"],
+        ["source_evidence", "multi_alpha", "combined_prediction_ref_uri"],
+    ],
+    "manifest_replacements": [
+        {
+            "path": ["source", "source_type"],
+            "value": "candidate_strategy_package",
+        }
+    ],
+    "preserved_identities": ["package_id", "alpha_mode", "alpha_components"],
+    "runtime_asset_closure": "exact",
+    "absolute_workstation_paths": "prohibited",
+}
+PORTABLE_MANIFEST_PROJECTION_POLICY_HASH = canonical_json_sha256(PORTABLE_MANIFEST_PROJECTION_POLICY)
 
 REASON_REQUEST_INVALID = "ADVISORY_REAL_DEV_REQUEST_INVALID"
 REASON_ENV_INVALID = "ADVISORY_REAL_DEV_ENV_INVALID"
@@ -174,6 +194,7 @@ class ImportPlanStatus(str, Enum):
 
 class ImportCommitOutcome(str, Enum):
     COMMITTED = "COMMITTED"
+    ROLLED_BACK = "ROLLED_BACK"
     ALREADY_PRESENT = "ALREADY_PRESENT"
     STATE_UNKNOWN = "STATE_UNKNOWN"
 
@@ -684,6 +705,115 @@ def _drop_empty_manifest_asset_defaults(value: Any) -> Any:
     return cleaned
 
 
+class PortableManifestProjectionEvidence(HashClosedContract):
+    hash_field: ClassVar[str] = "projection_hash"
+    package_id: str = Field(min_length=1, max_length=160)
+    source_manifest_sha256: str = Field(min_length=64, max_length=64)
+    portable_manifest_sha256: str = Field(min_length=64, max_length=64)
+    projection_policy_hash: Literal[PORTABLE_MANIFEST_PROJECTION_POLICY_HASH] = (
+        PORTABLE_MANIFEST_PROJECTION_POLICY_HASH
+    )
+    removed_source_provenance_hash: str = Field(min_length=64, max_length=64)
+    runtime_asset_closure_hash: str = Field(min_length=64, max_length=64)
+    alpha_component_closure_hash: str = Field(min_length=64, max_length=64)
+    projection_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "source_manifest_sha256",
+        "portable_manifest_sha256",
+        "removed_source_provenance_hash",
+        "runtime_asset_closure_hash",
+        "alpha_component_closure_hash",
+        "projection_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "PortableManifestProjectionEvidence":
+        self.close_hash()
+        return self
+
+
+def project_portable_manifest(
+    manifest: Mapping[str, Any],
+) -> tuple[dict[str, Any], PortableManifestProjectionEvidence]:
+    """Remove non-runtime backtest provenance while preserving runtime identity."""
+
+    source = deepcopy(dict(manifest))
+    package_id = str(source.get("package_id") or "")
+    source_manifest_sha256 = validate_sha256(
+        str(source.get("manifest_sha256") or ""),
+        field_name="source_manifest_sha256",
+    )
+    if compute_portable_manifest_json_sha256(source) != source_manifest_sha256:
+        raise ValueError("source manifest hash is inconsistent before portable projection")
+    source_runtime_refs = portable_manifest_runtime_asset_refs(source)
+    source_alpha_mode = deepcopy(source.get("alpha_mode"))
+    source_components = deepcopy(source.get("alpha_components"))
+    removed: dict[str, Any] = {}
+    for raw_path in PORTABLE_MANIFEST_PROJECTION_POLICY["removed_manifest_paths"]:
+        path = tuple(str(part) for part in raw_path)
+        found, value = _pop_manifest_path(source, path)
+        if found:
+            removed[".".join(path)] = value
+    for replacement in PORTABLE_MANIFEST_PROJECTION_POLICY["manifest_replacements"]:
+        path = tuple(str(part) for part in replacement["path"])
+        found, previous = _replace_manifest_path(source, path, replacement["value"])
+        if found and previous != replacement["value"]:
+            removed[f"replaced:{'.'.join(path)}"] = previous
+    source["manifest_sha256"] = None
+    portable_manifest_sha256 = compute_portable_manifest_json_sha256(source)
+    source["manifest_sha256"] = portable_manifest_sha256
+    if str(source.get("package_id") or "") != package_id:
+        raise ValueError("portable projection changed package_id")
+    if source.get("alpha_mode") != source_alpha_mode:
+        raise ValueError("portable projection changed alpha_mode")
+    if source.get("alpha_components") != source_components:
+        raise ValueError("portable projection changed alpha_components")
+    portable_runtime_refs = portable_manifest_runtime_asset_refs(source)
+    if portable_runtime_refs != source_runtime_refs:
+        raise ValueError("portable projection changed runtime asset closure")
+    evidence = PortableManifestProjectionEvidence(
+        package_id=package_id,
+        source_manifest_sha256=source_manifest_sha256,
+        portable_manifest_sha256=portable_manifest_sha256,
+        removed_source_provenance_hash=canonical_json_sha256(removed),
+        runtime_asset_closure_hash=canonical_json_sha256(source_runtime_refs),
+        alpha_component_closure_hash=canonical_json_sha256(source_components),
+    )
+    return source, evidence
+
+
+def _pop_manifest_path(document: dict[str, Any], path: tuple[str, ...]) -> tuple[bool, Any]:
+    current: Any = document
+    for part in path[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    if not isinstance(current, dict) or path[-1] not in current:
+        return False, None
+    return True, current.pop(path[-1])
+
+
+def _replace_manifest_path(
+    document: dict[str, Any],
+    path: tuple[str, ...],
+    replacement: Any,
+) -> tuple[bool, Any]:
+    current: Any = document
+    for part in path[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    if not isinstance(current, dict) or path[-1] not in current:
+        return False, None
+    previous = current[path[-1]]
+    current[path[-1]] = replacement
+    return True, previous
+
+
 class PortableRelationRowSet(HashClosedContract):
     hash_field: ClassVar[str] = "row_set_hash"
     schema_version: Literal[ROW_SET_SCHEMA_VERSION] = ROW_SET_SCHEMA_VERSION
@@ -766,12 +896,25 @@ class PortableRelationRowSet(HashClosedContract):
 class BundlePackageRef(StrictContract):
     package_id: str = Field(min_length=1, max_length=160)
     manifest_sha256: str = Field(min_length=64, max_length=64)
+    source_manifest_sha256: str = Field(min_length=64, max_length=64)
+    removed_source_row_provenance_hash: str = Field(min_length=64, max_length=64)
     alpha_mode: AlphaMode
+    projection: PortableManifestProjectionEvidence
 
-    @field_validator("manifest_sha256")
+    @field_validator("manifest_sha256", "source_manifest_sha256", "removed_source_row_provenance_hash")
     @classmethod
-    def _hash(cls, value: str) -> str:
-        return validate_sha256(value, field_name="manifest_sha256")
+    def _hash(cls, value: str, info: Any) -> str:
+        return validate_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _projection_identity(self) -> "BundlePackageRef":
+        if (
+            self.projection.package_id != self.package_id
+            or self.projection.source_manifest_sha256 != self.source_manifest_sha256
+            or self.projection.portable_manifest_sha256 != self.manifest_sha256
+        ):
+            raise ValueError("bundle package projection identity is inconsistent")
+        return self
 
 
 class NativeMultiComponentRef(HashClosedContract):
@@ -864,8 +1007,10 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
             raise ValueError("package_refs package ids must be unique")
         if {item.package_id for item in packages} != set(self.request.source_package_ids):
             raise ValueError("bundle package refs must exactly close the request")
-        if {item.package_id: item.manifest_sha256 for item in packages} != self.request.expected_package_manifest_sha256s:
-            raise ValueError("bundle package manifest identities must exactly match the request")
+        if {
+            item.package_id: item.source_manifest_sha256 for item in packages
+        } != self.request.expected_package_manifest_sha256s:
+            raise ValueError("bundle source package manifest identities must exactly match the request")
         if {item.alpha_mode for item in packages} != {AlphaMode.SINGLE, AlphaMode.MULTI}:
             raise ValueError("bundle must contain both single and native multi packages")
         components = tuple(
@@ -916,6 +1061,14 @@ class PortableAdvisoryEvidenceBundle(HashClosedContract):
                 runtime_refs = portable_manifest_runtime_asset_refs(manifest)
                 if not runtime_refs:
                     raise ValueError("package row has no governed runtime asset closure")
+                package_ref = next(item for item in packages if item.package_id == package_id)
+                if (
+                    package_ref.projection.runtime_asset_closure_hash
+                    != canonical_json_sha256(runtime_refs)
+                    or package_ref.projection.alpha_component_closure_hash
+                    != canonical_json_sha256(manifest.get("alpha_components"))
+                ):
+                    raise ValueError("package row differs from its portable projection evidence")
                 runtime_refs_by_package[package_id] = runtime_refs
         asset_row_set = next(item for item in row_sets if item.relation_name == "strategy_pkg.package_asset")
         if not {"package_id", "asset_type", "asset_ref", "asset_sha256"}.issubset(asset_row_set.semantic_column_names):
@@ -1225,6 +1378,17 @@ class RealDevImportReceipt(HashClosedContract):
         if self.commit_outcome is ImportCommitOutcome.COMMITTED:
             if self.transaction_id is None or self.physical_commit_count != 1 or reasons:
                 raise ValueError("COMMITTED receipt requires one physical commit and no failure reason")
+        elif self.commit_outcome is ImportCommitOutcome.ROLLED_BACK:
+            if (
+                self.transaction_id is None
+                or self.physical_commit_count != 0
+                or not any(self.inserted_row_counts.values())
+                or any(self.post_readback_row_hashes.values())
+                or reasons
+            ):
+                raise ValueError(
+                    "ROLLED_BACK receipt requires attempted inserts, zero commit, zero residue and no failure reason"
+                )
         elif self.commit_outcome is ImportCommitOutcome.ALREADY_PRESENT:
             if self.transaction_id is not None or self.physical_commit_count != 0 or any(self.inserted_row_counts.values()) or reasons:
                 raise ValueError("ALREADY_PRESENT receipt requires zero DML and zero failure reason")

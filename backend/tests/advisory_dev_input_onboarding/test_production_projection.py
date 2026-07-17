@@ -10,6 +10,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     InventoryClassification,
     RealDevOnboardingError,
     SourceFactEligibility,
+    project_portable_manifest,
 )
 from backend.services.advisory_dev_input_onboarding.production_projection import (
     SQL,
@@ -325,10 +326,23 @@ def test_inventory_reports_missing_explicit_program_and_package(onboarding_reque
 
 
 def test_inventory_accepts_exact_existing_target_program_and_binding(onboarding_request, onboarding_request_ref) -> None:
+    source_rows = _source_rows()
+    target_manifest_hashes = {
+        row["package_id"]: project_portable_manifest(row["manifest_json"])[1].portable_manifest_sha256
+        for row in source_rows["packages"]
+    }
     target_rows = {
         "target_packages": [
-            {"package_id": "pkg_single", "manifest_sha256": SHA_A, "alpha_mode": "single_alpha"},
-            {"package_id": "pkg_multi", "manifest_sha256": SHA_B, "alpha_mode": "multi_alpha"},
+            {
+                "package_id": "pkg_single",
+                "manifest_sha256": target_manifest_hashes["pkg_single"],
+                "alpha_mode": "single_alpha",
+            },
+            {
+                "package_id": "pkg_multi",
+                "manifest_sha256": target_manifest_hashes["pkg_multi"],
+                "alpha_mode": "multi_alpha",
+            },
         ],
         "target_programs": [
             {
@@ -355,7 +369,7 @@ def test_inventory_accepts_exact_existing_target_program_and_binding(onboarding_
         selected_input_ref=onboarding_request_ref,
         source=StubProjection(
             _identity(TargetLabel.PRODUCTION, database="aistock", address="10.0.0.1"),
-            _source_rows(),
+            source_rows,
         ),  # type: ignore[arg-type]
         target=StubProjection(
             _identity(TargetLabel.DEV, database="aistock_dev", address="10.0.0.2"),
