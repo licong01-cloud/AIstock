@@ -35,8 +35,8 @@
   "expected": "Use a tested synchronous repository or explicit executor adapter, canonical PIT market schema, previous completed trading day semantics, and mandatory candidate/source identity filtering with stable errors.",
   "first_seen_at": "2026-07-17T01:40:34.087998Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "79666855d0bceafcb292e0242cfd5c675befa31d",
+  "fixed_at": "2026-07-17T02:21:25.246368Z",
   "github_issue_number": 2256,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2256",
   "last_seen_at": "2026-07-17T01:40:34.087998Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2266",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "30157222824b28f63ded2463",
     "source_event_id": "FE-20260717-30157222824b"
   },
+  "validation_evidence": [
+    "CI: 17 passed, 0 failed, mergeStateStatus CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
