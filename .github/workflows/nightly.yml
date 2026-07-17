@@ -14,6 +14,11 @@ on:
         description: 'Run Nightly L3 validations. Disable only for CI/LLM/code-intelligence smoke runs.'
         type: boolean
         default: true
+      full_nightly_run:
+        description: Explicitly run every enabled runner plan instead of the successful-watermark change window.
+        required: false
+        default: false
+        type: boolean
       run_paper_v2_live:
         description: 'Run Paper v2 live catch-up after L3. Scheduled Nightly always runs it.'
         type: boolean
@@ -251,52 +256,62 @@ jobs:
             exit 1
           }
 
-      - name: nox -s paper_v2_l3
-        id: paper_v2_l3
-        continue-on-error: true
+      - name: Build successful-watermark Nightly execution plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_NIGHTLY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_nightly_run || false }}
         run: |
-          conda run -n AIstock python -m nox -s paper_v2_l3
+          $outDir = "tmp/validation/nightly_l3"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $successful = gh run list --workflow nightly.yml --branch main --event schedule --status success --limit 1 --json headSha | ConvertFrom-Json | Select-Object -First 1
+          $watermark = if ($successful) { $successful.headSha } else { "" }
+          $changedFile = "$outDir/changed-files.txt"
+          $extraArgs = @()
+          $watermarkArgs = @()
+          if ($watermark) { $watermarkArgs += @("--watermark", $watermark) }
+          if ($env:FULL_NIGHTLY_RUN -eq "true" -or -not $watermark) {
+            $extraArgs += "--full-run"
+            New-Item -ItemType File -Force -Path $changedFile | Out-Null
+          } else {
+            git cat-file -e "$watermark^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::Successful watermark is unavailable locally; using explicit full-run fallback."
+              $extraArgs += "--full-run"
+              New-Item -ItemType File -Force -Path $changedFile | Out-Null
+            } else {
+              git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
+              if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
+            }
+          }
+          conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+            --provider deterministic `
+            --changed-files-file $changedFile `
+            --head-commit "${env:GITHUB_SHA}" `
+            --plan-selection-output "$outDir/execution-plan.json" `
+            --fail-on-blocked `
+            @watermarkArgs `
+            @extraArgs
+
+      - name: Run selected Nightly sessions once
         env:
           PAPER_V2_SKIP_REALTIME: '1'
           PAPER_V2_E2E_TRADE_DATE: '2026-06-02'
           PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-02'
-
-      - name: nox -s qe_archive_l3
-        id: qe_archive_l3
-        continue-on-error: true
-        run: |
-          conda run -n AIstock python -m nox -s qe_archive_l3
-        env:
           QE_ARCHIVE_L3_SKIP_UI: '1'
-
-      - name: nox -s qe_read_l3
-        id: qe_read_l3
-        continue-on-error: true
-        run: |
-          conda run -n AIstock python -m nox -s qe_read_l3
-        env:
           QE_READ_L3_SKIP_UI: '1'
-
-      - name: Summarize Nightly L3 session results
-        if: always()
-        env:
-          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
-          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
-          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
         run: |
           $outDir = "tmp/validation/nightly_l3"
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $rows = @(
-            [pscustomobject]@{ session = "paper_v2_l3"; result = $env:PAPER_V2_L3_RESULT },
-            [pscustomobject]@{ session = "qe_archive_l3"; result = $env:QE_ARCHIVE_L3_RESULT },
-            [pscustomobject]@{ session = "qe_read_l3"; result = $env:QE_READ_L3_RESULT }
-          )
-          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
-          "# Nightly L3 session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
-          foreach ($row in $rows) {
-            "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          $plan = Get-Content -Raw "$outDir/execution-plan.json" | ConvertFrom-Json
+          $rows = @()
+          foreach ($session in $plan.selected_sessions) {
+            conda run -n AIstock python -m nox -s $session
+            $result = if ($LASTEXITCODE -eq 0) { "success" } else { "failure" }
+            $rows += [pscustomobject]@{ session = $session; result = $result }
           }
-          Get-Content -LiteralPath "$outDir/session-results.md"
+          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
+          "# Nightly selected session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          foreach ($row in $rows) { "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8 }
+          if ($rows.result -contains "failure") { exit 1 }
 
       - name: Print validation history manifest
         if: always()
@@ -315,23 +330,6 @@ jobs:
           path: tmp/validation/nightly_l3/
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: Fail Nightly L3 after all sessions complete
-        if: always()
-        env:
-          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
-          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
-          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
-        run: |
-          $failed = @()
-          if ($env:PAPER_V2_L3_RESULT -eq "failure") { $failed += "paper_v2_l3" }
-          if ($env:QE_ARCHIVE_L3_RESULT -eq "failure") { $failed += "qe_archive_l3" }
-          if ($env:QE_READ_L3_RESULT -eq "failure") { $failed += "qe_read_l3" }
-          if ($failed.Count -gt 0) {
-            Write-Host "::error::Nightly L3 sessions failed after complete run: $($failed -join ', ')"
-            exit 1
-          }
-          Write-Host "Nightly L3 sessions completed without failure."
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)

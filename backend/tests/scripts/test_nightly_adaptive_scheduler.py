@@ -331,8 +331,41 @@ def test_collect_changed_files_filters_diff_headers_and_bom(tmp_path: Path) -> N
     assert collected == ["scripts/llm_provider_adapter.py"]
 
 
+def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None:
+    plan = scheduler.build_nightly_execution_plan(
+        ["backend/services/simulation_runtime/ops.py", "backend/services/simulation_runtime/ops.py"],
+        watermark="abc123",
+        head_commit="def456",
+    )
+
+    assert plan["selected_sessions"].count("simulation_core_l2") == 1
+    assert "paper_v2_l3" not in plan["selected_sessions"]
+    assert plan["watermark"] == "abc123"
+    assert plan["advance_watermark_on_success_only"] is True
+    assert plan["retry_window_on_failure"] is True
+
+
+def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> None:
+    monkeypatch.setattr(
+        scheduler.issue_flow,
+        "select_validation",
+        lambda _paths: {"ownership": {"unmatched_files": ["backend/unknown_runtime.py"]}},
+    )
+
+    try:
+        scheduler.build_nightly_execution_plan(["backend/unknown_runtime.py"])
+    except ValueError as exc:
+        assert "unmapped executable code" in str(exc)
+    else:
+        raise AssertionError("Nightly must fail closed for unmapped executable code")
+
+
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
+    import yaml
+
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+    parsed = yaml.safe_load(workflow)
+    dispatch = parsed.get("on", parsed.get(True))["workflow_dispatch"]["inputs"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "Build compact code intelligence refs for LLM advice" in workflow
@@ -379,6 +412,17 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "llm-value-summary.md" in workflow
     assert "LLM + Code Intelligence Value" in workflow
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
+    assert "full_nightly_run:" in workflow
+    assert dispatch["run_nightly_l3"]["default"] is True
+    assert dispatch["full_nightly_run"]["default"] is False
+    assert "Build successful-watermark Nightly execution plan" in workflow
+    assert "gh run list --workflow nightly.yml --branch main --event schedule --status success" in workflow
+    assert "--plan-selection-output" in workflow
+    assert "--fail-on-blocked" in workflow
+    assert 'git cat-file -e "$watermark^{commit}"' in workflow
+    assert "using explicit full-run fallback" in workflow
+    assert "foreach ($session in $plan.selected_sessions)" in workflow
+    assert "nox -s paper_v2_l3" not in workflow
 
 
 def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> None:
