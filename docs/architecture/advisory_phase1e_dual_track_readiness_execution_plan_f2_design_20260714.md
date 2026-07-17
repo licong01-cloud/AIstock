@@ -10,7 +10,7 @@ Phase 0A.2D、Phase 1A-1D：
 ```text
 explicit Program + completed historical trade date
   -> immutable manual historical research receipt
-  -> Phase 0A read-only revalidation
+  -> Phase 0A read-only evidence/date consistency replay; no StrategyPackage revalidation
   -> Phase 0A.1 handoff/admission scopes
   -> Phase 1 source requirement/resolution
   -> content-addressed Phase 1E execution plan
@@ -26,11 +26,16 @@ resolution、capture、label、store 和 capacity 契约绑定为可复算的执
 跨阶段 hash 漂移、多 Program 隔离、容量未知值被伪装为已测量，以及计划被误接入共享
 Selection/Paper/模拟盘运行链。
 
+本文保留既有 contract 名称中的 `Revalidation`，其含义仅为对 Advisory historical receipt、dated binding引用、DSE、
+source cutoff和artifact hash进行只读一致性复算。它不表示重新执行 StrategyPackage admission、资产完整性检查、
+package health、模型加载或推理，也不产生新的 package gate。
+
 当前交付状态：
 
 ```text
-implementation_status = code_complete_pending_real_dev_input
-code_implementation = E1-E5 implemented; E6 real DEV dual-track E2E blocked_by_input
+implementation_status = pre_o4_code_complete_o4_development_started_not_merged
+code_implementation = E1-E5 implemented; O4 not merged; E6 real DEV dual-track E2E blocked_by_input
+design_feature_workflow_validation = f2_pass_21_of_21_zero_warning
 database_read_or_write = DEV read-only schema checks plus transactional stateful DML validation; rolled back with zero residue; no DDL or persistent DML
 production_ddl = none
 production_frontend_dependency = none
@@ -44,7 +49,8 @@ model_training = none
 DEV只对package关系执行`INSERT-or-compare`，再通过正常DEV service创建Program/dated binding、由正常prospective
 Selection producer生成DSE v2，最后由historical runner、Phase 1D和本编译器形成正式输入。production DSE v1和
 legacy null binding不得导入或升级。该子设计O1/O2/O3已经合入，O4已完成逐Program source mapping、capacity v2、
-immutable input bundle和mixed-batch语义的设计加固，当前为design-ready pending merge且尚未实现；O5尚未开始；
+immutable input bundle和mixed-batch语义的设计加固，并修订为从已准入frozen manifest做无I/O纯input projection，
+明确禁止二次package/asset validation；当前设计修订待提交合入，O4代码开发已开始但未合入，O5尚未开始；
 因此E6仍为`blocked_by_input`，不得把
 低层测试或代码合入描述为真实DEV dual-track完成。
 
@@ -99,8 +105,8 @@ immutable input bundle和mixed-batch语义的设计加固，当前为design-read
 ### 3.1 In Scope
 
 1. 显式、多 Program、多历史交易日的 `Phase1ERevalidationBatchRequest`。
-2. dated Program binding、单 Alpha/原生多 Alpha父包类型和 immutable historical receipt
-   的逐 scope 复验。
+2. dated Program binding、已持久化单 Alpha/原生多 Alpha父包identity和 immutable historical receipt
+   的逐 scope只读证据一致性复算；不重新执行package admission或资产验证。
 3. 调用既有 Phase 0A read-only audit 与 Phase 0A.1 normalizer，形成可引用的 audit/handoff。
 4. 生成 `SourceRequirementSet`，执行 read-only source resolution，保存精确 gap/conflict。
 5. 对可执行 scope 冻结完整 `CapturePlan`、observation semantic request template 与预期 hash；
@@ -114,6 +120,8 @@ immutable input bundle和mixed-batch语义的设计加固，当前为design-read
 ### 3.2 Non-goals
 
 - 不执行 Selection、策略推理、候选重排、HMM 调整或荐股名单更新。
+- 不调用 StrategyPackage validator、health、runtime admission、asset store、model loader、preflight或inference；
+  不重新判断已入库package是否可用，不改变package/binding状态。
 - 不新增 arbitrary package ids 的页面内多策略组合；一个 Program 只能解析到一个单 Alpha 包
   或一个原生多 Alpha父包，多个 Program 始终独立。
 - 不合并不同 Program 的候选、rank、score、行业或结果，不产生全局前 5/前 20。
@@ -125,9 +133,10 @@ immutable input bundle和mixed-batch语义的设计加固，当前为design-read
 - 不新增 API、UI、scheduler、backend startup hook、ingestion callback 或共享 runtime 接线。
 - 不新增表、字段、trigger、role、RBAC、授权、审批、人工确认、manual override、双人复核或
   DDL 前全库备份要求。
-- 不修改 StrategyPackage、Selection Center、Advisory consumer、Paper、模拟盘、QE、RD-Agent、
-  Qlib 的代码、业务数据、任务状态或 artifact；只允许经 Advisory-owned projection 单向读取
-  已持久化的 immutable identity/evidence。
+- 除 additive pure `backend/services/strategy_package/advisory_input_projection.py` 外，不修改 StrategyPackage、
+  Selection Center、Advisory consumer、Paper、模拟盘、QE、RD-Agent、Qlib 的代码、业务数据、任务状态或 artifact；
+  该纯文件只把调用方提供的已准入manifest转换为DTO，无I/O、无validation、无状态写入。Phase 1E只经Advisory-owned
+  projection单向读取已持久化的 immutable identity/evidence。
 
 ## 4. Architecture And Authority / 架构与权威边界
 
@@ -428,6 +437,13 @@ Phase 0A 对 historical available-at/vintage 的检查只决定 `RETROSPECTIVE/G
 不能产生 `PACKAGE_INVALID`、禁用 Program或阻断其他具有精确证据的日期；缺少历史可用时间不得
 触发重新验证包资产，只能作为该日期的研究证据 gap保留。
 
+O4新增的`StrategyPackageAdvisoryInputProjectionV1`是上述边界的唯一共享投影。它只接收调用方已经从dated binding解析出的
+typed frozen manifest，并从已持久化`runtime_assets.alpha158.aliases`、factor identity和native multi leg metadata生成
+exact factor order/required window；不访问repository、asset store、validator、health、model或inference。Phase 1E只读取
+已序列化projection artifact，不直接import StrategyPackage模块。projection缺失或冲突只形成当前Program/date的显式
+Advisory输入错误，不改变package status、enabled、binding或其它模块运行。
+factor order顺序与分腿规则以子设计§7.9.1为唯一 authority，禁止排序去重、跨腿合并或用父包聚合window代替真实腿window。
+
 #### Capture plan field provenance
 
 Phase 1E 只能通过一个 typed `CapturePlanEvidenceResolver` 按以下来源组装 `CapturePlan`：
@@ -519,8 +535,9 @@ Program/date 不得重写其他 scope plan。`all_scope_workloads_covered` 只�
 
 1. 从请求引用读取 historical batch receipt 和 program run，完整重算 receipt hash，并按既有
    `_program_payload_hash` 权威字段集合重算 Program hash；非空但不匹配的 hash同样拒绝。
-2. 经 Advisory read-only projection 解析当日有效 binding、manifest identity 和 package metadata；
-   只断言已验证类型为单 Alpha或原生多 Alpha父包，不调用包 validator/inference/asset loader。
+2. 经 Advisory read-only projection 解析当日有效 binding，并消费O4已生成的
+   `StrategyPackageAdvisoryInputProjectionV1`；alpha mode、component和factor/window均来自已准入frozen manifest的持久化字段，
+   不再次断言package准入结果，不调用package validator/health/preflight/inference/asset/model loader。
 3. 对 program run 的 binding/package/manifest/policy/runtime/source/evidence/artifact refs 与数据库
    readback 做 identity/hash 等值核对。多 Alpha只核对持久化父/腿 closure-lineage hashes，不重算
    资产闭包，也不要求各腿 lookback/window 相同。
@@ -727,6 +744,8 @@ backend/tests/advisory_phase1/test_readiness_plan_store.py
 backend/tests/advisory_phase1/test_readiness_plan_cli.py
 backend/tests/advisory_phase1/test_readiness_plan_isolation.py
 backend/tests/advisory_phase0a/test_evidence_projection.py
+backend/services/strategy_package/advisory_input_projection.py  # pure admitted-manifest DTO projection only
+backend/tests/strategy_package/test_advisory_input_projection.py
 docs/architecture/...phase1e...
 ```
 
@@ -741,7 +760,7 @@ its concrete Advisory-owned modules only.
 backend/main.py
 backend/routers/selection_center.py
 backend/services/selection_center/
-backend/services/strategy_package/
+backend/services/strategy_package/  # except additive pure advisory_input_projection.py
 backend/services/simulation_runtime/
 backend/services/paper_trading/
 backend/services/paper_trading_v2/
@@ -755,8 +774,9 @@ rl_execution/
 ```
 
 允许的 Phase 0A改动仅用于移除共享 runtime imports并改接等价 read-only DTO/projection，必须以
-相同 fixture/DEV evidence输出 hash parity证明业务语义不变。不得修改 frozen路径，不新增
-migration、requirements 或模型依赖。
+相同 fixture/DEV evidence输出 hash parity证明业务语义不变。`advisory_input_projection.py`不得import或调用
+repository、asset store、validator、health、model loader、preflight、inference、Selection、Paper或simulation；
+除此之外不得修改 frozen路径，不新增migration、requirements或模型依赖。
 
 ## 12. Implementation Plan / 实施方案
 
@@ -823,7 +843,7 @@ receipt，验证同 batch 独立 plan、dated binding、source gap、capacity PA
 Implementation status: local review completed; final F2 delivery review remains pending only for
 the L4 real-DEV evidence named above.
 
-逐项映射 F-501 至 F-520，执行 F2 validator、frozen-path/import scan、测试和差异检查。任何 gap
+逐项映射 F-501 至 F-521，执行 F2 validator、frozen-path/import scan、测试和差异检查。任何 gap
 不得用 TODO、mock-only、fixture-only 或静默 fallback 宣称完成。
 
 ## 13. Verification Plan / 验证方案
@@ -832,6 +852,8 @@ the L4 real-DEV evidence named above.
 
 - import graph/AST denylist 证明 Phase 1E及其 audit facade 不依赖 Selection/StrategyPackage
   runtime、Paper、simulation、QE/QuantEvolver、RD-Agent、Qlib exporter/worker、QMT、broker。
+- `advisory_input_projection.py` AST/call scan证明只import typed manifest model、canonical hash utility与canonical window helper，不访问
+  repository、asset store、validator、health、model loader、preflight、inference或任何I/O；StrategyPackage其余路径零修改。
 - changed-path scan 证明无 API/UI/startup/scheduler/migration/requirements 变更。
 - 扫描 approval/RBAC/role/manual override/backup gate 和硬编码 DB/path。
 - `python scripts/aistock_feature_workflow.py validate --design <path> --tier F2`。
@@ -856,8 +878,9 @@ the L4 real-DEV evidence named above.
 - `VALID_NO_CANDIDATE` 有证据通过，无证据空列表拒绝。
 - replay/current/latest binding 尝试替代 manual historical receipt 拒绝。
 - receipt hash和 Program payload hash均按权威公式重算；自洽但错误的 Program hash拒绝。
-- package validator/asset loader/live inference/multi-alpha live sentinel 被调用即测试失败；持久化
-  closure/lineage hash相同可直接通过。
+- current single/native-multi frozen manifest正向生成exact per-leg factor order/required window；package validator、health、
+  runtime admission、asset store、model loader、preflight、live inference和multi-alpha execution sentinel被调用即测试失败；
+  projection不改变输入manifest或任何package状态。
 - workload role projection与 capacity dominance正反例；小 workload receipt不能覆盖大计划。
 
 ### 13.3 L2 PostgreSQL read-only integration
@@ -959,7 +982,7 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 | 多 Program被当组合策略 | 候选和标签污染 | 每个capture request只消费一个scope；batch无 ranking authority |
 | target无 admission scope | BLOCKED输入从结果消失 | TARGET_DIAGNOSTIC，不合成scope |
 | shared runtime import/call | Selection/模拟盘/QE故障或行为受影响 | Advisory projection + explicit denylist + zero-diff tests |
-| 重复策略包资产验证 | 已入库可用包被二次阻断 | 只核对persisted identity/hash，禁止validator/loader/inference |
+| 重复策略包资产验证 | 已入库可用包被二次阻断 | admitted-manifest-only纯input projection；禁止validator/health/asset/model/preflight/inference，结果不写回package状态 |
 | 多 Alpha腿窗口被要求相同 | 稳定父包无法执行 | 公共 PIT identity 与 leg window lineage 分离 |
 | replay冒充历史真实执行 | 虚构 OOS | v1只接受 manual historical receipt；replay仅诊断分类 |
 | PARTIAL被当 READY/MEASURED | 缺失证据进入快照 | 原状态透传、resource freeze布尔由 receipt自动推导 |
@@ -994,6 +1017,8 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 - F-518：无角色、授权、审批、人工门禁、manual override或额外备份要求。
 - F-519：实现与验证范围覆盖 pure、read-only DB、artifact store和真实 DEV双轨 E2E。
 - F-520：父蓝图、Phase 1父设计、Phase 1D真实合入状态和后续 Phase 1F-1I边界一致。
+- F-521：Phase 1E/O4只消费已准入manifest的纯输入投影，不执行StrategyPackage二次验证或资产读取；合法single/native-multi
+  Program可自动形成分腿factor order/window，projection错误不改变package状态或影响其它模块。
 
 ## 18. Design Acceptance Matrix
 
@@ -1004,14 +1029,14 @@ DEV completion:
 | implementation_state | coverage | current result |
 |---|---|---|
 | E1-E5 / L0-L3 local | contracts, full DTO/hash projection parity, normalized SQL, store, CLI, isolation, Phase 0A regression | verified locally: 332 passed, 7 skipped; Ruff clean; direct DSE/SelectionRun parity probes pass; DEV schema contract read-only check passed |
-| E6 / L4 real DEV | completed single-Alpha and native multi-Alpha historical receipts plus explicit input artifacts | DEV package closure exists and O3 code is merged; persistent O3 receipt and O4 source/capacity/input artifacts remain blocked_by_input |
+| E6 / L4 real DEV | completed single-Alpha and native multi-Alpha historical receipts plus explicit input artifacts | DEV package closure exists and O3 code is merged；O4 design已修订为admitted-manifest-only projection且代码开发已开始但未合入；persistent O3 receipt和O4 source/capacity/input artifacts仍未完成 |
 | production | DDL, runtime activation, API/UI or shared-runtime changes | noop; none performed |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-501 | §1、§3、§4 | Advisory projection/import denylist/frozen-path；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
 | F-502 | §5.1-5.2、§6、§8 | batch-invariant identity + diagnostic；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
-| F-503 | §5.1、§5.4、§6 | binding switch/type/no-revalidation；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-503 | §5.1、§5.4、§6 | binding switch/type/admitted-manifest projection/no-package-revalidation；`backend/tests/advisory_phase1/test_readiness_plan.py`、`backend/tests/strategy_package/test_advisory_input_projection.py` | design_ready | none |
 | F-504 | §5.1、§6、§8 | receipt/replay negative matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
 | F-505 | §2、§4、§6、§9 | deterministic audit/handoff exact readback；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
 | F-506 | §2.1、§5.3、§6 | unequal-leg-window positive test；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
@@ -1029,6 +1054,7 @@ DEV completion:
 | F-518 | §3.2、§7、§14-15 | approval/RBAC/backup scan；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
 | F-519 | §12-13 | L0-L4 verification matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
 | F-520 | §1-2、§15、§20 | parent status/reference diff；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-521 | §3.2、§5.4、§6、§11、§16 | no-secondary-validation AST/call denylist、single/native-multi positive projection和shared-module zero-diff；`backend/tests/strategy_package/test_advisory_input_projection.py`、`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001
 
@@ -1041,7 +1067,10 @@ DEV completion:
   策略推理、荐股消费、Paper、模拟盘、QE/RD-Agent/Qlib；多 Program独立，不恢复组合模式。
 - [x] `no_unrequested_gate_or_approval`：只复用已有自动数据/hash/resource invariants；无角色、
   授权、审批、人工确认、manual override或额外备份。
-- [x] `no_duplicate_package_gate`：只核对已验证 package identity/hash，不重新验证资产或执行推理。
+- [x] `no_duplicate_package_gate`：只核对Advisory证据引用的persisted package identity，不重新判断package准入状态，
+  不验证资产、不执行preflight或推理，也不写回package/binding。
+- [x] `admitted_input_projection_only`：factor order/window只从已准入frozen manifest纯投影；不读资产、不调用包
+  validator/health/preflight/inference、不写回package状态，合法当前包自动走通。
 - [x] `positive_path_satisfiable`：control binding自动创建/复用，capacity覆盖实际 role workload，
   PARTIAL循环已解除，合法数据与充足资源可自动到达 `MEASURED -> publish/seal`。
 - [x] `historical_research_boundary`：仅显式已完成日期、DB historical/manual receipt，replay不
@@ -1055,22 +1084,22 @@ source mapping、capacity v2和正式Phase 1E输入后才可继续E6。该顺序
 
 ## 20. Exit Criteria / 设计与未来代码退出条件
 
-Current implementation exit state: local code, review, read-only DEV schema verification and
-transactional stateful DEV DML validation are complete. Persistent dual-track L4 still requires real
-immutable DEV receipts and explicit request/registry/capacity artifacts. By explicit user confirmation on
+Current pre-O4 implementation exit state: E1-E5 code, review, read-only DEV schema verification and
+transactional stateful DEV DML validation are complete. O4 code development has started but is not merged;
+persistent dual-track L4 still requires real immutable DEV receipts and explicit request/registry/capacity artifacts. By explicit user confirmation on
 2026-07-14, implementation code may merge as `code_complete_pending_real_dev_input`; this does not mark
 Phase 1E `verified`, activate runtime behavior, or permit a mock/replay/handwritten DSE to replace L4.
 
 本文可标记 `design_ready` 的条件：
 
-1. F-501 至 F-520 全部 `design_ready` 且无未批准 gap、TODO或 exception。
+1. F-501 至 F-521 全部 `design_ready` 且无未批准 gap、TODO或 exception。
 2. F2 feature workflow validator通过。
 3. 父蓝图、Phase 1父设计和 Phase 1D当前真实状态同步。
 4. `git diff --check`通过，且只修改 Phase 1E及父级引用文档。
 
 Phase 1E代码可请求合入的条件：
 
-1. F-501 至 F-518、F-520逐项具有 implementation ref和直接 test/evidence；F-519 的 L0-L3、
+1. F-501 至 F-518、F-520、F-521逐项具有 implementation ref和直接 test/evidence；F-519 的 L0-L3、
    read-only DEV schema和事务型 DEV DML已验证。
 2. 如果 persistent L4 的唯一缺口是环境中不存在真实 single/multi immutable DSE/receipt，用户可
    明确批准代码以 `code_complete_pending_real_dev_input` 合入；缺输入仍不得用 mock、复制或手写
