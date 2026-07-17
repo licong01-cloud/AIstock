@@ -33,8 +33,8 @@
   "expected": "One batch must load prediction, label, candidate coefficients and market data once, execute candidates with configured concurrency 1..4 (default 2), preserve deterministic result ordering, and meet the approved performance path without changing QE assets.",
   "first_seen_at": "2026-07-17T19:44:50.616173Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a63299f3c50d44a171ad72538e6d5e32aa35f353",
+  "fixed_at": "2026-07-17T21:01:18.497922Z",
   "github_issue_number": 2394,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2394",
   "last_seen_at": "2026-07-17T19:44:50.616173Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2404",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -62,6 +63,10 @@
     "fingerprint": "eebf71727afd3a841ee235e5",
     "source_event_id": "FE-20260717-eebf71727afd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution -q -p no:cacheprovider -> PASS (138 passed, 2 skipped)",
+    "python -m nox -s l0 validation_module_registry_l0 -> PASS (2 sessions)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

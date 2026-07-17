@@ -35,8 +35,8 @@
   "expected": "Persist one idempotency key per user intent and preserve it across transport retries; classify only explicit validation exceptions as HTTP 400; log and persist stable sanitized diagnostic chains for unexpected failures while returning HTTP 500.",
   "first_seen_at": "2026-07-17T19:53:00.897601Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a63299f3c50d44a171ad72538e6d5e32aa35f353",
+  "fixed_at": "2026-07-17T21:03:34.593577Z",
   "github_issue_number": 2400,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2400",
   "last_seen_at": "2026-07-17T19:53:00.897601Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2404",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -99,6 +100,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution -q -p no:cacheprovider -> PASS (138 passed, 2 skipped)",
+    "python -m nox -s l0 validation_module_registry_l0 -> PASS (2 sessions)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
