@@ -569,6 +569,14 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     ]
     assert nox_steps
     assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+    l0_step = next(step for step in nox_steps if step.get("name") == "nox -s l0 -- changed files")
+    assert "l0_changed_files.txt" in l0_step["run"]
+    assert "python -m nox -s l0 -- \"${changed_files[@]}\"" in l0_step["run"]
+
+    changed_files_step = next(
+        step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
+    )
+    assert "git diff --name-only --diff-filter=ACMRT" in changed_files_step["run"]
 
 
 def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
@@ -582,6 +590,7 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert names.count("Build registry-sync quality record") == 1
     assert names.count("Comment PR summary") == 1
     assert names.count("Upload PR quality artifacts") == 1
+    assert "Semgrep AIstock guardrails (report-only phase)" not in names
     assert not any("Legacy" in name for name in names)
 
     registry_step = next(step for step in steps if isinstance(step, dict) and step.get("name") == "Build registry-sync quality record")
@@ -600,31 +609,37 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
             "Build AIstock PR quality summary",
             "Build code intelligence PR artifact",
             "Ruff changed Python files",
-            "Semgrep AIstock guardrails (report-only phase)",
         }
     ]
     assert normal_lane_steps
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
 
 
-def test_codeql_uses_registry_sync_fast_lane() -> None:
+def test_codeql_selects_only_changed_languages() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     fast_lane = jobs["docs-lite"]
-    analyze_steps = jobs["analyze"]["steps"]
+    analyze = jobs["analyze"]
+    analyze_steps = analyze["steps"]
 
     assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
+    assert fast_lane["outputs"]["languages"].endswith("steps.fast_lane.outputs.languages }}")
+    assert fast_lane["outputs"]["has_languages"].endswith("steps.fast_lane.outputs.has_languages }}")
     detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
     assert "scripts/ci_change_classifier.py" in detect_step["run"]
     assert "close_sync_metadata_only" in detect_step["run"]
+    assert '*.py) PYTHON_CHANGED=1' in detect_step["run"]
+    assert '*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1' in detect_step["run"]
+    assert "LANGUAGES='[]'" in detect_step["run"]
 
-    no_op = next(step for step in analyze_steps if step.get("name") == "Fast-lane CodeQL no-op")
-    assert "registry_sync == '1'" in str(no_op["if"])
+    assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
+    assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
+    assert not any(step.get("name") == "Fast-lane CodeQL no-op" for step in analyze_steps)
     gated_steps = [step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}]
     assert gated_steps
-    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in gated_steps)
+    assert all("if" not in step for step in gated_steps)
 
 
 def test_semgrep_uses_registry_sync_fast_lane() -> None:
@@ -647,6 +662,50 @@ def test_semgrep_uses_registry_sync_fast_lane() -> None:
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in semgrep_steps)
     no_op = next(step for step in steps if step.get("name") == "Emit fast-lane semgrep no-op record")
     assert "registry_sync == '1'" in str(no_op["if"])
+
+
+def test_classifier_dependency_is_installed_before_detection() -> None:
+    import yaml
+
+    workflows = {
+        ".github/workflows/test.yml": ("classify-changes", "Classify CI lane"),
+        ".github/workflows/pr-quality.yml": ("pr-quality", "Detect PR quality lane"),
+        ".github/workflows/codeql.yml": ("docs-lite", "Detect CodeQL fast lane"),
+        ".github/workflows/semgrep.yml": ("semgrep", "Detect Semgrep fast lane"),
+    }
+    for path, (job_name, detect_name) in workflows.items():
+        workflow = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        steps = workflow["jobs"][job_name]["steps"]
+        install_index = next(
+            index for index, step in enumerate(steps) if step.get("name") == "Install change-classifier dependency"
+        )
+        detect_index = next(index for index, step in enumerate(steps) if step.get("name") == detect_name)
+        assert install_index < detect_index
+        assert "pyyaml" in steps[install_index]["run"].lower()
+
+
+def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
+    import yaml
+
+    ci = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    registrar = ci["jobs"]["failure-bug-register"]
+    registrar_text = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+    assert "issues" not in registrar.get("permissions", {})
+    assert "github.rest.issues.create({" not in registrar_text
+    assert "pr-ci-failure-issue-context" in registrar_text
+
+    issue_writer = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
+    issue_writer_text = Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8")
+    assert issue_writer["permissions"]["issues"] == "write"
+    assert "github.rest.issues.create" in issue_writer_text
+    assert "workflow_run:" in issue_writer_text
+
+    guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
+    guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")
+    assert "issues" not in guardrail.get("permissions", {})
+    assert "workflow_run:" not in guardrail_text
+    assert "github.rest.issues" not in guardrail_text
+    assert "actions/upload-artifact@v4" in guardrail_text
 
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:

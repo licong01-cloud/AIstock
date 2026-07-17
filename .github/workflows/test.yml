@@ -57,6 +57,9 @@ jobs:
           fi
           cat tmp/validation/ci_change_classifier/changed_files.txt
 
+      - name: Install change-classifier dependency
+        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+
       - name: Classify CI lane
         id: classify
         run: |
@@ -132,9 +135,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install nox httpx pyyaml pytest
 
-      - name: nox -s l0
+      - name: Build static-gate changed-file list
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
-        run: python -m nox -s l0
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/guardrails
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/guardrails/l0_changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_SHA}" > tmp/validation/guardrails/l0_changed_files.txt
+          fi
+
+      - name: nox -s l0 -- changed files
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
+        run: |
+          mapfile -t changed_files < tmp/validation/guardrails/l0_changed_files.txt
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "No changed files require the l0 scan."
+            exit 0
+          fi
+          python -m nox -s l0 -- "${changed_files[@]}"
 
       - name: nox -s validation_module_registry_l0
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
@@ -412,32 +434,30 @@ jobs:
           if-no-files-found: error
 
   failure-bug-register:
-    name: Auto-register CI failures as BUGs
+    name: Publish PR CI failure evidence
     needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
-    # Keep this job green/no-op when backend tests pass or are intentionally
-    # skipped, so PR check summaries do not report a skipped registrar as
-    # another failure. The failure path below still comments when backend
-    # tests actually fail.
+    # Keep this job green/no-op when targeted tests pass or are intentionally
+    # skipped. PR failures retain compact evidence without creating a second
+    # Issue alongside the default-branch failure workflow.
     if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
-      issues: write
     steps:
-      - name: No backend failure to register
+      - name: No targeted CI failure evidence required
         if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' && needs.prompt-evaluation.result != 'failure' }}
         run: |
           echo "backend-tests result: ${{ needs.backend-tests.result }}"
           echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
           echo "prompt-evaluation result: ${{ needs.prompt-evaluation.result }}"
-          echo "No CI failure BUG registration required."
+          echo "No CI failure evidence required."
 
       - uses: actions/checkout@v4
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
 
-      - name: Build CI failure issue context
+      - name: Build CI failure evidence
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -457,10 +477,9 @@ jobs:
             --output tmp/validation/ci_failure_issue/summary.json \
             --markdown-output tmp/validation/ci_failure_issue/body.md \
             --context-output tmp/validation/ci_failure_issue/context-pack.json \
-            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
-            --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json
+            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
 
-      - name: Upload CI failure issue context
+      - name: Upload CI failure evidence
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
@@ -469,63 +488,19 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create or update CI failure issue
-        if: ${{ (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') && hashFiles('tmp/validation/ci_failure_issue/github-issue-payload.json') != '' }}
+      - name: Comment PR with CI failure evidence
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const payload = JSON.parse(fs.readFileSync('tmp/validation/ci_failure_issue/github-issue-payload.json', 'utf8'));
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const search = await github.rest.search.issuesAndPullRequests({
-              q: payload.dedupe.search_query,
-              per_page: 1,
-            });
-            let issueNumber = null;
-            if (search.data.items.length) {
-              issueNumber = search.data.items[0].number;
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: issueNumber,
-                body: payload.recurrence_comment,
-              });
-              core.info(`Existing issue #${issueNumber} already tracks fingerprint ${payload.dedupe.fingerprint}.`);
-            } else {
-              try {
-                const created = await github.rest.issues.create({
-                  owner,
-                  repo,
-                  title: payload.title,
-                  body: payload.body,
-                  labels: payload.labels,
-                });
-                issueNumber = created.data.number;
-                core.info(`Created issue #${issueNumber}.`);
-              } catch (error) {
-                if (error.status !== 422) {
-                  throw error;
-                }
-                core.warning(`Could not apply labels (${payload.labels.join(', ')}); retrying without labels.`);
-                const created = await github.rest.issues.create({
-                  owner,
-                  repo,
-                  title: payload.title,
-                  body: payload.body,
-                });
-                issueNumber = created.data.number;
-                core.info(`Created issue #${issueNumber} without labels.`);
-              }
-            }
             const routingBody = [
-              '### CI failure issue routed',
+              '### CI failure evidence is available',
               '',
-              `Backend tests failed on this PR. Diagnostic issue: #${issueNumber}`,
+              'One or more targeted CI jobs failed on this PR.',
               '',
-              'Use generated context artifact pr-ci-failure-issue-context and run: '
-                + `python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber} `
-                + 'before promoting to BUG JSON.',
+              'Inspect the `pr-ci-failure-issue-context` artifact. Failed default-branch runs are registered only by the `Issue On Test Fail` workflow.',
             ].join('\n');
             await github.rest.issues.createComment({
               owner,
