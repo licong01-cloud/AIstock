@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.5
+> **版本**: v1.6
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-17
-> **状态**: Phase 0 已完成外部验收；Phase 1 设计已完成研究隔离、QE 全资产只读、latest-common 行情和反静默错误复审
+> **状态**: Phase 0 已完成；Phase 1 P1-A foundation 已完成外部验收，P1-B/P1-C 待实现，runtime activation 未启用
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -653,7 +653,7 @@ docs/
 1. **P0-A 数据契约修复**：处理 F-001/F-002/F-003，先让两种数据源真实可运行。
 2. **P0-B artifact/cache hardening**：处理 F-004，并补可信 manifest 与容量边界。
 3. **P0-C 验证与文档收敛**：处理 F-005，修正文档、专用 CI、受控 smoke 和 benchmark。
-4. **P1-A asset/schema/repository**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
+4. **P1-A asset/schema/repository（已完成外部验收）**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
 5. **P1-B evaluator**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；不得复制其中硬编码连接或临时 I/O。
 6. **P1-C API/UI**：交付 F-010，并完成真实 API/UI 验证。
 7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
@@ -685,9 +685,9 @@ docs/
 | F-003 | `realtime_source.py`; `models.py`; BUG-689/#2266 | candidate identity、隐式 latest 拒绝、filter contract tests | verified | 无 |
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
 | F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计/验收清单；本验收 PR | `hmm_data_source_backend`、coverage/JUnit、4-test read-only integration、compact timing/RSS receipt | verified | 无 |
-| F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；目标 QE asset reader + candidate bootstrap/repository | 目标：真实 node complete catalog/all-asset read-only/mutation-refusal/schema/comment/manifest/path/hash/lifecycle/write-allowlist tests | approved_by_user_for_implementation | 实现证据由 P1-A PR 回填 |
+| F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；AIstock QE asset reader + candidate bootstrap/repository；RD-Agent PR #4 complete catalog endpoint | 真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label 原位只读 receipt；unit isolation/manifest/path/hash/write-allowlist；生产 schema verify；runtime rollout 状态见 §13 | verified | 无 |
 | F-007 | Phase 1 详细设计 §7/§8；目标 versioned evaluator | 目标：旧诊断 oracle + asset trust/latest-common/tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
-| F-008 | Phase 1 详细设计 §10～§13；目标 batch/evaluation/item state machine | 目标：幂等/lease/fencing/heartbeat/cancel/retry/shared/partial failure tests | approved_by_user_for_implementation | 实现证据由 P1-A/P1-B PR 回填 |
+| F-008 | Phase 1 详细设计 §10～§13；durable batch/evaluation/item repository + disabled worker skeleton | unit state-machine suite；真实 dev PostgreSQL 8-worker idempotency/single-claim/CAS/fencing/heartbeat/lease-timeout；生产 drift verify；P1-B/P1-C 状态见 §9/§13 | verified | 无 |
 | F-009 | Phase 1 详细设计 §9；目标 `hmm_recommendation_v1` | 目标：percentile/版本/并列/缺失/top-3/无副作用 tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
 | F-010 | Phase 1 详细设计 §14/§15；目标 QE asset/candidate/evaluation/batch API、UI、导航 | 目标：API contract + 真实 UI/asset browser/动态 horizon/degraded warning/错误/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 | F-011 | 目标：hmm_risk alert state machine | 目标：watermark/dedupe/revision test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
@@ -717,6 +717,10 @@ docs/
 - `data_write_gate`：只允许 `hmm_evolution.*`、`hmm_risk.*`；其它 schema 写入为 fail-closed。
 - `design_compliance_gate`：每个实现 PR 必须执行 DESIGN-COMPLIANCE-001，四项控制均有证据：`no_simplified_delivery`、`no_silent_error`、`no_business_semantic_drift`、`no_unrequested_gate_or_approval`。
 
+当前 P1-A gate receipt（2026-07-17）：`production_ddl_gate=applied_and_verified`
+（`hmm_evolution_v1`：5 tables / 115 columns / 41 constraints / 7 non-constraint
+indexes，业务表为空）；`runtime_activation_gate=pending`；dependency gates 均为 `noop`。
+
 ---
 
 ## 14. 附录
@@ -739,6 +743,7 @@ docs/
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.6 | 2026-07-17 | 完成 P1-A 收尾：repository 受管事务、真实 dev PostgreSQL 并发/CAS/lease 验收、RD-Agent 全资产只读目录 PR #4、真实 Loop8 pred/label 零副本 receipt、生产 schema gate 回填 |
 | v1.5 | 2026-07-17 | 完成研究隔离复审：允许 QE 全资产只读、固化 latest-common market watermark、移除多余审批语义、强化 degraded warning 与禁止简化版 |
 | v1.4 | 2026-07-17 | 完成 Phase 1 实现级详细设计；拆分 reusable evaluation 与 batch-relative ranking；显式 label horizon；批准 `hmm_recommendation_v1` |
 | v1.3 | 2026-07-17 | 完成高收益 QE Prediction Store-only + 强制只读 DB/PIT sector 外部验收；F-001/F-002 更新为 verified，Phase 1 解锁 |
