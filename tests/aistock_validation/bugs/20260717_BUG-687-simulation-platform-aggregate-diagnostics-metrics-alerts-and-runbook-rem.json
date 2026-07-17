@@ -34,8 +34,8 @@
   "expected": "Implement the full blueprint sections 5.10, 5.11, 7 and 10.5: exact query and schema contracts for trade_date/binding_id/run_id/runtime_id/plan_id, fail-loud validation, bounded metrics without run/order/symbol/package labels, alerts that clear automatically after recovery, read-only operator diagnosis with no feed/DB/broker side effects, independent binding isolation, same-PR blueprint ledger update, and no RBAC/approval/acknowledge/execution gate.",
   "first_seen_at": "2026-07-17T01:38:51.763014Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c93ad5739ac5dce9de8821c712a7e0369e1e5a6a",
+  "fixed_at": "2026-07-17T03:05:25.341419Z",
   "github_issue_number": 2254,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2254",
   "last_seen_at": "2026-07-17T01:38:51.763014Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2269",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "d3db469cae5148fd4c8a9cbf",
     "source_event_id": "FE-20260717-d3db469cae51"
   },
+  "validation_evidence": [
+    "platform direct 17 passed; run-detail exact 1 passed; ops related matrix 33 passed; live-admission related 3 passed; observability line 85.80% branch 71.85%; F2 25/25 PASS; Ruff format py_compile diff-check PASS; PR #2269 all required CI SUCCESS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
