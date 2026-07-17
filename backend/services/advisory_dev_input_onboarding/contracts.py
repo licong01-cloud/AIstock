@@ -33,6 +33,8 @@ ROW_SET_SCHEMA_VERSION = "advisory_real_dev_relation_row_set_v1"
 CONTRACT_SCHEMA_VERSION = "advisory_real_dev_onboarding_contract_v1"
 IMPORT_PLAN_SCHEMA_VERSION = "advisory_real_dev_import_plan_v1"
 IMPORT_RECEIPT_SCHEMA_VERSION = "advisory_real_dev_import_receipt_v2"
+HISTORICAL_RUN_REQUEST_SCHEMA_VERSION = "advisory_real_dev_historical_run_request_v1"
+HISTORICAL_RUN_RECEIPT_SCHEMA_VERSION = "advisory_real_dev_historical_run_receipt_v1"
 ALLOWED_EXPORT_PACKAGE_STATUSES = frozenset(
     {
         "DRAFT",
@@ -106,6 +108,10 @@ REASON_IMPORT_TRANSACTION_FAILED = "ADVISORY_REAL_DEV_IMPORT_TRANSACTION_FAILED"
 REASON_IMPORT_READBACK_FAILED = "ADVISORY_REAL_DEV_IMPORT_READBACK_FAILED"
 REASON_IMPORT_COMMIT_NOT_OBSERVED = "ADVISORY_REAL_DEV_IMPORT_COMMIT_NOT_OBSERVED"
 REASON_IMPORT_COMMIT_STATE_UNKNOWN = "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN"
+REASON_HISTORICAL_INPUT_PENDING = "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
+REASON_PROGRAM_BINDING_INVALID = "ADVISORY_DEV_ONBOARDING_PROGRAM_BINDING_INVALID"
+REASON_DSE_INVALID = "ADVISORY_DEV_ONBOARDING_DSE_INVALID"
+REASON_HISTORICAL_RUN_FAILED = "ADVISORY_DEV_ONBOARDING_HISTORICAL_RUN_FAILED"
 REASON_UNEXPECTED_ERROR = "ADVISORY_REAL_DEV_UNEXPECTED_ERROR"
 IMPORT_RELATION_SET = frozenset({"strategy_pkg.package", "strategy_pkg.package_asset"})
 
@@ -197,6 +203,12 @@ class ImportCommitOutcome(str, Enum):
     ROLLED_BACK = "ROLLED_BACK"
     ALREADY_PRESENT = "ALREADY_PRESENT"
     STATE_UNKNOWN = "STATE_UNKNOWN"
+
+
+class HistoricalProgramStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    WAITING_INPUT = "WAITING_INPUT"
+    FAILED = "FAILED"
 
 
 class OnboardingArtifactRef(StrictContract):
@@ -1400,6 +1412,180 @@ class RealDevImportReceipt(HashClosedContract):
         object.__setattr__(self, "started_at", started)
         object.__setattr__(self, "finished_at", finished)
         object.__setattr__(self, "reason_codes", reasons)
+        self.close_hash()
+        return self
+
+
+class HistoricalProgramSpec(StrictContract):
+    program_id: str = Field(min_length=1, max_length=160)
+    program_name: str = Field(min_length=1, max_length=240)
+    package_id: str = Field(min_length=1, max_length=160)
+    alpha_mode: AlphaMode
+    style: str = Field(min_length=1, max_length=120)
+    target_count: int = Field(gt=0, le=100)
+    review_policy: dict[str, Any]
+    runtime_config: dict[str, Any]
+    review_schedule: dict[str, Any] = Field(default_factory=lambda: {"frequency": "daily_after_close"})
+    entry_price_basis: Literal["next_open_executable"] = "next_open_executable"
+    exit_price_basis: Literal["next_open_executable"] = "next_open_executable"
+    created_by: str = Field(default="advisory_real_dev_onboarding", min_length=1, max_length=160)
+
+    @field_validator("program_id", "program_name", "package_id", "style", "created_by")
+    @classmethod
+    def _text(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("historical program text fields cannot be blank")
+        return normalized
+
+
+class RealDevHistoricalRunRequest(HashClosedContract):
+    hash_field: ClassVar[str] = "historical_request_hash"
+    schema_version: Literal[HISTORICAL_RUN_REQUEST_SCHEMA_VERSION] = HISTORICAL_RUN_REQUEST_SCHEMA_VERSION
+    onboarding_request_ref: OnboardingArtifactRef
+    onboarding_request_hash: str = Field(min_length=64, max_length=64)
+    target_database_identity_hash: str = Field(min_length=64, max_length=64)
+    target_package_asset_root_hash: str = Field(min_length=64, max_length=64)
+    program_specs: tuple[HistoricalProgramSpec, ...] = Field(min_length=2)
+    binding_effective_from_trade_date: date
+    decision_trade_date: date
+    policy_registry_id: str = Field(min_length=1, max_length=160)
+    policy_registry_version: str = Field(min_length=1, max_length=80)
+    policy_registry_hash: str = Field(min_length=64, max_length=64)
+    code_release_id: str = Field(min_length=1, max_length=160)
+    code_release_hash: str = Field(min_length=64, max_length=64)
+    research_scope: Literal["HISTORICAL_RESEARCH_ONLY"] = "HISTORICAL_RESEARCH_ONLY"
+    execution_prohibited: Literal[True] = True
+    historical_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "onboarding_request_hash",
+        "target_database_identity_hash",
+        "target_package_asset_root_hash",
+        "policy_registry_hash",
+        "code_release_hash",
+        "historical_request_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "RealDevHistoricalRunRequest":
+        if self.onboarding_request_ref.evidence_kind is not EvidenceKind.REQUEST:
+            raise ValueError("historical run must reference one exact onboarding request")
+        if self.onboarding_request_ref.semantic_content_hash != self.onboarding_request_hash:
+            raise ValueError("onboarding request ref hash differs from onboarding_request_hash")
+        if self.decision_trade_date < self.binding_effective_from_trade_date:
+            raise ValueError("decision_trade_date must be inside the dated binding interval")
+        programs = tuple(sorted(self.program_specs, key=lambda item: item.program_id))
+        if len({item.program_id for item in programs}) != len(programs):
+            raise ValueError("historical program ids must be unique")
+        if len({item.package_id for item in programs}) != len(programs):
+            raise ValueError("historical packages must map one-to-one to Programs")
+        if {item.alpha_mode for item in programs} != {AlphaMode.SINGLE, AlphaMode.MULTI}:
+            raise ValueError("historical run must include single and native multi tracks")
+        object.__setattr__(self, "program_specs", programs)
+        self.close_hash()
+        return self
+
+
+class HistoricalProgramResult(StrictContract):
+    program_id: str = Field(min_length=1, max_length=160)
+    package_id: str = Field(min_length=1, max_length=160)
+    alpha_mode: AlphaMode
+    status: HistoricalProgramStatus
+    program_payload_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    binding_version_id: str | None = Field(default=None, min_length=1, max_length=160)
+    binding_payload_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selection_run_id: str | None = Field(default=None, min_length=1, max_length=160)
+    evidence_id: str | None = Field(default=None, min_length=1, max_length=160)
+    evidence_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=160)
+    artifact_payload_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    historical_program_run_id: str | None = Field(default=None, min_length=1, max_length=160)
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("program_payload_sha256", "binding_payload_hash", "evidence_hash", "artifact_payload_hash")
+    @classmethod
+    def _optional_hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _status_is_coherent(self) -> "HistoricalProgramResult":
+        reasons = sorted_unique(self.reason_codes, field_name="reason_codes") if self.reason_codes else ()
+        if self.status is HistoricalProgramStatus.COMPLETE:
+            required = (
+                self.program_payload_sha256,
+                self.binding_version_id,
+                self.binding_payload_hash,
+                self.evidence_id,
+                self.evidence_hash,
+                self.artifact_id,
+                self.artifact_payload_hash,
+                self.historical_program_run_id,
+            )
+            if not all(required) or reasons:
+                raise ValueError("complete historical Program result requires full identities and no failure reason")
+        elif not reasons:
+            raise ValueError("non-complete historical Program result requires a stable reason")
+        object.__setattr__(self, "reason_codes", reasons)
+        return self
+
+
+class RealDevHistoricalRunReceipt(HashClosedContract):
+    hash_field: ClassVar[str] = "receipt_hash"
+    schema_version: Literal[HISTORICAL_RUN_RECEIPT_SCHEMA_VERSION] = HISTORICAL_RUN_RECEIPT_SCHEMA_VERSION
+    historical_request_hash: str = Field(min_length=64, max_length=64)
+    target_database_identity_hash: str = Field(min_length=64, max_length=64)
+    target_package_asset_root_hash: str = Field(min_length=64, max_length=64)
+    batch_id: str = Field(min_length=1, max_length=160)
+    batch_key: str = Field(min_length=64, max_length=64)
+    batch_status: Literal["COMPLETE", "WAITING_INPUT", "FAILED"]
+    formal_batch_receipt_hash: str = Field(min_length=64, max_length=64)
+    program_results: tuple[HistoricalProgramResult, ...] = Field(min_length=2)
+    started_at: datetime
+    finished_at: datetime
+    receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "historical_request_hash",
+        "target_database_identity_hash",
+        "target_package_asset_root_hash",
+        "batch_key",
+        "formal_batch_receipt_hash",
+        "receipt_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "RealDevHistoricalRunReceipt":
+        if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
+        if self.finished_at.tzinfo is None or self.finished_at.utcoffset() is None:
+            raise ValueError("finished_at must be timezone-aware")
+        started = self.started_at.astimezone(timezone.utc)
+        finished = self.finished_at.astimezone(timezone.utc)
+        if finished < started:
+            raise ValueError("finished_at must not precede started_at")
+        results = tuple(sorted(self.program_results, key=lambda item: item.program_id))
+        if len({item.program_id for item in results}) != len(results):
+            raise ValueError("historical receipt Program ids must be unique")
+        statuses = {item.status for item in results}
+        expected_batch_status = (
+            HistoricalProgramStatus.FAILED.value
+            if HistoricalProgramStatus.FAILED in statuses
+            else HistoricalProgramStatus.WAITING_INPUT.value
+            if HistoricalProgramStatus.WAITING_INPUT in statuses
+            else HistoricalProgramStatus.COMPLETE.value
+        )
+        if self.batch_status != expected_batch_status:
+            raise ValueError("historical receipt batch_status must equal the aggregate Program status")
+        object.__setattr__(self, "program_results", results)
+        object.__setattr__(self, "started_at", started)
+        object.__setattr__(self, "finished_at", finished)
         self.close_hash()
         return self
 

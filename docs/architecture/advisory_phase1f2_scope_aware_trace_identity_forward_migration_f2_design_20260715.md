@@ -34,13 +34,13 @@ repository identity，不修改Selection、策略包推理、荐股列表、模�
 
 ```text
 design_status = design_ready
-implementation_status = not_started
+implementation_status = merged_and_dev_production_applied_verified
 phase1f1_dev_ddl = applied_and_verified_2026_07_15
 phase1f1_production_ddl = applied_and_verified_2026_07_15
-phase1f2_code = not_started
-phase1f2_dev_ddl = not_executed
-phase1f2_production_ddl = not_executed
-phase1g_business_code = blocked_pending_phase1f2_dev_ready_receipt
+phase1f2_code = merged_pr_2144_plus_bugfix_pr_2146_and_pr_2150
+phase1f2_dev_ddl = applied_and_verified_2026_07_15
+phase1f2_production_ddl = applied_and_verified_2026_07_15
+phase1g_business_code = g1_g5_merged_pending_real_dev_l3_l4
 business_dml = none
 runtime_activation = none
 role_or_approval = none
@@ -723,10 +723,10 @@ in-memory-only测试冒充完成。
 ## 20. Production Gates (State Reporting Only, No Approval) / 生产状态
 
 ```text
-code_merge = not_started
-implementation = local_verified_commits_pending_pr
-phase1f2_dev_ddl = not_executed
-phase1f2_production_ddl = not_executed
+code_merge = merged_pr_2144_plus_bugfix_pr_2146_and_pr_2150
+implementation = merged_and_dev_production_applied_verified
+phase1f2_dev_ddl = applied_and_verified_2026_07_15
+phase1f2_production_ddl = applied_and_verified_2026_07_15
 phase1g_business_dml = not_executed
 runtime_activation = none
 dependency_install = none

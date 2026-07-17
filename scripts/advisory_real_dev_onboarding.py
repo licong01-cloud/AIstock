@@ -27,6 +27,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     ImportPlanStatus,
     OnboardingArtifactRef,
     PortableAdvisoryEvidenceBundle,
+    RealDevHistoricalRunRequest,
     RealDevImportPlan,
     RealDevImportReceipt,
     RealDevOnboardingError,
@@ -34,6 +35,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     RealDevOnboardingInventoryQuery,
     RealDevOnboardingRequest,
     REASON_UNEXPECTED_ERROR,
+    REASON_HISTORICAL_INPUT_PENDING,
     database_identity_hash,
 )
 from backend.services.advisory_dev_input_onboarding.production_projection import (
@@ -42,6 +44,7 @@ from backend.services.advisory_dev_input_onboarding.production_projection import
     load_exact_release_receipt,
 )
 from backend.services.advisory_dev_input_onboarding.dev_importer import RealDevPackageImporter
+from backend.services.advisory_dev_input_onboarding.historical_onboarding import RealDevHistoricalOnboardingService
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
 
 
@@ -120,6 +123,15 @@ def _parser() -> argparse.ArgumentParser:
     verify_import.add_argument("--evidence-root", required=True, type=Path)
     verify_import.add_argument("--source-package-asset-root", required=True, type=Path)
     verify_import.add_argument("--target-package-asset-root", required=True, type=Path)
+
+    run_historical = subparsers.add_parser(
+        "run-historical",
+        help="create exact DEV Programs, produce prospective DSE v2 and run formal historical research",
+    )
+    run_historical.add_argument("--historical-request", required=True, type=Path)
+    run_historical.add_argument("--env-file", required=True, type=Path)
+    run_historical.add_argument("--evidence-root", required=True, type=Path)
+    run_historical.add_argument("--target-package-asset-root", required=True, type=Path)
     return parser
 
 
@@ -316,6 +328,48 @@ def _verify_import(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _run_historical(args: argparse.Namespace) -> int:
+    request = RealDevHistoricalRunRequest.model_validate(_read_json(args.historical_request))
+    receipt, stored = RealDevHistoricalOnboardingService().run(
+        request=request,
+        env_file=args.env_file,
+        evidence_root=args.evidence_root,
+        target_package_asset_root=args.target_package_asset_root,
+        repository_root=REPOSITORY_ROOT,
+    )
+    _emit(
+        {
+            "ok": receipt.batch_status == "COMPLETE",
+            "command": "run-historical",
+            "historical_request_hash": receipt.historical_request_hash,
+            "historical_receipt_hash": receipt.receipt_hash,
+            "formal_batch_receipt_hash": receipt.formal_batch_receipt_hash,
+            "batch_id": receipt.batch_id,
+            "batch_key": receipt.batch_key,
+            "batch_status": receipt.batch_status,
+            "program_results": [
+                {
+                    "program_id": item.program_id,
+                    "package_id": item.package_id,
+                    "alpha_mode": item.alpha_mode.value,
+                    "status": item.status.value,
+                    "reason_codes": item.reason_codes,
+                }
+                for item in receipt.program_results
+            ],
+            "receipt_relative_path": stored.relative_path,
+            "receipt_store_policy_hash": stored.store_policy_hash,
+            "receipt_file_sha256": stored.file_sha256,
+            "receipt_idempotent": stored.idempotent,
+        }
+    )
+    if receipt.batch_status == "COMPLETE":
+        return EXIT_SUCCESS
+    if receipt.batch_status == "WAITING_INPUT":
+        return EXIT_INPUT_PENDING
+    return EXIT_VERIFICATION_FAILED
+
+
 def _verify(args: argparse.Namespace, *, expected: EvidenceKind | None = None) -> int:
     store = RealDevOnboardingEvidenceStore(root=args.evidence_root)
     ref_path = args.bundle_ref if expected is EvidenceKind.BUNDLE else args.evidence_ref
@@ -372,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
             return _validate_dev_rollback(args)
         if args.command == "verify-import":
             return _verify_import(args)
+        if args.command == "run-historical":
+            return _run_historical(args)
         if args.command == "verify-evidence":
             return _verify(args)
         if args.command == "verify-bundle":
@@ -405,14 +461,32 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         reason_code = "ADVISORY_REAL_DEV_CONTRACT_INVALID"
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
-        _emit({"ok": False, "command": args.command, "reason_code": reason_code, "message": str(exc)})
+        _emit(
+            {
+                "ok": False,
+                "command": args.command,
+                "reason_code": reason_code,
+                "message": str(exc),
+                "context": getattr(exc, "context", None),
+            }
+        )
         return EXIT_INVALID
     except RealDevOnboardingError as exc:
         reason_code = getattr(exc, "reason_code", "ADVISORY_REAL_DEV_CONTRACT_INVALID")
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
-        _emit({"ok": False, "command": args.command, "reason_code": reason_code, "message": str(exc)})
+        _emit(
+            {
+                "ok": False,
+                "command": args.command,
+                "reason_code": reason_code,
+                "message": str(exc),
+                "context": exc.context,
+            }
+        )
         if reason_code == "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN":
             return EXIT_STATE_UNKNOWN
+        if reason_code == REASON_HISTORICAL_INPUT_PENDING:
+            return EXIT_INPUT_PENDING
         if args.command in {"verify-evidence", "verify-bundle", "verify-import"} or reason_code in {
             "ADVISORY_REAL_DEV_IMPORT_COMMIT_NOT_OBSERVED",
             "ADVISORY_REAL_DEV_IMPORT_READBACK_FAILED",

@@ -80,6 +80,20 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
 
 
 def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
+    advisory_payload = classifier.classify_changed_files(
+        [
+            "backend/services/advisory_dev_input_onboarding/historical_onboarding.py",
+            "backend/services/advisory_phase0a/historical_research_postgres.py",
+            "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+            "scripts/advisory_real_dev_onboarding.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert advisory_payload["classification"] == "targeted_ci_required"
+    assert advisory_payload["backend_sessions"] == ["advisory_dev_input_onboarding_backend"]
+    assert advisory_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,

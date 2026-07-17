@@ -36,6 +36,7 @@ def test_o2_source_has_no_bypass_or_unrequested_approval_flags() -> None:
     paths = (
         root / "services" / "advisory_dev_input_onboarding" / "dev_importer.py",
         root / "services" / "advisory_dev_input_onboarding" / "production_projection.py",
+        root / "services" / "advisory_dev_input_onboarding" / "historical_onboarding.py",
         root.parents[0] / "scripts" / "advisory_real_dev_onboarding.py",
     )
     forbidden = (
@@ -65,6 +66,7 @@ def test_cli_exposes_o2_commands_without_confirmation_arguments() -> None:
         "validate-dev-rollback",
         "import-dev",
         "verify-import",
+        "run-historical",
     ):
         assert command in help_text
     for forbidden in ("--confirm", "--force", "--skip", "--approval"):

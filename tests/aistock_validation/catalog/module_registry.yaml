@@ -1,5 +1,13 @@
 schema_version: aistock_module_registry_v1
 modules:
+  - module_id: advisory.dev_input_onboarding
+    display_name: Advisory DEV input onboarding
+    module_type: data_pipeline
+    risk_level: high
+    description: Research-only exact-DEV historical onboarding, prospective evidence, and Phase0A historical receipts.
+    description_zh: Advisory DEV 历史输入接入、前瞻证据和 Phase0A 历史回执，仅用于研究链路。
+    test_plans:
+      required_on_change: [l0, advisory_dev_input_onboarding_backend]
   - module_id: qe
     display_name: QE
     module_type: product_feature

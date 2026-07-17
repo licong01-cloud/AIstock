@@ -296,8 +296,12 @@ def _prospective_capture_fixture() -> tuple[
             "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
         },
     ]
+    normalized_source_receipts = [SourceReadReceipt.model_validate(item).model_dump(mode="json") for item in source_receipts]
     source_hash = canonical_evidence_json_sha256(
-        [SourceReadReceipt.model_validate(item).model_dump(mode="json") for item in source_receipts]
+        [
+            {key: value for key, value in item.items() if key != "first_observed_at"}
+            for item in normalized_source_receipts
+        ]
     )
     universe_hash = "3" * 64
     asset_closure = [

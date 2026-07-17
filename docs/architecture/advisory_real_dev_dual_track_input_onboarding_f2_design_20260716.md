@@ -26,7 +26,17 @@ scheduler 或审批系统。
 design_status = accepted
 o1_implementation_status = merged_pr_2231
 o2_implementation_status = merged_pr_2261_runtime_validated
-o3_to_o5_implementation_status = not_started
+o3_implementation_status = code_complete_l0_l2_passed_pr_2351_open_pending_user_merge_confirmation
+o3_code_merge = pr_2351_open_not_merged
+o3_focused_regression = 49_passed
+o3_module_regression = 121_passed_8_skipped
+o3_postgresql16_l2 = 8_passed_o2_o3_combined
+o3_real_dev_readonly_plan = already_present_98_exact_match_zero_dml
+o3_real_dev_persistent_execution = not_executed_waiting_code_merge
+o3_statement_coverage = 84_percent
+o3_branch_coverage = 74_percent
+o3_feature_workflow_validation = f2_pass_38_of_38_zero_warning
+o4_o5_implementation_status = not_started
 dev_database = real_dual_track_package_closure_imported
 production_database = read_only_source_only
 production_ddl = none_for_this_design
@@ -322,7 +332,30 @@ receipt_hash
 计划且数据库零残留；它要求`physical_commit_count=0`，不能冒充persistent import。`COMMITTED`必须完整readback；
 commit response丢失时用新连接按exact keys判定committed/not-committed/state-unknown，不静默重试写入。
 
-### 7.7 `Phase1ERealInputBundle`
+### 7.7 `RealDevHistoricalRunRequest` 与 `RealDevHistoricalRunReceipt`
+
+`RealDevHistoricalRunRequest`单独冻结O3才需要、且不能加入既有O1/O2 request而破坏其已发布hash的字段：
+
+```text
+onboarding_request_ref/request_hash
+target_database_identity_hash
+target_package_asset_root_hash
+program_specs[]                      # exact program_id/name/package/alpha mode/policy/runtime config
+binding_effective_from_trade_date
+decision_trade_date
+policy_registry_id/version/hash
+code_release_id/hash
+research_scope = HISTORICAL_RESEARCH_ONLY
+execution_prohibited = true
+historical_request_hash
+```
+
+`RealDevHistoricalRunReceipt`只是standalone编排回执；历史研究权威事实仍由既有runner写入
+`app.advisory_research_*`并产生formal batch/program receipt。编排回执固定记录request/DEV identity/asset root hash、
+逐Program的Program/binding、DSE v2和runner identity/status，以及formal batch receipt identity。相同request重跑时，
+已有exact Program/binding和唯一DSE v2必须readback复用，不新增第二份published事实；不同payload占用相同identity时失败。
+
+### 7.8 `Phase1ERealInputBundle`
 
 ```text
 historical_batch_receipt_ref
@@ -413,7 +446,9 @@ StrategyPackage runtime和asset resolver同样显式注入O2生成的target DEV 
 
 1. Program create request显式固定target package、review policy、runtime config和future-effective binding date；不
    backdate、不修复或复制production legacy binding。
-2. decision date必须是binding生效后已经完成的交易日；当前没有合法日期时输出`INPUT_PENDING`，不得改日期语义。
+2. 首次`run-historical`允许在decision date尚未完成时先通过正常Program语义持久化future-effective binding，然后
+   输出`INPUT_PENDING`；同一request在日期完成后重跑必须readback复用该Program/binding。不得先阻断Program创建再等
+   生效日过去，否则正向流程不可达。decision date最终必须是binding生效后已经完成的交易日，不得改日期语义。
 3. prospective Selection对每个Program/package独立运行，必须产生唯一DSE v2、artifact v2和完整stage/source receipts；
    v1、capture failed或incomplete evidence不能继续。
 4. read-only preflight验证exact dated binding和唯一DSE v2；正常runner对各Program独立事务执行并产生正式receipt。
@@ -423,6 +458,19 @@ StrategyPackage runtime和asset resolver同样显式注入O2生成的target DEV 
 8. 使用Phase0A audit CLI的exact-target connection resolver对DEV做只读audit并写仓库外receipt。
 9. 移除Phase0A CLI的localhost/port文本猜测，改为database identity与explicit target contract；该修改
    只影响 standalone audit CLI，不改变任何运行时连接逻辑。
+10. standalone编排开始时获得的DEV database identity必须传入所有repository使用的connection factory；每一个新建
+    writable connection都重新读取并核对完整database identity，不能只校验首个只读连接。
+11. `code_release_id/hash`只接受clean Git worktree的exact HEAD。tracked、staged或untracked变更均使执行失败；同Program/date
+    已存在DSE v2时，还必须核对DSE contract与effective config chain中的producer code release，跨release不可复用。
+12. O3不复制Selection的universe业务。由package inference或后续权威runtime负责、且未形成独立layer materialization的
+    upstream layer明确记录`NOT_APPLICABLE`；package layer使用真实artifact source receipts记录`RESEARCH_ONLY`，risk和
+    tradability layer使用真实stage receipt记录`FORMAL_READY`。禁止合成`universe:<name>`数据集、占位hash或伪造`PARTIAL`。
+13. O3不得向`SelectionCenterService`注入`object()`、mock或无类型placeholder。Paper portfolio依赖使用typed
+    execution-prohibited boundary；若共享Selection路径意外进入Paper创建，必须fail loud且不得产生执行事实。
+14. 编排阶段记录的Program failure不能被formal runner后续的`WAITING_INPUT`覆盖。逐Program最终状态按
+    `FAILED > WAITING_INPUT > COMPLETE`聚合，batch status必须等于逐Program状态的同一聚合结果，并由receipt contract校验。
+15. Phase0A audit执行必须显式提供存在的env文件和仓库外output root；不读取缺失env后的process fallback，不设置
+    `--execute-readonly`、acknowledgement或其他确认门槛，也不返回可能被误解为已完成audit的validation-only success。
 
 ## 11. Source And Capacity Formation / Source 与容量输入形成
 
@@ -492,6 +540,8 @@ identity、relation counts、全部post-readback hashes和dependency closure；�
 每个有副作用的command语义由命令名和exact request决定，不增加 `--confirm`、审批token、role、backup或
 manual bypass。`inventory/export/verify/plan` 永远零DB写入；`import-dev`只写固定import allowlist；
 `run-historical`只通过现有runner写Advisory historical relations；`build-phase1e-inputs`只写external CAS。
+Phase0A audit同样由request直接决定只读执行，不增加`--execute-readonly`或等价acknowledgement；audit必须显式接收
+`--env-file`和仓库外`--output-root`。
 
 稳定退出码：
 
@@ -513,6 +563,7 @@ backend/services/advisory_dev_input_onboarding/contracts.py
 backend/services/advisory_dev_input_onboarding/store.py
 backend/services/advisory_dev_input_onboarding/production_projection.py
 backend/services/advisory_dev_input_onboarding/dev_importer.py
+backend/services/advisory_dev_input_onboarding/historical_onboarding.py
 backend/services/advisory_dev_input_onboarding/phase1e_inputs.py
 scripts/advisory_real_dev_onboarding.py
 backend/tests/advisory_dev_input_onboarding/
@@ -528,9 +579,15 @@ backend/services/advisory_phase1/readiness_plan_store.py
 backend/services/advisory_phase1/source_observer_postgres.py
 ```
 
-上述修改只允许增加exact connection/root injection和typed output wiring，不改变既有业务判定。standalone脚本可组合
-现有`AdvisoryProgramService`、`SelectionCenterService`、`StrategyPackageSelectionService`和historical runner的公开
-接口，但不得修改它们的源码语义。以下路径冻结：
+上述修改只允许增加exact connection/root injection和typed output wiring，不改变既有业务判定。standalone脚本通过
+`historical_onboarding.py`组合现有`AdvisoryProgramService`、`SelectionCenterService`、
+`StrategyPackageSelectionService`和historical runner。由于现有Program公开创建接口不能接收request中已经冻结的
+`program_id`、指定的future-effective binding date和binding runtime config，O3适配层允许调用
+`AdvisoryProgramService`既有配置校验、日期校验和binding构造语义，并通过既有repository原子写入同一Program/binding
+模型；不得复制或放宽这些校验。由于prospective DSE v2的context必须等于Selection最终规范化配置，O3适配层允许调用
+现有Selection service的纯规范化/预检方法形成context，但最终候选、artifact和DSE仍必须由公开
+`SelectionCenterService.run_single_package`路径生成。WSL推理环境只允许由O3适配层从显式`TDX_DB_DEV_*`配置构造
+子进程env，不得修改共享推理器或进程全局数据库配置。以下路径冻结：
 
 ```text
 backend/main.py
@@ -548,6 +605,8 @@ rl_execution/
 
 若实现证明现有constructor/protocol无法完成exact DEV injection，必须停止并先修订本文及父设计；不得静默扩大
 允许范围、改用global pool、直接SQL重写Selection结果或添加fallback。
+对共享constructor中O3不会调用的执行依赖，必须注入typed fail-loud boundary，禁止使用`object()`、fixture或mock冒充
+生产依赖；该boundary只表达既有`execution_prohibited=true`研究范围，不增加审批、授权或运行门禁。
 
 ## 14. Failure And Logging Semantics / 失败与日志
 
@@ -575,6 +634,8 @@ expected business gap记录一次摘要；unexpected error保留后台traceback�
 错误数量和稳定reason，不得输出`input_value`或原始payload。日志只包含command、request/bundle/plan/
 receipt hash、target label、relation counts和reason/context，不输出密码、DSN、完整manifest、模型payload、候选全量
 或逐行无价值日志。禁止catch-all转success、空列表或 `ALREADY_PRESENT`。
+Program provisioning/Selection阶段的失败状态必须进入最终receipt；formal runner只补充正式run identity和其自身状态，不能
+把已记录的失败降级为input pending。receipt model必须拒绝batch status与逐Program聚合状态不一致的payload。
 
 ## 15. Concurrency And Idempotency / 并发与幂等
 
@@ -584,6 +645,8 @@ receipt hash、target label、relation counts和reason/context，不输出密码
 - exact bundle重复执行必须零DML并返回同post-closure hash、新invocation receipt。
 - 相同identity不同payload必须冲突；不采用last-write-wins、upsert update或静默跳过。
 - historical runner继续使用既有business key和逐Program独立事务，不改变其重试/恢复语义。
+- historical request/receipt CAS和Phase0A audit directory CAS都必须使用atomic no-replace、文件集合闭包校验和逐文件
+  exact readback；并发发布不能使用`Path.replace()`覆盖已存在identity，额外文件或目录同样视为冲突。
 
 ## 16. Security And Data Minimization / 安全与数据最小化
 
@@ -643,6 +706,17 @@ source不成熟时准确pending。
 - exit/reason/log contract，无silent fallback。
 
 ### 18.3 L2 disposable PostgreSQL 16
+
+O3 producer integration使用`ADVISORY_O3_TEST_DSN`仅作为PostgreSQL 16管理连接，测试自行创建唯一
+`aistock_o3_l2_<uuid>`数据库并在finally中终止残留连接后删除；禁止在配置指向的数据库内执行schema级清理。
+Validation Catalog必须声明`writes_database=true`，但该声明不增加审批、备份或人工确认流程。
+该L2固定`runner_enabled=false`，资源策略为`isolated_write`、`allowed_db_targets=[dev_db]`、
+`forbidden_db_targets=[prod_db]`并由pytest finalizer自动删除临时数据库；普通backend CI仍运行
+同一session中的非数据库回归，未提供DSN时PostgreSQL用例明确skip而不伪造L2成功。
+
+模型执行边界可注入确定性`LiveInferenceResult`，但artifact必须由真实
+`StrategyPackageSelectionArtifactService`生成，随后由真实`SelectionCenterService`、DSE assembler和PostgreSQL
+repository消费。禁止复制fixture artifact、手工构造DSE或把package health固定为READY。
 
 使用与O2关系有关的完整production StrategyPackage migration chain构造source/target disposable database，禁止在
 测试中手写`strategy_pkg.package/package_asset`替代生产结构：
@@ -719,7 +793,7 @@ production_backend_dependency_gate = noop
 production_runtime_activation = noop
 production_read_access = explicit read-only export only
 dev_ddl_gate = noop
-dev_dml_state = future O2/O3 execution only after code merge and exact request
+dev_dml_state = o2_committed_and_verified_o3_not_executed
 ```
 
 代码合入、production只读export、DEV package import、DEV Program/DSE v2、Phase1E和G5状态必须分别报告。
@@ -732,6 +806,8 @@ existing production single + native multi package/asset closure
   -> empty/non-conflicting DEV target
   -> insert-or-compare commit
   -> normal DEV Program + future-effective dated binding
+  -> before completed decision date: INPUT_PENDING with Program/binding retained
+  -> same exact request rerun after the decision date completes
   -> normal prospective Selection DSE v2 after binding becomes effective
   -> existing historical runner COMPLETE x 2
   -> audit/handoff
@@ -780,12 +856,15 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   修改其业务逻辑。
 - F-898：不得使用全库refresh、batch_a import、replica role或sequence reset。
 - F-899：多Program独立，双轨不融合，不限制未来多个package。
-- F-900：standalone编排只使用exact DEV connection injection，不调用backend.main/global pool。
+- F-900：standalone编排只使用exact DEV connection injection，不调用backend.main/global pool；首个身份与每个后续writable
+  connection的database identity必须一致。
 - F-901：DEV Program/binding由正常service创建且future-effective，不复制/回填legacy null interval。
-- F-902：正常prospective Selection原生生成single/native-multi DSE v2，v1不可升级或导入。
-- F-903：runner只接受manual historical/research-only/execution-prohibited request，逐Program失败隔离且receipt准确。
-- F-904：Phase0A audit CLI移除localhost猜测，使用explicit target identity。
-- F-905：audit/handoff只读且artifact仓库外content-addressed。
+- F-902：正常prospective Selection原生生成single/native-multi DSE v2，v1不可升级或导入；DSE必须与clean code release一致，
+  universe provenance不得使用合成dataset、占位hash或伪造PARTIAL。
+- F-903：runner只接受manual historical/research-only/execution-prohibited request，逐Program失败隔离且receipt准确；状态按
+  `FAILED > WAITING_INPUT > COMPLETE`聚合，禁止失败降级。
+- F-904：Phase0A audit CLI移除localhost猜测，使用explicit target identity、显式env文件且无acknowledgement门槛。
+- F-905：audit/handoff只读且artifact仓库外content-addressed，atomic no-replace并校验完整文件闭包。
 - F-906：source event只由DEV observer从真实ingestion事实追加，不复制/猜测/backdate。
 - F-907：source-pending与source-ready分型准确，不把PARTIAL冒充ready。
 - F-908：source registry从typed DSE/manifest/query policy派生，无generic/default window。
@@ -823,12 +902,12 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-897 | §5.3、§10 | one-way onboarding import graph/runtime import AST test | verified_l0_l2 | none |
 | F-898 | §4、§9.2 | batch-a/replica-role/sequence-reset denylist | verified_l0_l2 | none |
 | F-899 | §3、§6 | multi-package request and independent package identity tests | verified_l0_l2 | none |
-| F-900 | §10、§13 | exact DEV injected repositories/no-global-pool tests | design_ready | none |
-| F-901 | §10 | normal service future-effective binding tests | design_ready | none |
-| F-902 | §10 | prospective DSE v2 golden and v1 rejection tests | design_ready | none |
-| F-903 | §10 | historical request/Program isolation/retry tests | design_ready | none |
-| F-904 | §10 | audit target identity and non-local DEV host tests | design_ready | none |
-| F-905 | §10、§16 | audit/handoff read-only CAS tests | design_ready | none |
+| F-900 | §10、§13 | `historical_onboarding.py`; exact DEV repository/runtime/WSL env injection、逐connection identity drift拒绝与AST no-global-pool测试 | verified_l0_l1 | none |
+| F-901 | §10、§18.3 | exact Program id、normal config/date validation、future binding、pre-date `INPUT_PENDING`和exact rerun测试；`test_o3_postgres_integration.py`真实Program/binding首次创建与exact retry | verified_l0_l2 | none |
+| F-902 | §10、§18.3 | clean worktree release、existing DSE release一致性、typed prospective context、无合成universe provenance、DSE v2/v1 rejection与capture-status测试；临时PostgreSQL 16中由真实`StrategyPackageSelectionArtifactService`和`SelectionCenterService`生成single/native-multi artifact与DSE v2，确定性替代仅位于外部模型执行边界 | verified_l0_l2 | none |
+| F-903 | §10、§14、§18.3 | manual historical request、Selection失败不降级、逐Program状态隔离、pre-date provisioning状态不被pending掩盖、batch aggregate contract、formal receipt与retry测试；临时PostgreSQL双轨`COMPLETE/WAITING_INPUT -> COMPLETE/COMPLETE`及exact retry | verified_l0_l2 | none |
+| F-904 | §10、§13 | Phase0A audit explicit database identity、显式env、non-local DEV target、localhost/name guess和acknowledgement移除测试 | verified_l0_l1 | none |
+| F-905 | §10、§15 | Phase0A audit/handoff read-only projection、仓库外content-addressed atomic no-replace、文件闭包与full-readback测试 | verified_l0_l1 | none |
 | F-906 | §11.1 | observer real-ingestion/no-copy/no-backdate tests | design_ready | none |
 | F-907 | §7.7、§11.2 | pending/ready classification and no-fake-ready tests | design_ready | none |
 | F-908 | §11.3 | typed registry/per-component-window tests | design_ready | none |
