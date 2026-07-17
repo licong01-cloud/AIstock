@@ -18,12 +18,16 @@ from backend.services.hmm_evolution.models import (
 from backend.services.hmm_evolution.service import HMMEvolutionService
 
 
-def _candidate(candidate_id: str = "hmmc_test") -> CandidateRecord:
+def _candidate(
+    candidate_id: str = "hmmc_test",
+    *,
+    artifact_sha256: str = "a" * 64,
+) -> CandidateRecord:
     manifest = CandidateManifest(
         source_type=CandidateSourceType.CONFIGURED_LOCAL,
         source_ref={"root_alias": "research", "relative_path": "candidate.json"},
         artifact_uri="configured-local://research/candidate.json",
-        artifact_sha256="a" * 64,
+        artifact_sha256=artifact_sha256,
         size_bytes=100,
         detected_format="hmm_sector_coefficients_legacy_v1",
         coverage=CandidateCoverage(
@@ -53,14 +57,14 @@ def _candidate(candidate_id: str = "hmmc_test") -> CandidateRecord:
     )
 
 
-def _plan(candidate: CandidateRecord) -> EvaluationPlan:
+def _plan(candidate: CandidateRecord, *, topk: int = 50) -> EvaluationPlan:
     spec = EvaluationSpec(
         base_loop_ref="qe_20260706_013235_bbd4/Loop8",
         window_start=date(2026, 1, 1),
         window_end=date(2026, 3, 31),
         as_of={"policy": "latest_common_completed", "requested_date": None},
         label_horizon_days=20,
-        topk=50,
+        topk=topk,
         market_forward_return={"mode": "required", "horizon_trading_days": 10},
     )
     source_manifest = {
@@ -97,6 +101,28 @@ class _Repository:
     def create_or_get_batch(self, **kwargs):
         self.batch_args = kwargs
         return {"batch_id": "hmmb_1", "request_hash": kwargs["request_hash"]}, True
+
+
+class _MultiRepository(_Repository):
+    def __init__(self, candidates: list[CandidateRecord]):
+        super().__init__(candidates[0])
+        self.candidates = {candidate.candidate_id: candidate for candidate in candidates}
+        self.request_hashes: list[str] = []
+        self.eval_index = 0
+
+    def get_candidate(self, candidate_id: str):
+        return self.candidates[candidate_id]
+
+    def create_or_get_evaluation(self, **kwargs):
+        self.eval_index += 1
+        return {"eval_id": f"hmme_{self.eval_index}", "status": "queued"}, True
+
+    def create_or_get_batch(self, **kwargs):
+        self.request_hashes.append(kwargs["request_hash"])
+        return {
+            "batch_id": f"hmmb_{len(self.request_hashes)}",
+            "request_hash": kwargs["request_hash"],
+        }, True
 
 
 @pytest.mark.parametrize(
@@ -159,3 +185,33 @@ def test_evaluation_plan_detects_hash_or_watermark_drift() -> None:
     payload["resolved_as_of_date"] = date(2025, 12, 31)
     with pytest.raises(ValueError, match="window end"):
         EvaluationPlan.model_validate(payload)
+
+
+def test_batch_request_hash_preserves_candidate_to_spec_binding() -> None:
+    candidate_a = _candidate("hmmc_a", artifact_sha256="a" * 64)
+    candidate_b = _candidate("hmmc_b", artifact_sha256="b" * 64)
+    repository = _MultiRepository([candidate_a, candidate_b])
+    service = HMMEvolutionService(repository)  # type: ignore[arg-type]
+
+    service.create_batch(
+        plans=[_plan(candidate_a, topk=50), _plan(candidate_b, topk=60)],
+        recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+        recommendation_version="hmm_recommendation_v1",
+        created_by="tester",
+    )
+    service.create_batch(
+        plans=[_plan(candidate_a, topk=60), _plan(candidate_b, topk=50)],
+        recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+        recommendation_version="hmm_recommendation_v1",
+        created_by="tester",
+    )
+    service.create_batch(
+        plans=[_plan(candidate_b, topk=60), _plan(candidate_a, topk=50)],
+        recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+        recommendation_version="hmm_recommendation_v1",
+        created_by="tester",
+    )
+
+    first, swapped, reordered = repository.request_hashes
+    assert first != swapped
+    assert first == reordered

@@ -138,8 +138,25 @@ class HMMEvolutionService:
             )
         request_hash = canonical_json_sha256(
             {
-                "candidate_ids": sorted(candidate_ids),
-                "evaluation_spec_hashes": sorted(plan.evaluation_spec_hash for plan in plans),
+                "evaluations": sorted(
+                    (
+                        {
+                            "candidate_id": plan.candidate_id,
+                            "candidate_manifest_hash": plan.candidate_manifest_hash,
+                            "logical_evaluation_key": plan.logical_evaluation_key,
+                            "source_manifest_hash": plan.source_manifest_hash,
+                            "evaluation_spec_hash": plan.evaluation_spec_hash,
+                            "evaluator_version": plan.evaluator_version,
+                            "universe_id": plan.universe_id,
+                            "universe_hash": plan.universe_hash,
+                        }
+                        for plan in plans
+                    ),
+                    key=lambda item: (
+                        item["candidate_id"],
+                        item["logical_evaluation_key"],
+                    ),
+                ),
                 "recommendation_spec": dict(recommendation_spec),
                 "recommendation_version": recommendation_version,
             }
