@@ -1,6 +1,7 @@
 {
   "actual": "Recovery sweep raises KeyError: 0 before writes and repeats on later scheduler sweeps.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260717_BUG-735-local-data-realdictcursor-tuple-indexing-breaks-recovered-target-reconci.json",
@@ -17,6 +18,12 @@
   "created_at": "2026-07-17T15:26:26.958887Z",
   "description": "Recovery sweep raises KeyError: 0 before writes and repeats on later scheduler sweeps.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added backend/ingestion/tdx_scheduler.py after mapping the production scheduler to local_data in the ownership catalog.",
+      "timestamp": "2026-07-17T15:34:00Z"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
