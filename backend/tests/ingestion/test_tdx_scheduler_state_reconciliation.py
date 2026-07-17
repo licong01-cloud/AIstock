@@ -408,6 +408,7 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     scheduler._check_dataset_recovered = lambda dataset, expected_date=None: SimpleNamespace(
         status="ok", dataset=dataset, expected_date=expected_date
     )
+    scheduler._acknowledge_reconciled_target_alerts = lambda **kwargs: calls.append(("ack", kwargs))
     scheduler._enqueue_target_retry = lambda **_kwargs: (_ for _ in ()).throw(
         AssertionError("covered target must not submit a job")
     )
@@ -416,7 +417,11 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
 
     assert submitted == []
     assert calls[0][0:2] == ("reconciled", "target-1")
-    assert calls[1] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
+    assert calls[1] == (
+        "ack",
+        {"dataset": "index_daily", "target_id": "target-1", "target_date": target_date},
+    )
+    assert calls[2] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
 
 
 def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
@@ -680,6 +685,7 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     scheduler._check_dataset_recovered = lambda _dataset, expected_date=None: SimpleNamespace(
         status="ok", expected_date=expected_date
     )
+    scheduler._acknowledge_reconciled_target_alerts = lambda **kwargs: calls.append(("ack", kwargs))
 
     scheduler._finalize_data_sync_target_retry(
         _Future(),
@@ -692,7 +698,30 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     assert calls[0][0] == "target"
     assert calls[0][1] == "target-1"
     assert calls[0][2]["context"]["finalizer"] == "data_sync_target_retry"
-    assert calls[1] == ("attempt", "reconciled", "target-1")
+    assert calls[1] == (
+        "ack",
+        {"dataset": "cyq_perf", "target_id": "target-1", "target_date": dt.date(2026, 5, 18)},
+    )
+    assert calls[2] == ("attempt", "reconciled", "target-1")
+
+
+def test_recovered_target_acknowledges_matching_alerts_across_days():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    scheduler._execute = lambda sql, params=(): calls.append((sql, params))
+
+    scheduler._acknowledge_reconciled_target_alerts(
+        dataset="sector_data",
+        target_id="target-original",
+        target_date=dt.date(2026, 7, 15),
+    )
+
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert "details->>'target_id' = %s" in sql
+    assert "details->>'target_date' = %s" in sql
+    assert "created_at >= CURRENT_DATE" not in sql
+    assert params == ("sector_data", "target-original", "2026-07-15", "2026-07-15")
 
 
 def test_delayed_retry_persists_target_before_timer(monkeypatch):

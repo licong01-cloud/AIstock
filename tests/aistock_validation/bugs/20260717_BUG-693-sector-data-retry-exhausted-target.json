@@ -1,6 +1,8 @@
 {
   "actual": "sector_data 在上游数据晚到后可因 audit_stale 进入 final_blocked 并写入 retry_exhausted 告警；数据随后已补齐、target 已转 reconciled，但旧告警只在当天恢复路径自动确认，跨日仍可能在活动告警中保留。2026-07-15 的两条告警对应 target_date=2026-07-15；物理 sector_data、sw_daily、moneyflow_ts 均已覆盖 2026-07-16，sector_data 最新成功审计为 2026-07-16 18:29 写入 5864 行。修复应使 target reconciled 时按 target_id 或 dataset+target_date 自动确认关联历史告警，并避免同一业务目标重复创建 target/告警；不重跑数据、不重启服务、不写生产数据。",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20260717_BUG-693-sector-data-retry-exhausted-target.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],

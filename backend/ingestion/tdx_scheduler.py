@@ -1007,6 +1007,11 @@ class TDXScheduler:
                     "expected_date": target_date.isoformat() if target_date else None,
                 }
                 repo.mark_reconciled(target_id, context=metadata)
+                self._acknowledge_reconciled_target_alerts(
+                    dataset=health_dataset,
+                    target_id=target_id,
+                    target_date=target_date,
+                )
                 repo.record_attempt(
                     DataSyncAttemptRecord(
                         target_id=target_id,
@@ -1910,6 +1915,11 @@ class TDXScheduler:
         try:
             if recovered:
                 repo.mark_reconciled(target_id, context=metadata)
+                self._acknowledge_reconciled_target_alerts(
+                    dataset=health_dataset,
+                    target_id=target_id,
+                    target_date=target_date,
+                )
                 repo.record_attempt(
                     DataSyncAttemptRecord(
                         target_id=target_id,
@@ -1974,6 +1984,41 @@ class TDXScheduler:
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: failed to finalize %s/%s target %s: %s", dataset, mode, target_id, exc)
+
+    def _acknowledge_reconciled_target_alerts(
+        self,
+        *,
+        dataset: str,
+        target_id: str | None,
+        target_date: dt.date | None,
+    ) -> None:
+        """Close alerts for a recovered target even when recovery crosses midnight."""
+
+        dataset_key = str(dataset or "").strip().lower()
+        target_id_key = str(target_id or "").strip()
+        target_date_text = target_date.isoformat() if target_date else None
+        if not dataset_key or (not target_id_key and target_date_text is None):
+            return
+        try:
+            # A target-date match also closes duplicate retry targets for the same work.
+            self._execute(
+                """UPDATE market.data_alerts
+                      SET acknowledged = TRUE, ack_at = NOW()
+                    WHERE dataset = %s
+                      AND acknowledged = FALSE
+                      AND (
+                           details->>'target_id' = %s
+                           OR (%s IS NOT NULL AND details->>'target_date' = %s)
+                      )""",
+                (dataset_key, target_id_key, target_date_text, target_date_text),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "target recovery: failed to acknowledge alerts for %s/%s: %s",
+                dataset_key,
+                target_date_text,
+                exc,
+            )
 
     def _flush_final_data_sync_alerts(self, targets: List[Dict[str, Any]]) -> Dict[str, int]:
         alerts = []
@@ -3432,6 +3477,7 @@ class TDXScheduler:
                     attempt = 0
                     recovered = False
                     delayed_no_update = False
+                    target_date = None
                     while attempt < _MAX_RETRY_ATTEMPTS and not recovered and not delayed_no_update:
                         _log.info("auto-retry L%d: %s attempt %d/%d (reason: job=%s, max=%s)",
                                   layer_idx, ds, attempt + 1, _MAX_RETRY_ATTEMPTS,
@@ -3518,18 +3564,11 @@ class TDXScheduler:
                                             )
                                         except Exception as target_exc:  # noqa: BLE001
                                             _log.warning("auto-retry: failed to close recovered target for %s: %s", ds, target_exc)
-                                    # Auto-acknowledge original alerts for this dataset today
-                                    try:
-                                        self._execute(
-                                            """UPDATE market.data_alerts
-                                               SET acknowledged = TRUE, ack_at = NOW()
-                                               WHERE dataset = %s AND acknowledged = FALSE
-                                                 AND created_at >= CURRENT_DATE""",
-                                            (ds,),
-                                        )
-                                    except Exception as ack_exc:
-                                        _log.warning("auto-retry: failed to ack alerts for %s: %s",
-                                                    ds, ack_exc)
+                                    self._acknowledge_reconciled_target_alerts(
+                                        dataset=ds,
+                                        target_id=target_id,
+                                        target_date=target_date,
+                                    )
                                     retried.append(ds)
                                     entry["retry_status"] = "recovered"
                                     entry["retry_attempts"] = attempt + 1
