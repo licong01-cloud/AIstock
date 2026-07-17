@@ -2,26 +2,97 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return a compact context that cannot accidentally expose local paths."""
+_SECRET_KEY_MARKERS = (
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "credential",
+)
+_WINDOWS_PATH_RE = re.compile(
+    r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\s,;\]\[{}()<>\"']*"
+)
+_POSIX_PATH_RE = re.compile(
+    r"(?<![:/\w])/(?!/)[^\s,;\]\[{}()<>\"']*"
+)
+_MAX_CONTEXT_DEPTH = 6
+_MAX_CONTEXT_ITEMS = 50
+_MAX_CONTEXT_STRING = 500
 
-    safe: dict[str, Any] = {}
-    for key, value in dict(context or {}).items():
-        key_text = str(key)
-        lowered = key_text.lower()
-        if any(secret in lowered for secret in ("password", "token", "secret")):
-            continue
-        if isinstance(value, str) and (":\\" in value or value.startswith("/")):
-            safe[key_text] = "<redacted-path>"
-        elif isinstance(value, (str, int, float, bool)) or value is None:
-            safe[key_text] = value
-        else:
-            safe[key_text] = str(value)[:500]
-    return safe
+
+def _redact_paths(value: str) -> str:
+    redacted = _WINDOWS_PATH_RE.sub("<redacted-path>", value)
+    return _POSIX_PATH_RE.sub("<redacted-path>", redacted)
+
+
+def _safe_value(value: Any, *, depth: int, seen: set[int]) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _redact_paths(value[:_MAX_CONTEXT_STRING])
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if depth >= _MAX_CONTEXT_DEPTH:
+        return "<max-depth>"
+
+    if isinstance(value, Mapping):
+        object_id = id(value)
+        if object_id in seen:
+            return "<cycle>"
+        seen.add(object_id)
+        try:
+            result: dict[str, Any] = {}
+            for index, (raw_key, nested) in enumerate(value.items()):
+                if index >= _MAX_CONTEXT_ITEMS:
+                    result["<truncated>"] = len(value) - _MAX_CONTEXT_ITEMS
+                    break
+                key = _redact_paths(str(raw_key)[:_MAX_CONTEXT_STRING])
+                if any(marker in key.lower() for marker in _SECRET_KEY_MARKERS):
+                    result[key] = "<redacted>"
+                else:
+                    result[key] = _safe_value(
+                        nested,
+                        depth=depth + 1,
+                        seen=seen,
+                    )
+            return result
+        finally:
+            seen.remove(object_id)
+
+    if isinstance(value, Sequence):
+        object_id = id(value)
+        if object_id in seen:
+            return "<cycle>"
+        seen.add(object_id)
+        try:
+            items = [
+                _safe_value(item, depth=depth + 1, seen=seen)
+                for item in value[:_MAX_CONTEXT_ITEMS]
+            ]
+            if len(value) > _MAX_CONTEXT_ITEMS:
+                items.append(f"<truncated:{len(value) - _MAX_CONTEXT_ITEMS}>")
+            return items
+        finally:
+            seen.remove(object_id)
+
+    return f"<{type(value).__name__}>"
+
+
+def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return bounded, recursively sanitized public error context."""
+
+    sanitized = _safe_value(dict(context or {}), depth=0, seen=set())
+    if not isinstance(sanitized, dict):  # pragma: no cover - mapping input contract.
+        return {}
+    return sanitized
 
 
 class HMMEvolutionError(RuntimeError):
