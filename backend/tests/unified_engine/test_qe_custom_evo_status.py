@@ -1,4 +1,10 @@
-from backend.services.quantevolver.qe_evolution_service import derive_custom_evo_final_status
+from typing import Any
+
+import backend.services.quantevolver.qe_evolution_service as qes
+from backend.services.quantevolver.qe_evolution_service import (
+    AutoEvolutionScheduler,
+    derive_custom_evo_final_status,
+)
 from backend.services.quantevolver.config_composer import ConfigComposer
 
 
@@ -30,6 +36,62 @@ def test_custom_evo_final_status_fails_when_extra_active_loop_exists() -> None:
     status = derive_custom_evo_final_status(10, {"completed": 10, "running": 1})
 
     assert status == "failed"
+
+
+def test_recompute_custom_evo_task_status_reads_real_dict_rows(monkeypatch) -> None:
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.query = ""
+            self.updated_status: tuple[str, str] | None = None
+
+        def __enter__(self) -> "FakeCursor":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def execute(self, query: str, params: tuple[Any, ...]) -> None:
+            self.query = query
+            if query.startswith("UPDATE qe_evolution_tasks"):
+                self.updated_status = (str(params[0]), str(params[1]))
+
+        def fetchone(self) -> dict[str, Any]:
+            assert "SELECT strategy_evo_config" in self.query
+            return {"strategy_evo_config": {"loops": [{}, {}]}}
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            assert "COUNT(*) AS count" in self.query
+            return [{"status": "completed", "count": 2}]
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.cursor_instance = FakeCursor()
+            self.committed = False
+
+        def __enter__(self) -> "FakeConnection":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def cursor(self, **_kwargs: Any) -> FakeCursor:
+            return self.cursor_instance
+
+        def commit(self) -> None:
+            self.committed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(qes, "get_conn", lambda: connection)
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._parse_custom_evo_strategy_config = lambda *_args, **_kwargs: {
+        "loops": [{}, {}]
+    }
+
+    status = scheduler.recompute_custom_evo_task_status("qe_test")
+
+    assert status == "completed"
+    assert connection.cursor_instance.updated_status == ("completed", "qe_test")
+    assert connection.committed is True
 
 
 def test_history_parent_normalizer_attaches_custom_loop_to_base_experiment() -> None:
