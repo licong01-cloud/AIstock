@@ -149,3 +149,50 @@ test("API 失败显示 reason code、中文说明和重试条件", async ({ page
   await expect(page.getByText("部署独立 schema 后重试")).toBeVisible();
   await expect(page.getByText("trace-schema")).toBeVisible();
 });
+
+test("QE 资产目录超过 200 项仍可分页搜索并展示脱敏 schema 摘要", async ({ page }) => {
+  await installOverviewApi(page);
+  const assets = Array.from({ length: 221 }, (_, index) => ({
+    relative_path: `reports/asset-${String(index).padStart(3, "0")}.json`,
+    size_bytes: 128,
+    sha256: "c".repeat(64),
+    content_type: "application/json",
+    modified_at: "2026-07-18T00:00:00Z",
+    source: "qe_workspace_catalog",
+    trust_level: "unverified_evidence",
+    access_mode: "inspection_only",
+    schema_version: "qe_report_v1",
+    parser_contract: "json_object_v1",
+    catalog_completeness: "complete",
+  }));
+  await page.route("**/api/v1/hmm-evolution/qe-assets/qe_task/Loop8?require_complete=false", (route) => fulfill(route, {
+    schema_version: "hmm_qe_asset_catalog_v1",
+    task_id: "qe_task",
+    loop_name: "Loop8",
+    catalog_completeness: "complete",
+    assets,
+    warnings: [],
+  }));
+  await page.route("**/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/stat?**", (route) => fulfill(route, assets[220]));
+  await page.route("**/api/v1/hmm-evolution/qe-assets/qe_task/Loop8/content?**", (route) => fulfill(route, {
+    content_kind: "bounded_text",
+    text: JSON.stringify({ metric: 0.12, sensitive_value: "<redacted>" }),
+    schema_kind: "json",
+    redaction_count: 1,
+  }));
+
+  await page.goto(`${BASE_URL}/hmm-evolution`);
+  await page.getByPlaceholder("QE task id").fill("qe_task");
+  await page.getByPlaceholder("Loop8").fill("Loop8");
+  await page.getByRole("button", { name: "读取完整目录" }).click();
+  await expect(page.getByText("221", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("第 1 / 5 页", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByText("reports/asset-050.json", { exact: true })).toBeVisible();
+  await page.getByLabel("搜索 QE 资产").fill("asset-220");
+  const row = page.getByRole("row").filter({ hasText: "reports/asset-220.json" });
+  await row.getByRole("button", { name: "检查" }).click();
+  await expect(page.getByText("JSON 结构摘要")).toBeVisible();
+  await expect(page.getByText("脱敏 1 项", { exact: false })).toBeVisible();
+  await expect(page.locator("pre")).toHaveCount(0);
+});

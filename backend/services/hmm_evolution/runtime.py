@@ -7,6 +7,7 @@ training flow, or any production trading integration at import time.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -39,20 +40,18 @@ from .repository import HMMEvolutionRepository
 from .service import HMMEvolutionService
 
 
-DEFAULT_QE_WORKSPACE_BASE_URL = "http://localhost:9000/api/v1/qe_workspace"
 RUNTIME_MODES = frozenset({"disabled", "api_only", "api_worker"})
 
 
 class ManagedQEWorkspaceReadClient(WorkspaceReadClient):
-    """Open a short-lived QE client for each read-only request."""
+    """Open a short-lived client on the task/loop's authoritative QE node."""
 
-    def __init__(self, base_url: str) -> None:
-        self._base_url = str(base_url or "").strip().rstrip("/")
-        if not self._base_url:
-            raise ValueError("QE workspace base URL is required")
+    @staticmethod
+    async def _client_for(task_id: str, loop_id: str) -> QEWorkspaceClient:
+        return await asyncio.to_thread(QEWorkspaceClient.for_task_loop, task_id, loop_id)
 
     async def list_workspace_files(self, task_id: str, loop_id: str) -> Mapping[str, Any]:
-        async with QEWorkspaceClient(base_url=self._base_url) as client:
+        async with await self._client_for(task_id, loop_id) as client:
             return await client.list_workspace_files(task_id, loop_id)
 
     async def stat_workspace_file(
@@ -61,7 +60,7 @@ class ManagedQEWorkspaceReadClient(WorkspaceReadClient):
         loop_id: str,
         file_path: str,
     ) -> Mapping[str, Any]:
-        async with QEWorkspaceClient(base_url=self._base_url) as client:
+        async with await self._client_for(task_id, loop_id) as client:
             return await client.stat_workspace_file(task_id, loop_id, file_path)
 
     async def download_workspace_file_bytes(
@@ -70,7 +69,7 @@ class ManagedQEWorkspaceReadClient(WorkspaceReadClient):
         loop_id: str,
         file_path: str,
     ) -> bytes:
-        async with QEWorkspaceClient(base_url=self._base_url) as client:
+        async with await self._client_for(task_id, loop_id) as client:
             return await client.download_workspace_file_bytes(task_id, loop_id, file_path)
 
     async def open_workspace_file_range(
@@ -84,13 +83,12 @@ class ManagedQEWorkspaceReadClient(WorkspaceReadClient):
     ) -> tuple[httpx.AsyncClient, httpx.Response]:
         """Open one bounded HTTP Range without buffering the remote asset."""
 
-        client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
-        )
+        qe_client = await self._client_for(task_id, loop_id)
+        client = qe_client.client
         safe_task = quote(task_id, safe="")
         safe_loop = quote(QEWorkspaceClient._to_rdagent_loop_id(task_id, loop_id), safe="")
         safe_path = quote(normalize_asset_path(file_path), safe="/")
-        url = f"{self._base_url}/tasks/{safe_task}/loops/{safe_loop}/files/{safe_path}"
+        url = f"{qe_client.base_url}/tasks/{safe_task}/loops/{safe_loop}/files/{safe_path}"
         request = client.build_request("GET", url, headers={"Range": f"bytes={start}-{end}"})
         try:
             response = await client.send(request, stream=True)
@@ -230,9 +228,7 @@ def require_worker_runtime() -> str:
 
 def build_runtime() -> HMMEvolutionRuntime:
     artifact_roots = _artifact_roots_from_env()
-    qe_client = ManagedQEWorkspaceReadClient(
-        os.getenv("HMM_EVOLUTION_QE_WORKSPACE_BASE_URL", DEFAULT_QE_WORKSPACE_BASE_URL)
-    )
+    qe_client = ManagedQEWorkspaceReadClient()
     qe_reader = QEExperimentAssetReader(
         qe_client,
         max_read_bytes=_positive_int_env(

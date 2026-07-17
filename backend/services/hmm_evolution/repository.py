@@ -144,9 +144,8 @@ class HMMEvolutionRepository:
                 existing = cursor.fetchone()
                 if existing is None:  # pragma: no cover - conflict row must be visible.
                     raise SchemaUnavailableError("candidate conflict row was not visible")
-                if (
-                    existing["candidate_id"] != preview.candidate_id
-                    or not self._same_candidate_content(existing, preview)
+                if existing["candidate_id"] != preview.candidate_id or not self._same_candidate_content(
+                    existing, preview
                 ):
                     raise InvalidStateTransitionError(
                         "candidate identity collision",
@@ -419,9 +418,7 @@ class HMMEvolutionRepository:
                             cursor,
                             request_hash=request_hash,
                             idempotency_key=idempotency_key,
-                            conflict_message=(
-                                "Idempotency-Key was already used for a different request"
-                            ),
+                            conflict_message=("Idempotency-Key was already used for a different request"),
                         ),
                         False,
                     )
@@ -640,6 +637,7 @@ class HMMEvolutionRepository:
         fencing_token: int,
         expected_row_version: int,
         result: Mapping[str, Any],
+        defer_batch_recompute: bool = False,
     ) -> dict[str, Any]:
         required = {
             "trading_days_count",
@@ -706,11 +704,12 @@ class HMMEvolutionRepository:
                     """,
                     (eval_id,),
                 )
-                self._recompute_batches_for_evaluation(
-                    cursor,
-                    eval_id,
-                    release_lease=True,
-                )
+                if not defer_batch_recompute:
+                    self._recompute_batches_for_evaluation(
+                        cursor,
+                        eval_id,
+                        release_lease=True,
+                    )
                 return dict(row)
 
     def fail_evaluation(
@@ -725,6 +724,7 @@ class HMMEvolutionRepository:
         error_message: str,
         error_context: Mapping[str, Any] | None = None,
         terminal_status: EvaluationStatus = EvaluationStatus.FAILED,
+        defer_batch_recompute: bool = False,
     ) -> dict[str, Any]:
         if terminal_status not in {
             EvaluationStatus.FAILED,
@@ -780,11 +780,12 @@ class HMMEvolutionRepository:
                         eval_id,
                     ),
                 )
-                self._recompute_batches_for_evaluation(
-                    cursor,
-                    eval_id,
-                    release_lease=True,
-                )
+                if not defer_batch_recompute:
+                    self._recompute_batches_for_evaluation(
+                        cursor,
+                        eval_id,
+                        release_lease=True,
+                    )
                 return dict(row)
 
     def request_batch_cancel(self, *, batch_id: str, requested_by: str) -> dict[str, Any]:
@@ -799,9 +800,7 @@ class HMMEvolutionRepository:
                 )
                 batch = cursor.fetchone()
                 if batch is None:
-                    raise BatchNotFoundError(
-                        "batch was not found", context={"batch_id": batch_id}
-                    )
+                    raise BatchNotFoundError("batch was not found", context={"batch_id": batch_id})
                 if batch["status"] in TERMINAL_BATCH_STATUSES:
                     return dict(batch)
                 target_status = (
@@ -886,12 +885,73 @@ class HMMEvolutionRepository:
                 batch = cursor.fetchone()
                 if batch is None:
                     self._raise_stale_fence(batch_id, "batch")
-                return self._recompute_batch_state_with_cursor(
+                updated = self._recompute_batch_state_with_cursor(
                     cursor,
                     batch_id,
                     release_lease=True,
                     locked_batch=dict(batch),
                 )
+                if updated["status"] in TERMINAL_BATCH_STATUSES:
+                    self._apply_recommendations_with_cursor(cursor, batch_id)
+                return updated
+
+    def finalize_worker_cycle(
+        self,
+        *,
+        batch_id: str,
+        eval_ids: Sequence[str],
+        owner_id: str,
+        fencing_token: int,
+        expected_row_version: int,
+    ) -> dict[str, Any]:
+        """Recompute all shared batches after one concurrent worker slice."""
+
+        normalized_eval_ids = sorted({str(eval_id or "").strip() for eval_id in eval_ids})
+        if not normalized_eval_ids or any(not eval_id for eval_id in normalized_eval_ids):
+            raise ValueError("finalize_worker_cycle requires non-empty eval_ids")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM hmm_evolution.batch_test_run
+                    WHERE batch_id = %s AND status IN ('running', 'cancel_requested')
+                      AND owner_id = %s AND fencing_token = %s AND row_version = %s
+                    FOR UPDATE
+                    """,
+                    (batch_id, owner_id, fencing_token, expected_row_version),
+                )
+                claimed_batch = cursor.fetchone()
+                if claimed_batch is None:
+                    self._raise_stale_fence(batch_id, "batch")
+                cursor.execute(
+                    """
+                    SELECT DISTINCT batch_id
+                    FROM hmm_evolution.batch_test_item
+                    WHERE eval_id = ANY(%s)
+                    ORDER BY batch_id
+                    """,
+                    (normalized_eval_ids,),
+                )
+                affected = [str(row["batch_id"]) for row in cursor.fetchall()]
+                for affected_batch_id in affected:
+                    if affected_batch_id == batch_id:
+                        continue
+                    updated = self._recompute_batch_state_with_cursor(
+                        cursor,
+                        affected_batch_id,
+                        release_lease=True,
+                    )
+                    if updated["status"] in TERMINAL_BATCH_STATUSES:
+                        self._apply_recommendations_with_cursor(cursor, affected_batch_id)
+                updated_claimed = self._recompute_batch_state_with_cursor(
+                    cursor,
+                    batch_id,
+                    release_lease=True,
+                    locked_batch=dict(claimed_batch),
+                )
+                if updated_claimed["status"] in TERMINAL_BATCH_STATUSES:
+                    self._apply_recommendations_with_cursor(cursor, batch_id)
+                return updated_claimed
 
     def apply_recommendation(
         self,
@@ -1022,9 +1082,7 @@ class HMMEvolutionRepository:
                         cursor,
                         request_hash=request_hash,
                         idempotency_key=idempotency_key,
-                        conflict_message=(
-                            "Idempotency-Key was already used for a different retry"
-                        ),
+                        conflict_message=("Idempotency-Key was already used for a different retry"),
                     )
                 for ordinal, source in enumerate(failed_rows):
                     new_eval_id = _new_id("hmme")
@@ -1127,9 +1185,7 @@ class HMMEvolutionRepository:
                         """,
                         (expired_eval_ids,),
                     )
-                    affected_batch_ids.update(
-                        str(row["batch_id"]) for row in cursor.fetchall()
-                    )
+                    affected_batch_ids.update(str(row["batch_id"]) for row in cursor.fetchall())
                 for affected_batch_id in sorted(affected_batch_ids):
                     self._recompute_batch_state_with_cursor(
                         cursor,
@@ -1297,10 +1353,7 @@ class HMMEvolutionRepository:
             "detected_format",
             "algorithm_version",
         )
-        return all(
-            stored_manifest.get(field) == incoming_manifest.get(field)
-            for field in identity_fields
-        )
+        return all(stored_manifest.get(field) == incoming_manifest.get(field) for field in identity_fields)
 
     @staticmethod
     def _existing_batch_after_conflict(
@@ -1413,9 +1466,7 @@ class HMMEvolutionRepository:
                     metrics={
                         "net_label_return": row["net_label_return"],
                         "net_db_10d": row["net_db_10d"],
-                        "positive_net_label_day_ratio": row[
-                            "positive_net_label_day_ratio"
-                        ],
+                        "positive_net_label_day_ratio": row["positive_net_label_day_ratio"],
                         "primary_coverage_ratio": row["primary_coverage_ratio"],
                     },
                 )
@@ -1494,10 +1545,7 @@ class HMMEvolutionRepository:
             """,
             (batch_id,),
         )
-        counts = {
-            str(row["item_status"]): int(row["count"])
-            for row in cursor.fetchall()
-        }
+        counts = {str(row["item_status"]): int(row["count"]) for row in cursor.fetchall()}
         cursor.execute(
             """
             SELECT EXISTS (
@@ -1512,10 +1560,7 @@ class HMMEvolutionRepository:
         )
         queued_row = cursor.fetchone()
         has_queued_evaluation = bool(queued_row and queued_row["has_queued_evaluation"])
-        if (
-            has_queued_evaluation
-            and str(batch["status"]) != BatchStatus.CANCEL_REQUESTED.value
-        ):
+        if has_queued_evaluation and str(batch["status"]) != BatchStatus.CANCEL_REQUESTED.value:
             status = BatchStatus.QUEUED.value
         else:
             status = self._derive_batch_status(str(batch["status"]), counts)
@@ -1536,10 +1581,7 @@ class HMMEvolutionRepository:
             """,
             (
                 status,
-                sum(
-                    counts.get(item, 0)
-                    for item in ("pending", "waiting_shared", "queued")
-                ),
+                sum(counts.get(item, 0) for item in ("pending", "waiting_shared", "queued")),
                 counts.get("running", 0),
                 counts.get("succeeded", 0) + counts.get("reused", 0),
                 counts.get("failed", 0),

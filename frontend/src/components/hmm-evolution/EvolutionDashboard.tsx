@@ -7,7 +7,6 @@ import {
   Archive,
   Ban,
   ChevronRight,
-  Database,
   FileSearch,
   FlaskConical,
   Plus,
@@ -26,7 +25,6 @@ import {
   previewCandidate,
   registerCandidate,
   retryFailedBatch,
-  statQEAsset,
 } from "@/lib/hmm-evolution/api";
 import type {
   BatchDetail,
@@ -38,13 +36,13 @@ import type {
   CandidateSourceType,
   EvaluationSpecPayload,
   QEAssetCatalog,
-  QEAssetEntry,
 } from "@/lib/hmm-research/contracts";
 import { TERMINAL_BATCH_STATUSES } from "@/lib/hmm-research/contracts";
 import EvidencePanel from "@/components/hmm-research/EvidencePanel";
 import HMMResearchShell from "@/components/hmm-research/HMMResearchShell";
 import StatusBadge from "@/components/hmm-research/StatusBadge";
 import VisibleErrorState from "@/components/hmm-research/VisibleErrorState";
+import QEAssetBrowser from "@/components/hmm-evolution/QEAssetBrowser";
 import styles from "@/components/hmm-research/hmm-research.module.css";
 
 const POLL_FAST_MS = 3_000;
@@ -119,9 +117,12 @@ export default function EvolutionDashboard() {
   const [assetTaskId, setAssetTaskId] = useState("");
   const [assetLoopName, setAssetLoopName] = useState("");
   const [assetCatalog, setAssetCatalog] = useState<QEAssetCatalog | null>(null);
-  const [selectedAsset, setSelectedAsset] = useState<QEAssetEntry | null>(null);
   const [assetError, setAssetError] = useState<unknown>(null);
   const [assetLoading, setAssetLoading] = useState(false);
+  const [overviewStale, setOverviewStale] = useState(false);
+  const [batchStale, setBatchStale] = useState(false);
+  const [lastSuccessfulRefresh, setLastSuccessfulRefresh] = useState<string | null>(null);
+  const hasOverviewData = useRef(false);
   const pollStartedAt = useRef<number | null>(null);
 
   const loadOverview = useCallback(async () => {
@@ -131,9 +132,13 @@ export default function EvolutionDashboard() {
       const [candidateRows, batchRows] = await Promise.all([listCandidates(), listBatches()]);
       setCandidates(candidateRows);
       setBatches(batchRows);
+      hasOverviewData.current = true;
+      setOverviewStale(false);
+      setLastSuccessfulRefresh(new Date().toISOString());
       setSelectedBatchId((current) => current || batchRows[0]?.batch_id || "");
     } catch (error) {
       setGlobalError(error);
+      setOverviewStale(hasOverviewData.current);
     } finally {
       setLoading(false);
     }
@@ -148,8 +153,11 @@ export default function EvolutionDashboard() {
       const detail = await getBatch(batchId);
       setSelectedBatch(detail);
       setPollingError(null);
+      setBatchStale(false);
+      setLastSuccessfulRefresh(new Date().toISOString());
     } catch (error) {
       setPollingError(error);
+      setBatchStale(true);
     }
   }, []);
 
@@ -173,6 +181,7 @@ export default function EvolutionDashboard() {
     const poll = async () => {
       const elapsed = Date.now() - (pollStartedAt.current || Date.now());
       if (elapsed >= POLL_TIMEOUT_MS) {
+        setBatchStale(true);
         setPollingError(
           new HMMApiError(
             {
@@ -190,6 +199,8 @@ export default function EvolutionDashboard() {
         const detail = await getBatch(selectedBatch.batch_id);
         if (cancelled) return;
         setSelectedBatch(detail);
+        setBatchStale(false);
+        setLastSuccessfulRefresh(new Date().toISOString());
         setBatches((rows) => rows.map((row) => (row.batch_id === detail.batch_id ? detail : row)));
         if (TERMINAL_BATCH_STATUSES.has(detail.status)) {
           pollStartedAt.current = null;
@@ -198,7 +209,10 @@ export default function EvolutionDashboard() {
         const delay = elapsed >= POLL_BACKOFF_AFTER_MS ? POLL_SLOW_MS : POLL_FAST_MS;
         timer = setTimeout(poll, delay);
       } catch (error) {
-        if (!cancelled) setPollingError(error);
+        if (!cancelled) {
+          setPollingError(error);
+          setBatchStale(true);
+        }
       }
     };
 
@@ -314,7 +328,6 @@ export default function EvolutionDashboard() {
   const loadAssets = async () => {
     setAssetError(null);
     setAssetCatalog(null);
-    setSelectedAsset(null);
     try {
       if (!assetTaskId.trim() || !assetLoopName.trim()) {
         throw new Error("请输入 QE task 与 Loop。 ");
@@ -325,15 +338,6 @@ export default function EvolutionDashboard() {
       setAssetError(error);
     } finally {
       setAssetLoading(false);
-    }
-  };
-
-  const inspectAsset = async (asset: QEAssetEntry) => {
-    setAssetError(null);
-    try {
-      setSelectedAsset(await statQEAsset(assetTaskId.trim(), assetLoopName.trim(), asset.relative_path));
-    } catch (error) {
-      setAssetError(error);
     }
   };
 
@@ -406,6 +410,7 @@ export default function EvolutionDashboard() {
         {globalError ? (
           <VisibleErrorState error={globalError} onRetry={() => void loadOverview()} />
         ) : null}
+        {overviewStale ? <div className={`${styles.notice} ${styles.noticeWarning}`}>候选与批次概览刷新失败；当前展示 {formatDateTime(lastSuccessfulRefresh)} 的最后成功数据，不得视为最新状态。</div> : null}
 
         {showCandidateForm ? (
           <CandidateRegistrationPanel
@@ -433,7 +438,7 @@ export default function EvolutionDashboard() {
         ) : null}
 
         <section className={styles.metricsGrid} aria-label="HMM 演进概览">
-          <MetricCard className={styles.metricGreen} label="候选总数" value={String(candidates.length)} note="仅统计独立研究候选库" />
+          <MetricCard className={styles.metricGreen} label="当前加载候选" value={String(candidates.length)} note="API 当前页；不伪装为全库总数" />
           <MetricCard
             className={styles.metricBlue}
             label="本批次完成"
@@ -441,7 +446,7 @@ export default function EvolutionDashboard() {
             note={selectedBatch ? `状态：${selectedBatch.status}` : "尚无可显示批次"}
           />
           <MetricCard className={styles.metricAmber} label="共同数据水位" value={commonWatermark} note="来自已固化评估身份" date />
-          <MetricCard className={styles.metricSlate} label="中位评估耗时" value={medianDuration} note="只统计有起止时间的真实批次" />
+          <MetricCard className={styles.metricSlate} label="近期中位评估耗时" value={medianDuration} note="基于当前加载的最近批次样本" />
         </section>
 
         {loading ? <BoundedLoading resource="候选与批次概览" /> : null}
@@ -452,6 +457,8 @@ export default function EvolutionDashboard() {
             onRetry={() => void loadSelectedBatch(selectedBatchId)}
           />
         ) : null}
+        {batchStale && selectedBatch ? <div className={`${styles.notice} ${styles.noticeWarning}`}>当前批次状态已标记为 stale；手动刷新成功前不会继续自动轮询。</div> : null}
+        {selectedBatch?.items.some((item) => item.evidence_quality === "degraded") ? <div className={`${styles.notice} ${styles.noticeWarning}`}><strong>批次包含降级证据</strong><span>{selectedBatch.items.filter((item) => item.evidence_quality === "degraded").length} 个候选存在日期交集或行情覆盖 warning；排名仅供研究终审。</span></div> : null}
 
         <section className={styles.evolutionLayout}>
           <section className={styles.panel}>
@@ -509,17 +516,15 @@ export default function EvolutionDashboard() {
             </div>
           </section>
 
-          <QEAssetPanel
+          <QEAssetBrowser
             taskId={assetTaskId}
             loopName={assetLoopName}
             setTaskId={setAssetTaskId}
             setLoopName={setAssetLoopName}
             catalog={assetCatalog}
-            selectedAsset={selectedAsset}
             error={assetError}
             loading={assetLoading}
             onLoad={() => void loadAssets()}
-            onInspect={(asset) => void inspectAsset(asset)}
           />
 
           <section className={`${styles.panel} ${styles.fullWidth}`}>
@@ -811,42 +816,6 @@ function EvaluationCreatePanel({
         <div className={styles.notice} style={{ marginTop: 14 }}><ShieldCheck size={15} /><span>本操作只写 hmm_evolution.* 评估状态；不会重跑、终止或修改 QE 实验，也不会生成生产 snapshot。</span></div>
         <div className={styles.inlineActions} style={{ marginTop: 14 }}><button type="button" className={`${styles.button} ${styles.buttonPrimary}`} disabled={busy} onClick={onSubmit}>{busy ? "正在固化输入…" : "创建批次"}</button></div>
         {error ? <div style={{ marginTop: 14 }}><VisibleErrorState error={error} title="评估创建失败" onRetry={onSubmit} /></div> : null}
-      </div>
-    </section>
-  );
-}
-
-function QEAssetPanel({
-  taskId,
-  loopName,
-  setTaskId,
-  setLoopName,
-  catalog,
-  selectedAsset,
-  error,
-  loading,
-  onLoad,
-  onInspect,
-}: {
-  taskId: string;
-  loopName: string;
-  setTaskId: (value: string) => void;
-  setLoopName: (value: string) => void;
-  catalog: QEAssetCatalog | null;
-  selectedAsset: QEAssetEntry | null;
-  error: unknown;
-  loading: boolean;
-  onLoad: () => void;
-  onInspect: (asset: QEAssetEntry) => void;
-}) {
-  return (
-    <section className={`${styles.panel} ${styles.fullWidth}`}>
-      <div className={styles.panelHeader}><div><h2 className={styles.panelTitle}>QE 资产浏览</h2><div className={styles.panelSubtitle}>只读目录、trust level 与 schema-aware 元数据；不执行、不导入、不直显原始 JSON</div></div><span className={`${styles.tag} ${styles.tagInfo}`}><Database size={13} /> Inspection only</span></div>
-      <div className={styles.panelBody}>
-        <div className={styles.assetGrid}><input className={styles.input} placeholder="QE task id" value={taskId} onChange={(event) => setTaskId(event.target.value)} /><input className={styles.input} placeholder="Loop8" value={loopName} onChange={(event) => setLoopName(event.target.value)} /><button type="button" className={`${styles.button} ${styles.buttonSoft}`} onClick={onLoad} disabled={loading}><FileSearch size={14} />{loading ? "读取中" : "读取目录"}</button></div>
-        {error ? <div style={{ marginTop: 14 }}><VisibleErrorState error={error} title="QE 资产读取失败" onRetry={onLoad} /></div> : null}
-        {catalog ? <><div className={styles.assetSummary} style={{ marginTop: 14 }}><SummaryCell label="目录完整性" value={catalog.catalog_completeness} /><SummaryCell label="资产数量" value={String(catalog.assets.length)} /><SummaryCell label="可信计算输入" value={String(catalog.assets.filter((asset) => asset.trust_level === "trusted_computational_input").length)} /><SummaryCell label="Warnings" value={String(catalog.warnings.length)} /></div><div className={styles.panelBodyTable}><table className={styles.table}><thead><tr><th>相对路径</th><th>类型</th><th>大小</th><th>Trust</th><th>Access</th><th>Schema</th><th>查看</th></tr></thead><tbody>{catalog.assets.slice(0, 200).map((asset) => <tr key={asset.relative_path}><td className={styles.hash}>{asset.relative_path}</td><td>{asset.content_type || "未知"}</td><td>{formatBytes(asset.size_bytes)}</td><td><span className={`${styles.tag} ${asset.trust_level === "trusted_computational_input" ? styles.tagGood : styles.tagWarn}`}>{asset.trust_level === "trusted_computational_input" ? "可信输入" : "未验证证据"}</span></td><td>{asset.access_mode}</td><td>{asset.schema_version || "未声明"}</td><td><button type="button" className={styles.button} onClick={() => onInspect(asset)}>元数据</button></td></tr>)}</tbody></table>{catalog.assets.length > 200 ? <div className={`${styles.notice} ${styles.noticeWarning}`}>目录共 {catalog.assets.length} 项；主视图仅显示前 200 项，避免浏览器过载。完整目录仍保留在 API 结果中。</div> : null}</div></> : <div style={{ marginTop: 14 }}><EmptyState title="尚未读取 QE 资产" detail="输入 task 与 loop 后读取真实只读目录；不会扫描本机或固化额外副本。" /></div>}
-        {selectedAsset ? <div className={styles.detailGrid} style={{ marginTop: 16 }}><div className={styles.panel}><div className={styles.panelHeader}><h3 className={styles.panelTitle}>资产元数据</h3></div><div className={styles.panelBody}><EvidencePanel sections={[{ title: "资产身份", rows: [{ label: "相对路径", value: selectedAsset.relative_path }, { label: "媒体类型", value: selectedAsset.content_type || "未知" }, { label: "大小", value: formatBytes(selectedAsset.size_bytes) }, { label: "SHA256", value: selectedAsset.sha256 ? shortHash(selectedAsset.sha256) : "未声明" }] }]} /></div></div><div className={styles.panel}><div className={styles.panelHeader}><h3 className={styles.panelTitle}>信任与渲染</h3></div><div className={styles.panelBody}><EvidencePanel sections={[{ title: "可用边界", rows: [{ label: "Trust level", value: selectedAsset.trust_level }, { label: "Access mode", value: selectedAsset.access_mode }, { label: "Schema", value: selectedAsset.schema_version || "未声明" }, { label: "可视化", value: selectedAsset.schema_version ? "按已知 schema 提供摘要" : "不支持可视化；不回退 raw JSON" }] }]} /></div></div></div> : null}
       </div>
     </section>
   );

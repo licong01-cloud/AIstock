@@ -17,14 +17,18 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from backend.services.hmm_evolution.asset_content_policy import (
+    require_text_asset,
+    sanitize_asset_text,
+)
 from backend.services.hmm_evolution.errors import (
     HMMEvolutionError,
     InvalidSpecError,
     QEAssetTooLargeError,
+    sanitized_exception_chain,
 )
 from backend.services.hmm_evolution.models import (
     CandidateLifecycle,
@@ -74,7 +78,7 @@ class HMMEvolutionRoute(APIRoute):
                 logger.exception("unexpected HMM evolution route failure trace_id=%s", trace_id)
                 error = HMMEvolutionError(
                     "HMM evolution request failed unexpectedly",
-                    context={"error_type": type(exc).__name__},
+                    context={"exception_chain": sanitized_exception_chain(exc)},
                 )
                 return JSONResponse(
                     status_code=error.http_status,
@@ -91,10 +95,7 @@ router = APIRouter(
 )
 
 TRACE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-TEXT_EXTENSIONS = frozenset({".txt", ".log", ".md", ".csv", ".json", ".yaml", ".yml"})
-TERMINAL_BATCH_STATUSES = frozenset(
-    {"completed", "partial_failed", "failed", "cancelled", "timed_out"}
-)
+TERMINAL_BATCH_STATUSES = frozenset({"completed", "partial_failed", "failed", "cancelled", "timed_out"})
 
 
 @dataclass(frozen=True)
@@ -131,13 +132,10 @@ class CandidateSourceRequest(BaseModel):
         else:
             required = {"task_id", "loop_name", "relative_path"}
         missing = sorted(key for key in required if not str(values.get(key) or "").strip())
-        unexpected = sorted(
-            key for key, value in values.items() if key not in required and value is not None
-        )
+        unexpected = sorted(key for key, value in values.items() if key not in required and value is not None)
         if missing or unexpected:
             raise ValueError(
-                f"candidate source fields do not match source_type: missing={missing}, "
-                f"unexpected={unexpected}"
+                f"candidate source fields do not match source_type: missing={missing}, unexpected={unexpected}"
             )
         return self
 
@@ -231,14 +229,11 @@ async def _call(
         )
     except HMMEvolutionError as exc:
         return JSONResponse(status_code=exc.http_status, content=exc.as_dict(trace_id=trace_id))
-    except ValueError as exc:
-        error = InvalidSpecError(str(exc))
-        return JSONResponse(status_code=error.http_status, content=error.as_dict(trace_id=trace_id))
     except Exception as exc:  # fail loud to logs, bounded response to clients.
         logger.exception("unexpected HMM evolution API failure trace_id=%s", trace_id)
         error = HMMEvolutionError(
             "HMM evolution request failed unexpectedly",
-            context={"error_type": type(exc).__name__},
+            context={"exception_chain": sanitized_exception_chain(exc)},
         )
         return JSONResponse(status_code=error.http_status, content=error.as_dict(trace_id=trace_id))
 
@@ -446,6 +441,8 @@ async def read_qe_asset(
 ) -> Response:
     try:
         entry = await runtime.qe_asset_reader.stat_asset(task_id, loop_name, relative_path)
+        content_type = str(entry.content_type or "application/octet-stream")
+        require_text_asset(relative_path=entry.relative_path, content_type=content_type)
         api_limit = _positive_content_limit()
         if entry.size_bytes > api_limit:
             if range_header is None:
@@ -467,25 +464,42 @@ async def read_qe_asset(
                 end=end,
             )
 
-            async def iterator():
-                try:
-                    async for chunk in upstream.aiter_bytes():
-                        yield chunk
-                finally:
-                    await upstream.aclose()
-                    await client.aclose()
-
-            return StreamingResponse(
-                iterator(),
+            try:
+                ranged_data = await upstream.aread()
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+            sanitized = sanitize_asset_text(
+                ranged_data,
+                relative_path=entry.relative_path,
+                content_type=content_type,
+                partial=True,
+            )
+            return JSONResponse(
+                content=jsonable_encoder(
+                    {
+                        "status": "ok",
+                        "data": {
+                            "content_kind": "bounded_text_range",
+                            "text": sanitized.text,
+                            "schema_kind": sanitized.schema_kind,
+                            "redaction_count": sanitized.redaction_count,
+                            "range": {
+                                "start": start,
+                                "end": end,
+                                "total_size_bytes": entry.size_bytes,
+                            },
+                        },
+                        "trace_id": trace_id,
+                    }
+                ),
                 status_code=206,
-                media_type=str(entry.content_type or "application/octet-stream"),
                 headers={
                     "Accept-Ranges": "bytes",
                     "Content-Range": upstream.headers.get(
                         "Content-Range",
                         f"bytes {start}-{end}/{entry.size_bytes}",
                     ),
-                    "Content-Length": str(end - start + 1),
                     "X-HMM-Asset-SHA256": str(entry.sha256 or "unavailable-for-partial-read"),
                     "X-HMM-Asset-Trust-Level": entry.trust_level.value,
                     "X-HMM-Asset-Access-Mode": entry.access_mode.value,
@@ -498,44 +512,40 @@ async def read_qe_asset(
             relative_path,
             declared_entry=entry,
         )
-        suffix = os.path.splitext(entry.relative_path)[1].lower()
-        content_type = str(entry.content_type or "application/octet-stream")
         headers = {
             "X-HMM-Asset-SHA256": content.receipt.sha256,
             "X-HMM-Asset-Trust-Level": content.receipt.trust_level.value,
             "X-HMM-Asset-Access-Mode": content.receipt.access_mode.value,
             "X-Request-ID": trace_id,
         }
-        if content_type.startswith("text/") or suffix in TEXT_EXTENSIONS:
-            try:
-                text = content.data.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise InvalidSpecError(
-                    "QE text asset is not valid UTF-8",
-                    context={"relative_path": entry.relative_path},
-                ) from exc
-            return JSONResponse(
-                content=jsonable_encoder(
-                    {
-                        "status": "ok",
-                        "data": {
-                            "content_kind": "bounded_text",
-                            "text": text,
-                            "receipt": content.receipt,
-                        },
-                        "trace_id": trace_id,
-                    }
-                ),
-                headers=headers,
-            )
-        return Response(content=content.data, media_type=content_type, headers=headers)
+        sanitized = sanitize_asset_text(
+            content.data,
+            relative_path=entry.relative_path,
+            content_type=content_type,
+        )
+        return JSONResponse(
+            content=jsonable_encoder(
+                {
+                    "status": "ok",
+                    "data": {
+                        "content_kind": "bounded_text",
+                        "text": sanitized.text,
+                        "schema_kind": sanitized.schema_kind,
+                        "redaction_count": sanitized.redaction_count,
+                        "receipt": content.receipt,
+                    },
+                    "trace_id": trace_id,
+                }
+            ),
+            headers=headers,
+        )
     except HMMEvolutionError as exc:
         return JSONResponse(status_code=exc.http_status, content=exc.as_dict(trace_id=trace_id))
     except Exception as exc:
         logger.exception("unexpected QE asset read failure trace_id=%s", trace_id)
         error = HMMEvolutionError(
             "QE asset request failed unexpectedly",
-            context={"error_type": type(exc).__name__},
+            context={"exception_chain": sanitized_exception_chain(exc)},
         )
         return JSONResponse(status_code=error.http_status, content=error.as_dict(trace_id=trace_id))
 

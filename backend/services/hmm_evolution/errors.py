@@ -17,15 +17,15 @@ _SECRET_KEY_MARKERS = (
     "cookie",
     "credential",
 )
-_WINDOWS_PATH_RE = re.compile(
-    r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\s,;\]\[{}()<>\"']*"
-)
-_POSIX_PATH_RE = re.compile(
-    r"(?<![:/\w])/(?!/)[^\s,;\]\[{}()<>\"']*"
-)
+_WINDOWS_PATH_RE = re.compile(r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\s,;\]\[{}()<>\"']*")
+_POSIX_PATH_RE = re.compile(r"(?<![:/\w])/(?!/)[^\s,;\]\[{}()<>\"']*")
 _MAX_CONTEXT_DEPTH = 6
 _MAX_CONTEXT_ITEMS = 50
 _MAX_CONTEXT_STRING = 500
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?im)(?P<prefix>\b(?:password|token|secret|api[_-]?key|apikey|authorization|cookie|credential)\b\s*[:=]\s*)(?P<value>[^\r\n,;]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 
 
 def _redact_paths(value: str) -> str:
@@ -33,11 +33,48 @@ def _redact_paths(value: str) -> str:
     return _POSIX_PATH_RE.sub("<redacted-path>", redacted)
 
 
+def redact_public_text(value: str) -> tuple[str, int]:
+    """Redact secrets and local absolute paths from user-visible text."""
+
+    redactions = 0
+
+    def replace_assignment(match: re.Match[str]) -> str:
+        nonlocal redactions
+        redactions += 1
+        return f"{match.group('prefix')}<redacted>"
+
+    def replace_bearer(_match: re.Match[str]) -> str:
+        nonlocal redactions
+        redactions += 1
+        return "Bearer <redacted>"
+
+    redacted = _SECRET_ASSIGNMENT_RE.sub(replace_assignment, str(value))
+    redacted = _BEARER_RE.sub(replace_bearer, redacted)
+    path_redacted = _redact_paths(redacted)
+    if path_redacted != redacted:
+        redactions += 1
+    return path_redacted, redactions
+
+
+def sanitized_exception_chain(exc: BaseException, *, max_depth: int = 6) -> list[dict[str, str]]:
+    """Return a bounded diagnostic chain without credentials or local paths."""
+
+    chain: list[dict[str, str]] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and len(chain) < max_depth and id(current) not in seen:
+        seen.add(id(current))
+        message, _ = redact_public_text(str(current))
+        chain.append({"error_type": type(current).__name__, "message": message[:_MAX_CONTEXT_STRING]})
+        current = current.__cause__ or current.__context__
+    return chain
+
+
 def _safe_value(value: Any, *, depth: int, seen: set[int]) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return _redact_paths(value[:_MAX_CONTEXT_STRING])
+        return redact_public_text(value[:_MAX_CONTEXT_STRING])[0]
     if isinstance(value, bytes):
         return f"<bytes:{len(value)}>"
     if depth >= _MAX_CONTEXT_DEPTH:
@@ -73,10 +110,7 @@ def _safe_value(value: Any, *, depth: int, seen: set[int]) -> Any:
             return "<cycle>"
         seen.add(object_id)
         try:
-            items = [
-                _safe_value(item, depth=depth + 1, seen=seen)
-                for item in value[:_MAX_CONTEXT_ITEMS]
-            ]
+            items = [_safe_value(item, depth=depth + 1, seen=seen) for item in value[:_MAX_CONTEXT_ITEMS]]
             if len(value) > _MAX_CONTEXT_ITEMS:
                 items.append(f"<truncated:{len(value) - _MAX_CONTEXT_ITEMS}>")
             return items
@@ -152,6 +186,16 @@ class QEAssetCatalogIncompleteError(HMMEvolutionError):
 class QEAssetTooLargeError(HMMEvolutionError):
     reason_code = "hmm_evolution_qe_asset_too_large"
     http_status = 413
+
+
+class QEAssetContentUnsupportedError(HMMEvolutionError):
+    reason_code = "hmm_evolution_qe_asset_content_unsupported"
+    http_status = 415
+
+
+class QEAssetContentInvalidError(HMMEvolutionError):
+    reason_code = "hmm_evolution_qe_asset_content_invalid"
+    http_status = 422
 
 
 class ArtifactManifestInvalidError(HMMEvolutionError):

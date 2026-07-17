@@ -1,8 +1,8 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.6
+> **版本**：v1.7
 > **日期**：2026-07-17
-> **状态**：P1-A 已验收；P1-B evaluator/scorer 与旧诊断唯一计算路径迁移已实现，受控 benchmark 归 P1-C；P1-C 待实现；runtime activation 未启用
+> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已实现；真实 QE 10-case、性能、实机截图与 runtime activation 仍待外部验收
 > **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.8
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
@@ -1016,9 +1016,9 @@ frontend/src/lib/navigation/nav-groups.ts
 - repository、batch/evaluation/item 状态机、lease/fencing/idempotency/retry/cancel；
 - worker skeleton，不启生产 runtime。
 
-当前状态：P1-A 源码与外部验收完成；
+当前状态：P1-A 源码与外部验收完成；P1-B 与 P1-C 源码完成，P1-C 审计硬化已覆盖共享输入并发、lease recovery、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
 `production_ddl_gate=applied_and_verified`；
-`runtime_activation_gate=pending`。这不代表 P1-B evaluator 或 P1-C API/UI 已完成。
+`runtime_activation_gate=pending`。这不代表整个 Phase 1 已通过外部验收；真实 QE 10-case、10 候选性能、实机页面截图和首次 runtime activation 仍未完成。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -1124,9 +1124,9 @@ frontend/src/lib/navigation/nav-groups.ts
 |---|---|---|---|---|
 | F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt见 §17.4.1 | verified | 无 |
 | F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py` | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；非并列旧诊断 oracle、显式 tie-break、h10/h20/mixed horizon、latest-common/read-only transaction、交易日 forward return、coverage/warning、deterministic result hash；BUG-736/BUG-737 回归覆盖无硬编码凭据、无宽泛异常吞错、无 QE config 下载、Phase 0 缓存复用与 canonical market repository；HMM/Data Source matrix：178 passed / 8 skipped；新核心模块 line coverage 86.76%、branch coverage 70.31%；真实 dev PostgreSQL：空行情 fail-loud + forward-return SQL/只读事务 smoke 1 passed | verified | 无 |
-| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | `python -m pytest backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_worker.py -q`；`backend/tests/hmm_evolution/test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify | verified | 无 |
+| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,input_adapter,executor,models,errors}.py`；BUG-742/BUG-743 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`：共享 input bundle 单次加载、`candidate_concurrency=1..4` 有界并发、serialized heartbeat/fencing、worker-cycle batch recompute、每轮 lease reaper；既有 dev PostgreSQL 8-worker receipt | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；仍需 dev PostgreSQL 真实双候选并发、进程中断后 lease recovery 和 10 候选耗时 receipt，未标记 verified |
 | F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
-| F-010 | 本文 §14、§15；`backend/routers/hmm_evolution.py`、`backend/services/hmm_evolution/runtime.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/{app/hmm-evolution,components/hmm-evolution,components/hmm-research,lib/hmm-evolution,lib/hmm-research}`、feature-flagged navigation | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_worker_cli.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；`frontend/tests/hmm-evolution/hmm-evolution.spec.ts` 待安全端口外部验证；artifact: `frontend/.next/BUILD_ID`（本地生产构建） | approved_by_user_for_implementation | API/UI/worker 源码与本地 contract/build 已实现；真实 API 页面截图、10-case 对照、性能 benchmark 和首次 runtime activation 仍待外部验收，未宣称 F-010 verified |
+| F-010 | 本文 §14、§15；`backend/routers/hmm_evolution.py`、`backend/services/hmm_evolution/{runtime,asset_content_policy}.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/{app/hmm-evolution,components/hmm-evolution,components/hmm-research,lib/hmm-evolution,lib/hmm-research}`；BUG-744～BUG-748 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；`frontend/tests/hmm-evolution/hmm-evolution.spec.ts`：QE 权威节点、text-only bounded content + redaction、221+ 资产分页搜索、schema-aware 摘要、bounded polling/stale/degraded、daily_summary fail-loud、SVG 曲线、session idempotency | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；真实 API 页面截图、完整 Playwright、10-case、性能 benchmark 和首次 runtime activation 仍待补，未宣称 F-010 verified |
 
 ## 24. 设计结论
 
@@ -1134,13 +1134,15 @@ P1-A 的 QE 全资产只读 reader、candidate identity、schema 和 durable sta
 源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。P1-B 已实现 pure
 evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只读 repository、durable
 executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算
-路径迁移；F-007/F-009 已验证。P1-C 仍负责受控 benchmark、API/UI 与外部验收。生产
-worker/API/UI 均未启用，不得把当前状态表述为整个 Phase 1 完成。
+路径迁移；F-007/F-009 已验证。P1-C 的 API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已完成，
+但受控 10-case、10 候选性能、真实页面/Playwright 和首次 runtime activation 仍待外部验收。
+生产 worker/API/UI 均未启用，不得把当前状态表述为整个 Phase 1 完成或已具备生产运行状态。
 
 ## 25. 变更记录
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v1.7 | 2026-07-18 | 回填 BUG-742～BUG-748 审计修复：有界并发共享输入、lease reaper、QE 权威节点、内容安全、全资产 schema-aware 浏览、UI fail-loud 状态机和 idempotency；F-008/F-010 标记为源码完成但外部验收待补，不提前宣称 Phase 1 完成 |
 | v1.6 | 2026-07-18 | 回填 P1-C API/UI/worker 实现路径、本地 contract/TypeScript/Next build 证据和仍待完成的真实 UI/10-case/性能外部验收；将 F-006/F-008 测试证据改为 feature validator 可核验命令 |
 | v1.5 | 2026-07-18 | 固化用户确认的三页签最终信息架构和风险热力图默认首页；Phase 1 只激活真实演进页；以固定证据区/独立详情页替代抽屉和 raw JSON；补 UI 状态机、失败语义、legacy guard、可访问性和四项 DESIGN-COMPLIANCE-001 审核 |
 | v1.4 | 2026-07-17 | 回填 P1-B evaluator/scorer、旧诊断唯一计算路径迁移、真实验证证据和 P1-C 剩余范围 |

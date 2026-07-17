@@ -12,7 +12,12 @@ import pandas as pd
 from backend.services.hmm_data_source import BacktestDataSource
 
 from .candidate_artifact import CandidateArtifactResolver
-from .errors import ArtifactHashMismatchError, InvalidSpecError, SourceUnavailableError
+from .errors import (
+    ArtifactHashMismatchError,
+    HMMEvolutionError,
+    InvalidSpecError,
+    SourceUnavailableError,
+)
 from .evaluator import (
     EVALUATOR_VERSION,
     CandidateCoefficients,
@@ -63,6 +68,14 @@ class EvaluationExecutionInputs:
     market_returns: pd.DataFrame | None
 
 
+@dataclass(frozen=True)
+class BatchExecutionInputs:
+    """Candidate-specific views over one shared, verified batch input bundle."""
+
+    inputs_by_eval_id: Mapping[str, EvaluationExecutionInputs]
+    errors_by_eval_id: Mapping[str, HMMEvolutionError]
+
+
 class HMMEvaluationInputAdapter:
     """Load each shared input once and freeze durable evaluation identities."""
 
@@ -92,9 +105,7 @@ class HMMEvaluationInputAdapter:
         coefficient_inputs: dict[str, CandidateCoefficients] = {}
         for candidate in candidates:
             resolved = await self._candidate_resolver.resolve_registered_candidate(candidate)
-            coefficient_inputs[candidate.candidate_id] = CandidateCoefficients.from_payload(
-                resolved.payload
-            )
+            coefficient_inputs[candidate.candidate_id] = CandidateCoefficients.from_payload(resolved.payload)
 
         source = self._source_factory(evaluation_spec, "prediction_store_first")
         try:
@@ -142,9 +153,7 @@ class HMMEvaluationInputAdapter:
                 self._market_repository.read_forward_returns,
                 symbols=symbols,
                 trade_dates=date_plan.evaluation_dates,
-                horizon_trading_days=int(
-                    evaluation_spec.market_forward_return["horizon_trading_days"]
-                ),
+                horizon_trading_days=int(evaluation_spec.market_forward_return["horizon_trading_days"]),
                 as_of_date=resolved_as_of_date,
             )
             market_returns = market_read.returns
@@ -228,90 +237,214 @@ class HMMEvaluationInputAdapter:
     ) -> EvaluationExecutionInputs:
         """Replay one durable evaluation from its frozen manifest and spec."""
 
-        spec = EvaluationSpec.model_validate(evaluation["evaluation_spec"])
-        source_manifest = dict(evaluation["source_manifest"])
-        if checkpoint:
-            checkpoint("before_candidate_artifact")
-        resolved_candidate = await self._candidate_resolver.resolve_registered_candidate(candidate)
-        coefficients = CandidateCoefficients.from_payload(resolved_candidate.payload)
-        if checkpoint:
-            checkpoint("after_candidate_artifact")
+        prepared = await self.load_batch_evaluations(
+            evaluations=((evaluation, candidate),),
+            candidate_concurrency=1,
+            checkpoint=checkpoint,
+        )
+        eval_id = str(evaluation["eval_id"])
+        if eval_id in prepared.errors_by_eval_id:
+            raise prepared.errors_by_eval_id[eval_id]
+        return prepared.inputs_by_eval_id[eval_id]
 
-        preference = _replay_source_preference(source_manifest)
-        source = self._source_factory(spec, preference)
+    async def load_batch_evaluations(
+        self,
+        *,
+        evaluations: Sequence[tuple[Mapping[str, Any], CandidateRecord]],
+        candidate_concurrency: int,
+        checkpoint: Callable[[str], None] | None = None,
+    ) -> BatchExecutionInputs:
+        """Replay shared source/market inputs once for a claimed batch slice."""
+
+        if not evaluations:
+            raise InvalidSpecError("batch input replay requires at least one evaluation")
+        if not 1 <= candidate_concurrency <= 4:
+            raise InvalidSpecError("candidate_concurrency must be between one and four")
+
+        records = [(dict(evaluation), candidate) for evaluation, candidate in evaluations]
+        eval_ids = [str(evaluation.get("eval_id") or "").strip() for evaluation, _ in records]
+        if any(not eval_id for eval_id in eval_ids) or len(eval_ids) != len(set(eval_ids)):
+            raise InvalidSpecError("claimed evaluations must have unique non-empty eval_id values")
+
+        specs = {
+            eval_id: EvaluationSpec.model_validate(evaluation["evaluation_spec"])
+            for eval_id, (evaluation, _) in zip(eval_ids, records, strict=True)
+        }
+        first_eval_id = eval_ids[0]
+        first_spec = specs[first_eval_id]
+        first_spec_payload = first_spec.model_dump(mode="json")
+        for eval_id, spec in specs.items():
+            if spec.model_dump(mode="json") != first_spec_payload:
+                raise ArtifactHashMismatchError(
+                    "claimed batch evaluations do not share one frozen evaluation spec",
+                    context={"first_eval_id": first_eval_id, "mismatched_eval_id": eval_id},
+                )
+
+        manifests = {
+            eval_id: dict(evaluation["source_manifest"])
+            for eval_id, (evaluation, _) in zip(eval_ids, records, strict=True)
+        }
+        preferences = {_replay_source_preference(manifest) for manifest in manifests.values()}
+        if len(preferences) != 1:
+            raise ArtifactHashMismatchError(
+                "claimed batch evaluations use different frozen artifact sources",
+                context={"preferences": sorted(preferences)},
+            )
+
+        if checkpoint:
+            checkpoint("before_shared_source_inputs")
+        source = self._source_factory(first_spec, next(iter(preferences)))
         try:
             async with source:
-                predictions = await source.get_predictions(spec.window_start, spec.window_end)
+                predictions = await source.get_predictions(
+                    first_spec.window_start,
+                    first_spec.window_end,
+                )
                 labels = await source.get_labels(
-                    spec.window_start,
-                    spec.window_end,
-                    horizon_days=spec.label_horizon_days,
+                    first_spec.window_start,
+                    first_spec.window_end,
+                    horizon_days=first_spec.label_horizon_days,
                 )
                 current_source_info = source.get_artifact_source_info()
+        except SourceUnavailableError:
+            raise
         except Exception as exc:
             raise SourceUnavailableError(
                 "failed to replay frozen Phase 0 prediction and label inputs",
                 context={"error_type": type(exc).__name__},
             ) from exc
-        _verify_artifact_receipts(source_manifest, current_source_info, predictions, labels)
-        _verify_universe(source_manifest, predictions)
-        date_coverage = dict(source_manifest.get("date_coverage") or {})
-        try:
-            evaluation_dates = tuple(
-                date.fromisoformat(str(item)) for item in date_coverage["evaluation_dates"]
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ArtifactHashMismatchError(
-                "frozen source manifest has invalid evaluation dates",
-                context={"candidate_id": candidate.candidate_id},
-            ) from exc
-        if not evaluation_dates:
-            raise ArtifactHashMismatchError("frozen source manifest has no evaluation dates")
         if checkpoint:
-            checkpoint("after_shared_inputs")
+            checkpoint("after_shared_source_inputs")
 
-        market = dict(source_manifest.get("market_forward_return") or {})
-        market_returns: pd.DataFrame | None = None
-        if market.get("mode") == "required":
-            if checkpoint:
-                checkpoint("before_market_returns")
+        evaluation_dates_by_id: dict[str, tuple[date, ...]] = {}
+        date_evidence_by_id: dict[str, Mapping[str, Any]] = {}
+        for eval_id, manifest in manifests.items():
+            _verify_artifact_receipts(manifest, current_source_info, predictions, labels)
+            _verify_universe(manifest, predictions)
+            date_coverage = dict(manifest.get("date_coverage") or {})
             try:
-                resolved_as_of_date = date.fromisoformat(str(market["resolved_as_of_date"]))
-                horizon = int(market["horizon_trading_days"])
+                evaluation_dates = tuple(date.fromisoformat(str(item)) for item in date_coverage["evaluation_dates"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ArtifactHashMismatchError(
-                    "frozen market return manifest is invalid",
-                    context={"candidate_id": candidate.candidate_id},
+                    "frozen source manifest has invalid evaluation dates",
+                    context={"eval_id": eval_id},
                 ) from exc
-            symbols = sorted(
-                {str(item).strip() for item in predictions["symbol"] if str(item).strip()}
+            if not evaluation_dates:
+                raise ArtifactHashMismatchError(
+                    "frozen source manifest has no evaluation dates",
+                    context={"eval_id": eval_id},
+                )
+            evaluation_dates_by_id[eval_id] = evaluation_dates
+            date_evidence_by_id[eval_id] = date_coverage
+
+        market_returns: pd.DataFrame | None = None
+        market_manifests = {
+            eval_id: dict(manifest.get("market_forward_return") or {}) for eval_id, manifest in manifests.items()
+        }
+        market_modes = {str(market.get("mode") or "") for market in market_manifests.values()}
+        if len(market_modes) != 1:
+            raise ArtifactHashMismatchError(
+                "claimed batch evaluations use different market return modes",
+                context={"modes": sorted(market_modes)},
             )
-            market_read = self._market_repository.read_forward_returns(
+        market_mode = next(iter(market_modes))
+        if market_mode == "required":
+            identities: set[tuple[date, int]] = set()
+            for eval_id, market in market_manifests.items():
+                try:
+                    identities.add(
+                        (
+                            date.fromisoformat(str(market["resolved_as_of_date"])),
+                            int(market["horizon_trading_days"]),
+                        )
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ArtifactHashMismatchError(
+                        "frozen market return manifest is invalid",
+                        context={"eval_id": eval_id},
+                    ) from exc
+            if len(identities) != 1:
+                raise ArtifactHashMismatchError("claimed batch evaluations use different market return identities")
+            if checkpoint:
+                checkpoint("before_shared_market_returns")
+            resolved_as_of_date, horizon = next(iter(identities))
+            symbols = sorted({str(item).strip() for item in predictions["symbol"] if str(item).strip()})
+            union_dates = tuple(sorted({item for dates in evaluation_dates_by_id.values() for item in dates}))
+            market_read = await asyncio.to_thread(
+                self._market_repository.read_forward_returns,
                 symbols=symbols,
-                trade_dates=evaluation_dates,
+                trade_dates=union_dates,
                 horizon_trading_days=horizon,
                 as_of_date=resolved_as_of_date,
             )
-            if len(market_read.returns) != int(market.get("return_row_count", -1)):
-                raise ArtifactHashMismatchError(
-                    "market return row count changed since evaluation enqueue",
-                    context={
-                        "expected_row_count": market.get("return_row_count"),
-                        "actual_row_count": len(market_read.returns),
-                    },
-                )
             market_returns = market_read.returns
+            for eval_id, evaluation_dates in evaluation_dates_by_id.items():
+                expected_count = int(market_manifests[eval_id].get("return_row_count", -1))
+                actual_count = len(market_returns.loc[market_returns["trade_date"].isin(evaluation_dates)])
+                if actual_count != expected_count:
+                    raise ArtifactHashMismatchError(
+                        "market return row count changed since evaluation enqueue",
+                        context={
+                            "eval_id": eval_id,
+                            "expected_row_count": expected_count,
+                            "actual_row_count": actual_count,
+                        },
+                    )
             if checkpoint:
-                checkpoint("after_market_returns")
-        elif market.get("mode") != "disabled":
+                checkpoint("after_shared_market_returns")
+        elif market_mode != "disabled":
             raise ArtifactHashMismatchError("frozen market return mode is invalid")
-        return EvaluationExecutionInputs(
-            predictions=predictions,
-            labels=labels,
-            coefficients=coefficients,
-            evaluation_dates=evaluation_dates,
-            date_coverage_evidence=date_coverage,
-            market_returns=market_returns,
+
+        semaphore = asyncio.Semaphore(candidate_concurrency)
+
+        async def resolve_coefficients(
+            eval_id: str,
+            candidate: CandidateRecord,
+        ) -> tuple[str, CandidateCoefficients]:
+            async with semaphore:
+                if checkpoint:
+                    checkpoint(f"before_candidate_artifact_{eval_id}")
+                resolved = await self._candidate_resolver.resolve_registered_candidate(candidate)
+                coefficients = CandidateCoefficients.from_payload(resolved.payload)
+                if checkpoint:
+                    checkpoint(f"after_candidate_artifact_{eval_id}")
+                return eval_id, coefficients
+
+        coefficient_results = await asyncio.gather(
+            *(
+                resolve_coefficients(eval_id, candidate)
+                for eval_id, (_, candidate) in zip(eval_ids, records, strict=True)
+            ),
+            return_exceptions=True,
+        )
+        resolved_coefficients: dict[str, CandidateCoefficients] = {}
+        coefficient_errors: dict[str, HMMEvolutionError] = {}
+        for eval_id, result in zip(eval_ids, coefficient_results, strict=True):
+            if isinstance(result, BaseException):
+                if isinstance(result, HMMEvolutionError):
+                    coefficient_errors[eval_id] = result
+                else:
+                    coefficient_errors[eval_id] = HMMEvolutionError(
+                        "unexpected candidate artifact preparation failure",
+                        context={"eval_id": eval_id, "error_type": type(result).__name__},
+                    )
+                continue
+            resolved_eval_id, coefficients = result
+            resolved_coefficients[resolved_eval_id] = coefficients
+        return BatchExecutionInputs(
+            inputs_by_eval_id={
+                eval_id: EvaluationExecutionInputs(
+                    predictions=predictions,
+                    labels=labels,
+                    coefficients=resolved_coefficients[eval_id],
+                    evaluation_dates=evaluation_dates_by_id[eval_id],
+                    date_coverage_evidence=date_evidence_by_id[eval_id],
+                    market_returns=market_returns,
+                )
+                for eval_id in eval_ids
+                if eval_id in resolved_coefficients
+            },
+            errors_by_eval_id=coefficient_errors,
         )
 
     @staticmethod
