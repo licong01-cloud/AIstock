@@ -26,9 +26,13 @@ scheduler 或审批系统。
 design_status = accepted
 o1_implementation_status = merged_pr_2231
 o2_implementation_status = merged_pr_2261_runtime_validated
-o3_implementation_status = code_complete_l0_l1_passed_pending_l2_and_real_dev
+o3_implementation_status = code_complete_l0_l2_passed_pending_pr_and_post_merge_real_dev
 o3_code_merge = not_started
-o3_local_regression = 165_passed_7_skipped
+o3_focused_regression = 49_passed
+o3_module_regression = 121_passed_8_skipped
+o3_postgresql16_l2 = 8_passed_o2_o3_combined
+o3_real_dev_readonly_plan = already_present_98_exact_match_zero_dml
+o3_real_dev_persistent_execution = not_executed_waiting_code_merge
 o3_statement_coverage = 84_percent
 o3_branch_coverage = 74_percent
 o3_feature_workflow_validation = f2_pass_38_of_38_zero_warning
@@ -888,9 +892,9 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-898 | §4、§9.2 | batch-a/replica-role/sequence-reset denylist | verified_l0_l2 | none |
 | F-899 | §3、§6 | multi-package request and independent package identity tests | verified_l0_l2 | none |
 | F-900 | §10、§13 | `historical_onboarding.py`; exact DEV repository/runtime/WSL env injection、逐connection identity drift拒绝与AST no-global-pool测试 | verified_l0_l1 | none |
-| F-901 | §10 | exact Program id、normal config/date validation、future binding、pre-date `INPUT_PENDING`和exact rerun测试 | verified_l0_l1 | none |
-| F-902 | §10 | clean worktree release、existing DSE release一致性、typed prospective context、无合成universe provenance、DSE v2/v1 rejection与capture-status测试 | verified_l0_l1 | none |
-| F-903 | §10、§14 | manual historical request、Selection失败不降级、逐Program状态隔离、batch aggregate contract、formal receipt与retry测试 | verified_l0_l1 | none |
+| F-901 | §10、§18.3 | exact Program id、normal config/date validation、future binding、pre-date `INPUT_PENDING`和exact rerun测试；`test_o3_postgres_integration.py`真实Program/binding首次创建与exact retry | verified_l0_l2 | none |
+| F-902 | §10、§18.3 | clean worktree release、existing DSE release一致性、typed prospective context、无合成universe provenance、DSE v2/v1 rejection与capture-status测试；真实PostgreSQL single/native-multi artifact与DSE v2仓储链 | verified_l0_l2 | none |
+| F-903 | §10、§14、§18.3 | manual historical request、Selection失败不降级、逐Program状态隔离、batch aggregate contract、formal receipt与retry测试；真实PostgreSQL双轨`COMPLETE/WAITING_INPUT -> COMPLETE/COMPLETE`及exact retry | verified_l0_l2 | none |
 | F-904 | §10、§13 | Phase0A audit explicit database identity、显式env、non-local DEV target、localhost/name guess和acknowledgement移除测试 | verified_l0_l1 | none |
 | F-905 | §10、§15 | Phase0A audit/handoff read-only projection、仓库外content-addressed atomic no-replace、文件闭包与full-readback测试 | verified_l0_l1 | none |
 | F-906 | §11.1 | observer real-ingestion/no-copy/no-backdate tests | design_ready | none |
