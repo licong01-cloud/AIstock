@@ -4,6 +4,7 @@
     "backend/services/watchlist_service.py",
     "frontend/src/app/watchlist/page.tsx",
     "backend/tests/test_watchlist_category_entry_tracking.py",
+    "backend/tests/watchlist/test_realtime_amount_units.py",
     "frontend/tests/watchlist/watchlist-return-height.spec.ts",
     "backend/repositories/watchlist_repo_impl.py",
     "tests/aistock_validation/bugs/20260717_BUG-700-issue.json",

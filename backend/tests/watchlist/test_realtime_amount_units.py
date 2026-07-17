@@ -211,8 +211,11 @@ def test_list_items_with_quotes_returns_adjusted_entry_metadata(monkeypatch):
                 {
                     "id": 1,
                     "code": "000001.SZ",
-                    "entry_price": Decimal("20.0"),
-                    "entry_as_of": "2024-01-02",
+                    "entry_price": Decimal("30.0"),
+                    "entry_as_of": "2023-12-01",
+                    "category_entry_price": Decimal("20.0"),
+                    "category_entry_date": "2024-01-02",
+                    "category_added_at": "2024-01-02T09:30:00+08:00",
                 }
             ],
         },
@@ -238,7 +241,7 @@ def test_list_items_with_quotes_returns_adjusted_entry_metadata(monkeypatch):
         },
     )
 
-    result = watchlist_service.list_items_with_quotes()
+    result = watchlist_service.list_items_with_quotes(category_id=7)
     row = result["items"][0]
 
     assert row["pct_since_entry"] == 100.0
@@ -246,3 +249,4 @@ def test_list_items_with_quotes_returns_adjusted_entry_metadata(monkeypatch):
     assert row["entry_price_adjusted"] == 5.0
     assert row["entry_price_basis_date"] == "2024-01-02"
     assert row["entry_price_basis_source"] == "entry_as_of"
+    assert row["effective_entry_price_source"] == "category"
