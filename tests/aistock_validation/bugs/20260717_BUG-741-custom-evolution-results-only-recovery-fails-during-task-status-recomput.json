@@ -30,8 +30,8 @@
   "expected": "Results-only recovery must recompute custom task status from named status/count fields and leave recovered loops completed.",
   "first_seen_at": "2026-07-17T19:16:40.596052Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "423a60a7439f522a1ed8f3cb91cc43a823ea7548",
+  "fixed_at": "2026-07-17T19:33:27.634999Z",
   "github_issue_number": 2390,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2390",
   "last_seen_at": "2026-07-17T19:16:40.596052Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2391",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -59,6 +60,10 @@
     "fingerprint": "648cf4f5067cd15cb5c0e09d",
     "source_event_id": "FE-20260717-648cf4f5067c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_status.py -q -> 8 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> 2 sessions passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
