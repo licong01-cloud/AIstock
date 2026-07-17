@@ -3,7 +3,7 @@ import logging
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..repositories.watchlist_repo_impl import watchlist_repo
 from ..core.data_source_manager_impl import data_source_manager
@@ -429,16 +429,26 @@ def list_items_with_quotes(
     items: List[Dict[str, Any]] = base.get("items", [])
     codes = [str(it.get("code")) for it in items if it.get("code")]
     quotes_raw = _fetch_quotes(codes)
-    entry_adjustments = _fetch_qfq_entry_adjustments(items)
+    if category_id is not None:
+        adjustment_items = []
+        for item in items:
+            category_item = dict(item)
+            category_item["entry_price"] = item.get("category_entry_price")
+            category_item["entry_as_of"] = (
+                item.get("category_entry_date") or item.get("category_added_at")
+            )
+            category_item["entry_task_id"] = None
+            adjustment_items.append(category_item)
+        entry_adjustments = _fetch_qfq_entry_adjustments(adjustment_items)
+    else:
+        entry_adjustments = {}
 
     enriched: List[Dict[str, Any]] = []
     for it in items:
         code = str(it.get("code"))
 
-        # 优先使用分类级别的加入价格，如果没有则回退到股票级别
         category_entry_price = it.get("category_entry_price")
-        stock_entry_price = it.get("entry_price")
-        entry_price = category_entry_price if category_entry_price is not None else stock_entry_price
+        entry_price = category_entry_price if category_id is not None else None
 
         entry_adjustment = entry_adjustments.get(code) or {}
         entry_price_for_return = entry_adjustment.get("entry_price_adjusted")
@@ -458,8 +468,12 @@ def list_items_with_quotes(
         row["entry_adj_factor_date"] = entry_adjustment.get("entry_adj_factor_date")
         row["latest_adj_factor_date"] = entry_adjustment.get("latest_adj_factor_date")
 
-        # 添加分类级别的信息到返回结果
-        row["effective_entry_price_source"] = "category" if category_entry_price is not None else "stock"
+        if category_id is None:
+            row["effective_entry_price_source"] = "not_applicable_all_categories"
+        elif category_entry_price is None:
+            row["effective_entry_price_source"] = "missing_category_snapshot"
+        else:
+            row["effective_entry_price_source"] = "category"
 
         enriched.append(row)
 
@@ -468,13 +482,18 @@ def list_items_with_quotes(
 
 def add_items_bulk(codes: List[str], category_id: int, on_conflict: str = "ignore") -> Dict[str, int]:
     names_map: Dict[str, str] = {}
-    for c in codes:
-        base = c
-        if "." in str(c):
+    normalized_codes: List[str] = []
+    for raw_code in codes:
+        ts_code = _normalize_code_for_storage(raw_code)
+        if not ts_code:
+            raise ValueError(f"无法识别的股票代码: {raw_code}")
+        normalized_codes.append(ts_code)
+        base = ts_code
+        if "." in ts_code:
             try:
-                base = data_source_manager._convert_from_ts_code(c)  # type: ignore[attr-defined]
+                base = data_source_manager._convert_from_ts_code(ts_code)  # type: ignore[attr-defined]
             except Exception:
-                base = c
+                base = ts_code
         try:
             info = data_source_manager.get_stock_basic_info(base)
         except Exception:
@@ -482,8 +501,22 @@ def add_items_bulk(codes: List[str], category_id: int, on_conflict: str = "ignor
         name = None
         if isinstance(info, dict):
             name = info.get("name") or info.get("stock_name")
-        names_map[c] = name or c
-    return watchlist_repo.add_items_bulk(codes, category_id, on_conflict=on_conflict, names=names_map)
+        names_map[ts_code] = name or ts_code
+
+    normalized_codes = list(dict.fromkeys(normalized_codes))
+    price_map = _get_entry_price_bulk(normalized_codes)
+    missing = [code for code in normalized_codes if code not in price_map]
+    if missing:
+        raise ValueError(f"无法获取分类加入价格: {', '.join(missing)}")
+    today = date.today()
+    snapshots = {code: (today, price_map[code]) for code in normalized_codes}
+    return watchlist_repo.add_items_bulk(
+        normalized_codes,
+        category_id,
+        on_conflict=on_conflict,
+        names=names_map,
+        entry_snapshots=snapshots,
+    )
 
 
 def delete_items(ids: List[int]) -> int:
@@ -548,7 +581,12 @@ def add_single_item(
     if extra_category_ids:
         valid_extra = [cid for cid in extra_category_ids if isinstance(cid, int)]
         if valid_extra:
-            watchlist_repo.add_categories_to_items([item_id], valid_extra)
+            snapshot_date = entry_as_of_date or date.today()
+            watchlist_repo.add_categories_to_items(
+                [item_id],
+                valid_extra,
+                {item_id: (snapshot_date, float(entry_price))},
+            )
 
     return item_id
 
@@ -770,6 +808,31 @@ def add_items_bulk_from_task_selection(
     if not prepared:
         return {"ok": False, "added": 0, "skipped": 0, "moved": 0, "errors": errors, "item_ids_by_code": {}}
 
+    category_codes = [str(item["code"]) for item in prepared]
+    category_price_map = _get_entry_price_bulk(category_codes)
+    missing_category_prices = [code for code in category_codes if code not in category_price_map]
+    if missing_category_prices:
+        return {
+            "ok": False,
+            "added": 0,
+            "skipped": 0,
+            "moved": 0,
+            "errors": errors + [
+                {
+                    "code": code,
+                    "error": "无法获取加入分类时的当前价格",
+                }
+                for code in missing_category_prices
+            ],
+            "item_ids_by_code": {},
+        }
+
+    category_entry_date = date.today()
+    for item in prepared:
+        code = str(item["code"])
+        item["category_entry_date"] = category_entry_date
+        item["category_entry_price"] = category_price_map[code]
+
     try:
         res = watchlist_repo.add_items_bulk_with_meta(
             category_id=category_id,
@@ -789,16 +852,36 @@ def add_items_bulk_from_task_selection(
         return {"ok": False, "added": 0, "skipped": 0, "moved": 0, "errors": [{"error": str(exc)}], "item_ids_by_code": {}}
 
 
+def _build_category_entry_snapshots(ids: List[int]) -> Dict[int, Tuple[date, float]]:
+    item_codes = watchlist_repo.get_item_codes_by_ids(ids)
+    missing_ids = [item_id for item_id in ids if item_id not in item_codes]
+    if missing_ids:
+        raise ValueError(f"自选股票不存在: {missing_ids}")
+
+    price_map = _get_entry_price_bulk(list(item_codes.values()))
+    missing_codes = [code for code in item_codes.values() if code not in price_map]
+    if missing_codes:
+        raise ValueError(f"无法获取分类加入价格: {', '.join(missing_codes)}")
+
+    today = date.today()
+    return {
+        item_id: (today, price_map[code])
+        for item_id, code in item_codes.items()
+    }
+
+
 def update_items_category(ids: List[int], new_category_id: int) -> int:
     """批量替换指定条目的分类为单一分类（原分类全部清空）。"""
 
-    return watchlist_repo.update_item_category(ids, new_category_id)
+    snapshots = _build_category_entry_snapshots(ids)
+    return watchlist_repo.update_item_category(ids, new_category_id, snapshots)
 
 
 def add_categories_to_items(ids: List[int], category_ids: List[int]) -> int:
     """为一批自选条目追加多个分类映射。"""
 
-    return watchlist_repo.add_categories_to_items(ids, category_ids)
+    snapshots = _build_category_entry_snapshots(ids)
+    return watchlist_repo.add_categories_to_items(ids, category_ids, snapshots)
 
 
 def remove_categories_from_items(ids: List[int], category_ids: List[int]) -> int:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
@@ -49,7 +49,11 @@ interface WatchlistItem {
   category_added_at?: string | null;
   category_entry_price?: number | null;
   category_entry_date?: string | null;
-  effective_entry_price_source?: "category" | "stock" | null;
+  effective_entry_price_source?:
+    | "category"
+    | "missing_category_snapshot"
+    | "not_applicable_all_categories"
+    | null;
 }
 
 interface ListItemsResponse {
@@ -66,20 +70,6 @@ interface Task {
 
 interface TasksResponse {
   tasks: Task[];
-}
-
-interface PricesResponse {
-  prices: Record<
-    string,
-    {
-      latestPrice?: number | null;
-      openPrice?: number | null;
-      closePrice?: number | null;
-      highPrice?: number | null;
-      lowPrice?: number | null;
-      rating?: string | null;
-    } | null
-  >;
 }
 
 interface TdxSyncResult {
@@ -128,6 +118,8 @@ const PERSISTENT_SORT_KEYS: SortByPersistent[] = [
   "code",
   "name",
   "category",
+  "entry_price",
+  "entry_rank",
   "created_at",
   "updated_at",
   "last_analysis_time",
@@ -294,17 +286,35 @@ function canSortRealtime(field: SortBy, pricesRefreshed: boolean): boolean {
   return pricesRefreshed;
 }
 
+function entryPriceForView(item: WatchlistItem, categorySelected: boolean) {
+  return categorySelected ? item.category_entry_price : item.entry_price;
+}
+
+function joinedAtForView(item: WatchlistItem, categorySelected: boolean) {
+  return categorySelected ? item.category_added_at : item.created_at;
+}
+
+function entryDateForView(item: WatchlistItem, categorySelected: boolean) {
+  if (!categorySelected) return item.entry_as_of;
+  return item.category_entry_date ?? item.category_added_at;
+}
+
 function sortItemsPersistent(
   items: WatchlistItem[],
   sortBy: SortByPersistent,
   sortDir: "asc" | "desc",
+  categorySelected: boolean,
 ): WatchlistItem[] {
   const reverse = sortDir === "desc";
   const cloned = [...items];
   cloned.sort((a, b) => {
     if (sortBy === "entry_price" || sortBy === "entry_rank") {
-      const va = (a as any)[sortBy] as number | null | undefined;
-      const vb = (b as any)[sortBy] as number | null | undefined;
+      const va = sortBy === "entry_price"
+        ? entryPriceForView(a, categorySelected)
+        : a.entry_rank;
+      const vb = sortBy === "entry_price"
+        ? entryPriceForView(b, categorySelected)
+        : b.entry_rank;
       const aNull = va === null || va === undefined || Number.isNaN(va);
       const bNull = vb === null || vb === undefined || Number.isNaN(vb);
       if (aNull && bNull) {
@@ -336,8 +346,8 @@ function sortItemsPersistent(
       va = a.last_rating ?? "";
       vb = b.last_rating ?? "";
     } else if (sortBy === "created_at") {
-      va = a.created_at ?? "";
-      vb = b.created_at ?? "";
+      va = joinedAtForView(a, categorySelected) ?? "";
+      vb = joinedAtForView(b, categorySelected) ?? "";
     } else {
       va = a.updated_at ?? "";
       vb = b.updated_at ?? "";
@@ -367,6 +377,7 @@ function WatchlistPage() {
   const [allItems, setAllItems] = useState<WatchlistItem[]>([]);
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [total, setTotal] = useState(0);
+  const loadRequestIdRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -594,7 +605,11 @@ function WatchlistPage() {
       function okDate(it: WatchlistItem): boolean {
         const d = f.date;
         if (d.created_at.enabled) {
-          if (!cmpDate(it.created_at ?? null, d.created_at.op, d.created_at.value))
+          if (!cmpDate(
+            joinedAtForView(it, currentCatId != null),
+            d.created_at.op,
+            d.created_at.value,
+          ))
             return false;
         }
         if (d.last_analysis_time.enabled) {
@@ -622,6 +637,7 @@ function WatchlistPage() {
         filtered,
         effectiveSort as SortByPersistent,
         effectiveDir,
+        currentCatId != null,
       );
     } else {
       filtered = sortItemsRealtime(
@@ -639,8 +655,14 @@ function WatchlistPage() {
     setTotal(totalLocal);
   }
 
-  async function loadAllItems() {
-    setLoading(true);
+  async function loadAllItems(
+    markPricesRefreshed = false,
+    usePriceSpinner = false,
+  ) {
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
+    if (usePriceSpinner) setRefreshingPrices(true);
+    else setLoading(true);
     setError(null);
     try {
       const all: WatchlistItem[] = [];
@@ -648,120 +670,6 @@ function WatchlistPage() {
       let totalRemote = 0;
       const pageSizeServer = 200;
       let p = 1;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const params = new URLSearchParams();
-        params.set("page", String(p));
-        params.set("page_size", String(pageSizeServer));
-        params.set("sort_by", "updated_at");
-        params.set("sort_dir", "desc");
-        const res = await fetch(
-          `${API_BASE}/watchlist/items?${params.toString()}`,
-        );
-        if (!res.ok) throw new Error(`列表请求失败: ${res.status}`);
-        const data: ListItemsResponse = await res.json();
-        const batch = data.items || [];
-        if (p === 1) totalRemote = data.total || batch.length || 0;
-        all.push(...batch);
-        fetched += batch.length;
-        if (batch.length === 0 || fetched >= totalRemote) break;
-        p += 1;
-        if (p > 200) break;
-      }
-      setAllItems(all);
-      setPricesRefreshed(false);
-      applyFiltersAndSort(all);
-    } catch (e: any) {
-      setError(e?.message || "未知错误");
-      setItems([]);
-      setTotal(0);
-      setAllItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function refreshPrices() {
-    if (refreshingPrices) return;
-    setRefreshingPrices(true);
-    setError(null);
-    try {
-      let filtered = allItems.filter((item) => matchesCategory(item));
-      const codes = filtered.map((item) => item.code).filter(Boolean);
-      if (codes.length === 0) {
-        setPricesRefreshed(true);
-        return;
-      }
-      const res = await fetch(`${API_BASE}/stocks/prices`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codes }),
-      });
-      if (!res.ok) throw new Error(`价格刷新失败: ${res.status}`);
-      const data: PricesResponse = await res.json();
-      const updated = allItems.map((item) => {
-        const priceData = data.prices[item.code];
-        if (!priceData) return item;
-        const rawLast = priceData.latestPrice ?? item.last;
-        const newPrevClose = priceData.closePrice ?? item.prev_close;
-        // 停牌/盘前: latestPrice=0 → 用 prev_close 作为有效价格
-        const effectivePrice =
-          rawLast != null && rawLast > 0
-            ? rawLast
-            : newPrevClose != null && newPrevClose > 0
-              ? newPrevClose
-              : item.last;
-        // 重新计算涨跌幅
-        let newPctChange = item.pct_change;
-        if (effectivePrice != null && effectivePrice > 0 && newPrevClose != null && newPrevClose > 0) {
-          newPctChange = ((effectivePrice - newPrevClose) / newPrevClose) * 100;
-        }
-        let newPctSinceEntry = item.pct_since_entry;
-        const basisEntryPrice = item.entry_price_adjusted ?? item.entry_price;
-        if (effectivePrice != null && effectivePrice > 0 && basisEntryPrice != null && basisEntryPrice > 0) {
-          newPctSinceEntry = ((effectivePrice - basisEntryPrice) / basisEntryPrice) * 100;
-        }
-        return {
-          ...item,
-          last: effectivePrice,
-          open: priceData.openPrice ?? item.open,
-          prev_close: newPrevClose,
-          high: priceData.highPrice ?? item.high,
-          low: priceData.lowPrice ?? item.low,
-          last_rating: priceData.rating ?? item.last_rating,
-          pct_change: newPctChange,
-          pct_since_entry: newPctSinceEntry,
-        };
-      });
-      setAllItems(updated);
-      setPricesRefreshed(true);
-      applyFiltersAndSort(updated);
-    } catch (e: any) {
-      setError(e?.message || "价格刷新失败");
-    } finally {
-      setRefreshingPrices(false);
-    }
-  }
-
-  async function loadPageItems() {
-    if (searchActive) {
-      await loadAllAndFilter();
-      return;
-    }
-    await loadAllItems();
-  }
-
-  async function loadAllAndFilter() {
-    // 搜索模式：拉取当前分类下所有条目并在前端过滤+排序+分页
-    setLoading(true);
-    setError(null);
-    try {
-      const all: WatchlistItem[] = [];
-      let fetched = 0;
-      let totalRemote = 0;
-      const pageSizeServer = 200;
-      let p = 1;
-      // 先尝试最多取若干页，直到达到 total
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const params = new URLSearchParams();
@@ -783,102 +691,34 @@ function WatchlistPage() {
         fetched += batch.length;
         if (batch.length === 0 || fetched >= totalRemote) break;
         p += 1;
-        if (p > 100) break;
+        if (p > 200) break;
       }
-
-      // 文本过滤
-      const f = searchFilters;
-      const tCode = f.code.trim().toLowerCase();
-      const tName = f.name.trim().toLowerCase();
-      const tCat = f.category.trim().toLowerCase();
-      const tRating = f.rating.trim().toLowerCase();
-
-      function okText(it: WatchlistItem): boolean {
-        const ts = (it.code || "").toLowerCase();
-        const c6 = displayCode(it.code).toLowerCase();
-        if (tCode && !c6.includes(tCode) && !ts.includes(tCode)) return false;
-        if (tName && !(it.name || "").toLowerCase().includes(tName)) return false;
-        if (tCat && !(it.category_names || "").toLowerCase().includes(tCat))
-          return false;
-        if (
-          tRating &&
-          !(it.last_rating || "")
-            .toLowerCase()
-            .includes(tRating)
-        )
-          return false;
-        return true;
-      }
-
-      function okNumeric(it: WatchlistItem): boolean {
-        const n = f.num;
-        const mapping: [keyof typeof n, keyof WatchlistItem][] = [
-          ["last", "last"],
-          ["pct_change", "pct_change"],
-          ["open", "open"],
-          ["prev_close", "prev_close"],
-          ["high", "high"],
-          ["low", "low"],
-          ["volume_hand", "volume_hand"],
-          ["amount", "amount"],
-        ];
-        for (const [k, field] of mapping) {
-          const nf = n[k];
-          if (!nf.enabled) continue;
-          if (!cmpNumeric((it as any)[field], nf.op, nf.value)) return false;
-        }
-        return true;
-      }
-
-      function okDate(it: WatchlistItem): boolean {
-        const d = f.date;
-        if (d.created_at.enabled) {
-          if (!cmpDate(it.created_at ?? null, d.created_at.op, d.created_at.value))
-            return false;
-        }
-        if (d.last_analysis_time.enabled) {
-          if (
-            !cmpDate(
-              it.last_analysis_time ?? null,
-              d.last_analysis_time.op,
-              d.last_analysis_time.value,
-            )
-          )
-            return false;
-        }
-        return true;
-      }
-
-      let filtered = all.filter((it) => okText(it) && okNumeric(it) && okDate(it));
-
-      // 分类筛选（在搜索模式下也需要应用）
-      filtered = filtered.filter((item) => matchesCategory(item));
-
-      // 排序
-      if (PERSISTENT_SORT_KEYS.includes(sortBy as SortByPersistent)) {
-        filtered = sortItemsPersistent(filtered, sortBy as SortByPersistent, sortDir);
-      } else {
-        filtered = sortItemsRealtime(filtered, sortBy as SortByRealtime, sortDir);
-      }
-
-      const totalLocal = filtered.length;
-      const start = Math.max(0, (page - 1) * pageSize);
-      const end = start + pageSize;
-      const pageItems = filtered.slice(start, end);
-      setItems(pageItems);
-      setTotal(totalLocal);
+      if (requestId !== loadRequestIdRef.current) return;
+      setAllItems(all);
+      setPricesRefreshed(markPricesRefreshed);
     } catch (e: any) {
+      if (requestId !== loadRequestIdRef.current) return;
       setError(e?.message || "未知错误");
       setItems([]);
       setTotal(0);
+      setAllItems([]);
     } finally {
-      setLoading(false);
+      if (usePriceSpinner) setRefreshingPrices(false);
+      else if (requestId === loadRequestIdRef.current) setLoading(false);
     }
+  }
+
+  async function refreshPrices() {
+    if (refreshingPrices) return;
+    await loadAllItems(true, true);
+  }
+
+  async function loadPageItems() {
+    await loadAllItems();
   }
 
   useEffect(() => {
     loadCategories();
-    loadAllItems();
     fetch(`${API_BASE}/tdx-blocks/available`)
       .then((res) => (res.ok ? res.json() : { available: false }))
       .then((data) => setTdxAvailable(Boolean(data.available)))
@@ -888,11 +728,12 @@ function WatchlistPage() {
   }, []);
 
   useEffect(() => {
-    if (searchActive) {
-      loadAllAndFilter();
-    } else {
-      applyFiltersAndSort(allItems);
-    }
+    loadAllItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCatId]);
+
+  useEffect(() => {
+    applyFiltersAndSort(allItems);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentCatId,
@@ -908,11 +749,7 @@ function WatchlistPage() {
   useEffect(() => {
     if (!autoRefresh) return undefined;
     const id = setInterval(() => {
-      if (searchActive) {
-        loadAllAndFilter();
-      } else {
-        applyFiltersAndSort(allItems);
-      }
+      applyFiltersAndSort(allItems);
     }, Math.max(2, refreshInterval) * 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2235,7 +2072,6 @@ function WatchlistPage() {
             onClick={() => {
               setSearchActive(true);
               setPage(1);
-              loadAllAndFilter();
             }}
             style={{
               padding: "4px 10px",
@@ -2498,8 +2334,12 @@ function WatchlistPage() {
             </thead>
             <tbody>
               {items.map((row) => {
-                const joinDate = row.created_at
-                  ? formatDate(row.created_at)
+                const categorySelected = currentCatId != null;
+                const joinedAt = joinedAtForView(row, categorySelected);
+                const displayedEntryPrice = entryPriceForView(row, categorySelected);
+                const displayedEntryDate = entryDateForView(row, categorySelected);
+                const joinDate = joinedAt
+                  ? formatDateTime(joinedAt)
                   : "-";
                 const selected = selectedIds.includes(row.id);
                 return (
@@ -2529,16 +2369,21 @@ function WatchlistPage() {
                     </td>
                     <td data-testid={`watchlist-cell-entry-price-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       <span title={row.entry_price_basis === "qfq_adjusted" ? `Adjusted entry price: ${row.entry_price_adjusted?.toFixed(3) ?? "-"}; factor: ${row.entry_adjustment_factor?.toFixed(6) ?? "-"}; basis date: ${row.entry_price_basis_date ?? row.entry_adj_factor_date ?? "-"}` : "Adjustment factor unavailable; using raw entry price"}>
-                        {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
+                        {displayedEntryPrice != null ? displayedEntryPrice.toFixed(3) : "-"}
                       </span>
                     </td>
                     <td data-testid={`watchlist-cell-entry-as-of-${row.code}`} style={{ padding: 6, color: "#6b7280" }}>
-                      {row.entry_price_basis_date ? formatDate(row.entry_price_basis_date) : row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
+                      {row.entry_price_basis_date
+                        ? formatDate(row.entry_price_basis_date)
+                        : displayedEntryDate
+                          ? formatDate(displayedEntryDate)
+                          : "-"}
                     </td>
                     <td style={{ padding: 6, textAlign: "right" }}>
                       {row.last != null ? row.last.toFixed(3) : "-"}
                     </td>
                     <td
+                      data-testid={`watchlist-cell-pct-change-${row.code}`}
                       style={{
                         padding: 6,
                         textAlign: "right",
@@ -2555,6 +2400,7 @@ function WatchlistPage() {
                         : "-"}
                     </td>
                     <td
+                      data-testid={`watchlist-cell-pct-since-entry-${row.code}`}
                       style={{
                         padding: 6,
                         textAlign: "right",
@@ -2592,7 +2438,9 @@ function WatchlistPage() {
                       {formatAmount(row.amount ?? null)}
                     </td>
                     <td style={{ padding: 6 }}>{row.last_rating || "N/A"}</td>
-                    <td style={{ padding: 6 }}>{joinDate}</td>
+                    <td data-testid={`watchlist-cell-joined-at-${row.code}`} style={{ padding: 6 }}>
+                      {joinDate}
+                    </td>
                     <td style={{ padding: 6 }}>
                       {row.last_analysis_time
                         ? formatDateTime(row.last_analysis_time)

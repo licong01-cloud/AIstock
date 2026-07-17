@@ -10,8 +10,7 @@
 from __future__ import annotations
 
 import pytest
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import date, timedelta
 
 from backend.repositories.watchlist_repo_impl import watchlist_repo
 from backend.services import watchlist_service
@@ -33,7 +32,7 @@ def setup_test_data():
     cat1 = watchlist_repo.create_category("TEST_CAT_1", "测试分类1")
     cat2 = watchlist_repo.create_category("TEST_CAT_2", "测试分类2")
 
-    yield {"cat1_id": cat1["id"], "cat2_id": cat2["id"]}
+    yield {"cat1_id": cat1, "cat2_id": cat2}
 
     # 清理测试数据
     with get_conn() as conn:
@@ -288,8 +287,13 @@ def test_add_categories_to_items_records_entry_snapshot(setup_test_data):
     )
     item_id = result["item_ids_by_code"]["TEST_000004.SZ"]
 
-    # 使用 add_categories_to_items 添加到另一个分类
-    watchlist_repo.add_categories_to_items(item_ids=[item_id], category_ids=[cat2_id])
+    # 使用分类加入当时的独立快照添加到另一个分类
+    category_entry_date = date.today()
+    watchlist_repo.add_categories_to_items(
+        item_ids=[item_id],
+        category_ids=[cat2_id],
+        entry_snapshots={item_id: (category_entry_date, 30.0)},
+    )
 
     # 验证新关联记录也有价格快照
     with get_conn() as conn:
@@ -304,9 +308,236 @@ def test_add_categories_to_items_records_entry_snapshot(setup_test_data):
             )
             row = cur.fetchone()
             assert row is not None
-            # 应该使用股票当前的 entry_as_of 和 entry_price
-            assert row[0] == entry_date
-            assert float(row[1]) == 25.0
+            assert row[0] == category_entry_date
+            assert float(row[1]) == 30.0
+
+
+def test_service_uses_selected_category_snapshot_for_adjusted_return(monkeypatch):
+    captured_adjustment_items = []
+    monkeypatch.setattr(
+        watchlist_service.watchlist_repo,
+        "list_items",
+        lambda **_kwargs: {
+            "total": 1,
+            "items": [
+                {
+                    "id": 1,
+                    "code": "000001.SZ",
+                    "entry_price": 10.0,
+                    "entry_as_of": "2024-01-02",
+                    "entry_task_id": "global-task",
+                    "category_entry_price": 20.0,
+                    "category_entry_date": "2024-02-05",
+                    "category_added_at": "2024-02-05T09:30:00+08:00",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        watchlist_service,
+        "_fetch_quotes",
+        lambda _codes: {"000001.SZ": {"price": 30.0, "pre_close": 29.0}},
+    )
+
+    def fake_adjustments(items):
+        captured_adjustment_items.extend(items)
+        return {
+            "000001.SZ": {
+                "entry_price_basis": "qfq_adjusted",
+                "entry_price_adjusted": 24.0,
+                "entry_adjustment_factor": 1.2,
+                "entry_price_basis_date": "2024-02-05",
+                "entry_price_basis_source": "entry_as_of",
+                "entry_adj_factor_date": "2024-02-05",
+                "latest_adj_factor_date": "2024-06-03",
+            }
+        }
+
+    monkeypatch.setattr(watchlist_service, "_fetch_qfq_entry_adjustments", fake_adjustments)
+
+    result = watchlist_service.list_items_with_quotes(category_id=7)
+    row = result["items"][0]
+
+    assert captured_adjustment_items[0]["entry_price"] == 20.0
+    assert captured_adjustment_items[0]["entry_as_of"] == "2024-02-05"
+    assert captured_adjustment_items[0]["entry_task_id"] is None
+    assert row["pct_since_entry"] == 25.0
+    assert row["effective_entry_price_source"] == "category"
+
+
+def test_service_does_not_fallback_to_stock_entry_for_selected_category(monkeypatch):
+    monkeypatch.setattr(
+        watchlist_service.watchlist_repo,
+        "list_items",
+        lambda **_kwargs: {
+            "total": 1,
+            "items": [
+                {
+                    "id": 1,
+                    "code": "000001.SZ",
+                    "entry_price": 10.0,
+                    "entry_as_of": "2024-01-02",
+                    "category_entry_price": None,
+                    "category_entry_date": None,
+                    "category_added_at": "2024-02-05T09:30:00+08:00",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        watchlist_service,
+        "_fetch_quotes",
+        lambda _codes: {"000001.SZ": {"price": 30.0, "pre_close": 29.0}},
+    )
+    monkeypatch.setattr(watchlist_service, "_fetch_qfq_entry_adjustments", lambda _items: {})
+
+    row = watchlist_service.list_items_with_quotes(category_id=7)["items"][0]
+
+    assert row["pct_since_entry"] is None
+    assert row["effective_entry_price_source"] == "missing_category_snapshot"
+
+
+def test_service_does_not_report_stock_entry_return_for_all_categories(monkeypatch):
+    monkeypatch.setattr(
+        watchlist_service.watchlist_repo,
+        "list_items",
+        lambda **_kwargs: {
+            "total": 1,
+            "items": [
+                {
+                    "id": 1,
+                    "code": "000001.SZ",
+                    "entry_price": 10.0,
+                    "entry_as_of": "2024-01-02",
+                    "category_entry_price": None,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        watchlist_service,
+        "_fetch_quotes",
+        lambda _codes: {"000001.SZ": {"price": 30.0, "pre_close": 29.0}},
+    )
+
+    row = watchlist_service.list_items_with_quotes()["items"][0]
+
+    assert row["pct_since_entry"] is None
+    assert row["effective_entry_price_source"] == "not_applicable_all_categories"
+
+
+def test_task_selection_records_current_category_price_without_replacing_selection_basis(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(watchlist_service, "_normalize_code_for_storage", lambda code: code)
+    monkeypatch.setattr(
+        watchlist_service,
+        "_get_entry_price_bulk",
+        lambda codes: {code: 12.0 for code in codes},
+    )
+
+    def fake_add_items_bulk_with_meta(**kwargs):
+        captured.update(kwargs)
+        return {
+            "added": 1,
+            "skipped": 0,
+            "moved": 0,
+            "item_ids_by_code": {"000001.SZ": 1},
+        }
+
+    monkeypatch.setattr(
+        watchlist_service.watchlist_repo,
+        "add_items_bulk_with_meta",
+        fake_add_items_bulk_with_meta,
+    )
+
+    result = watchlist_service.add_items_bulk_from_task_selection(
+        items=[
+            {
+                "code": "000001.SZ",
+                "name": "测试股票",
+                "entry_price": 10.0,
+                "as_of": "2024-01-02",
+            }
+        ],
+        category_id=7,
+    )
+
+    prepared_item = captured["items"][0]
+    assert result["ok"] is True
+    assert prepared_item["entry_price"] == 10.0
+    assert prepared_item["entry_as_of"] == date(2024, 1, 2)
+    assert prepared_item["category_entry_price"] == 12.0
+    assert prepared_item["category_entry_date"] == date.today()
+
+
+def test_single_add_records_the_same_snapshot_for_extra_categories(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(watchlist_service, "_normalize_code_for_storage", lambda code: code)
+    monkeypatch.setattr(watchlist_service.watchlist_repo, "add_item", lambda *_args, **_kwargs: 11)
+
+    def fake_add_categories(item_ids, category_ids, entry_snapshots):
+        captured["item_ids"] = item_ids
+        captured["category_ids"] = category_ids
+        captured["entry_snapshots"] = entry_snapshots
+        return len(category_ids)
+
+    monkeypatch.setattr(
+        watchlist_service.watchlist_repo,
+        "add_categories_to_items",
+        fake_add_categories,
+    )
+
+    item_id = watchlist_service.add_single_item(
+        code="000001.SZ",
+        category_id=1,
+        name="测试股票",
+        extra_category_ids=[2, 3],
+        entry_price=15.0,
+    )
+
+    assert item_id == 11
+    assert captured["item_ids"] == [11]
+    assert captured["category_ids"] == [2, 3]
+    assert captured["entry_snapshots"] == {11: (date.today(), 15.0)}
+
+
+def test_plain_bulk_add_records_current_category_snapshots(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(watchlist_service, "_normalize_code_for_storage", lambda code: code)
+    monkeypatch.setattr(
+        watchlist_service.data_source_manager,
+        "_convert_from_ts_code",
+        lambda code: code.split(".", 1)[0],
+    )
+    monkeypatch.setattr(
+        watchlist_service.data_source_manager,
+        "get_stock_basic_info",
+        lambda _code: {"name": "测试股票"},
+    )
+    monkeypatch.setattr(
+        watchlist_service,
+        "_get_entry_price_bulk",
+        lambda codes: {code: 18.0 for code in codes},
+    )
+
+    def fake_add_items_bulk(codes, category_id, **kwargs):
+        captured["codes"] = codes
+        captured["category_id"] = category_id
+        captured.update(kwargs)
+        return {"added": 1, "skipped": 0, "moved": 0}
+
+    monkeypatch.setattr(watchlist_service.watchlist_repo, "add_items_bulk", fake_add_items_bulk)
+
+    result = watchlist_service.add_items_bulk(
+        ["000001.SZ", "000001.SZ"],
+        category_id=7,
+    )
+
+    assert result["added"] == 1
+    assert captured["codes"] == ["000001.SZ"]
+    assert captured["entry_snapshots"] == {
+        "000001.SZ": (date.today(), 18.0),
+    }
 
 
 if __name__ == "__main__":
