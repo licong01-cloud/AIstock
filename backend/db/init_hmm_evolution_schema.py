@@ -7,6 +7,7 @@ separate, explicitly authorized gate even after the code is merged.
 from __future__ import annotations
 
 import sys
+import re
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover - direct script invocation support.
 
 SCHEMA_NAME = "hmm_evolution"
 SCHEMA_VERSION = "hmm_evolution_v1"
+SCHEMA_COMMENT = "Isolated HMM evolution research state; never trading control state."
 
 EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
     "schema_version": ("version", "description", "applied_at"),
@@ -196,6 +198,254 @@ EXPECTED_CONSTRAINTS: Mapping[str, tuple[str, ...]] = {
         "batch_test_item_confidence_ck",
         "batch_test_item_rank_ck",
     ),
+}
+
+_TYPE_SIGNATURES: Mapping[str, tuple[str, str, int | None]] = {
+    "text": ("text", "text", None),
+    "char64": ("character", "bpchar", 64),
+    "jsonb": ("jsonb", "jsonb", None),
+    "bigint": ("bigint", "int8", None),
+    "integer": ("integer", "int4", None),
+    "timestamptz": ("timestamp with time zone", "timestamptz", None),
+    "date": ("date", "date", None),
+    "double": ("double precision", "float8", None),
+    "boolean": ("boolean", "bool", None),
+}
+
+_COLUMN_TYPE_GROUPS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
+    "schema_version": {
+        "text": ("version", "description"),
+        "timestamptz": ("applied_at",),
+    },
+    "candidate": {
+        "text": (
+            "candidate_id", "display_name", "description", "source_type",
+            "algorithm_version", "lifecycle_status", "invalid_reason_code", "created_by",
+        ),
+        "char64": ("manifest_hash",),
+        "jsonb": ("source_ref", "artifact_manifest", "invalid_context"),
+        "bigint": ("row_version",),
+        "timestamptz": ("created_at", "updated_at", "retired_at"),
+    },
+    "offline_evaluation": {
+        "text": (
+            "eval_id", "candidate_id", "base_loop_ref", "evaluator_version", "universe_id",
+            "status", "owner_id", "evidence_quality", "error_code", "reason_code",
+            "error_message",
+        ),
+        "char64": (
+            "logical_evaluation_key", "source_manifest_hash", "candidate_manifest_hash",
+            "evaluation_spec_hash", "input_hash", "universe_hash", "result_hash",
+        ),
+        "jsonb": (
+            "source_manifest", "evaluation_spec", "warnings_json", "metrics_json",
+            "error_context",
+        ),
+        "integer": (
+            "run_generation", "label_horizon_days", "topk", "attempt_count",
+            "trading_days_count", "changed_day_count", "label_comparable_day_count",
+            "db_comparable_day_count",
+        ),
+        "bigint": ("fencing_token", "row_version", "replacement_count"),
+        "date": ("as_of_date", "window_start", "window_end"),
+        "timestamptz": (
+            "lease_expires_at", "heartbeat_at", "cancel_requested_at", "queued_at",
+            "started_at", "completed_at", "created_at", "updated_at",
+        ),
+        "double": (
+            "primary_coverage_ratio", "net_label_return", "net_db_10d",
+            "positive_net_label_day_ratio",
+        ),
+    },
+    "batch_test_run": {
+        "text": (
+            "batch_id", "idempotency_key", "retry_of_batch_id", "status", "owner_id",
+            "cancel_requested_by", "recommendation_version", "error_code", "reason_code",
+            "created_by",
+        ),
+        "char64": ("request_hash", "recommendation_spec_hash"),
+        "integer": (
+            "retry_generation", "candidate_count", "queued_count", "running_count",
+            "succeeded_count", "failed_count", "cancelled_count", "timed_out_count",
+        ),
+        "bigint": ("fencing_token", "row_version"),
+        "timestamptz": (
+            "lease_expires_at", "heartbeat_at", "cancel_requested_at", "created_at",
+            "started_at", "completed_at", "updated_at",
+        ),
+        "jsonb": ("recommendation_spec", "error_context"),
+    },
+    "batch_test_item": {
+        "text": (
+            "batch_id", "candidate_id", "eval_id", "item_status", "error_code", "reason_code",
+        ),
+        "integer": ("ordinal", "recommendation_rank"),
+        "double": ("recommendation_score", "evidence_confidence"),
+        "boolean": ("is_top3",),
+        "jsonb": ("recommendation_components", "error_context"),
+        "timestamptz": ("created_at", "updated_at", "completed_at"),
+    },
+}
+
+_NULLABLE_COLUMNS: Mapping[str, frozenset[str]] = {
+    "schema_version": frozenset(),
+    "candidate": frozenset(
+        {"description", "invalid_reason_code", "invalid_context", "retired_at"}
+    ),
+    "offline_evaluation": frozenset(
+        {
+            "owner_id", "lease_expires_at", "heartbeat_at", "cancel_requested_at",
+            "primary_coverage_ratio", "net_label_return", "net_db_10d",
+            "positive_net_label_day_ratio", "evidence_quality", "metrics_json", "result_hash",
+            "error_code", "reason_code", "error_message", "error_context", "started_at",
+            "completed_at",
+        }
+    ),
+    "batch_test_run": frozenset(
+        {
+            "idempotency_key", "retry_of_batch_id", "owner_id", "lease_expires_at",
+            "heartbeat_at", "cancel_requested_at", "cancel_requested_by", "error_code",
+            "reason_code", "error_context", "started_at", "completed_at",
+        }
+    ),
+    "batch_test_item": frozenset(
+        {
+            "recommendation_score", "evidence_confidence", "recommendation_rank",
+            "recommendation_components", "error_code", "reason_code", "error_context",
+            "completed_at",
+        }
+    ),
+}
+
+_COLUMN_DEFAULTS: Mapping[str, Mapping[str, str]] = {
+    "schema_version": {"applied_at": "clock_timestamp()"},
+    "candidate": {
+        "lifecycle_status": "'research_only'::text",
+        "row_version": "1",
+        "created_at": "clock_timestamp()",
+        "updated_at": "clock_timestamp()",
+    },
+    "offline_evaluation": {
+        "run_generation": "1", "status": "'queued'::text", "attempt_count": "0",
+        "fencing_token": "0", "row_version": "1", "trading_days_count": "0",
+        "changed_day_count": "0", "label_comparable_day_count": "0",
+        "db_comparable_day_count": "0", "replacement_count": "0",
+        "warnings_json": "'[]'::jsonb", "queued_at": "clock_timestamp()",
+        "created_at": "clock_timestamp()", "updated_at": "clock_timestamp()",
+    },
+    "batch_test_run": {
+        "retry_generation": "1", "status": "'queued'::text", "fencing_token": "0",
+        "row_version": "1", "queued_count": "0", "running_count": "0",
+        "succeeded_count": "0", "failed_count": "0", "cancelled_count": "0",
+        "timed_out_count": "0", "created_at": "clock_timestamp()",
+        "updated_at": "clock_timestamp()",
+    },
+    "batch_test_item": {
+        "item_status": "'pending'::text", "is_top3": "false",
+        "created_at": "clock_timestamp()", "updated_at": "clock_timestamp()",
+    },
+}
+
+
+def _build_expected_column_contracts() -> dict[str, tuple[tuple[Any, ...], ...]]:
+    contracts: dict[str, tuple[tuple[Any, ...], ...]] = {}
+    for table, expected_columns in EXPECTED_COLUMNS.items():
+        type_by_column: dict[str, tuple[str, str, int | None]] = {}
+        for type_name, columns in _COLUMN_TYPE_GROUPS[table].items():
+            signature = _TYPE_SIGNATURES[type_name]
+            for column in columns:
+                if column in type_by_column:
+                    raise RuntimeError(f"duplicate HMM schema type contract: {table}.{column}")
+                type_by_column[column] = signature
+        if set(type_by_column) != set(expected_columns):
+            raise RuntimeError(
+                f"incomplete HMM schema type contract for {table}: "
+                f"missing={sorted(set(expected_columns) - set(type_by_column))}, "
+                f"extra={sorted(set(type_by_column) - set(expected_columns))}"
+            )
+        contracts[table] = tuple(
+            (
+                column,
+                *type_by_column[column],
+                "YES" if column in _NULLABLE_COLUMNS[table] else "NO",
+                _COLUMN_DEFAULTS[table].get(column),
+            )
+            for column in expected_columns
+        )
+    return contracts
+
+
+EXPECTED_COLUMN_CONTRACTS = _build_expected_column_contracts()
+
+EXPECTED_CONSTRAINT_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
+    "schema_version": {"schema_version_pkey": "PRIMARY KEY (version)"},
+    "candidate": {
+        "candidate_pkey": "PRIMARY KEY (candidate_id)",
+        "candidate_manifest_hash_key": "UNIQUE (manifest_hash)",
+        "candidate_manifest_hash_ck": "CHECK (manifest_hash ~ '^[0-9a-f]{64}$')",
+        "candidate_source_type_ck": "CHECK (source_type IN ('existing_snapshot_coefficients', 'configured_local_coefficients', 'qe_experiment_coefficients'))",
+        "candidate_lifecycle_status_ck": "CHECK (lifecycle_status IN ('research_only', 'retired', 'invalid'))",
+        "candidate_row_version_ck": "CHECK (row_version >= 1)",
+    },
+    "offline_evaluation": {
+        "offline_evaluation_pkey": "PRIMARY KEY (eval_id)",
+        "offline_evaluation_candidate_fk": "FOREIGN KEY (candidate_id) REFERENCES hmm_evolution.candidate(candidate_id)",
+        "offline_evaluation_logical_generation_key": "UNIQUE (logical_evaluation_key, run_generation)",
+        "offline_evaluation_hashes_ck": "CHECK (logical_evaluation_key ~ '^[0-9a-f]{64}$' AND source_manifest_hash ~ '^[0-9a-f]{64}$' AND candidate_manifest_hash ~ '^[0-9a-f]{64}$' AND evaluation_spec_hash ~ '^[0-9a-f]{64}$' AND input_hash ~ '^[0-9a-f]{64}$' AND universe_hash ~ '^[0-9a-f]{64}$' AND (result_hash IS NULL OR result_hash ~ '^[0-9a-f]{64}$'))",
+        "offline_evaluation_generation_ck": "CHECK (run_generation >= 1)",
+        "offline_evaluation_window_ck": "CHECK (window_start <= window_end)",
+        "offline_evaluation_label_horizon_ck": "CHECK (label_horizon_days BETWEEN 1 AND 30)",
+        "offline_evaluation_topk_ck": "CHECK (topk >= 1)",
+        "offline_evaluation_status_ck": "CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out'))",
+        "offline_evaluation_attempt_ck": "CHECK (attempt_count >= 0)",
+        "offline_evaluation_fencing_ck": "CHECK (fencing_token >= 0)",
+        "offline_evaluation_row_version_ck": "CHECK (row_version >= 1)",
+        "offline_evaluation_counts_ck": "CHECK (trading_days_count >= 0 AND changed_day_count >= 0 AND label_comparable_day_count >= 0 AND db_comparable_day_count >= 0 AND replacement_count >= 0)",
+        "offline_evaluation_ratios_ck": "CHECK ((primary_coverage_ratio IS NULL OR primary_coverage_ratio BETWEEN 0 AND 1) AND (positive_net_label_day_ratio IS NULL OR positive_net_label_day_ratio BETWEEN 0 AND 1))",
+        "offline_evaluation_evidence_quality_ck": "CHECK (evidence_quality IS NULL OR evidence_quality IN ('complete', 'degraded', 'insufficient'))",
+    },
+    "batch_test_run": {
+        "batch_test_run_pkey": "PRIMARY KEY (batch_id)",
+        "batch_test_run_request_hash_key": "UNIQUE (request_hash)",
+        "batch_test_run_idempotency_key_key": "UNIQUE (idempotency_key)",
+        "batch_test_run_retry_fk": "FOREIGN KEY (retry_of_batch_id) REFERENCES hmm_evolution.batch_test_run(batch_id)",
+        "batch_test_run_hashes_ck": "CHECK (request_hash ~ '^[0-9a-f]{64}$' AND recommendation_spec_hash ~ '^[0-9a-f]{64}$')",
+        "batch_test_run_retry_generation_ck": "CHECK (retry_generation >= 1)",
+        "batch_test_run_status_ck": "CHECK (status IN ('queued', 'running', 'cancel_requested', 'completed', 'partial_failed', 'failed', 'cancelled', 'timed_out'))",
+        "batch_test_run_fencing_ck": "CHECK (fencing_token >= 0)",
+        "batch_test_run_row_version_ck": "CHECK (row_version >= 1)",
+        "batch_test_run_counts_ck": "CHECK (candidate_count BETWEEN 1 AND 50 AND queued_count >= 0 AND running_count >= 0 AND succeeded_count >= 0 AND failed_count >= 0 AND cancelled_count >= 0 AND timed_out_count >= 0)",
+    },
+    "batch_test_item": {
+        "batch_test_item_pkey": "PRIMARY KEY (batch_id, candidate_id)",
+        "batch_test_item_batch_fk": "FOREIGN KEY (batch_id) REFERENCES hmm_evolution.batch_test_run(batch_id)",
+        "batch_test_item_candidate_fk": "FOREIGN KEY (candidate_id) REFERENCES hmm_evolution.candidate(candidate_id)",
+        "batch_test_item_evaluation_fk": "FOREIGN KEY (eval_id) REFERENCES hmm_evolution.offline_evaluation(eval_id)",
+        "batch_test_item_ordinal_key": "UNIQUE (batch_id, ordinal)",
+        "batch_test_item_ordinal_ck": "CHECK (ordinal >= 0)",
+        "batch_test_item_status_ck": "CHECK (item_status IN ('pending', 'waiting_shared', 'reused', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out'))",
+        "batch_test_item_confidence_ck": "CHECK (evidence_confidence IS NULL OR evidence_confidence BETWEEN 0 AND 1)",
+        "batch_test_item_rank_ck": "CHECK (recommendation_rank IS NULL OR recommendation_rank >= 1)",
+    },
+}
+
+EXPECTED_INDEX_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
+    "schema_version": {},
+    "candidate": {
+        "candidate_lifecycle_created_idx": "CREATE INDEX candidate_lifecycle_created_idx ON hmm_evolution.candidate USING btree (lifecycle_status, created_at DESC)",
+    },
+    "offline_evaluation": {
+        "offline_evaluation_claim_idx": "CREATE INDEX offline_evaluation_claim_idx ON hmm_evolution.offline_evaluation USING btree (status, lease_expires_at)",
+        "offline_evaluation_candidate_created_idx": "CREATE INDEX offline_evaluation_candidate_created_idx ON hmm_evolution.offline_evaluation USING btree (candidate_id, created_at DESC)",
+        "offline_evaluation_input_hash_idx": "CREATE INDEX offline_evaluation_input_hash_idx ON hmm_evolution.offline_evaluation USING btree (input_hash)",
+    },
+    "batch_test_run": {
+        "batch_test_run_claim_idx": "CREATE INDEX batch_test_run_claim_idx ON hmm_evolution.batch_test_run USING btree (status, lease_expires_at)",
+        "batch_test_run_created_idx": "CREATE INDEX batch_test_run_created_idx ON hmm_evolution.batch_test_run USING btree (created_at DESC)",
+    },
+    "batch_test_item": {
+        "batch_test_item_eval_idx": "CREATE INDEX batch_test_item_eval_idx ON hmm_evolution.batch_test_item USING btree (eval_id, item_status)",
+    },
 }
 
 TABLE_DDL: list[str] = [
@@ -456,7 +706,7 @@ def _quote_comment(value: str) -> str:
 
 
 def _comment_ddl() -> Iterable[str]:
-    yield "COMMENT ON SCHEMA hmm_evolution IS 'Isolated HMM evolution research state; never trading control state.'"
+    yield f"COMMENT ON SCHEMA hmm_evolution IS '{_quote_comment(SCHEMA_COMMENT)}'"
     for table, comment in TABLE_COMMENTS.items():
         yield f"COMMENT ON TABLE hmm_evolution.{table} IS '{_quote_comment(comment)}'"
         for column, column_comment in COLUMN_COMMENTS[table].items():
@@ -484,28 +734,53 @@ def bootstrap_schema(
 
 
 def verify_schema(conn: Any) -> None:
-    """Fail closed when an existing table drifts from the versioned contract."""
+    """Fail closed on structural or documentation drift from the versioned contract."""
 
     with conn.cursor() as cursor:
-        for table, expected_columns in EXPECTED_COLUMNS.items():
+        cursor.execute(
+            """
+            SELECT obj_description(n.oid, 'pg_namespace')
+            FROM pg_namespace n WHERE n.nspname = %s
+            """,
+            (SCHEMA_NAME,),
+        )
+        schema_comment_row = cursor.fetchone()
+        actual_schema_comment = schema_comment_row[0] if schema_comment_row else None
+        if actual_schema_comment != SCHEMA_COMMENT:
+            raise RuntimeError(
+                "hmm_evolution schema comment drift: "
+                f"expected={SCHEMA_COMMENT!r}, actual={actual_schema_comment!r}"
+            )
+
+        for table, expected_columns in EXPECTED_COLUMN_CONTRACTS.items():
             cursor.execute(
                 """
-                SELECT column_name
+                SELECT column_name, data_type, udt_name, character_maximum_length,
+                       is_nullable, column_default
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
                 ORDER BY ordinal_position
                 """,
                 (SCHEMA_NAME, table),
             )
-            actual_columns = tuple(str(row[0]) for row in cursor.fetchall())
-            if actual_columns != expected_columns:
+            actual_columns = tuple(
+                (
+                    str(row[0]), str(row[1]), str(row[2]), row[3], str(row[4]),
+                    _normalize_default(row[5]),
+                )
+                for row in cursor.fetchall()
+            )
+            normalized_expected_columns = tuple(
+                (*row[:5], _normalize_default(row[5])) for row in expected_columns
+            )
+            if actual_columns != normalized_expected_columns:
                 raise RuntimeError(
-                    f"hmm_evolution schema drift for {table}: "
-                    f"expected={expected_columns}, actual={actual_columns}"
+                    f"hmm_evolution column drift for {table}: "
+                    f"expected={normalized_expected_columns}, actual={actual_columns}"
                 )
             cursor.execute(
                 """
-                SELECT conname
+                SELECT conname, pg_get_constraintdef(c.oid, true)
                 FROM pg_constraint c
                 JOIN pg_class t ON t.oid = c.conrelid
                 JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -514,13 +789,109 @@ def verify_schema(conn: Any) -> None:
                 """,
                 (SCHEMA_NAME, table),
             )
-            actual_constraints = tuple(sorted(str(row[0]) for row in cursor.fetchall()))
-            expected_constraints = tuple(sorted(EXPECTED_CONSTRAINTS[table]))
+            actual_constraints = {
+                str(row[0]): _normalize_sql_definition(str(row[1]))
+                for row in cursor.fetchall()
+            }
+            expected_constraints = {
+                name: _normalize_sql_definition(definition)
+                for name, definition in EXPECTED_CONSTRAINT_DEFINITIONS[table].items()
+            }
             if actual_constraints != expected_constraints:
                 raise RuntimeError(
                     f"hmm_evolution constraint drift for {table}: "
                     f"expected={expected_constraints}, actual={actual_constraints}"
                 )
+            cursor.execute(
+                """
+                SELECT i.relname, pg_get_indexdef(i.oid)
+                FROM pg_class t
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                JOIN pg_index ix ON ix.indrelid = t.oid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                WHERE n.nspname = %s AND t.relname = %s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pg_constraint c WHERE c.conindid = i.oid
+                  )
+                ORDER BY i.relname
+                """,
+                (SCHEMA_NAME, table),
+            )
+            actual_indexes = {
+                str(row[0]): _normalize_sql_definition(str(row[1]))
+                for row in cursor.fetchall()
+            }
+            expected_indexes = {
+                name: _normalize_sql_definition(definition)
+                for name, definition in EXPECTED_INDEX_DEFINITIONS[table].items()
+            }
+            if actual_indexes != expected_indexes:
+                raise RuntimeError(
+                    f"hmm_evolution index drift for {table}: "
+                    f"expected={expected_indexes}, actual={actual_indexes}"
+                )
+            cursor.execute(
+                """
+                SELECT obj_description(c.oid, 'pg_class')
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = %s AND c.relname = %s
+                """,
+                (SCHEMA_NAME, table),
+            )
+            table_comment_row = cursor.fetchone()
+            actual_table_comment = table_comment_row[0] if table_comment_row else None
+            if actual_table_comment != TABLE_COMMENTS[table]:
+                raise RuntimeError(
+                    f"hmm_evolution table comment drift for {table}: "
+                    f"expected={TABLE_COMMENTS[table]!r}, actual={actual_table_comment!r}"
+                )
+            cursor.execute(
+                """
+                SELECT a.attname, col_description(c.oid, a.attnum)
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_attribute a ON a.attrelid = c.oid
+                WHERE n.nspname = %s AND c.relname = %s
+                  AND a.attnum > 0 AND NOT a.attisdropped
+                ORDER BY a.attnum
+                """,
+                (SCHEMA_NAME, table),
+            )
+            actual_column_comments = {
+                str(row[0]): row[1] for row in cursor.fetchall()
+            }
+            expected_column_comments = dict(COLUMN_COMMENTS[table])
+            if actual_column_comments != expected_column_comments:
+                raise RuntimeError(
+                    f"hmm_evolution column comment drift for {table}: "
+                    f"expected={expected_column_comments}, actual={actual_column_comments}"
+                )
+
+
+_SQL_CAST_RE = re.compile(
+    r"::(?:text|bpchar|character varying|jsonb|integer|bigint|double precision|boolean|date|timestamp with time zone)(?:\[\])?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_sql_definition(value: str) -> str:
+    text = str(value or "").strip().lower().replace('"', "")
+    text = _SQL_CAST_RE.sub("", text)
+    text = re.sub(
+        r"=\s*any\s*\(\s*array\s*\[(.*?)\]\s*\)",
+        r"in(\1)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = text.replace("[", "(").replace("]", ")")
+    return re.sub(r"[\s();]+", "", text)
+
+
+def _normalize_default(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _normalize_sql_definition(str(value))
 
 
 if __name__ == "__main__":  # pragma: no cover - operator invocation only.
