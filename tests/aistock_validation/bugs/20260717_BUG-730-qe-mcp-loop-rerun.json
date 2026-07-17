@@ -38,8 +38,8 @@
   "expected": "MCP rerun必须允许并透传node_id与node_parallelism；未显式覆盖时应保留任务现有节点并发，资源遥测继续强制关闭。",
   "first_seen_at": "2026-07-17T10:31:24.083786Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "50f752de7d9725365b58a9511585b117a9b63ce9",
+  "fixed_at": "2026-07-17T12:02:21.602866Z",
   "github_issue_number": 2343,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2343",
   "last_seen_at": "2026-07-17T10:31:24.083786Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2347",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "2665da6c5d43e167b29651ec",
     "source_event_id": "FE-20260717-2665da6c5d43"
   },
+  "validation_evidence": [
+    "pytest MCP module -> 24 passed; classifier test -> passed; ruff/py_compile/diff -> passed; GitHub CI -> green"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
