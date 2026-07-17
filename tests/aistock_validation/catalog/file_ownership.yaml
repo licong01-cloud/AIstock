@@ -216,6 +216,24 @@ rules:
     layer: product_feature
     risk_level: critical
     ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: miniqmt_execution_runtime_services
+    priority: 95
+    include:
+      - backend/services/miniqmt_execution_runtime/**
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: The canonical MiniQMT event-loop runtime owns durable algorithm state, tick-driven child creation, and broker synchronization.
+  - rule_id: miniqmt_execution_runtime_tests
+    priority: 95
+    include:
+      - backend/tests/miniqmt_execution_runtime/**
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2]
+    layer: backend_test
+    risk_level: critical
+    ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
   - rule_id: qmt_infra
     priority: 85
     include:

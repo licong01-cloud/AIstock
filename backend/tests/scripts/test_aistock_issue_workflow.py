@@ -597,9 +597,17 @@ def test_start_validation_budget_defers_broad_required_plans(
         "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
         "l0",
     ]
-    assert payload["deferred_nightly_plans"] == ["paper_v2_backend", "simulation_core_l2", "miniqmt_sim_stub_l3"]
+    assert payload["deferred_nightly_plans"] == [
+        "paper_v2_backend",
+        "simulation_core_l2",
+        "miniqmt_sim_stub_l3",
+        "miniqmt_execution_runtime_l2",
+    ]
     task_card_text = (isolated_workflow_root / payload["task_card_md"]).read_text(encoding="utf-8")
-    assert "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3`" in task_card_text
+    assert (
+        "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3, "
+        "miniqmt_execution_runtime_l2`"
+    ) in task_card_text
     state = json.loads((isolated_workflow_root / payload["state_path"]).read_text(encoding="utf-8"))
     assert state["task_card_availability"]["available"] is True
 def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(

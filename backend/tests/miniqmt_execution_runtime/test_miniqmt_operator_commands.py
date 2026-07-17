@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
@@ -13,6 +14,8 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeConfig,
     MiniQMTOperatorCommandStatus,
 )
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.trading_core.models import OrderSide
 
 
@@ -515,7 +518,23 @@ def test_replace_alpha_signal_book_records_binding_without_execution_layer_mutat
 
 def test_runtime_client_executes_operator_command_with_evidence() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
-    client = MiniQMTExecutionRuntimeClient(repository=repo)
+    strategy_ledger_repository = InMemoryQmtStrategyLedgerRepository()
+    strategy_ledger_repository.create_virtual_account(
+        VirtualAccount(
+            strategy_id="slot_alpha_001",
+            strategy_name="slot_alpha_001",
+            display_name="Operator command test strategy",
+            account_id="ag_minqmt_main_sim",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=strategy_ledger_repository,
+    )
     gateway = FakeMiniQMTGateway(
         positions=[
             {
@@ -543,3 +562,9 @@ def test_runtime_client_executes_operator_command_with_evidence() -> None:
     assert result.submitted_child_order_ids
     assert evidence.runtime_owner == "MiniQMTExecutionRuntime"
     assert evidence.submitted_child_count == 1
+    assert len(
+        strategy_ledger_repository.list_order_ledger(
+            account_id="ag_minqmt_main_sim",
+            trade_date=date(2026, 6, 9),
+        )
+    ) == 1

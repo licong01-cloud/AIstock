@@ -2,8 +2,17 @@
   "actual": "过期测试要求立即 BrokerSubmitError；在当前 origin/main 精确 nodeid 失败，而 test_b0_quote_v2_pending_tick_driver_continues_without_duplicate_child 通过。",
   "allowed_write_scope": [
     "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "noxfile.py",
+    "backend/services/validation/plan_catalog.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260717_BUG-698-miniqmt-no-child-tick-pending.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -17,7 +26,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-17T03:47:38.958893Z",
-  "description": "过期测试要求立即 BrokerSubmitError；在当前 origin/main 精确 nodeid 失败，而 test_b0_quote_v2_pending_tick_driver_continues_without_duplicate_child 通过。",
+  "description": "origin/main 的 test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch 仍断言首次 dispatch 未产生 child 时必须立即抛 BrokerSubmitError，但权威 MiniQMT event-loop 语义是将 active algo 持久化为 explicit pending，并由后续真实 tick 继续驱动。该 nodeid 已失败，同时 backend/tests/miniqmt_execution_runtime 只映射到通用 tests.backend，未被现有 Paper/Simulation nox 计划覆盖，形成测试语义冲突和 CI 假绿。启用完整目录矩阵后另暴露两个 fixture/LEGACY 断言漂移，以及 BEST_LIMIT cancel-requote 与 TWAP partial-fill 被通用 child terminalization 提前结束的真实 vn.py lifecycle 偏移；这些问题必须一并闭合后才能启用专属 L2 计划，禁止缩窄测试制造假绿。GitHub CI classifier 还必须对 MiniQMT service/test 精确选择该 session，不能只在 catalog 中登记而实际 PR matrix 不执行。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
