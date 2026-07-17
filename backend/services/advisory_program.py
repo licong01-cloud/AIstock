@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -32,6 +33,9 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     UnsupportedFeatureError,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 PROGRAM_STATUS_DRAFT = "DRAFT"
@@ -2118,14 +2122,21 @@ class AdvisoryProgramService:
                 candidates=candidates,
                 active_episodes=active,
             )
+            normalized_market = {
+                symbol: _market_from_mapping(symbol, payload, trade_date=current)
+                for symbol, payload in (raw_market or {}).items()
+            }
+            normalized_market = self._with_active_episode_market_marks(
+                trade_date=current,
+                candidates=candidates,
+                market_by_symbol=normalized_market,
+                active_episodes=active,
+            )
             result = self._evaluate_review(
                 program=program,
                 trade_date=current,
                 candidates=candidates,
-                market_by_symbol={
-                    symbol: _market_from_mapping(symbol, payload, trade_date=current)
-                    for symbol, payload in (raw_market or {}).items()
-                },
+                market_by_symbol=normalized_market,
                 active_episodes=active,
                 preview=True,
             )
@@ -2340,6 +2351,11 @@ class AdvisoryProgramService:
         try:
             loaded = self._load_daily_market_marks(missing_symbols, trade_date=trade_date)
         except Exception:
+            logger.exception(
+                "advisory active-holding market hydration failed for trade_date=%s symbols=%s",
+                trade_date.isoformat(),
+                missing_symbols,
+            )
             return market
         return {**loaded, **market}
 
@@ -2663,13 +2679,18 @@ class AdvisoryProgramService:
                 decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_HOLD, EXIT_REPLACEMENT_BUDGET, REVIEW_STATUS_SUCCEEDED, kept, evidence))
 
         active_symbols = {row.symbol for row in snapshots if row.status == EPISODE_STATUS_ACTIVE}
+        exited_symbols = {row.symbol for row in decisions if row.action == ACTION_EXIT}
         slots = max(program.target_count - len(active_symbols), 0)
         entry_limit = slots if not active_episodes else min(slots, replacement_budget)
         entered = 0
         for candidate in sorted(candidates, key=lambda row: (row.rank, row.symbol)):
             if entered >= entry_limit:
                 break
-            if candidate.rank > int(program.review_policy["rank_enter_threshold"]) or candidate.symbol in active_symbols:
+            if (
+                candidate.rank > int(program.review_policy["rank_enter_threshold"])
+                or candidate.symbol in active_symbols
+                or candidate.symbol in exited_symbols
+            ):
                 continue
             entry_price = _price_for_basis(market_by_symbol.get(candidate.symbol), candidate, program.entry_price_basis)
             if entry_price is None:
