@@ -5,8 +5,10 @@ import json
 from datetime import date, datetime, timezone
 
 import pandas as pd
+import pytest
 
 from backend.services.hmm_evolution.candidate_artifact import CandidateArtifactResolver
+from backend.services.hmm_evolution.errors import ArtifactHashMismatchError
 from backend.services.hmm_evolution.input_adapter import HMMEvaluationInputAdapter
 from backend.services.hmm_evolution.market_repository import MarketReturnRead, MarketWatermark
 from backend.services.hmm_evolution.models import (
@@ -17,9 +19,10 @@ from backend.services.hmm_evolution.models import (
 
 
 class _Source:
-    def __init__(self, predictions, labels):
+    def __init__(self, predictions, labels, *, pred_sha="b" * 64):
         self.predictions = predictions
         self.labels = labels
+        self.pred_sha = pred_sha
 
     async def __aenter__(self):
         return self
@@ -38,7 +41,7 @@ class _Source:
             "pred.pkl": {
                 "source": "prediction_store",
                 "uri": "cas://qe/pred.pkl",
-                "sha256": "b" * 64,
+                "sha256": self.pred_sha,
                 "size_bytes": 100,
                 "row_count": len(self.predictions),
                 "zero_copy": True,
@@ -55,7 +58,12 @@ class _Source:
 
 
 class _MarketRepository:
+    def __init__(self):
+        self.watermark_calls = 0
+        self.return_calls = 0
+
     def resolve_watermark(self, *, policy, requested_date):
+        self.watermark_calls += 1
         return MarketWatermark(
             requested_policy=policy,
             requested_date=requested_date,
@@ -79,6 +87,7 @@ class _MarketRepository:
         horizon_trading_days,
         as_of_date,
     ):
+        self.return_calls += 1
         frame = pd.DataFrame(
             [(item, symbol, 10, 0.1, date(2026, 1, 20)) for item in trade_dates for symbol in symbols],
             columns=["trade_date", "symbol", "horizon_days", "future_return", "label_date"],
@@ -147,10 +156,12 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
         market_forward_return={"mode": "required", "horizon_trading_days": 10},
     )
     source = _Source(predictions, labels)
+    preferences = []
+    market_repository = _MarketRepository()
     adapter = HMMEvaluationInputAdapter(
         candidate_resolver=resolver,
-        market_repository=_MarketRepository(),
-        source_factory=lambda _spec, _preference: source,
+        market_repository=market_repository,
+        source_factory=lambda _spec, preference: preferences.append(preference) or source,
     )
 
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
@@ -162,3 +173,169 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     assert plan.source_manifest["market_forward_return"]["price_row_count"] == 4
     assert prepared.market_returns is not None
     assert len(prepared.market_returns) == 2
+    assert preferences == ["prediction_store_first"]
+
+    checkpoints = []
+    replayed = asyncio.run(
+        adapter.load_evaluation(
+            evaluation={
+                "evaluation_spec": spec.model_dump(mode="json"),
+                "source_manifest": plan.source_manifest,
+            },
+            candidate=candidate,
+            checkpoint=checkpoints.append,
+        )
+    )
+    assert preferences == ["prediction_store_first", "prediction_store_only"]
+    assert replayed.evaluation_dates == (trade_date,)
+    assert replayed.market_returns is not None
+    assert checkpoints == [
+        "before_candidate_artifact",
+        "after_candidate_artifact",
+        "after_shared_inputs",
+        "before_market_returns",
+        "after_market_returns",
+    ]
+    assert market_repository.watermark_calls == 1
+    assert market_repository.return_calls == 2
+
+
+def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_path) -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    root = tmp_path / "coefficients"
+    root.mkdir()
+    (root / "candidate.json").write_text(
+        json.dumps(
+            {
+                "daily_coefficients": {trade_date.isoformat(): {"S": 1.0}},
+                "stock_sector_map": {"A": "S"},
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    resolver = CandidateArtifactResolver(artifact_roots={"research": root})
+    preview = resolver.preview_configured_local(
+        root_alias="research", relative_path="candidate.json"
+    )
+    now = datetime.now(timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=preview.candidate_id,
+        manifest_hash=preview.manifest_hash,
+        display_name="candidate",
+        source_type=preview.manifest.source_type,
+        source_ref=preview.manifest.source_ref,
+        artifact_manifest=preview.manifest,
+        algorithm_version=preview.manifest.algorithm_version,
+        lifecycle_status=CandidateLifecycle.RESEARCH_ONLY,
+        created_by="tester",
+        row_version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    spec = EvaluationSpec(
+        base_loop_ref="qe_task/Loop8",
+        window_start=trade_date,
+        window_end=trade_date,
+        as_of={"policy": "explicit", "requested_date": trade_date.isoformat()},
+        label_horizon_days=10,
+        topk=1,
+        market_forward_return={"mode": "disabled", "horizon_trading_days": 10},
+    )
+    market_repository = _MarketRepository()
+    adapter = HMMEvaluationInputAdapter(
+        candidate_resolver=resolver,
+        market_repository=market_repository,
+        source_factory=lambda _spec, _preference: _Source(predictions, labels),
+    )
+
+    prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
+
+    assert prepared.market_returns is None
+    assert prepared.market_watermark is None
+    assert prepared.plans[0].source_manifest["market_forward_return"] == {
+        "mode": "disabled",
+        "horizon_trading_days": 10,
+        "requested_policy": "explicit",
+        "requested_date": trade_date.isoformat(),
+        "resolved_as_of_date": trade_date.isoformat(),
+        "query_executed": False,
+    }
+    assert market_repository.watermark_calls == 0
+    assert market_repository.return_calls == 0
+
+
+def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    root = tmp_path / "coefficients"
+    root.mkdir()
+    (root / "candidate.json").write_text(
+        json.dumps(
+            {
+                "daily_coefficients": {trade_date.isoformat(): {"S": 1.0}},
+                "stock_sector_map": {"A": "S"},
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    resolver = CandidateArtifactResolver(artifact_roots={"research": root})
+    preview = resolver.preview_configured_local(
+        root_alias="research", relative_path="candidate.json"
+    )
+    now = datetime.now(timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=preview.candidate_id,
+        manifest_hash=preview.manifest_hash,
+        display_name="candidate",
+        source_type=preview.manifest.source_type,
+        source_ref=preview.manifest.source_ref,
+        artifact_manifest=preview.manifest,
+        algorithm_version=preview.manifest.algorithm_version,
+        lifecycle_status=CandidateLifecycle.RESEARCH_ONLY,
+        created_by="tester",
+        row_version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    spec = EvaluationSpec(
+        base_loop_ref="qe_task/Loop8",
+        window_start=trade_date,
+        window_end=trade_date,
+        as_of={"policy": "explicit", "requested_date": trade_date.isoformat()},
+        label_horizon_days=10,
+        topk=1,
+        market_forward_return={"mode": "disabled", "horizon_trading_days": 10},
+    )
+    sources = [_Source(predictions, labels), _Source(predictions, labels, pred_sha="d" * 64)]
+    adapter = HMMEvaluationInputAdapter(
+        candidate_resolver=resolver,
+        market_repository=_MarketRepository(),
+        source_factory=lambda _spec, _preference: sources.pop(0),
+    )
+    prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
+
+    with pytest.raises(ArtifactHashMismatchError, match="receipt changed"):
+        asyncio.run(
+            adapter.load_evaluation(
+                evaluation={
+                    "evaluation_spec": spec.model_dump(mode="json"),
+                    "source_manifest": prepared.plans[0].source_manifest,
+                },
+                candidate=candidate,
+            )
+        )
