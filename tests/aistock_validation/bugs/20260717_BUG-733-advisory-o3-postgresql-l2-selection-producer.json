@@ -52,8 +52,8 @@
   "expected": "Exercise the real O3 Selection producer and compare Program context against the binding base config hash.",
   "first_seen_at": "2026-07-17T14:42:54.496501Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d4af94833a5b21cdb5490822a15ab3e7180fdee0",
+  "fixed_at": "2026-07-17T17:02:26.335009Z",
   "github_issue_number": 2358,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2358",
   "last_seen_at": "2026-07-17T14:42:54.496501Z",
@@ -61,6 +61,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2351",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -71,7 +72,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -80,6 +81,9 @@
     "fingerprint": "35387e686c4d9b0bf8948559",
     "source_event_id": "FE-20260717-35387e686c4d"
   },
+  "validation_evidence": [
+    "CI verdict PASS; O3 regressions 50 passed; real PostgreSQL 16 L2 passed; paper_v2_backend and validation gates passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

@@ -30,8 +30,8 @@
   "expected": "Record each Program independently and aggregate FAILED, WAITING_INPUT, and COMPLETE without blocking peers.",
   "first_seen_at": "2026-07-17T14:41:57.173558Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d4af94833a5b21cdb5490822a15ab3e7180fdee0",
+  "fixed_at": "2026-07-17T17:02:26.319755Z",
   "github_issue_number": 2357,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2357",
   "last_seen_at": "2026-07-17T14:41:57.173558Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2351",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "c543de0c338c4f00ce93aebd",
     "source_event_id": "FE-20260717-c543de0c338c"
   },
+  "validation_evidence": [
+    "CI verdict PASS; O3 regressions 50 passed; real PostgreSQL 16 L2 passed; paper_v2_backend and validation gates passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
