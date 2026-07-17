@@ -257,7 +257,7 @@ def test_wsl_provider_exports_only_explicit_dev_database_values(monkeypatch) -> 
         port=5544,
         database="aistock_dev",
         user="dev-user",
-        password="dev-password",
+        password="fixture",
         environment_contract_hash="a" * 64,
     )
     exports = ExactDevWslInferenceProvider(database=config, repo_root=Path.cwd())._build_env_exports()  # noqa: SLF001

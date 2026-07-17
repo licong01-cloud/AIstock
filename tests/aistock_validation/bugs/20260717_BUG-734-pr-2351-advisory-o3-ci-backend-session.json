@@ -8,7 +8,8 @@
     "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/catalog/module_registry.yaml",
-    "tests/aistock_validation/catalog/test_plans.yaml"
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/services/validation/plan_catalog.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-734",
