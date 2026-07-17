@@ -44,6 +44,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install classifier catalog dependency
+        run: python -m pip install --disable-pip-version-check pyyaml
+
       - name: Build changed-file list
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
@@ -508,3 +511,59 @@ jobs:
               issue_number: context.issue.number,
               body: routingBody,
             });
+
+  ci-verdict:
+    name: CI verdict
+    needs:
+      - classify-changes
+      - static-gate
+      - docs-lite
+      - backend-tests
+      - frontend-quality
+      - tdx-go-tests
+      - workflow-validation-tests
+      - prompt-evaluation
+      - failure-bug-register
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Require every selected CI lane to pass
+        env:
+          CLASSIFY_RESULT: ${{ needs.classify-changes.result }}
+          STATIC_RESULT: ${{ needs.static-gate.result }}
+          DOCS_RESULT: ${{ needs.docs-lite.result }}
+          BACKEND_RESULT: ${{ needs.backend-tests.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
+          GO_RESULT: ${{ needs.tdx-go-tests.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
+          PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
+          REGISTRAR_RESULT: ${{ needs.failure-bug-register.result }}
+        run: |
+          failures=()
+          for entry in "classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"; do
+            lane="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" ]]; then
+              failures+=("${lane}=${result}")
+            fi
+          done
+          for entry in \
+            "docs:${DOCS_RESULT}" \
+            "backend:${BACKEND_RESULT}" \
+            "frontend:${FRONTEND_RESULT}" \
+            "go:${GO_RESULT}" \
+            "workflow:${WORKFLOW_RESULT}" \
+            "prompt:${PROMPT_RESULT}" \
+            "registrar:${REGISTRAR_RESULT}"; do
+            lane="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              failures+=("${lane}=${result}")
+            fi
+          done
+          if (( ${#failures[@]} > 0 )); then
+            printf 'CI verdict failed: %s\n' "${failures[*]}" >&2
+            exit 1
+          fi
+          echo "CI verdict passed: all required and selected lanes succeeded."

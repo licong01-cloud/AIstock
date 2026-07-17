@@ -590,6 +590,37 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
+def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    verdict = jobs["ci-verdict"]
+    expected_needs = {
+        "classify-changes",
+        "static-gate",
+        "docs-lite",
+        "backend-tests",
+        "frontend-quality",
+        "tdx-go-tests",
+        "workflow-validation-tests",
+        "prompt-evaluation",
+        "failure-bug-register",
+    }
+
+    assert verdict["name"] == "CI verdict"
+    assert verdict["if"] == "always()"
+    assert set(verdict["needs"]) == expected_needs
+    run = str(verdict["steps"][0]["run"])
+    assert 'result" != "success"' in run
+    assert 'result" != "skipped"' in run
+    assert "CI verdict failed" in run
+
+    classify_steps = jobs["classify-changes"]["steps"]
+    install = next(step for step in classify_steps if step.get("name") == "Install classifier catalog dependency")
+    assert "pyyaml" in install["run"]
+
+
 def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     import yaml
 
