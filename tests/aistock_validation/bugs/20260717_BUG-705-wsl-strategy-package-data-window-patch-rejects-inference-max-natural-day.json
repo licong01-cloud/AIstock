@@ -30,8 +30,8 @@
   "expected": "WSL live strategy-package inference preserves the full factor trading-day window and accepts the adapter max_natural_days contract.",
   "first_seen_at": "2026-07-17T06:34:23.942169Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "05b2021517cf74acbb59cabd7066d6e2389c00dc",
+  "fixed_at": "2026-07-17T06:47:49.177198Z",
   "github_issue_number": 2304,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2304",
   "last_seen_at": "2026-07-17T06:34:23.942169Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2305",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -59,6 +60,10 @@
     "fingerprint": "b15f612162e6810fee0d4d32",
     "source_event_id": "FE-20260717-b15f612162e6"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_strategy_package_live_inference_window_patch.py -q -> 1 passed",
+    "PR 2305 required CI matrix passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
