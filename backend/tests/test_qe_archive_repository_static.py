@@ -892,6 +892,82 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
 
 
+def test_source_assembler_merges_posthoc_experiment_metrics_into_evolution_lineage() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_enriched_Loop5",
+            "task_id": "task_enriched",
+            "loop_index": 5,
+            "experiment_id": "task_enriched_L5",
+            "config_json": {
+                "factor_list": ["factor_a"],
+                "runtime_flags": {"label_horizon": 60},
+                "model_type": "LSTM",
+            },
+            "metrics_json": {"IC": 0.042, "enhanced_metrics": {"summary": {"source": "loop"}}},
+            "status": "completed",
+        },
+        {"task_id": "task_enriched", "task_name": "custom evo", "label_horizon": 60},
+        {
+            "experiment_id": "task_enriched_L5",
+            "qe_task_id": "task_enriched",
+            "qe_loop_id": "Loop5",
+            "loop_index": 5,
+            "is_evolution_loop": True,
+            "result_metrics": {
+                "Rank IC": 0.101,
+                "enhanced_metrics": {
+                    "summary": {"source": "experiment", "cagr": 0.63},
+                    "return_curves": {
+                        "dates": ["2025-01-02", "2025-01-03"],
+                        "portfolio_values": [1.0, 1.02],
+                        "drawdown_series": [0.0, -0.01],
+                    },
+                    "factor_analysis": {
+                        "feature_importance": {"factor_a": 0.75},
+                    },
+                    "stock_trades": [
+                        {
+                            "trade_id": "trade-1",
+                            "date": "2025-01-03",
+                            "symbol": "000001.SZ",
+                            "side": "buy",
+                            "price": 10.0,
+                            "quantity": 100,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system=payload["source_system"],
+        source_id=payload["source_id"],
+        source_sub_id=payload["source_sub_id"],
+    )
+
+    assert payload["source_system"] == "qe_evolution"
+    assert payload["logical_experiment_id"] == "task_enriched:task_enriched_Loop5"
+    assert payload["metrics"]["IC"] == 0.042
+    assert payload["metrics"]["Rank IC"] == 0.101
+    assert payload["metrics"]["enhanced_metrics"]["summary"] == {
+        "source": "loop",
+        "cagr": 0.63,
+    }
+    assert payload["raw_config"]["metrics_provenance"] == {
+        "base_source": "qe_evolution_loops.metrics_json",
+        "enhancement_source": "qe_experiments.result_metrics",
+        "linked_experiment_id": "task_enriched_L5",
+    }
+    assert len(extracted.curves) >= 2
+    assert len(extracted.factor_importance) == 1
+    assert len(extracted.trades) == 1
+    assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
+    assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-03"
+
+
 def test_archive_policy_resolves_custom_evo_strategy_params_manual_only() -> None:
     payload = QEArchiveSourceAssembler.build_loop_payload(
         {
