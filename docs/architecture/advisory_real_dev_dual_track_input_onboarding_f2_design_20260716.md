@@ -25,17 +25,19 @@ scheduler 或审批系统。
 ```text
 design_status = accepted
 o1_implementation_status = merged_pr_2231
-o2_implementation_status = bug_686_fix_validated_pending_review_and_merge
+o2_implementation_status = merged_pr_2261_runtime_validated
 o3_to_o5_implementation_status = not_started
-dev_database = schema_ready_but_real_dual_track_input_absent
+dev_database = real_dual_track_package_closure_imported
 production_database = read_only_source_only
 production_ddl = none_for_this_design
 production_dml = prohibited
 production_readonly_export_execution = completed_bundle_75806f83b2a5
 dev_ddl = none
-dev_import_plan_execution = executable_plan_8da94d2f87b9
+dev_import_initial_plan_execution = executable_plan_8da94d2f87b9
 dev_import_rollback_validation = completed_zero_residue_receipt_21f01f6aeab4
-dev_import_persistent_execution = not_run
+dev_import_persistent_execution = committed_receipt_62dd9e07ca0c
+dev_import_fresh_verification = passed_receipt_62dd9e07ca0c
+dev_import_idempotent_rerun = already_present_zero_dml_receipt_3e9977fc8355
 runtime_activation = none
 role_or_approval_gate = none
 model_training = none
@@ -813,9 +815,9 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-889 | §7.5、§9.1 | `dev_importer.py`; INSERT/EXACT/CONFLICT classification tests | verified_l0_l2 | none |
 | F-890 | §9、§18.1 | fixed SQL registry/AST/forbidden statement scan | verified_l0_l2 | none |
 | F-891 | §9.2、§18.3 | PostgreSQL 16 owner transaction/trigger rollback；真实DEV receipt `21f01f6aeab4`执行98次INSERT尝试、physical commit 0、fresh plan相同 | verified_l0_l2 | none |
-| F-892 | §9.2 | disposable PostgreSQL full-row insert-or-compare/readback | verified_l0_l2 | none |
+| F-892 | §9.2 | disposable PostgreSQL full-row insert-or-compare/readback；真实DEV receipt `62dd9e07ca0c`提交2个package和96个package_asset并通过fresh verify | verified_real_dev | none |
 | F-893 | §9.3 | all-key committed/not-observed/state-unknown tests including preexisting-row conflict | verified_l0_l2 | none |
-| F-894 | §9.4、§15 | exact rerun zero-DML/new receipt；forged request/source/plan/count rejection | verified_l0_l2 | none |
+| F-894 | §9.4、§15 | exact rerun plan `770daea7ba2e`为`ALREADY_PRESENT`；receipt `3e9977fc8355`为0 insert、0 physical commit、98 exact match并通过fresh verify | verified_real_dev | none |
 | F-895 | §15 | disposable PostgreSQL same/different bundle concurrency tests | verified_l0_l2 | none |
 | F-896 | §9.4、§20.2 | no-cleanup SQL/source scan | verified_l0_l2 | none |
 | F-897 | §5.3、§10 | one-way onboarding import graph/runtime import AST test | verified_l0_l2 | none |
