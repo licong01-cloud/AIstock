@@ -4,7 +4,7 @@ This matrix covers the development-standard guardrail gate that protects new AIs
 
 ## Scope
 
-- Standards authority remains `docs/standards/aistock_development_standard_v1.5_20260523.md` and its same-version YAML catalog.
+- The sole human-readable authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; its same-version YAML is a machine-derived catalog.
 - The scanner entry point is `scripts/aistock_guardrail_scan.py`.
 - The first machine baseline is local `tmp/validation/guardrails/baseline_20260504.json`; the human summary is `docs/analysis/aistock_guardrail_baseline_20260504.md`.
 - Historical findings are not silently ignored: they are classified as `baseline` and stay visible in JSON/Markdown output.
@@ -44,6 +44,8 @@ python -m nox -s guardrail_changed_files -- --changed-only
 - Baseline fingerprints classify findings as `baseline`; missing baseline classifies findings as `new`.
 - `blocking_findings(..., fail_new_only=True)` ignores baseline findings and blocks new P0/P1 findings.
 - JSON/Markdown output records gate status and baseline-status summary.
+- Changed-file routing selects tests for the owning module and adds another module only when an explicit dependency or shared contract is affected.
+- Direct BUG/feature tests prove changed behavior or a stable contract; unrelated, duplicate, obsolete, and implementation-only tests stay outside active gates.
 
 ## Production Isolation
 

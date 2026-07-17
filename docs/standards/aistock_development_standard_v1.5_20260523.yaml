@@ -1,10 +1,10 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
 source_version: "1.5"
-updated_at: "2026-05-24"
+updated_at: "2026-07-18"
 rule_sync_policy:
   authority: human_markdown_standard
-  requirement: Every enabled machine rule must reference a rule section in the human-readable standard.
+  requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
   archive_directory: docs/standards/archive
 scan:
   default_roots:
@@ -46,7 +46,7 @@ scan:
 rules:
   - rule_id: ARCH-WSL-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-arch-wsl-001
-    title: Windows backend must not read Linux or remote worker workspace directly
+    title: Windows backend reads worker artifacts through owned APIs or artifact storage
     severity: P0
     category: architecture
     enabled: true
@@ -67,11 +67,11 @@ rules:
         - '\\{2}wsl(?:\$|\.localhost)'
         - '/mnt/[a-z]/(?:Dev|home|data)/'
     baseline_policy: block_new_only
-    remediation: Use worker API or AIstock-owned artifact store with manifest/hash; do not use filesystem shortcuts.
+    remediation: Use worker API or AIstock-owned artifact store with manifest and hash evidence.
 
   - rule_id: PROD-PORT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-port-001
-    title: Tests and tools must not restart or kill production backend 8001
+    title: Development validation uses isolated ports and production actions require explicit authorization
     severity: P0
     category: production_isolation
     enabled: true
@@ -111,7 +111,7 @@ rules:
 
   - rule_id: ERR-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-err-fallback-001
-    title: Broad exception handlers must not return fake success or defaults
+    title: Exception paths return structured failure instead of silent or fake success
     severity: P0
     category: error_handling
     enabled: true
@@ -127,11 +127,11 @@ rules:
         - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}return\s+(?:\[\]|\{\}|None|True|False|0)(?:\s|$)'
         - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}pass\b'
     baseline_policy: block_new_only
-    remediation: Fail fast with structured status/error context; never hide business failure behind an empty/default success.
+    remediation: Fail fast with structured status and error context that preserves the business failure.
 
   - rule_id: TRADING-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-trading-fallback-001
-    title: Trading, backtest, and HMM paths must not silently downgrade business logic
+    title: Trading, backtest, and HMM paths preserve approved business semantics and expose failures
     severity: P0
     category: trading_safety
     enabled: true
@@ -154,7 +154,7 @@ rules:
 
   - rule_id: CONFIG-HARDCODE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-config-hardcode-001
-    title: Runtime code must not hardcode workstation paths or secrets
+    title: Runtime paths and secrets come from controlled configuration sources
     severity: P1
     category: config
     enabled: true
@@ -172,7 +172,7 @@ rules:
         - '[A-Za-z]:\\(?:Users|Dev\\AIstock)'
         - '(?i)(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*["''][^"'']{8,}'
     baseline_policy: block_new_only
-    remediation: Move paths/secrets to configuration, environment, DB catalog, or manifest; never commit secrets.
+    remediation: Move paths and secrets to configuration, environment, DB catalog, manifest, or a controlled secret source.
 
   - rule_id: QE-ARTIFACT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-qe-artifact-001
@@ -196,7 +196,7 @@ rules:
 
   - rule_id: UI-RAWJSON-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ui-rawjson-001
-    title: Operator UI must not use raw JSON as the primary business view
+    title: Operator UI presents business views with an optional advanced JSON drawer
     severity: P2
     category: frontend
     enabled: true
@@ -218,7 +218,7 @@ rules:
 
   - rule_id: UI-DESIGN-SYSTEM-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ui-design-system-001
-    title: New UI must use shadcn/ui Blocks baseline and not inherit Paper v2 templates
+    title: New UI follows the approved shadcn-style operator baseline
     severity: P2
     category: frontend
     enabled: true
@@ -275,7 +275,7 @@ rules:
 
   - rule_id: ROOT-POLLUTION-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-root-pollution-001
-    title: One-off files must not be added to the repository root
+    title: One-off files use debug_tools or tmp while the repository root keeps stable entrypoints
     severity: P1
     category: repository_hygiene
     enabled: true
@@ -431,10 +431,10 @@ rules:
         - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}pass\b'
         - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}return\s+(?:\[\]|\{\}|None|True|False|0)(?:\s|$)'
     baseline_policy: block_new_only
-    remediation: Print structured diagnostic context and exit non-zero; do not hide failure in one-off scripts.
+    remediation: Print structured diagnostic context and exit non-zero when one-off scripts fail.
   - rule_id: FEATURE-WORKFLOW-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
-    title: New feature development requires tiered design, design acceptance matrix, and anti-drift verification
+    title: New feature development uses tiered design and an acceptance matrix mapped to approved requirements
     severity: P1
     category: agent_efficiency
     enabled: true
@@ -501,7 +501,7 @@ manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
     severity: P0
-    title: "Completed implementation must pass four explicit checks against approved requirements and design: no simplified delivery, no silent error or fake success, no business semantic drift, and no unrequested gate or approval."
+    title: "Completed implementation records four explicit checks against approved requirements: complete delivery, visible failures, preserved business semantics, and approved gates or approvals."
     required_evidence:
       - no_simplified_delivery
       - no_silent_error
@@ -527,11 +527,11 @@ manual_review_controls:
   - control_id: FEATURE-WORKFLOW-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
     severity: P1
-    title: New features must use the F0/F1/F2 design workflow, include a Design Acceptance Index and acceptance matrix, and reject unapproved drift or simplified delivery before merge.
+    title: New features use the F0/F1/F2 workflow, a Design Acceptance Index, and an acceptance matrix before merge.
   - control_id: CONTEXT-BUDGET-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-context-budget-001
     severity: P1
-    title: Tasks must use tiered, module-scoped context and avoid full unrelated prompt/history injection.
+    title: Tasks use tiered, module-scoped context and load additional history only when evidence requires it.
   - control_id: ISSUE-BATCH-CONTEXT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-batch-context-001
     severity: P1

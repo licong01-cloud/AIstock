@@ -53,7 +53,6 @@ TIER_COMPLEXITY_THRESHOLDS = {
 }
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
-    "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md",
 ]
 VALID_CANDIDATE_STATUSES = {
     "new",

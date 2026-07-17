@@ -749,8 +749,10 @@ rules:
       - AGENTS.md
       - AGENTS.override.md
       - docs/codex_project_memory.md
+      - .codex/skills/aistock-task-router/**
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
+      - .claude/commands/aistock-task-router.md
       - .claude/commands/fix-aistock-issue.md
       - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards

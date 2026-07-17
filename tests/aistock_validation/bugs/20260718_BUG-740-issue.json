@@ -1,15 +1,31 @@
 {
   "actual": "当前v1.5开发规范、Issue并行流程规范和客户端入口存在重复分级、过期版本引用及过多负向条款。需收敛为唯一权威开发规范，以正向执行规则描述流程，仅保留禁止简化交付、禁止静默错误、禁止改变批准设计的业务逻辑、禁止私自增加门禁和审批四类禁令，并确保全局Claude Code、全局Codex和官方隔离Codex使用一致入口；官方隔离Claude profile不在本次范围。",
   "allowed_write_scope": [
+    ".claude/commands/aistock-task-router.md",
+    ".claude/commands/fix-aistock-issue.md",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "docs/codex_project_memory.md",
+    "docs/standards/README.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md",
+    "scripts/issue_flow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260718_BUG-740-issue.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/modules/development_guardrails.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-740",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Keep one authoritative human-readable development standard and one same-version machine-derived catalog.",
+    "Route Codex, Claude Code, and the official isolated Codex profile through the same repository workflow sources.",
+    "Keep only the four approved prohibition classes; express all other workflow rules as positive execution guidance.",
+    "Run the smallest directly relevant workflow and client verification.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-17T18:59:36.053127Z",
@@ -23,7 +39,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The v1.5 Markdown standard is the sole human-readable authority, its YAML file is explicitly derived, legacy workflow documents only redirect to that authority, and all in-scope clients install the same repository entrypoints.",
   "first_seen_at": "2026-07-17T18:59:36.053127Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -33,7 +49,8 @@
   "last_seen_at": "2026-07-17T18:59:36.053127Z",
   "module": "validation",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not update the official isolated Claude profile in this BUG."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -41,7 +58,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -58,15 +76,10 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
-      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "Documentation, workflow routing, and client-entry changes have no Validation Center business-flow dependency."
     },
     "delegated_validation": {
       "receipt_default": "compact",
@@ -118,15 +131,10 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
-        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "Documentation, workflow routing, and client-entry changes have no Validation Center business-flow dependency."
       },
       "delegated_validation": {
         "receipt_default": "compact",

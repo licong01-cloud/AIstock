@@ -1,36 +1,30 @@
 # aistock-task-router
 
-Use this command as the lightweight first stop for broad AIstock requests. Read project-level rules once, route first, then load only the selected scenario command and task artifacts.
+Use this as Claude Code's lightweight entry for broad or unclear AIstock work. The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; commands provide scenario procedures and reference that authority.
 
-## Required first checks
+## Start
 
-1. Read `F:\Dev\AIstock\docs\codex_project_memory.md` only when the turn involves AIstock repo/workflow/runtime decisions.
-2. Run:
+1. For repository, workflow, runtime, architecture, backend, frontend, data or trading decisions, read `F:\Dev\AIstock\docs\codex_project_memory.md` once.
+2. Run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor` before repository mutation.
+3. Use `docs/standards/README.md` when standards routing is unclear; active work uses the sole authority rather than archived material.
+4. Treat `F:\Dev\AIstock` as the sync/runtime root and use a task worktree for implementation.
 
-```powershell
-python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
-```
+## Route
 
-3. If standards selection is unclear, read `docs/standards/README.md` only. Do not read `docs/standards/archive/` by default.
-4. Treat `F:\Dev\AIstock` as sync/runtime root, not an implementation workspace.
+- BUG registration, fix, GitHub Issue, Context Pack or allowed scope -> `.claude/commands/fix-aistock-issue.md`.
+- New feature and design acceptance -> `.claude/commands/aistock-feature-workflow.md`.
+- Docs, handoff or small documentation cleanup -> `.claude/commands/aistock-docs-handoff.md`.
+- Merge, close-sync, root sync, production gates, install-client or cleanup -> `.claude/commands/aistock-merge-aftercare.md`.
+- Read-only triage, CI/nightly status or inventory -> `.claude/commands/aistock-readonly-triage.md`.
+- Broad UI/API/business-flow, LLM drift or cross-module validation -> `.claude/commands/aistock-validation-delegation.md`.
 
-## Route table
+## Execution Boundaries
 
-- BUG registration/fix/GitHub Issue/P0/P1/Context Pack/allowed scope -> `.claude/commands/fix-aistock-issue.md`.
-- New feature or design acceptance -> `.claude/commands/aistock-feature-workflow.md`.
-- Ordinary docs, handoff docs, temporary Codex/Claude notes, and small docs/scratch/root-pollution cleanup -> `.claude/commands/aistock-docs-handoff.md`.
-- Merge, close-sync, root/GitHub sync, DDL/dependency gates, install-client, cleanup -> `.claude/commands/aistock-merge-aftercare.md`.
-- Read-only analysis, open issue listing, nightly/CI status, branch/worktree audit -> `.claude/commands/aistock-readonly-triage.md`.
-- Broad UI/API/business-flow or cross-module validation beyond the minimal local gate -> `.claude/commands/aistock-validation-delegation.md`.
+- Load one selected lane plus its task card and direct artifacts.
+- Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
+- Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.
+- Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
+- Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
+- BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
 
-## Hard stops
-
-- The selected lane owns its own details; do not load other scenario skills, quickstarts, or full standards unless explicitly required.
-- If the user says read-only, do not edit, commit, push, merge, cleanup, restart, or write DB.
-- Ordinary BUG fixes do not read design docs unless the issue/user cites them or the task is T3.
-- Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) require controlled workflow.
-- Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
-- Cleanup-fast requests stay mechanical: move/archive/delete named files and use `git diff --check`; add focused executable checks only when executable behavior is intentionally retained.
-- BUG fixes use verification budgets: choose the smallest safe pre-merge gate and defer broad UI/API/business-flow validation to nightly for daily deduplicated execution.
-
-Report the selected lane and continue only if the user asked to execute.
+Report the selected lane, then continue when execution is requested.
