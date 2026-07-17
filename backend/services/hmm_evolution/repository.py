@@ -28,6 +28,7 @@ from .models import (
     EvaluationStatus,
     canonical_json_sha256,
 )
+from .scorer import RECOMMENDATION_VERSION, RecommendationCandidate, score_batch
 
 WRITABLE_RELATIONS = frozenset(
     {
@@ -1265,11 +1266,112 @@ class HMMEvolutionRepository:
             (eval_id,),
         )
         for row in cursor.fetchall():
-            self._recompute_batch_state_with_cursor(
+            batch = self._recompute_batch_state_with_cursor(
                 cursor,
                 str(row["batch_id"]),
                 release_lease=release_lease,
             )
+            if batch["status"] in TERMINAL_BATCH_STATUSES:
+                self._apply_recommendations_with_cursor(cursor, str(row["batch_id"]))
+
+    def _apply_recommendations_with_cursor(self, cursor: Any, batch_id: str) -> None:
+        cursor.execute(
+            """
+            SELECT recommendation_version
+            FROM hmm_evolution.batch_test_run
+            WHERE batch_id = %s
+            """,
+            (batch_id,),
+        )
+        batch = cursor.fetchone()
+        if batch is None:
+            raise InvalidStateTransitionError(
+                "batch was not found while applying recommendations",
+                context={"batch_id": batch_id},
+            )
+        if str(batch["recommendation_version"]) != RECOMMENDATION_VERSION:
+            raise InvalidStateTransitionError(
+                "batch recommendation version is unsupported",
+                context={
+                    "batch_id": batch_id,
+                    "recommendation_version": str(batch["recommendation_version"]),
+                },
+            )
+        cursor.execute(
+            """
+            SELECT
+                i.candidate_id,
+                e.net_label_return,
+                e.net_db_10d,
+                e.positive_net_label_day_ratio,
+                e.primary_coverage_ratio
+            FROM hmm_evolution.batch_test_item i
+            JOIN hmm_evolution.offline_evaluation e ON e.eval_id = i.eval_id
+            WHERE i.batch_id = %s
+              AND i.item_status IN ('succeeded', 'reused')
+              AND e.status = 'succeeded'
+            ORDER BY i.ordinal ASC
+            """,
+            (batch_id,),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return
+        recommendations = score_batch(
+            [
+                RecommendationCandidate(
+                    candidate_id=str(row["candidate_id"]),
+                    metrics={
+                        "net_label_return": row["net_label_return"],
+                        "net_db_10d": row["net_db_10d"],
+                        "positive_net_label_day_ratio": row[
+                            "positive_net_label_day_ratio"
+                        ],
+                        "primary_coverage_ratio": row["primary_coverage_ratio"],
+                    },
+                )
+                for row in rows
+            ]
+        )
+        cursor.execute(
+            """
+            UPDATE hmm_evolution.batch_test_item
+            SET recommendation_score = NULL, evidence_confidence = NULL,
+                recommendation_rank = NULL, is_top3 = FALSE,
+                recommendation_components = NULL, updated_at = clock_timestamp()
+            WHERE batch_id = %s AND item_status IN ('succeeded', 'reused')
+            """,
+            (batch_id,),
+        )
+        for recommendation in recommendations:
+            cursor.execute(
+                """
+                UPDATE hmm_evolution.batch_test_item
+                SET recommendation_score = %s, evidence_confidence = %s,
+                    recommendation_rank = %s, is_top3 = %s,
+                    recommendation_components = %s, updated_at = clock_timestamp()
+                WHERE batch_id = %s AND candidate_id = %s
+                  AND item_status IN ('succeeded', 'reused')
+                RETURNING candidate_id
+                """,
+                (
+                    recommendation.score,
+                    recommendation.confidence,
+                    recommendation.rank,
+                    recommendation.is_top3,
+                    _json(dict(recommendation.components)),
+                    batch_id,
+                    recommendation.candidate_id,
+                ),
+            )
+            if cursor.fetchone() is None:
+                raise InvalidStateTransitionError(
+                    "successful batch item disappeared during recommendation persistence",
+                    context={
+                        "batch_id": batch_id,
+                        "candidate_id": recommendation.candidate_id,
+                    },
+                )
 
     def _recompute_batch_state_with_cursor(
         self,

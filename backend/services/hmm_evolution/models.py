@@ -435,6 +435,31 @@ class EvaluationSpec(BaseModel):
             raise ValueError("window_start must not exceed window_end")
         if self.universe != {"type": "prediction_artifact_all"}:
             raise ValueError("Phase 1 v1 supports only prediction_artifact_all universe")
+        loop_parts = self.base_loop_ref.split("/")
+        if (
+            len(loop_parts) != 2
+            or any(not part or part in {".", ".."} for part in loop_parts)
+            or not loop_parts[1].startswith("Loop")
+        ):
+            raise ValueError("base_loop_ref must use '<task_id>/LoopN'")
+        as_of = dict(self.as_of)
+        if set(as_of) != {"policy", "requested_date"}:
+            raise ValueError("as_of must contain exactly policy and requested_date")
+        if as_of["policy"] not in {"explicit", "latest_common_completed"}:
+            raise ValueError("as_of.policy must be explicit or latest_common_completed")
+        if as_of["policy"] == "explicit" and not as_of["requested_date"]:
+            raise ValueError("explicit as_of policy requires requested_date")
+        if as_of["policy"] == "latest_common_completed" and as_of["requested_date"] is not None:
+            raise ValueError("latest_common_completed must not carry requested_date")
+        market = dict(self.market_forward_return)
+        if set(market) != {"mode", "horizon_trading_days"}:
+            raise ValueError(
+                "market_forward_return must contain exactly mode and horizon_trading_days"
+            )
+        if market["mode"] not in {"required", "disabled"}:
+            raise ValueError("market_forward_return.mode must be required or disabled")
+        if market["horizon_trading_days"] != 10:
+            raise ValueError("Phase 1 v1 market forward return horizon must be 10 trading days")
         return self
 
     @property

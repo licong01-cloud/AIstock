@@ -7,6 +7,7 @@ import json
 import math
 import os
 import stat
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -17,6 +18,7 @@ from .models import (
     CandidateCoverage,
     CandidateManifest,
     CandidatePreview,
+    CandidateRecord,
     CandidateSourceType,
     CoefficientStats,
     normalize_asset_path,
@@ -35,6 +37,14 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise _DuplicateKeyError(f"duplicate JSON key: {key}")
         result[key] = value
     return result
+
+
+@dataclass(frozen=True)
+class ResolvedCandidateArtifact:
+    """Revalidated candidate content used by one evaluator execution."""
+
+    preview: CandidatePreview
+    payload: Mapping[str, Any]
 
 
 class CandidateArtifactParser:
@@ -301,6 +311,109 @@ class CandidateArtifactResolver:
             expected_sha256=entry.sha256,
             trust_level=content.receipt.trust_level,
         )
+
+    async def resolve_registered_candidate(
+        self,
+        candidate: CandidateRecord,
+    ) -> ResolvedCandidateArtifact:
+        """Re-read and re-hash a registered candidate before computation."""
+
+        source_ref = dict(candidate.source_ref)
+        if candidate.source_type is CandidateSourceType.EXISTING_SNAPSHOT:
+            if self._snapshot_provider is None:
+                raise ArtifactManifestInvalidError("snapshot coefficient provider is not configured")
+            snapshot_id = str(source_ref["snapshot_id"])
+            artifact_name = normalize_asset_path(str(source_ref["artifact_name"]))
+            metadata = dict(self._snapshot_provider.get_snapshot_metadata(snapshot_id))
+            status = str(metadata.get("status") or "").lower()
+            if status not in {"completed", "ready"}:
+                raise ArtifactManifestInvalidError(
+                    "snapshot must remain completed or ready during evaluation",
+                    context={"snapshot_id": snapshot_id, "status": status},
+                )
+            if source_ref.get("config_id") != metadata.get("config_id"):
+                raise ArtifactHashMismatchError(
+                    "snapshot config identity changed before evaluation",
+                    context={"snapshot_id": snapshot_id},
+                )
+            data = self._snapshot_provider.read_coefficient_bytes(snapshot_id, artifact_name)
+            artifact_uri = f"snapshot://{snapshot_id}/{artifact_name}"
+            trust_level = AssetTrustLevel.TRUSTED_COMPUTATIONAL_INPUT
+        elif candidate.source_type is CandidateSourceType.CONFIGURED_LOCAL:
+            root_alias = str(source_ref["root_alias"])
+            if root_alias not in self._artifact_roots:
+                raise ArtifactManifestInvalidError(
+                    "configured coefficient root alias is not available",
+                    context={"root_alias": root_alias},
+                )
+            relative_path = normalize_asset_path(str(source_ref["relative_path"]))
+            root = self._artifact_roots[root_alias]
+            self._assert_no_reparse(root)
+            target = root.joinpath(*relative_path.split("/"))
+            self._assert_contained(root, target)
+            self._assert_no_reparse_path(root, target)
+            try:
+                data = target.read_bytes()
+            except OSError as exc:
+                raise ArtifactManifestInvalidError(
+                    "configured coefficient artifact cannot be read",
+                    context={"root_alias": root_alias, "relative_path": relative_path},
+                ) from exc
+            artifact_uri = f"configured-local://{root_alias}/{relative_path}"
+            trust_level = AssetTrustLevel.TRUSTED_COMPUTATIONAL_INPUT
+        else:
+            if self._qe_asset_reader is None:
+                raise ArtifactManifestInvalidError("QE asset reader is not configured")
+            task_id = str(source_ref["task_id"])
+            loop_name = str(source_ref["loop_name"])
+            asset_path = normalize_asset_path(str(source_ref["asset_path"]))
+            entry = await self._qe_asset_reader.stat_asset(task_id, loop_name, asset_path)
+            if entry.trust_level is not AssetTrustLevel.TRUSTED_COMPUTATIONAL_INPUT:
+                raise ArtifactManifestInvalidError(
+                    "QE coefficient asset is no longer trusted for computation",
+                    context={"task_id": task_id, "loop_name": loop_name, "relative_path": asset_path},
+                )
+            if (
+                entry.schema_version != source_ref.get("schema_version")
+                or entry.parser_contract != source_ref.get("parser_contract")
+            ):
+                raise ArtifactHashMismatchError(
+                    "QE coefficient parser receipt changed before evaluation",
+                    context={"task_id": task_id, "loop_name": loop_name},
+                )
+            content = await self._qe_asset_reader.read_asset(
+                task_id,
+                loop_name,
+                asset_path,
+                declared_entry=entry,
+            )
+            data = content.data
+            artifact_uri = f"qe://{task_id}/{loop_name}/{asset_path}"
+            trust_level = content.receipt.trust_level
+
+        self._assert_size(data)
+        preview = self._parser.preview_bytes(
+            data,
+            source_type=candidate.source_type,
+            source_ref=source_ref,
+            artifact_uri=artifact_uri,
+            expected_sha256=candidate.artifact_manifest.artifact_sha256,
+            trust_level=trust_level,
+        )
+        if preview.candidate_id != candidate.candidate_id or preview.manifest_hash != candidate.manifest_hash:
+            raise ArtifactHashMismatchError(
+                "registered candidate manifest changed before evaluation",
+                context={"candidate_id": candidate.candidate_id},
+            )
+        try:
+            payload = json.loads(data.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+        except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError) as exc:
+            raise ArtifactManifestInvalidError(
+                "registered coefficient artifact cannot be decoded for evaluation"
+            ) from exc
+        if not isinstance(payload, dict):  # already enforced by preview; keeps the return type explicit.
+            raise ArtifactManifestInvalidError("registered coefficient artifact root must be an object")
+        return ResolvedCandidateArtifact(preview=preview, payload=payload)
 
     def _assert_size(self, data: bytes) -> None:
         if len(data) > self._max_artifact_bytes:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -10,11 +11,16 @@ from backend.services.hmm_evolution.candidate_artifact import (
     CandidateArtifactParser,
     CandidateArtifactResolver,
 )
-from backend.services.hmm_evolution.errors import ArtifactManifestInvalidError
+from backend.services.hmm_evolution.errors import (
+    ArtifactHashMismatchError,
+    ArtifactManifestInvalidError,
+)
 from backend.services.hmm_evolution.models import (
     AssetAccessMode,
     AssetTrustLevel,
     CandidateSourceType,
+    CandidateLifecycle,
+    CandidateRecord,
 )
 from backend.services.hmm_evolution.qe_asset_reader import QEExperimentAssetReader
 
@@ -99,6 +105,41 @@ def test_configured_local_resolver_enforces_root_alias_and_containment(tmp_path)
         resolver.preview_configured_local(root_alias="missing", relative_path="candidate.json")
     with pytest.raises(Exception, match="path|root|relative"):
         resolver.preview_configured_local(root_alias="research", relative_path="../candidate.json")
+
+
+def test_registered_candidate_is_rehashed_before_evaluation(tmp_path) -> None:
+    root = tmp_path / "coefficients"
+    root.mkdir()
+    artifact = root / "candidate.json"
+    artifact.write_bytes(_payload_bytes())
+    resolver = CandidateArtifactResolver(artifact_roots={"research": root})
+    preview = resolver.preview_configured_local(
+        root_alias="research",
+        relative_path="candidate.json",
+    )
+    now = datetime.now(timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=preview.candidate_id,
+        manifest_hash=preview.manifest_hash,
+        display_name="candidate",
+        source_type=preview.manifest.source_type,
+        source_ref=preview.manifest.source_ref,
+        artifact_manifest=preview.manifest,
+        algorithm_version=preview.manifest.algorithm_version,
+        lifecycle_status=CandidateLifecycle.RESEARCH_ONLY,
+        created_by="tester",
+        row_version=1,
+        created_at=now,
+        updated_at=now,
+    )
+
+    resolved = asyncio.run(resolver.resolve_registered_candidate(candidate))
+    assert resolved.preview.candidate_id == candidate.candidate_id
+    assert resolved.payload["stock_sector_map"]["000001.SZ"] == "801010.SI"
+
+    artifact.write_bytes(_payload_bytes().replace(b"1.2", b"1.3"))
+    with pytest.raises(ArtifactHashMismatchError):
+        asyncio.run(resolver.resolve_registered_candidate(candidate))
 
 
 class _TrustedQEClient:
