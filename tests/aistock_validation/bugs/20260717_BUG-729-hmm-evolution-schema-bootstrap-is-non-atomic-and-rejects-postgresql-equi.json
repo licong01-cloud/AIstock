@@ -31,8 +31,8 @@
   "expected": "The bootstrap must run DDL plus exact verification in one managed transaction, roll back on any verification failure, accept PostgreSQL-equivalent BETWEEN versus >=/<= constraint representations, and remain idempotent.",
   "first_seen_at": "2026-07-17T10:30:18.166750Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "05f662264f7699f3f35d7fc34024ca9049378f36",
+  "fixed_at": "2026-07-17T10:39:52.117553Z",
   "github_issue_number": 2342,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2342",
   "last_seen_at": "2026-07-17T10:30:18.166750Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2344",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -60,6 +61,10 @@
     "fingerprint": "9491e87d2a9b226d50ae75f3",
     "source_event_id": "FE-20260717-9491e87d2a9b"
   },
+  "validation_evidence": [
+    "dev DB atomic rollback, exact schema verify, and idempotent bootstrap passed",
+    "PR #2344 CI all generated checks successful; MERGEABLE/CLEAN"
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {
