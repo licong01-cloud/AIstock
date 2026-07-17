@@ -366,6 +366,8 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
         1,
         custom_loop,
         confirm_rerun="QE_CUSTOM_EVO_RERUN",
+        node_id="node-1",
+        node_parallelism={"node-1": 4},
         phase_pipeline_enabled=True,
         resource_telemetry_enabled=True,
     )
@@ -373,6 +375,8 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
         "task-1",
         [custom_loop],
         confirm_append="QE_CUSTOM_EVO_APPEND",
+        node_id="node-1",
+        node_parallelism={"node-1": 4},
         phase_pipeline_enabled=True,
         resource_telemetry_enabled=True,
     )
@@ -396,8 +400,91 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
     assert calls[4]["body"]["resource_telemetry_enabled"] is False
     assert calls[5]["body"]["phase_pipeline_enabled"] is True
     assert calls[5]["body"]["resource_telemetry_enabled"] is False
+    assert calls[5]["body"]["node_id"] == "node-1"
+    assert calls[5]["body"]["node_parallelism"] == {"node-1": 4}
     assert calls[6]["body"]["phase_pipeline_enabled"] is True
     assert calls[6]["body"]["resource_telemetry_enabled"] is False
+    assert calls[6]["body"]["node_id"] == "node-1"
+    assert calls[6]["body"]["node_parallelism"] == {"node-1": 4}
+
+
+def test_qe_custom_evo_mutations_preserve_existing_node_scope_when_omitted() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call = {
+            "method": request.method,
+            "path": request.url.path,
+            "query": dict(request.url.params),
+            "body": _decode_json_body(request),
+        }
+        calls.append(call)
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {
+                        "node_id": "node-existing",
+                        "node_parallelism": {"node-existing": 4},
+                    },
+                },
+            )
+        return httpx.Response(200, json={"status": "success"})
+
+    mcp = FakeMCP()
+    registry = ModuleRegistry(
+        mcp=mcp,
+        base_url="http://127.0.0.1:8011/api/v1",
+        env_name="test",
+        transport=httpx.MockTransport(handler),
+    )
+    qe_experiment.register(registry)
+    custom_loop = {
+        "factor_keys": ["Alpha001||alpha158"],
+        "model_id": "model_lgbm_v1",
+        "runtime_flags": {"random_seed": 42},
+    }
+
+    mcp.tools["qe_custom_evo_rerun_loop_confirmed"](
+        "task-1",
+        1,
+        custom_loop,
+        confirm_rerun="QE_CUSTOM_EVO_RERUN",
+    )
+    mcp.tools["qe_custom_evo_append_loops_confirmed"](
+        "task-1",
+        [custom_loop],
+        confirm_append="QE_CUSTOM_EVO_APPEND",
+    )
+
+    assert [call["method"] for call in calls] == ["GET", "POST", "GET", "POST"]
+    assert calls[1]["body"]["node_id"] == "node-existing"
+    assert calls[1]["body"]["node_parallelism"] == {"node-existing": 4}
+    assert calls[3]["body"]["node_id"] == "node-existing"
+    assert calls[3]["body"]["node_parallelism"] == {"node-existing": 4}
+
+    with pytest.raises(ValueError, match="node_parallelism is required"):
+        mcp.tools["qe_custom_evo_rerun_loop_confirmed"](
+            "task-1",
+            1,
+            custom_loop,
+            confirm_rerun="QE_CUSTOM_EVO_RERUN",
+            node_id="node-new",
+        )
+    assert calls[-1]["method"] == "GET"
+
+    call_count = len(calls)
+    with pytest.raises(ValueError, match="node_parallelism"):
+        mcp.tools["qe_custom_evo_rerun_loop_confirmed"](
+            "task-1",
+            1,
+            custom_loop,
+            confirm_rerun="QE_CUSTOM_EVO_RERUN",
+            node_id="node-existing",
+            node_parallelism={"node-existing": 5},
+        )
+    assert len(calls) == call_count
 
 
 def test_qe_runtime_first_create_paths_validate_before_http() -> None:
