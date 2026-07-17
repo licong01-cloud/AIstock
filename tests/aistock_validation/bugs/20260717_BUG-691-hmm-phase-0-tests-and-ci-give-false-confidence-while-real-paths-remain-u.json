@@ -38,8 +38,8 @@
   "expected": "Add direct unit and contract tests for both sources, safe read-only integration smoke, correct paths/schema/oracles, a dedicated HMM nox/CI route, and evidence-backed coverage/performance reporting.",
   "first_seen_at": "2026-07-17T01:42:40.163841Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7b1a32c3bd1f30c2b0bcbeb07b48382cd02fbb3a",
+  "fixed_at": "2026-07-17T03:12:34.539509Z",
   "github_issue_number": 2258,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2258",
   "last_seen_at": "2026-07-17T01:42:40.163841Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2273",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -68,6 +69,9 @@
     "fingerprint": "ad2d6ace5723591cd13dd114",
     "source_event_id": "FE-20260717-ad2d6ace5723"
   },
+  "validation_evidence": [
+    "CI: 11 passed, 0 failed, dedicated hmm_data_source_backend generated, mergeStateStatus CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
