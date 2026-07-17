@@ -1,8 +1,8 @@
 # HMM 演进系统 Phase 0 数据源详细设计
 
-> 版本：v2.0（2026-07-17 hardening 收敛版）<br>
-> 状态：实现与单元/contract CI 已完成；受控只读 QE/DB integration receipt 待执行。<br>
-> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.1。<br>
+> 版本：v2.1（2026-07-17 Prediction Store 零副本收尾版）<br>
+> 状态：实现、单元/contract CI 与真实 Prediction Store 只读 smoke 已完成；受控只读 DB integration receipt 待执行。<br>
+> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.2。<br>
 > 运行权威：`backend/services/hmm_data_source/README.md`。
 
 本文替代 2026-07-16 初稿中的伪 async DB、旧 market 表、隐式 latest snapshot、无
@@ -30,6 +30,7 @@ backend/services/hmm_data_source/
 ├── db_repository.py
 ├── realtime_source.py
 ├── backtest_source.py
+├── prediction_store_resolver.py
 ├── artifact_manifest.py
 └── cache_manager.py
 ```
@@ -46,14 +47,22 @@ backend/services/hmm_data_source/
 
 ### 3.2 Artifact 获取
 
-1. 从 `qe_current_recorder.json`，必要时 `qe_extracted_recorder.json` 解析
-   `experiment_id/recorder_id`。
-2. 在下载 pickle 前读取远端 sidecar / HMM manifest / QE completion payload。
-3. manifest 必须给出 artifact 名、schema version、SHA256、size、row count、
-   `quality_status=ok`。
-4. 只调用仓库已有的 `download_workspace_file_bytes()` 下载白名单内容。
-5. 下载 bytes 与远端 SHA/size 不一致时拒绝缓存。
-6. 反序列化后 row count 不一致时清除 entry 并失败。
+默认策略为 `prediction_store_first`：
+
+1. 将 `<task_id>/LoopN` 映射为 Prediction Store run key `<task_id>_LN`。
+2. 调用 `ModelStoreService.resolve_archive_manifest()`，验证 task/loop identity、SHA256、
+   size 和实际 blob；HMM 额外要求目标 artifact 的 `collection_status=available`、
+   `parser_status=parsed`、正数 row count。
+3. 命中后直接读取 content-addressed blob，不写入 HMM artifact cache，并保存
+   `source=prediction_store`、URI、SHA、row count、`zero_copy=true` 的运行时 source receipt。
+4. manifest 不存在或目标 artifact 未登记时才允许 workspace fallback；manifest 或 blob
+   已存在但损坏时 fail loud，不允许以 fallback 掩盖完整性错误。
+5. workspace fallback 从 `qe_current_recorder.json`，必要时
+   `qe_extracted_recorder.json` 解析 `experiment_id/recorder_id`。
+6. 在下载 pickle 前读取远端 sidecar / HMM manifest / QE completion payload；manifest
+   必须给出 artifact 名、schema version、SHA256、size、row count、`quality_status=ok`。
+7. 只调用仓库已有的 `download_workspace_file_bytes()` 下载白名单内容；下载 bytes 与
+   远端 SHA/size 不一致时拒绝缓存，反序列化后 row count 不一致时清除 entry 并失败。
 
 白名单固定为 `pred.pkl`、`label.pkl`。读取 manifest 是信任验证，不授权下载配置文件。
 
@@ -64,7 +73,8 @@ backend/services/hmm_data_source/
 
 ## 4. Artifact cache
 
-缓存目录为 `tmp/hmm_evolution_cache/<sha256(loop_ref)>/`。每个 artifact 有独立
+Prediction Store 命中不创建额外副本。仅 workspace fallback 使用
+`tmp/hmm_evolution_cache/<sha256(loop_ref)>/`；每个 artifact 有独立
 `*.manifest.json`，本地 manifest 绑定远端 provenance。
 
 安全要求：
@@ -103,8 +113,8 @@ service 通过 `asyncio.to_thread()` 调用，不使用 `async with` 伪装异�
 
 `DataSourceConfig` 支持：
 
-- backtest：`base_loop_ref`、`cache_dir`、`max_artifact_bytes`、
-  `max_cache_bytes`、`cache_ttl_seconds`；
+- backtest：`base_loop_ref`、`artifact_source_preference`、`label_horizon_days`、
+  `cache_dir`、`max_artifact_bytes`、`max_cache_bytes`、`cache_ttl_seconds`；
 - realtime：`candidate_id`、`as_of_date`、`lag_days`、`max_query_days`。
 
 ## 7. 验证架构
@@ -132,6 +142,10 @@ service 通过 `asyncio.to_thread()` 调用，不使用 `async with` 伪装异�
 只执行 QE 文件读取和 DB SELECT，不运行 DML/DDL。缺任一坐标直接拒绝，不允许硬编码旧 task
 或“全部 skip 也算通过”。
 
+此外保留不访问 DB/workspace 的 Prediction Store-only smoke：显式设置
+`artifact_source_preference=prediction_store_only`，断言真实 loop 可读取、source receipt
+为 `zero_copy=true`，且 HMM cache 中没有生成对应 artifact。
+
 ## 8. 部署与生产门禁
 
 Phase 0 不需要数据库部署。`scripts/deploy_hmm_data_source.py` 默认只输出 plan/verify，唯一
@@ -156,12 +170,14 @@ Phase 1 schema 必须单独交付幂等 Python bootstrap、完整 `COMMENT ON`�
 | remote manifest/cache 信任边界 | BUG-690 / #2270 | 已合入 |
 | 专用测试/coverage/CI 路由 | BUG-691 / #2273 | 已合入 |
 | unsafe deploy helper/文档收敛 | BUG-692 | 本次修复 |
+| Prediction Store 零副本复用 | Phase 0 收尾 PR | 本次实现；真实 prediction smoke 通过 |
 
-本地/CI contract 已通过不等于真实外部依赖已验收。Phase 1 的剩余阻塞项是一次当前
-authoritative QE loop + 配置好的只读 DB integration receipt；本任务不执行该外部 smoke。
+本地/CI contract 与真实 Prediction Store-only smoke 已通过不等于 DB 外部依赖已验收。
+Phase 1 的剩余阻塞项是一次配置好的只读 DB trading-calendar/PIT sector integration receipt；
+不得用 Prediction Store 通过替代该证据。
 
 ## 10. Phase 1 接入原则
 
-Phase 1 只能消费 Phase 0 返回的标准化副本，并保存可重放的 source manifest、candidate
+Phase 1 只能消费 Phase 0 返回的标准化只读视图，并保存可重放的 source manifest、candidate
 manifest、evaluation spec、evaluator version 和 input hash。不得绕过 cache provenance、
 candidate identity 或 as-of 边界，也不得把 top-3 推荐变成生产门禁。

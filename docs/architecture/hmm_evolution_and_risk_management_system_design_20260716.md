@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.1
+> **版本**: v1.2
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-17
-> **状态**: F2 蓝图已修订，Phase 0 hardening 完成前禁止进入 Phase 1 实施
+> **状态**: Phase 0 代码与 Prediction Store 零副本收尾完成；受控只读 DB integration receipt 前禁止进入 Phase 1 实施
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -68,7 +68,8 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 - 不向 `model_train_configs`、`model_train_snapshots`、`strategy_packages`、`paper_v2.*` 写入数据。
 - 不把风险预警接入 `can_buy`、订单、持仓、调仓或任何交易决策链。
 - 不把 top-3、保护率、一致性阈值升级为未经批准的研究淘汰门禁或生产准入门禁。
-- 不下载 QE 配置文件；只允许下载有可信 manifest 的 `pred.pkl`、`label.pkl` 及设计明确允许的 HMM 系数 artifact。
+- 不下载 QE 配置文件；优先只读复用 Prediction Store 已固化的 `pred.pkl`、
+  `label.pkl`，仅在 artifact 缺失时下载有可信 manifest 的同名 QE workspace artifact。
 - Phase 4+ 的 QE/Paper/实盘接入不属于本文实施范围，必须另立 F2 设计和审批。
 
 ### 1.6 当前实现状态与进入 Phase 1 的前置条件
@@ -77,7 +78,7 @@ PR #2227（merge `5cae5861853bd4be4a07699fb332224c2bdf54c2`）只代表 Phase 0 
 
 Phase 1 开发前必须同时满足：
 
-1. 两种数据源的真实受控 smoke 通过，且无生产 DB 写入。
+1. Prediction Store 零副本真实 smoke 与两种数据源的受控只读 DB/QE smoke 均通过，且无生产 DB 写入。
 2. HMM 数据源相关单元测试进入专用 CI/nox plan，不再依赖无关 `qe_data_contract_backend`。
 3. artifact manifest、路径边界、原子写、缓存生命周期和反序列化信任边界完成直接测试。
 4. 本文 Design Acceptance Index 中 `F-001` 至 `F-005` 均有实现与证据。
@@ -116,7 +117,8 @@ Phase 1 开发前必须同时满足：
 │                    数据层（环境隔离）                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  研发/回测环境              │  实时只读数据环境                     │
-│  - QE artifact cache       │  - market.kline_daily_raw         │
+│  - Prediction Store blob   │  - market.kline_daily_raw         │
+│  - QE workspace fallback   │                                    │
 │  - pred.pkl (固定)         │  - market.trading_calendar       │
 │  - label.pkl (ground truth)│  - market.sw_index_member        │
 │                            │                                    │
@@ -140,6 +142,8 @@ class HMMDataSourceMode(str, Enum):
 {
     "data_source_mode": "backtest",
     "base_loop_ref": "qe_20260502_131502_9b54/Loop1",
+    "artifact_source_preference": "prediction_store_first",
+    "label_horizon_days": 10,
     "artifact_cache_dir": "tmp/hmm_evolution_cache/",
     "use_label_as_truth": true
 }
@@ -174,15 +178,19 @@ backend/services/hmm_data_source/
   models.py            # Pydantic models
 ```
 
-**当前状态**: 代码已合入，真实路径验收待 hardening。
+**当前状态**: Phase 0 hardening 与 Prediction Store 零副本路径已实现；受控只读 DB
+integration receipt 仍是进入 Phase 1 的最后阻塞项。
 
 **验收标准**:
-- [ ] 回测数据源通过任务节点解析，以现有 QE workspace 文件接口下载白名单 artifact。
-- [ ] 实时数据源使用 canonical market schema 和上一完成交易日，按候选/快照身份过滤。
-- [ ] 两种数据源均使用真实 DB/client 契约测试，不以错误 mock 代替。
-- [ ] artifact 具有可信 manifest、SHA256、行数、schema version、来源任务与质量状态。
-- [ ] 缓存路径不可越界，写入原子化，具备跨进程互斥、TTL/max-size/clear 生命周期。
-- [ ] Realtime、Backtest、cache、isolation、integration 测试进入专用 CI 计划。
+- [x] 回测数据源优先按 task/LoopN 只读解析 Prediction Store content-addressed blob，
+  缺 artifact 才通过任务节点和 QE workspace 文件接口下载白名单 artifact。
+- [x] 已存在但损坏的 Prediction Store manifest/blob fail loud，不以 workspace fallback 掩盖。
+- [x] 实时数据源使用 canonical market schema 和上一完成交易日，按候选/快照身份过滤。
+- [x] 两种数据源均使用真实 DB/client 契约测试，不以错误 mock 代替。
+- [x] artifact 具有可信 manifest、SHA256、行数、schema version、来源任务与质量状态。
+- [x] workspace fallback cache 路径不可越界，写入原子化，具备跨进程互斥、TTL/max-size/clear 生命周期。
+- [x] Realtime、Backtest、cache、isolation、integration 测试进入专用 CI 计划。
+- [ ] 当前授权只读 DB 上的 trading-calendar/PIT sector integration receipt。
 
 ---
 ### Phase 1: HMM 离线评估与演进实验室（Week 2-3）
@@ -627,7 +635,9 @@ docs/
 
 ## 8. Design Acceptance Index（设计验收索引）
 
-- **F-001 Phase 0 QE artifact 契约**：按 task/loop 解析节点，调用真实 workspace 文件接口，只接收可信 manifest 白名单 artifact。
+- **F-001 Phase 0 QE artifact 契约**：按 task/loop 优先只读复用 Prediction Store
+  content-addressed artifact；缺失时解析节点并调用真实 workspace 文件接口，只接收可信
+  manifest 白名单 artifact；损坏不得静默 fallback。
 - **F-002 Phase 0 canonical DB 契约**：同步 DB adapter、`market.trading_calendar`、`market.sw_index_member`、`ts_code/close_li` 和 PIT 区间正确。
 - **F-003 Phase 0 candidate identity**：所有预测、系数、标签和评估均绑定明确 candidate/source identity，不混用不同模型结果。
 - **F-004 Phase 0 cache 安全**：路径不可越界、原子写、跨进程互斥、可信校验、安全清理、TTL/max-size/clear 生命周期完整。
@@ -676,11 +686,11 @@ docs/
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 目标：hmm_data_source backtest/client adapter | 目标：真实 QE 受控 smoke | approved_by_user_for_implementation | 实现证据由 Phase 0 BUG PR 回填 |
-| F-002 | 目标：DB repository/canonical schema | 目标：contract + read-only integration | approved_by_user_for_implementation | 实现证据由 Phase 0 BUG PR 回填 |
-| F-003 | 目标：candidate/source identity contract | 目标：混用拒绝与过滤测试 | approved_by_user_for_implementation | 实现证据由 Phase 0 BUG PR 回填 |
-| F-004 | 目标：ArtifactCacheManager hardening | 目标：路径/原子/锁/容量测试 | approved_by_user_for_implementation | 实现证据由 Phase 0 BUG PR 回填 |
-| F-005 | 目标：HMM nox/CI plan 与验收文档 | 目标：CI receipt/benchmark | approved_by_user_for_implementation | 实现证据由 Phase 0 BUG PR 回填 |
+| F-001 | `backtest_source.py`; `prediction_store_resolver.py`; BUG-688/#2260; 本收尾 PR | `test_backtest_source.py` Prediction Store zero-copy/MultiIndex/corruption/fallback；真实 `qe_20260715_104922_001d/Loop1` prediction-store-only smoke | verified_local; approved_by_user_for_implementation | 受控只读 DB/QE 组合 integration receipt 待执行 |
+| F-002 | `db_repository.py`; `realtime_source.py`; BUG-689/#2266 | canonical schema/交易日/PIT repository contract tests | verified_local; approved_by_user_for_implementation | 受控只读 DB integration receipt 待执行 |
+| F-003 | `realtime_source.py`; `models.py`; BUG-689/#2266 | candidate identity、隐式 latest 拒绝、filter contract tests | verified | 无 |
+| F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
+| F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计 | `hmm_data_source_backend`、coverage/JUnit、真实 store-only compact receipt | verified | 无 |
 | F-006 | 目标：hmm_evolution.candidate bootstrap/repository | 目标：schema/comment/repository test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
 | F-007 | 目标：versioned evaluator | 目标：fixture oracle + replay hash | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |
 | F-008 | 目标：batch/evaluation job state machine | 目标：幂等/heartbeat/cancel/failure test | approved_by_user_for_implementation | 实现证据由 Phase 1 PR 回填 |

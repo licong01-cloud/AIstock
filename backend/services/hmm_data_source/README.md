@@ -1,13 +1,14 @@
 # HMM 数据源抽象层
 
-> Phase 0 hardening（BUG-688～BUG-691）<br>
-> 状态：代码契约与专用 CI 已建立；Phase 1 仍需受控只读 integration receipt 后解锁。
+> Phase 0 hardening 与 Prediction Store 零副本收尾<br>
+> 状态：代码契约、专用 CI 和 Prediction Store 真实只读 smoke 已建立；Phase 1 仍需受控只读 DB integration receipt 后解锁。
 
 ## 边界
 
 该模块只为 HMM 独立研究生产线提供两类输入：
 
-- `BacktestDataSource`：读取指定 QE task/loop 的 `pred.pkl`、`label.pkl`。
+- `BacktestDataSource`：优先只读复用 Prediction Store 中指定 QE task/loop 的
+  `pred.pkl`、`label.pkl`；缺失时才回退 QE workspace。
 - `RealtimeDataSource`：读取 canonical market 表和显式注册的研究候选预测 provider。
 
 允许只读访问 QE workspace、`qe_evolution_tasks`、`market.kline_daily_raw`、
@@ -27,6 +28,8 @@ from backend.services.hmm_data_source import BacktestDataSource
 async with BacktestDataSource(
     base_loop_ref="qe_20260502_131502_9b54/Loop1",
     cache_dir="tmp/hmm_evolution_cache/",
+    artifact_source_preference="prediction_store_first",
+    label_horizon_days=10,
 ) as source:
     predictions = await source.get_predictions(
         date(2024, 7, 1),
@@ -36,15 +39,21 @@ async with BacktestDataSource(
 
 运行链路：
 
-1. 从 `qe_evolution_tasks.node_id` 解析任务的权威 compute node。
-2. 通过 `QEWorkspaceClient.get_workspace_file()` 解析 recorder 和远端 artifact manifest。
-3. 远端 manifest 必须包含 `sha256`、`size_bytes`、`row_count`、
-   `schema_version`、`quality_status=ok`。
-4. 只通过 `download_workspace_file_bytes()` 下载白名单 artifact。
-5. 下载后先比对 SHA/size，再原子发布到本地缓存；反序列化后比对 row count。
-6. 内部创建的 client 由 data source 关闭，外部注入 client 由调用方管理。
+1. 将 `<task_id>/LoopN` 映射为 Prediction Store run key `<task_id>_LN`。
+2. 通过 `ModelStoreService.resolve_archive_manifest()` 校验 manifest identity、SHA256、
+   size、row count、`collection_status=available` 和 `parser_status=parsed`。
+3. 命中时直接读取 content-addressed blob，不复制到 HMM cache；source receipt 标记
+   `source=prediction_store`、`zero_copy=true`。
+4. manifest 缺失或缺少目标 artifact 时，`prediction_store_first` 才进入 workspace
+   fallback；`prediction_store_only` 明确失败。
+5. manifest/物理 blob 已存在但损坏时 fail loud，禁止用 workspace fallback 掩盖完整性问题。
+6. workspace fallback 从 `qe_evolution_tasks.node_id` 解析权威 compute node，通过
+   `QEWorkspaceClient` 读取 recorder/可信远端 manifest，只下载白名单 artifact，并在
+   SHA/size/row count 全部匹配后原子发布到本地缓存。
+7. 内部创建的 client 由 data source 关闭，外部注入 client 由调用方管理。
 
-缺远端 manifest、manifest 不匹配或 provenance 不可信时 fail closed，不使用旧缓存伪装成功。
+Prediction Store 与 workspace 两条链均只读。任何已存在的损坏 manifest、SHA/size/row
+count 不一致或 provenance 不可信均 fail closed，不使用另一来源或旧缓存伪装成功。
 
 ### 实时数据源
 
@@ -66,9 +75,10 @@ source = RealtimeDataSource(
 - 行情字段为 `ts_code`、`close_li`；行业映射使用 `market.sw_index_member` 的 PIT 区间。
 - 仓库没有隐含的 `model_train_predictions` 表；未配置 provider 时预测接口明确失败。
 
-## Artifact 缓存
+## Workspace fallback cache
 
-每个 loop 使用 `sha256(loop_ref)` 隔离目录，artifact 使用独立 manifest：
+Prediction Store 命中时不创建 artifact 副本。仅 workspace fallback 使用
+`sha256(loop_ref)` 隔离目录，artifact 使用独立 manifest：
 
 ```text
 tmp/hmm_evolution_cache/
@@ -89,7 +99,9 @@ tmp/hmm_evolution_cache/
 - clear/淘汰前扫描 reparse point，不递归穿透 junction/symlink。
 
 可通过 `DataSourceConfig` 或 `BacktestDataSource` 参数配置
-`max_artifact_bytes`、`max_cache_bytes`、`cache_ttl_seconds`。
+`artifact_source_preference`（`prediction_store_first` / `prediction_store_only` /
+`workspace_only`）、`label_horizon_days`、`max_artifact_bytes`、`max_cache_bytes`、
+`cache_ttl_seconds`。
 
 ## 验证
 
@@ -140,7 +152,8 @@ backend/tests/hmm_data_source/
 ## 已知门禁
 
 - 普通单元/contract CI 通过不等于真实 QE/DB smoke 已通过。
-- Phase 1 开发前必须保存一次当前 authoritative QE loop + read-only DB 的 integration receipt。
+- Prediction Store 零副本真实 smoke 已覆盖当前 authoritative QE loop 的 prediction；
+  Phase 1 开发前仍必须保存一次 read-only DB 与 sector mapping integration receipt。
 - 若 QE producer 尚未发布可信 artifact manifest，cold download 应失败；不得回退到无 manifest pickle。
 - 任何性能结论必须引用 JUnit durations、输入行数和冷/热缓存条件，不在文档中写未经测量的固定秒数。
 
