@@ -16,11 +16,7 @@ import pytest
 psycopg2 = pytest.importorskip("psycopg2")
 from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
-from .conftest import skip_if_missing_columns
-
-
-def test_module_collected_smoke():
-    assert True
+from .conftest import skip_if_missing_columns  # noqa: E402  after importorskip
 
 
 def test_paper_v2_fill_count_matches_archive_per_run(

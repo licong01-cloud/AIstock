@@ -64,6 +64,26 @@ COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
 )
 FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
+VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
+VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
+VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
+VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("nox", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("pytest", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?pytest\b", re.IGNORECASE)),
+    ("ruff", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
+    ("diff_check", re.compile(r"^git\s+diff\s+--check\b", re.IGNORECASE)),
+    ("compile", re.compile(r"^python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
+    (
+        "workflow_smoke",
+        re.compile(
+            r"^python(?:\.exe)?\s+scripts/aistock_issue_workflow\.py\s+(?:batch-)?workflow-smoke\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("feature_validation", re.compile(r"^python(?:\.exe)?\s+scripts/aistock_feature_workflow\.py\s+validate\b", re.IGNORECASE)),
+    ("frontend", re.compile(r"^(?:npm|npx)\s+(?:run|exec|test)\b", re.IGNORECASE)),
+    ("go", re.compile(r"^go\s+test\b", re.IGNORECASE)),
+)
 FAST_PATH_REGISTRY_PREFIXES = ("tests/aistock_validation/bugs/",)
 FAST_PATH_CATALOG_PREFIXES = ("tests/aistock_validation/catalog/",)
 FAST_PATH_WORKFLOW_FILES = {
@@ -416,6 +436,68 @@ def _fallback_context_metrics(bug_id: str, root: Path) -> dict[str, Any]:
     return {key: value for key, value in metrics.items() if value.get("exists")}
 
 
+def _build_validation_receipts(
+    evidence: Iterable[str],
+    *,
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    commit = _git(["rev-parse", "HEAD"], cwd=root, check=False).strip() or "unknown"
+    receipts: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for raw_item in evidence:
+        item = str(raw_item or "").strip()
+        if not item:
+            continue
+        if "->" not in item:
+            errors.append(f"validation evidence must use '<command> -> <passed result>': {item}")
+            continue
+        command, result = (part.strip() for part in item.rsplit("->", 1))
+        if not command or not result or VALIDATION_FAIL_RE.search(result) or not VALIDATION_PASS_RE.search(result):
+            errors.append(f"validation result is not an explicit pass: {item}")
+            continue
+        evidence_kind = ""
+        plan = ""
+        for kind, pattern in VALIDATION_COMMAND_PATTERNS:
+            match = pattern.search(command)
+            if not match:
+                continue
+            evidence_kind = kind
+            plan = str(match.groupdict().get("plan") or "")
+            break
+        if not evidence_kind:
+            errors.append(f"validation command is not allowlisted: {command}")
+            continue
+        normalized = f"{commit}\n{command}\n{result}\n{evidence_kind}\n{plan}"
+        receipts.append(
+            {
+                "schema_version": VALIDATION_RECEIPT_SCHEMA,
+                "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                "commit": commit,
+                "command": command,
+                "result": result,
+                "status": "passed",
+                "evidence_kind": evidence_kind,
+                "plan": plan or None,
+                "recorded_at": _utc_now(),
+            }
+        )
+    return receipts, errors
+
+
+def _render_validation_receipt(receipt: dict[str, Any]) -> str:
+    command = str(receipt.get("command") or "").replace("`", "'")
+    result = str(receipt.get("result") or "").replace("`", "'")
+    return (
+        "validation-receipt: "
+        f"id={receipt.get('receipt_id')} "
+        f"commit={receipt.get('commit')} "
+        f"kind={receipt.get('evidence_kind')} "
+        f"plan={receipt.get('plan') or 'direct'} "
+        f"status={receipt.get('status')} "
+        f"command=`{command}` result=`{result}`"
+    )
+
+
 def _validation_receipt_summary(evidence: list[str], deferred_plans: list[str] | None = None) -> dict[str, Any]:
     local_items: list[str] = []
     broad_items: list[str] = []
@@ -628,6 +710,24 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
     )
     if "validation_evidence" in value:
         compact["validation_evidence_count"] = len(value.get("validation_evidence") or [])
+    if "validation_receipts" in value:
+        compact["validation_receipts"] = [
+            _pick(
+                receipt,
+                "schema_version",
+                "receipt_id",
+                "commit",
+                "command",
+                "result",
+                "status",
+                "evidence_kind",
+                "plan",
+            )
+            for receipt in value.get("validation_receipts") or []
+            if isinstance(receipt, dict)
+        ]
+    if value.get("validation_evidence_errors"):
+        compact["validation_evidence_errors"] = value.get("validation_evidence_errors")
     if "scope_check" in value:
         compact["scope_check"] = _pick(value["scope_check"], "status", "violations", "status_source")
     if "code_intelligence" in value:
@@ -5206,7 +5306,7 @@ def build_batch_workflow_smoke_plan() -> dict[str, Any]:
             changed_files=["scripts/aistock_issue_workflow.py"],
             base="origin/main",
             head="HEAD",
-            validation_evidence=["batch-workflow-smoke synthetic validation -> passed"],
+            validation_evidence=["python scripts/aistock_issue_workflow.py batch-workflow-smoke -> passed"],
             issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
             plan_only=False,
             allow_missing_evidence=False,
@@ -5660,8 +5760,10 @@ def build_finish_plan(
     codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
     if codegraph_tests:
         validation["codegraph_suggested_tests"] = codegraph_tests
-    evidence = [item for item in validation_evidence if item.strip()]
-    closure_ready = bool(evidence) or plan_only or allow_missing_evidence
+    raw_evidence = [item for item in validation_evidence if item.strip()]
+    validation_receipts, validation_evidence_errors = _build_validation_receipts(raw_evidence, root=REPO_ROOT)
+    evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
+    closure_ready = (bool(evidence) or plan_only or allow_missing_evidence) and not validation_evidence_errors
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
     pr_body_path = output_dir / "pr-body.md"
     pr_body = render_pr_body(canonical_bug_id, record, changed, validation, pr_quality, evidence, closure_ready)
@@ -5674,6 +5776,8 @@ def build_finish_plan(
             "selected_validation": _compact_validation_for_finish(validation),
             "pr_quality": _compact_pr_quality_for_finish(pr_quality),
             "validation_evidence": evidence,
+            "validation_receipts": validation_receipts,
+            "validation_evidence_errors": validation_evidence_errors,
             "closure_ready": closure_ready,
             "code_intelligence": _compact_code_intelligence_for_finish(code_intelligence_summary, codegraph_tests),
             "h7_code_intelligence": h7_code_intelligence,
@@ -5683,7 +5787,7 @@ def build_finish_plan(
         with contextlib.suppress(OSError):
             finish_plan_path.unlink()
     _write_text(pr_body_path, pr_body)
-    next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
+    next_state = "validation_passed" if evidence and not validation_evidence_errors else ("validation_planned" if plan_only else "blocked")
     _write_state(
         canonical_bug_id,
         state=next_state,
@@ -5711,7 +5815,9 @@ def build_finish_plan(
             "readiness_next_command": h7_code_intelligence.get("readiness_next_command"),
             "fallback_reason": h7_code_intelligence.get("fallback_reason"),
         },
-        stop_reason=None if closure_ready else "validation_evidence_missing",
+        stop_reason=None
+        if closure_ready
+        else ("; ".join(validation_evidence_errors) if validation_evidence_errors else "validation_evidence_missing"),
         next_actions=[
             "commit_only_task_files",
             "push_task_branch",
@@ -5751,12 +5857,16 @@ def build_finish_plan(
         "codegraph_suggested_tests": codegraph_tests,
         "h7_code_intelligence": h7_code_intelligence,
         "validation_evidence": evidence,
+        "validation_receipts": validation_receipts,
+        "validation_evidence_errors": validation_evidence_errors,
         "validation_receipt_summary": _validation_receipt_summary(
             evidence,
             validation.get("deferred_nightly_plans") or [],
         ),
         "closure_ready": closure_ready,
-        "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
+        "workflow_gate": "ready_for_pr"
+        if closure_ready
+        else ("blocked" if validation_evidence_errors else "validation_evidence_missing"),
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
@@ -5768,7 +5878,11 @@ def build_finish_plan(
     }
     payload["pre_pr_gate"] = _pre_pr_gate(finish=payload, validation_evidence=evidence, root=REPO_ROOT, run_lint=False)
     if not closure_ready:
-        payload["error"] = "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+        payload["error"] = (
+            "; ".join(validation_evidence_errors)
+            if validation_evidence_errors
+            else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+        )
     return payload
 
 
@@ -6368,8 +6482,14 @@ def build_finish_batch_plan(
     codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
     if codegraph_tests:
         validation["codegraph_suggested_tests"] = codegraph_tests
-    evidence = [item for item in validation_evidence if item.strip()]
-    closure_ready = (bool(evidence) or plan_only or allow_missing_evidence) and not selector_blocking
+    raw_evidence = [item for item in validation_evidence if item.strip()]
+    validation_receipts, validation_evidence_errors = _build_validation_receipts(raw_evidence, root=REPO_ROOT)
+    evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
+    closure_ready = (
+        (bool(evidence) or plan_only or allow_missing_evidence)
+        and not selector_blocking
+        and not validation_evidence_errors
+    )
     commit_map = _parse_issue_commit_map(issue_commit)
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_batch_id
     pr_body_path = output_dir / "pr-body.md"
@@ -6383,6 +6503,8 @@ def build_finish_batch_plan(
         "batch_selector": batch_selector,
         "scope_check": scope_check,
         "validation_evidence": evidence,
+        "validation_receipts": validation_receipts,
+        "validation_evidence_errors": validation_evidence_errors,
         "per_issue_commit_map": commit_map,
         "per_issue_closure_map": {
             str(record.get("bug_id")): flow._unique_strings(flow._as_list(record.get("closure_requirements")))
@@ -6409,7 +6531,7 @@ def build_finish_batch_plan(
             closure_ready,
         ),
     )
-    next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
+    next_state = "validation_passed" if evidence and not validation_evidence_errors else ("validation_planned" if plan_only else "blocked")
     _write_state(
         canonical_batch_id,
         state=next_state,
@@ -6425,7 +6547,13 @@ def build_finish_batch_plan(
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
         },
-        stop_reason=None if closure_ready else ("; ".join(selector_blocking) if selector_blocking else "validation_evidence_missing"),
+        stop_reason=None
+        if closure_ready
+        else (
+            "; ".join(selector_blocking + validation_evidence_errors)
+            if selector_blocking or validation_evidence_errors
+            else "validation_evidence_missing"
+        ),
         next_actions=[
             "commit_only_batch_files",
             "push_task_branch",
@@ -6435,7 +6563,9 @@ def build_finish_batch_plan(
     )
     payload = {
         **finish_plan,
-        "workflow_gate": "ready_for_pr" if closure_ready else ("blocked" if selector_blocking else "validation_evidence_missing"),
+        "workflow_gate": "ready_for_pr"
+        if closure_ready
+        else ("blocked" if selector_blocking or validation_evidence_errors else "validation_evidence_missing"),
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
         "code_intelligence": {
@@ -6451,7 +6581,12 @@ def build_finish_batch_plan(
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
     }
     if not closure_ready:
-        payload["error"] = "; ".join(selector_blocking) if selector_blocking else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+        blocking_reasons = selector_blocking + validation_evidence_errors
+        payload["error"] = (
+            "; ".join(blocking_reasons)
+            if blocking_reasons
+            else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+        )
     return payload
 
 

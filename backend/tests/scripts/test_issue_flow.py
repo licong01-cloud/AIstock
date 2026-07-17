@@ -696,7 +696,8 @@ def test_pr_check_p1_evidence_gate_passes_with_evidence(
     )
     monkeypatch.setenv(
         "AISTOCK_PR_BODY",
-        "Validation Evidence: python -m nox -s l0 -> passed\n"
+        "validation-receipt: id=0123456789abcdef commit=abcdef1 kind=nox plan=l0 status=passed "
+        "command=`python -m nox -s l0` result=`passed`\n"
         "production_ddl_gate=noop\n"
         "production_frontend_dependency_gate=noop\n"
         "production_backend_dependency_gate=noop",
@@ -743,7 +744,18 @@ def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
                 "module": "validation",
                 "status": "fixed",
                 "allowed_write_scope": ["tests/aistock_validation/bugs/**"],
-                "validation_evidence": ["python -m nox -s l0 -> passed"],
+                "validation_receipts": [
+                    {
+                        "schema_version": "aistock_validation_receipt_v1",
+                        "receipt_id": "0123456789abcdef",
+                        "commit": "abcdef1",
+                        "command": "python -m nox -s l0",
+                        "result": "passed",
+                        "status": "passed",
+                        "evidence_kind": "nox",
+                        "plan": "l0",
+                    }
+                ],
                 "production_ddl_gate": "noop",
                 "production_frontend_dependency_gate": "noop",
                 "production_backend_dependency_gate": "noop",
@@ -771,6 +783,53 @@ def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
         "validation_evidence": True,
         "production_gates": True,
     }
+
+
+def test_pr_check_rejects_legacy_validation_pass_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "Validation Evidence: python -m nox -s l0 -> passed\n"
+        "production_ddl_gate=noop\n"
+        "production_frontend_dependency_gate=noop\n"
+        "production_backend_dependency_gate=noop",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-198 P1")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 2
+    gate = json.loads(capsys.readouterr().out)["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "blocked"
+    assert "validation_evidence" in gate["blocking"]
 
 
 def test_pr_check_does_not_treat_workflow_gate_design_pr_as_high_risk(
@@ -1052,3 +1111,14 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
 def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
     assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]
+    steps = workflow["jobs"]["dependency-update-validate"]["steps"]
+    runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
+
+    assert "git diff --name-only --diff-filter=ACMRT" in runs
+    assert 'selection_args+=(--changed-file "$file")' in runs
+    assert "--changed-file requirements.txt" not in runs
+    assert 'python -m pip install --dry-run -r "$file"' in runs
+    assert "python -m pip install --dry-run ." in runs
+    assert "npm ci" in runs
+    assert "npx tsc --noEmit" in runs
+    assert "npm run lint" in runs

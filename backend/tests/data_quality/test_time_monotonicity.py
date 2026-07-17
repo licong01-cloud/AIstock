@@ -33,11 +33,7 @@ import pytest
 psycopg2 = pytest.importorskip("psycopg2")
 from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
-from .conftest import skip_if_missing_columns
-
-
-def test_module_collected_smoke():
-    assert True
+from .conftest import skip_if_missing_columns  # noqa: E402  after importorskip
 
 
 def test_fills_trade_time_bounded_by_run_trade_date(
