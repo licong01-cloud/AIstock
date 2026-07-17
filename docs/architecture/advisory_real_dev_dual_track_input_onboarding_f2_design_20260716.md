@@ -26,8 +26,8 @@ scheduler 或审批系统。
 design_status = accepted
 o1_implementation_status = merged_pr_2231
 o2_implementation_status = merged_pr_2261_runtime_validated
-o3_implementation_status = code_complete_l0_l2_passed_pending_pr_and_post_merge_real_dev
-o3_code_merge = not_started
+o3_implementation_status = code_complete_l0_l2_passed_pr_2351_open_pending_user_merge_confirmation
+o3_code_merge = pr_2351_open_not_merged
 o3_focused_regression = 49_passed
 o3_module_regression = 121_passed_8_skipped
 o3_postgresql16_l2 = 8_passed_o2_o3_combined
