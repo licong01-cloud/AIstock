@@ -31,6 +31,10 @@ class QEWorkspaceCatalogUnavailable(RuntimeError):
     """Raised when the QE node lacks the Phase 1 read-only catalog contract."""
 
 
+class QEWorkspaceCatalogInvalid(QEWorkspaceCatalogUnavailable):
+    """Raised when a QE node exposes the catalog endpoint but violates its contract."""
+
+
 class QEWorkspaceClient:
     """
     专门负责与被物理隔离的 RDAgent 端进行网络交互的客户端
@@ -305,18 +309,18 @@ class QEWorkspaceClient:
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
-                raise QEWorkspaceCatalogUnavailable(
+                raise QEWorkspaceCatalogInvalid(
                     f"invalid workspace catalog response for {task_id}/{rdagent_loop_id}"
                 )
             rows = payload.get("files")
             if rows is None:
                 rows = payload.get("assets")
             if not isinstance(rows, list):
-                raise QEWorkspaceCatalogUnavailable(
+                raise QEWorkspaceCatalogInvalid(
                     f"invalid workspace catalog response for {task_id}/{rdagent_loop_id}"
                 )
             if payload.get("catalog_completeness") not in {"complete", "partial"}:
-                raise QEWorkspaceCatalogUnavailable(
+                raise QEWorkspaceCatalogInvalid(
                     "workspace catalog response must declare catalog_completeness"
                 )
             return payload

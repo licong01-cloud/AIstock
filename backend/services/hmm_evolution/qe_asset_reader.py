@@ -9,6 +9,12 @@ from typing import Any, Protocol
 
 import httpx
 
+from backend.services.quantevolver.qe_workspace_client import (
+    QEWorkspaceCatalogInvalid,
+    QEWorkspaceCatalogUnavailable,
+    QEWorkspaceFileNotFound,
+)
+
 from .errors import (
     ArtifactHashMismatchError,
     QEAssetCatalogIncompleteError,
@@ -73,7 +79,17 @@ class QEExperimentAssetReader:
         try:
             payload = await self._client.list_workspace_files(task_id, loop_name)
             catalog = self._catalog_from_payload(task_id, loop_name, payload)
-        except (httpx.HTTPError, RuntimeError, ValueError, TypeError) as exc:
+        except QEWorkspaceCatalogUnavailable as exc:
+            if isinstance(exc, QEWorkspaceCatalogInvalid):
+                raise QEAssetUnavailableError(
+                    "QE loop asset catalog is invalid or unreadable",
+                    context={
+                        "task_id": task_id,
+                        "loop_name": loop_name,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                ) from exc
             if self._partial_catalog_provider is None:
                 raise QEAssetUnavailableError(
                     "QE node does not expose a usable loop asset catalog",
@@ -105,6 +121,18 @@ class QEExperimentAssetReader:
                 ),
                 warnings=tuple(warnings),
             )
+        except Exception as exc:
+            if isinstance(exc, (QEAssetCatalogIncompleteError, QEAssetUnavailableError)):
+                raise
+            raise QEAssetUnavailableError(
+                "QE loop asset catalog is invalid or unreadable",
+                context={
+                    "task_id": task_id,
+                    "loop_name": loop_name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
         if require_complete and catalog.catalog_completeness is not CatalogCompleteness.COMPLETE:
             raise QEAssetCatalogIncompleteError(
                 "complete QE loop asset catalog is required for this operation",
@@ -122,7 +150,17 @@ class QEExperimentAssetReader:
         try:
             payload = await self._client.stat_workspace_file(task_id, loop_name, path)
             return self._entry_from_mapping(payload, fallback_path=path)
-        except (httpx.HTTPError, RuntimeError, ValueError, TypeError):
+        except QEWorkspaceCatalogUnavailable as exc:
+            if isinstance(exc, QEWorkspaceCatalogInvalid):
+                raise QEAssetUnavailableError(
+                    "QE asset metadata is invalid or unreadable",
+                    context={
+                        "task_id": task_id,
+                        "loop_name": loop_name,
+                        "relative_path": path,
+                        "error_type": "QEWorkspaceCatalogInvalid",
+                    },
+                ) from exc
             catalog = await self.list_assets(task_id, loop_name)
             match = next((item for item in catalog.assets if item.relative_path == path), None)
             if match is not None:
@@ -143,6 +181,28 @@ class QEExperimentAssetReader:
                 access_mode=AssetAccessMode.INSPECTION_ONLY,
                 catalog_completeness=CatalogCompleteness.PARTIAL,
             )
+        except QEWorkspaceFileNotFound as exc:
+            raise QEAssetUnavailableError(
+                "QE asset does not exist in the loop catalog",
+                context={
+                    "task_id": task_id,
+                    "loop_name": loop_name,
+                    "relative_path": path,
+                },
+            ) from exc
+        except Exception as exc:
+            if isinstance(exc, QEAssetUnavailableError):
+                raise
+            raise QEAssetUnavailableError(
+                "QE asset metadata is invalid or unreadable",
+                context={
+                    "task_id": task_id,
+                    "loop_name": loop_name,
+                    "relative_path": path,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
 
     async def read_asset(
         self,
@@ -249,14 +309,18 @@ class QEExperimentAssetReader:
         completeness_raw = str(payload.get("catalog_completeness") or "partial").lower()
         completeness = CatalogCompleteness(completeness_raw)
         warnings = tuple(str(item) for item in payload.get("warnings") or ())
+        entries = tuple(
+            self._entry_from_mapping(row, catalog_completeness=completeness)
+            for row in rows
+        )
+        paths = [entry.relative_path for entry in entries]
+        if len(paths) != len(set(paths)):
+            raise ValueError("QE node asset catalog contains duplicate relative paths")
         return QEAssetCatalog(
             task_id=task_id,
             loop_name=loop_name,
             catalog_completeness=completeness,
-            assets=tuple(
-                self._entry_from_mapping(row, catalog_completeness=completeness)
-                for row in rows
-            ),
+            assets=entries,
             warnings=warnings,
         )
 
