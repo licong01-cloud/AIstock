@@ -87,6 +87,20 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert payload["backend_required"] is True
     assert payload["backend_sessions"] == ["paper_v2_backend"]
 
+    miniqmt_payload = classifier.classify_changed_files(
+        ["backend/services/miniqmt_execution_runtime/runtime.py"],
+        repo_root=tmp_path,
+    )
+
+    assert miniqmt_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
+
+    miniqmt_test_payload = classifier.classify_changed_files(
+        ["backend/tests/miniqmt_execution_runtime/test_runtime.py"],
+        repo_root=tmp_path,
+    )
+
+    assert miniqmt_test_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
+
     qe_payload = classifier.classify_changed_files(
         ["backend/services/quantevolver/qe_evolution_service.py"],
         repo_root=tmp_path,

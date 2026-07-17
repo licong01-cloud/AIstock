@@ -737,6 +737,25 @@ def simulation_core_l2(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
+    """Run the canonical MiniQMT event-loop runtime and durable tick-driver regression suite."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/miniqmt_execution_runtime",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/miniqmt_execution_runtime",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def localsim_unattended_l3(session: nox.Session) -> None:
     """Run current LocalSim scheduler/restart regression slice."""
     _run_pytest(

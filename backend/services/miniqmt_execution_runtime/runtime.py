@@ -1666,6 +1666,14 @@ class MiniQMTExecutionRuntime:
         if vnpy_active_order_ids and not ignore_vnpy_active_orders:
             return None
         terminal_status = _algo_terminal_status_from_child_orders(children)
+        if (
+            self._is_vnpy_instance(instance)
+            and not ignore_vnpy_active_orders
+            and terminal_status is not MiniQMTAlgoInstanceStatus.FAILED
+        ):
+            core = self._ensure_vnpy_core(instance)
+            if core.get_data().status != "finished":
+                return None
         updated = self.oms.record_algo_instance(
             instance.model_copy(
                 update={

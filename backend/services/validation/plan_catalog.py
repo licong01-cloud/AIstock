@@ -53,6 +53,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_paper_v2_backend": "paper_v2_backend",
     "nox_paper_v2_l3": "paper_v2_l3",
     "nox_simulation_core_l2": "simulation_core_l2",
+    "nox_miniqmt_execution_runtime_l2": "miniqmt_execution_runtime_l2",
     "nox_localsim_unattended_l3": "localsim_unattended_l3",
     "nox_miniqmt_sim_stub_l3": "miniqmt_sim_stub_l3",
     "nox_simulation_runtime_ops_ui": "simulation_runtime_ops_ui",
