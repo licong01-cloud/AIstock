@@ -187,6 +187,57 @@ def test_evaluation_plan_detects_hash_or_watermark_drift() -> None:
         EvaluationPlan.model_validate(payload)
 
 
+def test_evaluation_spec_nested_identity_is_deeply_immutable() -> None:
+    plan = _plan(_candidate())
+    original_hash = plan.evaluation_spec.spec_hash
+
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        plan.evaluation_spec.as_of["policy"] = "explicit"
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        plan.evaluation_spec.market_forward_return["mode"] = "disabled"
+
+    assert plan.evaluation_spec.spec_hash == original_hash
+
+
+def test_evaluation_plan_source_manifest_is_deeply_immutable_and_serializable() -> None:
+    candidate = _candidate()
+    original = _plan(candidate)
+    plan = EvaluationPlan.build(
+        candidate_id=candidate.candidate_id,
+        candidate_manifest_hash=candidate.manifest_hash,
+        source_manifest={
+            "schema_version": "hmm_evaluation_source_manifest_v1",
+            "artifacts": [{"artifact_name": "pred.pkl", "sha256": "c" * 64}],
+        },
+        evaluation_spec=original.evaluation_spec,
+        evaluator_version=original.evaluator_version,
+        resolved_as_of_date=original.resolved_as_of_date,
+        universe_id=original.universe_id,
+        universe_hash=original.universe_hash,
+    )
+    original_hash = plan.source_manifest_hash
+
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        plan.source_manifest["schema_version"] = "other"
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        plan.source_manifest["artifacts"][0]["sha256"] = "f" * 64
+
+    assert plan.source_manifest_hash == original_hash
+    dumped = plan.model_dump(mode="json")
+    assert isinstance(dumped["source_manifest"], dict)
+    assert isinstance(dumped["source_manifest"]["artifacts"], list)
+
+
+def test_candidate_manifest_source_ref_is_deeply_immutable() -> None:
+    candidate = _candidate()
+    original_hash = candidate.manifest_hash
+
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        candidate.artifact_manifest.source_ref["relative_path"] = "other.json"
+
+    assert candidate.artifact_manifest.manifest_hash == original_hash
+
+
 def test_batch_request_hash_preserves_candidate_to_spec_binding() -> None:
     candidate_a = _candidate("hmmc_a", artifact_sha256="a" * 64)
     candidate_b = _candidate("hmmc_b", artifact_sha256="b" * 64)
