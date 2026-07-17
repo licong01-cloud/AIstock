@@ -112,11 +112,13 @@ BACKEND_MATRIX_SESSIONS = (
     "rl_execution_smoke",
     "validation_center_backend",
     "qe_data_contract_backend",
+    "hmm_data_source_backend",
 )
 BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("paper_v2_backend", ("backend/services/paper_trading_v2/**", "backend/routers/paper_v2.py", "backend/services/selection_center/**", "backend/routers/selection_center.py", "backend/services/strategy_package/**", "backend/routers/strategy_package*.py", "backend/tests/paper_trading_v2/**", "backend/tests/selection_center/**", "backend/tests/strategy_package/**")),
     ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
     ("qe_data_contract_backend", ("backend/services/quantevolver/**", "backend/routers/quantevolver*.py", "backend/tests/unified_engine/test_qe_*.py")),
+    ("hmm_data_source_backend", ("backend/services/hmm_data_source/**", "backend/tests/hmm_data_source/**")),
     ("model_registry_backend", ("backend/services/model_registry/**", "backend/routers/model_registry*.py", "backend/tests/model_registry/**", "backend/tests/test_model_registry*.py")),
     ("market_regime_label", ("backend/services/market_regime/**", "backend/routers/market_regime*.py", "backend/tests/market_regime/**", "backend/tests/test_market_regime*.py")),
     ("rl_execution_smoke", ("backend/services/rl_execution/**", "backend/routers/rl_execution.py", "backend/tests/test_rl_execution_module_visibility.py")),

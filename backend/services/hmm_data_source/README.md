@@ -1,409 +1,145 @@
 # HMM 数据源抽象层
 
-> **Phase 0 实现**  
-> **版本**: v1.0  
-> **状态**: ✅ 开发完成，待验收
+> Phase 0 hardening（BUG-688～BUG-691）<br>
+> 状态：代码契约与专用 CI 已建立；Phase 1 仍需受控只读 integration receipt 后解锁。
 
----
+## 边界
 
-## 📋 概述
+该模块只为 HMM 独立研究生产线提供两类输入：
 
-HMM 数据源抽象层提供统一的数据访问接口，支持回测和实时两种模式，实现研发环境与生产环境的完全隔离。
+- `BacktestDataSource`：读取指定 QE task/loop 的 `pred.pkl`、`label.pkl`。
+- `RealtimeDataSource`：读取 canonical market 表和显式注册的研究候选预测 provider。
 
-### 核心特性
+允许只读访问 QE workspace、`qe_evolution_tasks`、`market.kline_daily_raw`、
+`market.trading_calendar`、`market.sw_index_member`。禁止修改或下载
+`model_train_configs`、`model_train_snapshots`、`strategy_packages`、`paper_v2.*`
+配置，禁止把分析结果接入交易决策。
 
-- ✅ **统一接口**: 抽象 `HMMDataSourceInterface`，业务逻辑与数据来源解耦
-- ✅ **双模式支持**: 回测模式（QE artifact）+ 实时模式（DB t-1）
-- ✅ **智能缓存**: 首次下载 + 本地缓存 + 内存缓存，性能优化
-- ✅ **真实交易日历**: 使用 `market.trade_cal` 计算交易日，避免简化近似
-- ✅ **完全隔离**: 不读取/修改生产配置和模型，独立缓存目录
-- ✅ **类型安全**: 完整的类型注解和 Pydantic 模型验证
-- ✅ **并发安全**: asyncio.Lock 防止重复下载
-
----
-
-## 🏗️ 架构
-
-```
-HMMDataSourceInterface (抽象接口)
-    │
-    ├─ BacktestDataSource (回测)
-    │   ├─ QEWorkspaceClient (下载 artifact)
-    │   ├─ ArtifactCacheManager (本地缓存)
-    │   └─ market.trade_cal (交易日历)
-    │
-    └─ RealtimeDataSource (实时)
-        ├─ PostgreSQL (t-1 数据)
-        └─ market.trade_cal (交易日历)
-```
-
----
-
-## 🚀 快速开始
-
-### 安装依赖
-
-```bash
-# 已包含在 AIstock 项目依赖中
-pip install pandas pydantic asyncpg
-```
+## 真实运行契约
 
 ### 回测数据源
 
 ```python
 from datetime import date
+
 from backend.services.hmm_data_source import BacktestDataSource
 
-# 创建回测数据源
-source = BacktestDataSource(
+async with BacktestDataSource(
     base_loop_ref="qe_20260502_131502_9b54/Loop1",
     cache_dir="tmp/hmm_evolution_cache/",
-)
-
-# 获取预测数据
-pred_df = await source.get_predictions(
-    start_date=date(2024, 7, 1),
-    end_date=date(2024, 7, 5),
-)
-
-# 获取标签数据
-label_df = await source.get_labels(
-    start_date=date(2024, 7, 1),
-    end_date=date(2024, 7, 5),
-    horizon_days=10,
-)
-
-# 获取板块映射
-mapping = await source.get_sector_mapping(date(2024, 7, 1))
+) as source:
+    predictions = await source.get_predictions(
+        date(2024, 7, 1),
+        date(2024, 7, 5),
+    )
 ```
+
+运行链路：
+
+1. 从 `qe_evolution_tasks.node_id` 解析任务的权威 compute node。
+2. 通过 `QEWorkspaceClient.get_workspace_file()` 解析 recorder 和远端 artifact manifest。
+3. 远端 manifest 必须包含 `sha256`、`size_bytes`、`row_count`、
+   `schema_version`、`quality_status=ok`。
+4. 只通过 `download_workspace_file_bytes()` 下载白名单 artifact。
+5. 下载后先比对 SHA/size，再原子发布到本地缓存；反序列化后比对 row count。
+6. 内部创建的 client 由 data source 关闭，外部注入 client 由调用方管理。
+
+缺远端 manifest、manifest 不匹配或 provenance 不可信时 fail closed，不使用旧缓存伪装成功。
 
 ### 实时数据源
 
 ```python
-from backend.services.hmm_data_source import RealtimeDataSource
+from datetime import date
 
-# 创建实时数据源
+from backend.services.hmm_data_source.realtime_source import RealtimeDataSource
+
 source = RealtimeDataSource(
-    snapshot_id="latest",
-    lag_days=1,  # t-1 数据
-)
-
-# 获取预测数据（从 DB）
-pred_df = await source.get_predictions(
-    start_date=date(2024, 7, 1),
-    end_date=date(2024, 7, 5),
-)
-
-# 获取已实现的收益
-realized_df = await source.get_labels(
-    start_date=date(2024, 6, 1),
-    end_date=date(2024, 6, 30),
-    horizon_days=10,
+    candidate_id="hmm-candidate-id",
+    as_of_date=date(2026, 7, 16),
+    prediction_provider=registered_candidate_provider,
 )
 ```
 
-### 数据源切换
+- `candidate_id` 必须显式提供；`snapshot_id="latest"` 不可用于预测身份解析。
+- 默认 repository 使用同步 `backend.db.pg_pool.get_conn()`，异步 service 通过线程执行器调用。
+- 最新可用日取 `as_of_date` 之前的完成交易日，不使用自然日减法或 `CURRENT_DATE`。
+- 行情字段为 `ts_code`、`close_li`；行业映射使用 `market.sw_index_member` 的 PIT 区间。
+- 仓库没有隐含的 `model_train_predictions` 表；未配置 provider 时预测接口明确失败。
 
-```python
-from backend.services.hmm_data_source import DataSourceConfig
+## Artifact 缓存
 
-# 配置驱动的数据源切换
-config = DataSourceConfig(
-    mode="backtest",  # 或 "realtime"
-    base_loop_ref="qe_20260502_131502_9b54/Loop1",
-    cache_dir="tmp/hmm_evolution_cache/",
-)
+每个 loop 使用 `sha256(loop_ref)` 隔离目录，artifact 使用独立 manifest：
 
-# 根据配置创建数据源
-if config.mode == "backtest":
-    source = BacktestDataSource(
-        base_loop_ref=config.base_loop_ref,
-        cache_dir=config.cache_dir,
-    )
-else:
-    source = RealtimeDataSource(
-        snapshot_id=config.snapshot_id,
-        lag_days=config.lag_days,
-    )
-```
-
----
-
-## 📊 数据格式
-
-### 预测数据 (Predictions)
-
-```python
-pd.DataFrame:
-    trade_date: date        # 交易日期
-    symbol: str             # 股票代码（含后缀 .SZ/.SH）
-    score: float            # 预测分数
-    rank: int (optional)    # 排名
-```
-
-### 标签数据 (Labels)
-
-```python
-pd.DataFrame:
-    trade_date: date        # 交易日期（T日）
-    symbol: str             # 股票代码
-    horizon_days: int       # 未来窗口（天数）
-    future_return: float    # 未来收益率
-    label_date: date        # 标签日期（T+horizon）
-```
-
-### 板块映射 (Sector Mapping)
-
-```python
-dict[str, str]:
-    {
-        "000001.SZ": "801780.SI",  # 银行
-        "600000.SH": "801192.SI",  # 券商
-        ...
-    }
-```
-
----
-
-## 🔒 隔离约束
-
-Phase 0 严格遵守隔离约束，确保零耦合：
-
-### ✅ 允许读取
-
-- `QE artifact` (pred.pkl, label.pkl)  # 历史数据
-- `market.kline_daily_raw`              # 市场数据
-- `market.sw_member`                    # 板块数据
-- `market.trade_cal`                    # 交易日历
-- `market.stock_basic`                  # 股票基本信息
-
-### ✅ 允许写入
-
-- `hmm_evolution.*`                     # 演进系统专用表
-- `hmm_risk.*`                          # 风险监控专用表
-- `tmp/hmm_evolution_cache/`            # 独立缓存目录
-
-### 🚫 严格禁止
-
-- ❌ 读取 `model_train_configs`
-- ❌ 读取 `model_train_snapshots`
-- ❌ 读取 `strategy_packages`
-- ❌ 修改 `paper_v2.*`
-- ❌ 下载 QE 配置文件（.json, .yaml, .toml）
-- ❌ 调用模拟盘 API
-
----
-
-## 🧪 测试
-
-### 运行单元测试
-
-```bash
-cd /f/Dev/AIstock
-
-# 运行所有测试
-pytest tests/backend/services/hmm_data_source/
-
-# 只运行单元测试（不含集成测试）
-pytest tests/backend/services/hmm_data_source/ -m "not integration"
-
-# 运行隔离约束验证（阻塞项）
-pytest tests/backend/services/hmm_data_source/test_isolation_constraints.py
-```
-
-### 运行集成测试
-
-```bash
-# 需要真实 DB 连接和 QE workspace
-pytest tests/backend/services/hmm_data_source/ --run-integration
-```
-
-### 测试覆盖率
-
-```bash
-pytest tests/backend/services/hmm_data_source/ --cov=backend/services/hmm_data_source --cov-report=html
-
-# 查看覆盖率报告
-open htmlcov/index.html
-```
-
----
-
-## 📈 性能指标
-
-### 回测数据源
-
-- **首次加载**: < 30s（下载 + 缓存）
-- **缓存命中**: < 1s（内存缓存）
-- **并发下载**: 锁保护，只下载一次
-
-### 实时数据源
-
-- **单次查询**: < 2s
-- **日期范围**: 最多 2 年（可配置）
-
----
-
-## 📁 目录结构
-
-```
-backend/services/hmm_data_source/
-├── __init__.py              # 包导出
-├── base.py                  # 抽象接口
-├── backtest_source.py       # 回测数据源
-├── realtime_source.py       # 实时数据源
-├── cache_manager.py         # 缓存管理
-├── models.py                # Pydantic 模型
-└── exceptions.py            # 异常定义
-
-tests/backend/services/hmm_data_source/
-├── __init__.py
-├── test_backtest_source.py  # 回测数据源测试
-├── test_cache_manager.py    # 缓存管理测试
-├── test_integration.py      # 集成测试
-└── test_isolation_constraints.py  # 隔离约束验证
-
-tmp/hmm_evolution_cache/     # 缓存目录（.gitignore）
-└── {loop_ref}/
+```text
+tmp/hmm_evolution_cache/
+└── <loop-ref-sha256>/
     ├── pred.pkl
+    ├── pred.pkl.manifest.json
     ├── label.pkl
-    └── metadata.json
+    └── label.pkl.manifest.json
 ```
 
----
+缓存保证：
 
-## 🔧 配置
+- loop/artifact 名称校验与 resolved-root containment；
+- QE remote provenance 默认必需，`test_fixture` 仅显式测试模式可用；
+- artifact/manifest 原子替换；线程锁 + 独占 lock-file 跨进程互斥；
+- 强制 SHA、size、row count、TTL 校验；
+- 单 artifact 和总缓存容量上限，超限淘汰最旧 entry；
+- clear/淘汰前扫描 reparse point，不递归穿透 junction/symlink。
 
-### 环境变量
+可通过 `DataSourceConfig` 或 `BacktestDataSource` 参数配置
+`max_artifact_bytes`、`max_cache_bytes`、`cache_ttl_seconds`。
+
+## 验证
+
+### 专用 CI（默认、无外部依赖）
 
 ```bash
-# 数据库连接（继承 AIstock 配置）
-export AISTOCK_DB_HOST=localhost
-export AISTOCK_DB_PORT=5432
-export AISTOCK_DB_NAME=aistock
-export AISTOCK_DB_USER=hmm_evolution_rw
-export AISTOCK_DB_PASSWORD=***
-
-# QE Workspace（继承 AIstock 配置）
-export QE_WORKSPACE_URL=http://localhost:8000
+rtk python -m nox -s hmm_data_source_backend
 ```
 
-### 缓存目录
+该 session 运行 `backend/tests/hmm_data_source/` 的非 integration 测试，生成：
 
-```python
-# 默认缓存目录
-cache_dir = "tmp/hmm_evolution_cache/"
+- `tmp/validation/hmm_data_source/coverage.xml`
+- `tmp/validation/hmm_data_source/junit.xml`（含最慢 10 项时长）
 
-# 自定义缓存目录
-cache_dir = "/path/to/custom/cache/"
+CI change classifier 会把以下路径路由到该 session：
+
+- `backend/services/hmm_data_source/**`
+- `backend/tests/hmm_data_source/**`
+
+覆盖率门槛是可审计的最低线（70% branch-aware），不是“功能已完整验收”的替代品。
+
+### 受控只读 integration（不在普通 PR 自动执行）
+
+```powershell
+$env:AISTOCK_HMM_READONLY_INTEGRATION = "1"
+$env:HMM_TEST_QE_LOOP_REF = "<authoritative-task-id>/<LoopN>"
+$env:HMM_TEST_AS_OF_DATE = "YYYY-MM-DD"
+rtk python -m nox -s hmm_data_source_readonly_integration
 ```
 
----
+该 session 只执行 SELECT 和 QE artifact 读取，不运行服务、不执行 INSERT/UPDATE/DELETE/DDL。
+缺少显式开关或可重放坐标时拒绝运行；不得使用硬编码旧 task 作为通过证据。
 
-## 🐛 故障排查
+## 测试目录
 
-### 问题：下载 artifact 失败
-
-**症状**: `DataSourceError: Failed to download pred.pkl`
-
-**原因**:
-1. QE workspace 不可访问
-2. base_loop_ref 格式错误
-3. artifact 不存在
-
-**解决**:
-```python
-# 1. 验证 base_loop_ref 格式
-# 正确: "qe_20260502_131502_9b54/Loop1"
-# 错误: "qe_20260502_131502_9b54" (缺少 /Loop1)
-
-# 2. 检查 QE workspace 连接
-from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
-client = QEWorkspaceClient()
-# 测试连接...
-
-# 3. 清理缓存重试
-from backend.services.hmm_data_source import ArtifactCacheManager
-cache_manager = ArtifactCacheManager()
-cache_manager.clear_cache("qe_20260502_131502_9b54/Loop1")
+```text
+backend/tests/hmm_data_source/
+├── conftest.py
+├── test_backtest_source.py
+├── test_realtime_source.py
+├── test_cache_manager.py
+├── test_integration.py
+└── test_isolation_constraints.py
 ```
 
-### 问题：日期范围错误
+异步测试由本目录 `conftest.py` 使用 `asyncio.run()` 驱动；integration 默认跳过。
 
-**症状**: `DateRangeError: 结束日期晚于数据可用结束日期`
+## 已知门禁
 
-**原因**: 查询日期超出数据源可用范围
-
-**解决**:
-```python
-# 先查询可用日期范围
-min_date, max_date = await source.get_available_date_range()
-print(f"Available range: {min_date} to {max_date}")
-
-# 使用有效日期范围
-pred_df = await source.get_predictions(min_date, max_date)
-```
-
-### 问题：校验和不匹配
-
-**症状**: `CacheError: Checksum mismatch`
-
-**原因**: 缓存文件损坏
-
-**解决**:
-```python
-# 清理损坏的缓存
-cache_manager.clear_cache("qe_20260502_131502_9b54/Loop1")
-
-# 重新下载
-pred_df = await source.get_predictions(...)
-```
-
----
-
-## 📚 API 文档
-
-详细 API 文档请参考：
-
-- [抽象接口](base.py) - `HMMDataSourceInterface`
-- [回测数据源](backtest_source.py) - `BacktestDataSource`
-- [实时数据源](realtime_source.py) - `RealtimeDataSource`
-- [缓存管理](cache_manager.py) - `ArtifactCacheManager`
-
----
-
-## 🛣️ 下一步
-
-Phase 0 完成后，将进入 Phase 1：
-
-- **HMM 离线评估**: 10 分钟评估一个 HMM 版本
-- **批量对比**: 同时测试 10+ 个候选
-- **前端可视化**: 评估结果展示
-
-详见: `docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md`
-
----
-
-## 📝 变更日志
-
-### v1.0 (2026-07-16)
-
-- ✅ 实现抽象接口 `HMMDataSourceInterface`
-- ✅ 实现回测数据源 `BacktestDataSource`
-- ✅ 实现实时数据源 `RealtimeDataSource`
-- ✅ 实现缓存管理 `ArtifactCacheManager`
-- ✅ 修复交易日历计算（使用真实 `trade_cal`）
-- ✅ 完整单元测试（覆盖率 > 90%）
-- ✅ 隔离约束验证通过
-
----
-
-## 👥 贡献者
-
-- **Kiro (Claude Code)** - Phase 0 设计与实现
-
----
-
-## 📄 许可
-
-内部项目，遵循 AIstock 项目许可。
+- 普通单元/contract CI 通过不等于真实 QE/DB smoke 已通过。
+- Phase 1 开发前必须保存一次当前 authoritative QE loop + read-only DB 的 integration receipt。
+- 若 QE producer 尚未发布可信 artifact manifest，cold download 应失败；不得回退到无 manifest pickle。
+- 任何性能结论必须引用 JUnit durations、输入行数和冷/热缓存条件，不在文档中写未经测量的固定秒数。
