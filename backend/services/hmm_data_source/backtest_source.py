@@ -9,7 +9,7 @@
 - 后续访问使用缓存（无重复下载）
 - 内存缓存（避免重复加载 pickle）
 - 并发安全（asyncio.Lock）
-- 使用真实交易日历（market.trade_cal）
+- 使用真实交易日历（market.trading_calendar）
 """
 
 import asyncio
@@ -24,6 +24,7 @@ from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
 from .base import HMMDataSourceInterface
 from .cache_manager import ArtifactCacheManager
+from .db_repository import HMMDataRepository
 from .exceptions import DataSourceError, DateRangeError, HorizonError, DataNotFoundError
 
 
@@ -54,12 +55,14 @@ class BacktestDataSource(HMMDataSourceInterface):
         base_loop_ref: str,
         cache_dir: str = "tmp/hmm_evolution_cache/",
         qe_client: Optional[QEWorkspaceClient] = None,
+        repository: Optional[HMMDataRepository] = None,
     ):
         """
         Args:
             base_loop_ref: QE loop 引用（如 "qe_20260502_131502_9b54/Loop1"）
             cache_dir: 缓存目录
             qe_client: QE workspace 客户端（用于测试注入）
+            repository: 只读 canonical market repository（用于测试注入）
         """
         self.base_loop_ref = base_loop_ref
         self.cache_manager = ArtifactCacheManager(cache_dir)
@@ -68,6 +71,7 @@ class BacktestDataSource(HMMDataSourceInterface):
         # closed by this data source.
         self.qe_client = qe_client
         self._owns_qe_client = False
+        self.repository = repository or HMMDataRepository()
 
         # 内存缓存（避免重复加载 pickle）
         self._pred_cache: Optional[pd.DataFrame] = None
@@ -160,32 +164,13 @@ class BacktestDataSource(HMMDataSourceInterface):
         获取股票板块映射（申万 L2）
 
         Notes:
-            回测模式下，从 market.sw_member 查询历史板块映射
+            回测模式下，从 market.sw_index_member 查询历史板块映射
         """
         try:
-            async with get_conn() as conn:
-                async with conn.cursor() as cur:
-                    query = """
-                    SELECT
-                        sb.symbol,
-                        sw.index_code as sector_code
-                    FROM market.stock_basic sb
-                    LEFT JOIN market.sw_member sw ON sb.ts_code = sw.con_code
-                    WHERE sw.level = 'L2'
-                      AND sw.in_date <= %(trade_date)s
-                      AND (sw.out_date IS NULL OR sw.out_date > %(trade_date)s)
-                    """
-                    await cur.execute(query, {'trade_date': trade_date})
-                    rows = await cur.fetchall()
-
-                    # 构建映射 {symbol: sector_code}
-                    mapping = {}
-                    for row in rows:
-                        symbol, sector_code = row
-                        if symbol and sector_code:
-                            mapping[symbol] = sector_code
-
-                    return mapping
+            return await asyncio.to_thread(
+                self.repository.get_sector_mapping,
+                trade_date,
+            )
 
         except Exception as e:
             raise DataSourceError(f"Failed to query sector mapping: {e}")
@@ -640,29 +625,12 @@ class BacktestDataSource(HMMDataSourceInterface):
             DataSourceError: 查询失败或数据不足
         """
         try:
-            async with get_conn() as conn:
-                async with conn.cursor() as cur:
-                    query = """
-                    SELECT cal_date
-                    FROM market.trade_cal
-                    WHERE cal_date > %(start_date)s
-                      AND is_open = 1
-                    ORDER BY cal_date
-                    LIMIT 1 OFFSET %(offset)s
-                    """
-                    await cur.execute(query, {
-                        'start_date': start_date,
-                        'offset': n_days - 1,
-                    })
-                    row = await cur.fetchone()
-
-                    if not row:
-                        raise DataSourceError(
-                            f"Cannot find {n_days} trading days after {start_date}. "
-                            f"Trade calendar data may be insufficient."
-                        )
-
-                    return row[0]
-
+            return await asyncio.to_thread(
+                self.repository.get_nth_trading_day,
+                start_date,
+                n_days,
+            )
+        except DataSourceError:
+            raise
         except Exception as e:
-            raise DataSourceError(f"Failed to query trading calendar: {e}")
+            raise DataSourceError(f"Failed to query trading calendar: {e}") from e

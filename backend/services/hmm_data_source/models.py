@@ -20,9 +20,14 @@ class DataSourceConfig(BaseModel):
     cache_dir: str = Field("tmp/hmm_evolution_cache/", description="缓存目录")
 
     # 实时模式参数
-    snapshot_id: Optional[str] = Field("latest", description="HMM snapshot ID")
-    lag_days: int = Field(1, description="数据延迟天数")
-    max_query_days: int = Field(730, description="单次查询最大天数")
+    candidate_id: Optional[str] = Field(None, description="显式 HMM 研究候选 ID")
+    snapshot_id: Optional[str] = Field(
+        "latest",
+        description="兼容字段；实时预测不得隐式解析 latest",
+    )
+    as_of_date: Optional[date] = Field(None, description="分析口径日期")
+    lag_days: int = Field(1, ge=1, description="完成交易日延迟数")
+    max_query_days: int = Field(730, ge=1, description="单次查询最大天数")
 
     @field_validator('mode')
     @classmethod
@@ -35,6 +40,8 @@ class DataSourceConfig(BaseModel):
     def validate_backtest_config(self):
         if self.mode == 'backtest' and not self.base_loop_ref:
             raise ValueError("base_loop_ref is required for backtest mode")
+        if self.mode == 'realtime' and self.candidate_id is None:
+            self.candidate_id = self.snapshot_id
         return self
 
 
