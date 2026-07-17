@@ -1,12 +1,12 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.0  
-> **日期**：2026-07-17  
-> **状态**：implementation-ready design；Phase 1 代码尚未实现  
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.4  
-> **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2  
-> **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.0  
-> **Feature tier**：F2  
+> **版本**：v1.0
+> **日期**：2026-07-17
+> **状态**：implementation-ready design；Phase 1 代码尚未实现
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.4
+> **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
+> **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.0
+> **Feature tier**：F2
 > **Design Acceptance Index**：复用总体蓝图 `F-006`～`F-010`
 
 本文是总体蓝图 Phase 1 的从属实现设计，不建立第二套架构。总体蓝图定义阶段边界与
