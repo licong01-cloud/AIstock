@@ -41,8 +41,8 @@
   "expected": "测试必须保持生产 pending 语义：首个 tick 无 child 时返回明确 pending durable result，不伪造成功、不静默丢失；后续真实 tick 产生 child 且只提交一次。CI/测试计划必须覆盖该 canonical 路径。不得修改生产执行语义、增加 fallback、审批或门禁。",
   "first_seen_at": "2026-07-17T03:47:38.958893Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b1fe6496a52c32b9cd68693fb51541381c66332",
+  "fixed_at": "2026-07-17T05:08:43.189494Z",
   "github_issue_number": 2282,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2282",
   "last_seen_at": "2026-07-17T03:47:38.958893Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2284",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -72,6 +73,9 @@
     "fingerprint": "346a774d5ed1c391b6db6277",
     "source_event_id": "FE-20260717-346a774d5ed1"
   },
+  "validation_evidence": [
+    "PR #2284 required CI checks passed; miniqmt_execution_runtime_l2 and validation_center_backend passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
