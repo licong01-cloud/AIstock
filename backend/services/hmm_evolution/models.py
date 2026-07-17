@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
 from pathlib import PurePosixPath
@@ -17,6 +18,33 @@ from .errors import InvalidSpecError, UnsafeAssetPathError
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+class FrozenDict(dict[Any, Any]):
+    """JSON-serializable dict whose mutation methods always fail."""
+
+    @staticmethod
+    def _immutable(*_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("frozen identity mappings cannot be mutated")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+    __ior__ = _immutable
+
+
+def deep_freeze_json(value: Any) -> Any:
+    """Recursively freeze JSON-compatible identity data without changing serialization."""
+
+    if isinstance(value, Mapping):
+        return FrozenDict({str(key): deep_freeze_json(nested) for key, nested in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(deep_freeze_json(nested) for nested in value)
+    return value
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -271,6 +299,11 @@ class CandidateManifest(BaseModel):
             raise ValueError("artifact_sha256 must be 64 lowercase hex characters")
         return lowered
 
+    @field_validator("source_ref", mode="after")
+    @classmethod
+    def _freeze_source_ref(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return deep_freeze_json(value)
+
     @field_validator("artifact_uri")
     @classmethod
     def _stable_uri(cls, value: str) -> str:
@@ -363,6 +396,11 @@ class CandidateRecord(BaseModel):
     updated_at: datetime
     retired_at: datetime | None = None
 
+    @field_validator("source_ref", "invalid_context", mode="after")
+    @classmethod
+    def _freeze_nested_identity(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return deep_freeze_json(value) if value is not None else None
+
 
 class EvaluationSpec(BaseModel):
     """Frozen evaluator input identity; P1-B consumes this contract."""
@@ -385,6 +423,11 @@ class EvaluationSpec(BaseModel):
     sort_policy: Literal["score_desc_symbol_asc_v1"] = "score_desc_symbol_asc_v1"
     metric_version: Literal["hmm_replacement_metrics_v1"] = "hmm_replacement_metrics_v1"
     recommendation_version: Literal["hmm_recommendation_v1"] = "hmm_recommendation_v1"
+
+    @field_validator("as_of", "universe", "market_forward_return", mode="after")
+    @classmethod
+    def _freeze_spec_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return deep_freeze_json(value)
 
     @model_validator(mode="after")
     def _window(self) -> "EvaluationSpec":
@@ -416,6 +459,11 @@ class EvaluationPlan(BaseModel):
     resolved_as_of_date: date
     universe_id: str
     universe_hash: str
+
+    @field_validator("source_manifest", mode="after")
+    @classmethod
+    def _freeze_source_manifest(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return deep_freeze_json(value)
 
     @field_validator(
         "candidate_manifest_hash",

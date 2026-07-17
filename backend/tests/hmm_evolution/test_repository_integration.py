@@ -180,7 +180,7 @@ def test_cross_source_alias_is_accepted_after_atomic_candidate_conflict() -> Non
 
     assert created is False
     assert candidate.manifest_hash == primary.manifest_hash
-    assert candidate.source_ref["aliases"] == [alias.manifest.source_ref]
+    assert candidate.source_ref["aliases"] == (alias.manifest.source_ref,)
     assert cursor.steps == []
 
 

@@ -2,6 +2,7 @@
   "actual": "Nested mappings can be changed without model reconstruction and spec_hash changes.",
   "allowed_write_scope": [
     "backend/services/hmm_evolution/models.py",
+    "backend/tests/hmm_evolution/test_repository_integration.py",
     "backend/tests/hmm_evolution/test_service.py",
     "tests/aistock_validation/bugs/20260717_BUG-738-hmm-evolution-frozen-identity-models-allow-nested-manifest-mutation-and.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
