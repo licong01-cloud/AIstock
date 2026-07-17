@@ -43,8 +43,10 @@ model_training = none
 `advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md`：production只读导出exact package/asset闭包，
 DEV只对package关系执行`INSERT-or-compare`，再通过正常DEV service创建Program/dated binding、由正常prospective
 Selection producer生成DSE v2，最后由historical runner、Phase 1D和本编译器形成正式输入。production DSE v1和
-legacy null binding不得导入或升级。该子设计当前仅`design_ready_pending_implementation`，不改变E6的
-`blocked_by_input`事实。
+legacy null binding不得导入或升级。该子设计O1/O2/O3已经合入，O4已完成逐Program source mapping、capacity v2、
+immutable input bundle和mixed-batch语义的设计加固，当前为design-ready pending merge且尚未实现；O5尚未开始；
+因此E6仍为`blocked_by_input`，不得把
+低层测试或代码合入描述为真实DEV dual-track完成。
 
 2026-07-14 implementation record:
 
@@ -797,16 +799,17 @@ capacity receipt并输出明确 missing evidence。
 
 ### E5：Content-addressed store and CLI
 
-Implementation status: completed. The standalone CLI reads DEV/prod connection configuration only
-from the selected env file and the store performs no-replace publication/readback.
+Implementation status: completed for the original compiler/store. The real-DEV onboarding O4 integration must narrow compile to
+an explicitly supplied DEV env/database identity, remove the production target selector and process-env fallback, and keep the store
+no-replace publication/readback contract.
 
 实现原子 store、full readback、`compile-batch/verify-plan/inspect-plan` 和结构化错误；保持 standalone。
 
 ### E6：Real DEV dual-track validation
 
-Implementation status: `blocked_by_input`. DEV has no immutable historical research batch receipt;
-the required single-Alpha and native multi-Alpha E2E cases must run after real completed receipts
-and their explicit Phase 1E input artifacts exist.
+Implementation status: `blocked_by_input`. The exact single/native-multi package closure is already present in DEV and O3 code is
+merged, but no persistent O3 historical run has produced the required immutable historical research batch/program receipts. O4
+source mapping/capacity/input artifacts are also not implemented. E6 can run only after those real outputs exist.
 
 E6 的前置实现顺序由
 `advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 冻结为 O1-O5。identity-complete 但
@@ -883,9 +886,9 @@ nonzero CLI exit.
 
 ### 13.5 L4 Real DEV dual-track E2E
 
-Current result: `blocked_by_input` on 2026-07-14 because DEV contains zero
-`app.advisory_research_batch_receipt` rows. This is a reported evidence gap, not a successful mock
-substitute and not a runtime admission/approval state.
+Current result: `blocked_by_input` on 2026-07-18 because no persistent O3 historical execution receipt and no O4 immutable
+source/capacity/input bundle exist. DEV package availability is no longer the blocker. This is a reported evidence gap, not a
+successful mock substitute and not a runtime admission/approval state.
 
 至少执行：
 
@@ -1001,31 +1004,31 @@ DEV completion:
 | implementation_state | coverage | current result |
 |---|---|---|
 | E1-E5 / L0-L3 local | contracts, full DTO/hash projection parity, normalized SQL, store, CLI, isolation, Phase 0A regression | verified locally: 332 passed, 7 skipped; Ruff clean; direct DSE/SelectionRun parity probes pass; DEV schema contract read-only check passed |
-| E6 / L4 real DEV | completed single-Alpha and native multi-Alpha historical receipts plus explicit input artifacts | transactional single-Alpha repository/assembler/runner DML passed and rolled back; persistent dual-track case remains blocked_by_input because DEV has no native multi-Alpha package or DSE/receipt |
+| E6 / L4 real DEV | completed single-Alpha and native multi-Alpha historical receipts plus explicit input artifacts | DEV package closure exists and O3 code is merged; persistent O3 receipt and O4 source/capacity/input artifacts remain blocked_by_input |
 | production | DDL, runtime activation, API/UI or shared-runtime changes | noop; none performed |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-501 | §1、§3、§4 | Advisory projection/import denylist/frozen-path设计 | design_ready | none |
-| F-502 | §5.1-5.2、§6、§8 | batch-invariant identity + diagnostic L1/L4 | design_ready | none |
-| F-503 | §5.1、§5.4、§6 | binding switch/type/no-revalidation matrix | design_ready | none |
-| F-504 | §5.1、§6、§8 | receipt/replay negative matrix | design_ready | none |
-| F-505 | §2、§4、§6、§9 | deterministic audit/handoff exact readback tests | design_ready | none |
-| F-506 | §2.1、§5.3、§6 | unequal-leg-window positive test | design_ready | none |
-| F-507 | §4、§5.4、§6 | read-only source resolution L2 | design_ready | none |
-| F-508 | §2.2、§5.4 | request/template/slot pure matrix | design_ready | none |
-| F-509 | §5.5-5.6、§9 | CAS no-replace/two-writer/exact retry tests | design_ready | none |
-| F-510 | §7.1、§14 | state derivation positive/negative tests | design_ready | none |
-| F-511 | §7.2-7.3 | role dominance + PARTIAL/staging/MEASURED tests | design_ready | none |
-| F-512 | §5.4、§7、§14 | automatic control binding + valid input E2E | design_ready | none |
-| F-513 | §10、§13 | reason/context/traceback/exit tests | design_ready | none |
-| F-514 | §9、§13.3 | configured no-overwrite artifact store tests | design_ready | none |
-| F-515 | §3.2、§11、§15 | changed-path and dependency scans | design_ready | none |
-| F-516 | §4.1、§11、§13 | Selection/simulation/QE/RD-Agent/Qlib zero-diff regression | design_ready | none |
-| F-517 | §3.2、§13.1 | backtest/QE/Qlib/training import scan | design_ready | none |
-| F-518 | §3.2、§7、§14-15 | approval/RBAC/backup scan | design_ready | none |
-| F-519 | §12-13 | L0-L4 verification matrix | design_ready | none |
-| F-520 | §1-2、§15、§20 | parent status/reference diff | design_ready | none |
+| F-501 | §1、§3、§4 | Advisory projection/import denylist/frozen-path；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-502 | §5.1-5.2、§6、§8 | batch-invariant identity + diagnostic；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-503 | §5.1、§5.4、§6 | binding switch/type/no-revalidation；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-504 | §5.1、§6、§8 | receipt/replay negative matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-505 | §2、§4、§6、§9 | deterministic audit/handoff exact readback；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-506 | §2.1、§5.3、§6 | unequal-leg-window positive test；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-507 | §4、§5.4、§6 | read-only source resolution；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-508 | §2.2、§5.4 | request/template/slot pure matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-509 | §5.5-5.6、§9 | CAS no-replace/two-writer/exact retry；`backend/tests/advisory_phase1/test_readiness_plan_store.py` | design_ready | none |
+| F-510 | §7.1、§14 | state derivation positive/negative；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-511 | §7.2-7.3 | role dominance + PARTIAL/staging/MEASURED；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-512 | §5.4、§7、§14 | automatic control binding + valid input E2E；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-513 | §10、§13 | reason/context/traceback/exit；`backend/tests/advisory_phase1/test_readiness_plan_cli.py` | design_ready | none |
+| F-514 | §9、§13.3 | configured no-overwrite artifact store；`backend/tests/advisory_phase1/test_readiness_plan_store.py` | design_ready | none |
+| F-515 | §3.2、§11、§15 | changed-path and dependency scans；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-516 | §4.1、§11、§13 | Selection/simulation/QE/RD-Agent/Qlib zero-diff；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-517 | §3.2、§13.1 | backtest/QE/Qlib/training import scan；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-518 | §3.2、§7、§14-15 | approval/RBAC/backup scan；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
+| F-519 | §12-13 | L0-L4 verification matrix；`backend/tests/advisory_phase1/test_readiness_plan.py` | design_ready | none |
+| F-520 | §1-2、§15、§20 | parent status/reference diff；`backend/tests/advisory_phase1/test_readiness_plan_isolation.py` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001
 
@@ -1047,8 +1050,8 @@ DEV completion:
 - [x] `production_truth`：设计、代码、Phase 1D生产 DDL、observer activation和后续 DML分别报告。
 
 在进入本节退出条件前，真实 DEV 输入必须按
-`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 从 O1 contracts/inventory/CAS 开始，
-O1-O4 形成正式 Phase 1E 输入后才可继续 E6。该顺序不增加审批门禁，只补齐当前缺失的权威数据生产路径。
+`advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md` 继续执行。O1-O3已合入；O4必须形成逐Program
+source mapping、capacity v2和正式Phase 1E输入后才可继续E6。该顺序不增加审批门禁，只补齐当前缺失的权威数据生产路径。
 
 ## 20. Exit Criteria / 设计与未来代码退出条件
 
