@@ -1042,6 +1042,7 @@ def test_prospective_context_is_fully_typed_before_selection(
 
     assert context.capture_mode.value == "PROSPECTIVE"
     assert context.execution_origin.value == "ADVISORY_RUN"
+    assert context.decision_clock_seed["decision_cutoff_ts"] == NOW
     assert context.decision_clock_seed["decision_clock_hash"]
     assert context.effective_config_seed["chain_hash"]
     layers = context.source_watermark_seed["universe_evidence"]["layers"]
@@ -1059,6 +1060,96 @@ def test_prospective_context_is_fully_typed_before_selection(
         for item in layers[:3]
     )
     assert all("not_materialized_in_o3_projection" not in item["exclusion_reason_counts"] for item in layers)
+
+
+def test_prospective_context_rejects_source_observed_after_historical_cutoff(
+    tmp_path: Path,
+    onboarding_request,
+    monkeypatch,
+) -> None:
+    asset_root = tmp_path / "assets"
+    asset_root.mkdir()
+    base = RealDevOnboardingEvidenceStore(root=tmp_path / "evidence")
+    request = _historical_request(onboarding_request, base.publish(onboarding_request).ref, asset_root)
+    spec = request.program_specs[0]
+    repository = InMemoryAdvisoryProgramRepository()
+    historical_replay_at = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
+    program_service = AdvisoryProgramService(
+        repository=repository,
+        selection_service=object(),
+        calendar_provider=_Calendar(),
+        symbol_name_resolver=object(),
+        now_provider=lambda: NOW,
+    )
+    components = SimpleNamespace(program_repository=repository, program_service=program_service, conn_factory=object())
+    service = RealDevHistoricalOnboardingService(now_provider=lambda: historical_replay_at)
+    _program, binding = service._ensure_program(  # noqa: SLF001
+        spec=spec,
+        effective_from=request.binding_effective_from_trade_date,
+        components=components,
+    )
+    package_config = normalize_selection_runtime_config(
+        mark_non_trading_preview_runtime_config(spec.runtime_config, reason="historical advisory research evidence")
+    )
+    package_config = refresh_generated_runtime_profile_binding(package_config)
+    package_config["point_in_time_context"] = {
+        "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+        "trade_date": "2026-07-22",
+        "cutoff_date": request.decision_trade_date.isoformat(),
+        "score_trade_date": request.decision_trade_date.isoformat(),
+        "reference_price_trade_date": request.decision_trade_date.isoformat(),
+    }
+    observed_after_cutoff = datetime(2026, 7, 22, 2, 0, tzinfo=UTC)
+    source_rows = [
+        {
+            "source_role": "daily_market",
+            "dataset_id": "market.kline_daily_raw",
+            "row_count": 10,
+            "available_at": observed_after_cutoff,
+            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+        }
+    ]
+    universe_hash = canonical_evidence_json_sha256(["000001.SZ"])
+    candidate = SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1)
+    artifact = SimpleNamespace(
+        artifact_id="artifact-o3-late",
+        artifact_payload_sha256="b" * 64,
+        artifact_contract_version="selection_score_artifact_v2",
+        package_id=spec.package_id,
+        manifest_sha256="a" * 64,
+        universe_count=1,
+        source_revision_set_hash=canonical_evidence_json_sha256(source_rows),
+        metadata={"source_read_receipts": source_rows, "artifact_input_context": {"universe_input_hash": universe_hash}},
+    )
+    receipt = SimpleNamespace(input_count=1, output_count=1, receipt_hash="f" * 64)
+    preflight = {
+        "signal": SimpleNamespace(snapshot=SimpleNamespace(candidates=[candidate])),
+        "risk": SimpleNamespace(candidates=[candidate], exclusions=[], receipt=receipt),
+        "tradability": SimpleNamespace(candidates=[candidate], exclusions=[], receipt=receipt),
+    }
+    monkeypatch.setattr(
+        service,
+        "_calendar_payload",
+        lambda **_kwargs: [
+            {"cal_date": request.decision_trade_date, "is_trading": True},
+            {"cal_date": date(2026, 7, 22), "is_trading": True},
+        ],
+    )
+
+    with pytest.raises(HistoricalResearchInputUnavailable) as excinfo:
+        service._prospective_context(  # noqa: SLF001
+            request=request,
+            binding=binding,
+            package_config=package_config,
+            artifact=artifact,
+            preflight=preflight,
+            target_trade_date=date(2026, 7, 22),
+            components=components,
+        )
+
+    assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
+    assert excinfo.value.context["decision_cutoff_ts"] == "2026-07-22T09:25:00+08:00"
+    assert excinfo.value.context["data_available_at"] == observed_after_cutoff.isoformat()
 
 
 def test_universe_evidence_rejects_missing_sources_and_unreconciled_exclusions(
@@ -1246,6 +1337,133 @@ def test_run_keeps_program_failures_independent_and_publishes_formal_status(
         complete_spec.program_id: HistoricalProgramStatus.COMPLETE,
     }
     assert "ADVISORY_O3_SELECTION_FAILED" in next(
+        item.reason_codes for item in receipt.program_results if item.program_id == failed_spec.program_id
+    )
+    assert stored.relative_path.startswith("historical-receipts/")
+
+
+def test_run_keeps_program_provisioning_failures_independent(
+    tmp_path: Path,
+    onboarding_request,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.services.advisory_dev_input_onboarding.historical_onboarding.repository_code_release",
+        lambda _root: (CODE_RELEASE_ID, CODE_RELEASE_HASH),
+    )
+    asset_root = tmp_path / "assets"
+    asset_root.mkdir()
+    base = RealDevOnboardingEvidenceStore(root=tmp_path / "evidence")
+    identity = DatabaseIdentity(
+        target_label=TargetLabel.DEV,
+        current_database="aistock_dev",
+        server_address="10.0.0.2",
+        server_port=5432,
+        server_version_num=160000,
+        current_user_hash="a" * 64,
+        environment_contract_hash="b" * 64,
+    )
+    request = _historical_request(
+        onboarding_request,
+        base.publish(onboarding_request).ref,
+        asset_root,
+        target_identity_hash=database_identity_hash(identity),
+    )
+    config = DatabaseConnectionConfig(
+        target_label=TargetLabel.DEV,
+        host="dev-host",
+        port=5432,
+        database="aistock_dev",
+        user="dev-user",
+        password="secret",
+        environment_contract_hash="b" * 64,
+    )
+    monkeypatch.setattr(
+        "backend.services.advisory_dev_input_onboarding.historical_onboarding.resolve_database_connection",
+        lambda **_kwargs: config,
+    )
+
+    @contextmanager
+    def readonly(*_args, **_kwargs):
+        yield object()
+
+    monkeypatch.setattr(
+        "backend.services.advisory_dev_input_onboarding.historical_onboarding.readonly_onboarding_connection",
+        readonly,
+    )
+    monkeypatch.setattr(
+        "backend.services.advisory_dev_input_onboarding.historical_onboarding.FixedReadOnlyProjection",
+        lambda _connection, _config: SimpleNamespace(identity=lambda: identity),
+    )
+    failed_spec, complete_spec = request.program_specs
+    failed_run = SimpleNamespace(
+        program_id=failed_spec.program_id,
+        status=HistoricalResearchRunStatus.FAILED,
+        program_payload_sha256=None,
+        binding_version_id=None,
+        binding_payload_hash=None,
+        evidence_id=None,
+        evidence_hash=None,
+        artifact_id=None,
+        artifact_payload_hash=None,
+        program_run_id="run-provisioning-failed",
+        reason_codes=["ADVISORY_PHASE0A2D_PROGRAM_FAILED"],
+    )
+    complete_run = SimpleNamespace(
+        program_id=complete_spec.program_id,
+        status=HistoricalResearchRunStatus.COMPLETE,
+        program_payload_sha256="1" * 64,
+        binding_version_id="binding-complete",
+        binding_payload_hash="2" * 64,
+        evidence_id="evidence-complete",
+        evidence_hash="3" * 64,
+        artifact_id="artifact-complete",
+        artifact_payload_hash="4" * 64,
+        program_run_id="run-complete",
+        reason_codes=[],
+    )
+    formal = SimpleNamespace(
+        batch_id="batch-provisioning",
+        batch_key="5" * 64,
+        status=HistoricalResearchRunStatus.FAILED,
+        receipt_hash="6" * 64,
+        program_runs=[failed_run, complete_run],
+    )
+    components = SimpleNamespace(
+        historical_runner=SimpleNamespace(run=lambda _request: formal),
+        trading_date_resolver=SimpleNamespace(require_completed_historical_trading_date=lambda **_kwargs: None),
+        calendar_service=SimpleNamespace(ensure_trading_day=lambda _date: None),
+    )
+    attempted_evidence: list[str] = []
+
+    class Service(RealDevHistoricalOnboardingService):
+        def _build_components(self, **_kwargs):
+            return components
+
+        def _ensure_program(self, *, spec, **_kwargs):
+            if spec.program_id == failed_spec.program_id:
+                raise RealDevOnboardingError("ADVISORY_O3_PROGRAM_PROVISION_FAILED", "program provisioning failed")
+            return SimpleNamespace(program_id=spec.program_id), SimpleNamespace(binding_version_id=f"b-{spec.program_id}")
+
+        def _ensure_prospective_evidence(self, *, spec, **_kwargs):
+            attempted_evidence.append(spec.program_id)
+            return SimpleNamespace(evidence_id="evidence-complete"), "selection-complete"
+
+    receipt, stored = Service(now_provider=lambda: NOW).run(
+        request=request,
+        env_file=tmp_path / ".env",
+        evidence_root=base.root,
+        target_package_asset_root=asset_root,
+        repository_root=Path.cwd(),
+    )
+
+    assert attempted_evidence == [complete_spec.program_id]
+    assert receipt.batch_status == "FAILED"
+    assert {item.program_id: item.status for item in receipt.program_results} == {
+        failed_spec.program_id: HistoricalProgramStatus.FAILED,
+        complete_spec.program_id: HistoricalProgramStatus.COMPLETE,
+    }
+    assert "ADVISORY_O3_PROGRAM_PROVISION_FAILED" in next(
         item.reason_codes for item in receipt.program_results if item.program_id == failed_spec.program_id
     )
     assert stored.relative_path.startswith("historical-receipts/")

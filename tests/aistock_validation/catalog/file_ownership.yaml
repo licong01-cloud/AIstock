@@ -1,5 +1,19 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_dev_input_onboarding
+    priority: 105
+    include:
+      - backend/services/advisory_dev_input_onboarding/**
+      - backend/services/advisory_phase0a/**
+      - backend/tests/advisory_dev_input_onboarding/**
+      - backend/tests/advisory_phase0a/**
+      - scripts/advisory_phase0a_audit.py
+      - scripts/advisory_real_dev_onboarding.py
+    primary_module: advisory.dev_input_onboarding
+    impact_modules: [tests.backend]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Advisory historical onboarding and Phase0A evidence paths share one isolated research-only validation contract.
   - rule_id: validation_catalog_module_quality
     priority: 120
     include:

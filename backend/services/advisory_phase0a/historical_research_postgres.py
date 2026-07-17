@@ -308,7 +308,7 @@ class PersistedHistoricalSelectionEvidenceAdapter:
             or payload.phase0a_candidate_lineage.get("manifest_sha256") != context.manifest_sha256
             or binding_ref.get("binding_id") != context.binding_version_id
             or binding_ref.get("binding_hash") != context.binding_payload_hash
-            or config_chain.get("package_effective_config_hash") != context.effective_runtime_config_hash
+            or config_chain.get("binding_base_config_hash") != context.effective_runtime_config_hash
         ):
             raise RuntimeConfigInvalidError(
                 "stored DailySelectionEvidence does not match the dated Program context",

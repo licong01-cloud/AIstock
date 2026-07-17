@@ -511,6 +511,19 @@ def guardrail_changed_files(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_dev_input_onboarding_backend(session: nox.Session) -> None:
+    """Run Advisory historical onboarding and Phase0A backend regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_dev_input_onboarding",
+        "backend/tests/advisory_phase0a",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [

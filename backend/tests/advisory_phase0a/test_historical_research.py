@@ -312,7 +312,7 @@ def test_persisted_dse_adapter_accepts_only_the_exact_dated_program_context() ->
         package_id=manifest.package_id,
         manifest_sha256=manifest.manifest_sha256,
         policy_hash="a" * 64,
-        effective_runtime_config_hash=effective_config["package_effective_config_hash"],
+        effective_runtime_config_hash=effective_config["binding_base_config_hash"],
     )
 
     class _Cursor:

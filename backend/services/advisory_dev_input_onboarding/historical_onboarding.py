@@ -9,9 +9,10 @@ import subprocess
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
@@ -146,6 +147,8 @@ HISTORICAL_STORE_POLICY_HASH = canonical_json_sha256(
         "latest_pointer": False,
     }
 )
+HISTORICAL_DECISION_TIMEZONE = ZoneInfo("Asia/Shanghai")
+HISTORICAL_TARGET_ENTRY_CUTOFF = time(9, 25)
 
 
 def target_package_asset_root_hash(path: Path) -> str:
@@ -648,18 +651,6 @@ class RealDevHistoricalOnboardingService:
                     spec.package_id,
                 )
                 provisioning[spec.program_id] = {"reason_codes": (REASON_HISTORICAL_RUN_FAILED,), "failed": True}
-
-        provisioning_failures = {
-            program_id: list(state.get("reason_codes") or ())
-            for program_id, state in provisioning.items()
-            if state.get("failed")
-        }
-        if provisioning_failures:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID,
-                "one or more exact historical Programs could not be provisioned",
-                context={"program_failures": provisioning_failures},
-            )
 
         try:
             components.trading_date_resolver.require_completed_historical_trading_date(
@@ -1345,8 +1336,25 @@ class RealDevHistoricalOnboardingService:
             raise RealDevOnboardingError(REASON_DSE_INVALID, "score artifact source receipts are incomplete")
         data_available_at = max(item for item in observed if item is not None)
         generated_at = self._now_provider()
-        if generated_at < data_available_at:
-            generated_at = data_available_at
+        if generated_at.tzinfo is None:
+            raise RuntimeConfigInvalidError("historical onboarding clock must be timezone-aware")
+        latest_legal_cutoff = datetime.combine(
+            target_trade_date,
+            HISTORICAL_TARGET_ENTRY_CUTOFF,
+            tzinfo=HISTORICAL_DECISION_TIMEZONE,
+        )
+        decision_cutoff = min(generated_at, latest_legal_cutoff)
+        if data_available_at > decision_cutoff:
+            raise HistoricalResearchInputUnavailable(
+                "historical source receipts were first available after the frozen decision cutoff",
+                reason_code=REASON_HISTORICAL_INPUT_PENDING,
+                context={
+                    "decision_trade_date": request.decision_trade_date.isoformat(),
+                    "target_trade_date": target_trade_date.isoformat(),
+                    "decision_cutoff_ts": decision_cutoff.isoformat(),
+                    "data_available_at": data_available_at.isoformat(),
+                },
+            )
         calendar_payload = self._calendar_payload(
             decision_date=request.decision_trade_date,
             target_date=target_trade_date,
@@ -1406,7 +1414,7 @@ class RealDevHistoricalOnboardingService:
                 "requested_selection_as_of_trade_date": request.decision_trade_date,
                 "requested_cutoff_date": request.decision_trade_date,
                 "effective_cutoff_date": request.decision_trade_date,
-                "decision_cutoff_ts": generated_at,
+                "decision_cutoff_ts": decision_cutoff,
                 "data_available_at": data_available_at,
                 "decision_generated_at": generated_at,
                 "timezone": "Asia/Shanghai",

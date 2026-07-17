@@ -12,7 +12,10 @@ import psycopg2
 import pytest
 
 from backend.services.advisory_dev_input_onboarding.contracts import AlphaMode, HistoricalProgramSpec
-from backend.services.advisory_dev_input_onboarding.historical_onboarding import RealDevHistoricalOnboardingService
+from backend.services.advisory_dev_input_onboarding.historical_onboarding import (
+    HistoricalResearchExecutionProhibitedPortfolioService,
+    RealDevHistoricalOnboardingService,
+)
 from backend.services.advisory_phase0a.historical_research import (
     HistoricalAdvisoryResearchRunner,
     HistoricalResearchBatchRequest,
@@ -24,15 +27,29 @@ from backend.services.advisory_phase0a.historical_research_postgres import (
     PostgresHistoricalResearchRepository,
     PostgresHistoricalResearchTradingDateResolver,
 )
-from backend.services.advisory_phase0a.policy import canonical_json_sha256
-from backend.services.advisory_program import AdvisoryProgramPGRepository, AdvisoryProgramService, _binding_payload
+from backend.services.advisory_phase1.stage_trace import Phase1TraceCaptureService
+from backend.services.advisory_program import AdvisoryProgramPGRepository, AdvisoryProgramService
 from backend.services.selection_center.prospective_evidence import canonical_evidence_json_sha256
-from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
+from backend.services.selection_center.repository import SelectionCenterRepository
+from backend.services.selection_center.risk_policy import StockRiskPolicyService
+from backend.services.selection_center.service import SelectionCenterService
+from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.simulation_runtime.repository import SimulationRuntimeRepository
+from backend.services.simulation_runtime.selection import DailySelectionSignalService, StrategyPackageSelectionService
 from backend.services.strategy_package.components import StrategyPackageComponentService
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.repository import StrategyPackageRepository
-from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
+from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.selection_artifact import (
+    StrategyPackageSelectionArtifactRepository,
+    selection_artifact_runtime_hash_v2_for_manifest,
+)
+from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.strategy_package.test_multi_alpha_base_schema import _multi_manifest, _single_manifest
 from backend.tests.strategy_package.test_prospective_selection_evidence_dev_db import _dynamic_fixture
 
@@ -128,112 +145,210 @@ def _program_spec(*, program_id: str, package_id: str, alpha_mode: AlphaMode, ru
     )
 
 
-def _save_prospective_evidence(
-    *,
-    conn_factory: Any,
-    manifest: Any,
-    binding: Any,
-    runtime_config: dict[str, Any],
-) -> tuple[Any, Any]:
-    context, _base_manifest, artifact, trace, _base_runtime_config, selected = _dynamic_fixture()
-    observed_at = artifact.metadata["asset_closure"][0]["first_observed_at"]
-    asset_closure = [
-        {
-            "asset_role": "strategy_package_manifest",
-            "asset_id": manifest.package_id,
-            "asset_ref": None,
-            "sha256": manifest.manifest_sha256,
-            "first_observed_at": observed_at,
-            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
-        }
-    ]
-    metadata = {**artifact.metadata, "asset_closure": asset_closure}
-    if manifest.alpha_mode.value == "multi_alpha":
-        component_ids = {
-            component.alpha_id: f"ssa_leg_{component.alpha_id}_{uuid4().hex}"
-            for component in manifest.alpha_components
-        }
-        component_hashes = {
-            component.alpha_id: canonical_evidence_json_sha256(
-                {"alpha_id": component.alpha_id, "manifest_sha256": manifest.manifest_sha256}
+class _PreparedArtifactService:
+    """Replace only external model execution; Selection and DSE production stay real."""
+
+    def __init__(
+        self,
+        *,
+        package_repository: StrategyPackageRepository,
+        artifact_repository: StrategyPackageSelectionArtifactRepository,
+    ) -> None:
+        self.package_repository = package_repository
+        self.artifact_repository = artifact_repository
+
+    def generate_from_live_inference(
+        self,
+        *,
+        package_id: str,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+        cutoff_date: date | None = None,
+        **_kwargs: Any,
+    ) -> Any:
+        manifest = self.package_repository.get(package_id).current_manifest()
+        runtime_hash = selection_artifact_runtime_hash_v2_for_manifest(manifest, runtime_config)
+        try:
+            return self.artifact_repository.get(
+                package_id=package_id,
+                manifest_sha256=manifest.manifest_sha256,
+                trade_date=trade_date,
+                data_source=data_source,
+                runtime_config_hash=runtime_hash,
             )
-            for component in manifest.alpha_components
+        except DataUnavailableError:
+            pass
+
+        _context, _base_manifest, artifact, _trace, _base_runtime_config, _selected = _dynamic_fixture()
+        decision_date = cutoff_date or trade_date
+        observed_at = artifact.metadata["asset_closure"][0]["first_observed_at"]
+        source_receipts = list(artifact.metadata["source_read_receipts"])
+        calendar_payload = [
+            {"cal_date": decision_date, "is_trading": True},
+            {"cal_date": trade_date, "is_trading": True},
+        ]
+        input_context = {
+            **artifact.metadata["artifact_input_context"],
+            "requested_trade_date": trade_date.isoformat(),
+            "effective_trade_date": decision_date.isoformat(),
+            "cutoff_date": decision_date.isoformat(),
+            "score_trade_date": decision_date.isoformat(),
+            "reference_price_trade_date": decision_date.isoformat(),
+            "calendar_hash": canonical_evidence_json_sha256(calendar_payload),
         }
-        metadata.update(
+        asset_closure = [
             {
-                "component_score_artifact_ids": component_ids,
-                "component_score_artifact_sha256": component_hashes,
-                "weight_artifact_id": f"weight_{uuid4().hex}",
-                "weight_artifact_sha256": canonical_evidence_json_sha256(
-                    manifest.alpha_combination_policy.weights
+                "asset_role": "strategy_package_manifest",
+                "asset_id": manifest.package_id,
+                "asset_ref": None,
+                "sha256": manifest.manifest_sha256,
+                "first_observed_at": observed_at,
+                "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+            }
+        ]
+        metadata = {
+            **artifact.metadata,
+            "source_type": (
+                LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                if manifest.alpha_mode.value == "multi_alpha"
+                else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+            ),
+            "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+            "artifact_input_context": input_context,
+            "source_read_receipts": source_receipts,
+            "asset_closure": asset_closure,
+        }
+        if manifest.alpha_mode.value == "multi_alpha":
+            component_ids = {
+                component.alpha_id: f"ssa_leg_{component.alpha_id}_{uuid4().hex}"
+                for component in manifest.alpha_components
+            }
+            component_hashes = {
+                component.alpha_id: canonical_evidence_json_sha256(
+                    {"alpha_id": component.alpha_id, "manifest_sha256": manifest.manifest_sha256}
+                )
+                for component in manifest.alpha_components
+            }
+            metadata.update(
+                {
+                    "component_score_artifact_ids": component_ids,
+                    "component_score_artifact_sha256": component_hashes,
+                    "weight_artifact_id": f"weight_{uuid4().hex}",
+                    "weight_artifact_sha256": canonical_evidence_json_sha256(
+                        manifest.alpha_combination_policy.weights
+                    ),
+                    "combined_score_artifact_sha256": canonical_evidence_json_sha256(
+                        {"component_hashes": component_hashes, "weights": manifest.alpha_combination_policy.weights}
+                    ),
+                    "multi_alpha_parent_parity_hash": canonical_evidence_json_sha256(
+                        {"package_id": manifest.package_id, "component_ids": component_ids}
+                    ),
+                    "multi_alpha_parent_parity": {
+                        "package_id": manifest.package_id,
+                        "component_count": len(manifest.alpha_components),
+                        "deterministic_replay": True,
+                    },
+                    "component_artifacts": {
+                        component.alpha_id: {
+                            "artifact_id": component_ids[component.alpha_id],
+                            "artifact_sha256": component_hashes[component.alpha_id],
+                            "model_ref": component.model_ref,
+                        }
+                        for component in manifest.alpha_components
+                    },
+                    "weights": manifest.alpha_combination_policy.weights,
+                }
+            )
+        isolated = artifact.model_copy(
+            update={
+                "artifact_id": f"ssa_o3_l2_{uuid4().hex}",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "trade_date": trade_date,
+                "data_source": data_source,
+                "runtime_config_hash": runtime_hash,
+                "metadata": metadata,
+                "artifact_input_context_hash": canonical_evidence_json_sha256(input_context),
+                "source_revision_set_hash": artifact.source_revision_set_hash,
+                "asset_closure_hash": canonical_evidence_json_sha256(
+                    [{key: value for key, value in asset_closure[0].items() if key != "first_observed_at"}]
                 ),
-                "combined_score_artifact_sha256": canonical_evidence_json_sha256(
-                    {"component_hashes": component_hashes, "weights": manifest.alpha_combination_policy.weights}
-                ),
-                "multi_alpha_parent_parity_hash": canonical_evidence_json_sha256(
-                    {"package_id": manifest.package_id, "component_ids": component_ids}
-                ),
-                "multi_alpha_parent_parity": {
-                    "package_id": manifest.package_id,
-                    "component_count": len(manifest.alpha_components),
-                    "deterministic_replay": True,
-                },
-                "component_artifacts": {
-                    component.alpha_id: {
-                        "artifact_id": component_ids[component.alpha_id],
-                        "artifact_sha256": component_hashes[component.alpha_id],
-                        "model_ref": component.model_ref,
-                    }
-                    for component in manifest.alpha_components
-                },
-                "weights": manifest.alpha_combination_policy.weights,
+                "artifact_payload_sha256": None,
             }
         )
-    isolated = artifact.model_copy(
-        update={
-            "artifact_id": f"ssa_o3_l2_{uuid4().hex}",
-            "package_id": manifest.package_id,
-            "manifest_sha256": manifest.manifest_sha256,
-            "metadata": metadata,
-            "asset_closure_hash": canonical_evidence_json_sha256(
-                [{key: value for key, value in asset_closure[0].items() if key != "first_observed_at"}]
-            ),
-            "artifact_payload_sha256": None,
-        }
+        return self.artifact_repository.save(isolated)
+
+
+class _PackageHealth:
+    @staticmethod
+    def summarize(_record: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"status": "READY", "source": "o3_postgres_l2"}
+
+
+class _ResultEnrichment:
+    @staticmethod
+    def enrich_candidates(candidates: list[Any], **_kwargs: Any) -> list[Any]:
+        return list(candidates)
+
+
+def _selection_components(
+    *,
+    conn_factory: Any,
+    package_repository: StrategyPackageRepository,
+    program_repository: AdvisoryProgramPGRepository,
+    program_service: AdvisoryProgramService,
+) -> SimpleNamespace:
+    artifact_repository = StrategyPackageSelectionArtifactRepository(conn_factory=conn_factory)
+    artifact_service = _PreparedArtifactService(
+        package_repository=package_repository,
+        artifact_repository=artifact_repository,
     )
-    isolated = StrategyPackageSelectionArtifactRepository._with_digest(isolated)
-    stored_artifact = StrategyPackageSelectionArtifactRepository(conn_factory=conn_factory).save(isolated)
-    binding_payload_hash = canonical_json_sha256(_binding_payload(binding))
-    context = context.model_copy(
-        update={
-            "selection_run_id": f"sel_o3_l2_{uuid4().hex}",
-            "binding_ref": {
-                "binding_id": binding.binding_version_id,
-                "binding_hash": binding_payload_hash,
-            },
-            "effective_config_seed": {
-                **context.effective_config_seed,
-                "binding_base_source_id": binding.binding_version_id,
-                "binding_base_source_hash": binding_payload_hash,
-                "package_effective_config": runtime_config,
-                "package_effective_config_hash": canonical_evidence_json_sha256(runtime_config),
-                "final_effective_config_hash": canonical_evidence_json_sha256(runtime_config),
-            },
-        }
+    runtime = StrategyPackageRuntime(artifact_repository=artifact_repository)
+    tradability = TradabilityFilter()
+    risk_policy = StockRiskPolicyService()
+    health = _PackageHealth()
+    signal_service = DailySelectionSignalService(runtime=runtime, selection_artifact_service=artifact_service)
+    selection_repository = SimulationRuntimeRepository(conn_factory=conn_factory)
+    strategy_selection = StrategyPackageSelectionService(
+        package_repository=package_repository,
+        runtime=runtime,
+        tradability_filter=tradability,
+        refresh_audit=SimpleNamespace(require_success=lambda **_kwargs: None),
+        selection_artifact_service=artifact_service,
+        calendar_provider=_Calendar(),
+        risk_policy_service=risk_policy,
+        package_health_service=health,
+        repository=selection_repository,
+        signal_service=signal_service,
+        phase1_trace_capture_service=Phase1TraceCaptureService(),
     )
-    evidence = ProspectiveSelectionEvidenceAssembler().assemble(
-        context=context,
-        manifest=manifest,
-        selection_run_id=context.selection_run_id,
-        artifact=stored_artifact,
-        stage_trace=trace,
-        runtime_config=runtime_config,
-        selected=selected,
-        excluded=[],
-        created_by="o3_postgres_l2",
+    selection_center = SelectionCenterService(
+        package_repository=package_repository,
+        repository=SelectionCenterRepository(conn_factory=conn_factory),
+        runtime=runtime,
+        tradability_filter=tradability,
+        refresh_audit=SimpleNamespace(require_success=lambda **_kwargs: None),
+        paper_portfolio_service=HistoricalResearchExecutionProhibitedPortfolioService(),
+        selection_artifact_service=artifact_service,
+        calendar_provider=_Calendar(),
+        risk_policy_service=risk_policy,
+        package_health_service=health,
+        strategy_selection_service=strategy_selection,
+        result_enrichment_service=_ResultEnrichment(),
     )
-    stored_evidence = SimulationRuntimeRepository(conn_factory=conn_factory).save_daily_selection_evidence(evidence)
-    return stored_artifact, stored_evidence
+    return SimpleNamespace(
+        conn_factory=conn_factory,
+        program_repository=program_repository,
+        program_service=program_service,
+        selection_center=selection_center,
+        selection_service=strategy_selection,
+        artifact_service=artifact_service,
+        artifact_repository=artifact_repository,
+        program_resolver=PostgresHistoricalResearchProgramResolver(conn_factory=conn_factory),
+        evidence_adapter=PersistedHistoricalSelectionEvidenceAdapter(conn_factory=conn_factory),
+        calendar_service=_Calendar(),
+    )
 
 
 def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgres_dsn: str) -> None:
@@ -243,8 +358,8 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgr
     with conn_factory() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO market.trading_calendar (cal_date, is_trading) VALUES (%s, TRUE)",
-                (decision_date,),
+                "INSERT INTO market.trading_calendar (cal_date, is_trading) VALUES (%s, TRUE), (%s, TRUE)",
+                (decision_date, date.fromordinal(decision_date.toordinal() + 1)),
             )
 
     package_repository = StrategyPackageRepository(conn_factory=conn_factory)
@@ -254,12 +369,21 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgr
     package_repository.save_manifest(single_manifest)
     package_repository.save_manifest(child_a)
     package_repository.save_manifest(child_b)
+    multi_source_manifest = _multi_manifest(
+        f"o3_multi_{uuid4().hex}",
+        child_a.alpha_components[0],
+        child_b.alpha_components[0],
+    )
+    multi_source_manifest = multi_source_manifest.model_copy(
+        update={
+            "backtest_context": {
+                **(multi_source_manifest.backtest_context or {}),
+                "daily_strategy": {"topk": 5},
+            }
+        }
+    )
     multi_record, _components = StrategyPackageComponentService(repository=package_repository).create_multi_alpha_package(
-        manifest=_multi_manifest(
-            f"o3_multi_{uuid4().hex}",
-            child_a.alpha_components[0],
-            child_b.alpha_components[0],
-        ),
+        manifest=multi_source_manifest,
         components=[
             {"child_package_id": child_a.package_id, "component_weight": 0.6, "score_normalization": "rank", "position": 1},
             {"child_package_id": child_b.package_id, "component_weight": 0.4, "score_normalization": "zscore", "position": 2},
@@ -267,7 +391,20 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgr
     )
     multi_manifest = multi_record.current_manifest()
 
-    _context, _manifest, _artifact, _trace, runtime_config, _selected = _dynamic_fixture()
+    runtime_config = {
+        "runtime_profile": {
+            "selection": {"top_k": 5},
+            "hmm": {"enabled": False},
+            "risk_policy": {"enabled": False},
+            "tradability": {"exclude_suspended": False},
+            "industry_blacklist": [],
+        },
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "inference_backend": "wsl",
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+        },
+    }
     program_repository = AdvisoryProgramPGRepository(conn_factory=conn_factory)
     program_service = AdvisoryProgramService(
         repository=program_repository,
@@ -308,12 +445,31 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgr
     assert single_retry.program_id == single_program.program_id
     assert single_binding_retry.binding_version_id == single_binding.binding_version_id
 
-    _save_prospective_evidence(
+    producer_components = _selection_components(
         conn_factory=conn_factory,
-        manifest=single_manifest,
-        binding=single_binding,
-        runtime_config=runtime_config,
+        package_repository=package_repository,
+        program_repository=program_repository,
+        program_service=program_service,
     )
+    exact_request = SimpleNamespace(
+        binding_effective_from_trade_date=decision_date,
+        decision_trade_date=decision_date,
+        policy_registry_id="o3_l2_policy",
+        policy_registry_version="v1",
+        policy_registry_hash="9" * 64,
+        code_release_id="c" * 40,
+        code_release_hash="d" * 64,
+    )
+    evidence_service = RealDevHistoricalOnboardingService(now_provider=lambda: requested_at)
+    single_evidence, single_selection_run_id = evidence_service._ensure_prospective_evidence(  # noqa: SLF001
+        request=exact_request,
+        spec=single_spec,
+        program=single_program,
+        binding=single_binding,
+        components=producer_components,
+    )
+    assert single_evidence.evidence_id
+    assert single_selection_run_id and single_selection_run_id.startswith("sel_")
     runner = HistoricalAdvisoryResearchRunner(
         repository=PostgresHistoricalResearchRepository(conn_factory=conn_factory),
         trading_date_resolver=PostgresHistoricalResearchTradingDateResolver(conn_factory=conn_factory),
@@ -331,12 +487,15 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(postgr
     assert first_by_program[single_program.program_id].status is HistoricalResearchRunStatus.COMPLETE
     assert first_by_program[multi_program.program_id].status is HistoricalResearchRunStatus.WAITING_INPUT
 
-    _save_prospective_evidence(
-        conn_factory=conn_factory,
-        manifest=multi_manifest,
+    multi_evidence, multi_selection_run_id = evidence_service._ensure_prospective_evidence(  # noqa: SLF001
+        request=exact_request,
+        spec=multi_spec,
+        program=multi_program,
         binding=multi_binding,
-        runtime_config=runtime_config,
+        components=producer_components,
     )
+    assert multi_evidence.evidence_id
+    assert multi_selection_run_id and multi_selection_run_id.startswith("sel_")
     completed = runner.run(request)
     completed_by_program = {item.program_id: item for item in completed.program_runs}
     assert completed.status is HistoricalResearchRunStatus.COMPLETE
