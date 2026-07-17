@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-750",
-  "closed_at": null,
+  "closed_at": "2026-07-17T21:23:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,8 +38,8 @@
   "expected": "Single and batch close-sync must persist closed_at from the merged source PR timestamp while preserving fixed_at as the finalizer execution timestamp; current BUG-742 through BUG-749 records must be backfilled without touching the historical fixed backlog.",
   "first_seen_at": "2026-07-17T21:14:36.771043Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "738b94e1e953e0ad0784ffc0d9fed12f4f86ef30",
+  "fixed_at": "2026-07-17T21:24:43.606473Z",
   "github_issue_number": 2406,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2406",
   "last_seen_at": "2026-07-17T21:14:36.771043Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2407",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -69,6 +70,10 @@
     "fingerprint": "29aa95cde8b2e47b74d17151",
     "source_event_id": "FE-20260717-29aa95cde8b2"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_close_sync_apply_skips_github_sync_when_github_check_is_disabled backend/tests/scripts/test_aistock_issue_workflow.py::test_close_sync_batch_updates_multiple_bug_jsons backend/tests/scripts/test_aistock_issue_workflow.py::test_close_sync_is_dry_run_and_requires_pr_url -q -p no:cacheprovider -> PASS (3 passed)",
+    "python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -> PASS (3 sessions)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
