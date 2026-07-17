@@ -9,7 +9,7 @@ BacktestDataSource 单元测试
 5. horizon 验证
 6. 板块映射
 7. 并发下载锁
-8. 交易日历计算（真实 trade_cal）
+8. 交易日历计算（真实 trading_calendar）
 """
 
 import asyncio
@@ -211,40 +211,23 @@ class TestBacktestDataSource:
     @pytest.mark.asyncio
     async def test_sector_mapping_query(self, mock_qe_client):
         """测试板块映射查询"""
+        repository = MagicMock()
+        repository.get_sector_mapping.return_value = {
+            '000001.SZ': '801780.SI',
+            '600000.SH': '801192.SI',
+        }
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
             cache_dir="tmp/test_cache/",
             qe_client=mock_qe_client,
+            repository=repository,
         )
 
-        # Mock 数据库查询
-        with patch('backend.services.hmm_data_source.backtest_source.get_conn') as mock_get_conn:
-            # cur.fetchall() 是协程；cur.execute() 是协程
-            mock_cursor = MagicMock()
-            mock_cursor.execute = AsyncMock()
-            mock_cursor.fetchall = AsyncMock(return_value=[
-                ('000001.SZ', '801780.SI'),
-                ('600000.SH', '801192.SI'),
-            ])
+        mapping = await source.get_sector_mapping(date(2024, 7, 1))
 
-            # async with conn.cursor() as cur -> cursor() 返回异步上下文管理器
-            cursor_cm = MagicMock()
-            cursor_cm.__aenter__ = AsyncMock(return_value=mock_cursor)
-            cursor_cm.__aexit__ = AsyncMock(return_value=False)
-
-            mock_conn = MagicMock()
-            mock_conn.cursor = MagicMock(return_value=cursor_cm)
-
-            # async with get_conn() as conn -> get_conn() 返回异步上下文管理器
-            conn_cm = MagicMock()
-            conn_cm.__aenter__ = AsyncMock(return_value=mock_conn)
-            conn_cm.__aexit__ = AsyncMock(return_value=False)
-            mock_get_conn.return_value = conn_cm
-
-            mapping = await source.get_sector_mapping(date(2024, 7, 1))
-
-            assert mapping['000001.SZ'] == '801780.SI'
-            assert mapping['600000.SH'] == '801192.SI'
+        repository.get_sector_mapping.assert_called_once_with(date(2024, 7, 1))
+        assert mapping['000001.SZ'] == '801780.SI'
+        assert mapping['600000.SH'] == '801192.SI'
 
     @pytest.mark.asyncio
     async def test_concurrent_download_lock(
@@ -285,7 +268,7 @@ class TestBacktestDataSource:
     @pytest.mark.integration
     async def test_trading_calendar_calculation(self, mock_qe_client):
         """
-        测试交易日历计算（使用真实 trade_cal）
+        测试交易日历计算（使用真实 trading_calendar）
 
         需要连接真实数据库，使用 --run-integration 标志
         """
