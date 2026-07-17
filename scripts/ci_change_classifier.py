@@ -63,6 +63,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".codex/skills/verify-aistock-feature/SKILL.md",
     ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_feature_workflow.py",
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
@@ -94,6 +95,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_feature_workflow.py",
     "scripts/aistock_validation_catalog_integrity.py",
     "scripts/aistock_guardrail_scan.py",
     "scripts/bug_registry_metadata_check.py",
@@ -207,7 +209,14 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     unmapped_files: list[str] = []
     for path in paths:
         path_selection = flow.select_validation([path])
-        if _backend_sessions_from_selection(path_selection, plans):
+        required_plans = [str(item) for item in path_selection.get("required_plans") or []]
+        has_related_deferred_plan = any(
+            plan_key not in {"l0", "guardrail_changed_files", "validation_module_registry_l0"}
+            and bool((plans.get(plan_key) or {}).get("enabled", True))
+            and bool((plans.get(plan_key) or {}).get("runner_enabled", True))
+            for plan_key in required_plans
+        )
+        if _backend_sessions_from_selection(path_selection, plans) or has_related_deferred_plan:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)

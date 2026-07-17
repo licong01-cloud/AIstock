@@ -193,6 +193,33 @@ def test_unmapped_backend_code_blocks_instead_of_running_unrelated_matrix(tmp_pa
     assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
 
 
+def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/data_quality/test_cross_table_consistency.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["unmapped_code_files"] == []
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert "data_quality_deep" in payload["backend_plan_keys"]
+
+
+def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_feature_workflow.py",
+            "backend/tests/scripts/test_aistock_feature_workflow.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
+
+
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
     source = Path("scripts/ci_change_classifier.py").read_text(encoding="utf-8")
     payload = classifier.classify_changed_files(
