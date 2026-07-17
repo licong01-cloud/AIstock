@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v1.6
+> **版本**: v1.7
 > **日期**: 2026-07-16  
-> **修订日期**: 2026-07-17
-> **状态**: Phase 0 已完成；Phase 1 P1-A foundation 已完成外部验收，P1-B/P1-C 待实现，runtime activation 未启用
+> **修订日期**: 2026-07-18
+> **状态**: Phase 0 已完成；Phase 1 P1-A/P1-B 已完成，P1-C API/UI 与受控 benchmark 待实现；runtime activation 未启用
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -24,12 +24,12 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 
 ### 1.2 核心目标
 
-**Phase 0-3 目标**:
-- ✅ 离线快速评估：10 分钟评估一个 HMM 版本（vs 6-12 小时 QE）
-- ✅ 批量对比筛选：同时测试 10+ 个候选，自动推荐 top-3
-- ✅ 风险预警可视化：每日板块风险预警 + 状态热力图
-- ✅ 滚动训练自动化：定期重训 HMM，保持模型时效性
-- ✅ 数据环境隔离：研发用回测数据，生产用 t-1 实时数据
+**Phase 0-3 目标与当前状态**:
+- 🟡 离线快速评估：evaluator/replay 核心已实现；标准基准上的单候选 <10 分钟验收待 P1-C。
+- 🟡 批量对比筛选：batch-relative scorer/top-3 核心已实现；10+ 候选真实 benchmark 待 P1-C。
+- ⬜ 风险预警可视化：每日板块风险预警 + 状态热力图由 Phase 2 交付。
+- ⬜ 滚动训练自动化：研究候选滚动训练与时效性监控由 Phase 3 交付。
+- ✅ 数据环境隔离：Phase 0 数据源、Phase 1 source manifest 与只读 market repository 已完成。
 
 **Phase 4+ 目标** (待独立设计):
 - 接入 QE 和模拟盘（需独立审批）
@@ -93,6 +93,16 @@ Phase 1 开发前的四项前置条件现均已满足：
 2. HMM 数据源相关单元测试进入专用 CI/nox plan，不再依赖无关 `qe_data_contract_backend`。
 3. artifact manifest、路径边界、原子写、缓存生命周期和反序列化信任边界完成直接测试。
 4. 本文 Design Acceptance Index 中 `F-001` 至 `F-005` 均有实现与证据。
+
+Phase 1 当前进度：
+
+- P1-A 已完成 QE 全资产只读 reader、candidate registry、Python schema bootstrap、durable
+  repository/state machine 与生产 schema verify；runtime 默认关闭。
+- P1-B 已由 PR #2373（merge `b7d59e6a0209d94c71b28ea58008973e43dc16d1`）实现
+  versioned evaluator、input adapter、latest-common/交易日 market repository、durable executor 和
+  `hmm_recommendation_v1` scorer；BUG-736/BUG-737 由 PR #2377（merge
+  `8372d043afc1a47fc1c8cd341c70adccc2b236c9`）完成旧诊断唯一计算路径迁移。
+- F-007/F-009 已验证；P1-C 的 worker CLI、真实 API/UI、10-case 对照和性能 benchmark 尚未完成。
 
 ---
 
@@ -216,7 +226,7 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 
 **实现级权威**:
 
-- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v1.1。
+- `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v1.4。
 
 **数据库 Schema**:
 
@@ -239,6 +249,14 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 - top-3 是研究推荐，不自动提交 QE、不修改生产配置、不淘汰未入选方向。
 - 每次结果必须可由 `source_manifest + candidate manifest + evaluation_spec + evaluator_version + input_hash` 重放。
 - neutral fallback、共同日期裁剪和缺失指标重加权必须标记 degraded 并在主 UI 可见，禁止只藏调试 JSON。
+
+**当前实现状态**:
+
+- P1-A/P1-B 后端基础、evaluator、executor、source manifest、market repository 和 scorer 已合入 main。
+- 旧 `hmm_offline_diagnostic.py` 已复用唯一 evaluator/Phase 0 缓存/canonical 只读行情 repository，
+  不再包含硬编码 DB 凭据、QE config 下载或宽泛异常吞错。
+- API 端点、`/hmm-evolution` UI、人工 worker CLI 和真实 benchmark 仍属于 P1-C，当前不存在
+  生产 runtime activation。
 
 **API 端点**:
 ```
@@ -654,8 +672,8 @@ docs/
 2. **P0-B artifact/cache hardening**：处理 F-004，并补可信 manifest 与容量边界。
 3. **P0-C 验证与文档收敛**：处理 F-005，修正文档、专用 CI、受控 smoke 和 benchmark。
 4. **P1-A asset/schema/repository（已完成外部验收）**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
-5. **P1-B evaluator**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；不得复制其中硬编码连接或临时 I/O。
-6. **P1-C API/UI**：交付 F-010，并完成真实 API/UI 验证。
+5. **P1-B evaluator（已完成）**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；旧诊断已迁到唯一 evaluator。
+6. **P1-C API/UI（下一阶段）**：交付 F-010、人工 worker CLI、10-case/性能 benchmark，并完成真实 API/UI 验证。
 7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
 8. **P3 研究训练**：先交付 F-014；F-015 自动调度部分等待独立语义批准。
 
@@ -676,7 +694,7 @@ docs/
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v1.5 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
+本表记录 v1.7 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -686,9 +704,9 @@ docs/
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | 路径/原子/跨进程锁/容量/reparse/corruption fail-loud tests | verified | 无 |
 | F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273；Phase 0 README/详细设计/验收清单；本验收 PR | `hmm_data_source_backend`、coverage/JUnit、4-test read-only integration、compact timing/RSS receipt | verified | 无 |
 | F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；AIstock QE asset reader + candidate bootstrap/repository；RD-Agent PR #4 complete catalog endpoint | 真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label 原位只读 receipt；unit isolation/manifest/path/hash/write-allowlist；生产 schema verify；runtime rollout 状态见 §13 | verified | 无 |
-| F-007 | Phase 1 详细设计 §7/§8；目标 versioned evaluator | 目标：旧诊断 oracle + asset trust/latest-common/tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-007 | Phase 1 详细设计 §7/§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py`；PR #2373/#2377 | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；tie/h10/h20/mixed horizon/latest-common/read-only transaction/coverage/result hash；HMM/Data Source matrix 178 passed / 8 skipped；dev PostgreSQL read-only smoke | verified | 无 |
 | F-008 | Phase 1 详细设计 §10～§13；durable batch/evaluation/item repository + disabled worker skeleton | unit state-machine suite；真实 dev PostgreSQL 8-worker idempotency/single-claim/CAS/fencing/heartbeat/lease-timeout；生产 drift verify；P1-B/P1-C 状态见 §9/§13 | verified | 无 |
-| F-009 | Phase 1 详细设计 §9；目标 `hmm_recommendation_v1` | 目标：percentile/版本/并列/缺失/top-3/无副作用 tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
+| F-009 | Phase 1 详细设计 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；PR #2373 | `test_scorer.py`、repository integration；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3；排名仅写 batch item，无淘汰阈值或交易副作用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；目标 QE asset/candidate/evaluation/batch API、UI、导航 | 目标：API contract + 真实 UI/asset browser/动态 horizon/degraded warning/错误/E2E/截图 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 | F-011 | 目标：hmm_risk alert state machine | 目标：watermark/dedupe/revision test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
 | F-012 | 目标：advisory-only service boundary | 目标：Selection/Paper/QMT 无副作用 test | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
@@ -717,9 +735,9 @@ docs/
 - `data_write_gate`：只允许 `hmm_evolution.*`、`hmm_risk.*`；其它 schema 写入为 fail-closed。
 - `design_compliance_gate`：每个实现 PR 必须执行 DESIGN-COMPLIANCE-001，四项控制均有证据：`no_simplified_delivery`、`no_silent_error`、`no_business_semantic_drift`、`no_unrequested_gate_or_approval`。
 
-当前 P1-A gate receipt（2026-07-17）：`production_ddl_gate=applied_and_verified`
+当前 P1-A/P1-B gate receipt（2026-07-18）：`production_ddl_gate=applied_and_verified`
 （`hmm_evolution_v1`：5 tables / 115 columns / 41 constraints / 7 non-constraint
-indexes，业务表为空）；`runtime_activation_gate=pending`；dependency gates 均为 `noop`。
+indexes，业务表为空）；P1-B 未新增 DDL/依赖；`runtime_activation_gate=pending`；dependency gates 均为 `noop`。
 
 ---
 
@@ -743,6 +761,7 @@ indexes，业务表为空）；`runtime_activation_gate=pending`；dependency ga
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.7 | 2026-07-18 | 同步 P1-B 实际完成状态：回填 PR #2373/#2377、F-007/F-009 验证证据、旧诊断唯一计算路径迁移和 P1-C 剩余边界；runtime 仍未启用 |
 | v1.6 | 2026-07-17 | 完成 P1-A 收尾：repository 受管事务、真实 dev PostgreSQL 并发/CAS/lease 验收、RD-Agent 全资产只读目录 PR #4、真实 Loop8 pred/label 零副本 receipt、生产 schema gate 回填 |
 | v1.5 | 2026-07-17 | 完成研究隔离复审：允许 QE 全资产只读、固化 latest-common market watermark、移除多余审批语义、强化 degraded warning 与禁止简化版 |
 | v1.4 | 2026-07-17 | 完成 Phase 1 实现级详细设计；拆分 reusable evaluation 与 batch-relative ranking；显式 label horizon；批准 `hmm_recommendation_v1` |
