@@ -25,6 +25,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     compute_portable_manifest_json_sha256,
     database_identity_hash,
     deserialize_postgres_value,
+    project_portable_manifest,
     serialize_postgres_value,
     TargetDevProgramSpec,
 )
@@ -32,16 +33,27 @@ from backend.services.advisory_dev_input_onboarding.dev_importer import (
     PACKAGE_ASSET_SEMANTIC_COLUMNS,
     PACKAGE_SEMANTIC_COLUMNS,
     RealDevPackageImporter,
+    _database_exception_context,
     _validate_receipt_authority,
     _verify_target_blobs,
     build_import_plan,
 )
+from backend.services.advisory_dev_input_onboarding.production_projection import PACKAGE_PROVENANCE_COLUMNS
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
 from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity, TargetLabel
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+
+
+class _DatabaseFailureForDiagnostic(Exception):
+    pgcode = "23514"
+
+    class diag:
+        schema_name = "strategy_pkg"
+        table_name = "package"
+        constraint_name = "package_source_type_check"
 
 
 def _identity() -> DatabaseIdentity:
@@ -138,13 +150,23 @@ def _bundle(onboarding_request: RealDevOnboardingRequest) -> tuple[PortableAdvis
         str(row["package_id"]): str(row["manifest_sha256"]) for row in package_rows
     }
     onboarding_request = RealDevOnboardingRequest.model_validate(request_payload)
+    projections = {
+        str(row["package_id"]): project_portable_manifest(row["manifest_json"])[1]
+        for row in package_rows
+    }
     asset_rows = (_asset_row("pkg_single", 40), _asset_row("pkg_multi", 41))
     package_set = PortableRelationRowSet(
         relation_name="strategy_pkg.package",
         primary_or_natural_key_fields=("package_id",),
         semantic_column_names=PACKAGE_SEMANTIC_COLUMNS,
         source_provenance_column_names=("paper_portfolio_count", "created_at", "updated_at"),
-        sorted_rows=package_rows,
+        sorted_rows=tuple(
+            {
+                name: row[name]
+                for name in (*PACKAGE_SEMANTIC_COLUMNS, *PACKAGE_PROVENANCE_COLUMNS)
+            }
+            for row in package_rows
+        ),
     )
     asset_set = PortableRelationRowSet(
         relation_name="strategy_pkg.package_asset",
@@ -165,12 +187,18 @@ def _bundle(onboarding_request: RealDevOnboardingRequest) -> tuple[PortableAdvis
             BundlePackageRef(
                 package_id="pkg_single",
                 manifest_sha256=str(package_rows[0]["manifest_sha256"]),
+                source_manifest_sha256=str(package_rows[0]["manifest_sha256"]),
+                removed_source_row_provenance_hash=SHA_C,
                 alpha_mode=AlphaMode.SINGLE,
+                projection=projections["pkg_single"],
             ),
             BundlePackageRef(
                 package_id="pkg_multi",
                 manifest_sha256=str(package_rows[1]["manifest_sha256"]),
+                source_manifest_sha256=str(package_rows[1]["manifest_sha256"]),
+                removed_source_row_provenance_hash=SHA_C,
                 alpha_mode=AlphaMode.MULTI,
+                projection=projections["pkg_multi"],
             ),
         ),
         native_multi_component_refs=(
@@ -408,6 +436,41 @@ def test_import_receipt_outcome_invariants(onboarding_request: RealDevOnboarding
         RealDevImportReceipt.model_validate(
             {**receipt.model_dump(mode="python", exclude={"receipt_hash"}), "physical_commit_count": 0}
         )
+    rollback = RealDevImportReceipt.model_validate(
+        {
+            **receipt.model_dump(mode="python", exclude={"receipt_hash"}),
+            "physical_commit_count": 0,
+            "commit_outcome": ImportCommitOutcome.ROLLED_BACK,
+            "post_readback_row_hashes": {
+                "strategy_pkg.package": (),
+                "strategy_pkg.package_asset": (),
+            },
+        }
+    )
+    assert rollback.commit_outcome is ImportCommitOutcome.ROLLED_BACK
+    with pytest.raises(ValidationError, match="zero residue"):
+        RealDevImportReceipt.model_validate(
+            {
+                **rollback.model_dump(mode="python", exclude={"receipt_hash"}),
+                "post_readback_row_hashes": receipt.post_readback_row_hashes,
+            }
+        )
+
+
+def test_database_exception_context_is_diagnostic_without_sensitive_payload() -> None:
+    exc = _DatabaseFailureForDiagnostic("INSERT secret-value F:/private/model.pkl")
+
+    context = _database_exception_context(exc)
+
+    assert context == {
+        "error_type": "_DatabaseFailureForDiagnostic",
+        "sqlstate": "23514",
+        "schema_name": "strategy_pkg",
+        "table_name": "package",
+        "constraint_name": "package_source_type_check",
+    }
+    assert "secret-value" not in str(context)
+    assert "F:/private" not in str(context)
 
 
 def test_commit_uncertainty_uses_stable_natural_keys_for_all_three_outcomes(

@@ -16,9 +16,11 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     PortableRelationRowSet,
     RealDevOnboardingRequest,
     compute_portable_manifest_json_sha256,
+    project_portable_manifest,
 )
 from backend.services.advisory_dev_input_onboarding.production_projection import (
     PACKAGE_ASSET_SEMANTIC_COLUMNS,
+    PACKAGE_PROVENANCE_COLUMNS,
     PACKAGE_SEMANTIC_COLUMNS,
 )
 
@@ -116,6 +118,10 @@ def build_database_bundle(
         package_row("pkg_single", "a" * 64, "single_alpha"),
         package_row("pkg_multi", "b" * 64, "multi_alpha"),
     )
+    package_projections = {
+        str(row["package_id"]): project_portable_manifest(row["manifest_json"])[1]
+        for row in package_rows
+    }
     request_payload = request.model_dump(mode="python", exclude={"request_hash"})
     request_payload["expected_package_manifest_sha256s"] = {
         str(row["package_id"]): str(row["manifest_sha256"]) for row in package_rows
@@ -126,7 +132,13 @@ def build_database_bundle(
         primary_or_natural_key_fields=("package_id",),
         semantic_column_names=PACKAGE_SEMANTIC_COLUMNS,
         source_provenance_column_names=("paper_portfolio_count", "created_at", "updated_at"),
-        sorted_rows=package_rows,
+        sorted_rows=tuple(
+            {
+                name: row[name]
+                for name in (*PACKAGE_SEMANTIC_COLUMNS, *PACKAGE_PROVENANCE_COLUMNS)
+            }
+            for row in package_rows
+        ),
     )
     asset_rows = tuple(
         {
@@ -190,12 +202,18 @@ def build_database_bundle(
             BundlePackageRef(
                 package_id="pkg_single",
                 manifest_sha256=str(package_rows[0]["manifest_sha256"]),
+                source_manifest_sha256=str(package_rows[0]["manifest_sha256"]),
+                removed_source_row_provenance_hash="c" * 64,
                 alpha_mode=AlphaMode.SINGLE,
+                projection=package_projections["pkg_single"],
             ),
             BundlePackageRef(
                 package_id="pkg_multi",
                 manifest_sha256=str(package_rows[1]["manifest_sha256"]),
+                source_manifest_sha256=str(package_rows[1]["manifest_sha256"]),
+                removed_source_row_provenance_hash="c" * 64,
                 alpha_mode=AlphaMode.MULTI,
+                projection=package_projections["pkg_multi"],
             ),
         ),
         native_multi_component_refs=components,

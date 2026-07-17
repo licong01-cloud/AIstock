@@ -9,8 +9,36 @@ hmm_data_source 测试包的本地配置。
 """
 import asyncio
 import inspect
+import os
+from dataclasses import dataclass
+from datetime import date
 
 import pytest
+
+
+@dataclass(frozen=True)
+class HMMReadonlyIntegrationConfig:
+    qe_loop_ref: str
+    as_of_date: date
+
+
+@pytest.fixture
+def hmm_readonly_integration_config() -> HMMReadonlyIntegrationConfig:
+    """Require explicit, reproducible coordinates for external read-only smoke."""
+    if os.environ.get("AISTOCK_HMM_READONLY_INTEGRATION") != "1":
+        pytest.skip("AISTOCK_HMM_READONLY_INTEGRATION=1 is required")
+    qe_loop_ref = os.environ.get("HMM_TEST_QE_LOOP_REF", "").strip()
+    as_of_raw = os.environ.get("HMM_TEST_AS_OF_DATE", "").strip()
+    if not qe_loop_ref or not as_of_raw:
+        pytest.skip("HMM_TEST_QE_LOOP_REF and HMM_TEST_AS_OF_DATE are required")
+    try:
+        as_of_date = date.fromisoformat(as_of_raw)
+    except ValueError as exc:
+        pytest.fail(f"HMM_TEST_AS_OF_DATE must be YYYY-MM-DD: {exc}")
+    return HMMReadonlyIntegrationConfig(
+        qe_loop_ref=qe_loop_ref,
+        as_of_date=as_of_date,
+    )
 
 
 def pytest_configure(config):

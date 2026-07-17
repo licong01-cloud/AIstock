@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 from collections import Counter
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Mapping
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan, SimulationBrokerBackend, SimulationDailyRun, SimulationDailyRunStatus
+from .platform_observability import SimulationPlatformObservability
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .scheduler import (
     SimulationLifecycleBackgroundScheduler,
@@ -64,6 +65,73 @@ def _required_positive_int(value: Any, *, field: str) -> int:
     return value
 
 
+def _scheduler_bool(status: dict[str, Any], key: str, *, default: bool = False) -> bool:
+    if key not in status:
+        return default
+    value = status[key]
+    if not isinstance(value, bool):
+        raise RuntimeConfigInvalidError(
+            f"scheduler status {key} must be a boolean",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_STATUS_INVALID",
+                "stage": "SCHEDULER_STATUS_PROJECTION",
+                "field": key,
+                "value_type": type(value).__name__,
+            },
+        )
+    return value
+
+
+def _scheduler_positive_int(status: dict[str, Any], key: str) -> int | None:
+    if key not in status or status[key] is None:
+        return None
+    value = status[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeConfigInvalidError(
+            f"scheduler status {key} must be a positive integer",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_STATUS_INVALID",
+                "stage": "SCHEDULER_STATUS_PROJECTION",
+                "field": key,
+                "value": value,
+            },
+        )
+    return value
+
+
+def _run_projection_bool(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    field_prefix: str,
+    required: bool,
+    default: bool = False,
+) -> bool:
+    if key not in payload or payload[key] is None:
+        if not required:
+            return default
+        raise DataUnavailableError(
+            f"{field_prefix}.{key} is required",
+            context={
+                "reason_code": "SIMULATION_RUN_PAYLOAD_BOOLEAN_MISSING",
+                "stage": "RUN_DETAIL_PROJECTION",
+                "field": f"{field_prefix}.{key}",
+            },
+        )
+    value = payload[key]
+    if not isinstance(value, bool):
+        raise DataUnavailableError(
+            f"{field_prefix}.{key} must be a boolean",
+            context={
+                "reason_code": "SIMULATION_RUN_PAYLOAD_BOOLEAN_INVALID",
+                "stage": "RUN_DETAIL_PROJECTION",
+                "field": f"{field_prefix}.{key}",
+                "value_type": type(value).__name__,
+            },
+        )
+    return value
+
+
 def _runtime_controller_health(registry: dict[str, Any], runtime_id: str) -> dict[str, Any] | None:
     controllers = registry.get("controllers")
     if isinstance(controllers, dict) and isinstance(controllers.get(runtime_id), dict):
@@ -94,9 +162,7 @@ def _canonical_miniqmt_quote_health(
         else None
     )
     writer = (
-        dict(ingress.get("writer"))
-        if isinstance(ingress, dict) and isinstance(ingress.get("writer"), dict)
-        else None
+        dict(ingress.get("writer")) if isinstance(ingress, dict) and isinstance(ingress.get("writer"), dict) else None
     )
     controller = _runtime_controller_health(controller_registry, runtime_id)
     durable_health_present = isinstance(durable_health, dict)
@@ -113,11 +179,7 @@ def _canonical_miniqmt_quote_health(
         if cadence_seconds is not None
         else None
     )
-    event_time = (
-        durable_health_event.get("event_time")
-        if isinstance(durable_health_event, dict)
-        else None
-    )
+    event_time = durable_health_event.get("event_time") if isinstance(durable_health_event, dict) else None
     event_id = durable_health_event.get("event_id") if isinstance(durable_health_event, dict) else None
     event_sequence = durable_health_event.get("sequence") if isinstance(durable_health_event, dict) else None
     durable_event_valid = bool(
@@ -138,11 +200,7 @@ def _canonical_miniqmt_quote_health(
         event_time_text = None
         age_ms = None
     durable_reported = durable_health_present and durable_event_valid
-    durable_status = (
-        str(durable_health.get("status") or "").strip().upper()
-        if durable_health_present
-        else None
-    )
+    durable_status = str(durable_health.get("status") or "").strip().upper() if durable_health_present else None
     runtime_projection = {
         "event_loop_state": _enum_value(getattr(runtime, "event_loop_state", None)),
         "gateway_state": _enum_value(getattr(runtime, "gateway_state", None)),
@@ -173,11 +231,7 @@ def _canonical_miniqmt_quote_health(
         if age_ms is not None and age_ms < 0:
             reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_EVENT_TIME_IN_FUTURE")
             durable_projection_failed = True
-        elif (
-            age_ms is not None
-            and durable_health_max_age_ms is not None
-            and age_ms > durable_health_max_age_ms
-        ):
+        elif age_ms is not None and durable_health_max_age_ms is not None and age_ms > durable_health_max_age_ms:
             reasons.append("MINIQMT_QUOTE_INGRESS_HEALTH_STALE")
     activation_status = str(activation.get("status") or "UNKNOWN")
     writer_status = str(writer.get("status") or "UNKNOWN") if writer is not None else "UNKNOWN"
@@ -230,9 +284,7 @@ def _canonical_miniqmt_quote_health(
             "age_ms": age_ms,
             "max_age_ms": durable_health_max_age_ms,
             "stale": (
-                age_ms is not None
-                and durable_health_max_age_ms is not None
-                and age_ms > durable_health_max_age_ms
+                age_ms is not None and durable_health_max_age_ms is not None and age_ms > durable_health_max_age_ms
             ),
             "health_or_aggregate": dict(durable_health) if durable_health is not None else None,
         },
@@ -277,7 +329,9 @@ def _quote_event_summary(event: Any) -> dict[str, Any]:
         "market_data_id": evidence.get("market_data_id") if evidence else None,
         "symbol": evidence.get("symbol") if evidence else None,
         "capture_type": evidence.get("capture_type") if evidence else None,
-        "reason_code": (evidence.get("quality_reason_code") or evidence.get("unavailable_reason")) if evidence else None,
+        "reason_code": (evidence.get("quality_reason_code") or evidence.get("unavailable_reason"))
+        if evidence
+        else None,
         "stage": evidence.get("stage") if evidence else None,
     }
 
@@ -418,13 +472,17 @@ class SimulationRuntimeOpsService:
 
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
-        default_submit = bool(status.get("default_submit", False))
+        default_submit = _scheduler_bool(status, "default_submit")
+        autostart = _scheduler_bool(status, "autostart")
+        running = _scheduler_bool(status, "running")
+        thread_alive = _scheduler_bool(status, "thread_alive")
+        scheduler_control_api_enabled = _scheduler_bool(status, "scheduler_control_api_enabled")
+        manual_tick_endpoint_enabled = _scheduler_bool(status, "manual_tick_endpoint_enabled")
+        interval_seconds = _scheduler_positive_int(status, "interval_seconds")
         scheduler_loop_health = self._scheduler_loop_health(status)
         last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
         last_blocking_result = (
-            status.get("last_blocking_result")
-            if isinstance(status.get("last_blocking_result"), dict)
-            else None
+            status.get("last_blocking_result") if isinstance(status.get("last_blocking_result"), dict) else None
         )
         last_result_errors = (
             list(last_result.get("errors") or [])
@@ -440,9 +498,10 @@ class SimulationRuntimeOpsService:
         return {
             "ok": True,
             "scheduler": status.get("scheduler") or "simulation_lifecycle_scheduler",
-            "autostart": bool(status.get("autostart", False)),
-            "running": bool(status.get("running", False)),
-            "thread_alive": bool(status.get("thread_alive", False)),
+            "autostart": autostart,
+            "running": running,
+            "thread_alive": thread_alive,
+            "interval_seconds": interval_seconds,
             "last_run_at": status.get("last_run_at"),
             "last_result": last_result,
             "last_blocking_result": last_blocking_result,
@@ -464,8 +523,8 @@ class SimulationRuntimeOpsService:
             "read_only_status_api": True,
             "read_only_ops_api": False,
             "controlled_ops_api": True,
-            "scheduler_control_api_enabled": bool(status.get("scheduler_control_api_enabled", False)),
-            "manual_tick_endpoint_enabled": bool(status.get("manual_tick_endpoint_enabled", False)),
+            "scheduler_control_api_enabled": scheduler_control_api_enabled,
+            "manual_tick_endpoint_enabled": manual_tick_endpoint_enabled,
             "context_provider": status.get("context_provider") or {},
             "context_provider_mode": status.get("context_provider_mode"),
             "data_source": status.get("data_source"),
@@ -517,6 +576,156 @@ class SimulationRuntimeOpsService:
             },
         }
 
+    def platform_diagnostics(
+        self,
+        *,
+        trade_date: date | None = None,
+        binding_id: str | None = None,
+        run_id: str | None = None,
+        runtime_id: str | None = None,
+        plan_id: str | None = None,
+        limit: int = 100,
+        runtime_repository: MiniQMTExecutionRuntimeRepository | None = None,
+        generated_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Read current durable facts without starting feeds or mutating execution state."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise RuntimeConfigInvalidError(
+                "platform diagnostics limit must be between 1 and 100",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_DIAGNOSTIC_QUERY_INVALID",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                    "field": "limit",
+                    "value": limit,
+                },
+            )
+
+        def normalized(value: str | None, field: str) -> str | None:
+            if value is None:
+                return None
+            if not isinstance(value, str) or not value.strip():
+                raise RuntimeConfigInvalidError(
+                    "platform diagnostics identity filters must be non-empty text",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_DIAGNOSTIC_QUERY_INVALID",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                        "field": field,
+                    },
+                )
+            return value.strip()
+
+        binding_id = normalized(binding_id, "binding_id")
+        run_id = normalized(run_id, "run_id")
+        runtime_id = normalized(runtime_id, "runtime_id")
+        plan_id = normalized(plan_id, "plan_id")
+        scheduler_status = self.scheduler_status()
+        scan_trade_date = trade_date
+        exact_identity_filter = any((binding_id, run_id, runtime_id, plan_id))
+        runtime_only_query = runtime_id is not None and not any((binding_id, run_id, plan_id))
+
+        if run_id is not None:
+            runs = [self.repository.get_simulation_daily_run(run_id)]
+            scan_trade_date = scan_trade_date or runs[0].trade_date
+            scan_count = 1
+        else:
+            if scan_trade_date is None and (not exact_identity_filter or runtime_only_query):
+                blocker_projection = scheduler_status["current_trade_date_blockers"]
+                scan_trade_date = date.fromisoformat(str(blocker_projection["trade_date"]))
+            scan_limit = 501
+            try:
+                scanned_runs = self.repository.list_simulation_daily_runs(
+                    trade_date=scan_trade_date,
+                    limit=scan_limit,
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostics cannot downgrade repository failures.
+                raise DataUnavailableError(
+                    "failed to read simulation runs for platform diagnostics",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_DIAGNOSTIC_READBACK_FAILED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                        "trade_date": scan_trade_date.isoformat() if scan_trade_date else None,
+                    },
+                ) from exc
+            scan_count = len(scanned_runs)
+            if scan_count >= scan_limit:
+                raise DataUnavailableError(
+                    "platform diagnostics scan exceeded its bounded exact-query contract",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_DIAGNOSTIC_SCAN_TRUNCATED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                        "bounded_limit": scan_limit - 1,
+                        "trade_date": scan_trade_date.isoformat() if scan_trade_date else None,
+                        "next_action": "supply trade_date or run_id to narrow the read-only query",
+                    },
+                )
+            runs = list(scanned_runs)
+
+        if binding_id is not None:
+            runs = [run for run in runs if run.binding_id == binding_id]
+        if plan_id is not None:
+            self.repository.get_execution_plan(plan_id)
+            runs = [run for run in runs if run.execution_plan_id == plan_id]
+        if runtime_id is not None:
+            runs = [run for run in runs if SimulationPlatformObservability.run_runtime_id(run) == runtime_id]
+        if trade_date is not None:
+            runs = [run for run in runs if run.trade_date == trade_date]
+        if exact_identity_filter and not runs and not runtime_only_query:
+            raise DataUnavailableError(
+                "no simulation run matches the exact platform diagnostics query",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_DIAGNOSTIC_RUN_NOT_FOUND",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                    "trade_date": trade_date.isoformat() if trade_date else None,
+                    "binding_id": binding_id,
+                    "run_id": run_id,
+                    "runtime_id": runtime_id,
+                    "plan_id": plan_id,
+                },
+            )
+        runs.sort(key=lambda item: (item.updated_at, item.created_at, item.run_id), reverse=True)
+        observed_match_count = len(runs)
+        selected_runs = runs[:limit]
+        quote_diagnostics = None
+        if runtime_id is not None:
+            if runtime_repository is None:
+                raise RuntimeConfigInvalidError(
+                    "runtime_repository is required for an exact MiniQMT runtime query",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_RUNTIME_REPOSITORY_REQUIRED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                        "runtime_id": runtime_id,
+                    },
+                )
+            quote_diagnostics = self.list_miniqmt_quote_diagnostics(
+                runtime_repository=runtime_repository,
+                runtime_id=runtime_id,
+                limit=min(limit, 100),
+                scheduler_status_snapshot=scheduler_status,
+            )
+        effective_trade_date = trade_date or scan_trade_date or (selected_runs[0].trade_date if selected_runs else None)
+        query = {
+            "schema_version": "simulation_platform_diagnostic_query_v1",
+            "trade_date": effective_trade_date.isoformat() if effective_trade_date else None,
+            "binding_id": binding_id,
+            "run_id": run_id,
+            "runtime_id": runtime_id,
+            "plan_id": plan_id,
+            "limit": limit,
+            "scan_count": scan_count,
+            "observed_match_count": observed_match_count,
+            "returned_count": len(selected_runs),
+            "truncated": observed_match_count > limit,
+            "read_only": True,
+        }
+        return SimulationPlatformObservability().build(
+            scheduler_status=scheduler_status,
+            runs=selected_runs,
+            query=query,
+            quote_diagnostics=quote_diagnostics,
+            generated_at=generated_at,
+        )
+
     @staticmethod
     def _effective_runtime_health(
         *,
@@ -528,7 +737,7 @@ class SimulationRuntimeOpsService:
             return "BLOCKED"
         if current_trade_date_blockers["blocker_count"] > 0:
             return "BLOCKED"
-        if not bool(status.get("running", False)) or not bool(status.get("thread_alive", False)):
+        if not _scheduler_bool(status, "running") or not _scheduler_bool(status, "thread_alive"):
             return "SCHEDULER_INACTIVE"
         return "NO_CURRENT_DAY_BLOCKER"
 
@@ -556,9 +765,7 @@ class SimulationRuntimeOpsService:
                         },
                     ) from exc
                 observed_trade_dates.append(raw_trade_date)
-        trade_date = SimulationLifecycleBackgroundScheduler._trade_date(
-            SimulationLifecycleScheduler._scheduler_now()
-        )
+        trade_date = SimulationLifecycleBackgroundScheduler._trade_date(SimulationLifecycleScheduler._scheduler_now())
         blocking_statuses = (
             SimulationDailyRunStatus.FAILED_RETRYABLE,
             SimulationDailyRunStatus.FAILED_TERMINAL,
@@ -632,16 +839,14 @@ class SimulationRuntimeOpsService:
             "blockers": blockers,
             "observed_blocker_count": observed_blocker_count,
             "bounded_limit": 100,
-            "truncated": observed_blocker_count > 100 or any(
-                len(runs) >= 100 for runs in runs_by_status.values()
-            ),
+            "truncated": observed_blocker_count > 100 or any(len(runs) >= 100 for runs in runs_by_status.values()),
             "execution_gate": False,
             "source": (
                 "scheduler_loop_health+simulation_daily_run_readback"
                 if loop_blockers
                 else "simulation_daily_run_readback"
             ),
-            "scheduler_running": bool(status.get("running", False)),
+            "scheduler_running": _scheduler_bool(status, "running"),
             "last_observed_trade_dates": list(dict.fromkeys(observed_trade_dates)),
         }
 
@@ -649,7 +854,7 @@ class SimulationRuntimeOpsService:
     def _scheduler_loop_health(status: dict[str, Any]) -> dict[str, Any]:
         value = status.get("scheduler_loop_health")
         if value is None:
-            if bool(status.get("scheduler_control_api_enabled", False)):
+            if _scheduler_bool(status, "scheduler_control_api_enabled"):
                 raise RuntimeConfigInvalidError(
                     "background scheduler status is missing scheduler_loop_health",
                     context={
@@ -789,8 +994,7 @@ class SimulationRuntimeOpsService:
                 )
             failure_context = active_failure.get("context")
             if not isinstance(failure_context, dict) or any(
-                len(str(key)) > 64 or len(str(value)) > 512
-                for key, value in failure_context.items()
+                len(str(key)) > 64 or len(str(value)) > 512 for key, value in failure_context.items()
             ):
                 raise RuntimeConfigInvalidError(
                     "scheduler_loop_health active_failure context is invalid",
@@ -883,9 +1087,7 @@ class SimulationRuntimeOpsService:
         run = self.repository.get_simulation_daily_run(run_id)
         payload: dict[str, Any] = {"run": self._run_summary(run)}
         if run.execution_plan_id:
-            payload["execution_plan"] = self._plan_summary(
-                self.repository.get_execution_plan(run.execution_plan_id)
-            )
+            payload["execution_plan"] = self._plan_summary(self.repository.get_execution_plan(run.execution_plan_id))
         else:
             payload["execution_plan"] = None
         if run.selection_evidence_id:
@@ -953,6 +1155,7 @@ class SimulationRuntimeOpsService:
         symbol: str | None = None,
         cursor: str | None = None,
         limit: int = 100,
+        scheduler_status_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Project durable journal facts only; never construct quote runtime objects."""
 
@@ -974,7 +1177,7 @@ class SimulationRuntimeOpsService:
             limit=limit,
         )
         summary = runtime_repository.quote_diagnostics_summary(runtime_id, symbol=symbol)
-        scheduler_status = dict(self.scheduler.status())
+        scheduler_status = dict(scheduler_status_snapshot or self.scheduler.status())
         markout = dict(summary["markout"])
         markout_due = int(markout["terminal_due_count"])
         markout_captured = int(markout["captured_count"])
@@ -1143,7 +1346,11 @@ class SimulationRuntimeOpsService:
         return {
             "schema_version": "miniqmt_quote_evidence_readback_v1",
             "runtime_id": runtime_id,
-            "query": {"market_data_id": market_data_id, "evidence_id": evidence_id, "include_archived": include_archived},
+            "query": {
+                "market_data_id": market_data_id,
+                "evidence_id": evidence_id,
+                "include_archived": include_archived,
+            },
             "read_only": True,
             "records": records,
             "next_cursor": next_cursor,
@@ -1261,12 +1468,26 @@ class SimulationRuntimeOpsService:
 
     def _run_display(self, run: SimulationDailyRun, stage_counts: dict[str, int]) -> dict[str, Any]:
         target_count = int(stage_counts.get("target_count") or 0)
-        intent_count = int(stage_counts.get("execution_plan_intent_count") or stage_counts.get("order_intent_count") or 0)
+        intent_count = int(
+            stage_counts.get("execution_plan_intent_count") or stage_counts.get("order_intent_count") or 0
+        )
         submitted = int(stage_counts.get("submitted_intents") or 0)
         failed = int(stage_counts.get("failed_intents") or 0)
-        broker_label = "MiniQMT \u6a21\u62df\u76d8" if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM else "LocalSim \u672c\u5730\u6a21\u62df"
-        account_label = self._readable_identifier(run.account_group_id) if run.account_group_id else "\u672c\u5730\u6a21\u62df\u8d26\u6237"
-        slot_label = self._readable_identifier(run.strategy_slot_id) if run.strategy_slot_id else "\u9ed8\u8ba4\u7b56\u7565\u69fd"
+        broker_label = (
+            "MiniQMT \u6a21\u62df\u76d8"
+            if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            else "LocalSim \u672c\u5730\u6a21\u62df"
+        )
+        account_label = (
+            self._readable_identifier(run.account_group_id)
+            if run.account_group_id
+            else "\u672c\u5730\u6a21\u62df\u8d26\u6237"
+        )
+        slot_label = (
+            self._readable_identifier(run.strategy_slot_id)
+            if run.strategy_slot_id
+            else "\u9ed8\u8ba4\u7b56\u7565\u69fd"
+        )
         return {
             "run_title": f"{run.trade_date.isoformat()} - {HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value)}",
             "status_label": HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value),
@@ -1330,12 +1551,8 @@ class SimulationRuntimeOpsService:
             payload.update(
                 {
                     "succeeded_with_capacity_residual": True,
-                    "capacity_residual_count": int(
-                        capacity_residual_observability.get("capacity_residual_count") or 0
-                    ),
-                    "capacity_residual_failed_intents": int(
-                        capacity_residual_observability.get("failed_intents") or 0
-                    ),
+                    "capacity_residual_count": int(capacity_residual_observability.get("capacity_residual_count") or 0),
+                    "capacity_residual_failed_intents": int(capacity_residual_observability.get("failed_intents") or 0),
                     "miniqmt_capacity_residual_observability": capacity_residual_observability,
                     "alerts": [capacity_residual_observability["alert"]],
                 }
@@ -1382,10 +1599,26 @@ class SimulationRuntimeOpsService:
     @staticmethod
     def _require_localsim_persisted_effects_for_live_evidence(run: SimulationDailyRun) -> None:
         payload = run.run_payload_json
-        broker_called = bool(payload.get("broker_called"))
-        submitted_intents = SimulationRuntimeOpsService._safe_int(payload.get("submitted_intents"))
-        planned_intents = SimulationRuntimeOpsService._safe_int(payload.get("execution_plan_intent_count"))
-        no_rebalance_required = bool(payload.get("no_rebalance_required"))
+        broker_called = SimulationRuntimeOpsService._live_evidence_bool(
+            run,
+            payload,
+            "broker_called",
+        )
+        submitted_intents = SimulationRuntimeOpsService._live_evidence_count(
+            run,
+            payload,
+            "submitted_intents",
+        )
+        planned_intents = SimulationRuntimeOpsService._live_evidence_count(
+            run,
+            payload,
+            "execution_plan_intent_count",
+        )
+        no_rebalance_required = SimulationRuntimeOpsService._live_evidence_bool(
+            run,
+            payload,
+            "no_rebalance_required",
+        )
         expected_order_count = max(submitted_intents, planned_intents)
         if not broker_called and submitted_intents <= 0 and (planned_intents <= 0 or no_rebalance_required):
             return
@@ -1400,10 +1633,40 @@ class SimulationRuntimeOpsService:
                     "execution_plan_intent_count": planned_intents,
                 },
             )
-        status = str(persistence.get("status") or "").upper()
-        order_count = SimulationRuntimeOpsService._safe_int(persistence.get("order_count"))
-        fill_count = SimulationRuntimeOpsService._safe_int(persistence.get("fill_count"))
-        cash_count = SimulationRuntimeOpsService._safe_int(persistence.get("cash_ledger_count"))
+        raw_status = persistence.get("status")
+        if not isinstance(raw_status, str) or not raw_status.strip():
+            raise RuntimeConfigInvalidError(
+                "live admission LocalSim persistence status must be non-empty text",
+                context={
+                    "reason_code": "SIMULATION_LIVE_EVIDENCE_PERSISTENCE_STATUS_INVALID",
+                    "stage": "SIMULATION_LIVE_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "field": "local_sim_persistence.status",
+                    "value_type": type(raw_status).__name__,
+                },
+            )
+        status = raw_status.strip().upper()
+        order_count = SimulationRuntimeOpsService._live_evidence_count(
+            run,
+            persistence,
+            "order_count",
+            required=True,
+            field_prefix="local_sim_persistence",
+        )
+        fill_count = SimulationRuntimeOpsService._live_evidence_count(
+            run,
+            persistence,
+            "fill_count",
+            required=True,
+            field_prefix="local_sim_persistence",
+        )
+        cash_count = SimulationRuntimeOpsService._live_evidence_count(
+            run,
+            persistence,
+            "cash_ledger_count",
+            required=True,
+            field_prefix="local_sim_persistence",
+        )
         if status != "PERSISTED" or order_count < expected_order_count or fill_count <= 0 or cash_count <= 0:
             raise DataUnavailableError(
                 "live admission LocalSim evidence has incomplete durable execution effects",
@@ -1416,11 +1679,62 @@ class SimulationRuntimeOpsService:
             )
 
     @staticmethod
-    def _safe_int(value: Any) -> int:
-        try:
-            return int(value or 0)
-        except (TypeError, ValueError):
-            return 0
+    def _live_evidence_bool(
+        run: SimulationDailyRun,
+        payload: dict[str, Any],
+        key: str,
+    ) -> bool:
+        if key not in payload or payload[key] is None:
+            return False
+        value = payload[key]
+        if not isinstance(value, bool):
+            raise RuntimeConfigInvalidError(
+                "live admission simulation evidence boolean is invalid",
+                context={
+                    "reason_code": "SIMULATION_LIVE_EVIDENCE_BOOLEAN_INVALID",
+                    "stage": "SIMULATION_LIVE_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "field": key,
+                    "value_type": type(value).__name__,
+                },
+            )
+        return value
+
+    @staticmethod
+    def _live_evidence_count(
+        run: SimulationDailyRun,
+        payload: dict[str, Any],
+        key: str,
+        *,
+        required: bool = False,
+        field_prefix: str = "run_payload_json",
+    ) -> int:
+        if key not in payload or payload[key] is None:
+            if not required:
+                return 0
+            raise RuntimeConfigInvalidError(
+                "live admission simulation evidence count is missing",
+                context={
+                    "reason_code": "SIMULATION_LIVE_EVIDENCE_COUNT_MISSING",
+                    "stage": "SIMULATION_LIVE_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "field": f"{field_prefix}.{key}",
+                },
+            )
+        value = payload[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeConfigInvalidError(
+                "live admission simulation evidence count must be a non-negative integer",
+                context={
+                    "reason_code": "SIMULATION_LIVE_EVIDENCE_COUNT_INVALID",
+                    "stage": "SIMULATION_LIVE_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "field": f"{field_prefix}.{key}",
+                    "value_type": type(value).__name__,
+                    "value": value,
+                },
+            )
+        return value
 
     @staticmethod
     def _live_evidence_for_run(run: SimulationDailyRun, *, validation_backend: str) -> dict[str, Any]:
@@ -1527,7 +1841,12 @@ class SimulationRuntimeOpsService:
     def _broker_context(run: SimulationDailyRun) -> dict[str, Any]:
         payload = run.run_payload_json
         context = {
-            "no_rebalance_required": bool(payload.get("no_rebalance_required", False)),
+            "no_rebalance_required": _run_projection_bool(
+                payload,
+                "no_rebalance_required",
+                field_prefix="run_payload_json",
+                required=False,
+            ),
             "broker_called": payload.get("broker_called"),
             "broker_order_handles": payload.get("broker_order_handles"),
             "qmt_batch_id": payload.get("qmt_batch_id"),
@@ -1604,8 +1923,18 @@ class SimulationRuntimeOpsService:
                     "source": "miniqmt_managed_order",
                     "intent_id": item.get("intent_id"),
                     "qmt_order_id": item.get("qmt_order_id"),
-                    "success": bool(item.get("success")),
-                    "broker_called": bool(item.get("broker_called")),
+                    "success": _run_projection_bool(
+                        item,
+                        "success",
+                        field_prefix="qmt_batch_result.results[]",
+                        required=True,
+                    ),
+                    "broker_called": _run_projection_bool(
+                        item,
+                        "broker_called",
+                        field_prefix="qmt_batch_result.results[]",
+                        required=True,
+                    ),
                     "broker_message": item.get("broker_message"),
                     "preflight_allowed": preflight.get("allowed"),
                     "primary_error_code": preflight.get("primary_error_code"),
@@ -1694,7 +2023,10 @@ class SimulationRuntimeOpsService:
                     "context": submit_failure.get("context") or {},
                 }
             )
-        if run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL} and not errors:
+        if (
+            run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL}
+            and not errors
+        ):
             errors.append(
                 {
                     "source": "simulation_daily_run",
@@ -1705,7 +2037,9 @@ class SimulationRuntimeOpsService:
             )
         return errors
 
-    def start_scheduler(self, *, interval_seconds: int | None = None, default_submit: bool | None = None) -> dict[str, Any]:
+    def start_scheduler(
+        self, *, interval_seconds: int | None = None, default_submit: bool | None = None
+    ) -> dict[str, Any]:
         if not isinstance(self.scheduler, SimulationLifecycleBackgroundScheduler):
             raise DataUnavailableError(
                 "scheduler start requires SimulationLifecycleBackgroundScheduler",
@@ -1729,7 +2063,8 @@ class SimulationRuntimeOpsService:
             return {"ok": True, "action": "scheduler_tick", **result}
         tick = self.scheduler.run_once(
             trade_date=(as_of_time or datetime.now()).date(),
-            data_source=(os.getenv("SIMULATION_RUNTIME_SCHEDULER_DATA_SOURCE") or "DB_HISTORICAL").strip() or "DB_HISTORICAL",
+            data_source=(os.getenv("SIMULATION_RUNTIME_SCHEDULER_DATA_SOURCE") or "DB_HISTORICAL").strip()
+            or "DB_HISTORICAL",
             submit=False,
             as_of_time=as_of_time,
         )

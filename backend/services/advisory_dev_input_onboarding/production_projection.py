@@ -74,6 +74,7 @@ from .contracts import (
     compute_portable_manifest_json_sha256,
     database_identity_hash,
     portable_manifest_runtime_asset_refs,
+    project_portable_manifest,
     validate_sha256,
 )
 from .store import RealDevOnboardingEvidenceStore, resolve_package_asset_roots
@@ -102,10 +103,6 @@ PACKAGE_SEMANTIC_COLUMNS = (
     "display_name",
     "legacy_name",
     "data_vintage",
-    "prediction_ref_uri",
-    "prediction_ref_sha256",
-    "model_artifact_uri",
-    "model_artifact_sha256",
     "seed_policy",
     "master_seed",
     "seed_sequence",
@@ -115,6 +112,13 @@ PACKAGE_SEMANTIC_COLUMNS = (
     "nondeterministic_flags",
 )
 PACKAGE_PROVENANCE_COLUMNS = ("paper_portfolio_count", "created_at", "updated_at")
+PACKAGE_EXCLUDED_SOURCE_COLUMNS = (
+    "prediction_ref_uri",
+    "prediction_ref_sha256",
+    "model_artifact_uri",
+    "model_artifact_sha256",
+)
+PACKAGE_PROJECTED_SOURCE_COLUMNS = ("source_type",)
 PACKAGE_ASSET_SEMANTIC_COLUMNS = (
     "package_id",
     "asset_type",
@@ -436,6 +440,7 @@ class RealDevOnboardingInventoryService:
         dse_by_package = _group_dse(dse_rows)
         program_packages = _source_program_packages(source_binding_rows)
         expected_modes = {item.package_id: item.alpha_mode for item in input_contract.target_dev_program_specs}
+        target_expected_manifests: dict[str, str] = {}
         candidates: list[PackageInventoryCandidate] = []
         top_reasons: set[str] = set()
         if {str(row["program_id"]) for row in source_program_rows} != set(source_program_ids):
@@ -458,6 +463,16 @@ class RealDevOnboardingInventoryService:
             candidates.append(candidate)
             if not candidate.package_eligible:
                 top_reasons.update(candidate.reason_codes)
+            try:
+                _, projection = project_portable_manifest(
+                    _json_object(row["manifest_json"], field_name="manifest_json")
+                )
+            except ValueError:
+                top_reasons.add(REASON_PACKAGE_MANIFEST_MISMATCH)
+            else:
+                if projection.source_manifest_sha256 != expected_manifests[package_id]:
+                    top_reasons.add(REASON_PACKAGE_MANIFEST_MISMATCH)
+                target_expected_manifests[package_id] = projection.portable_manifest_sha256
 
         if not any(item.alpha_mode is AlphaMode.SINGLE and item.package_eligible for item in candidates):
             top_reasons.add(REASON_SINGLE_TRACK_MISSING)
@@ -466,7 +481,7 @@ class RealDevOnboardingInventoryService:
 
         conflicts = _target_conflicts(
             input_contract=input_contract,
-            expected_manifests=expected_manifests,
+            expected_manifests=target_expected_manifests,
             expected_modes=expected_modes,
             package_rows=target_package_rows,
             program_rows=target_program_rows,
@@ -669,6 +684,7 @@ def _build_portable_bundle(
     package_refs: list[BundlePackageRef] = []
     component_refs: list[NativeMultiComponentRef] = []
     manifest_asset_refs: dict[str, dict[str, str]] = {}
+    portable_package_rows: list[dict[str, Any]] = []
     for row in package_rows:
         package_id = str(row["package_id"])
         manifest_sha = validate_sha256(str(row["manifest_sha256"]), field_name="manifest_sha256")
@@ -694,7 +710,21 @@ def _build_portable_bundle(
                 "production export manifest identity is inconsistent",
                 context={"package_id": package_id},
             )
-        components = _components(manifest)
+        try:
+            portable_manifest, projection = project_portable_manifest(manifest)
+        except ValueError as exc:
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_MANIFEST_MISMATCH,
+                "production manifest cannot be projected to a portable runtime identity",
+                context={"package_id": package_id, "error_type": type(exc).__name__},
+            ) from exc
+        if projection.source_manifest_sha256 != manifest_sha:
+            raise RealDevOnboardingError(
+                REASON_PACKAGE_MANIFEST_MISMATCH,
+                "portable projection source identity differs from production",
+                context={"package_id": package_id},
+            )
+        components = _components(portable_manifest)
         if (expected_modes[package_id] is AlphaMode.SINGLE and len(components) != 1) or (
             expected_modes[package_id] is AlphaMode.MULTI and len(components) < 2
         ):
@@ -704,15 +734,35 @@ def _build_portable_bundle(
                 context={"package_id": package_id},
             )
         package_refs.append(
-            BundlePackageRef(package_id=package_id, manifest_sha256=manifest_sha, alpha_mode=expected_modes[package_id])
+            BundlePackageRef(
+                package_id=package_id,
+                manifest_sha256=projection.portable_manifest_sha256,
+                source_manifest_sha256=manifest_sha,
+                removed_source_row_provenance_hash=canonical_json_sha256(
+                    {
+                        name: row.get(name)
+                        for name in (*PACKAGE_EXCLUDED_SOURCE_COLUMNS, *PACKAGE_PROJECTED_SOURCE_COLUMNS)
+                    }
+                ),
+                alpha_mode=expected_modes[package_id],
+                projection=projection,
+            )
         )
         if expected_modes[package_id] is AlphaMode.MULTI:
             component_refs.extend(
                 NativeMultiComponentRef(parent_package_id=package_id, component=component)
                 for component in components
             )
-        _assert_portable_payload({name: row.get(name) for name in PACKAGE_SEMANTIC_COLUMNS})
-        runtime_asset_refs = _manifest_runtime_asset_refs(manifest)
+        portable_row = {
+            name: row.get(name)
+            for name in (*PACKAGE_SEMANTIC_COLUMNS, *PACKAGE_PROVENANCE_COLUMNS)
+        }
+        portable_row["manifest_json"] = portable_manifest
+        portable_row["manifest_sha256"] = projection.portable_manifest_sha256
+        portable_row["source_type"] = "candidate_strategy_package"
+        _assert_portable_payload({name: portable_row.get(name) for name in PACKAGE_SEMANTIC_COLUMNS})
+        portable_package_rows.append(portable_row)
+        runtime_asset_refs = _manifest_runtime_asset_refs(portable_manifest)
         if not runtime_asset_refs:
             raise RealDevOnboardingError(
                 REASON_PACKAGE_ASSET_MISSING,
@@ -771,7 +821,7 @@ def _build_portable_bundle(
         primary_or_natural_key_fields=("package_id",),
         semantic_column_names=PACKAGE_SEMANTIC_COLUMNS,
         source_provenance_column_names=PACKAGE_PROVENANCE_COLUMNS,
-        sorted_rows=tuple(package_rows),
+        sorted_rows=tuple(portable_package_rows),
     )
     asset_row_set = PortableRelationRowSet(
         relation_name="strategy_pkg.package_asset",

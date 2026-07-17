@@ -59,7 +59,13 @@ def test_o2_source_has_no_bypass_or_unrequested_approval_flags() -> None:
 def test_cli_exposes_o2_commands_without_confirmation_arguments() -> None:
     parser = cli._parser()
     help_text = parser.format_help()
-    for command in ("export-bundle", "plan-import", "import-dev", "verify-import"):
+    for command in (
+        "export-bundle",
+        "plan-import",
+        "validate-dev-rollback",
+        "import-dev",
+        "verify-import",
+    ):
         assert command in help_text
     for forbidden in ("--confirm", "--force", "--skip", "--approval"):
         assert forbidden not in help_text

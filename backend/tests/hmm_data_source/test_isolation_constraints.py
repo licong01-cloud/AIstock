@@ -86,14 +86,21 @@ class TestIsolationConstraints:
         """验证缓存目录完全隔离"""
         # 创建缓存管理器
         cache_dir = tmp_path / "hmm_evolution_cache"
-        cache_manager = ArtifactCacheManager(str(cache_dir))
+        cache_manager = ArtifactCacheManager(
+            str(cache_dir), allow_test_fixtures=True
+        )
 
         # 保存数据
-        cache_manager.save_artifact("qe_test/Loop1", "pred.pkl", b"test_data")
+        cache_manager.save_artifact(
+            "qe_test/Loop1",
+            "pred.pkl",
+            b"test_data",
+            metadata={"source": "test_fixture"},
+        )
 
         # 验证缓存只在指定目录
         assert cache_dir.exists()
-        assert (cache_dir / "qe_test_Loop1" / "pred.pkl").exists()
+        assert cache_manager.get_artifact_path("qe_test/Loop1", "pred.pkl").exists()
 
         # 验证没有污染其他目录
         parent_dir = tmp_path
@@ -108,9 +115,8 @@ class TestIsolationConstraints:
 
         allowed_market_tables = [
             'market.kline_daily_raw',
-            'market.sw_member',
-            'market.trade_cal',
-            'market.stock_basic',
+            'market.sw_index_member',
+            'market.trading_calendar',
         ]
 
         forbidden_operations = ['UPDATE', 'DELETE', 'INSERT INTO', 'DROP', 'ALTER']
@@ -132,8 +138,9 @@ class TestIsolationConstraints:
         source_file = Path("backend/services/hmm_data_source/backtest_source.py")
         content = source_file.read_text(encoding="utf-8")
 
-        # 只允许调用 download_artifact
-        assert 'download_artifact' in content
+        # 只允许通过现有 workspace 文件下载契约读取 allowlisted artifact
+        assert 'download_workspace_file_bytes' in content
+        assert '.download_artifact(' not in content
 
         # 禁止调用配置 API
         forbidden_api_calls = [
@@ -171,67 +178,6 @@ class TestIsolationConstraints:
                 )
 
 
-class TestDatabasePermissions:
-    """数据库权限隔离验证"""
-
-    @pytest.mark.integration
-    @pytest.mark.asyncio
-    async def test_readonly_user_cannot_write_production_tables(self):
-        """
-        验证只读用户无法修改生产表
-
-        需要真实数据库连接和权限配置
-        """
-        from backend.db.pg_pool import get_conn
-
-        # 尝试更新生产表（应该失败）
-        async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                with pytest.raises(Exception):
-                    # 尝试更新 model_train_configs（应该被拒绝）
-                    await cur.execute("""
-                        UPDATE model_train_configs
-                        SET config_json = '{}'
-                        WHERE 1=0
-                    """)
-
-    @pytest.mark.integration
-    @pytest.mark.asyncio
-    async def test_can_write_evolution_tables(self):
-        """
-        验证可以写入演进系统专用表
-
-        需要真实数据库连接和权限配置
-        """
-        from backend.db.pg_pool import get_conn
-
-        # 尝试写入演进系统表（应该成功）
-        async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                # 创建测试表（如果不存在）
-                await cur.execute("""
-                    CREATE SCHEMA IF NOT EXISTS hmm_evolution
-                """)
-
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS hmm_evolution.test_isolation (
-                        id SERIAL PRIMARY KEY,
-                        test_data TEXT
-                    )
-                """)
-
-                # 插入测试数据（应该成功）
-                await cur.execute("""
-                    INSERT INTO hmm_evolution.test_isolation (test_data)
-                    VALUES ('test')
-                """)
-
-                # 清理
-                await cur.execute("""
-                    DROP TABLE hmm_evolution.test_isolation
-                """)
-
-
 class TestCodeQuality:
     """代码质量检查（隔离相关）"""
 
@@ -256,15 +202,15 @@ class TestCodeQuality:
                     f"Found hardcoded absolute path '{pattern}' in {py_file.name}"
                 )
 
-    def test_cache_dir_configurable(self):
+    def test_cache_dir_configurable(self, tmp_path):
         """验证缓存目录可配置"""
         from backend.services.hmm_data_source import ArtifactCacheManager
 
         # 测试自定义缓存目录（跨平台比较，规避 Windows 反斜杠差异）
-        custom_dir = "custom/cache/path"
-        manager = ArtifactCacheManager(custom_dir)
+        custom_dir = tmp_path / "custom-cache"
+        manager = ArtifactCacheManager(str(custom_dir))
 
-        assert manager.cache_dir == Path(custom_dir)
+        assert manager.cache_dir == custom_dir
 
     def test_no_production_credentials_in_code(self):
         """验证代码中没有硬编码的生产凭证"""

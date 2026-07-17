@@ -1,137 +1,95 @@
-"""
-集成测试
+"""Controlled HMM data-source integration smoke.
 
-测试完整的数据源集成流程：
-1. 数据源切换（回测 ↔ 实时）
-2. 真实 QE artifact 下载（需要 --run-integration）
-3. 真实 DB 查询（需要 --run-integration）
-
-运行方式:
-    pytest tests/backend/services/hmm_data_source/test_integration.py --run-integration
+The integration lane is opt-in and read-only.  It never writes DB rows, runs
+DDL, starts services, or guesses a historical QE task.  Operators must provide
+an authoritative loop reference and reproducible as-of date.
 """
 
-from datetime import date
+from __future__ import annotations
+
+from datetime import timedelta
 
 import pytest
 
-from backend.services.hmm_data_source import (
-    BacktestDataSource,
-    RealtimeDataSource,
-    DataSourceConfig,
-)
+from backend.services.hmm_data_source import BacktestDataSource, DataSourceConfig
+from backend.services.hmm_data_source.realtime_source import RealtimeDataSource
 
 
-class TestDataSourceIntegration:
-    """数据源集成测试"""
+def test_data_source_config_requires_explicit_realtime_candidate():
+    backtest = DataSourceConfig(
+        mode="backtest",
+        base_loop_ref="qe_example/Loop1",
+    )
+    realtime = DataSourceConfig(
+        mode="realtime",
+        candidate_id="candidate-readonly-smoke",
+    )
 
-    @pytest.mark.asyncio
-    async def test_data_source_switching(self):
-        """测试数据源模式切换"""
-        # 回测模式
-        backtest_config = DataSourceConfig(
-            mode="backtest",
-            base_loop_ref="qe_20260502_131502_9b54/Loop1",
-        )
-        assert backtest_config.mode == "backtest"
+    assert backtest.mode == "backtest"
+    assert realtime.candidate_id == "candidate-readonly-smoke"
 
-        # 实时模式
-        realtime_config = DataSourceConfig(
-            mode="realtime",
-            snapshot_id="latest",
-            lag_days=1,
-        )
-        assert realtime_config.mode == "realtime"
 
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_real_qe_artifact_download(self):
-        """
-        测试真实 QE artifact 下载
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_real_qe_artifact_cold_download_readonly(
+    hmm_readonly_integration_config,
+    tmp_path,
+):
+    """Download one manifest-backed QE artifact through the real node client."""
+    config = hmm_readonly_integration_config
+    async with BacktestDataSource(
+        base_loop_ref=config.qe_loop_ref,
+        cache_dir=str(tmp_path / "qe-cache"),
+    ) as source:
+        start_date, end_date = await source.get_available_date_range()
+        requested_start = max(start_date, end_date - timedelta(days=10))
+        frame = await source.get_predictions(requested_start, end_date)
 
-        需要:
-        - QE workspace 可访问
-        - 存在可用的 QE 任务
-        - 使用 --run-integration 标志运行
-        """
-        source = BacktestDataSource(
-            base_loop_ref="qe_20260502_131502_9b54/Loop1",
-            cache_dir="tmp/test_integration_cache/",
-        )
+    assert not frame.empty
+    assert {"trade_date", "symbol", "score"}.issubset(frame.columns)
+    assert frame["trade_date"].min() >= requested_start
+    assert frame["trade_date"].max() <= end_date
 
-        # 尝试获取预测数据（会触发下载）
-        df = await source.get_predictions(
-            start_date=date(2024, 7, 1),
-            end_date=date(2024, 7, 5),
-        )
 
-        # 验证数据
-        assert not df.empty
-        assert 'trade_date' in df.columns
-        assert 'symbol' in df.columns
-        assert 'score' in df.columns
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_real_market_repository_readonly(
+    hmm_readonly_integration_config,
+):
+    """Exercise canonical trading-calendar and PIT sector SELECT paths only."""
+    config = hmm_readonly_integration_config
+    source = RealtimeDataSource(
+        candidate_id="candidate-readonly-smoke",
+        as_of_date=config.as_of_date,
+    )
 
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_real_db_query(self):
-        """
-        测试真实 DB 查询
+    start_date, completed_date = await source.get_available_date_range()
+    mapping = await source.get_sector_mapping(completed_date)
 
-        需要:
-        - 数据库连接可用
-        - market.kline_daily_raw 表有数据
-        - 使用 --run-integration 标志运行
-        """
-        source = RealtimeDataSource(
-            snapshot_id="latest",
-            lag_days=1,
-        )
+    assert start_date <= completed_date <= config.as_of_date
+    assert mapping
+    assert all(isinstance(symbol, str) for symbol in mapping)
+    assert all(isinstance(sector, str) for sector in mapping.values())
 
-        # 获取可用日期范围
-        min_date, max_date = await source.get_available_date_range()
 
-        assert min_date < max_date
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_backtest_and_realtime_share_canonical_sector_mapping(
+    hmm_readonly_integration_config,
+    tmp_path,
+):
+    """Compare both adapters against the same PIT mapping date without writes."""
+    config = hmm_readonly_integration_config
+    realtime = RealtimeDataSource(
+        candidate_id="candidate-readonly-smoke",
+        as_of_date=config.as_of_date,
+    )
+    _, completed_date = await realtime.get_available_date_range()
+    async with BacktestDataSource(
+        base_loop_ref=config.qe_loop_ref,
+        cache_dir=str(tmp_path / "mapping-cache"),
+    ) as backtest:
+        backtest_mapping = await backtest.get_sector_mapping(completed_date)
+    realtime_mapping = await realtime.get_sector_mapping(completed_date)
 
-        # 查询板块映射
-        mapping = await source.get_sector_mapping(max_date)
-
-        assert isinstance(mapping, dict)
-        assert len(mapping) > 0
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_backtest_vs_realtime_consistency(self):
-        """
-        测试回测和实时数据源的一致性
-
-        使用相同的日期范围，验证两种数据源返回的数据结构一致。
-        """
-        # 回测数据源
-        backtest_source = BacktestDataSource(
-            base_loop_ref="qe_20260502_131502_9b54/Loop1",
-            cache_dir="tmp/test_consistency_cache/",
-        )
-
-        # 实时数据源
-        realtime_source = RealtimeDataSource(
-            snapshot_id="latest",
-            lag_days=1,
-        )
-
-        # 获取两种数据源的日期范围
-        backtest_min, backtest_max = await backtest_source.get_available_date_range()
-        realtime_min, realtime_max = await realtime_source.get_available_date_range()
-
-        # 选择一个共同的日期
-        common_date = min(backtest_max, realtime_max)
-
-        # 查询板块映射
-        backtest_mapping = await backtest_source.get_sector_mapping(common_date)
-        realtime_mapping = await realtime_source.get_sector_mapping(common_date)
-
-        # 验证数据结构一致
-        assert isinstance(backtest_mapping, dict)
-        assert isinstance(realtime_mapping, dict)
-
-        # 验证有共同的股票
-        common_symbols = set(backtest_mapping.keys()) & set(realtime_mapping.keys())
-        assert len(common_symbols) > 0
+    assert backtest_mapping == realtime_mapping

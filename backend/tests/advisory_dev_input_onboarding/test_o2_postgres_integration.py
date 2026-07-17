@@ -340,6 +340,45 @@ def test_first_import_exact_rerun_and_fresh_verify(
     )
 
 
+def test_rollback_only_executes_full_import_and_proves_zero_database_residue(
+    monkeypatch,
+    tmp_path: Path,
+    postgres_dsn: str,
+    onboarding_request,
+) -> None:
+    importer, bundle, ref, store, plan, source_root, target_root = _prepared(
+        monkeypatch, tmp_path, postgres_dsn, onboarding_request
+    )
+    assert plan.status is ImportPlanStatus.EXECUTABLE
+    receipt = importer.validate_rollback(
+        bundle=bundle,
+        bundle_ref=ref,
+        supplied_plan=plan,
+        evidence_store=store,
+        env_file=tmp_path / ".env",
+        release_receipt_root=tmp_path / "release",
+        source_package_asset_root=source_root,
+        target_package_asset_root=target_root,
+    )
+    assert receipt.commit_outcome is ImportCommitOutcome.ROLLED_BACK
+    assert receipt.physical_commit_count == 0
+    assert sum(receipt.inserted_row_counts.values()) == 4
+    assert receipt.post_readback_row_hashes == {
+        "strategy_pkg.package": (),
+        "strategy_pkg.package_asset": (),
+    }
+    assert _counts(postgres_dsn) == (0, 0)
+    post_plan = importer.plan(
+        bundle=bundle,
+        bundle_ref=ref,
+        evidence_store=store,
+        env_file=tmp_path / ".env",
+        release_receipt_root=tmp_path / "release",
+    )
+    assert post_plan.status is ImportPlanStatus.EXECUTABLE
+    assert post_plan.plan_hash == plan.plan_hash
+
+
 def test_conflict_plan_has_zero_dml_even_with_other_insert_rows(
     monkeypatch,
     tmp_path: Path,
