@@ -18,6 +18,20 @@ def _write(path: Path, text: str) -> None:
     path.write_text(textwrap.dedent(text).lstrip(), encoding="utf-8")
 
 
+def test_every_validation_plan_is_reachable_from_module_registry() -> None:
+    catalog_root = Path("tests/aistock_validation/catalog")
+    plans = yaml.safe_load((catalog_root / "test_plans.yaml").read_text(encoding="utf-8"))["plans"]
+    modules = yaml.safe_load((catalog_root / "module_registry.yaml").read_text(encoding="utf-8"))["modules"]
+    referenced: set[str] = set()
+    for module in modules:
+        module_plans = module.get("test_plans") or {}
+        referenced.update(module_plans.get("required_on_change") or [])
+        referenced.update(module_plans.get("recommended") or [])
+
+    orphaned = sorted(str(plan["plan_key"]) for plan in plans if plan["plan_key"] not in referenced)
+    assert orphaned == []
+
+
 def _write_pass_repo(repo_root: Path) -> None:
     _write(
         repo_root / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml",

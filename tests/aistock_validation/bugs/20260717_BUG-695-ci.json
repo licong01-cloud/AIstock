@@ -7,6 +7,7 @@
     "scripts/issue_flow.py",
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/test_validation_catalog_integrity.py",
+    "backend/services/validation/plan_catalog.py",
     "scripts/ci_change_classifier.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260717_BUG-695-ci.json",

@@ -76,6 +76,7 @@ plans:
     level: L2
     command_key: nox_validation_center_backend
     nox_session: validation_center_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -283,6 +284,7 @@ plans:
     level: L2
     command_key: nox_qe_data_contract_backend
     nox_session: qe_data_contract_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -368,6 +370,7 @@ plans:
     level: L2
     command_key: nox_qe_read_backend
     nox_session: qe_read_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -813,6 +816,7 @@ plans:
     level: L2
     command_key: nox_paper_v2_backend
     nox_session: paper_v2_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -845,6 +849,7 @@ plans:
     level: L2
     command_key: nox_simulation_core_l2
     nox_session: simulation_core_l2
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -862,6 +867,7 @@ plans:
     level: L2
     command_key: nox_miniqmt_execution_runtime_l2
     nox_session: miniqmt_execution_runtime_l2
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -873,6 +879,24 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
+  - plan_key: hmm_data_source_backend
+    title: HMM data-source backend regression
+    module: hmm
+    level: L2
+    command_key: nox_hmm_data_source_backend
+    nox_session: hmm_data_source_backend
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
   - plan_key: localsim_unattended_l3
     title: LocalSim scheduler and restart backend validation slice
     module: paper_v2_selection_center
@@ -1032,6 +1056,7 @@ plans:
     level: L2
     command_key: nox_model_registry_backend
     nox_session: model_registry_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -1049,6 +1074,7 @@ plans:
     level: L2
     command_key: nox_market_regime_label
     nox_session: market_regime_label
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -1066,6 +1092,7 @@ plans:
     level: L0
     command_key: nox_rl_execution_smoke
     nox_session: rl_execution_smoke
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -1083,6 +1110,7 @@ plans:
     level: L2
     command_key: nox_qe_archive_backend
     nox_session: qe_archive_backend
+    ci_lane: backend
     enabled: true
     requires_backend: false
     requires_frontend: false
