@@ -33,8 +33,8 @@
   "expected": "An invalid historical MiniQMT binding must be recorded as an explicit binding-scoped fail-loud lifecycle result with broker_called=false and must not prevent unrelated valid LocalSIM or MiniQMT bindings from progressing. Platform diagnostics must project the scheduler blocking result and active alert even when run_count is zero. The fix must not synthesize B0_QUOTE_V2, silently skip the invalid binding, change selection/execution semantics, add approval gates, call broker, or write production data.",
   "first_seen_at": "2026-07-17T03:25:22.640489Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "28d9a6c8cbb75a9a6d195471d833d36ab0127129",
+  "fixed_at": "2026-07-17T04:50:43.155238Z",
   "github_issue_number": 2279,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2279",
   "last_seen_at": "2026-07-17T03:25:22.640489Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2281",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "5142e61980206c3008923563",
     "source_event_id": "FE-20260717-5142e6198020"
   },
+  "validation_evidence": [
+    "PR #2281 required CI checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
