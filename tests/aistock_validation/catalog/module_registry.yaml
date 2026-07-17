@@ -212,7 +212,7 @@ modules:
     description_zh: 覆盖本地 Tushare/TDX 数据接入、刷新审计、数据集质量和本地数据管理页面。
     ui_routes: [/local-data, /qlib]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, data_sync_autonomy_backend]
       recommended: [data_sync_autonomy_backend]
   - module_id: analysis
     display_name: Stock analysis
