@@ -153,6 +153,7 @@ def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path
     payload = classifier.classify_changed_files(
         [
             "backend/execution_algos/twap_algo.py",
+            "backend/services/trading_core/execution_algo_adapter.py",
             "backend/services/trading_core/minute_execution.py",
             "backend/tests/trading_core/test_minute_execution.py",
         ],

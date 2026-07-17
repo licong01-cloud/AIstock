@@ -5,6 +5,7 @@
     "backend/tests/scripts/test_ci_change_classifier.py",
     "noxfile.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260717_BUG-718-ci-classifier-lacks-direct-paper-v2-mapping-for-minute-execution-algorit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -27,7 +28,8 @@
     }
   ],
   "evidence_uris": [
-    "PR #2325 AIstock CI run 29567290511 job 87842667282"
+    "PR #2325 AIstock CI run 29567290511 job 87842667282",
+    "PR #2325 AIstock CI run 29580550883 job 87884951700"
   ],
   "expected": "Changed minute execution algorithm/runtime files select paper_v2_backend and that session executes the focused Trading Core minute execution and V25 contract tests without adding runtime gates.",
   "first_seen_at": "2026-07-17T08:47:10.693318Z",
@@ -44,7 +46,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file backend/execution_algos/twap_algo.py --changed-file backend/services/trading_core/minute_execution.py --changed-file backend/tests/trading_core/test_minute_execution.py",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file backend/execution_algos/twap_algo.py --changed-file backend/services/trading_core/execution_algo_adapter.py --changed-file backend/services/trading_core/minute_execution.py --changed-file backend/tests/trading_core/test_minute_execution.py",
   "required_verification": [
     "l0",
     "validation_module_registry_l0",

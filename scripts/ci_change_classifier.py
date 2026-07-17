@@ -136,6 +136,7 @@ BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "backend/services/strategy_package/**",
             "backend/routers/strategy_package*.py",
             "backend/execution_algos/**",
+            "backend/services/trading_core/execution_algo_adapter.py",
             "backend/services/trading_core/minute_execution.py",
             "backend/tests/paper_trading_v2/**",
             "backend/tests/selection_center/**",

@@ -293,6 +293,7 @@ rules:
   - rule_id: trading_core_minute_execution
     priority: 85
     include:
+      - backend/services/trading_core/execution_algo_adapter.py
       - backend/services/trading_core/minute_execution.py
       - backend/tests/trading_core/test_execution_algo_capabilities.py
       - backend/tests/trading_core/test_minute_execution.py
