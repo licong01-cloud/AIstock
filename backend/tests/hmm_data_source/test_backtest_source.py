@@ -13,6 +13,8 @@ BacktestDataSource 单元测试
 """
 
 import asyncio
+import hashlib
+import json
 import pickle
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,6 +29,22 @@ from backend.services.hmm_data_source import (
 )
 
 
+def qe_provenance(payload: bytes, *, artifact_name: str, row_count: int) -> dict:
+    workspace_path = f"mlruns/1/abc123/artifacts/{artifact_name}"
+    return {
+        "source": "qe_workspace",
+        "task_id": "qe_test",
+        "loop_name": "Loop1",
+        "workspace_path": workspace_path,
+        "remote_manifest_path": f"{workspace_path}.manifest.json",
+        "remote_schema_version": "qe_dataframe_v1",
+        "remote_sha256": hashlib.sha256(payload).hexdigest(),
+        "remote_size_bytes": len(payload),
+        "remote_row_count": row_count,
+        "remote_quality_status": "ok",
+    }
+
+
 class TestBacktestDataSource:
     """BacktestDataSource 单元测试"""
 
@@ -34,11 +52,25 @@ class TestBacktestDataSource:
     def mock_qe_client(self):
         """Mock QE client"""
         client = MagicMock()
-        client.get_workspace_file = AsyncMock(return_value={
-            "experiment_id": "1",
-            "recorder_id": "abc123",
-        })
         client.download_workspace_file_bytes = AsyncMock()
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                return {"experiment_id": "1", "recorder_id": "abc123"}
+            payload = client.download_workspace_file_bytes.return_value
+            if not isinstance(payload, bytes):
+                raise AssertionError("test must configure artifact bytes before manifest read")
+            frame = pickle.loads(payload)
+            return {
+                "artifact_name": path.removesuffix(".manifest.json").rsplit("/", 1)[-1],
+                "schema_version": "qe_dataframe_v1",
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size_bytes": len(payload),
+                "row_count": len(frame),
+                "quality_status": "ok",
+            }
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
         client.close = AsyncMock()
         return client
 
@@ -166,7 +198,16 @@ class TestBacktestDataSource:
         from backend.services.hmm_data_source import ArtifactCacheManager
         cache_manager = ArtifactCacheManager(str(cache_dir))
         pred_bytes = pickle.dumps(sample_pred_data)
-        cache_manager.save_artifact("qe_test/Loop1", "pred.pkl", pred_bytes)
+        cache_manager.save_artifact(
+            "qe_test/Loop1",
+            "pred.pkl",
+            pred_bytes,
+            metadata=qe_provenance(
+                pred_bytes,
+                artifact_name="pred.pkl",
+                row_count=len(sample_pred_data),
+            ),
+        )
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -185,6 +226,32 @@ class TestBacktestDataSource:
 
         # 验证数据正确
         assert len(df) > 0
+
+    @pytest.mark.asyncio
+    async def test_expired_manifest_invalidates_memory_cache(
+        self,
+        mock_qe_client,
+        sample_pred_data,
+        tmp_path,
+    ):
+        pred_bytes = pickle.dumps(sample_pred_data)
+        mock_qe_client.download_workspace_file_bytes.return_value = pred_bytes
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=mock_qe_client,
+        )
+        await source.get_predictions(date(2024, 7, 1), date(2024, 7, 2))
+        manifest_path = source.cache_manager._manifest_path(
+            "qe_test/Loop1", "pred.pkl"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["expires_at"] = "2000-01-01T00:00:00Z"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        await source.get_predictions(date(2024, 7, 1), date(2024, 7, 2))
+
+        assert mock_qe_client.download_workspace_file_bytes.await_count == 2
 
     @pytest.mark.asyncio
     async def test_horizon_validation(self, mock_qe_client):
@@ -243,9 +310,24 @@ class TestBacktestDataSource:
         # Mock QE client 返回数据（模拟慢速下载）
         async def slow_download(*args, **kwargs):
             await asyncio.sleep(0.1)
-            return pickle.dumps(sample_pred_data)
+            return pred_bytes
 
+        pred_bytes = pickle.dumps(sample_pred_data)
         mock_qe_client.download_workspace_file_bytes = slow_download
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                return {"experiment_id": "1", "recorder_id": "abc123"}
+            return {
+                "artifact_name": "pred.pkl",
+                "schema_version": "qe_dataframe_v1",
+                "sha256": hashlib.sha256(pred_bytes).hexdigest(),
+                "size_bytes": len(pred_bytes),
+                "row_count": len(sample_pred_data),
+                "quality_status": "ok",
+            }
+
+        mock_qe_client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -330,13 +412,22 @@ class TestBacktestDataSourceIsolation:
             {'trade_date': date(2024, 7, 1), 'symbol': '000001.SZ', 'score': 0.5},
         ])
         mock_qe_client = MagicMock()
-        mock_qe_client.get_workspace_file = AsyncMock(return_value={
-            "experiment_id": "1",
-            "recorder_id": "abc123",
-        })
-        mock_qe_client.download_workspace_file_bytes = AsyncMock(
-            return_value=pickle.dumps(sample_df)
-        )
+        pred_bytes = pickle.dumps(sample_df)
+        mock_qe_client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                return {"experiment_id": "1", "recorder_id": "abc123"}
+            return {
+                "artifact_name": "pred.pkl",
+                "schema_version": "qe_dataframe_v1",
+                "sha256": hashlib.sha256(pred_bytes).hexdigest(),
+                "size_bytes": len(pred_bytes),
+                "row_count": len(sample_df),
+                "quality_status": "ok",
+            }
+
+        mock_qe_client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -357,17 +448,29 @@ class TestBacktestDataSourceIsolation:
     async def test_resolve_recorder_metadata_fallback(self, tmp_path):
         """首选 recorder ref 缺失时使用受控的 extracted metadata。"""
         client = MagicMock()
-        client.get_workspace_file = AsyncMock(side_effect=[
-            FileNotFoundError("current recorder missing"),
-            {"selected_experiment_id": "42", "selected_recorder_id": "deadbeef"},
-        ])
-        client.download_workspace_file_bytes = AsyncMock(return_value=pickle.dumps(
-            pd.DataFrame([{
+        sample_df = pd.DataFrame([{
                 "trade_date": date(2024, 7, 1),
                 "symbol": "000001.SZ",
                 "score": 0.5,
             }])
-        ))
+        pred_bytes = pickle.dumps(sample_df)
+        client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path == "qe_current_recorder.json":
+                raise FileNotFoundError("current recorder missing")
+            if path == "qe_extracted_recorder.json":
+                return {"selected_experiment_id": "42", "selected_recorder_id": "deadbeef"}
+            return {
+                "artifact_name": "pred.pkl",
+                "schema_version": "qe_dataframe_v1",
+                "sha256": hashlib.sha256(pred_bytes).hexdigest(),
+                "size_bytes": len(pred_bytes),
+                "row_count": len(sample_df),
+                "quality_status": "ok",
+            }
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -406,17 +509,27 @@ class TestBacktestDataSourceIsolation:
     async def test_default_client_resolves_task_node_and_is_closed(self, tmp_path):
         """未注入 client 时按任务 node_id 创建，并由 source 释放连接池。"""
         client = MagicMock()
-        client.get_workspace_file = AsyncMock(return_value={
-            "experiment_id": "1",
-            "recorder_id": "abc123",
-        })
-        client.download_workspace_file_bytes = AsyncMock(return_value=pickle.dumps(
-            pd.DataFrame([{
+        sample_df = pd.DataFrame([{
                 "trade_date": date(2024, 7, 1),
                 "symbol": "000001.SZ",
                 "score": 0.5,
             }])
-        ))
+        pred_bytes = pickle.dumps(sample_df)
+        client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                return {"experiment_id": "1", "recorder_id": "abc123"}
+            return {
+                "artifact_name": "pred.pkl",
+                "schema_version": "qe_dataframe_v1",
+                "sha256": hashlib.sha256(pred_bytes).hexdigest(),
+                "size_bytes": len(pred_bytes),
+                "row_count": len(sample_df),
+                "quality_status": "ok",
+            }
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
         client.close = AsyncMock()
 
         source = BacktestDataSource(
@@ -437,13 +550,45 @@ class TestBacktestDataSourceIsolation:
         client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_remote_manifest_mismatch_fails_before_cache_publish(self, tmp_path):
+        """远端 SHA/size 不匹配时不得发布或反序列化 artifact。"""
+        pred_bytes = pickle.dumps(pd.DataFrame([{"score": 0.5}]))
+        client = MagicMock()
+        client.download_workspace_file_bytes = AsyncMock(return_value=pred_bytes)
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                return {"experiment_id": "1", "recorder_id": "abc123"}
+            return {
+                "artifact_name": "pred.pkl",
+                "schema_version": "qe_dataframe_v1",
+                "sha256": "0" * 64,
+                "size_bytes": len(pred_bytes),
+                "row_count": 1,
+                "quality_status": "ok",
+            }
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=client,
+        )
+
+        with pytest.raises(DataSourceError, match="trusted remote manifest"):
+            await source._download_artifact("pred.pkl")
+        assert not source.cache_manager.is_cached("qe_test/Loop1", "pred.pkl")
+
+    @pytest.mark.asyncio
     async def test_only_read_artifact_files(self, tmp_path):
         """验证只读取 artifact 文件（pred.pkl, label.pkl）"""
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
 
         from backend.services.hmm_data_source import ArtifactCacheManager
-        cache_manager = ArtifactCacheManager(str(cache_dir))
+        cache_manager = ArtifactCacheManager(
+            str(cache_dir), allow_test_fixtures=True
+        )
 
         # 验证缓存管理器只处理 .pkl 文件
         allowed_artifacts = ['pred.pkl', 'label.pkl']
@@ -453,7 +598,8 @@ class TestBacktestDataSourceIsolation:
             cache_manager.save_artifact(
                 "qe_test/Loop1",
                 artifact,
-                b"test_data"
+                b"test_data",
+                metadata={"source": "test_fixture"},
             )
 
         # 验证缓存信息
