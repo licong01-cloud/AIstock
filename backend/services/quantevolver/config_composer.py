@@ -1161,7 +1161,10 @@ class ConfigComposer:
             raise ValueError("custom_params.risk_policy must be an object or JSON object string")
         from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
 
-        return RuntimeRiskPolicyProfile.model_validate(raw_policy)
+        return RuntimeRiskPolicyProfile.model_validate(
+            raw_policy,
+            context={"st_pit_namespace_scope": "qe_immutable"},
+        )
 
     @classmethod
     def _is_qe_risk_policy_enabled(cls, custom_params: Optional[Dict[str, Any]]) -> bool:
