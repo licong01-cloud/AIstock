@@ -63,11 +63,32 @@ def _scheduler_component_status() -> dict[str, object]:
 
 
 class _PlatformDiagnosticsBackgroundScheduler:
-    def __init__(self, *, last_run_at: datetime, market_phase: str = "OPEN_AM") -> None:
+    def __init__(
+        self,
+        *,
+        last_run_at: datetime,
+        market_phase: str | None = "OPEN_AM",
+        window_id: str | None = None,
+        errors: list[dict[str, Any]] | None = None,
+        has_blocking_result: bool = False,
+    ) -> None:
         self.last_run_at = last_run_at
         self.market_phase = market_phase
+        self.window_id = window_id
+        self.errors = list(errors or [])
+        self.has_blocking_result = has_blocking_result
 
     def status(self) -> dict[str, object]:
+        last_result: dict[str, object] = {
+            "trade_date": TRADE_DATE.isoformat(),
+            "errors": list(self.errors),
+            "processed": [],
+            "has_blocking_result": self.has_blocking_result,
+        }
+        if self.market_phase is not None:
+            last_result["market_phase"] = self.market_phase
+        if self.window_id is not None:
+            last_result["window"] = {"window_id": self.window_id}
         return {
             "scheduler": "simulation_lifecycle_scheduler",
             "default_submit": True,
@@ -78,12 +99,8 @@ class _PlatformDiagnosticsBackgroundScheduler:
             "scheduler_control_api_enabled": True,
             "manual_tick_endpoint_enabled": False,
             "last_run_at": self.last_run_at.isoformat(),
-            "last_result": {
-                "trade_date": TRADE_DATE.isoformat(),
-                "market_phase": self.market_phase,
-                "errors": [],
-            },
-            "last_blocking_result": None,
+            "last_result": last_result,
+            "last_blocking_result": last_result if self.has_blocking_result else None,
             "scheduler_loop_health": {
                 "schema_version": "simulation_background_scheduler_loop_health_v1",
                 "status": "HEALTHY",
@@ -1243,6 +1260,74 @@ def test_platform_diagnostics_is_read_only_layered_and_low_cardinality(
     assert all(set(metric["labels"]) <= allowed_labels for metric in payload["metrics"]["series"])
     assert all(not set(metric["labels"]).intersection(forbidden_labels) for metric in payload["metrics"]["series"])
     assert repo.get_simulation_daily_run(run_id).model_dump(mode="json") == before
+
+
+def test_platform_diagnostics_surfaces_zero_run_scheduler_blocker_and_auto_clears() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    scheduler = _PlatformDiagnosticsBackgroundScheduler(
+        last_run_at=datetime(2026, 7, 17, 3, 20, tzinfo=UTC),
+        market_phase=None,
+        window_id="execution",
+        errors=[
+            {
+                "type": "RuntimeConfigInvalidError",
+                "message": "new MiniQMT SIM bindings require an explicit B0_QUOTE_V2 quote-control revision",
+                "context": {
+                    "reason_code": "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED",
+                    "strategy_id": "strategy_invalid_legacy_roll_forward",
+                    "legacy_fallback": False,
+                },
+            }
+        ],
+        has_blocking_result=True,
+    )
+    service = SimulationRuntimeOpsService(repository=repo, scheduler=scheduler)  # type: ignore[arg-type]
+
+    blocked = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        generated_at=datetime(2026, 7, 17, 3, 20, 15, tzinfo=UTC),
+    )
+
+    assert blocked["query"]["returned_count"] == 0
+    assert blocked["overall_health"] == {
+        "schema_version": "simulation_platform_overall_health_v1",
+        "status": "BLOCKED",
+        "reason_codes": ["SIMULATION_SCHEDULER_LAST_RESULT_BLOCKED"],
+        "market_phase": "OPEN_AM",
+        "execution_gate": False,
+        "acknowledge_required": False,
+    }
+    assert blocked["layers"]["process"]["status"] == "BLOCKED"
+    assert blocked["layers"]["process"]["facts"]["current_result_blocking_reason_codes"] == [
+        "MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED"
+    ]
+    assert blocked["layers"]["lifecycle"]["status"] == "BLOCKED"
+    scheduler_alert = next(
+        item for item in blocked["alerts"]["items"] if item["alert_type"] == "SIMULATION_SCHEDULER_HEALTH"
+    )
+    assert scheduler_alert["reason_code"] == "SIMULATION_SCHEDULER_LAST_RESULT_BLOCKED"
+    blocker_metric = next(
+        item for item in blocked["metrics"]["series"] if item["name"] == "simulation_scheduler_current_result_blocking"
+    )
+    assert blocker_metric["value"] == 1
+
+    scheduler.errors = []
+    scheduler.has_blocking_result = False
+    recovered = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        generated_at=datetime(2026, 7, 17, 3, 20, 30, tzinfo=UTC),
+    )
+
+    assert recovered["overall_health"]["status"] == "NOT_YET_RUN"
+    assert recovered["layers"]["process"]["status"] == "HEALTHY"
+    assert recovered["layers"]["lifecycle"]["status"] == "NOT_YET_RUN"
+    assert all(item["alert_type"] != "SIMULATION_SCHEDULER_HEALTH" for item in recovered["alerts"]["items"])
+    recovered_metric = next(
+        item
+        for item in recovered["metrics"]["series"]
+        if item["name"] == "simulation_scheduler_current_result_blocking"
+    )
+    assert recovered_metric["value"] == 0
 
 
 def test_platform_diagnostics_filters_exact_run_binding_and_plan_identity(

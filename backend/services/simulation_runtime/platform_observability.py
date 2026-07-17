@@ -87,6 +87,17 @@ ACTIVE_MARKET_PHASES = frozenset(
         "POST_CLOSE_RECONCILIATION",
     }
 )
+SCHEDULER_WINDOW_MARKET_PHASE = {
+    "pre_open": "PRE_OPEN",
+    "selection": "PRE_OPEN",
+    "planning": "PRE_OPEN",
+    "opening_auction_observe": "OPEN_AUCTION",
+    "execution": "OPEN_AM",
+    "lunch_recess": "LUNCH_BREAK",
+    "execution_afternoon": "OPEN_PM",
+    "closing_auction_observe": "CLOSE_AUCTION",
+    "post_close_reconcile": "POST_CLOSE_RECONCILIATION",
+}
 LOCAL_SIM_PERSISTENCE_STATUSES = frozenset(
     {
         "PROJECTION_PENDING",
@@ -407,7 +418,12 @@ class SimulationPlatformObservability:
             raise _invalid("generated_at must be timezone-aware", field="generated_at", value=now)
         exact_scheduler = dict(scheduler_status)
         exact_runs = list(runs)
-        process_layer = self._process_layer(exact_scheduler, observed_at=now)
+        scheduler_blocking_result = self._scheduler_blocking_result(exact_scheduler)
+        process_layer = self._process_layer(
+            exact_scheduler,
+            scheduler_blocking_result=scheduler_blocking_result,
+            observed_at=now,
+        )
         market_phase = self._market_phase(exact_scheduler)
         binding_layers = [self._binding_layer(run) for run in exact_runs]
         durability_layers = [self._durability_layer(run, observed_at=now) for run in exact_runs]
@@ -421,6 +437,7 @@ class SimulationPlatformObservability:
             runs=exact_runs,
             query=query,
             market_phase=market_phase,
+            scheduler_blocking_result=scheduler_blocking_result,
         )
         alerts = self._alerts(
             process_layer=process_layer,
@@ -433,6 +450,7 @@ class SimulationPlatformObservability:
         )
         metrics = self._metrics(
             scheduler_status=exact_scheduler,
+            process_layer=process_layer,
             runs=exact_runs,
             binding_layers=binding_layers,
             durability_layers=durability_layers,
@@ -531,12 +549,144 @@ class SimulationPlatformObservability:
                         value=raw_phase,
                     )
                 return raw_phase.strip().upper()
+            window = last_result.get("window")
+            if window is not None:
+                if not isinstance(window, Mapping):
+                    raise _invalid(
+                        "scheduler window must be a mapping",
+                        field="scheduler_status.last_result.window",
+                        value=window,
+                    )
+                window_id = _required_text(
+                    window,
+                    "window_id",
+                    field_prefix="scheduler_status.last_result.window",
+                )
+                market_phase = SCHEDULER_WINDOW_MARKET_PHASE.get(window_id)
+                if market_phase is None:
+                    raise _invalid(
+                        "scheduler window_id has no canonical market phase",
+                        field="scheduler_status.last_result.window.window_id",
+                        value=window_id,
+                    )
+                return market_phase
         return "NOT_YET_OBSERVED"
+
+    @staticmethod
+    def _scheduler_blocking_result(scheduler_status: Mapping[str, Any]) -> dict[str, Any]:
+        last_result = scheduler_status.get("last_result")
+        if last_result is None:
+            return {
+                "blocking": False,
+                "reason_codes": [],
+                "error_count": 0,
+                "processed_error_count": 0,
+            }
+        if not isinstance(last_result, Mapping):
+            raise _invalid(
+                "scheduler last_result must be a mapping",
+                field="scheduler_status.last_result",
+                value=last_result,
+            )
+        has_blocking_result = _optional_exact_bool(
+            last_result,
+            "has_blocking_result",
+            field_prefix="scheduler_status.last_result",
+        )
+        if has_blocking_result is None:
+            raise _invalid(
+                "scheduler last_result.has_blocking_result is required",
+                field="scheduler_status.last_result.has_blocking_result",
+            )
+        errors = last_result.get("errors")
+        if not isinstance(errors, list) or any(not isinstance(item, Mapping) for item in errors):
+            raise _invalid(
+                "scheduler last_result.errors must be a list of mappings",
+                field="scheduler_status.last_result.errors",
+                value=errors,
+            )
+        processed = last_result.get("processed", [])
+        if not isinstance(processed, list) or any(not isinstance(item, Mapping) for item in processed):
+            raise _invalid(
+                "scheduler last_result.processed must be a list of mappings",
+                field="scheduler_status.last_result.processed",
+                value=processed,
+            )
+        reason_codes: set[str] = set()
+        for error in errors:
+            reason_code = _optional_text(
+                error,
+                "reason_code",
+                field_prefix="scheduler_status.last_result.errors[]",
+            )
+            context = error.get("context")
+            if context is not None and not isinstance(context, Mapping):
+                raise _invalid(
+                    "scheduler last_result error context must be a mapping",
+                    field="scheduler_status.last_result.errors[].context",
+                    value=context,
+                )
+            if reason_code is None and isinstance(context, Mapping):
+                reason_code = _optional_text(
+                    context,
+                    "reason_code",
+                    field_prefix="scheduler_status.last_result.errors[].context",
+                )
+            if reason_code is not None:
+                reason_codes.add(reason_code)
+        processed_error_count = 0
+        for item in processed:
+            error = item.get("error")
+            if error is None:
+                continue
+            if not isinstance(error, Mapping):
+                raise _invalid(
+                    "scheduler processed error must be a mapping",
+                    field="scheduler_status.last_result.processed[].error",
+                    value=error,
+                )
+            processed_error_count += 1
+            reason_code = _optional_text(
+                error,
+                "reason_code",
+                field_prefix="scheduler_status.last_result.processed[].error",
+            )
+            context = error.get("context")
+            if context is not None and not isinstance(context, Mapping):
+                raise _invalid(
+                    "scheduler processed error context must be a mapping",
+                    field="scheduler_status.last_result.processed[].error.context",
+                    value=context,
+                )
+            if reason_code is None and isinstance(context, Mapping):
+                reason_code = _optional_text(
+                    context,
+                    "reason_code",
+                    field_prefix="scheduler_status.last_result.processed[].error.context",
+                )
+            if reason_code is not None:
+                reason_codes.add(reason_code)
+        observed_blocking_evidence = len(errors) > 0 or processed_error_count > 0
+        if not has_blocking_result and observed_blocking_evidence:
+            raise _invalid(
+                "scheduler last_result blocking flag conflicts with error evidence",
+                field="scheduler_status.last_result.has_blocking_result",
+                value=has_blocking_result,
+            )
+        if has_blocking_result and not reason_codes:
+            reason_codes.add("SIMULATION_SCHEDULER_LAST_RESULT_BLOCKED")
+        return {
+            "blocking": has_blocking_result,
+            "reason_codes": sorted(reason_codes),
+            "error_count": len(errors),
+            "processed_error_count": processed_error_count,
+        }
 
     @staticmethod
     def _process_layer(
         scheduler_status: Mapping[str, Any],
         *,
+        scheduler_blocking_result: Mapping[str, Any],
         observed_at: datetime,
     ) -> dict[str, Any]:
         loop_health = _required_mapping(scheduler_status, "scheduler_loop_health", field_prefix="scheduler_status")
@@ -576,9 +726,15 @@ class SimulationPlatformObservability:
         )
         if loop_status == "BLOCKED":
             status = "BLOCKED"
+            source = "scheduler_status.scheduler_loop_health"
+        elif scheduler_blocking_result["blocking"] is True:
+            status = "BLOCKED"
+            reason_code = "SIMULATION_SCHEDULER_LAST_RESULT_BLOCKED"
+            source = "scheduler_status.last_result"
         elif not running or not thread_alive:
             status = "INACTIVE"
             reason_code = "SIMULATION_SCHEDULER_PROCESS_INACTIVE"
+            source = "scheduler_status.scheduler_loop_health"
         elif (
             tick_lag_seconds is not None
             and tick_lag_threshold_seconds is not None
@@ -586,10 +742,13 @@ class SimulationPlatformObservability:
         ):
             status = "DEGRADED"
             reason_code = "SIMULATION_SCHEDULER_TICK_LAG_EXCEEDED"
+            source = "scheduler_status.scheduler_loop_health"
         elif loop_status == "NOT_YET_RUN":
             status = "NOT_YET_RUN"
+            source = "scheduler_status.scheduler_loop_health"
         elif loop_status in {"HEALTHY", "NOT_APPLICABLE"}:
             status = "HEALTHY"
+            source = "scheduler_status.scheduler_loop_health"
         else:
             raise _invalid(
                 "scheduler loop health has unsupported status",
@@ -601,7 +760,7 @@ class SimulationPlatformObservability:
             "layer": "process",
             "status": status,
             "reason_code": reason_code,
-            "source": "scheduler_status.scheduler_loop_health",
+            "source": source,
             "facts": {
                 "running": running,
                 "thread_alive": thread_alive,
@@ -610,6 +769,10 @@ class SimulationPlatformObservability:
                 "interval_seconds": interval_seconds,
                 "tick_lag_seconds": tick_lag_seconds,
                 "tick_lag_threshold_seconds": tick_lag_threshold_seconds,
+                "current_result_blocking": scheduler_blocking_result["blocking"],
+                "current_result_blocking_reason_codes": list(scheduler_blocking_result["reason_codes"]),
+                "current_result_error_count": scheduler_blocking_result["error_count"],
+                "current_result_processed_error_count": scheduler_blocking_result["processed_error_count"],
             },
             "execution_gate": False,
         }
@@ -621,6 +784,7 @@ class SimulationPlatformObservability:
         runs: Sequence[SimulationDailyRun],
         query: Mapping[str, Any],
         market_phase: str,
+        scheduler_blocking_result: Mapping[str, Any],
     ) -> dict[str, Any]:
         blockers = _required_mapping(
             scheduler_status,
@@ -634,7 +798,10 @@ class SimulationPlatformObservability:
         )
         failed_run_count = sum(run.status in BLOCKING_RUN_STATUSES for run in runs)
         active_run_count = sum(run.status in ACTIVE_RUN_STATUSES for run in runs)
-        if failed_run_count:
+        if scheduler_blocking_result["blocking"] is True:
+            status = "BLOCKED"
+            reason_code = "SIMULATION_SCHEDULER_LAST_RESULT_BLOCKED"
+        elif failed_run_count:
             status = "BLOCKED"
             reason_code = "SIMULATION_QUERY_HAS_BLOCKING_RUNS"
         elif not runs:
@@ -659,6 +826,8 @@ class SimulationPlatformObservability:
                 "active_run_count": active_run_count,
                 "failed_run_count": failed_run_count,
                 "current_trade_date_blocker_count": blocker_count,
+                "scheduler_current_result_blocking": scheduler_blocking_result["blocking"],
+                "scheduler_current_result_blocking_reason_codes": list(scheduler_blocking_result["reason_codes"]),
             },
             "execution_gate": False,
         }
@@ -1318,6 +1487,7 @@ class SimulationPlatformObservability:
     def _metrics(
         *,
         scheduler_status: Mapping[str, Any],
+        process_layer: Mapping[str, Any],
         runs: Sequence[SimulationDailyRun],
         binding_layers: Sequence[Mapping[str, Any]],
         durability_layers: Sequence[Mapping[str, Any]],
@@ -1350,6 +1520,17 @@ class SimulationPlatformObservability:
                     "reason_code": loop_reason,
                     "market_phase": market_phase,
                     "source": "scheduler_loop_health",
+                },
+            ),
+            _metric(
+                name="simulation_scheduler_current_result_blocking",
+                kind="gauge",
+                value=1 if process_layer["facts"]["current_result_blocking"] is True else 0,
+                labels={
+                    "status": str(process_layer["status"]),
+                    "reason_code": str(process_layer["reason_code"]),
+                    "market_phase": market_phase,
+                    "source": str(process_layer["source"]),
                 },
             ),
             _metric(
