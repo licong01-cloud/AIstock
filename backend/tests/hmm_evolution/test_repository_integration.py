@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Any
 
 import pytest
 
+from backend.services.hmm_evolution import repository as repository_module
 from backend.services.hmm_evolution.errors import IdempotencyConflictError
 from backend.services.hmm_evolution.models import (
     CandidateCoverage,
@@ -68,6 +70,25 @@ class _Connection:
 def _repository(steps: list[dict[str, Any]]) -> tuple[HMMEvolutionRepository, _ScriptedCursor]:
     cursor = _ScriptedCursor(steps)
     return HMMEvolutionRepository(lambda: _Connection(cursor)), cursor
+
+
+def test_repository_default_connection_is_an_atomic_managed_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    @contextmanager
+    def fake_get_conn(**kwargs: Any):
+        calls.append(kwargs)
+        yield object()
+
+    monkeypatch.setattr(repository_module, "get_conn", fake_get_conn)
+    repository = HMMEvolutionRepository()
+
+    with repository._conn_factory():  # noqa: SLF001 - verifies the durable DB boundary.
+        pass
+
+    assert calls == [{"autocommit": False, "manage_transaction": True}]
 
 
 def _preview(

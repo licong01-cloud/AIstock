@@ -1,9 +1,9 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.1
+> **版本**：v1.2
 > **日期**：2026-07-17
-> **状态**：implementation-ready design；Phase 1 代码尚未实现
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.5
+> **状态**：P1-A foundation 已完成外部验收；P1-B/P1-C 待实现；runtime activation 未启用
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.6
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -875,6 +875,34 @@ frontend/src/lib/navigation/nav-groups.ts
 - 记录 performance receipt、Prediction Store zero-copy、QE 全资产只读 access receipt、DB transaction read-only 与 latest-common watermark；
 - 任何 production DDL、worker activation 或服务运行未获批时明确报告 pending。
 
+#### 17.4.1 P1-A 外部验收回执（2026-07-17）
+
+- **真实 dev PostgreSQL**：仅连接 `5433/aistock_dev`，8 路并发验证 candidate、
+  evaluation、batch 的唯一创建与幂等返回；验证 batch/evaluation 单 worker claim、
+  heartbeat、row_version CAS、fencing token 拒绝旧写、完成态重算和 lease 超时。
+  `backend/tests/hmm_evolution/test_repository_dev_postgres.py` 结果为 `1 passed`，
+  测试数据按唯一 ID 精确删除。
+- **repository 事务边界**：默认连接固定为
+  `get_conn(autocommit=False, manage_transaction=True)`，禁止多语句 create/batch/state
+  transition 在 autocommit 下产生半提交。
+- **生产 schema**：经用户授权后已执行并 verify
+  `hmm_evolution_v1`；回执为 5 张表、115 列、41 个约束、7 个非约束索引，业务表为空。
+  bootstrap 原子性与 PostgreSQL constraint normalization 修复见 BUG-729 / PR #2344。
+- **真实 QE 资产复用**：选择近期高收益
+  `qe_20260706_013235_bbd4/Loop8`（年化收益
+  `0.4939623331722296`，horizon=20，status=completed）。RD-Agent PR #4 增加精确
+  `GET .../files` 只读路由；用合并后的路由对真实 node workspace 扫描得到 221 个
+  唯一相对路径、`catalog_completeness=complete`、无绝对路径和重定向。
+- **零副本证据**：AIstock reader 原位读取既有
+  `pred.pkl`（18,159,009 bytes，
+  SHA256=`bc82351d405b5f370eaef50ce3245d237508f1861806bc31ffdd63b62451cfef`）
+  与 `label.pkl`（18,159,035 bytes，
+  SHA256=`451a11242af6cc9834760704411403986344850522fe59b882c6387b0ce8a0f3`），
+  只生成内存 read receipt，不创建新的 artifact 副本。
+- **运行态边界**：上述证据完成 P1-A contract/数据验收；现有 9000 进程仍按正常部署周期
+  更新，未因本验收重启。8001/3000/19080 未由本任务启动，worker/API/UI activation
+  继续为 pending。
+
 ### 17.5 DESIGN-COMPLIANCE-001
 
 每个实现 PR 逐项检查：
@@ -896,7 +924,9 @@ frontend/src/lib/navigation/nav-groups.ts
 - repository、batch/evaluation/item 状态机、lease/fencing/idempotency/retry/cancel；
 - worker skeleton，不启生产 runtime。
 
-生产状态：代码可合入；`production_ddl_gate=pending`；`runtime_activation_gate=pending`。
+当前状态：P1-A 源码与外部验收完成；
+`production_ddl_gate=applied_and_verified`；
+`runtime_activation_gate=pending`。这不代表 P1-B evaluator 或 P1-C API/UI 已完成。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -968,7 +998,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | pending，需生产 DDL 操作授权 | noop | noop |
+| `production_ddl_gate` | noop | applied_and_verified（hmm_evolution_v1：5 tables / 115 columns / 41 constraints / 7 indexes） | noop | noop |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
 | `runtime_activation_gate` | noop | pending | pending | pending，首次生产启用需一次操作授权；不新增业务审批流 |
@@ -993,14 +1023,15 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py` | `backend/tests/hmm_evolution/`：catalog completeness、mutation-refusal、manifest/path/hash/content identity/lifecycle/bootstrap/comment/write-allowlist；Phase 0/QE read-path regression | approved_by_user_for_implementation | 用户明确批准按 P1-A 分阶段实现；AIstock 端严格契约、partial 标记、candidate/schema foundation 已落地，但真实 QE node 尚无 loop complete catalog endpoint，真实 node `catalog_completeness=complete` 与生产 DDL 均未验收，不能标 complete |
+| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `backend/tests/hmm_evolution/`；RD-Agent catalog API tests；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt；runtime rollout 状态见 §17.4.1/§21 | verified | 无 |
 | F-007 | 本文 §7、§8；目标 `hmm_evolution/evaluator.py` | 目标：旧诊断 oracle、asset trust、latest-common watermark、tie/horizon/calendar/coverage/replay hash tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
-| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | `backend/tests/hmm_evolution/test_schema_and_state_machine.py`、`test_service.py`：状态推导、shared result、terminal preservation、idempotency contract、lease/fencing/CAS SQL、cancel/retry/write allowlist、disabled runtime | approved_by_user_for_implementation | 用户明确批准按 P1-A 分阶段实现；durable repository 与 disabled-by-default worker skeleton 已落地，但真实 PostgreSQL bootstrap/drift/concurrency/CAS 验收和 P1-B evaluator executor 尚未完成，不能标 complete |
+| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,models,errors}.py` | unit state-machine suite；`test_repository_dev_postgres.py`：8-worker idempotency、single claim、heartbeat、CAS/fencing stale-write rejection、completion recompute、lease timeout；生产 schema drift verify；P1-B/worker rollout 状态见 §18/§21 | verified | 无 |
 | F-009 | 本文 §9；目标 `hmm_evolution/scorer.py` | 目标：percentile/weight/missing/tie/top-3/no-side-effect tests | approved_by_user_for_implementation | 实现证据由 P1-B PR 回填 |
 | F-010 | 本文 §14、§15；目标 QE asset/candidate/evaluation/batch router、API client、页面、导航 | 目标：API contract、真实 UI、asset browser、中文/动态 horizon/degraded warning/error/截图证据 | approved_by_user_for_implementation | 实现证据由 P1-C PR 回填 |
 
 ## 24. 设计结论
 
-Phase 1 可以按 P1-A → P1-B → P1-C 开始实现。最优先是 P1-A，因为 QE 全资产只读 reader、
-candidate identity、schema 和 durable state machine 是 evaluator/API/UI 的共同地基。当前只
-完成设计，不代表 schema 已部署、worker 已启用、API/UI 已运行或 Phase 1 已验收。
+P1-A 的 QE 全资产只读 reader、candidate identity、schema 和 durable state machine 已完成
+源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。下一交付段为 P1-B
+pure evaluator + recommendation scorer。worker/API/UI 尚未启用，P1-B/P1-C 未完成，因此不得
+把本次收尾表述为整个 Phase 1 完成。

@@ -77,11 +77,17 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+def _managed_transaction_conn() -> Any:
+    """Return the repository's required atomic PostgreSQL transaction context."""
+
+    return get_conn(autocommit=False, manage_transaction=True)
+
+
 class HMMEvolutionRepository:
     """The only Phase 1 component permitted to write HMM evolution state."""
 
     def __init__(self, conn_factory: Callable[[], Any] | None = None) -> None:
-        self._conn_factory = conn_factory or get_conn
+        self._conn_factory = conn_factory or _managed_transaction_conn
 
     def register_candidate(
         self,
