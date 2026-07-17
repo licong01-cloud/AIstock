@@ -11,6 +11,8 @@
     "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
     "backend/tests/advisory_dev_input_onboarding/test_o2_static_and_cli.py",
     "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+    "backend/services/selection_center/prospective_evidence_assembler.py",
+    "backend/tests/strategy_package/test_prospective_selection_evidence.py",
     "docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md",
     "docs/architecture/advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md",
     "docs/architecture/advisory_phase1g_g5_dev_evidence_f2_design_20260716.md",
@@ -36,6 +38,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260717-35387e686c4d",
       "timestamp": "2026-07-17T14:42:54.496498Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Real PostgreSQL producer execution exposed a source revision hash consumer mismatch; add the exact DSE assembler and canonical non-DB fixture regression paths.",
+      "timestamp": "2026-07-17T16:39:43Z"
     }
   ],
   "evidence_uris": [

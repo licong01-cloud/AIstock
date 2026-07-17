@@ -42,7 +42,8 @@ from backend.services.advisory_phase1.release_schema_contract import DatabaseIde
 from backend.services.advisory_phase1.release_schema_verify_postgres import DatabaseConnectionConfig
 from backend.services.advisory_program import AdvisoryProgramService, InMemoryAdvisoryProgramRepository
 from backend.services.selection_center.models import SelectionCandidate
-from backend.services.selection_center.prospective_evidence import canonical_evidence_json_sha256
+from backend.services.selection_center.prospective_evidence import SourceReadReceipt, canonical_evidence_json_sha256
+from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
 from backend.services.selection_center.risk_policy import StPitRiskDecisionProvider
 from backend.services.stock_universe_pit_service import DEFAULT_ST_PIT_UNIVERSE_KEY, StockUniversePitError
 from backend.services.selection_center.runtime_profile import (
@@ -1062,7 +1063,7 @@ def test_prospective_context_is_fully_typed_before_selection(
     assert all("not_materialized_in_o3_projection" not in item["exclusion_reason_counts"] for item in layers)
 
 
-def test_prospective_context_rejects_source_observed_after_historical_cutoff(
+def test_prospective_context_rejects_source_observed_after_actual_generation(
     tmp_path: Path,
     onboarding_request,
     monkeypatch,
@@ -1073,7 +1074,7 @@ def test_prospective_context_rejects_source_observed_after_historical_cutoff(
     request = _historical_request(onboarding_request, base.publish(onboarding_request).ref, asset_root)
     spec = request.program_specs[0]
     repository = InMemoryAdvisoryProgramRepository()
-    historical_replay_at = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
+    historical_replay_at = datetime(2026, 7, 22, 0, 30, tzinfo=UTC)
     program_service = AdvisoryProgramService(
         repository=repository,
         selection_service=object(),
@@ -1148,8 +1149,48 @@ def test_prospective_context_rejects_source_observed_after_historical_cutoff(
         )
 
     assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
-    assert excinfo.value.context["decision_cutoff_ts"] == "2026-07-22T09:25:00+08:00"
+    assert excinfo.value.context["decision_cutoff_ts"] == historical_replay_at.isoformat()
     assert excinfo.value.context["data_available_at"] == observed_after_cutoff.isoformat()
+
+
+def test_prospective_generation_window_rejects_post_entry_replay() -> None:
+    replay_at = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(HistoricalResearchInputUnavailable) as excinfo:
+        RealDevHistoricalOnboardingService._require_prospective_generation_window(  # noqa: SLF001
+            decision_trade_date=date(2026, 7, 21),
+            target_trade_date=date(2026, 7, 22),
+            generated_at=replay_at,
+        )
+
+    assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
+    assert excinfo.value.context == {
+        "decision_trade_date": "2026-07-21",
+        "target_trade_date": "2026-07-22",
+        "decision_generated_at": replay_at.isoformat(),
+        "latest_legal_cutoff_ts": "2026-07-22T09:25:00+08:00",
+        "classification": "RETROSPECTIVE_ONLY",
+    }
+
+
+def test_dse_assembler_validates_semantic_source_revision_hash() -> None:
+    receipt = {
+        "source_role": "market_history",
+        "dataset_id": "market.kline_daily_raw",
+        "row_count": 10,
+        "content_hash": "1" * 64,
+        "first_observed_at": NOW,
+    }
+    validated_receipt = SourceReadReceipt.model_validate(receipt).model_dump(mode="json")
+    semantic_receipt = {key: value for key, value in validated_receipt.items() if key != "first_observed_at"}
+    artifact = SimpleNamespace(
+        metadata={"source_read_receipts": [validated_receipt]},
+        source_revision_set_hash=canonical_evidence_json_sha256([semantic_receipt]),
+    )
+
+    payload = ProspectiveSelectionEvidenceAssembler._source_receipts(artifact)  # noqa: SLF001
+
+    assert payload[0]["first_observed_at"] == NOW.isoformat().replace("+00:00", "Z")
 
 
 def test_universe_evidence_rejects_missing_sources_and_unreconciled_exclusions(
@@ -1469,10 +1510,12 @@ def test_run_keeps_program_provisioning_failures_independent(
     assert stored.relative_path.startswith("historical-receipts/")
 
 
-def test_first_run_provisions_future_bindings_before_returning_input_pending(
+@pytest.mark.parametrize("failed_program_index", [None, 0])
+def test_first_run_preserves_provisioning_statuses_before_completed_date(
     tmp_path: Path,
     onboarding_request,
     monkeypatch,
+    failed_program_index: int | None,
 ) -> None:
     monkeypatch.setattr(
         "backend.services.advisory_dev_input_onboarding.historical_onboarding.repository_code_release",
@@ -1548,6 +1591,11 @@ def test_first_run_provisions_future_bindings_before_returning_input_pending(
         def _build_components(self, **_kwargs):
             return components
 
+        def _ensure_program(self, *, spec, **kwargs):
+            if failed_program_index is not None and spec.program_id == request.program_specs[failed_program_index].program_id:
+                raise RealDevOnboardingError("ADVISORY_O3_PROGRAM_PROVISION_FAILED", "program provisioning failed")
+            return super()._ensure_program(spec=spec, **kwargs)
+
     with pytest.raises(RealDevOnboardingError) as excinfo:
         Service(now_provider=lambda: NOW).run(
             request=request,
@@ -1557,6 +1605,26 @@ def test_first_run_provisions_future_bindings_before_returning_input_pending(
             repository_root=Path.cwd(),
         )
 
-    assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
-    assert set(repository.programs) == {item.program_id for item in request.program_specs}
-    assert len(repository.binding_versions) == 2
+    result_by_program = {
+        item["program_id"]: item
+        for item in excinfo.value.context["program_results"]
+    }
+    if failed_program_index is None:
+        assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_INPUT_PENDING"
+        assert excinfo.value.context["batch_status"] == "WAITING_INPUT"
+        assert set(repository.programs) == {item.program_id for item in request.program_specs}
+        assert len(repository.binding_versions) == 2
+        assert {item["status"] for item in result_by_program.values()} == {"WAITING_INPUT"}
+    else:
+        failed_program_id = request.program_specs[failed_program_index].program_id
+        assert excinfo.value.reason_code == "ADVISORY_DEV_ONBOARDING_HISTORICAL_RUN_FAILED"
+        assert excinfo.value.context["batch_status"] == "FAILED"
+        assert failed_program_id not in repository.programs
+        assert len(repository.binding_versions) == 1
+        assert result_by_program[failed_program_id]["status"] == "FAILED"
+        assert result_by_program[failed_program_id]["reason_codes"] == ["ADVISORY_O3_PROGRAM_PROVISION_FAILED"]
+        assert {
+            item["status"]
+            for program_id, item in result_by_program.items()
+            if program_id != failed_program_id
+        } == {"WAITING_INPUT"}

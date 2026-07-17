@@ -659,14 +659,23 @@ class RealDevHistoricalOnboardingService:
             )
         except TradingCoreError as exc:
             if self._reason_code(exc, fallback="") == REASON_HISTORICAL_DATE_REQUIRED:
+                pending_results = self._provisioning_pending_results(
+                    request=request,
+                    provisioning=provisioning,
+                )
+                pending_status = self._aggregate_program_statuses(pending_results)
+                pending_reason = (
+                    REASON_HISTORICAL_RUN_FAILED
+                    if pending_status == HistoricalProgramStatus.FAILED.value
+                    else REASON_HISTORICAL_INPUT_PENDING
+                )
                 raise RealDevOnboardingError(
-                    REASON_HISTORICAL_INPUT_PENDING,
-                    "historical Programs are provisioned; decision_trade_date is not completed yet",
+                    pending_reason,
+                    "historical Program provisioning completed; decision_trade_date is not completed yet",
                     context={
                         "decision_trade_date": request.decision_trade_date.isoformat(),
-                        "provisioned_program_ids": sorted(
-                            program_id for program_id, state in provisioning.items() if state.get("program") is not None
-                        ),
+                        "batch_status": pending_status,
+                        "program_results": [item.model_dump(mode="json") for item in pending_results],
                     },
                 ) from exc
             raise
@@ -798,6 +807,33 @@ class RealDevHistoricalOnboardingService:
         if HistoricalProgramStatus.WAITING_INPUT in statuses:
             return HistoricalProgramStatus.WAITING_INPUT.value
         return HistoricalProgramStatus.COMPLETE.value
+
+    @staticmethod
+    def _provisioning_pending_results(
+        *,
+        request: RealDevHistoricalRunRequest,
+        provisioning: dict[str, dict[str, Any]],
+    ) -> list[HistoricalProgramResult]:
+        results: list[HistoricalProgramResult] = []
+        for spec in request.program_specs:
+            state = provisioning.get(spec.program_id, {})
+            state_reasons = tuple(state.get("reason_codes") or ())
+            if state.get("failed") or state.get("program") is None or state.get("binding") is None:
+                status = HistoricalProgramStatus.FAILED
+                reasons = tuple(sorted(set(state_reasons) or {REASON_HISTORICAL_RUN_FAILED}))
+            else:
+                status = HistoricalProgramStatus.WAITING_INPUT
+                reasons = (REASON_HISTORICAL_INPUT_PENDING,)
+            results.append(
+                HistoricalProgramResult(
+                    program_id=spec.program_id,
+                    package_id=spec.package_id,
+                    alpha_mode=spec.alpha_mode,
+                    status=status,
+                    reason_codes=reasons,
+                )
+            )
+        return results
 
     @staticmethod
     def _validate_request_parity(*, request: RealDevHistoricalRunRequest, onboarding: RealDevOnboardingRequest) -> None:
@@ -1071,6 +1107,11 @@ class RealDevHistoricalOnboardingService:
         except HistoricalResearchInputUnavailable:
             pass
         target_trade_date = components.calendar_service.next_trading_day(request.decision_trade_date, inclusive=False)
+        self._require_prospective_generation_window(
+            decision_trade_date=request.decision_trade_date,
+            target_trade_date=target_trade_date,
+            generated_at=self._now_provider(),
+        )
         raw_config = components.program_service._review_runtime_config(program, binding.runtime_config_json)
         raw_config = components.program_service._with_advisory_date_context(
             raw_config,
@@ -1336,14 +1377,11 @@ class RealDevHistoricalOnboardingService:
             raise RealDevOnboardingError(REASON_DSE_INVALID, "score artifact source receipts are incomplete")
         data_available_at = max(item for item in observed if item is not None)
         generated_at = self._now_provider()
-        if generated_at.tzinfo is None:
-            raise RuntimeConfigInvalidError("historical onboarding clock must be timezone-aware")
-        latest_legal_cutoff = datetime.combine(
-            target_trade_date,
-            HISTORICAL_TARGET_ENTRY_CUTOFF,
-            tzinfo=HISTORICAL_DECISION_TIMEZONE,
+        decision_cutoff = self._require_prospective_generation_window(
+            decision_trade_date=request.decision_trade_date,
+            target_trade_date=target_trade_date,
+            generated_at=generated_at,
         )
-        decision_cutoff = min(generated_at, latest_legal_cutoff)
         if data_available_at > decision_cutoff:
             raise HistoricalResearchInputUnavailable(
                 "historical source receipts were first available after the frozen decision cutoff",
@@ -1441,6 +1479,34 @@ class RealDevHistoricalOnboardingService:
             source_watermark_seed={"universe_evidence": universe_evidence.model_dump(mode="python")},
             created_by="advisory_real_dev_onboarding",
         )
+
+    @staticmethod
+    def _require_prospective_generation_window(
+        *,
+        decision_trade_date: date,
+        target_trade_date: date,
+        generated_at: datetime,
+    ) -> datetime:
+        if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+            raise RuntimeConfigInvalidError("historical onboarding clock must be timezone-aware")
+        latest_legal_cutoff = datetime.combine(
+            target_trade_date,
+            HISTORICAL_TARGET_ENTRY_CUTOFF,
+            tzinfo=HISTORICAL_DECISION_TIMEZONE,
+        )
+        if generated_at > latest_legal_cutoff:
+            raise HistoricalResearchInputUnavailable(
+                "historical replay occurred after the prospective recommendation window",
+                reason_code=REASON_HISTORICAL_INPUT_PENDING,
+                context={
+                    "decision_trade_date": decision_trade_date.isoformat(),
+                    "target_trade_date": target_trade_date.isoformat(),
+                    "decision_generated_at": generated_at.isoformat(),
+                    "latest_legal_cutoff_ts": latest_legal_cutoff.isoformat(),
+                    "classification": "RETROSPECTIVE_ONLY",
+                },
+            )
+        return generated_at
 
     @staticmethod
     def _calendar_payload(*, decision_date: date, target_date: date, conn_factory: ConnFactory) -> list[dict[str, Any]]:

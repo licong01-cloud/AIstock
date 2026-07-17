@@ -12,12 +12,22 @@ plans:
     requires_frontend: false
     allowed_backend_ports: []
     allowed_frontend_ports: []
-    writes_database: false
+    writes_database: true
     writes_artifacts: false
     writes_business_state: false
-    runner_enabled: true
+    runner_enabled: false
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+    resource_policy:
+      resource_mode: isolated_write
+      creates_validation_resources: true
+      resource_types: [temporary_postgresql_database]
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      cleanup_required: true
+      cleanup_policy:
+        strategy: pytest_finalizer_drop_database
+        cleanup_failure_severity: P0
   - plan_key: l0
     title: L0 static guardrail gate
     module: validation_center

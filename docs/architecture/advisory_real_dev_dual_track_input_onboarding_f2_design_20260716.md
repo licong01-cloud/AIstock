@@ -707,6 +707,17 @@ source不成熟时准确pending。
 
 ### 18.3 L2 disposable PostgreSQL 16
 
+O3 producer integration使用`ADVISORY_O3_TEST_DSN`仅作为PostgreSQL 16管理连接，测试自行创建唯一
+`aistock_o3_l2_<uuid>`数据库并在finally中终止残留连接后删除；禁止在配置指向的数据库内执行schema级清理。
+Validation Catalog必须声明`writes_database=true`，但该声明不增加审批、备份或人工确认流程。
+该L2固定`runner_enabled=false`，资源策略为`isolated_write`、`allowed_db_targets=[dev_db]`、
+`forbidden_db_targets=[prod_db]`并由pytest finalizer自动删除临时数据库；普通backend CI仍运行
+同一session中的非数据库回归，未提供DSN时PostgreSQL用例明确skip而不伪造L2成功。
+
+模型执行边界可注入确定性`LiveInferenceResult`，但artifact必须由真实
+`StrategyPackageSelectionArtifactService`生成，随后由真实`SelectionCenterService`、DSE assembler和PostgreSQL
+repository消费。禁止复制fixture artifact、手工构造DSE或把package health固定为READY。
+
 使用与O2关系有关的完整production StrategyPackage migration chain构造source/target disposable database，禁止在
 测试中手写`strategy_pkg.package/package_asset`替代生产结构：
 
@@ -893,8 +904,8 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-899 | §3、§6 | multi-package request and independent package identity tests | verified_l0_l2 | none |
 | F-900 | §10、§13 | `historical_onboarding.py`; exact DEV repository/runtime/WSL env injection、逐connection identity drift拒绝与AST no-global-pool测试 | verified_l0_l1 | none |
 | F-901 | §10、§18.3 | exact Program id、normal config/date validation、future binding、pre-date `INPUT_PENDING`和exact rerun测试；`test_o3_postgres_integration.py`真实Program/binding首次创建与exact retry | verified_l0_l2 | none |
-| F-902 | §10、§18.3 | clean worktree release、existing DSE release一致性、typed prospective context、无合成universe provenance、DSE v2/v1 rejection与capture-status测试；真实PostgreSQL single/native-multi artifact与DSE v2仓储链 | verified_l0_l2 | none |
-| F-903 | §10、§14、§18.3 | manual historical request、Selection失败不降级、逐Program状态隔离、batch aggregate contract、formal receipt与retry测试；真实PostgreSQL双轨`COMPLETE/WAITING_INPUT -> COMPLETE/COMPLETE`及exact retry | verified_l0_l2 | none |
+| F-902 | §10、§18.3 | clean worktree release、existing DSE release一致性、typed prospective context、无合成universe provenance、DSE v2/v1 rejection与capture-status测试；临时PostgreSQL 16中由真实`StrategyPackageSelectionArtifactService`和`SelectionCenterService`生成single/native-multi artifact与DSE v2，确定性替代仅位于外部模型执行边界 | verified_l0_l2 | none |
+| F-903 | §10、§14、§18.3 | manual historical request、Selection失败不降级、逐Program状态隔离、pre-date provisioning状态不被pending掩盖、batch aggregate contract、formal receipt与retry测试；临时PostgreSQL双轨`COMPLETE/WAITING_INPUT -> COMPLETE/COMPLETE`及exact retry | verified_l0_l2 | none |
 | F-904 | §10、§13 | Phase0A audit explicit database identity、显式env、non-local DEV target、localhost/name guess和acknowledgement移除测试 | verified_l0_l1 | none |
 | F-905 | §10、§15 | Phase0A audit/handoff read-only projection、仓库外content-addressed atomic no-replace、文件闭包与full-readback测试 | verified_l0_l1 | none |
 | F-906 | §11.1 | observer real-ingestion/no-copy/no-backdate tests | design_ready | none |

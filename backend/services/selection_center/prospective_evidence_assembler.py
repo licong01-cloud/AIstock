@@ -385,7 +385,11 @@ class ProspectiveSelectionEvidenceAssembler:
         except Exception as exc:
             raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source read receipt is invalid") from exc
         payload = [item.model_dump(mode="json") for item in receipts]
-        if canonical_evidence_json_sha256(payload) != artifact.source_revision_set_hash:
+        semantic_payload = [
+            {key: value for key, value in item.items() if key != "first_observed_at"}
+            for item in payload
+        ]
+        if canonical_evidence_json_sha256(semantic_payload) != artifact.source_revision_set_hash:
             raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source receipt hash is invalid")
         return payload
 
