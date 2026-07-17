@@ -3,7 +3,10 @@
   "allowed_write_scope": [
     "aistock_models/aistock_models/efficient_gats.py",
     "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_gpu_training_policy.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_gpu_training_policy.py",
     "tests/aistock_validation/bugs/20260717_BUG-739-efficientgats-desktop-gpu-starvation.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -12,6 +15,9 @@
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
+    "Exclusive GAT full-train scheduling must not depend on an optional phase-pipeline request.",
+    "GPU-resident execution and industry-provider failures must fail explicitly without changing execution mode.",
+    "Chunked attention must preserve full-market training semantics while avoiding saved C-by-N attention blocks.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
@@ -29,12 +35,19 @@
       "actor": "Codex",
       "note": "Added the repository-owned EfficientGATs adapter after run --mode fix placed it in the task card but the high-level workflow did not persist the scope expansion to the BUG record.",
       "timestamp": "2026-07-17T16:49:55.4270147Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Expanded BUG-739 after code review to cover unconditional exclusive GAT scheduling, fail-fast GPU-resident behavior, and the focused GPU policy tests. The high-level workflow updated the task card but again did not persist these paths to the BUG record.",
+      "timestamp": "2026-07-17T17:41:51.2473016Z"
     }
   ],
   "evidence_uris": [
-    "R11B qe_20260717_134306_6354 Loop3 run.log; WSL dxg wait_for_completion failures"
+    "R11B qe_20260717_134306_6354 Loop3 run.log; WSL dxg wait_for_completion failures",
+    "BUG-739 follow-up code review: conditional exclusive lease, GPU-resident downgrade, provider TypeError swallowing, and O(N^2) Autograd saved tensors"
   ],
-  "expected": "A single GAT loop remains desktop-responsive while preserving dense full-market attention and training semantics, with forward, gradient, optimizer-update, and fixed-seed equivalence evidence.",
+  "expected": "A single GAT loop remains desktop-responsive while preserving dense full-market attention and training semantics; exclusive GAT training is durable even when the optional phase-pipeline toggle is false; GPU-resident and provider failures are fail-fast; checkpointed query chunks reduce saved Autograd storage without changing forward, gradient, optimizer-update, or fixed-seed fit/predict results.",
   "first_seen_at": "2026-07-17T16:17:35.537211Z",
   "fix_branch": null,
   "fix_commit": null,
