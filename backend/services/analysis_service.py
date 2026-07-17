@@ -664,7 +664,7 @@ def analyze_stock_trend(req: StockTrendAnalysisRequest) -> StockTrendAnalysisRes
     if analysis_date_raw:
         analysis_date_str = f"{analysis_date_raw[:4]}-{analysis_date_raw[4:6]}-{analysis_date_raw[6:8]}"
     else:
-        analysis_date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        analysis_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # 2. 获取基础数据（信息 + 历史行情 + 技术指标）
     symbol = req.ts_code

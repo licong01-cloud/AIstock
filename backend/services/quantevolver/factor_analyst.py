@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from decimal import Decimal
-from datetime import datetime, date
+from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -372,7 +372,7 @@ def _get_llm_client():
 
 
 def _utc_now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _to_jsonable(obj):

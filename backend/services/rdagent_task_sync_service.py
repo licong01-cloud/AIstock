@@ -6,7 +6,7 @@ import logging
 import os
 import pickle
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, WindowsPath, PosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -52,7 +52,7 @@ def _get_client_for_node(node_id: Optional[str] = None) -> RDAgentResultsApiClie
 JsonDict = Dict[str, Any]
 
 def _utc_now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def _sha1_text(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
@@ -216,7 +216,7 @@ class RDAgentTaskSyncService:
             "sync_status": "syncing",
             "sync_error": None,
             "sync_diagnostics": None,
-            "updated_at_utc": datetime.utcnow(),
+            "updated_at_utc": datetime.now(timezone.utc),
         }
         if node_id:
             catalog_init["node_id"] = node_id
@@ -597,7 +597,7 @@ class RDAgentTaskSyncService:
                     "sync_status": "success",
                     "sync_error": None,
                     "sync_diagnostics": json.dumps(diagnostics, ensure_ascii=False),
-                    "updated_at_utc": datetime.utcnow(),
+                    "updated_at_utc": datetime.now(timezone.utc),
                     "enabled_for_selection_by": operator,
                     "sota_factors_count": len(all_factors),
                     "has_model_weight": has_model_weight,
@@ -677,7 +677,7 @@ class RDAgentTaskSyncService:
                     "sync_status": "failed",
                     "sync_error": err_msg,
                     "sync_diagnostics": json.dumps(diagnostics, ensure_ascii=False),
-                    "updated_at_utc": datetime.utcnow(),
+                    "updated_at_utc": datetime.now(timezone.utc),
                 },
             )
             return TaskSyncResult(
@@ -1102,7 +1102,7 @@ class RDAgentTaskSyncService:
                 "sync_status": "syncing",
                 "sync_error": None,
                 "sync_diagnostics": None,
-                "updated_at_utc": datetime.utcnow(),
+                "updated_at_utc": datetime.now(timezone.utc),
             },
         )
 
@@ -1339,7 +1339,7 @@ class RDAgentTaskSyncService:
                     "sync_status": "success",
                     "sync_error": None,
                     "sync_diagnostics": diagnostics,
-                    "updated_at_utc": datetime.utcnow(),
+                    "updated_at_utc": datetime.now(timezone.utc),
                     "is_enabled_for_selection": True,
                 },
             )
@@ -1365,7 +1365,7 @@ class RDAgentTaskSyncService:
                     "sync_status": "failed",
                     "sync_error": error_msg,
                     "sync_diagnostics": diagnostics,
-                    "updated_at_utc": datetime.utcnow(),
+                    "updated_at_utc": datetime.now(timezone.utc),
                 },
             )
 
