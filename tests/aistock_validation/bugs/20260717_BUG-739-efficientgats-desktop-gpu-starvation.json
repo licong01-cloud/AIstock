@@ -1,6 +1,7 @@
 {
   "actual": "A single loop can make the Windows desktop unresponsive; batch_size does not bound the daily N-by-N attention and evaluation unnecessarily builds Autograd graphs.",
   "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260717_BUG-739-efficientgats-desktop-gpu-starvation.json",
@@ -22,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260717-78ca6903f5bc",
       "timestamp": "2026-07-17T16:17:35.537207Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Added the repository-owned EfficientGATs adapter after run --mode fix placed it in the task card but the high-level workflow did not persist the scope expansion to the BUG record.",
+      "timestamp": "2026-07-17T16:49:55.4270147Z"
     }
   ],
   "evidence_uris": [
