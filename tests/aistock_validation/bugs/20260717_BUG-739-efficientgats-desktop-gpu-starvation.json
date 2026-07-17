@@ -41,6 +41,12 @@
       "actor": "Codex",
       "note": "Expanded BUG-739 after code review to cover unconditional exclusive GAT scheduling, fail-fast GPU-resident behavior, and the focused GPU policy tests. The high-level workflow updated the task card but again did not persist these paths to the BUG record.",
       "timestamp": "2026-07-17T17:41:51.2473016Z"
+    },
+    {
+      "action": "code_review_followup_validated",
+      "actor": "Codex",
+      "note": "Implemented exact checkpointed query chunks, fail-fast resident/provider/resource-option contracts, strict cooperative execution configuration, and durable exclusive GAT scheduling. Local L0/module tests and WSL CPU equivalence plus saved-storage validation passed without GPU monitoring or runtime mutation.",
+      "timestamp": "2026-07-17T18:19:30.7262560Z"
     }
   ],
   "evidence_uris": [
