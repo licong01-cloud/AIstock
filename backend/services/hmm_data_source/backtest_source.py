@@ -13,8 +13,9 @@
 """
 
 import asyncio
+import json
 from datetime import date
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import pandas as pd
 
@@ -62,7 +63,11 @@ class BacktestDataSource(HMMDataSourceInterface):
         """
         self.base_loop_ref = base_loop_ref
         self.cache_manager = ArtifactCacheManager(cache_dir)
-        self.qe_client = qe_client or QEWorkspaceClient()
+        # Injected clients are owned by the caller.  The default client is
+        # resolved lazily from the QE task's authoritative compute node and is
+        # closed by this data source.
+        self.qe_client = qe_client
+        self._owns_qe_client = False
 
         # 内存缓存（避免重复加载 pickle）
         self._pred_cache: Optional[pd.DataFrame] = None
@@ -74,6 +79,19 @@ class BacktestDataSource(HMMDataSourceInterface):
     @property
     def mode(self) -> str:
         return "backtest"
+
+    async def __aenter__(self) -> "BacktestDataSource":
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close an internally created QE client and release its HTTP pool."""
+        if self._owns_qe_client and self.qe_client is not None:
+            await self.qe_client.close()
+            self.qe_client = None
+            self._owns_qe_client = False
 
     async def get_predictions(
         self,
@@ -280,9 +298,20 @@ class BacktestDataSource(HMMDataSourceInterface):
         task_id, loop_name = parts
 
         try:
+            client = await self._get_qe_client(task_id)
+            artifact_path = await self._resolve_workspace_artifact_path(
+                client,
+                task_id=task_id,
+                loop_name=loop_name,
+                artifact_name=artifact_name,
+            )
+
             # 下载 artifact（带重试）
             artifact_bytes = await self._download_with_retry(
-                task_id, loop_name, artifact_name
+                client,
+                task_id,
+                loop_name,
+                artifact_path,
             )
 
             # 保存到缓存
@@ -293,6 +322,7 @@ class BacktestDataSource(HMMDataSourceInterface):
                 metadata={
                     "task_id": task_id,
                     "loop_name": loop_name,
+                    "workspace_path": artifact_path,
                 },
             )
 
@@ -303,9 +333,10 @@ class BacktestDataSource(HMMDataSourceInterface):
 
     async def _download_with_retry(
         self,
+        client: QEWorkspaceClient,
         task_id: str,
         loop_name: str,
-        artifact_name: str,
+        artifact_path: str,
         max_retries: int = 3,
     ) -> bytes:
         """
@@ -314,7 +345,7 @@ class BacktestDataSource(HMMDataSourceInterface):
         Args:
             task_id: QE 任务 ID
             loop_name: Loop 名称
-            artifact_name: artifact 名称
+            artifact_path: workspace 内经 recorder metadata 解析的 artifact 路径
             max_retries: 最大重试次数
 
         Returns:
@@ -327,10 +358,10 @@ class BacktestDataSource(HMMDataSourceInterface):
 
         for attempt in range(max_retries):
             try:
-                artifact_bytes = await self.qe_client.download_artifact(
-                    task_id=task_id,
-                    loop_name=loop_name,
-                    artifact_name=artifact_name,
+                artifact_bytes = await client.download_workspace_file_bytes(
+                    task_id,
+                    loop_name,
+                    artifact_path,
                 )
                 return artifact_bytes
 
@@ -342,7 +373,100 @@ class BacktestDataSource(HMMDataSourceInterface):
                     await asyncio.sleep(wait_time)
 
         raise DataSourceError(
-            f"Failed to download {artifact_name} after {max_retries} retries: {last_error}"
+            f"Failed to download {artifact_path} after {max_retries} retries: {last_error}"
+        )
+
+    async def _get_qe_client(self, task_id: str) -> QEWorkspaceClient:
+        """Return the injected client or lazily resolve the task's node client."""
+        if self.qe_client is not None:
+            return self.qe_client
+
+        node_id = await asyncio.to_thread(self._resolve_task_node_id, task_id)
+        try:
+            client = await asyncio.to_thread(QEWorkspaceClient.for_node, node_id)
+        except Exception as exc:
+            raise DataSourceError(
+                f"Failed to create QE workspace client for task={task_id}, "
+                f"node={node_id}: {exc}"
+            ) from exc
+        self.qe_client = client
+        self._owns_qe_client = True
+        return client
+
+    @staticmethod
+    def _resolve_task_node_id(task_id: str) -> str:
+        """Resolve the authoritative compute node recorded for a QE task."""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT node_id FROM qe_evolution_tasks WHERE task_id = %s",
+                        (task_id,),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataSourceError(
+                f"Failed to resolve compute node for QE task {task_id}: {exc}"
+            ) from exc
+
+        node_id = str(row[0]).strip() if row and row[0] else ""
+        if not node_id:
+            raise DataSourceError(
+                f"QE task {task_id} has no authoritative compute node"
+            )
+        return node_id
+
+    @staticmethod
+    async def _resolve_workspace_artifact_path(
+        client: QEWorkspaceClient,
+        *,
+        task_id: str,
+        loop_name: str,
+        artifact_name: str,
+    ) -> str:
+        """Resolve an allowlisted MLflow artifact from recorder metadata."""
+        attempts: dict[str, str] = {}
+        for ref_name in ("qe_current_recorder.json", "qe_extracted_recorder.json"):
+            try:
+                payload: Any = await client.get_workspace_file(
+                    task_id,
+                    loop_name,
+                    ref_name,
+                )
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                if not isinstance(payload, dict):
+                    raise ValueError(
+                        f"expected JSON object, got {type(payload).__name__}"
+                    )
+
+                recorder_id = str(
+                    payload.get("recorder_id")
+                    or payload.get("selected_recorder_id")
+                    or ""
+                ).strip()
+                experiment_id = str(
+                    payload.get("experiment_id")
+                    or payload.get("selected_experiment_id")
+                    or ""
+                ).strip()
+                for field_name, value in (
+                    ("recorder_id", recorder_id),
+                    ("experiment_id", experiment_id),
+                ):
+                    if not value or "/" in value or "\\" in value or value in {".", ".."}:
+                        raise ValueError(f"invalid {field_name}: {value!r}")
+
+                return (
+                    f"mlruns/{experiment_id}/{recorder_id}/artifacts/"
+                    f"{artifact_name}"
+                )
+            except Exception as exc:
+                attempts[ref_name] = f"{type(exc).__name__}: {exc}"
+
+        raise DataSourceError(
+            f"QE recorder metadata unavailable for task={task_id}, "
+            f"loop={loop_name}: {attempts}"
         )
 
     def _normalize_prediction_data(self, pred_obj: any) -> pd.DataFrame:

@@ -34,7 +34,12 @@ class TestBacktestDataSource:
     def mock_qe_client(self):
         """Mock QE client"""
         client = MagicMock()
-        client.download_artifact = AsyncMock()
+        client.get_workspace_file = AsyncMock(return_value={
+            "experiment_id": "1",
+            "recorder_id": "abc123",
+        })
+        client.download_workspace_file_bytes = AsyncMock()
+        client.close = AsyncMock()
         return client
 
     @pytest.fixture
@@ -119,7 +124,7 @@ class TestBacktestDataSource:
 
         # Mock QE client 返回 pickle bytes
         pred_bytes = pickle.dumps(sample_pred_data)
-        mock_qe_client.download_artifact.return_value = pred_bytes
+        mock_qe_client.download_workspace_file_bytes.return_value = pred_bytes
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -134,7 +139,11 @@ class TestBacktestDataSource:
         )
 
         # 验证下载被调用
-        mock_qe_client.download_artifact.assert_called_once()
+        mock_qe_client.download_workspace_file_bytes.assert_awaited_once_with(
+            "qe_test",
+            "Loop1",
+            "mlruns/1/abc123/artifacts/pred.pkl",
+        )
 
         # 验证数据正确
         assert len(df) > 0
@@ -172,7 +181,7 @@ class TestBacktestDataSource:
         )
 
         # 验证没有调用下载
-        mock_qe_client.download_artifact.assert_not_called()
+        mock_qe_client.download_workspace_file_bytes.assert_not_called()
 
         # 验证数据正确
         assert len(df) > 0
@@ -253,7 +262,7 @@ class TestBacktestDataSource:
             await asyncio.sleep(0.1)
             return pickle.dumps(sample_pred_data)
 
-        mock_qe_client.download_artifact = slow_download
+        mock_qe_client.download_workspace_file_bytes = slow_download
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -305,7 +314,8 @@ class TestBacktestDataSourceIsolation:
     async def test_forbid_config_file_download(self, tmp_path):
         """验证 _download_artifact 强制拒绝非白名单文件（如配置文件）"""
         mock_qe_client = MagicMock()
-        mock_qe_client.download_artifact = AsyncMock()
+        mock_qe_client.get_workspace_file = AsyncMock()
+        mock_qe_client.download_workspace_file_bytes = AsyncMock()
 
         source = BacktestDataSource(
             base_loop_ref="qe_test/Loop1",
@@ -325,7 +335,8 @@ class TestBacktestDataSourceIsolation:
                 await source._download_artifact(filename)
 
         # 被拒绝时不得真正发起下载
-        mock_qe_client.download_artifact.assert_not_called()
+        mock_qe_client.get_workspace_file.assert_not_called()
+        mock_qe_client.download_workspace_file_bytes.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_allow_whitelisted_artifact_download(self, tmp_path):
@@ -336,7 +347,11 @@ class TestBacktestDataSourceIsolation:
             {'trade_date': date(2024, 7, 1), 'symbol': '000001.SZ', 'score': 0.5},
         ])
         mock_qe_client = MagicMock()
-        mock_qe_client.download_artifact = AsyncMock(
+        mock_qe_client.get_workspace_file = AsyncMock(return_value={
+            "experiment_id": "1",
+            "recorder_id": "abc123",
+        })
+        mock_qe_client.download_workspace_file_bytes = AsyncMock(
             return_value=pickle.dumps(sample_df)
         )
 
@@ -348,8 +363,95 @@ class TestBacktestDataSourceIsolation:
 
         # pred.pkl 在白名单内，应成功下载并缓存
         await source._download_artifact("pred.pkl")
-        mock_qe_client.download_artifact.assert_called_once()
+        mock_qe_client.download_workspace_file_bytes.assert_awaited_once_with(
+            "qe_test",
+            "Loop1",
+            "mlruns/1/abc123/artifacts/pred.pkl",
+        )
         assert source.cache_manager.is_cached("qe_test/Loop1", "pred.pkl")
+
+    @pytest.mark.asyncio
+    async def test_resolve_recorder_metadata_fallback(self, tmp_path):
+        """首选 recorder ref 缺失时使用受控的 extracted metadata。"""
+        client = MagicMock()
+        client.get_workspace_file = AsyncMock(side_effect=[
+            FileNotFoundError("current recorder missing"),
+            {"selected_experiment_id": "42", "selected_recorder_id": "deadbeef"},
+        ])
+        client.download_workspace_file_bytes = AsyncMock(return_value=pickle.dumps(
+            pd.DataFrame([{
+                "trade_date": date(2024, 7, 1),
+                "symbol": "000001.SZ",
+                "score": 0.5,
+            }])
+        ))
+
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=client,
+        )
+        await source._download_artifact("pred.pkl")
+
+        client.download_workspace_file_bytes.assert_awaited_once_with(
+            "qe_test",
+            "Loop1",
+            "mlruns/42/deadbeef/artifacts/pred.pkl",
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_recorder_metadata_fails_before_download(self, tmp_path):
+        """Recorder identity 不能包含路径穿越片段。"""
+        client = MagicMock()
+        client.get_workspace_file = AsyncMock(return_value={
+            "experiment_id": "../42",
+            "recorder_id": "abc123",
+        })
+        client.download_workspace_file_bytes = AsyncMock()
+
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+            qe_client=client,
+        )
+
+        with pytest.raises(DataSourceError, match="recorder metadata unavailable"):
+            await source._download_artifact("pred.pkl")
+        client.download_workspace_file_bytes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_client_resolves_task_node_and_is_closed(self, tmp_path):
+        """未注入 client 时按任务 node_id 创建，并由 source 释放连接池。"""
+        client = MagicMock()
+        client.get_workspace_file = AsyncMock(return_value={
+            "experiment_id": "1",
+            "recorder_id": "abc123",
+        })
+        client.download_workspace_file_bytes = AsyncMock(return_value=pickle.dumps(
+            pd.DataFrame([{
+                "trade_date": date(2024, 7, 1),
+                "symbol": "000001.SZ",
+                "score": 0.5,
+            }])
+        ))
+        client.close = AsyncMock()
+
+        source = BacktestDataSource(
+            base_loop_ref="qe_test/Loop1",
+            cache_dir=str(tmp_path / "cache"),
+        )
+        with (
+            patch.object(source, "_resolve_task_node_id", return_value="rdagent-node1"),
+            patch(
+                "backend.services.hmm_data_source.backtest_source.QEWorkspaceClient.for_node",
+                return_value=client,
+            ) as for_node,
+        ):
+            await source._download_artifact("pred.pkl")
+            await source.aclose()
+
+        for_node.assert_called_once_with("rdagent-node1")
+        client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_only_read_artifact_files(self, tmp_path):
