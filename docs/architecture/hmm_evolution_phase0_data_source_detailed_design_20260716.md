@@ -2,7 +2,7 @@
 
 > 版本：v2.2（2026-07-17 controlled external acceptance 版）<br>
 > 状态：实现、单元/contract CI、Prediction Store 零副本与受控只读 DB/PIT sector integration 均已验收。<br>
-> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.3。<br>
+> 设计权威：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.5。<br>
 > 运行权威：`backend/services/hmm_data_source/README.md`。
 
 本文替代 2026-07-16 初稿中的伪 async DB、旧 market 表、隐式 latest snapshot、无
@@ -185,3 +185,9 @@ Phase 0 已 externally accepted，Phase 1 implementation unlocked。
 Phase 1 只能消费 Phase 0 返回的标准化只读视图，并保存可重放的 source manifest、candidate
 manifest、evaluation spec、evaluator version 和 input hash。不得绕过 cache provenance、
 candidate identity 或 as-of 边界，也不得把 top-3 推荐变成生产门禁。
+
+Phase 1 另设 `QEExperimentAssetReader`，允许 inspection-only 读取 QE task/loop 的全部实验资产。
+该 reader 不改变 Phase 0 的 pred/label 自动反序列化白名单，不复用 Phase 0 cache 伪装通用
+asset store；只有通过独立 manifest/parser trust contract 的资产可以进入计算，其余资产只作
+只读证据。数据库“最新”必须解析并固化 latest-common-completed watermark，不能依赖本类的
+隐式当前日期默认值。
