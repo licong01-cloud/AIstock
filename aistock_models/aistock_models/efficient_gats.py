@@ -9,18 +9,23 @@ equivalent additive form:
 The qlib implementation materializes ``[N, N, 2 * hidden]`` before projecting
 with ``a``.  This implementation materializes only the scalar ``[N, N]`` score
 matrix required by softmax while preserving qlib's real expand/transpose
-indexing order.
+indexing order.  Full-market training additionally checkpoints exact query-row
+chunks so backward recomputes each block instead of retaining every attention
+matrix simultaneously.
 """
 
 from __future__ import annotations
 
 import gc
+import inspect
 import os
+import time
 import numpy as np
 import pandas as pd
 import torch
 import copy
 from torch import optim
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from qlib.contrib.model.pytorch_gats_ts import DailyBatchSampler
 from qlib.contrib.model.pytorch_gats_ts import GATModel as QlibGATModel
@@ -43,6 +48,9 @@ _GATS_INDUSTRY_EMBEDDING_MODES = {_GATS_INDUSTRY_EMBEDDING_OFF, _GATS_INDUSTRY_E
 _GATS_L2_INDUSTRY_CLASSES = 200
 _MISSING_INDUSTRY_ID = _GATS_L2_INDUSTRY_CLASSES
 _GATS_INDUSTRY_EMBEDDING_CLASSES = _GATS_L2_INDUSTRY_CLASSES + 1
+_DEFAULT_ATTENTION_QUERY_CHUNK_SIZE = 512
+_DEFAULT_GPU_COOPERATIVE_YIELD_EVERY_DAYS = 1
+_DEFAULT_GPU_COOPERATIVE_YIELD_MS = 2.0
 
 
 try:
@@ -85,6 +93,86 @@ def _normalise_industry_code(value):
     return text or None
 
 
+def _strict_bool(value, *, name):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(
+        f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_boolean"
+    )
+
+
+def _call_first_compatible(callable_obj, candidate_args, *, reason_code, callable_name):
+    """Invoke the first signature-compatible argument tuple without swallowing body errors."""
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"reason_code={reason_code}: callable={callable_name} signature_unavailable"
+        ) from exc
+
+    for args in candidate_args:
+        try:
+            signature.bind(*args)
+        except TypeError:
+            continue
+        return callable_obj(*args)
+
+    arities = [len(args) for args in candidate_args]
+    raise TypeError(
+        f"reason_code={reason_code}: callable={callable_name} "
+        f"no_compatible_signature candidate_arities={arities}"
+    )
+
+
+def _non_negative_int(value, *, name):
+    if isinstance(value, bool):
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_int"
+        )
+    try:
+        normalised = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_int"
+        ) from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_int"
+        )
+    if normalised < 0:
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_int"
+        )
+    return normalised
+
+
+def _non_negative_float(value, *, name):
+    if isinstance(value, bool):
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_float"
+        )
+    try:
+        normalised = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_float"
+        ) from exc
+    if not np.isfinite(normalised) or normalised < 0:
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: value={value!r} expected_non_negative_float"
+        )
+    return normalised
+
+
 def additive_gats_attention_logits(
     column_hidden: torch.Tensor,
     row_hidden: torch.Tensor,
@@ -121,6 +209,7 @@ class EfficientGATModel(QlibGATModel):
         gats_industry_gamma_init=0.0,
         gats_industry_embedding=_GATS_INDUSTRY_EMBEDDING_OFF,
         gats_industry_embedding_dim=8,
+        gats_attention_query_chunk_size=_DEFAULT_ATTENTION_QUERY_CHUNK_SIZE,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -135,6 +224,10 @@ class EfficientGATModel(QlibGATModel):
             name="industry_embedding",
         )
         self.gats_industry_embedding_dim = int(gats_industry_embedding_dim)
+        self.gats_attention_query_chunk_size = _non_negative_int(
+            gats_attention_query_chunk_size,
+            name="attention_query_chunk_size",
+        )
         if self.gats_industry_embedding_dim <= 0:
             raise ValueError(
                 "reason_code=efficient_gats_industry_embedding_dim_invalid: "
@@ -157,6 +250,7 @@ class EfficientGATModel(QlibGATModel):
             self.industry_embedding = None
             self.industry_embedding_projection = None
         self.last_attention_weight = None
+        self.last_attention_execution = None
 
     @staticmethod
     def industry_same_matrix(industry_ids, *, device, dtype):
@@ -195,14 +289,118 @@ class EfficientGATModel(QlibGATModel):
             attention_out = attention_out + self.industry_bias_gamma.to(attention_out.dtype) * same_industry
         attention_weight = self.softmax(attention_out)
         self.last_attention_weight = attention_weight
+        self.last_attention_execution = {
+            "mode": "dense",
+            "rows": int(attention_weight.shape[0]),
+            "columns": int(attention_weight.shape[1]),
+        }
         return attention_weight
+
+    def _industry_same_block(self, industry_ids, *, start, end, device, dtype):
+        ids = industry_ids.to(device=device, dtype=torch.long).view(-1)
+        valid = (ids >= 0) & (ids < _GATS_L2_INDUSTRY_CLASSES)
+        row_ids = ids[start:end]
+        row_valid = valid[start:end]
+        same = (
+            (row_ids.view(-1, 1) == ids.view(1, -1))
+            & row_valid.view(-1, 1)
+            & valid.view(1, -1)
+        )
+        return same.to(dtype=dtype)
+
+    def _aggregate_attention_chunk(
+        self,
+        row_score_block,
+        column_scores,
+        hidden,
+        *,
+        industry_ids,
+        start,
+        end,
+    ):
+        attention_out = row_score_block + column_scores.t()
+        attention_out = self.leaky_relu(attention_out)
+        if self.gats_adjacency_mode == _GATS_ADJACENCY_INDUSTRY_BIAS and industry_ids is not None:
+            same_industry = self._industry_same_block(
+                industry_ids,
+                start=start,
+                end=end,
+                device=attention_out.device,
+                dtype=attention_out.dtype,
+            )
+            attention_out = (
+                attention_out
+                + self.industry_bias_gamma.to(attention_out.dtype) * same_industry
+            )
+        return self.softmax(attention_out).mm(hidden)
+
+    def aggregate_attention(self, hidden, industry_ids=None):
+        """Apply full-pool attention in exact query-row chunks.
+
+        Each chunk keeps every stock as a key/value and normalises softmax over
+        the complete daily cross-section.  Only the query rows are bounded, so
+        graph semantics and the once-per-day optimiser update remain intact.
+        Training uses non-reentrant checkpointing because this block contains no
+        stochastic operation; forward values remain unchanged while attention
+        intermediates are recomputed during backward.
+        """
+
+        sample_num = int(hidden.shape[0])
+        chunk_size = self.gats_attention_query_chunk_size
+        if chunk_size == 0 or sample_num <= chunk_size:
+            return self.cal_attention(hidden, hidden, industry_ids=industry_ids).mm(hidden)
+
+        left_hidden = self.transformation(hidden)
+        right_hidden = self.transformation(hidden)
+        a_left = self.a[: self.hidden_size]
+        a_right = self.a[self.hidden_size :]
+        column_scores = left_hidden.mm(a_left)
+        row_scores = right_hidden.mm(a_right)
+
+        attended_chunks = []
+        autograd_recompute = bool(self.training and torch.is_grad_enabled())
+        for start in range(0, sample_num, chunk_size):
+            end = min(start + chunk_size, sample_num)
+
+            def _compute_chunk(row_score_block, all_column_scores, values, _start=start, _end=end):
+                return self._aggregate_attention_chunk(
+                    row_score_block,
+                    all_column_scores,
+                    values,
+                    industry_ids=industry_ids,
+                    start=_start,
+                    end=_end,
+                )
+
+            if autograd_recompute:
+                attended = torch_checkpoint(
+                    _compute_chunk,
+                    row_scores[start:end],
+                    column_scores,
+                    hidden,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )
+            else:
+                attended = _compute_chunk(row_scores[start:end], column_scores, hidden)
+            attended_chunks.append(attended)
+
+        self.last_attention_weight = None
+        self.last_attention_execution = {
+            "mode": "query_chunked",
+            "rows": sample_num,
+            "columns": sample_num,
+            "query_chunk_size": chunk_size,
+            "chunk_count": len(attended_chunks),
+            "autograd_recompute": autograd_recompute,
+        }
+        return torch.cat(attended_chunks, dim=0)
 
     def forward(self, x, industry_ids=None):
         out, _ = self.rnn(x)
         hidden = out[:, -1, :]
         hidden = self._with_industry_embedding(hidden, industry_ids)
-        att_weight = self.cal_attention(hidden, hidden, industry_ids=industry_ids)
-        hidden = att_weight.mm(hidden) + hidden
+        hidden = self.aggregate_attention(hidden, industry_ids=industry_ids) + hidden
         hidden = self.fc(hidden)
         hidden = self.leaky_relu(hidden)
         return self.fc_out(hidden).squeeze()
@@ -230,24 +428,56 @@ class EfficientGATs(QlibGATs):
                 "reason_code=efficient_gats_adjacency_mode_invalid: "
                 f"mode={self.gats_adjacency_mode} allowed={sorted(_GATS_ADJACENCY_MODES)}"
             )
-        self.gpu_resident = bool(kwargs.pop("gpu_resident", False))
-        self.gpu_resident_shuffle_days = bool(kwargs.pop("gpu_resident_shuffle_days", True))
-        removed_resource_options = {
-            key: kwargs.pop(key)
+        self.gpu_resident = _strict_bool(
+            kwargs.pop("gpu_resident", False),
+            name="gpu_resident",
+        )
+        self.gpu_resident_shuffle_days = _strict_bool(
+            kwargs.pop("gpu_resident_shuffle_days", True),
+            name="gpu_resident_shuffle_days",
+        )
+        self.gats_attention_query_chunk_size = _non_negative_int(
+            kwargs.pop("gats_attention_query_chunk_size", _DEFAULT_ATTENTION_QUERY_CHUNK_SIZE),
+            name="attention_query_chunk_size",
+        )
+        if self.gats_attention_query_chunk_size == 0:
+            raise ValueError(
+                "reason_code=efficient_gats_attention_query_chunk_size_invalid: "
+                "value=0 expected_positive_int"
+            )
+        self.gpu_cooperative_yield_every_days = _non_negative_int(
+            kwargs.pop(
+                "gpu_cooperative_yield_every_days",
+                _DEFAULT_GPU_COOPERATIVE_YIELD_EVERY_DAYS,
+            ),
+            name="gpu_cooperative_yield_every_days",
+        )
+        self.gpu_cooperative_yield_ms = _non_negative_float(
+            kwargs.pop("gpu_cooperative_yield_ms", _DEFAULT_GPU_COOPERATIVE_YIELD_MS),
+            name="gpu_cooperative_yield_ms",
+        )
+        if self.gpu_cooperative_yield_every_days == 0 or self.gpu_cooperative_yield_ms == 0:
+            raise ValueError(
+                "reason_code=efficient_gats_gpu_cooperative_yield_config_invalid: "
+                f"every_days={self.gpu_cooperative_yield_every_days} "
+                f"yield_ms={self.gpu_cooperative_yield_ms} expected_both_positive"
+            )
+        removed_resource_options = sorted(
+            key
             for key in (
                 "gpu_resident_vram_margin_bytes",
                 "gpu_resident_working_memory_multiplier",
                 "gpu_phase_release_tolerance_bytes",
             )
             if key in kwargs
-        }
+        )
         if removed_resource_options:
-            print(
-                "[INFO] reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED "
-                f"ignored_options={sorted(removed_resource_options)}"
+            raise ValueError(
+                "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED: "
+                f"unsupported_options={removed_resource_options}"
             )
         self.gpu_resident_active = False
-        self.gpu_resident_last_fallback = None
+        self.gpu_resident_last_error = None
         self.gats_adjacency_last_event = None
         self.gats_adjacency_events = []
         self._industry_code_to_id = {}
@@ -270,8 +500,17 @@ class EfficientGATs(QlibGATs):
             gats_industry_gamma_init=self.gats_industry_gamma_init,
             gats_industry_embedding=self.gats_industry_embedding,
             gats_industry_embedding_dim=self.gats_industry_embedding_dim,
+            gats_attention_query_chunk_size=self.gats_attention_query_chunk_size,
         )
         self.GAT_model.to(self.device)
+
+        self.logger.info(
+            "EfficientGATs cooperative execution: attention_query_chunk_size=%s "
+            "attention_autograd_recompute=true yield_every_days=%s yield_ms=%s",
+            self.gats_attention_query_chunk_size,
+            self.gpu_cooperative_yield_every_days,
+            self.gpu_cooperative_yield_ms,
+        )
 
         if self.optimizer == "adam":
             self.train_optimizer = optim.Adam(self.GAT_model.parameters(), lr=self.lr)
@@ -280,18 +519,19 @@ class EfficientGATs(QlibGATs):
         else:
             raise NotImplementedError(f"optimizer {self.optimizer} is not supported!")
 
-    def _loud_gpu_resident_fallback(self, reason_code, **details):
+    def _raise_gpu_resident_error(self, reason_code, **details):
         self.gpu_resident_active = False
         payload = {"reason_code": reason_code, **details}
-        self.gpu_resident_last_fallback = payload
+        self.gpu_resident_last_error = payload
         _record_model_resident_state(
             requested=bool(self.gpu_resident),
             active=False,
             fallback_reason_code=reason_code,
         )
         message = " ".join(f"{key}={value}" for key, value in payload.items())
-        self.logger.warning("EfficientGATs GPU resident fallback: %s", message)
+        self.logger.error("EfficientGATs GPU resident failure: %s", message)
         print(message)
+        raise RuntimeError(message)
 
     def _industry_bias_enabled(self):
         return getattr(self, "gats_adjacency_mode", _GATS_ADJACENCY_OFF) == _GATS_ADJACENCY_INDUSTRY_BIAS
@@ -316,15 +556,16 @@ class EfficientGATs(QlibGATs):
         if provider is None:
             return None
         if callable(provider):
-            for args in (
-                (segment, index, segment_name),
-                (segment, index),
-                (index,),
-            ):
-                try:
-                    return provider(*args)
-                except TypeError:
-                    continue
+            return _call_first_compatible(
+                provider,
+                (
+                    (segment, index, segment_name),
+                    (segment, index),
+                    (index,),
+                ),
+                reason_code="efficient_gats_industry_provider_signature_invalid",
+                callable_name=type(provider).__name__,
+            )
         if isinstance(provider, dict):
             values = []
             for row_key in index:
@@ -341,7 +582,10 @@ class EfficientGATs(QlibGATs):
                 )
                 values.append(next((provider[key] for key in candidates if key in provider), None))
             return values
-        return None
+        raise TypeError(
+            "reason_code=efficient_gats_industry_provider_invalid: "
+            f"provider_type={type(provider).__name__} expected_callable_or_mapping"
+        )
 
     def _segment_industry_values(self, segment, index, *, segment_name):
         values = self._provider_industry_values(segment, index, segment_name=segment_name)
@@ -352,12 +596,12 @@ class EfficientGATs(QlibGATs):
             method = getattr(segment, method_name, None)
             if method is None:
                 continue
-            for args in ((index,), ()):
-                try:
-                    values = method(*args)
-                    break
-                except TypeError:
-                    continue
+            values = _call_first_compatible(
+                method,
+                ((index,), ()),
+                reason_code="efficient_gats_segment_industry_method_signature_invalid",
+                callable_name=method_name,
+            )
             if values is not None:
                 return values
 
@@ -496,15 +740,23 @@ class EfficientGATs(QlibGATs):
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _maybe_cooperative_gpu_yield(self, completed_days):
+        if self.device.type != "cuda" or self.gpu_cooperative_yield_every_days == 0:
+            return False
+        if completed_days % self.gpu_cooperative_yield_every_days != 0:
+            return False
+        torch.cuda.synchronize(self.device)
+        time.sleep(self.gpu_cooperative_yield_ms / 1000.0)
+        return True
+
     def _can_activate_gpu_resident(self, _resident_segments):
         if not self.gpu_resident:
             return False
         if self.device.type != "cuda" or not torch.cuda.is_available():
-            self._loud_gpu_resident_fallback(
+            self._raise_gpu_resident_error(
                 "efficient_gats_gpu_resident_not_cuda",
                 device=str(self.device),
             )
-            return False
         return True
 
     def _move_segment_to_gpu(self, resident_segment):
@@ -622,7 +874,7 @@ class EfficientGATs(QlibGATs):
             else:
                 batch_iter = self._iter_streaming_batches(data_loader, shuffle=False)
 
-            for data, industry_ids in batch_iter:
+            for completed_days, (data, industry_ids) in enumerate(batch_iter, start=1):
                 data = data.squeeze()
                 feature = data[:, :, 0:-1]
                 label = data[:, -1, -1]
@@ -642,10 +894,11 @@ class EfficientGATs(QlibGATs):
                 loss.backward()
                 torch.nn.utils.clip_grad_value_(self.GAT_model.parameters(), 3.0)
                 self.train_optimizer.step()
+                self._maybe_cooperative_gpu_yield(completed_days)
             return
 
         self.GAT_model.train()
-        for data in data_loader:
+        for completed_days, data in enumerate(data_loader, start=1):
             data = data.squeeze()
             feature = data[:, :, 0:-1].to(self.device)
             label = data[:, -1, -1].to(self.device)
@@ -657,6 +910,7 @@ class EfficientGATs(QlibGATs):
             loss.backward()
             torch.nn.utils.clip_grad_value_(self.GAT_model.parameters(), 3.0)
             self.train_optimizer.step()
+            self._maybe_cooperative_gpu_yield(completed_days)
 
     def test_epoch(self, data_loader):
         self.GAT_model.eval()
@@ -673,41 +927,43 @@ class EfficientGATs(QlibGATs):
         else:
             batch_iter = data_loader
 
-        for batch in batch_iter:
-            if resident_loader:
-                data, industry_ids = batch
-            else:
-                data = batch
-                industry_ids = None
+        with torch.no_grad():
+            for completed_days, batch in enumerate(batch_iter, start=1):
+                if resident_loader:
+                    data, industry_ids = batch
+                else:
+                    data = batch
+                    industry_ids = None
 
-            if resident_loader:
-                data = data.squeeze()
-                feature = data[:, :, 0:-1]
-                label = data[:, -1, -1]
-                if feature.device != self.device:
-                    feature = feature.to(self.device)
-                if label.device != self.device:
-                    label = label.to(self.device)
-                if torch.is_tensor(industry_ids) and industry_ids.device != self.device:
-                    industry_ids = industry_ids.to(self.device)
-                if data_loader.get("tensor") is None:
+                if resident_loader:
+                    data = data.squeeze()
+                    feature = data[:, :, 0:-1]
+                    label = data[:, -1, -1]
+                    if feature.device != self.device:
+                        feature = feature.to(self.device)
+                    if label.device != self.device:
+                        label = label.to(self.device)
+                    if torch.is_tensor(industry_ids) and industry_ids.device != self.device:
+                        industry_ids = industry_ids.to(self.device)
+                    if data_loader.get("tensor") is None:
+                        feature = feature.float()
+                else:
+                    data = data.squeeze()
+                    feature = data[:, :, 0:-1]
+                    label = data[:, -1, -1]
+                    if feature.device != self.device:
+                        feature = feature.to(self.device)
+                    if label.device != self.device:
+                        label = label.to(self.device)
                     feature = feature.float()
-            else:
-                data = data.squeeze()
-                feature = data[:, :, 0:-1]
-                label = data[:, -1, -1]
-                if feature.device != self.device:
-                    feature = feature.to(self.device)
-                if label.device != self.device:
-                    label = label.to(self.device)
-                feature = feature.float()
 
-            pred = self.GAT_model(feature, industry_ids=industry_ids)
-            loss = self.loss_fn(pred, label)
-            losses.append(loss.detach())
+                pred = self.GAT_model(feature, industry_ids=industry_ids)
+                loss = self.loss_fn(pred, label)
+                losses.append(loss.detach())
 
-            score = self.metric_fn(pred, label)
-            scores.append(score.detach())
+                score = self.metric_fn(pred, label)
+                scores.append(score.detach())
+                self._maybe_cooperative_gpu_yield(completed_days)
 
         return torch.stack(losses).mean().item(), torch.stack(scores).mean().item()
 
@@ -796,8 +1052,7 @@ class EfficientGATs(QlibGATs):
         valid_cpu = self._preload_segment_to_cpu(dl_valid, segment_name="valid")
         resident_cpu = [train_cpu, valid_cpu]
 
-        if not self._can_activate_gpu_resident(resident_cpu):
-            return self._fit_streaming(dataset, evals_result, save_path)
+        self._can_activate_gpu_resident(resident_cpu)
 
         train_resident = None
         valid_resident = None
@@ -810,14 +1065,13 @@ class EfficientGATs(QlibGATs):
             gc.collect()
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
-            self._loud_gpu_resident_fallback(
+            self._raise_gpu_resident_error(
                 "efficient_gats_gpu_resident_preload_failed",
                 error=str(exc),
             )
-            return self._fit_streaming(dataset, evals_result, save_path)
 
         self.gpu_resident_active = True
-        self.gpu_resident_last_fallback = None
+        self.gpu_resident_last_error = None
         _record_model_resident_state(requested=True, active=True)
         self.logger.info(
             "EfficientGATs GPU resident mode active: train_rows=%s valid_rows=%s model_size=%.4f MB",
@@ -895,31 +1149,33 @@ class EfficientGATs(QlibGATs):
             dl_test.config(fillna_type="ffill+bfill")
             test_cpu = self._preload_segment_to_cpu(dl_test, segment_name="test")
 
-            if not self._can_activate_gpu_resident([test_cpu]):
-                return self._predict_streaming(dataset)
+            self._can_activate_gpu_resident([test_cpu])
 
             try:
                 test_resident = self._move_segment_to_gpu(test_cpu)
             except RuntimeError as exc:
                 if self.device.type == "cuda":
                     torch.cuda.empty_cache()
-                self._loud_gpu_resident_fallback(
+                self._raise_gpu_resident_error(
                     "efficient_gats_gpu_resident_predict_preload_failed",
                     error=str(exc),
                 )
-                return self._predict_streaming(dataset)
 
             self.GAT_model.eval()
             preds = []
-            for data, industry_ids in self._iter_resident_batches(
-                test_resident,
-                shuffle=False,
-                include_industry=True,
+            for completed_days, (data, industry_ids) in enumerate(
+                self._iter_resident_batches(
+                    test_resident,
+                    shuffle=False,
+                    include_industry=True,
+                ),
+                start=1,
             ):
                 feature = data.narrow(2, 0, data.shape[2] - 1)
                 with torch.no_grad():
                     pred = self.GAT_model(feature, industry_ids=industry_ids).detach().cpu().numpy()
                 preds.append(pred)
+                self._maybe_cooperative_gpu_yield(completed_days)
 
             return pd.Series(np.concatenate(preds), index=dl_test.get_index())
         except Exception as exc:
@@ -945,7 +1201,10 @@ class EfficientGATs(QlibGATs):
 
         self.GAT_model.eval()
         preds = []
-        for data, industry_ids in self._iter_streaming_batches(test_loader, shuffle=False):
+        for completed_days, (data, industry_ids) in enumerate(
+            self._iter_streaming_batches(test_loader, shuffle=False),
+            start=1,
+        ):
             data = data.squeeze()
             feature = data[:, :, 0:-1].to(self.device)
             if torch.is_tensor(industry_ids):
@@ -953,5 +1212,6 @@ class EfficientGATs(QlibGATs):
             with torch.no_grad():
                 pred = self.GAT_model(feature.float(), industry_ids=industry_ids).detach().cpu().numpy()
             preds.append(pred)
+            self._maybe_cooperative_gpu_yield(completed_days)
 
         return pd.Series(np.concatenate(preds), index=dl_test.get_index())

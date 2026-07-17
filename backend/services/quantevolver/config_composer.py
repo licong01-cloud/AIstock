@@ -45,6 +45,16 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
 _GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
+_EFFICIENT_GATS_EXECUTION_DEFAULTS = {
+    "gats_attention_query_chunk_size": 512,
+    "gpu_cooperative_yield_every_days": 1,
+    "gpu_cooperative_yield_ms": 2.0,
+}
+_REMOVED_GATS_RESOURCE_OPTIONS = {
+    "gpu_resident_vram_margin_bytes",
+    "gpu_resident_working_memory_multiplier",
+    "gpu_phase_release_tolerance_bytes",
+}
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
@@ -3057,6 +3067,17 @@ class ConfigComposer:
                         if key in hp and isinstance(hp[key], str):
                             hp[key] = float(hp[key])
                     model_kwargs.update(hp)
+                removed_resource_options = sorted(
+                    _REMOVED_GATS_RESOURCE_OPTIONS & set(model_kwargs)
+                )
+                if removed_resource_options:
+                    raise ValueError(
+                        "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED: "
+                        f"unsupported_options={removed_resource_options}"
+                    )
+                if model_class == "EfficientGATs":
+                    for key, value in _EFFICIENT_GATS_EXECUTION_DEFAULTS.items():
+                        model_kwargs.setdefault(key, value)
             elif "PTNN" in model_type or "NN" in model_type:
                 # 无源代码的 GeneralPTNN：必须在 model_hyperparameters 中提供 pt_model_uri
                 model_class = "GeneralPTNN"
@@ -3294,11 +3315,10 @@ class ConfigComposer:
             "metric", "early_stop", "loss", "base_model", "model_path",
             "optimizer", "GPU", "n_jobs", "seed", "batch_size",
             "weight_decay", "gpu_resident", "gpu_resident_shuffle_days",
-            "gpu_resident_vram_margin_bytes",
-            "gpu_resident_working_memory_multiplier",
             "gats_adjacency_mode", "gats_industry_gamma_init",
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
+        _EFFICIENT_GATS_HP_KEYS = _GATS_HP_KEYS | set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
@@ -3341,10 +3361,25 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
+            removed_resource_options = sorted(
+                _REMOVED_GATS_RESOURCE_OPTIONS & set(custom_params)
+            )
+            if removed_resource_options:
+                raise ValueError(
+                    "reason_code=QE_GPU_RESOURCE_OPTIONS_REMOVED: "
+                    f"unsupported_options={removed_resource_options}"
+                )
+            efficient_gats_execution_keys = set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
+            invalid_efficient_gats_keys = efficient_gats_execution_keys & set(custom_params)
+            if invalid_efficient_gats_keys and model_class != "EfficientGATs":
+                raise ValueError(
+                    "reason_code=efficient_gats_execution_params_require_efficient_gats: "
+                    f"model_class={model_class!r} keys={sorted(invalid_efficient_gats_keys)}"
+                )
             hp_keys = set()
             if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 hp_keys = _PTNN_HP_KEYS
@@ -3358,7 +3393,9 @@ class ConfigComposer:
                 hp_keys = _TABPFN_HP_KEYS
             elif model_class in ("LinearModel",):
                 hp_keys = _LINEAR_HP_KEYS
-            elif model_class in _GATS_MODEL_CLASSES:
+            elif model_class == "EfficientGATs":
+                hp_keys = _EFFICIENT_GATS_HP_KEYS
+            elif model_class == "GATs":
                 hp_keys = _GATS_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
             if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
@@ -4398,7 +4435,8 @@ class ConfigComposer:
         lines.append("    if not contract.get('official_cache_hit'):")
         lines.append('        logger.info(f\'  {factor_name}: cache miss reasons={contract.get("miss_reasons")} top_errors={contract.get("top_level_errors")}\')')
         lines.append("        if contract.get('miss_reasons', {}).get('missing_meta_reconcile_required'):")
-        lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + _json.dumps(contract, ensure_ascii=False, default=str))")
+        lines.append("            contract_payload = _json.dumps(contract, ensure_ascii=False, default=str)")
+        lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + contract_payload)")
         lines.append('        return None')
         lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
         lines.append('    df = pd.read_parquet(cache_path)')
@@ -4408,7 +4446,6 @@ class ConfigComposer:
         lines.append("        df = df.rename(columns={'value': factor_name})")
         lines.append('    logger.info(f\'  {factor_name}: CACHE HIT ({len(df)} rows, {contract.get("date_range")})\')')
         lines.append('    return df')
-        lines.append("")
         lines.append("")
         lines.append("def _write_cache(factor_name, factor_code, result_df):")
         lines.append("    \"\"\"Publish one factor and its metadata atomically while factor lock is held.\"\"\"")

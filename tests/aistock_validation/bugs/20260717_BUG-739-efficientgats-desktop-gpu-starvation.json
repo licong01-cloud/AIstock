@@ -1,0 +1,192 @@
+{
+  "actual": "A single loop can make the Windows desktop unresponsive; batch_size does not bound the daily N-by-N attention and evaluation unnecessarily builds Autograd graphs.",
+  "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_gpu_training_policy.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_gpu_training_policy.py",
+    "tests/aistock_validation/bugs/20260717_BUG-739-efficientgats-desktop-gpu-starvation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-739",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Exclusive GAT full-train scheduling must not depend on an optional phase-pipeline request.",
+    "GPU-resident execution and industry-provider failures must fail explicitly without changing execution mode.",
+    "Chunked attention must preserve full-market training semantics while avoiding saved C-by-N attention blocks.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-17T16:17:35.537211Z",
+  "description": "A single loop can make the Windows desktop unresponsive; batch_size does not bound the daily N-by-N attention and evaluation unnecessarily builds Autograd graphs.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260717-78ca6903f5bc",
+      "timestamp": "2026-07-17T16:17:35.537207Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Added the repository-owned EfficientGATs adapter after run --mode fix placed it in the task card but the high-level workflow did not persist the scope expansion to the BUG record.",
+      "timestamp": "2026-07-17T16:49:55.4270147Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Expanded BUG-739 after code review to cover unconditional exclusive GAT scheduling, fail-fast GPU-resident behavior, and the focused GPU policy tests. The high-level workflow updated the task card but again did not persist these paths to the BUG record.",
+      "timestamp": "2026-07-17T17:41:51.2473016Z"
+    },
+    {
+      "action": "code_review_followup_validated",
+      "actor": "Codex",
+      "note": "Implemented exact checkpointed query chunks, fail-fast resident/provider/resource-option contracts, strict cooperative execution configuration, and durable exclusive GAT scheduling. Local L0/module tests and WSL CPU equivalence plus saved-storage validation passed without GPU monitoring or runtime mutation.",
+      "timestamp": "2026-07-17T18:19:30.7262560Z"
+    }
+  ],
+  "evidence_uris": [
+    "R11B qe_20260717_134306_6354 Loop3 run.log; WSL dxg wait_for_completion failures",
+    "BUG-739 follow-up code review: conditional exclusive lease, GPU-resident downgrade, provider TypeError swallowing, and O(N^2) Autograd saved tensors"
+  ],
+  "expected": "A single GAT loop remains desktop-responsive while preserving dense full-market attention and training semantics; exclusive GAT training is durable even when the optional phase-pipeline toggle is false; GPU-resident and provider failures are fail-fast; checkpointed query chunks reduce saved Autograd storage without changing forward, gradient, optimizer-update, or fixed-seed fit/predict results.",
+  "first_seen_at": "2026-07-17T16:17:35.537211Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2374,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2374",
+  "last_seen_at": "2026-07-17T16:17:35.537211Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "EfficientGATs desktop GPU starvation",
+  "trigger_condition": {
+    "fingerprint": "78ca6903f5bcff6ad86435ed",
+    "source_event_id": "FE-20260717-78ca6903f5bc"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
