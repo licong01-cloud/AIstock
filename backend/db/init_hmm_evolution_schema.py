@@ -722,11 +722,14 @@ def iter_ddl() -> Iterable[str]:
 
 
 def bootstrap_schema(
-    conn_factory: Callable[[], Any] = get_conn,
+    conn_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Apply the schema in one transaction, then verify exact columns/constraints."""
 
-    with conn_factory() as conn:
+    factory = conn_factory or (
+        lambda: get_conn(autocommit=False, manage_transaction=True)
+    )
+    with factory() as conn:
         with conn.cursor() as cursor:
             for statement in iter_ddl():
                 cursor.execute(statement)
@@ -873,11 +876,16 @@ _SQL_CAST_RE = re.compile(
     r"::(?:text|bpchar|character varying|jsonb|integer|bigint|double precision|boolean|date|timestamp with time zone)(?:\[\])?",
     re.IGNORECASE,
 )
+_NUMERIC_BETWEEN_RE = re.compile(
+    r"\b([a-z_][a-z0-9_.]*)\s+between\s+(-?\d+(?:\.\d+)?)\s+and\s+(-?\d+(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_sql_definition(value: str) -> str:
     text = str(value or "").strip().lower().replace('"', "")
     text = _SQL_CAST_RE.sub("", text)
+    text = _NUMERIC_BETWEEN_RE.sub(r"\1 >= \2 and \1 <= \3", text)
     text = re.sub(
         r"=\s*any\s*\(\s*array\s*\[(.*?)\]\s*\)",
         r"in(\1)",
