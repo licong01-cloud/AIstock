@@ -32,8 +32,8 @@
   "expected": "对已归档evolution Loop再次执行selection backfill时，应保持原source lineage和run identity，并从权威qe_experiments结果或节点增强资产回灌曲线、交易、因子重要性及backtest_window；不得创建qe source重复run。",
   "first_seen_at": "2026-07-17T05:44:58.928805Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f5127f5fcd099f4daab3679932e33ef5269eb8f5",
+  "fixed_at": "2026-07-17T06:54:04.356153Z",
   "github_issue_number": 2295,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2295",
   "last_seen_at": "2026-07-17T05:44:58.928805Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2298",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "3e5394d1510299826b66009c",
     "source_event_id": "FE-20260717-3e5394d15102"
   },
+  "validation_evidence": [
+    "targeted pytest -> 59 passed; ruff -> passed; git diff --check -> passed; GitHub CI -> green"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
