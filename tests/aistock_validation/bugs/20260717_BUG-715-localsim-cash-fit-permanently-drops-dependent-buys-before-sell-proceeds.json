@@ -8,6 +8,7 @@
     "backend/services/trading_core/minute_execution.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/paper_trading_v2/test_daemon_sim_e2e.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260717_BUG-715-localsim-cash-fit-permanently-drops-dependent-buys-before-sell-proceeds.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
