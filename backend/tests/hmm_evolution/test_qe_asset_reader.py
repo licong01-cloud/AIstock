@@ -13,6 +13,7 @@ from backend.services.hmm_evolution.errors import (
 from backend.services.hmm_evolution.models import CatalogCompleteness
 from backend.services.hmm_evolution.qe_asset_reader import QEExperimentAssetReader
 from backend.services.quantevolver.qe_workspace_client import (
+    QEWorkspaceCatalogInvalid,
     QEWorkspaceCatalogUnavailable,
 )
 
@@ -99,6 +100,44 @@ def test_partial_manifest_never_masquerades_as_complete_catalog() -> None:
         asyncio.run(reader.list_assets("qe_task", "Loop8", require_complete=True))
 
 
+def test_catalog_unavailable_without_partial_provider_fails_loud() -> None:
+    reader = QEExperimentAssetReader(_NoCatalogClient())
+
+    with pytest.raises(QEAssetUnavailableError, match="does not expose"):
+        asyncio.run(reader.list_assets("qe_task", "Loop8"))
+
+
+def test_partial_manifest_provider_failure_preserves_both_failure_causes() -> None:
+    async def failed_provider(task_id: str, loop_id: str):
+        raise RuntimeError("manifest lookup failed")
+
+    reader = QEExperimentAssetReader(
+        _NoCatalogClient(),
+        partial_catalog_provider=failed_provider,
+    )
+
+    with pytest.raises(QEAssetUnavailableError, match="both failed") as exc_info:
+        asyncio.run(reader.list_assets("qe_task", "Loop8"))
+    assert "catalog_error" in exc_info.value.context
+    assert "manifest_error" in exc_info.value.context
+
+
+def test_stat_uses_partial_manifest_or_explicit_unverified_read_when_endpoint_missing() -> None:
+    reader = QEExperimentAssetReader(
+        _NoCatalogClient(data=b"raw-evidence"),
+        partial_catalog_provider=_partial_provider,
+    )
+
+    declared = asyncio.run(reader.stat_asset("qe_task", "Loop8", "pred.pkl"))
+    inspected = asyncio.run(reader.stat_asset("qe_task", "Loop8", "other.bin"))
+
+    assert declared.relative_path == "pred.pkl"
+    assert declared.catalog_completeness is CatalogCompleteness.PARTIAL
+    assert inspected.relative_path == "other.bin"
+    assert inspected.size_bytes == len(b"raw-evidence")
+    assert inspected.catalog_completeness is CatalogCompleteness.PARTIAL
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -151,6 +190,32 @@ def test_malformed_stat_fails_loud_instead_of_reading_raw_content() -> None:
     reader = QEExperimentAssetReader(_MalformedStatClient())
     with pytest.raises(QEAssetUnavailableError, match="metadata is invalid"):
         asyncio.run(reader.stat_asset("qe_task", "Loop8", "reports/result.json"))
+
+
+def test_explicit_invalid_catalog_exception_never_uses_partial_fallback() -> None:
+    class _InvalidCatalogClient(_CatalogClient):
+        async def list_workspace_files(self, task_id: str, loop_id: str):
+            raise QEWorkspaceCatalogInvalid("catalog payload violates contract")
+
+        async def stat_workspace_file(self, task_id: str, loop_id: str, file_path: str):
+            raise QEWorkspaceCatalogInvalid("catalog payload violates contract")
+
+    provider_called = False
+
+    async def provider(task_id: str, loop_id: str):
+        nonlocal provider_called
+        provider_called = True
+        return []
+
+    reader = QEExperimentAssetReader(
+        _InvalidCatalogClient(),
+        partial_catalog_provider=provider,
+    )
+    with pytest.raises(QEAssetUnavailableError, match="catalog is invalid"):
+        asyncio.run(reader.list_assets("qe_task", "Loop8"))
+    with pytest.raises(QEAssetUnavailableError, match="metadata is invalid"):
+        asyncio.run(reader.stat_asset("qe_task", "Loop8", "reports/result.json"))
+    assert provider_called is False
 
 
 def test_read_rejects_catalog_hash_mismatch() -> None:
