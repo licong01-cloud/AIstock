@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 import inspect
+import logging
 
 import pytest
 
 from backend.services.advisory_program import (
     ACTION_ENTER,
+    ACTION_EXIT,
     ACTION_HOLD,
     EXIT_ALPHA_RANK_DROP,
     EXIT_REPLACEMENT_BUDGET,
@@ -18,6 +20,7 @@ from backend.services.advisory_program import (
     PRICE_BASIS_NEXT_OPEN,
     REASON_ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT,
     REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED,
+    AdvisoryMarketMark,
     AdvisoryProgramService,
     InMemoryAdvisoryProgramRepository,
 )
@@ -525,6 +528,101 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
 
     assert len(replay["daily_reviews"]) == 2
     assert replay["summary"]["win_rate"] == 1.0
+
+
+def test_replay_hydrates_missing_active_market_marks_like_daily_review(monkeypatch) -> None:
+    days = _calendar_days(date(2026, 6, 1), date(2026, 6, 2))
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar(days),
+    )
+    program = _program(service, target_count=1)
+    calls: list[tuple[list[str], date]] = []
+
+    def load_marks(symbols: list[str], *, trade_date: date) -> dict[str, AdvisoryMarketMark]:
+        calls.append((symbols, trade_date))
+        return {
+            "000001.SZ": AdvisoryMarketMark(
+                symbol="000001.SZ",
+                trade_date=trade_date,
+                next_open_executable=10.0,
+            )
+        }
+
+    monkeypatch.setattr(service, "_load_daily_market_marks", load_marks)
+    replay = service.run_replay(
+        program.program_id,
+        start_date=days[0],
+        end_date=days[1],
+        candidates_by_date={
+            days[0].isoformat(): [_candidate("000001.SZ", 1, 10.0)],
+            days[1].isoformat(): [_candidate("000002.SZ", 1, 20.0), _candidate("000003.SZ", 2, 30.0)],
+        },
+        market_by_date={},
+    )
+
+    second = replay["daily_reviews"][1]
+    assert calls == [(["000001.SZ"], days[1])]
+    assert second["review_status"] == "SUCCEEDED"
+    assert not any(row["action"] == "WAITING" for row in second["decisions"])
+
+
+def test_replay_does_not_reenter_a_symbol_exited_on_the_same_review() -> None:
+    days = _calendar_days(date(2026, 6, 1), date(2026, 6, 2))
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar(days),
+    )
+    program = _program(service, target_count=1)
+
+    replay = service.run_replay(
+        program.program_id,
+        start_date=days[0],
+        end_date=days[1],
+        candidates_by_date={
+            days[0].isoformat(): [_candidate("000001.SZ", 1, 10.0)],
+            days[1].isoformat(): [_candidate("000001.SZ", 1, 9.0)],
+        },
+        market_by_date={},
+    )
+
+    actions = [row["action"] for row in replay["daily_reviews"][1]["decisions"] if row["symbol"] == "000001.SZ"]
+    assert actions == [ACTION_EXIT]
+    assert replay["daily_reviews"][1]["active_pool"][0]["status"] == "EXITED"
+
+
+def test_active_market_hydration_failure_is_logged(monkeypatch, caplog) -> None:
+    day = date(2026, 6, 1)
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar([day]),
+    )
+    program = _program(service, target_count=1)
+    first = service.run_review(
+        program.program_id,
+        trade_date=day,
+        candidates=[_candidate("000001.SZ", 1, 10.0)],
+        market_by_symbol={},
+        preview=True,
+    )
+
+    def fail_load(_symbols: list[str], *, trade_date: date) -> dict[str, AdvisoryMarketMark]:
+        raise RuntimeError(f"market lookup failed for {trade_date}")
+
+    monkeypatch.setattr(service, "_load_daily_market_marks", fail_load)
+    with caplog.at_level(logging.ERROR):
+        marks = service._with_active_episode_market_marks(
+            trade_date=day,
+            candidates=[],
+            market_by_symbol={},
+            active_episodes=first.active_pool,
+        )
+
+    assert marks == {}
+    assert "advisory active-holding market hydration failed" in caplog.text
 
 
 def test_review_from_selection_builds_default_authoritative_runtime_config() -> None:
