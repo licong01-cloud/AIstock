@@ -34,8 +34,8 @@
   "expected": "Create a portable derived StrategyPackage identity without mutating the source package, preserve runtime asset and selection parity, export a path-free exact bundle, and expose rollback-only DEV import with fresh zero-residue readback before persistent import.",
   "first_seen_at": "2026-07-17T01:17:23.970482Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e881b2c100e705c34d834e5e6fae4f93c3c1d160",
+  "fixed_at": "2026-07-17T02:12:07.383646Z",
   "github_issue_number": 2251,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2251",
   "last_seen_at": "2026-07-17T01:17:23.970482Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2261",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "0376d2d9322f4ee3c37f56af",
     "source_event_id": "FE-20260717-0376d2d9322f"
   },
+  "validation_evidence": [
+    "advisory onboarding module: 82 passed, 7 skipped; PostgreSQL 16 integration: 7 passed; post-rebase focused: 2 passed; Ruff, compileall, diff checks: passed; F2 design validator: 38/38 passed; nox l0 and validation_module_registry_l0: passed; GitHub CI rerun: all required checks passed; production readonly bundle 75806f83b2a5; DEV rollback receipt 21f01f6aeab4 with 98 attempted inserts, physical commit 0 and zero DB residue"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
