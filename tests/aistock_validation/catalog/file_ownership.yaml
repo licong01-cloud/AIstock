@@ -387,6 +387,8 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - backend/ingestion/tdx_scheduler.py
+      - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
       - backend/data_service/**
       - backend/services/*data*.py
       - backend/routers/local_data*.py
