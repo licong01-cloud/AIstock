@@ -1,20 +1,19 @@
 # AIstock Standards Index
 
-Last updated: 2026-07-03
+Last updated: 2026-07-18
 
 ## Operating Model
 
-This file is the standards constitution and routing index. Read it once when standards selection is unclear, then execute through exactly one task-specific skill or Claude command. Scenario details live in skills, not in startup context.
+This file is the standards routing index. Read it once when standards selection is unclear, then execute through exactly one task-specific skill or Claude command.
 
-## Active Standards
+## Sole Authority
 
-Reference these only when the selected skill or user request needs the detail:
+AIstock has one human-readable development standard:
 
-- `docs/standards/aistock_development_standard_v1.5_20260523.md` - development constitution and feature workflow reference; not a default BUG context file.
-- `docs/standards/aistock_development_standard_v1.5_20260523.yaml` - structured companion for tooling.
-- `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md` - BUG workflow reference for workflow maintenance or disputed behavior.
-- `docs/standards/aistock_issue_workflow_quickstart.md` - human/operator quickstart; not a default agent startup file.
-- `docs/standards/cross_test_framework_template_20260508.md` - read only for cross-test framework work.
+- `docs/standards/aistock_development_standard_v1.5_20260523.md` - sole human-readable authority.
+- `docs/standards/aistock_development_standard_v1.5_20260523.yaml` - machine-derived catalog; it has no independent policy authority.
+
+`aistock_issue_fix_parallel_workflow_standard_20260514.md`, quickstarts, templates, skills, and commands are compatibility or scenario guidance. They reference the sole authority and do not define a second ruleset.
 
 ## Skill Routing
 
@@ -28,4 +27,4 @@ Reference these only when the selected skill or user request needs the detail:
 
 ## Archived Standards
 
-Historical versions are stored only under `docs/standards/archive/` and are not active instructions. Open them only when the user asks for historical context or an audit cites a specific archived standard.
+Historical versions live under `docs/standards/archive/` and are inactive. Use them only for an explicit historical audit.

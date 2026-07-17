@@ -208,10 +208,42 @@ def test_context_pack_records_token_budget_and_rejects_ambiguous_inputs(tmp_path
     assert pack["schema_version"] == "aistock_context_pack_v1"
     assert pack["token_budget"]["full_docs_allowed"] is False
     assert pack["token_budget"]["target_tokens"] == 12000
-    assert "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001" in pack["standards_refs"]
+    assert pack["standards_refs"] == [
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001"
+    ]
 
     assert flow.main(["context-pack"]) == 2
     assert "requires exactly one" in capsys.readouterr().err
+
+
+def test_development_standard_is_single_authority_for_workflow_clients() -> None:
+    authority = "docs/standards/aistock_development_standard_v1.5_20260523.md"
+    standard = Path(authority).read_text(encoding="utf-8")
+
+    assert flow.STANDARD_REFS == [f"{authority}#CONTEXT-BUDGET-001"]
+    assert [
+        "**禁止简化交付**",
+        "**禁止静默错误**",
+        "**禁止改变业务逻辑**",
+        "**禁止私增门禁审批**",
+    ] == [line.split("：", 1)[0].split(". ", 1)[1] for line in standard.splitlines() if line.startswith(("1. **禁止", "2. **禁止", "3. **禁止", "4. **禁止"))]
+    assert all(keyword not in standard for keyword in ("不得", "不允许", "严禁"))
+
+    client_entries = (
+        Path(".codex/skills/aistock-task-router/SKILL.md"),
+        Path(".codex/skills/fix-aistock-issue/SKILL.md"),
+        Path(".claude/commands/aistock-task-router.md"),
+        Path(".claude/commands/fix-aistock-issue.md"),
+    )
+    for entry in client_entries:
+        assert authority in entry.read_text(encoding="utf-8")
+
+    compatibility_pointer = Path(
+        "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md"
+    ).read_text(encoding="utf-8")
+    assert "兼容入口，不是开发规范" in compatibility_pointer
+    assert authority in compatibility_pointer
+    assert "aistock_development_standard_v1.5_20260521.md" not in compatibility_pointer
 
 
 def test_batch_plan_allows_same_module_and_rejects_cross_module(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

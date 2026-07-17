@@ -17,15 +17,14 @@ Default rule: load this file only for AIstock architecture, backend, frontend, d
 - Market data bridge: TDX Go service under `tdx-api-main/`, typical port `19080`.
 - Important domains: `backend/routers`, `backend/services`, `backend/data_service`, `backend/infra`, `frontend/src/app`, `tests/aistock_validation`.
 
-## Active Standards
+## Development Standard
 
-Use the active standard only when it is relevant to the current task. Start from `docs/standards/README.md` when there is any doubt about the current standard set.
+Use the development standard only when it is relevant to the current task. Start from `docs/standards/README.md` when routing is unclear.
 
 - `docs/standards/README.md`
 - `docs/standards/aistock_development_standard_v1.5_20260523.md`
-- `docs/standards/aistock_development_standard_v1.5_20260523.yaml`
-- `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
-- `docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md`
+
+The Markdown file is the sole human-readable authority. Its same-version YAML is a machine-derived catalog. Quickstarts, architecture documents, skills, and commands provide scenario guidance and reference the authority.
 
 The current issue Context Pack, explicit user request, and relevant code paths are the default starting point. Open module design documents only when the task scope, issue evidence, or user request points to that module.
 

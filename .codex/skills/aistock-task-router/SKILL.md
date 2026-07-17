@@ -1,37 +1,35 @@
 ---
 name: aistock-task-router
-description: "Route AIstock work to the correct lightweight workflow lane before loading context. Use for any broad AIstock request, especially when the user asks what to do next, starts work without naming BUG/feature/docs lane, or says BUG, issue, PR, merge, docs, read-only, nightly, CI, cleanup, or workflow."
+description: "Route broad AIstock work into one lightweight workflow lane before loading task context."
 ---
 
 # AIstock Task Router
 
-Use this as the default lightweight entry for ambiguous AIstock work. Read the project-level rules once, route first, then load only the selected scenario skill/command and task artifacts.
+Use this as the lightweight entry for broad or unclear AIstock work. The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; skills provide scenario procedures and reference that authority.
 
-## Required first checks
+## Start
 
-1. Read `F:\Dev\AIstock\docs\codex_project_memory.md` only if the current turn involves AIstock repo/workflow/runtime decisions.
-2. Run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor` before mutating repo state.
-3. If standards selection is unclear, read `docs/standards/README.md`; do not read `docs/standards/archive/` by default.
-4. Treat `F:\Dev\AIstock` as the sync/runtime root, not the implementation workspace.
+1. For repository, workflow, runtime, architecture, backend, frontend, data or trading decisions, read `F:\Dev\AIstock\docs\codex_project_memory.md` once.
+2. Run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor` before repository mutation.
+3. Use `docs/standards/README.md` when standards routing is unclear; active work uses the sole authority rather than archived material.
+4. Treat `F:\Dev\AIstock` as the sync/runtime root and use a task worktree for implementation.
 
-## Route table
+## Route
 
-- BUG registration, BUG fix, GitHub Issue repair, P0/P1, Context Pack, allowed scope -> use `fix-aistock-issue`.
-- New feature delivery, architecture/capability implementation, design acceptance matrix -> use `verify-aistock-feature` / feature workflow.
-- Ordinary docs, handoff docs, temporary Codex/Claude notes, README changes, and small docs/scratch/root-pollution cleanup -> use `aistock-docs-handoff`.
-- Merge, close-sync, root/GitHub sync, DDL/dependency gates, install-client, branch/worktree cleanup -> use `aistock-merge-aftercare`.
-- Read-only analysis, open issue listing, nightly/CI status, branch/worktree audit, root-cause investigation before repair -> use `aistock-readonly-triage`.
+- BUG registration, fix, GitHub Issue, Context Pack or allowed scope -> `fix-aistock-issue`.
+- New feature and design acceptance -> `verify-aistock-feature`.
+- Docs, handoff or small documentation cleanup -> `aistock-docs-handoff`.
+- Merge, close-sync, root sync, production gates, install-client or cleanup -> `aistock-merge-aftercare`.
+- Read-only triage, CI/nightly status or inventory -> `aistock-readonly-triage`.
+- Broad UI/API/business-flow, LLM drift or cross-module validation -> `aistock-validation-delegation`.
 
-## Hard stops
+## Execution Boundaries
 
-- The selected lane owns its own details; do not load other scenario skills, quickstarts, or full standards unless explicitly required.
-- If the user says read-only, do not edit files, commit, push, merge, cleanup, restart, or write DB.
-- If the task is an ordinary BUG, do not read feature/module design docs unless the issue or user explicitly cites them or `fast-path` classifies T3.
-- Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `.codex/**`, `.claude/**`, `AGENTS*`) use a controlled workflow.
-- Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
-- Cleanup-fast requests stay mechanical: move/archive/delete named files and use `git diff --check`; add focused executable checks only when executable behavior is intentionally retained.
-- BUG fixes use verification budgets: route ordinary and high-risk fixes to the smallest safe pre-merge gate, then defer broad UI/API/business-flow validation to nightly for daily deduplicated execution.
+- Load one selected lane plus its task card and direct artifacts.
+- Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
+- Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.
+- Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
+- Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
+- BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
 
-## Output
-
-State the selected lane, minimal context to read next, and whether mutation is allowed. Then continue with the selected lane if the request asks to execute.
+Report the selected lane, then continue when execution is requested.

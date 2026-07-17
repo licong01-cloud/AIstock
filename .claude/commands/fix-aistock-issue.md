@@ -1,47 +1,46 @@
 # fix-aistock-issue
 
-Use this Claude Code command only for AIstock BUG/GitHub Issue work. Use docs, feature, read-only, merge-aftercare, or validation-delegation commands for those scenarios.
+Use this lane for AIstock BUG/GitHub Issue work in Claude Code. The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command is its BUG procedure.
 
-## Context Budget
+## Context
 
-Read project rules once, then this command plus the issue task card/context pack. Do not read other scenario commands, full standards, quickstarts, module designs, or historical docs unless the user, BUG evidence, or task card explicitly requires it. After compaction/restart, run `resume` and read only the compact digest plus `task-card.md` unless a digest changed. Treat machine JSON as debug/resume-only: do not open `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, or dependency cache JSON during ordinary fixes unless a command failed or state recovery requires it.
+- Read project rules once, then use this command, `task-card.md`, the compact Context Pack and direct code references.
+- After compaction/restart, run `resume` and use the Context Resume Digest hashes.
+- Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.
+- CodeGraph/UA or exact-symbol references precede broader search. At the task-card budget, summarize and choose delegation or a narrower hypothesis.
 
 ## Start
 
 ```powershell
-python F:\Dev\AIstock\scripts/aistock_issue_workflow.py doctor
+python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 ```
 
-- Existing BUG: `python F:\Dev\AIstock\scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`.
-- New BUG: `python F:\Dev\AIstock\scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`.
-- If the command returns `workflow_gate=resume`, follow `next_command`; do not create another worktree.
-- Read `task_card_md` first, Code Intelligence refs as needed, and `context_pack_md` only when needed. Treat `fix_ready_path`, `state_path`, and `events_path` as debug/resume-only machine JSON.
+1. Existing BUG: `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`.
+2. New BUG: `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`.
+3. Existing workflow state resumes through the returned `next_command`.
+4. Work in the returned task worktree; task-card scope is the editing boundary.
 
-## Fix Boundary
+## Implement
 
-- Edit only inside `allowed_write_scope`; stop for scope expansion when needed.
-- Do not hand-write BUG JSON, skip GitHub linkage, or write registry files from canonical root/main.
-- Do not merge, restart production services, write production DB, or apply DDL without explicit user authorization.
-- Ordinary BUG fixes do not read feature/module design docs by default. Load a design only when the BUG/user cites it or fast-path classifies T3.
+- BUG metadata and GitHub linkage use the workflow. A required scope expansion updates the issue record in the task worktree before implementation continues.
+- Ordinary BUGs use targeted snippets and ownership/catalog data; cited designs and T3 tasks add the relevant design acceptance items.
+- Production merge, services, DB writes and DDL execute only under explicit user authorization and report separately from source completion.
+- Before completion, apply the four `DESIGN-COMPLIANCE-001` checks from the sole development standard.
 
-## Verification Budget
+## Verify
 
-- Default PR gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, scope check, and production gates.
-- High-risk PR gate adds only safety-critical invariant/fail-closed/route/DDL/side-effect checks.
-- After a test failure, rerun the failed nodeid first (`pytest path::test -q`) or use `pytest --lf -q` / `pytest --ff -x -q`; do not rerun a broad suite just to reach the same failure.
-- Run the related final small matrix at most once after behavior stabilizes. If it already passed, do not repeat it for test renames, comments, docs, formatting, or other non-behavioral edits.
-- If local exploration or validation exceeds about 30 minutes, command count exceeds the task-card soft limit, or the task needs broad module/cross-module/UI/API/business-flow coverage, stop expanding local runs and delegate validation.
-- Use `.claude/commands/aistock-validation-delegation.md` for broad UI/API/business-flow, cross-module, or LLM design-drift validation; report deferred modules so nightly can run one deduplicated deep pass for the day.
+- Standard PR gate: changed-file lint/compile, direct fix-point test or API/contract smoke, `git diff --check`, scope check and production gates.
+- High-risk work adds the directly affected invariant, fail-closed, route, DDL or side-effect check.
+- A failed test resumes at its nodeid, `pytest --lf`, or `pytest --ff -x`; behavior stabilization is followed by one final related small matrix.
+- Broad module, cross-module, UI/API/business-flow and LLM design-drift coverage uses `.claude/commands/aistock-validation-delegation.md` so nightly performs one deduplicated deep pass.
 
-## Finish / PR / Aftercare
+## Finish
 
 ```powershell
 python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only
 python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr
 ```
 
-For workflow/client changes, run `python scripts/aistock_issue_workflow.py workflow-smoke --changed-file <path> --module validation`. For merge aftercare, prefer `merge-finalizer` or route to `.claude/commands/aistock-merge-aftercare.md`. Use compact `postmortem` output; persist JSON only for diagnostics or `AISTOCK_WORKFLOW_ARTIFACTS=1`. Do not add full module suites to PR evidence just because they are recommended/deferred.
+Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`. Merge aftercare uses `merge-finalizer` or `.claude/commands/aistock-merge-aftercare.md`.
 
-## Report
-
-Include branch, PR, commit, changed files, local validation evidence, production gates, `verification_budget`, deferred nightly/delegated validation, and runtime/DB impact.
+Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans and runtime/DB impact.
