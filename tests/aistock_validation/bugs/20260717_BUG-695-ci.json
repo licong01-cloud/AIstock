@@ -37,8 +37,8 @@
   "expected": "模块归属、required/recommended计划和CI matrix由同一目录生成；启用计划必须至少被一个模块引用；simulation_runtime等关键模块能选择直接测试；目录一致性测试阻止新的孤儿计划。",
   "first_seen_at": "2026-07-17T03:21:00.851800Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4b7f75ef006936e9cfa24ba225bc9d2c80f4947f",
+  "fixed_at": "2026-07-17T15:13:35.208767Z",
   "github_issue_number": 2276,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2276",
   "last_seen_at": "2026-07-17T03:21:00.851800Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2338",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -69,6 +70,9 @@
     "fingerprint": "19398cbd8f0b5dbfec65e8f2",
     "source_event_id": "FE-20260717-19398cbd8f0b"
   },
+  "validation_evidence": [
+    "PR #2338 required checks passed; merge commit 4b7f75ef006936e9cfa24ba225bc9d2c80f4947f"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
