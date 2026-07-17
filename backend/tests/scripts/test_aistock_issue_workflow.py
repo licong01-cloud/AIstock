@@ -3557,6 +3557,9 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
     assert payload["workflow_gate"] == "close_synced"
     assert payload["github_issue_sync"]["status"] == "skipped_github_check_disabled"
     assert called is False
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert updated["closed_at"]
+    assert updated["fixed_at"]
 
 
 
@@ -3864,7 +3867,11 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
     monkeypatch.setattr(
         workflow,
         "_verify_pr_merged",
-        lambda pr_url, skip_github_check=False: {"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": "merge123"}}},
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": "merge123"}, "mergedAt": "2026-07-17T21:00:19Z"},
+        },
     )
     monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda record, payload, root: {"status": "synced", "bug_id": record["bug_id"]})
     monkeypatch.setattr(workflow, "_git_snapshot", lambda root: {"ok": True, "branch": "bug/close-sync-batch", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"})
@@ -3888,7 +3895,10 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
         "tests/aistock_validation/bugs/bug200.json",
     ]
     assert json.loads(bug_a.read_text(encoding="utf-8"))["status"] == "fixed"
-    assert json.loads(bug_b.read_text(encoding="utf-8"))["pr_url"] == "https://github.example/pull/299"
+    updated_b = json.loads(bug_b.read_text(encoding="utf-8"))
+    assert updated_b["pr_url"] == "https://github.example/pull/299"
+    assert updated_b["closed_at"] == "2026-07-17T21:00:19Z"
+    assert updated_b["fixed_at"]
     assert set(payload["github_issue_sync"]) == {"BUG-199", "BUG-200"}
 
 
