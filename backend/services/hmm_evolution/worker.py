@@ -82,7 +82,12 @@ class HMMEvolutionWorker:
             batch_id=str(batch["batch_id"]),
         )
         if evaluation is None:
-            self._repository.recompute_batch_state(str(batch["batch_id"]))
+            self._repository.release_batch_after_empty_claim(
+                batch_id=str(batch["batch_id"]),
+                owner_id=self._owner_id,
+                fencing_token=int(batch["fencing_token"]),
+                expected_row_version=int(batch["row_version"]),
+            )
             return True
         # P1-B executor owns checkpoints, heartbeat and terminal result mapping.
         # The call cannot be reached without a concrete executor and its

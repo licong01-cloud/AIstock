@@ -101,47 +101,12 @@ class HMMEvolutionRepository:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
-                    SELECT * FROM hmm_evolution.candidate
-                    WHERE candidate_id = %s OR manifest_hash = %s
-                    FOR UPDATE
-                    """,
-                    (preview.candidate_id, preview.manifest_hash),
-                )
-                existing = cursor.fetchone()
-                if existing is not None:
-                    if (
-                        existing["candidate_id"] != preview.candidate_id
-                        or existing["manifest_hash"] != preview.manifest_hash
-                    ):
-                        raise InvalidStateTransitionError(
-                            "candidate identity collision",
-                            context={"candidate_id": preview.candidate_id},
-                        )
-                    merged_source_ref = self._append_source_alias(
-                        dict(existing["source_ref"]),
-                        preview.manifest.source_ref,
-                    )
-                    if merged_source_ref != dict(existing["source_ref"]):
-                        cursor.execute(
-                            """
-                            UPDATE hmm_evolution.candidate
-                            SET source_ref = %s,
-                                row_version = row_version + 1,
-                                updated_at = clock_timestamp()
-                            WHERE candidate_id = %s
-                            RETURNING *
-                            """,
-                            (_json(merged_source_ref), preview.candidate_id),
-                        )
-                        existing = cursor.fetchone()
-                    return _candidate_from_row(existing), False
-                cursor.execute(
-                    """
                     INSERT INTO hmm_evolution.candidate (
                         candidate_id, manifest_hash, display_name, description,
                         source_type, source_ref, artifact_manifest,
                         algorithm_version, lifecycle_status, created_by
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'research_only', %s)
+                    ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
                     (
@@ -156,10 +121,46 @@ class HMMEvolutionRepository:
                         actor,
                     ),
                 )
-                row = cursor.fetchone()
-                if row is None:  # pragma: no cover - PostgreSQL RETURNING contract.
-                    raise SchemaUnavailableError("candidate insert returned no row")
-                return _candidate_from_row(row), True
+                inserted = cursor.fetchone()
+                if inserted is not None:
+                    return _candidate_from_row(inserted), True
+                cursor.execute(
+                    """
+                    SELECT * FROM hmm_evolution.candidate
+                    WHERE candidate_id = %s OR manifest_hash = %s
+                    FOR UPDATE
+                    """,
+                    (preview.candidate_id, preview.manifest_hash),
+                )
+                existing = cursor.fetchone()
+                if existing is None:  # pragma: no cover - conflict row must be visible.
+                    raise SchemaUnavailableError("candidate conflict row was not visible")
+                if (
+                    existing["candidate_id"] != preview.candidate_id
+                    or not self._same_candidate_content(existing, preview)
+                ):
+                    raise InvalidStateTransitionError(
+                        "candidate identity collision",
+                        context={"candidate_id": preview.candidate_id},
+                    )
+                merged_source_ref = self._append_source_alias(
+                    dict(existing["source_ref"]),
+                    preview.manifest.source_ref,
+                )
+                if merged_source_ref != dict(existing["source_ref"]):
+                    cursor.execute(
+                        """
+                        UPDATE hmm_evolution.candidate
+                        SET source_ref = %s,
+                            row_version = row_version + 1,
+                            updated_at = clock_timestamp()
+                        WHERE candidate_id = %s
+                        RETURNING *
+                        """,
+                        (_json(merged_source_ref), preview.candidate_id),
+                    )
+                    existing = cursor.fetchone()
+                return _candidate_from_row(existing), False
 
     def get_candidate(self, candidate_id: str) -> CandidateRecord:
         with self._conn_factory() as conn:
@@ -293,19 +294,6 @@ class HMMEvolutionRepository:
 
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(
-                    """
-                    SELECT * FROM hmm_evolution.offline_evaluation
-                    WHERE logical_evaluation_key = %s
-                    ORDER BY run_generation DESC
-                    LIMIT 1
-                    FOR UPDATE
-                    """,
-                    (logical_evaluation_key,),
-                )
-                existing = cursor.fetchone()
-                if existing is not None:
-                    return dict(existing), False
                 eval_id = _new_id("hmme")
                 cursor.execute(
                     """
@@ -318,7 +306,9 @@ class HMMEvolutionRepository:
                     ) VALUES (
                         %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s
-                    ) RETURNING *
+                    )
+                    ON CONFLICT (logical_evaluation_key, run_generation) DO NOTHING
+                    RETURNING *
                     """,
                     (
                         eval_id,
@@ -342,9 +332,21 @@ class HMMEvolutionRepository:
                     ),
                 )
                 row = cursor.fetchone()
-                if row is None:  # pragma: no cover
-                    raise SchemaUnavailableError("evaluation insert returned no row")
-                return dict(row), True
+                if row is not None:
+                    return dict(row), True
+                cursor.execute(
+                    """
+                    SELECT * FROM hmm_evolution.offline_evaluation
+                    WHERE logical_evaluation_key = %s
+                    ORDER BY run_generation DESC
+                    LIMIT 1
+                    """,
+                    (logical_evaluation_key,),
+                )
+                existing = cursor.fetchone()
+                if existing is None:  # pragma: no cover - conflict row must be visible.
+                    raise SchemaUnavailableError("evaluation conflict row was not visible")
+                return dict(existing), False
 
     def create_or_get_batch(
         self,
@@ -366,34 +368,6 @@ class HMMEvolutionRepository:
         recommendation_hash = canonical_json_sha256(dict(recommendation_spec))
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                if idempotency_key:
-                    cursor.execute(
-                        """
-                        SELECT * FROM hmm_evolution.batch_test_run
-                        WHERE idempotency_key = %s
-                        FOR UPDATE
-                        """,
-                        (idempotency_key,),
-                    )
-                    by_key = cursor.fetchone()
-                    if by_key is not None:
-                        if by_key["request_hash"] != request_hash:
-                            raise IdempotencyConflictError(
-                                "Idempotency-Key was already used for a different request",
-                                context={"idempotency_key": idempotency_key},
-                            )
-                        return dict(by_key), False
-                cursor.execute(
-                    """
-                    SELECT * FROM hmm_evolution.batch_test_run
-                    WHERE request_hash = %s
-                    FOR UPDATE
-                    """,
-                    (request_hash,),
-                )
-                existing = cursor.fetchone()
-                if existing is not None:
-                    return dict(existing), False
                 batch_id = _new_id("hmmb")
                 queued_count = sum(
                     str(item["item_status"])
@@ -412,6 +386,7 @@ class HMMEvolutionRepository:
                         recommendation_spec, recommendation_spec_hash,
                         recommendation_version, created_by
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
                     (
@@ -429,6 +404,18 @@ class HMMEvolutionRepository:
                     ),
                 )
                 batch = cursor.fetchone()
+                if batch is None:
+                    return (
+                        self._existing_batch_after_conflict(
+                            cursor,
+                            request_hash=request_hash,
+                            idempotency_key=idempotency_key,
+                            conflict_message=(
+                                "Idempotency-Key was already used for a different request"
+                            ),
+                        ),
+                        False,
+                    )
                 for ordinal, item in enumerate(items):
                     cursor.execute(
                         """
@@ -444,9 +431,13 @@ class HMMEvolutionRepository:
                             str(item["item_status"]),
                         ),
                     )
-                if batch is None:  # pragma: no cover
-                    raise SchemaUnavailableError("batch insert returned no row")
-                return dict(batch), True
+                batch = self._recompute_batch_state_with_cursor(
+                    cursor,
+                    batch_id,
+                    release_lease=True,
+                    locked_batch=dict(batch),
+                )
+                return batch, True
 
     def get_batch(self, batch_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
@@ -624,6 +615,11 @@ class HMMEvolutionRepository:
                     """,
                     (eval_id,),
                 )
+                self._recompute_batches_for_evaluation(
+                    cursor,
+                    eval_id,
+                    release_lease=True,
+                )
                 return dict(row)
 
     def fail_evaluation(
@@ -692,6 +688,11 @@ class HMMEvolutionRepository:
                         _json(dict(error_context or {})),
                         eval_id,
                     ),
+                )
+                self._recompute_batches_for_evaluation(
+                    cursor,
+                    eval_id,
+                    release_lease=True,
                 )
                 return dict(row)
 
@@ -768,61 +769,38 @@ class HMMEvolutionRepository:
     def recompute_batch_state(self, batch_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                return self._recompute_batch_state_with_cursor(cursor, batch_id)
+
+    def release_batch_after_empty_claim(
+        self,
+        *,
+        batch_id: str,
+        owner_id: str,
+        fencing_token: int,
+        expected_row_version: int,
+    ) -> dict[str, Any]:
+        """Release an orchestration lease when no local evaluation can be claimed."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     SELECT * FROM hmm_evolution.batch_test_run
-                    WHERE batch_id = %s FOR UPDATE
+                    WHERE batch_id = %s AND status = 'running' AND owner_id = %s
+                      AND fencing_token = %s AND row_version = %s
+                    FOR UPDATE
                     """,
-                    (batch_id,),
+                    (batch_id, owner_id, fencing_token, expected_row_version),
                 )
                 batch = cursor.fetchone()
                 if batch is None:
-                    raise InvalidStateTransitionError(
-                        "batch was not found", context={"batch_id": batch_id}
-                    )
-                cursor.execute(
-                    """
-                    SELECT item_status, COUNT(*) AS count
-                    FROM hmm_evolution.batch_test_item
-                    WHERE batch_id = %s GROUP BY item_status
-                    """,
-                    (batch_id,),
+                    self._raise_stale_fence(batch_id, "batch")
+                return self._recompute_batch_state_with_cursor(
+                    cursor,
+                    batch_id,
+                    release_lease=True,
+                    locked_batch=dict(batch),
                 )
-                counts = {str(row["item_status"]): int(row["count"]) for row in cursor.fetchall()}
-                status = self._derive_batch_status(str(batch["status"]), counts)
-                cursor.execute(
-                    """
-                    UPDATE hmm_evolution.batch_test_run
-                    SET status = %s,
-                        queued_count = %s, running_count = %s, succeeded_count = %s,
-                        failed_count = %s, cancelled_count = %s, timed_out_count = %s,
-                        completed_at = CASE WHEN %s = ANY(%s) THEN COALESCE(completed_at, clock_timestamp()) ELSE NULL END,
-                        owner_id = CASE WHEN %s = ANY(%s) THEN NULL ELSE owner_id END,
-                        lease_expires_at = CASE WHEN %s = ANY(%s) THEN NULL ELSE lease_expires_at END,
-                        updated_at = clock_timestamp(), row_version = row_version + 1
-                    WHERE batch_id = %s RETURNING *
-                    """,
-                    (
-                        status,
-                        sum(counts.get(item, 0) for item in ("pending", "waiting_shared", "queued")),
-                        counts.get("running", 0),
-                        counts.get("succeeded", 0) + counts.get("reused", 0),
-                        counts.get("failed", 0),
-                        counts.get("cancelled", 0),
-                        counts.get("timed_out", 0),
-                        status,
-                        list(TERMINAL_BATCH_STATUSES),
-                        status,
-                        list(TERMINAL_BATCH_STATUSES),
-                        status,
-                        list(TERMINAL_BATCH_STATUSES),
-                        batch_id,
-                    ),
-                )
-                row = cursor.fetchone()
-                if row is None:  # pragma: no cover
-                    raise SchemaUnavailableError("batch state recompute returned no row")
-                return dict(row)
 
     def apply_recommendation(
         self,
@@ -919,39 +897,13 @@ class HMMEvolutionRepository:
                 )
                 cursor.execute(
                     """
-                    SELECT * FROM hmm_evolution.batch_test_run
-                    WHERE request_hash = %s FOR UPDATE
-                    """,
-                    (request_hash,),
-                )
-                existing_retry = cursor.fetchone()
-                if existing_retry is not None:
-                    return dict(existing_retry)
-                if idempotency_key:
-                    cursor.execute(
-                        "SELECT request_hash FROM hmm_evolution.batch_test_run WHERE idempotency_key = %s",
-                        (idempotency_key,),
-                    )
-                    existing_key = cursor.fetchone()
-                    if existing_key is not None:
-                        if existing_key["request_hash"] != request_hash:
-                            raise IdempotencyConflictError(
-                                "Idempotency-Key was already used for a different retry",
-                                context={"idempotency_key": idempotency_key},
-                            )
-                        cursor.execute(
-                            "SELECT * FROM hmm_evolution.batch_test_run WHERE request_hash = %s",
-                            (request_hash,),
-                        )
-                        return dict(cursor.fetchone())
-                cursor.execute(
-                    """
                     INSERT INTO hmm_evolution.batch_test_run (
                         batch_id, request_hash, idempotency_key, retry_of_batch_id,
                         retry_generation, candidate_count, queued_count,
                         recommendation_spec, recommendation_spec_hash,
                         recommendation_version, created_by
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
                     (
@@ -969,6 +921,15 @@ class HMMEvolutionRepository:
                     ),
                 )
                 new_batch = cursor.fetchone()
+                if new_batch is None:
+                    return self._existing_batch_after_conflict(
+                        cursor,
+                        request_hash=request_hash,
+                        idempotency_key=idempotency_key,
+                        conflict_message=(
+                            "Idempotency-Key was already used for a different retry"
+                        ),
+                    )
                 for ordinal, source in enumerate(failed_rows):
                     new_eval_id = _new_id("hmme")
                     next_eval_generation = int(source["run_generation"]) + 1
@@ -1020,7 +981,7 @@ class HMMEvolutionRepository:
                 return dict(new_batch)
 
     def mark_expired_leases_timed_out(self) -> dict[str, int]:
-        """Terminalize expired leases; workers never silently reclaim them."""
+        """Terminalize expired evaluations and derive affected batches from item truth."""
 
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -1053,16 +1014,33 @@ class HMMEvolutionRepository:
                     )
                 cursor.execute(
                     """
-                    UPDATE hmm_evolution.batch_test_run
-                    SET status = 'timed_out', error_code = 'HMM_EVOLUTION_ERROR',
-                        reason_code = 'hmm_evolution_batch_timed_out', owner_id = NULL,
-                        lease_expires_at = NULL, completed_at = clock_timestamp(),
-                        updated_at = clock_timestamp(), row_version = row_version + 1
+                    SELECT batch_id FROM hmm_evolution.batch_test_run
                     WHERE status IN ('running', 'cancel_requested')
                       AND lease_expires_at < clock_timestamp()
+                    FOR UPDATE SKIP LOCKED
                     """
                 )
-                batch_count = cursor.rowcount
+                expired_batch_ids = [str(row["batch_id"]) for row in cursor.fetchall()]
+                affected_batch_ids = set(expired_batch_ids)
+                if expired_eval_ids:
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT batch_id
+                        FROM hmm_evolution.batch_test_item
+                        WHERE eval_id = ANY(%s)
+                        """,
+                        (expired_eval_ids,),
+                    )
+                    affected_batch_ids.update(
+                        str(row["batch_id"]) for row in cursor.fetchall()
+                    )
+                for affected_batch_id in sorted(affected_batch_ids):
+                    self._recompute_batch_state_with_cursor(
+                        cursor,
+                        affected_batch_id,
+                        release_lease=True,
+                    )
+                batch_count = len(expired_batch_ids)
         return {"evaluations": evaluation_count, "batches": batch_count}
 
     def _claim_one(
@@ -1092,6 +1070,25 @@ class HMMEvolutionRepository:
                         FOR UPDATE OF e SKIP LOCKED LIMIT 1
                         """,
                         (batch_id,),
+                    )
+                elif relation == "batch_test_run":
+                    cursor.execute(
+                        """
+                        SELECT b.batch_id
+                        FROM hmm_evolution.batch_test_run b
+                        WHERE b.status = 'queued'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM hmm_evolution.batch_test_item i
+                              JOIN hmm_evolution.offline_evaluation e
+                                ON e.eval_id = i.eval_id
+                              WHERE i.batch_id = b.batch_id
+                                AND e.status = 'queued'
+                                AND i.item_status IN ('pending', 'waiting_shared', 'queued')
+                          )
+                        ORDER BY b.created_at ASC, b.batch_id ASC
+                        FOR UPDATE OF b SKIP LOCKED LIMIT 1
+                        """
                     )
                 else:
                     cursor.execute(
@@ -1188,6 +1185,180 @@ class HMMEvolutionRepository:
         result = dict(primary)
         result["aliases"] = aliases
         return result
+
+    @staticmethod
+    def _same_candidate_content(
+        existing: Mapping[str, Any],
+        incoming: CandidatePreview,
+    ) -> bool:
+        stored_manifest = existing.get("artifact_manifest")
+        if not isinstance(stored_manifest, Mapping):
+            return False
+        incoming_manifest = incoming.manifest.model_dump(mode="json")
+        identity_fields = (
+            "artifact_sha256",
+            "artifact_type",
+            "detected_format",
+            "algorithm_version",
+        )
+        return all(
+            stored_manifest.get(field) == incoming_manifest.get(field)
+            for field in identity_fields
+        )
+
+    @staticmethod
+    def _existing_batch_after_conflict(
+        cursor: Any,
+        *,
+        request_hash: str,
+        idempotency_key: str | None,
+        conflict_message: str,
+    ) -> dict[str, Any]:
+        if idempotency_key:
+            cursor.execute(
+                """
+                SELECT * FROM hmm_evolution.batch_test_run
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            )
+            by_key = cursor.fetchone()
+            if by_key is not None:
+                if by_key["request_hash"] != request_hash:
+                    raise IdempotencyConflictError(
+                        conflict_message,
+                        context={"idempotency_key": idempotency_key},
+                    )
+                return dict(by_key)
+        cursor.execute(
+            """
+            SELECT * FROM hmm_evolution.batch_test_run
+            WHERE request_hash = %s
+            """,
+            (request_hash,),
+        )
+        existing = cursor.fetchone()
+        if existing is None:  # pragma: no cover - conflict row must be visible.
+            raise SchemaUnavailableError("batch conflict row was not visible")
+        return dict(existing)
+
+    def _recompute_batches_for_evaluation(
+        self,
+        cursor: Any,
+        eval_id: str,
+        *,
+        release_lease: bool,
+    ) -> None:
+        cursor.execute(
+            """
+            SELECT DISTINCT batch_id
+            FROM hmm_evolution.batch_test_item
+            WHERE eval_id = %s
+            ORDER BY batch_id
+            """,
+            (eval_id,),
+        )
+        for row in cursor.fetchall():
+            self._recompute_batch_state_with_cursor(
+                cursor,
+                str(row["batch_id"]),
+                release_lease=release_lease,
+            )
+
+    def _recompute_batch_state_with_cursor(
+        self,
+        cursor: Any,
+        batch_id: str,
+        *,
+        release_lease: bool = False,
+        locked_batch: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        batch = dict(locked_batch) if locked_batch is not None else None
+        if batch is None:
+            cursor.execute(
+                """
+                SELECT * FROM hmm_evolution.batch_test_run
+                WHERE batch_id = %s FOR UPDATE
+                """,
+                (batch_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise InvalidStateTransitionError(
+                    "batch was not found",
+                    context={"batch_id": batch_id},
+                )
+            batch = dict(row)
+        cursor.execute(
+            """
+            SELECT item_status, COUNT(*) AS count
+            FROM hmm_evolution.batch_test_item
+            WHERE batch_id = %s GROUP BY item_status
+            """,
+            (batch_id,),
+        )
+        counts = {
+            str(row["item_status"]): int(row["count"])
+            for row in cursor.fetchall()
+        }
+        cursor.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM hmm_evolution.batch_test_item i
+                JOIN hmm_evolution.offline_evaluation e ON e.eval_id = i.eval_id
+                WHERE i.batch_id = %s AND e.status = 'queued'
+                  AND i.item_status IN ('pending', 'waiting_shared', 'queued')
+            ) AS has_queued_evaluation
+            """,
+            (batch_id,),
+        )
+        queued_row = cursor.fetchone()
+        has_queued_evaluation = bool(queued_row and queued_row["has_queued_evaluation"])
+        if (
+            has_queued_evaluation
+            and str(batch["status"]) != BatchStatus.CANCEL_REQUESTED.value
+        ):
+            status = BatchStatus.QUEUED.value
+        else:
+            status = self._derive_batch_status(str(batch["status"]), counts)
+        terminal = status in TERMINAL_BATCH_STATUSES
+        clear_lease = terminal or release_lease
+        cursor.execute(
+            """
+            UPDATE hmm_evolution.batch_test_run
+            SET status = %s,
+                queued_count = %s, running_count = %s, succeeded_count = %s,
+                failed_count = %s, cancelled_count = %s, timed_out_count = %s,
+                completed_at = CASE WHEN %s THEN COALESCE(completed_at, clock_timestamp()) ELSE NULL END,
+                owner_id = CASE WHEN %s THEN NULL ELSE owner_id END,
+                lease_expires_at = CASE WHEN %s THEN NULL ELSE lease_expires_at END,
+                heartbeat_at = CASE WHEN %s THEN NULL ELSE heartbeat_at END,
+                updated_at = clock_timestamp(), row_version = row_version + 1
+            WHERE batch_id = %s RETURNING *
+            """,
+            (
+                status,
+                sum(
+                    counts.get(item, 0)
+                    for item in ("pending", "waiting_shared", "queued")
+                ),
+                counts.get("running", 0),
+                counts.get("succeeded", 0) + counts.get("reused", 0),
+                counts.get("failed", 0),
+                counts.get("cancelled", 0),
+                counts.get("timed_out", 0),
+                terminal,
+                clear_lease,
+                clear_lease,
+                clear_lease,
+                batch_id,
+            ),
+        )
+        updated = cursor.fetchone()
+        if updated is None:  # pragma: no cover
+            raise SchemaUnavailableError("batch state recompute returned no row")
+        return dict(updated)
 
     @staticmethod
     def _derive_batch_status(current: str, counts: Mapping[str, int]) -> str:
