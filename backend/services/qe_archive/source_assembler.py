@@ -99,6 +99,65 @@ TASK_COLUMNS = (
 TERMINAL_STATUSES = ("completed", "failed", "interrupted", "cancelled")
 
 
+def _merge_missing_mapping_evidence(base: Mapping[str, Any], supplement: Mapping[str, Any]) -> dict[str, Any]:
+    """Fill missing nested evidence while keeping loop metrics authoritative."""
+
+    merged = dict(base)
+    for key, value in supplement.items():
+        current = merged.get(key)
+        if isinstance(current, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_missing_mapping_evidence(current, value)
+        elif key not in merged or current is None or current == {} or current == [] or current == "":
+            merged[key] = value
+    return merged
+
+
+def _normalize_loop_identity(task_id: Any, loop_id: Any) -> tuple[str, str]:
+    task = str(task_id or "").strip()
+    raw_loop = str(loop_id or "").strip()
+    if task and raw_loop.startswith(f"{task}_"):
+        raw_loop = raw_loop[len(task) + 1 :]
+    return task, raw_loop
+
+
+def _validate_linked_experiment_identity(
+    loop: Mapping[str, Any],
+    experiment: Mapping[str, Any],
+) -> None:
+    """Fail fast when a linked experiment does not describe the same QE loop."""
+
+    if not experiment:
+        return
+    loop_experiment_id = str(loop.get("experiment_id") or "").strip()
+    experiment_id = str(experiment.get("experiment_id") or "").strip()
+    if loop_experiment_id and experiment_id and loop_experiment_id != experiment_id:
+        raise ValueError(
+            "QE archive linked experiment mismatch: "
+            f"loop experiment_id={loop_experiment_id}, experiment_id={experiment_id}"
+        )
+    if experiment_id and experiment.get("is_evolution_loop") is False:
+        raise ValueError(
+            "QE archive linked experiment is not marked as an evolution loop: "
+            f"experiment_id={experiment_id}"
+        )
+
+    loop_task, loop_suffix = _normalize_loop_identity(loop.get("task_id"), loop.get("loop_id"))
+    experiment_task, experiment_suffix = _normalize_loop_identity(
+        experiment.get("qe_task_id"),
+        experiment.get("qe_loop_id"),
+    )
+    if experiment_task and loop_task and experiment_task != loop_task:
+        raise ValueError(
+            "QE archive linked experiment task mismatch: "
+            f"loop task_id={loop_task}, experiment qe_task_id={experiment_task}"
+        )
+    if experiment_suffix and loop_suffix and experiment_suffix != loop_suffix:
+        raise ValueError(
+            "QE archive linked experiment loop mismatch: "
+            f"loop_id={loop_suffix}, experiment qe_loop_id={experiment_suffix}"
+        )
+
+
 class QEArchiveSourceAssembler:
     """Build archive-service payloads from existing QE DB records."""
 
@@ -348,17 +407,28 @@ class QEArchiveSourceAssembler:
             with conn.cursor() as cur:
                 loop_available = self._available_columns(cur, "qe_evolution_loops")
                 task_available = self._available_columns(cur, "qe_evolution_tasks")
+                experiment_available = self._available_columns(cur, "qe_experiments")
                 loop_cols = [col for col in LOOP_COLUMNS if col in loop_available]
                 task_cols = [col for col in TASK_COLUMNS if col in task_available]
+                experiment_cols = [col for col in EXPERIMENT_COLUMNS if col in experiment_available]
                 select_cols = [f"l.{col} AS loop__{col}" for col in loop_cols]
                 select_cols.extend(f"t.{col} AS task__{col}" for col in task_cols)
+                can_join_experiment = "experiment_id" in loop_available and "experiment_id" in experiment_available
+                if can_join_experiment:
+                    select_cols.extend(f"e.{col} AS experiment__{col}" for col in experiment_cols)
                 where_sql = "l.loop_id = %s" if loop_id else "l.task_id = %s AND l.loop_index = %s"
                 params: tuple[Any, ...] = (loop_id,) if loop_id else (task_id, loop_index)
+                experiment_join = (
+                    "LEFT JOIN qe_experiments e ON e.experiment_id = l.experiment_id"
+                    if can_join_experiment
+                    else ""
+                )
                 cur.execute(
                     f"""
                     SELECT {", ".join(select_cols)}
                     FROM qe_evolution_loops l
                     LEFT JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                    {experiment_join}
                     WHERE {where_sql}
                     """,
                     params,
@@ -372,7 +442,12 @@ class QEArchiveSourceAssembler:
         joined = dict(zip(descriptions, row))
         loop_row = {key.removeprefix("loop__"): value for key, value in joined.items() if key.startswith("loop__")}
         task_row = {key.removeprefix("task__"): value for key, value in joined.items() if key.startswith("task__")}
-        return self.build_loop_payload(loop_row, task_row)
+        experiment_row = {
+            key.removeprefix("experiment__"): value
+            for key, value in joined.items()
+            if key.startswith("experiment__")
+        }
+        return self.build_loop_payload(loop_row, task_row, experiment_row)
 
     def _experiment_archive_status(self, experiment_ids: Sequence[str]) -> dict[str, Any]:
         result = {
@@ -965,11 +1040,19 @@ class QEArchiveSourceAssembler:
         }
 
     @staticmethod
-    def build_loop_payload(loop_row: Mapping[str, Any], task_row: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def build_loop_payload(
+        loop_row: Mapping[str, Any],
+        task_row: Mapping[str, Any] | None = None,
+        experiment_row: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         loop = dict(loop_row)
         task = dict(task_row or {})
+        experiment = dict(experiment_row or {})
+        _validate_linked_experiment_identity(loop, experiment)
         config_json = _ensure_mapping(loop.get("config_json"))
-        metrics = _ensure_mapping(loop.get("metrics_json"))
+        loop_metrics = _ensure_mapping(loop.get("metrics_json"))
+        experiment_metrics = _ensure_mapping(experiment.get("result_metrics"))
+        metrics = _merge_missing_mapping_evidence(loop_metrics, experiment_metrics)
         task_id = loop.get("task_id") or task.get("task_id")
         loop_id = loop.get("loop_id")
         runtime_flags = _ensure_mapping(config_json.get("runtime_flags") or config_json.get("custom_params") or {})
@@ -1048,6 +1131,11 @@ class QEArchiveSourceAssembler:
                 "agent_analysis": _ensure_mapping(loop.get("agent_analysis")),
                 "action_type": loop.get("action_type"),
                 "is_sota": loop.get("is_sota"),
+                "metrics_provenance": {
+                    "base_source": "qe_evolution_loops.metrics_json",
+                    "enhancement_source": "qe_experiments.result_metrics" if experiment_metrics else None,
+                    "linked_experiment_id": experiment.get("experiment_id") or loop.get("experiment_id"),
+                },
             },
             "metrics": metrics,
             "source_created_at": _jsonable(loop.get("created_at")),
