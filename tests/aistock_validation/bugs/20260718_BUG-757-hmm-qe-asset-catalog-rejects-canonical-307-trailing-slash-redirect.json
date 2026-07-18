@@ -2,7 +2,9 @@
   "actual": "After runtime activation, GET /api/v1/hmm-evolution/qe-assets/{task}/{loop} returns 503. ManagedQEWorkspaceReadClient calls the QE workspace files collection URL without the canonical trailing slash; the node responds 307 to the slash-suffixed URL, while QEWorkspaceClient treats the redirect as an error. Expected: build the canonical collection URL or safely follow same-origin redirects while preserving authoritative-node routing, bounded reads, and fail-loud errors.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260718_BUG-757-hmm-qe-asset-catalog-rejects-canonical-307-trailing-slash-redirect.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/qe_workspace_client.py",
+    "backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-757",
