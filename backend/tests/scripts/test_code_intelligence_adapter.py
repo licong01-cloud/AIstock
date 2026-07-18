@@ -404,6 +404,10 @@ def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped
     assert "pull_request:" not in push_workflow
     assert "group: code-intelligence-refresh-main" in push_workflow
     assert "continue-on-error: true" in push_workflow
+    assert "GITHUB_OUTPUT" not in push_workflow
+    assert "if ($result.publish_ready)" in push_workflow
+    assert "--output \"$outDir/codegraph-state-export.json\"" in push_workflow
+    assert "steps.codegraph.outputs.publish_ready" not in push_workflow
     assert "refresh-plan `\n            --trigger main_push" in push_workflow
     assert "ua-refresh" not in push_workflow
     assert "code-intelligence-refresh-main" in nightly

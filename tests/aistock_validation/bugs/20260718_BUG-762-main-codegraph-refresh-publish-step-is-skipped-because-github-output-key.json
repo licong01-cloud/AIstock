@@ -1,6 +1,8 @@
 {
   "actual": "Post-merge run 29642988658 completed codegraph sync with publish_ready=true, but the atomic publish step was skipped because the Windows PowerShell GITHUB_OUTPUT handoff was not recognized. The updated index remained only in the disposable Actions workspace.",
   "allowed_write_scope": [
+    ".github/workflows/code-intelligence-refresh.yml",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
     "tests/aistock_validation/bugs/20260718_BUG-762-main-codegraph-refresh-publish-step-is-skipped-because-github-output-key.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "When CodeGraph sync returns publish_ready=true, the same warning-only step atomically exports the updated state without a cross-step GITHUB_OUTPUT handoff.",
   "first_seen_at": "2026-07-18T11:53:13.765522Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -33,7 +35,9 @@
   "last_seen_at": "2026-07-18T11:53:13.765522Z",
   "module": "validation",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not add a PR or merge gate.",
+    "Do not run unrelated backend, frontend, or business-module test matrices."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -41,7 +45,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
