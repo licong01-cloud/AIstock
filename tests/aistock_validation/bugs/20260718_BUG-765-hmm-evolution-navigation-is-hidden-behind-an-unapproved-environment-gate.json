@@ -4,8 +4,8 @@
     "frontend/src/lib/navigation/nav-groups.ts",
     "frontend/tests/hmm-evolution/hmm-evolution.spec.ts",
     "frontend/src/app/hmm-evolution/page.tsx",
-    "frontend/src/app/hmm-evolution/batches/[batchId]/page.tsx",
-    "frontend/src/app/hmm-evolution/evaluations/[evalId]/page.tsx",
+    "frontend/src/app/hmm-evolution/batches/**",
+    "frontend/src/app/hmm-evolution/evaluations/**",
     "tests/aistock_validation/bugs/20260718_BUG-765-hmm-evolution-navigation-is-hidden-behind-an-unapproved-environment-gate.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
