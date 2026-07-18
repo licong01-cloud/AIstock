@@ -418,22 +418,24 @@ phase0a_audit_request/receipt
 handoff_readiness_report
 phase1_handoff_bundle nullable
 admission_scope_id/hash nullable
-phase0a_policy_registry_payload/hash
-source_query_registry_payload/hash
-calendar_identity_payload/hash
-label_policy_bundle_payload/hash nullable
+phase0a_policy_registry_ref/hash
+source_query_registry_ref/hash
+observer_config_ref/hash
+calendar_identity_ref/hash
 dataset_schema_fingerprint
-partition_policy_payload/hash
-store_backend_policy_payload/hash
-artifact_store_policy_payload/hash
+partition_policy_ref/hash
+store_backend_policy_ref/hash
+artifact_store_policy_ref/hash
 compiler_version/serializer_version/compiler_source_hash
 dependency_hash
 ```
 
-这些 payload 必须是对应 typed model 的 canonical dump，并在 artifact full readback 时重新构造 typed model 和重算 hash；
-不能把一组散乱 hash、路径或调用方手填 JSON 当作依赖闭包。`LabelPolicyBundle` 绑定
-`admission_scope_id/package/manifest/style/calendar`，因此只能存在于对应 Program dependency 中，禁止在顶层 build request 或
-跨 Program batch 中设置一个全局 `label_policy_bundle_ref/hash`。`WAITING_INPUT` Program 尚未形成完整 audit/handoff 时，
+上述policy/config ref必须分别指向其固定O4 artifact kind；artifact payload是对应typed model的canonical dump，并在full
+readback时重新构造typed model和重算hash。不能把一组散乱hash、路径、Program dependency自身ref或调用方手填JSON冒充
+子依赖。`LabelPolicyBundle`不属于O4 compiler dependency：它定义Phase 1H outcome label语义，不参与荐股名单、source
+observation、G5 capture或当前Program readiness。O4 batch中的`label_policy_bundle_hash`固定为NULL deferred slot，Phase 1H
+冻结逐scope策略后重新生成其独立DML/capacity request，不得用Program review policy、固定常量或占位hash提前填充。
+`WAITING_INPUT` Program 尚未形成完整 audit/handoff 时，
 `compiler_dependency_ref/hash` 保持 NULL，并由 Program unit 明确记录缺失项；`FAILED` Program 直接进入 blocked。
 
 `Phase1ERealInputBuildRequest` 本身必须以 `real_input_build_request` kind 写入 O4 CAS；其 ref/hash 是后续
@@ -657,7 +659,9 @@ request_hash
 
 字段权威来源固定如下：Program/package/style/candidate depth 来自 O3 receipt、dated binding 与 Program policy exact
 readback；每个`input_universe_count`来自actual DSE/artifact input context，顶层universe p50/p95/max由本次exact
-`program_workloads[]`确定性计算；horizon/projection/stage参数来自冻结label/partition policy；
+`program_workloads[]`确定性计算。O4/G5 source-capture workload固定`horizons=()`、`projection_count=0`、
+`stage_projection_factor=0`，只测量source evidence、canonical signal和G5 capture所需资源；Phase 1H冻结label policy后使用新的
+capacity request测量label/universe/snapshot工作量，不复用O4 receipt；
 memory/concurrency/retention/reserve参数来自`capacity_policy_ref`；store root来自不可变store policy。revision multiplier、
 store available bytes、Parquet/row-width/change-ratio、source partition分布只能出现在Phase1D read-only measurement/receipt，
 不能由request携带或由调用方填写。这样probe不存在“先填测量值才能测量”的循环。v1继续兼容既有调用，但O4 builder和
@@ -745,7 +749,7 @@ Program unit中的O4-owned ref与artifact kind固定一一对应：
 不得使用registry、capacity request/receipt或其它 Program 的ref冒充Program级artifact。每个Program级artifact都包含parent
 artifact ref/hash、Program/date identity和自身semantic hash。`phase1e_batch_request` 固定只包含一个 Program/date；同一
 orchestration invocation可以产生任意多个独立batch request，禁止为了复用旧 batch contract 而把不同
-`label_policy_bundle_hash`、calendar或admission scope强塞进一个batch。
+calendar或admission scope强塞进一个batch。label policy在O4 batch中只能为NULL deferred slot。
 
 Program readiness固定按下表派生，调用方不能自行提升或覆盖：
 
@@ -948,10 +952,10 @@ Parquet probe只允许读取DEV `app.advisory_dataset_snapshot` / `app.advisory_
 1. `compile-phase1e`只接受post-capacity input bundle ref。它按Program unit独立构造一个只含该Program/date的
    `Phase1ERevalidationBatchRequest`，并填满`expected_package_id`、`expected_manifest_sha256`、
    `expected_alpha_mode`、`expected_style_family`和exact historical receipt；这些字段不能依赖compiler从当前数据库状态推断。
-2. 每个batch request的policy/query/calendar/label/partition/store/compiler/artifact-store字段只能从该Program的
+2. 每个batch request的policy/query/calendar/partition/store/compiler/artifact-store字段只能从该Program的
    `program_compiler_dependency` full readback提取；source requirement与capacity字段只能从该Program unit及其parent
    request/receipt/coverage提取。禁止使用顶层全局label、其它Program的依赖、路径alias、latest、目录mtime或只有hash没有
-   可定位ref的输入。
+   可定位ref的输入。`label_policy_bundle_hash`必须为NULL，并保留`phase1h_frozen_policy_resolution`输出槽。
 3. 一个orchestration invocation可以包含多个Program，但只是多个独立single-Program compiler request的确定性集合。
    `compile-phase1e`逐个调用现有compiler并发布各自batch request、plan/batch receipt ref，最后发布一个
    `phase1e_compile_receipt`，准确列出每个Program的`COMPLETE/PENDING/BLOCKED/FAILED`与输出refs。一个Program失败不回滚、
@@ -1162,7 +1166,7 @@ unexpected traceback只写后台日志。
 - historical runner继续使用既有business key和逐Program独立事务，不改变其重试/恢复语义。
 - historical request/receipt CAS和Phase0A audit directory CAS都必须使用atomic no-replace、文件集合闭包校验和逐文件
   exact readback；并发发布不能使用`Path.replace()`覆盖已存在identity，额外文件或目录同样视为冲突。
-- O4 CAS固定使用以下17个kind，禁止复用其它kind冒充缺失层级：
+- O4 CAS固定使用以下24个kind，禁止复用其它kind冒充缺失层级：
 
   ```text
   real_input_build_request
@@ -1176,6 +1180,13 @@ unexpected traceback只写后台日志。
   capacity_program_workload
   capacity_receipt
   capacity_program_coverage
+  phase0a_policy_registry
+  source_query_registry
+  observer_config
+  calendar_identity
+  partition_policy
+  store_backend_policy
+  artifact_store_policy
   program_compiler_dependency
   program_input
   input_bundle
@@ -1227,9 +1238,9 @@ projection、source mapping、derived PIT、capacity v2、pure input builders和
 authoritative command，也没有把真实DEV、audit/handoff、capacity和existing Phase1E compiler连成可执行链。该状态是
 `partial_components_merged`，不是O4完成。BUG-755继续实现F-906至F-911，内部顺序固定如下：
 
-1. O4A contract correction：把scope级audit/handoff/label/calendar/compiler依赖收敛为逐Program
+1. O4A contract correction：把scope级audit/handoff/calendar/compiler依赖收敛为逐Program
    `program_compiler_dependency`，移除顶层单一label依赖，增加逐Program `phase1e_batch_request` 与
-   `phase1e_compile_receipt`，并保持既有artifact full readback；
+   `phase1e_compile_receipt`及八类typed policy/config child artifact，并保持既有artifact full readback；
 2. O4B admitted-input projection + target-aware observer：从typed frozen manifest纯投影single/native-multi分腿factor order/window，
    不复验package资产；随后由统一CLI完成真实DSE role到physical requirement映射、显式DEV factory和无enable/prod/process-env路径；
 3. O4C authoritative build：新增`phase1e_orchestration.py`，从O3 exact refs与DEV snapshot逐Program生成audit/handoff、
@@ -1274,7 +1285,7 @@ readiness替代。source不成熟时逐Program准确pending，mapping/hash/ident
 - relation/column allowlist、dependency graph完整性、unknown relation拒绝；
 - insert/exact/conflict分类、same key different payload拒绝；
 - identity-complete/source-pending/source-ready严格分型；
-- 逐Program compiler dependency typed round-trip、label/admission/calendar错配拒绝、不同Program不同label合法；
+- 逐Program compiler dependency typed round-trip、admission/calendar错配拒绝、O4 label policy deferred slot不可伪造；
 - pre-capacity bundle只能是`NOT_MEASURED`，plan-capacity只能从其生成post-capacity bundle，反向或跳步调用显式失败；
 - 多Program compile产生多个single-Program batch request与一个aggregate receipt，一个Program失败不隐藏其它Program结果；
 - 逐Program identity/source/capacity状态与
@@ -1559,7 +1570,7 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-907 | §7.12、§11.2、§12 | `backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py`增加pre/post-capacity bundle与真实orchestration状态传播 | design_ready | none |
 | F-908 | §7.9-7.10、§11.2-11.3 | PR #2412组件证据：`backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py`；BUG-755增加O3 exact refs、observer和actual DSE readback | design_ready | none |
 | F-909 | §7.11、§11.4 | `backend/tests/advisory_dev_input_onboarding/test_o4_capacity_v2.py`增加pre-capacity bundle到真实request/receipt/coverage/post-capacity bundle闭包 | design_ready | none |
-| F-910 | §7.8、§7.10、§7.12、§12、§15 | `backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py`覆盖17-kind、逐Program compiler dependency、pre/post-capacity bundle与full readback | design_ready | none |
+| F-910 | §7.8、§7.10、§7.12、§12、§15 | `backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py`覆盖24-kind、逐Program compiler dependency、typed policy/config refs、pre/post-capacity bundle与full readback | design_ready | none |
 | F-911 | §7.12、§12 | `backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py`覆盖逐Program single-batch compiler、plan verify和aggregate compile receipt | design_ready | none |
 | F-912 | §11.2、§12 | `backend/tests/advisory_phase1/test_phase1g_dev_inventory.py`保持pending零DML/source-ready消费；真实DEV只在O4生成exact plan root后执行 | design_ready | none |
 | F-913 | §17 O5、§22 | `backend/tests/advisory_phase1/test_phase1g_service.py`保持existing G5 contract parity；O5只消费O4真实plan | design_ready | none |
