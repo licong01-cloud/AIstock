@@ -6,6 +6,11 @@ codegraph:
   install_mode: global_or_npx
   mcp_server: "codegraph serve --mcp"
   project_index_dir: ".codegraph"
+  refresh:
+    main_push: incremental_warning_only
+    nightly: reconcile_warning_only
+    persistent_state_root_env: AISTOCK_CODE_INTELLIGENCE_STATE_ROOT
+    merge_gate: false
   commit_index: false
   ci_mode: warning
   max_context_symbols_t1: 8

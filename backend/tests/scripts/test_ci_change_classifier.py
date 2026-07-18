@@ -354,6 +354,7 @@ def test_unrelated_workflow_validation_change_does_not_run_prompt_evaluation(tmp
 def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
+            ".github/workflows/code-intelligence-refresh.yml",
             ".github/workflows/nightly.yml",
             "scripts/code_intelligence_adapter.py",
             "backend/tests/scripts/test_code_intelligence_adapter.py",
@@ -365,6 +366,7 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
     assert payload["classification"] == "workflow_validation_only"
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
+    assert payload["unmapped_code_files"] == []
 
 
 def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path) -> None:
