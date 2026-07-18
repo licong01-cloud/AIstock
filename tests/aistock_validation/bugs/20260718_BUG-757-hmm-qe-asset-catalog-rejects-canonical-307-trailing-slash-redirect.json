@@ -1,0 +1,165 @@
+{
+  "actual": "GET /api/v1/hmm-evolution/qe-assets/{task}/{loop} returns 503 because the running RD-Agent Results API process predates the merged loop asset catalog contract. Its OpenAPI schema has only /files/{file_path}; requesting the intended /files collection falls through to a 307 slash redirect and then a 404 for an empty file path. RD-Agent PR #4 already added the exact /files collection endpoint, but the process started on 2026-07-15 and has not loaded that merged code.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260718_BUG-757-hmm-qe-asset-catalog-rejects-canonical-307-trailing-slash-redirect.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-757",
+  "closed_at": "2026-07-18T09:48:26.907243Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-18T08:42:54.952155Z",
+  "description": "The AIstock client already requests the correct exact collection route. RD-Agent PR #4 (commit 8c6776a5c90b16a57ab68853be72726d9e5305d9) implements that route, but the active Results API process is still serving the older route table. Activate the merged RD-Agent code and verify a complete read-only catalog before closing this BUG; do not add a redirect-following or guessed-file fallback in AIstock.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260718-cd5ae5fe9d94",
+      "timestamp": "2026-07-18T08:42:54.952150Z"
+    },
+    {
+      "action": "runtime_activation_verified",
+      "actor": "codex",
+      "note": "RD-Agent catalog returned complete with 155 assets; AIstock HMM asset API returned 200; batch hmmb_037f84c53f9b4ae487365c17cabf0292 completed 2/2 evaluations without failure or timeout.",
+      "timestamp": "2026-07-18T09:48:26.907243Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/RD-Agent/pull/4",
+    "https://github.com/licong01-cloud/RD-Agent/commit/8c6776a5c90b16a57ab68853be72726d9e5305d9"
+  ],
+  "expected": "After the RD-Agent Results API is restarted from commit 8c6776a5c90b16a57ab68853be72726d9e5305d9 or later, GET /api/v1/qe_workspace/tasks/{task_id}/loops/{loop_id}/files returns HTTP 200 with catalog_completeness and a deterministic read-only files list; the HMM QE asset endpoint then succeeds without redirects or fallback guessing.",
+  "first_seen_at": "2026-07-18T08:42:54.952155Z",
+  "fix_branch": null,
+  "fix_commit": "8c6776a5c90b16a57ab68853be72726d9e5305d9",
+  "fixed_at": "2026-07-18T09:48:26.907243Z",
+  "github_issue_number": 2423,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2423",
+  "last_seen_at": "2026-07-18T08:42:54.952155Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "HMM QE asset catalog runtime is behind merged RD-Agent catalog contract",
+  "trigger_condition": {
+    "fingerprint": "cd5ae5fe9d94e69f4c76a110",
+    "source_event_id": "FE-20260718-cd5ae5fe9d94"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
