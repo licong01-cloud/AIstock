@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-764",
-  "closed_at": null,
+  "closed_at": "2026-07-18T16:03:50Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "The authoritative O4 CLI must deterministically publish a typed immutable capacity policy from an explicit versioned operational input and return its exact ref so callers can execute the documented chain without handwritten artifact payloads, directory scans, code constants, approval gates, or silent fallback.",
   "first_seen_at": "2026-07-18T13:48:05.646654Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "69722f054218c1352f583bc9f9f1022c97821c86",
+  "fixed_at": "2026-07-18T16:05:43.377469Z",
   "github_issue_number": 2448,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2448",
   "last_seen_at": "2026-07-18T13:48:05.646654Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2449",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -60,6 +61,11 @@
     "fingerprint": "905625da820a233933e347b8",
     "source_event_id": "FE-20260718-905625da820a"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py backend/tests/advisory_dev_input_onboarding/test_o2_static_and_cli.py backend/tests/advisory_dev_input_onboarding/test_o4_orchestration.py backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py -q -> 61 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed with 8 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
