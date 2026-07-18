@@ -20,7 +20,28 @@ REASON_ARTIFACT_STORE_CONFIG_INVALID = "ADVISORY_PHASE1E_ARTIFACT_STORE_CONFIG_I
 REASON_ARTIFACT_STORE_IO_FAILED = "ADVISORY_PHASE1E_ARTIFACT_STORE_IO_FAILED"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
-_KINDS = frozenset({"audit", "plan", "batch"})
+_KINDS = frozenset(
+    {
+        "audit",
+        "plan",
+        "batch",
+        "real_input_build_request",
+        "strategy_package_input_projection",
+        "source_mapping_registry",
+        "source_observation_scope_request",
+        "source_requirement_registry",
+        "source_requirement_set",
+        "capacity_policy",
+        "capacity_request",
+        "capacity_program_workload",
+        "capacity_receipt",
+        "capacity_program_coverage",
+        "program_input",
+        "input_bundle",
+        "phase1e_program_date_request",
+        "phase1e_batch_request",
+    }
+)
 LOGGER = logging.getLogger("aistock.advisory.phase1e.store")
 
 
@@ -136,6 +157,14 @@ class ContentAddressedPlanStore:
     def inspect(self, *, kind: str, identity: str, semantic_hash: str) -> dict[str, Any]:
         return self.verify(kind=kind, identity=identity, semantic_hash=semantic_hash)
 
+    def relative_path(self, *, kind: str, identity: str, semantic_hash: str) -> str:
+        """Return the canonical contained path used by a verified artifact ref."""
+
+        kind = self._validate_kind(kind)
+        identity = self._validate_identity(identity)
+        semantic_hash = self._sha256(semantic_hash, field_name="semantic_hash")
+        return self._destination(kind=kind, identity=identity, semantic_hash=semantic_hash).relative_to(self._root).as_posix()
+
     def _destination(self, *, kind: str, identity: str, semantic_hash: str) -> Path:
         prefix = semantic_hash[:2]
         namespace = self._root / "advisory" / "phase1e"
@@ -143,7 +172,9 @@ class ContentAddressedPlanStore:
             return namespace / "audits" / prefix / identity / "audit.json"
         if kind == "plan":
             return namespace / "plans" / prefix / f"{semantic_hash}.json"
-        return namespace / "batches" / prefix / f"{semantic_hash}.json"
+        if kind == "batch":
+            return namespace / "batches" / prefix / f"{semantic_hash}.json"
+        return namespace / "inputs" / kind / prefix / f"{semantic_hash}.json"
 
     def _read_existing(self, *, destination: Path, expected: dict[str, Any]) -> dict[str, Any]:
         try:

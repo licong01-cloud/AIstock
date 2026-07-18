@@ -7,7 +7,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,18 +27,25 @@ from backend.services.advisory_phase1.source_observer import (
     registered_source_observer_configs,
 )
 from backend.services.advisory_phase1.source_observer_postgres import PostgresSourceObserverRepository
-
-
-REASON_OBSERVER_DISABLED = "ADVISORY_PHASE1_SOURCE_OBSERVER_DISABLED"
+from backend.services.advisory_phase1.source_observer_postgres import explicit_dev_observer_connection
+from backend.services.advisory_phase1.source_ledger_postgres import PostgresSourceAvailabilityLedger
+from backend.services.advisory_phase1.release_schema_contract import TargetLabel
+from backend.services.advisory_phase1.release_schema_verify_postgres import (
+    ReleaseSchemaVerificationError,
+    readonly_catalog_connection,
+    resolve_database_connection,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    observe = subparsers.add_parser("observe-once", help="Run one default-off observer pass.")
+    observe = subparsers.add_parser("observe-once", help="Run one explicit DEV observer pass.")
     _add_config_args(observe)
+    _add_database_args(observe)
     capacity = subparsers.add_parser("capacity-plan", help="Create a read-only capacity receipt.")
     _add_config_args(capacity)
+    _add_database_args(capacity)
     capacity.add_argument("--request", required=True, type=Path, help="CapacityPlanningRequest JSON path.")
     capacity.add_argument("--output", required=True, type=Path, help="External capacity receipt JSON path.")
     verify = subparsers.add_parser("verify-receipt", help="Verify a capacity receipt hash.")
@@ -48,8 +54,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_config_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config-id", default="phase1d_market_daily_dev_v1")
-    parser.add_argument("--config-version", default="v1")
+    parser.add_argument("--config-id", default="phase1e_advisory_inputs_dev_v2")
+    parser.add_argument("--config-version", default="v2")
+
+
+def _add_database_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--env-file", required=True, type=Path, help="Explicit AIstock env file containing DEV DB keys.")
 
 
 def _config(args: argparse.Namespace):
@@ -61,6 +71,17 @@ def _config(args: argparse.Namespace):
             context={"config_id": args.config_id, "config_version": args.config_version},
         )
     return config
+
+
+def _database_config(args: argparse.Namespace):
+    try:
+        return resolve_database_connection(target_label=TargetLabel.DEV, env_file=args.env_file)
+    except ReleaseSchemaVerificationError as exc:
+        raise SourceObserverError(
+            "ADVISORY_PHASE1_SOURCE_OBSERVER_CONFIG_INVALID",
+            "unable to resolve the explicit DEV database configuration",
+            context={"error_type": type(exc).__name__},
+        ) from exc
 
 
 def _external_output(path: Path) -> Path:
@@ -94,18 +115,27 @@ def _receipt_payload(receipt: CapacityPlanningReceipt) -> dict[str, Any]:
 
 
 def _run_observe_once(args: argparse.Namespace) -> int:
-    if os.getenv("AISTOCK_ADVISORY_PHASE1_SOURCE_OBSERVER_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
-        raise SourceObserverError(REASON_OBSERVER_DISABLED, "standalone observer is disabled by runtime configuration")
     config = _config(args)
-    summary = PostgresSourceObserverRepository().observe_once(config=config, registry=SOURCE_QUERY_TEMPLATES)
+    database = _database_config(args)
+
+    def conn_factory():
+        return explicit_dev_observer_connection(database)
+
+    summary = PostgresSourceObserverRepository(
+        conn_factory=conn_factory,
+        ledger=PostgresSourceAvailabilityLedger(conn_factory=conn_factory),
+    ).observe_once(config=config, registry=SOURCE_QUERY_TEMPLATES)
     print(canonical_json_text(summary.as_dict()))
     return 0 if summary.succeeded else 1
 
 
 def _run_capacity_plan(args: argparse.Namespace) -> int:
     config = _config(args)
+    database = _database_config(args)
     request = CapacityPlanningRequest.model_validate(_read_json(args.request))
-    receipt = AdvisoryPhase1CapacityProbe().probe(request=request, config=config, registry=SOURCE_QUERY_TEMPLATES)
+    receipt = AdvisoryPhase1CapacityProbe(
+        conn_factory=lambda: readonly_catalog_connection(database)
+    ).probe(request=request, config=config, registry=SOURCE_QUERY_TEMPLATES)
     output = _external_output(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(canonical_json_text(_receipt_payload(receipt)) + "\n", encoding="utf-8")
@@ -136,7 +166,7 @@ def _run_verify_receipt(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=os.getenv("AISTOCK_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = _parser().parse_args(argv)
     try:
         if args.command == "observe-once":

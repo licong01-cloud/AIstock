@@ -63,6 +63,7 @@ class ObservationOutcome(str, Enum):
 
 class RowCountParityPolicy(str, Enum):
     EXACT = "EXACT"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 def _require_aware(value: datetime, *, field_name: str) -> datetime:
@@ -101,19 +102,28 @@ class SourceQueryTemplate(BaseModel):
     table_name: str = Field(min_length=1, max_length=80)
     sql: str = Field(min_length=1)
     columns: tuple[SourceSchemaColumn, ...] = Field(min_length=1)
+    source_required_columns: tuple[str, ...] = ()
     partition_parameter_name: str = Field(default="trade_date", min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def _source_columns(self) -> "SourceQueryTemplate":
+        required = tuple(self.source_required_columns)
+        if tuple(sorted(set(required))) != required:
+            raise ValueError("source_required_columns must be sorted and duplicate-free")
+        return self
 
     @property
     def schema_fingerprint(self) -> str:
-        return canonical_json_sha256(
-            {
-                "template_id": self.template_id,
-                "template_version": self.template_version,
-                "schema_name": self.schema_name,
-                "table_name": self.table_name,
-                "columns": [column.canonical_payload() for column in self.columns],
-            }
-        )
+        payload = {
+            "template_id": self.template_id,
+            "template_version": self.template_version,
+            "schema_name": self.schema_name,
+            "table_name": self.table_name,
+            "columns": [column.canonical_payload() for column in self.columns],
+        }
+        if self.source_required_columns:
+            payload["source_required_columns"] = list(self.source_required_columns)
+        return canonical_json_sha256(payload)
 
     @property
     def template_hash(self) -> str:
@@ -133,11 +143,13 @@ class ObservedDatasetSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     dataset_name: str = Field(min_length=1, max_length=160)
+    audit_dataset_name: str | None = Field(default=None, min_length=1, max_length=160)
     allowed_data_sources: tuple[str, ...] = Field(min_length=1)
     source_roles: tuple[str, ...] = Field(min_length=1)
     query_template_id: str = Field(min_length=1, max_length=160)
     query_template_version: str = Field(min_length=1, max_length=80)
     audit_partition_mapper_id: str = Field(default="trade_date_v1", min_length=1, max_length=80)
+    partition_key_name: str = Field(default="trade_date", min_length=1, max_length=80)
     eligible_audit_statuses: tuple[str, ...] = ("success",)
     eligible_quality_statuses: tuple[str, ...] = ("ok",)
     allow_empty_partition: bool = False
@@ -150,7 +162,15 @@ class ObservedDatasetSpec(BaseModel):
             values = tuple(getattr(self, field_name))
             if tuple(sorted(set(values))) != values:
                 raise ValueError(f"{field_name} must be sorted and duplicate-free")
+        if self.audit_partition_mapper_id == "trade_date_v1" and self.partition_key_name != "trade_date":
+            raise ValueError("trade_date_v1 requires partition_key_name=trade_date")
+        if self.audit_partition_mapper_id not in {"trade_date_v1", "named_date_v2"}:
+            raise ValueError("unknown audit partition mapper")
         return self
+
+    @property
+    def resolved_audit_dataset_name(self) -> str:
+        return self.audit_dataset_name or self.dataset_name
 
     def canonical_payload(self, template: SourceQueryTemplate) -> dict[str, Any]:
         if template.template_id != self.query_template_id or template.template_version != self.query_template_version:
@@ -159,7 +179,7 @@ class ObservedDatasetSpec(BaseModel):
                 "dataset spec references a different compiled query template",
                 context={"dataset_name": self.dataset_name, "template_id": self.query_template_id},
             )
-        return {
+        payload = {
             "dataset_name": self.dataset_name,
             "allowed_data_sources": list(self.allowed_data_sources),
             "source_roles": list(self.source_roles),
@@ -173,6 +193,11 @@ class ObservedDatasetSpec(BaseModel):
             "min_coverage_ratio": self.min_coverage_ratio,
             "row_count_parity_policy": self.row_count_parity_policy.value,
         }
+        if self.audit_dataset_name is not None:
+            payload["audit_dataset_name"] = self.audit_dataset_name
+        if self.partition_key_name != "trade_date":
+            payload["partition_key_name"] = self.partition_key_name
+        return payload
 
 
 class SourceObserverConfigBundle(BaseModel):
@@ -465,19 +490,17 @@ def resolve_query_template(spec: ObservedDatasetSpec, registry: Mapping[str, Sou
 
 
 def canonical_partition_key(spec: ObservedDatasetSpec, audit: AuditRowSnapshot) -> dict[str, Any]:
-    if spec.audit_partition_mapper_id != "trade_date_v1":
-        raise SourceObserverError(
-            REASON_OBSERVER_REGISTRY_MISMATCH,
-            "dataset spec references an unknown partition mapper",
-            context={"dataset_name": spec.dataset_name, "mapper": spec.audit_partition_mapper_id},
-        )
-    if audit.dataset_name != spec.dataset_name:
+    if audit.dataset_name != spec.resolved_audit_dataset_name:
         raise SourceObserverError(
             REASON_OBSERVER_CONFIG_INVALID,
             "audit row does not match dataset spec",
-            context={"audit_dataset": audit.dataset_name, "spec_dataset": spec.dataset_name},
+            context={
+                "audit_dataset": audit.dataset_name,
+                "spec_dataset": spec.dataset_name,
+                "expected_audit_dataset": spec.resolved_audit_dataset_name,
+            },
         )
-    return {"trade_date": audit.trade_date.isoformat()}
+    return {spec.partition_key_name: audit.trade_date.isoformat()}
 
 
 def audit_eligibility_reasons(spec: ObservedDatasetSpec, audit: AuditRowSnapshot) -> tuple[str, ...]:
@@ -499,15 +522,18 @@ def canonical_source_partition_descriptor(
     rows: Iterable[Mapping[str, Any]],
     max_rows: int,
     max_bytes: int,
+    observed_schema_fingerprint: str | None = None,
 ) -> SourcePartitionDescriptor:
     """Hash every projected source row in registry column order without sampling."""
 
     digest = hashlib.sha256()
+    schema_fingerprint = observed_schema_fingerprint or template.schema_fingerprint
+    _require_sha256(schema_fingerprint, field_name="observed_schema_fingerprint")
     header = canonical_json_text(
         {
             "schema_version": SOURCE_PARTITION_DESCRIPTOR_SCHEMA_VERSION,
             "hash_algorithm": CANONICAL_STREAM_HASH_ALGORITHM,
-            "schema_fingerprint": template.schema_fingerprint,
+            "schema_fingerprint": schema_fingerprint,
             "columns": [column.name for column in template.columns],
         }
     ).encode("utf-8")
@@ -542,7 +568,7 @@ def canonical_source_partition_descriptor(
             )
         digest.update(row_bytes)
     return SourcePartitionDescriptor(
-        schema_fingerprint=template.schema_fingerprint,
+        schema_fingerprint=schema_fingerprint,
         row_count=row_count,
         partition_content_hash=digest.hexdigest(),
         canonical_bytes=canonical_bytes,
@@ -686,6 +712,7 @@ def build_observation_receipt(
     *,
     config: SourceObserverConfigBundle,
     registry: Mapping[str, SourceQueryTemplate],
+    spec: ObservedDatasetSpec,
     audit: AuditRowSnapshot,
     source_role: str,
     decision: ObservationDecision,
@@ -700,7 +727,7 @@ def build_observation_receipt(
             observer_config_id=config.observer_config_id,
             observer_config_version=config.observer_config_version,
             observer_config_hash=config_hash,
-            dataset_name=audit.dataset_name,
+            dataset_name=spec.dataset_name,
             data_source=audit.data_source,
             source_role=source_role,
             trade_date=audit.trade_date,
@@ -722,7 +749,7 @@ def build_observation_receipt(
         observer_config_id=config.observer_config_id,
         observer_config_version=config.observer_config_version,
         observer_config_hash=config_hash,
-        dataset_name=audit.dataset_name,
+        dataset_name=spec.dataset_name,
         data_source=audit.data_source,
         source_role=source_role,
         trade_date=audit.trade_date,
@@ -741,7 +768,16 @@ def build_observation_receipt(
     )
 
 
-def _template(*, template_id: str, version: str, table_name: str, sql: str, columns: tuple[tuple[str, str, bool], ...]) -> SourceQueryTemplate:
+def _template(
+    *,
+    template_id: str,
+    version: str,
+    table_name: str,
+    sql: str,
+    columns: tuple[tuple[str, str, bool], ...],
+    partition_parameter_name: str = "trade_date",
+    source_required_columns: tuple[str, ...] = (),
+) -> SourceQueryTemplate:
     return SourceQueryTemplate(
         template_id=template_id,
         template_version=version,
@@ -749,10 +785,28 @@ def _template(*, template_id: str, version: str, table_name: str, sql: str, colu
         table_name=table_name,
         sql=sql,
         columns=tuple(SourceSchemaColumn(name=name, pg_data_type=data_type, nullable=nullable) for name, data_type, nullable in columns),
+        partition_parameter_name=partition_parameter_name,
+        source_required_columns=source_required_columns,
     )
 
 
 SOURCE_QUERY_TEMPLATES: dict[str, SourceQueryTemplate] = {
+    "market_bak_basic_trade_date_v2": _template(
+        template_id="market_bak_basic_trade_date_v2",
+        version="v2",
+        table_name="bak_basic",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.bak_basic t WHERE trade_date = %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        source_required_columns=("trade_date", "ts_code"),
+    ),
+    "market_cyq_perf_trade_date_v2": _template(
+        template_id="market_cyq_perf_trade_date_v2",
+        version="v2",
+        table_name="cyq_perf",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.cyq_perf t WHERE trade_date = %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        source_required_columns=("trade_date", "ts_code"),
+    ),
     "market_daily_basic_trade_date_v1": _template(
         template_id="market_daily_basic_trade_date_v1",
         version="v1",
@@ -812,6 +866,81 @@ SOURCE_QUERY_TEMPLATES: dict[str, SourceQueryTemplate] = {
             ("pre_close", "numeric", True), ("change", "numeric", True), ("pct_chg", "numeric", True),
             ("vol", "numeric", True), ("amount", "numeric", True),
         ),
+    ),
+    "market_kline_daily_raw_trade_date_v2": _template(
+        template_id="market_kline_daily_raw_trade_date_v2",
+        version="v2",
+        table_name="kline_daily_raw",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.kline_daily_raw t WHERE trade_date = %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        source_required_columns=("trade_date", "ts_code"),
+    ),
+    "market_moneyflow_ts_trade_date_v2": _template(
+        template_id="market_moneyflow_ts_trade_date_v2",
+        version="v2",
+        table_name="moneyflow_ts",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.moneyflow_ts t WHERE trade_date = %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        source_required_columns=("trade_date", "ts_code"),
+    ),
+    "market_sector_data_trade_date_v2": _template(
+        template_id="market_sector_data_trade_date_v2",
+        version="v2",
+        table_name="sector_data",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.sector_data t WHERE trade_date = %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        source_required_columns=("trade_date", "ts_code"),
+    ),
+    "market_stock_basic_as_of_v2": _template(
+        template_id="market_stock_basic_as_of_v2",
+        version="v2",
+        table_name="stock_basic",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.stock_basic t WHERE list_date <= %s ORDER BY ts_code",
+        columns=(("row_payload", "jsonb", False),),
+        partition_parameter_name="as_of_date",
+        source_required_columns=("list_date", "ts_code"),
+    ),
+    "market_stock_st_events_as_of_v2": _template(
+        template_id="market_stock_st_events_as_of_v2",
+        version="v2",
+        table_name="stock_st_events",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.stock_st_events t WHERE pub_date <= %s ORDER BY ts_code, pub_date",
+        columns=(("row_payload", "jsonb", False),),
+        partition_parameter_name="as_of_date",
+        source_required_columns=("pub_date", "ts_code"),
+    ),
+    "market_stock_universe_pit_spans_as_of_v2": _template(
+        template_id="market_stock_universe_pit_spans_as_of_v2",
+        version="v2",
+        table_name="stock_universe_pit_spans",
+        sql=(
+            "SELECT to_jsonb(t) AS row_payload FROM market.stock_universe_pit_spans t "
+            "WHERE universe_key = %s AND %s BETWEEN eligible_start AND eligible_end ORDER BY universe_key, ts_code"
+        ),
+        columns=(("row_payload", "jsonb", False),),
+        partition_parameter_name="as_of_date",
+        source_required_columns=("eligible_end", "eligible_start", "ts_code", "universe_key"),
+    ),
+    "market_stock_universe_pit_state_as_of_v2": _template(
+        template_id="market_stock_universe_pit_state_as_of_v2",
+        version="v2",
+        table_name="stock_universe_pit_state",
+        sql=(
+            "SELECT to_jsonb(t) AS row_payload FROM market.stock_universe_pit_state t "
+            "WHERE universe_key = %s AND %s BETWEEN start_date AND end_date ORDER BY universe_key"
+        ),
+        columns=(("row_payload", "jsonb", False),),
+        partition_parameter_name="as_of_date",
+        source_required_columns=("end_date", "start_date", "universe_key"),
+    ),
+    "market_trading_calendar_date_v2": _template(
+        template_id="market_trading_calendar_date_v2",
+        version="v2",
+        table_name="trading_calendar",
+        sql="SELECT to_jsonb(t) AS row_payload FROM market.trading_calendar t WHERE cal_date = %s ORDER BY cal_date",
+        columns=(("row_payload", "jsonb", False),),
+        partition_parameter_name="cal_date",
+        source_required_columns=("cal_date",),
     ),
 }
 
@@ -878,6 +1007,122 @@ def default_source_observer_config() -> SourceObserverConfigBundle:
     )
 
 
+def o4_advisory_input_source_observer_config() -> SourceObserverConfigBundle:
+    """Compiled DEV-only observer coverage for physical Advisory input tables with refresh audits."""
+
+    return SourceObserverConfigBundle(
+        observer_config_id="phase1e_advisory_inputs_dev_v2",
+        observer_config_version="v2",
+        effective_from_observed_at=datetime(2026, 7, 18, tzinfo=UTC),
+        poll_interval_seconds=300,
+        audit_scan_batch_size=100,
+        source_fetch_rows=10_000,
+        statement_timeout_ms=30_000,
+        lock_timeout_ms=5_000,
+        serialization_retry_limit=3,
+        max_partition_rows=10_000_000,
+        max_partition_bytes=2 * 1024 * 1024 * 1024,
+        created_by_service_principal="advisory-phase1e-source-observer",
+        dataset_specs=(
+            ObservedDatasetSpec(
+                dataset_name="market.adj_factor",
+                audit_dataset_name="adj_factor",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("corporate_action",),
+                query_template_id="market_adj_factor_trade_date_v1",
+                query_template_version="v1",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.bak_basic",
+                audit_dataset_name="bak_basic",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("fundamental_bak_basic",),
+                query_template_id="market_bak_basic_trade_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.cyq_perf",
+                audit_dataset_name="cyq_perf",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("fundamental_cyq_perf",),
+                query_template_id="market_cyq_perf_trade_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.daily_basic",
+                audit_dataset_name="daily_basic",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("fundamental_daily_basic",),
+                query_template_id="market_daily_basic_trade_date_v1",
+                query_template_version="v1",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.kline_daily_raw",
+                audit_dataset_name="kline_daily_raw",
+                allowed_data_sources=("physical_audit_seed", "tdx_api"),
+                source_roles=("market_history", "reference_price"),
+                query_template_id="market_kline_daily_raw_trade_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.moneyflow_ts",
+                audit_dataset_name="stock_moneyflow_ts",
+                allowed_data_sources=("physical_audit_seed", "script"),
+                source_roles=("fundamental_moneyflow",),
+                query_template_id="market_moneyflow_ts_trade_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.sector_data",
+                audit_dataset_name="sector_data",
+                allowed_data_sources=("physical_audit_seed", "sector_builder"),
+                source_roles=("fundamental_sector_data",),
+                query_template_id="market_sector_data_trade_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.stock_basic",
+                audit_dataset_name="stock_basic",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("fundamental_stock_basic", "pit_universe_stock_basic_upstream"),
+                query_template_id="market_stock_basic_as_of_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+                partition_key_name="as_of_date",
+                row_count_parity_policy=RowCountParityPolicy.NOT_APPLICABLE,
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.stock_st_events",
+                audit_dataset_name="stock_st_events",
+                allowed_data_sources=("physical_audit_seed", "tushare"),
+                source_roles=("pit_universe_st_event_upstream",),
+                query_template_id="market_stock_st_events_as_of_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+                partition_key_name="as_of_date",
+                row_count_parity_policy=RowCountParityPolicy.NOT_APPLICABLE,
+            ),
+            ObservedDatasetSpec(
+                dataset_name="market.trading_calendar",
+                audit_dataset_name="trading_calendar",
+                allowed_data_sources=("physical_audit_seed", "script", "tdx_api"),
+                source_roles=("trading_calendar",),
+                query_template_id="market_trading_calendar_date_v2",
+                query_template_version="v2",
+                audit_partition_mapper_id="named_date_v2",
+                partition_key_name="cal_date",
+            ),
+        ),
+    )
+
+
 def registered_source_observer_configs() -> dict[tuple[str, str], SourceObserverConfigBundle]:
-    config = default_source_observer_config()
-    return {(config.observer_config_id, config.observer_config_version): config}
+    configs = (default_source_observer_config(), o4_advisory_input_source_observer_config())
+    return {(config.observer_config_id, config.observer_config_version): config for config in configs}

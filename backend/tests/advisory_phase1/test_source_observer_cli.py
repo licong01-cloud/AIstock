@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 
-def test_observer_cli_reports_disabled_nonzero_without_opening_a_database_connection() -> None:
+def test_observer_cli_requires_an_explicit_dev_env_file_without_enable_gate(tmp_path) -> None:
     root = Path(__file__).resolve().parents[3]
-    env = os.environ.copy()
-    env.pop("AISTOCK_ADVISORY_PHASE1_SOURCE_OBSERVER_ENABLED", None)
+    missing_env = tmp_path / "missing.env"
 
     completed = subprocess.run(
-        [sys.executable, "scripts/advisory_phase1_source_observer.py", "observe-once"],
+        [
+            sys.executable,
+            "scripts/advisory_phase1_source_observer.py",
+            "observe-once",
+            "--env-file",
+            str(missing_env),
+        ],
         cwd=root,
-        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert completed.returncode == 2
-    assert "ADVISORY_PHASE1_SOURCE_OBSERVER_DISABLED" in completed.stderr
+    assert "ADVISORY_PHASE1_SOURCE_OBSERVER_CONFIG_INVALID" in completed.stderr
+    assert "SOURCE_OBSERVER_ENABLED" not in completed.stderr

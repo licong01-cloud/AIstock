@@ -6,15 +6,18 @@ import logging
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import psycopg2
 import psycopg2.extras
 
-from backend.db.pg_pool import get_conn
-from backend.services.advisory_phase0a.policy import canonicalize
+from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.source_ledger_postgres import PostgresSourceAvailabilityLedger
+from backend.services.advisory_phase1.release_schema_contract import TargetLabel
+from backend.services.advisory_phase1.release_schema_verify_postgres import DatabaseConnectionConfig
 from backend.services.advisory_phase1.source_observer import (
     AuditRowSnapshot,
     ObservationOutcome,
@@ -36,6 +39,7 @@ from backend.services.advisory_phase1.source_observer import (
     SourceQueryTemplate,
     audit_eligibility_reasons,
     build_observation_receipt,
+    canonical_partition_key,
     canonical_source_partition_descriptor,
     decide_observation,
     resolve_query_template,
@@ -46,19 +50,57 @@ _logger = logging.getLogger(__name__)
 ConnFactory = Callable[[], Iterator[Any]]
 
 
-def _transactional_conn_factory() -> Iterator[Any]:
-    return get_conn(autocommit=False, manage_transaction=True)
+@contextmanager
+def explicit_dev_observer_connection(
+    config: DatabaseConnectionConfig,
+    *,
+    connector: Callable[..., Any] = psycopg2.connect,
+) -> Iterator[Any]:
+    """Open the exact configured DEV database with no global-pool or process-env fallback."""
 
-
+    if config.target_label is not TargetLabel.DEV:
+        raise SourceObserverError(
+            REASON_OBSERVER_CONFIG_INVALID,
+            "source observer accepts only the explicit DEV database target",
+        )
+    connection = None
+    try:
+        connection = connector(**config.connect_kwargs())
+        connection.autocommit = False
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT current_database(), inet_server_port(), current_setting('transaction_read_only')"
+            )
+            row = cursor.fetchone()
+        if row is None or str(row[0]) != config.database or int(row[1]) != config.port:
+            raise SourceObserverError(
+                REASON_OBSERVER_CONFIG_INVALID,
+                "source observer connection identity differs from the explicit DEV configuration",
+            )
+        if str(row[2]).lower() in {"on", "true"}:
+            raise SourceObserverError(
+                REASON_OBSERVER_CONFIG_INVALID,
+                "source observer DEV connection is unexpectedly read-only",
+            )
+        yield connection
+        connection.commit()
+    except Exception:
+        if connection is not None:
+            connection.rollback()
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
 @dataclass(frozen=True)
 class SourceObserverScope:
     dataset_name: str
+    audit_dataset_name: str
     data_source: str
     source_role: str
 
     @property
     def log_key(self) -> str:
-        return f"{self.dataset_name}:{self.data_source}:{self.source_role}"
+        return f"{self.dataset_name}:{self.audit_dataset_name}:{self.data_source}:{self.source_role}"
 
 
 @dataclass
@@ -96,11 +138,11 @@ class PostgresSourceObserverRepository:
     def __init__(
         self,
         *,
-        conn_factory: ConnFactory | None = None,
+        conn_factory: ConnFactory,
         ledger: PostgresSourceAvailabilityLedger | None = None,
     ) -> None:
-        self._conn_factory = conn_factory or _transactional_conn_factory
-        self._ledger = ledger or PostgresSourceAvailabilityLedger()
+        self._conn_factory = conn_factory
+        self._ledger = ledger or PostgresSourceAvailabilityLedger(conn_factory=conn_factory)
 
     def observe_once(
         self,
@@ -122,7 +164,12 @@ class PostgresSourceObserverRepository:
         for spec in config.dataset_specs:
             for source_role in spec.source_roles:
                 for data_source in spec.allowed_data_sources:
-                    scope = SourceObserverScope(spec.dataset_name, data_source, source_role)
+                    scope = SourceObserverScope(
+                        spec.dataset_name,
+                        spec.resolved_audit_dataset_name,
+                        data_source,
+                        source_role,
+                    )
                     try:
                         self._observe_scope(config=config, registry=registry, spec=spec, scope=scope, summary=summary)
                     except Exception as exc:  # Each scope is isolated; the CLI converts this into a non-zero result.
@@ -307,6 +354,7 @@ class PostgresSourceObserverRepository:
             receipt = build_observation_receipt(
                 config=config,
                 registry=registry,
+                spec=spec,
                 audit=audit,
                 source_role=scope.source_role,
                 decision=decision,
@@ -314,14 +362,15 @@ class PostgresSourceObserverRepository:
                 event=None,
             )
         else:
-            self._validate_source_schema(cur=cur, template=template)
+            observed_schema_fingerprint = self._validate_source_schema(cur=cur, template=template)
             descriptor = self._describe_source_partition(
                 conn=conn,
                 template=template,
                 audit=audit,
                 config=config,
+                observed_schema_fingerprint=observed_schema_fingerprint,
             )
-            partition_key = {"trade_date": audit.trade_date.isoformat()}
+            partition_key = canonical_partition_key(spec, audit)
             terminal = self._ledger.terminal_for_partition_in_transaction(
                 conn=conn,
                 dataset_name=spec.dataset_name,
@@ -345,6 +394,7 @@ class PostgresSourceObserverRepository:
             receipt = build_observation_receipt(
                 config=config,
                 registry=registry,
+                spec=spec,
                 audit=audit,
                 source_role=scope.source_role,
                 decision=decision,
@@ -421,7 +471,7 @@ class PostgresSourceObserverRepository:
             ORDER BY trade_date, dataset, data_source
             LIMIT %s
             """,
-            (scope.dataset_name, scope.data_source, cursor.last_audit_refreshed_at, batch_size),
+            (scope.audit_dataset_name, scope.data_source, cursor.last_audit_refreshed_at, batch_size),
         )
         boundary_rows = tuple(_audit_from_row(dict(row)) for row in cur.fetchall())
         if len(boundary_rows) == batch_size:
@@ -431,7 +481,7 @@ class PostgresSourceObserverRepository:
                 FROM market.dataset_date_refresh_audit
                 WHERE dataset = %s AND data_source = %s AND refreshed_at = %s
                 """,
-                (scope.dataset_name, scope.data_source, cursor.last_audit_refreshed_at),
+                (scope.audit_dataset_name, scope.data_source, cursor.last_audit_refreshed_at),
             )
             if int(cur.fetchone()["boundary_count"]) > batch_size:
                 raise SourceObserverError(
@@ -450,15 +500,19 @@ class PostgresSourceObserverRepository:
 
         if cursor.last_trade_date is None:
             predicate = "refreshed_at > %s"
-            params: tuple[Any, ...] = (scope.dataset_name, scope.data_source, cursor.last_audit_refreshed_at)
+            params: tuple[Any, ...] = (
+                scope.audit_dataset_name,
+                scope.data_source,
+                cursor.last_audit_refreshed_at,
+            )
         else:
             predicate = "(refreshed_at, trade_date, dataset, data_source) > (%s, %s, %s, %s)"
             params = (
-                scope.dataset_name,
+                scope.audit_dataset_name,
                 scope.data_source,
                 cursor.last_audit_refreshed_at,
                 cursor.last_trade_date,
-                scope.dataset_name,
+                scope.audit_dataset_name,
                 scope.data_source,
             )
         cur.execute(
@@ -476,7 +530,7 @@ class PostgresSourceObserverRepository:
         return None if row is None else _audit_from_row(dict(row))
 
     @staticmethod
-    def _validate_source_schema(*, cur: Any, template: SourceQueryTemplate) -> None:
+    def _validate_source_schema(*, cur: Any, template: SourceQueryTemplate) -> str:
         cur.execute(
             """
             SELECT column_name, data_type, is_nullable
@@ -486,7 +540,33 @@ class PostgresSourceObserverRepository:
             """,
             (template.schema_name, template.table_name),
         )
-        actual_by_name = {str(row["column_name"]): (str(row["data_type"]), str(row["is_nullable"]) == "YES") for row in cur.fetchall()}
+        actual_rows = tuple(dict(row) for row in cur.fetchall())
+        actual_by_name = {
+            str(row["column_name"]): (str(row["data_type"]), str(row["is_nullable"]) == "YES")
+            for row in actual_rows
+        }
+        if template.source_required_columns:
+            missing = sorted(set(template.source_required_columns) - set(actual_by_name))
+            if missing:
+                raise SourceObserverError(
+                    REASON_SCHEMA_MISMATCH,
+                    "source table is missing required query key columns",
+                    context={"template_id": template.template_id, "missing_columns": missing},
+                )
+            return canonical_json_sha256(
+                {
+                    "schema_name": template.schema_name,
+                    "table_name": template.table_name,
+                    "columns": [
+                        {
+                            "name": str(row["column_name"]),
+                            "pg_data_type": str(row["data_type"]),
+                            "nullable": str(row["is_nullable"]) == "YES",
+                        }
+                        for row in actual_rows
+                    ],
+                }
+            )
         expected = {column.name: (column.pg_data_type, column.nullable) for column in template.columns}
         mismatches = {
             name: {"expected": expected[name], "actual": actual_by_name.get(name)}
@@ -499,6 +579,7 @@ class PostgresSourceObserverRepository:
                 "registered source schema differs from information_schema",
                 context={"template_id": template.template_id, "mismatches": mismatches},
             )
+        return template.schema_fingerprint
 
     @staticmethod
     def _describe_source_partition(
@@ -507,6 +588,7 @@ class PostgresSourceObserverRepository:
         template: SourceQueryTemplate,
         audit: AuditRowSnapshot,
         config: SourceObserverConfigBundle,
+        observed_schema_fingerprint: str,
     ) -> SourcePartitionDescriptor:
         cursor_name = f"advisory_source_{uuid.uuid4().hex}"
         source_cur = conn.cursor(name=cursor_name, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -538,6 +620,7 @@ class PostgresSourceObserverRepository:
                 rows=rows(),
                 max_rows=config.max_partition_rows,
                 max_bytes=config.max_partition_bytes,
+                observed_schema_fingerprint=observed_schema_fingerprint,
             )
         finally:
             source_cur.close()
