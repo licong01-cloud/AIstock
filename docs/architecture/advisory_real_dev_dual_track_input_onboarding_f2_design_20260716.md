@@ -23,8 +23,8 @@ scheduler 或审批系统。
 当前状态：
 
 ```text
-design_status = design_implementation_consistent_bug_755_l0_verified
-o4_design_revision_status = revised_20260718_authoritative_orchestration_and_contract_corrections
+design_status = revised_for_bug_764_capacity_policy_authority_pending_code_merge_and_real_dev
+o4_design_revision_status = revised_20260718_authoritative_orchestration_capacity_policy_and_chain_corrections
 o1_implementation_status = merged_pr_2231
 o2_implementation_status = merged_pr_2261_runtime_validated
 o3_implementation_status = merged_pr_2351_l0_l2_and_design_compliance_verified
@@ -33,19 +33,23 @@ o3_focused_regression = 50_related_tests_passed
 o3_module_regression = validation_center_backend_and_paper_v2_backend_passed
 o3_postgresql16_l2 = real_single_and_native_multi_producer_passed_zero_residual_test_database
 o3_real_dev_readonly_plan = already_present_98_exact_match_zero_dml
-o3_real_dev_persistent_execution = not_executed
+o3_real_dev_persistent_execution = initial_program_binding_committed_waiting_decision_date_20260720
+o3_real_dev_historical_request_hash = ba3f0c230b2f4efe3f1d85f15b1de2268f0ad2a3622661f83cfe79deaf8eed6f
+o3_real_dev_program_binding_count = two_programs_two_active_future_effective_bindings
+o3_real_dev_initial_and_exact_rerun = waiting_input_without_duplicate_program_or_binding
 o3_statement_coverage = 84_percent
 o3_branch_coverage = 74_percent
 o3_feature_workflow_validation = f2_pass_38_of_38_zero_warning
 o4_design_feature_workflow_validation = f2_pass_39_of_39_zero_warning_bug_755_revision
-o4_implementation_status = code_complete_in_bug_755_worktree_l0_verified_pending_real_dev_and_pr
+o4_implementation_status = merged_pr_2444_plus_bug_764_pr_2449_ci_green_pending_merge_and_real_dev_execution
+o4_code_merge = merged_commit_16f43317ed857410297e3e9c951dd94cd61dca80
 o4_component_merge = merged_commit_f738b6a5e170345e444698114ac2d17a5c13a9d4
 o4_component_evidence = contracts_projection_mapping_derived_pit_capacity_v2_pure_builders_and_tests
-o4_authoritative_cli = four_commands_implemented_and_l0_verified
-o4_local_regression = 106_related_tests_passed
-o4_required_gates = l0_and_validation_module_registry_l0_passed
-o4_real_dev_execution = not_executed
-o5_implementation_status = not_started
+o4_authoritative_cli = four_commands_with_explicit_typed_capacity_policy_input_pr_2449_pending_merge
+o4_local_regression = 234_passed_9_skipped_advisory_backend_matrix
+o4_required_checks = l0_module_registry_f2_validator_chain_contract_and_pr_ci
+o4_real_dev_execution = waiting_for_bug_764_merge_and_20260720_real_ingestion_completed_decision_date
+o5_implementation_status = not_started_waiting_o4_exact_plan
 dev_database = real_dual_track_package_closure_imported
 production_database = read_only_source_only
 production_ddl = none_for_this_design
@@ -59,6 +63,7 @@ dev_import_fresh_verification = passed_receipt_62dd9e07ca0c
 dev_import_idempotent_rerun = already_present_zero_dml_receipt_3e9977fc8355
 runtime_activation = none
 role_or_approval_gate = none
+runtime_package_revalidation = prohibited
 model_training = none
 ```
 
@@ -649,6 +654,14 @@ policy_hash
 policy是版本化程序配置，不含`approved_by`、role、人工状态、store free bytes、row width或其它测量值。相同id/version不同
 hash为conflict；修改参数发布新version，不覆盖旧artifact。
 
+capacity policy 的权威 producer 固定为统一 CLI 的 `observe-source`：调用方通过显式
+`--capacity-policy <typed-json-path>` 提供一个仓库外、版本化的 `Phase1ECapacityPolicyV1` 输入文件。该文件是业务配置输入，
+不是 CAS artifact payload、审批记录或数据库测量结果；CLI 必须先执行完整 Pydantic contract/hash 校验，再由
+`Phase1EInputArtifactStore` 发布 immutable `capacity_policy` artifact，并在 `observe-source` 输出中返回 exact
+`capacity_policy_ref`。后续 `build-phase1e-inputs` 只能消费该返回 ref，不得重新手写 artifact、扫描 CAS、使用测试 fixture、
+从代码常量生成业务值或回退到隐藏默认值。policy 的内存、并发、保留和 reserve 参数由显式 DEV 运行配置冻结；主机资源盘点
+可以作为配置依据，但不能替代 policy version/hash。
+
 现有 v1 `program_count_by_style + candidate_depth_by_program` 无法无损表达同 style、不同 candidate depth 的多个
 Program。O4 必须使用 additive v2 contract；不得把 Program id 冒充 style，也不得取平均值、最大值或固定常量：
 
@@ -1031,12 +1044,13 @@ O4 command的authoritative输入输出固定如下，参数名可以在实现时
 
 | command | exact inputs | immutable outputs |
 |---|---|---|
-| `observe-source` | O3 historical request ref、target DEV identity、dated binding readback、explicit env/artifact root | input projection、pre-observation scope、observer append receipt；逐Program独立 |
+| `observe-source` | O3 historical request ref、typed capacity policy JSON、target DEV identity、dated binding readback、explicit env/artifact root | input projection、pre-observation scope、source mapping、immutable capacity policy ref、observer append receipt；逐Program独立 |
 | `build-phase1e-inputs` | O3 historical request/receipt refs、pre-observation refs、source mapping/capacity policy refs、explicit env/artifact root | compiler dependency、source requirements/resolution、workload、Program units、pre-capacity input bundle |
 | `plan-capacity` | exact pre-capacity input bundle ref、explicit env/artifact root | capacity request/receipt/coverage、post-capacity Program units与input bundle |
 | `compile-phase1e` | exact post-capacity input bundle ref、explicit env/artifact root | per-Program batch request、existing Phase1E plan/batch receipt refs、aggregate compile receipt |
 
-CLI不得要求调用方手写上述artifact payload，也不得通过目录扫描补齐缺失ref。兼容脚本只能转调同一orchestration service或保留
+CLI不得要求调用方手写上述artifact payload，也不得通过目录扫描补齐缺失ref。显式 typed capacity policy JSON 是
+`observe-source` 的版本化业务配置输入，由 CLI 校验并发布为 artifact，不等于调用方手写 CAS payload。兼容脚本只能转调同一orchestration service或保留
 既有v1用途；不能继续暴露`--target-db prod`、隐式process env或与统一CLI不同的O4业务顺序。
 
 `verify-import`必须同时接收生成receipt的exact `--plan`，并核对request、bundle、plan、source/target database
@@ -1055,7 +1069,8 @@ DEV。兼容保留的`scripts/advisory_phase1_source_observer.py`与`scripts/adv
 resolver/contract，不得保留enable flag、production选项或process-env fallback形成第二套语义。
 
 同一历史request的source-ready操作顺序固定为：首次`run-historical`在日期未完成时正常保留Program/binding并返回pending；
-日期当日真实ingestion完成后显式执行`observe-source`；随后重跑`run-historical`生成DSE/receipt；最后执行
+日期当日真实ingestion完成后，以显式 typed capacity policy JSON 执行`observe-source`并保存其输出的
+`source_mapping_registry_ref`、逐Program `observation_scope_ref`和`capacity_policy_ref`；随后重跑`run-historical`生成DSE/receipt；最后执行
 `build-phase1e-inputs -> plan-capacity -> compile-phase1e`。`build-phase1e-inputs`输出pre-capacity bundle，
 `plan-capacity`输出post-capacity bundle，`compile-phase1e`只消费后者。这只是依赖顺序和数据事实，不是审批门禁。若用户在observer
 记录前先生成DSE，该日期仍可研究但source保持pending，程序不得删除DSE、回填event或自动改用其它日期。
@@ -1270,24 +1285,23 @@ historical runner、audit target resolver、双轨exact retry和formal receipts�
 ### O4：Phase 1D / Phase 1E input builder
 
 PR #2412 / commit `f738b6a5e170345e444698114ac2d17a5c13a9d4` 已合入O4 contracts、admitted-manifest
-projection、source mapping、derived PIT、capacity v2、pure input builders和直接单元测试，但没有实现本文CLI中的四个
-authoritative command，也没有把真实DEV、audit/handoff、capacity和existing Phase1E compiler连成可执行链。该状态是
-`partial_components_merged`，不是O4完成。BUG-755继续实现F-906至F-911，内部顺序固定如下：
+projection、source mapping、derived PIT、capacity v2、pure input builders和直接单元测试。PR #2444 / commit
+`16f43317ed857410297e3e9c951dd94cd61dca80` 已完成逐Program compiler dependency、统一CLI、authoritative build、
+capacity/compile orchestration和回归矩阵。
 
-1. O4A contract correction：把scope级audit/handoff/calendar/compiler依赖收敛为逐Program
-   `program_compiler_dependency`，移除顶层单一label依赖，增加逐Program `phase1e_batch_request` 与
-   `phase1e_compile_receipt`及八类typed policy/config child artifact，并保持既有artifact full readback；
-2. O4B admitted-input projection + target-aware observer：从typed frozen manifest纯投影single/native-multi分腿factor order/window，
-   不复验package资产；随后由统一CLI完成真实DSE role到physical requirement映射、显式DEV factory和无enable/prod/process-env路径；
-3. O4C authoritative build：新增`phase1e_orchestration.py`，从O3 exact refs与DEV snapshot逐Program生成audit/handoff、
-   compiler dependency、requirements、source resolution、workload和pre-capacity bundle；
-4. O4D capacity/compile：`plan-capacity`从pre-capacity bundle执行DEV read-only probe并发布post-capacity bundle；
-   `compile-phase1e`逐Program构造single-Program batch、调用现有compiler、full readback并发布aggregate compile receipt；
-5. O4E direct regression：统一CLI正向命令存在性、兼容CLI无第二套语义、v1 compatibility、frozen module isolation、
-   真实DEV read-only/pending/ready验证。
+真实执行预检随后发现：`build-phase1e-inputs`要求`capacity_policy_ref`，但PR #2444没有为该ref提供authoritative producer，
+命令存在性/dispatch测试通过却无法直接执行完整链。该问题登记为BUG-764；PR #2449已增加：
 
-每个子步骤必须完成其完整契约和测试后才能进入下一步；不得以手写registry、fixture workload、单Program特例或全局
-readiness替代。source不成熟时逐Program准确pending，mapping/hash/identity冲突准确blocked。
+1. `observe-source --capacity-policy <typed-json-path>`强类型读取并验证`Phase1ECapacityPolicyV1`；
+2. 在统一O4 CAS发布immutable `capacity_policy` artifact，并返回exact `capacity_policy_ref`；
+3. `build-phase1e-inputs`直接消费该ref，不手写payload、不扫描目录、不使用默认常量；
+4. direct tests验证typed policy传递、artifact publish/full readback和ref hash一致；
+5. CI 16/16通过，当前等待代码合入及2026-07-20真实DEV链路验证。
+
+O4完成状态必须分开报告：PR #2444主体代码已合入；BUG-764修复待合入；真实DEV
+`observe-source -> run-historical -> build-phase1e-inputs -> plan-capacity -> compile-phase1e`仍待执行。任何一项不得冒充其它项完成。
+source不成熟时逐Program准确pending，mapping/hash/identity冲突准确blocked；不得以fixture、单Program特例或命令help通过
+替代跨命令ref闭包和真实DEV正向可达性。
 
 ### O5：G5 continuation and design closeout
 
@@ -1307,6 +1321,8 @@ readiness替代。source不成熟时逐Program准确pending，mapping/hash/ident
 - 扫描并直接断言O4 CLI不存在observer enable flag、`--target-db prod`、缺失env fallback或global-pool调用；
 - 正向断言统一CLI实际注册`observe-source/plan-capacity/build-phase1e-inputs/compile-phase1e`，逐个执行`--help`并通过
   dispatch spy证明进入同一authoritative orchestration service；仅有denylist不算CLI验收完成；
+- `observe-source --help`必须声明required `--capacity-policy`；static contract断言该输入经
+  `Phase1ECapacityPolicyV1.model_validate`后传入service，禁止默认policy、optional omission或代码常量构造；
 - AST直接断言`advisory_input_projection.py`除typed manifest model、canonical hash utility和window helper外，不import
   repository、asset store、validator、health、inference、Selection、Paper或simulation，且不包含文件/网络/数据库I/O；
   除该文件外StrategyPackage frozen path零修改；
@@ -1336,6 +1352,10 @@ readiness替代。source不成熟时逐Program准确pending，mapping/hash/ident
 - daily window逐交易日展开、as-of snapshot与derived PIT universe upstream audit/build-state closure正反例；
 - native multi每腿不同window、同style不同candidate depth、多个single/native-multi Program workload无损表达；
 - build request、Program input、bundle、所有registry/policy/ref/hash closure篡改和missing-slot tests；
+- capacity policy typed JSON、semantic hash、CAS publish/full readback、same id/version conflict和new version正反例；
+- 统一CLI chain contract必须证明`observe-source`输出的`source_mapping_registry_ref`、逐Program
+  `observation_scope_ref`和`capacity_policy_ref`可直接成为`build-phase1e-inputs`输入，随后pre-capacity ref可直接进入
+  `plan-capacity`，post-capacity ref可直接进入`compile-phase1e`；不得在测试中为链路缺口额外注入fixture ref；
 - no-SEALED bootstrap只产生bounded staging，非Parquet missing和INSUFFICIENT不能进入bootstrap；
 - exit/reason/log contract，无silent fallback。
 
@@ -1395,10 +1415,12 @@ L3必须直接读取当前DEV已导入的exact single/native-multi frozen manife
 4. 当前已准入single/native-multi manifest无需资产复验直接产生input projection；正常DEV service随后产生Program/dated
    binding、DSE v2和single/native-multi formal receipt；
 5. audit/handoff/source mapping/source registry/capacity v2/input bundle/Phase1E计划完整且Program独立；
-6. 至少验证一个真实pending Program不会阻断其它FULL_READY Program；若当前没有cutoff前source event，则保留pending证据，
+6. `observe-source`使用显式typed capacity policy文件，输出的exact policy/mapping/scope refs由后续命令直接消费；完整命令链
+   不扫描CAS、不手写artifact payload、不依赖隐藏默认值；
+7. 至少验证一个真实pending Program不会阻断其它FULL_READY Program；若当前没有cutoff前source event，则保留pending证据，
    不把环境限制写成代码完成；
-7. source-ready后G5 L3/L4按父设计执行；无source-ready时O4仍可完成代码与pending验证，但不得声明G5 ready；
-8. Selection/Paper/模拟盘/QE/QMT关系row count/hash在任务前后不因本任务allowlist之外发生变化。
+8. source-ready后G5 L3/L4按父设计执行；无source-ready时O4仍可完成代码与pending验证，但不得声明G5 ready；
+9. Selection/Paper/模拟盘/QE/QMT关系row count/hash在任务前后不因本任务allowlist之外发生变化。
 
 ## 19. Risks And Failure Modes / 风险与失败模式
 
@@ -1549,23 +1571,23 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   `FAILED > WAITING_INPUT > COMPLETE`聚合，禁止失败降级。
 - F-904：Phase0A audit CLI移除localhost猜测，使用explicit target identity、显式env文件且无acknowledgement门槛。
 - F-905：audit/handoff只读且artifact仓库外content-addressed，atomic no-replace并校验完整文件闭包。
-- F-906：source event只由显式DEV observer从真实ingestion事实追加，不复制/猜测/backdate；O4不存在enable、prod target或
-  process/global-pool fallback。
+- F-906：source event只由显式DEV observer从真实ingestion事实追加，不复制/猜测/backdate；同一命令强类型接收capacity
+  policy配置并发布exact ref；O4不存在enable、prod target或process/global-pool fallback。
 - F-907：逐Program identity/source/capacity/plan状态准确，pre/post-capacity bundle不把PARTIAL冒充FULL_READY，也不因一个
   Program失败阻断其它FULL_READY Program。
 - F-908：pre-observation request在Selection前由dated binding、admitted-manifest-only typed input projection、Selection config
   normalization和versioned mapping形成；Selection后source registry从actual DSE receipt/input context、projection、query
   registry逐字段reconcile派生；真实五类logical input全覆盖，多Alpha每腿window独立，无generic/default window或事后回填。
-- F-909：capacity v2逐Program表达style/depth/horizon/source workload，业务值来自exact Program/policy，测量来自DEV
-  capacity probe；无SEALED时仅允许规定的bounded staging bootstrap。
-- F-910：Phase1E build request、input projection、逐Program compiler dependency/requirement/workload/coverage/request、
+- F-909：capacity v2逐Program表达style/depth/horizon/source workload，业务值来自exact Program和显式版本化capacity
+  policy，测量来自DEV capacity probe；无SEALED时仅允许规定的bounded staging bootstrap。
+- F-910：`observe-source`是capacity policy artifact producer；Phase1E build request、input projection、逐Program compiler dependency/requirement/workload/coverage/request、
   pre/post-capacity bundle和compile receipt均使用独立exact kind；全部refs immutable、explicit、可定位且hash closed，无latest、
   顶层单一label假设、跨层kind冒充或只有hash没有artifact ref。
 - F-911：Phase1E计划single/native-multi parent/component和多Program独立；每个Program使用独立single-Program batch request，
   expected identity字段强制完整；mixed/all-failed/zero-plan状态显式且非成功不静默。
 - F-912：G5只消费source-ready计划，pending保持零DML。
 - F-913：G5 L3/L4继续使用既有契约，不在onboarding重定义门禁。
-- F-914：无角色、RBAC、审批、授权、备份、force、skip、enable flag、production target selector或人工数据库修改。
+- F-914：无角色、RBAC、审批、授权、备份、force、skip、enable flag、production target selector、运行时策略包二次验证或人工数据库修改。
 - F-915：无API/UI/scheduler/startup/runtime activation/production DDL/DML。
 - F-916：状态分别报告code、bundle、DEV import、historical receipt、Phase1E、G5 L3/L4和production。
 - F-917：荐股O4只从已准入frozen manifest做纯输入投影，不调用package validator/health/asset/model/preflight/inference，
@@ -1602,18 +1624,18 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 | F-903 | §10、§14、§18.3 | manual historical request、Selection失败不降级、逐Program状态隔离、batch aggregate contract与exact retry；`backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py` | verified_l0_l2 | none |
 | F-904 | §10、§13 | Phase0A audit explicit database identity、显式env、non-local DEV target、acknowledgement移除；`backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py` | verified_l0_l1 | none |
 | F-905 | §10、§15 | Phase0A audit/handoff read-only projection、CAS闭包与full-readback；`backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py` | verified_l0_l1 | none |
-| F-906 | §11.1、§13 | `backend/tests/advisory_dev_input_onboarding/test_o4_source_observer.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py`覆盖统一CLI、显式DEV factory和scope/mapping ref契约 | verified_l0 | none |
+| F-906 | §7.11、§11.1、§13 | `backend/tests/advisory_dev_input_onboarding/test_o4_source_observer.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py`覆盖统一CLI、显式DEV factory、typed capacity policy和scope/mapping/policy ref契约；BUG-764 PR #2449 CI 16/16 | verified_l0 | none |
 | F-907 | §7.12、§11.2、§12 | `backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py`覆盖historical COMPLETE保持、O4 identity blocked隔离、pre/post-capacity bundle状态传播 | verified_l0 | none |
 | F-908 | §7.9-7.10、§11.2-11.3 | `backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_orchestration.py`覆盖真实推理窗口hash、双cutoff、scope identity和DSE reconciliation | verified_l0 | none |
-| F-909 | §7.11、§11.4 | `backend/tests/advisory_dev_input_onboarding/test_o4_capacity_v2.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_orchestration.py`覆盖逐Program workload、权威universe、数据库时钟和coverage isolation | verified_l0 | none |
-| F-910 | §7.8、§7.10、§7.12、§12、§15 | `backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py`覆盖25-kind、逐Program compiler dependency、typed policy/config refs、source resolution bridge与full readback | verified_l0 | none |
+| F-909 | §7.11、§11.4 | `backend/tests/advisory_dev_input_onboarding/test_o4_capacity_v2.py`、`backend/tests/advisory_dev_input_onboarding/test_o4_orchestration.py`覆盖逐Program workload、权威universe、数据库时钟和coverage isolation；`test_o4_static_and_cli.py`覆盖policy publish/full readback | verified_l0 | none |
+| F-910 | §7.8、§7.10-7.12、§12、§15 | `backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py`覆盖25-kind、逐Program compiler dependency、typed policy/config refs、source resolution bridge与full readback；BUG-764 chain contract补齐policy ref producer | verified_l0 | none |
 | F-911 | §7.12、§12 | `backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py`覆盖逐Program single-batch、失败证据refs保留、zero-plan非成功和aggregate compile receipt | verified_l0 | none |
 | F-912 | §11.2、§12 | `backend/tests/advisory_phase1/test_phase1g_dev_inventory.py`保持pending零DML/source-ready消费；真实DEV只在O4生成exact plan root后执行 | design_ready | none |
 | F-913 | §17 O5、§22 | `backend/tests/advisory_phase1/test_phase1g_service.py`保持existing G5 contract parity；O5只消费O4真实plan | design_ready | none |
-| F-914 | §4、§11.1、§13、§21 | `backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py`覆盖四命令help/dispatch并deny role/approval/backup/force/skip/enable/prod-selector | verified_l0 | none |
+| F-914 | §4、§11.1、§13、§18、§21 | `backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py`覆盖四命令help/dispatch、required typed capacity policy、artifact publish/readback并deny role/approval/backup/force/skip/enable/prod-selector | verified_l0 | none |
 | F-915 | §4、§21 | `backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py`断言API/UI/scheduler/startup/production路径零修改及Selection/Paper/simulation导入隔离 | verified_l0 | none |
-| F-916 | §1、§21、§26 | `backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py`与`test_o4_static_and_cli.py`覆盖CLI退出语义、Program独立状态和阶段状态分离 | verified_l0 | none |
-| F-917 | §7.9.1、§11.2、§13、§18 | PR #2412组件证据：`backend/tests/strategy_package/test_advisory_input_projection.py`；BUG-755继续执行orchestration isolation AST audit | verified_component_merged | none |
+| F-916 | §1、§21、§26 | `backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py`与`test_o4_static_and_cli.py`覆盖CLI退出语义、Program独立状态和阶段状态分离；开头状态字段明确代码/PR/DEV事实 | verified_l0 | none |
+| F-917 | §7.9.1、§11.2、§13、§18 | PR #2412、#2444及BUG-764 PR #2449：`backend/tests/strategy_package/test_advisory_input_projection.py`与`test_o4_static_and_cli.py`覆盖projection和orchestration isolation AST audit | verified_component_and_orchestration | none |
 
 本矩阵的 `gap_or_exception` 只记录设计偏差或验收例外，不记录尚未执行的环境层验证。代码、数据库和运行证据的
 完成状态以本文开头的独立状态字段为准；`verified_l0_l2` 不代表真实 production/DEV 执行已完成。
@@ -1631,9 +1653,10 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
   inference，不重新判断package可用性；projection或Advisory evidence错误不写回package/binding状态，也不影响其它模块。
 - `no_unrequested_gate_or_approval`：无角色、审批、授权、备份、force、skip、observer enable flag、production target选择或
   acknowledgement；显式request/command是数据与动作输入，不是人工审批记录。
-- `positive_path_satisfiable`：现有production双轨package可导入DEV；已准入manifest内现有Alpha158 aliases、factor refs和
-  multi-leg runtime metadata足以零资产回读形成input projection；正常future-effective binding、真实source event和
-  prospective DSE v2可到Phase1E及G5 L3/L4。
+- `positive_path_satisfiable`：现有production双轨package已导入DEV；已准入manifest内现有Alpha158 aliases、factor refs和
+  multi-leg runtime metadata足以零资产回读形成input projection。BUG-764已补齐capacity policy ref producer，但完整
+  `observe-source -> run-historical -> build -> capacity -> compile -> G5`正向路径仍须在PR #2449合入并取得2026-07-20真实
+  source/DSE后验证；验证前不得声明Phase1E或G5 L3/L4完成。
 - `exact_database_truth`：所有连接来自显式env并核验database identity；production永远只读，DEV写关系固定。
 - `research_isolation`：全部输出research-only、execution-prohibited，不产生交易输入。
 - `state_reporting_truth`：design、implementation、DEV DML、production、Phase1E和G5状态分开报告。
@@ -1651,7 +1674,14 @@ dated binding和DSE v2时，必须等待新binding生效后的第一个已完成
 6. 无额外角色、审批、授权、备份、enable flag、production selector或人工数据库修改设计。
 7. F2 validator、文档引用、`git diff --check`通过。
 
-本次设计修订合入后，BUG-755代码阶段先修正已合入contract中的逐Program compiler dependency和pre/post-capacity顺序，
-再实现`phase1e_orchestration.py`与统一CLI四个authoritative command，最后执行真实DEV只读pending/ready验证；O1-O3保持
-已合入状态，O5不得提前开始。不得把PR #2412的pure components、pending验证或bounded staging描述为Phase 1E/G5完整完成。
-\n
+本次修订后的后续顺序固定为：
+
+1. 合入BUG-764 PR #2449，使`observe-source`成为typed capacity policy artifact的authoritative producer；
+2. 2026-07-20真实ingestion完成后执行`observe-source`，保存mapping/scope/policy exact refs；
+3. 重跑同一O3 request生成prospective DSE v2和formal historical receipt；
+4. 直接使用前序输出执行`build-phase1e-inputs -> plan-capacity -> compile-phase1e`，完成跨命令ref闭包和真实DEV证据；
+5. O4 exact plan形成后进入O5，重跑G5 inventory并按既有契约执行L3/L4；
+6. 同步父级蓝图和本设计的真实执行状态，再开始Phase 0B详细设计。
+
+O1-O3代码保持已合入状态；不得把PR #2412组件、PR #2444主体代码、PR #2449修复、pending验证、bounded staging、真实DEV
+Phase1E或G5中的任一状态冒充其它状态完成。
