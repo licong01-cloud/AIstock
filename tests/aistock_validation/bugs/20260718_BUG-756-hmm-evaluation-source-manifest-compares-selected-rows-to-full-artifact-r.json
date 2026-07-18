@@ -1,6 +1,10 @@
 {
   "actual": "Real HMM batch creation fails before persistence because build_source_manifest compares the filtered evaluation-window DataFrame length with the full Prediction Store manifest row_count. A 2025 window has 1,242,987 selected prediction rows versus 2,260,161 artifact rows; full-range h20 labels have 2,154,168 valid rows versus 2,260,161 stored rows after terminal NaN removal. Expected: preserve and verify full artifact identity separately from selected/effective row counts, and replay must validate both without weakening SHA/size/zero-copy checks.",
   "allowed_write_scope": [
+    "backend/services/hmm_evolution/source_manifest.py",
+    "backend/services/hmm_evolution/input_adapter.py",
+    "backend/tests/hmm_evolution/test_source_manifest.py",
+    "backend/tests/hmm_evolution/test_input_adapter.py",
     "tests/aistock_validation/bugs/20260718_BUG-756-hmm-evaluation-source-manifest-compares-selected-rows-to-full-artifact-r.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
