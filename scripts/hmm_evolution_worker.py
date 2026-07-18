@@ -14,6 +14,8 @@ import socket
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -29,6 +31,16 @@ from backend.services.hmm_evolution.worker import (  # noqa: E402
 )
 
 logger = logging.getLogger("hmm_evolution.worker_cli")
+
+
+def _load_canonical_env(env_path: Path | None = None) -> Path:
+    """Load the repository ``.env`` without overriding explicit process env."""
+
+    path = (env_path or PROJECT_ROOT / ".env").resolve()
+    if path.exists() and not path.is_file():
+        raise RuntimeError(f"HMM evolution worker env path is not a file: {path}")
+    load_dotenv(path, override=False)
+    return path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,10 +63,17 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.max_jobs < 1 or args.max_jobs > 500:
         raise SystemExit("--max-jobs must be between 1 and 500")
+    env_path = _load_canonical_env()
     logging.basicConfig(
         level=os.getenv("HMM_EVOLUTION_WORKER_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if not env_path.exists():
+        logger.warning(
+            "HMM evolution worker canonical env file is missing path=%s; "
+            "runtime mode remains fail-closed",
+            env_path,
+        )
     owner_id = str(args.owner_id or _default_owner_id()).strip()
     try:
         mode = require_worker_runtime()
