@@ -1,0 +1,103 @@
+name: AIstock Code Intelligence Refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.c'
+      - '**/*.cc'
+      - '**/*.cpp'
+      - '**/*.cs'
+      - '**/*.go'
+      - '**/*.h'
+      - '**/*.hpp'
+      - '**/*.java'
+      - '**/*.js'
+      - '**/*.jsx'
+      - '**/*.kt'
+      - '**/*.php'
+      - '**/*.py'
+      - '**/*.rb'
+      - '**/*.rs'
+      - '**/*.swift'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.yaml'
+      - '**/*.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-intelligence-refresh-main
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONDONTWRITEBYTECODE: '1'
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
+  AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
+
+jobs:
+  refresh-after-main:
+    name: Async graph refresh after main update
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    continue-on-error: true
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Prepare exact main workspace
+        timeout-minutes: 3
+        run: |
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
+          "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT=${env:GITHUB_WORKSPACE}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Import persistent graph state
+        run: |
+          python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --seed-root "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --direction import
+
+      - name: Sync CodeGraph incrementally
+        id: codegraph
+        continue-on-error: true
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          python scripts/code_intelligence_adapter.py codegraph-sync `
+            --output-dir $outDir `
+            --output "$outDir/codegraph-sync.stdout.json"
+          $result = Get-Content "$outDir/codegraph-sync.stdout.json" -Raw | ConvertFrom-Json
+          "publish_ready=$([string]$result.publish_ready).ToLowerInvariant()" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Publish CodeGraph state atomically
+        if: steps.codegraph.outputs.publish_ready == 'true'
+        run: |
+          python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider codegraph
+
+      - name: Assess Understand Anything work without LLM
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          python scripts/code_intelligence_adapter.py refresh-plan `
+            --trigger main_push `
+            --output "$outDir/graph-refresh-plan.json"
+
+      - name: Upload warning-only refresh evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-intelligence-refresh-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,9 +1,12 @@
 {
   "actual": "Nightly只运行freshness和ua-summary-all；CodeGraph DB与UA knowledge graph长期未更新，freshness可能掩盖旧索引。",
   "allowed_write_scope": [
+    ".github/workflows/code-intelligence-refresh.yml",
     ".github/workflows/nightly.yml",
     "scripts/code_intelligence_adapter.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/catalog/code_intelligence.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260718_BUG-759-nightly-codegraph-understand-anything.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -11,8 +14,11 @@
   "bug_id": "BUG-759",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Nightly reconciles CodeGraph and Understand Anything against the latest shared main graph root.",
+    "Main source-code merges trigger an asynchronous deduplicated CodeGraph sync and UA change assessment without adding a merge gate.",
+    "Understand Anything semantic updates run only for source changes and use an explicit plugin path and budget cap.",
+    "Graph failures preserve the previous successful graph and report warning/stale evidence.",
+    "Run direct adapter and workflow contract tests plus required lightweight plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-18T09:12:46.237058Z",
@@ -36,7 +42,9 @@
   "last_seen_at": "2026-07-18T09:12:46.237058Z",
   "module": "validation",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not make graph refresh a required PR or merge gate.",
+    "Do not run Understand Anything semantic analysis for docs-only or close-sync changes."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -45,7 +53,7 @@
   "required_verification": [
     "l0",
     "guardrail_changed_files",
-    "validation_center_backend"
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -62,15 +70,10 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
-      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "Workflow and local graph-tool orchestration have no Validation Center business-flow dependency."
     },
     "delegated_validation": {
       "receipt_default": "compact",
@@ -123,15 +126,10 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
-        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "Workflow and local graph-tool orchestration have no Validation Center business-flow dependency."
       },
       "delegated_validation": {
         "receipt_default": "compact",

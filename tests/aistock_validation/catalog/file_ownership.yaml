@@ -112,6 +112,15 @@ rules:
     layer: script
     risk_level: high
     ownership_reason: Validation and guardrail scripts are execution entry points for the local pipeline.
+  - rule_id: code_intelligence_catalog
+    priority: 100
+    include:
+      - tests/aistock_validation/catalog/code_intelligence.yaml
+    primary_module: validation.guardrails
+    impact_modules: [validation.center, validation.runner, validation.module_quality]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Code-intelligence refresh and context budgets are validation pipeline policy.
   - rule_id: noxfile_validation_runner
     priority: 100
     include:

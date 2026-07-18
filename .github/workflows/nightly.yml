@@ -52,6 +52,7 @@ env:
   AISTOCK_CANONICAL_ROOT: F:/Dev/AIstock
   AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
+  AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
   AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
@@ -369,11 +370,15 @@ jobs:
           }
 
   code-intelligence-weekly:
-    name: Code intelligence weekly graph summary
+    name: Code intelligence daily graph refresh and summary
     needs: runner-preflight
     if: github.event_name == 'schedule' || inputs.run_code_intelligence
+    continue-on-error: true
+    concurrency:
+      group: code-intelligence-refresh-main
+      cancel-in-progress: false
     runs-on: [self-hosted, windows]
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -392,6 +397,46 @@ jobs:
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
+          "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT=${env:GITHUB_WORKSPACE}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Import persistent graph state
+        continue-on-error: true
+        run: |
+          conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --seed-root "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --direction import
+
+      - name: Reconcile CodeGraph and Understand Anything
+        id: graph_refresh
+        continue-on-error: true
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py refresh-plan `
+            --trigger nightly `
+            --output "$outDir/graph-refresh-plan.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py codegraph-sync `
+            --output-dir $outDir `
+            --output "$outDir/codegraph-sync.stdout.json"
+          $codegraph = Get-Content "$outDir/codegraph-sync.stdout.json" -Raw | ConvertFrom-Json
+          if ($codegraph.publish_ready) {
+            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+              --direction export `
+              --provider codegraph
+          }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
+            --output-dir $outDir `
+            --max-budget-usd 2 `
+            --output "$outDir/understand-anything-refresh.stdout.json"
+          $ua = Get-Content "$outDir/understand-anything-refresh.stdout.json" -Raw | ConvertFrom-Json
+          if ($ua.publish_ready) {
+            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+              --direction export `
+              --provider understand_anything
+          }
 
       - name: Build CodeGraph freshness artifact
         run: |
@@ -808,7 +853,7 @@ jobs:
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
-          - code-intelligence-weekly: ${CODE_INTELLIGENCE_RESULT}
+          - code-intelligence-daily: ${CODE_INTELLIGENCE_RESULT}
           - run_dr_requested: ${RUN_DR_INPUT}
           - run_nightly_l3_requested: ${RUN_L3_INPUT}
           - run_paper_v2_live_requested: ${RUN_LIVE_INPUT}

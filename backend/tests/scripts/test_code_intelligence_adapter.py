@@ -67,6 +67,244 @@ def test_latest_freshness_command_defaults_to_compact_stdout(tmp_path: Path, mon
     assert "selected_nodes" not in stdout
 
 
+def test_graph_refresh_plan_defers_ua_semantic_work_on_main_push(tmp_path: Path, monkeypatch) -> None:
+    graph_dir = tmp_path / ".understand-anything"
+    graph_dir.mkdir()
+    (graph_dir / "knowledge-graph.json").write_text(
+        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
+        encoding="utf-8",
+    )
+    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
+    (graph_dir / "fingerprints.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
+    monkeypatch.setattr(
+        adapter,
+        "_graph_changed_files",
+        lambda root, base, head="HEAD": (["backend/service.py", "docs/readme.md"], None),
+    )
+
+    payload = adapter.build_graph_refresh_plan(root=tmp_path, trigger="main_push")
+
+    assert payload["warning_only"] is True
+    assert payload["understand_anything"]["action"] == "incremental_update"
+    assert payload["understand_anything"]["source_changed_files"] == ["backend/service.py"]
+    assert payload["understand_anything"]["run_semantic_now"] is False
+    assert payload["understand_anything"]["deferred_to_nightly"] is True
+
+
+def test_graph_refresh_plan_advances_metadata_for_docs_only_change(tmp_path: Path, monkeypatch) -> None:
+    graph_dir = tmp_path / ".understand-anything"
+    graph_dir.mkdir()
+    (graph_dir / "knowledge-graph.json").write_text(
+        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
+        encoding="utf-8",
+    )
+    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
+    monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
+    monkeypatch.setattr(adapter, "_graph_changed_files", lambda root, base, head="HEAD": (["docs/readme.md"], None))
+
+    payload = adapter.build_graph_refresh_plan(root=tmp_path, trigger="nightly")
+
+    assert payload["understand_anything"]["action"] == "metadata_advance"
+    assert payload["understand_anything"]["source_changed_count"] == 0
+    assert payload["understand_anything"]["run_semantic_now"] is False
+
+
+def test_graph_state_export_replaces_published_state_atomically(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    state_root = tmp_path / "state"
+    workspace_graph = workspace / ".codegraph"
+    published_graph = state_root / ".codegraph"
+    workspace_graph.mkdir(parents=True)
+    published_graph.mkdir(parents=True)
+    (workspace_graph / "codegraph.db").write_text("new", encoding="utf-8")
+    (published_graph / "codegraph.db").write_text("old", encoding="utf-8")
+
+    payload = adapter.transfer_graph_state(
+        root=workspace,
+        state_root=state_root,
+        direction="export",
+        providers=["codegraph"],
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert (published_graph / "codegraph.db").read_text(encoding="utf-8") == "new"
+    assert not (state_root / ".codegraph.backup").exists()
+    assert not (state_root / ".codegraph.staging").exists()
+
+
+def test_graph_state_import_uses_seed_without_mutating_seed(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    state_root = tmp_path / "state"
+    seed = tmp_path / "seed"
+    seed_graph = seed / ".understand-anything"
+    seed_graph.mkdir(parents=True)
+    (seed_graph / "knowledge-graph.json").write_text("seed", encoding="utf-8")
+
+    payload = adapter.transfer_graph_state(
+        root=workspace,
+        state_root=state_root,
+        seed_root=seed,
+        direction="import",
+        providers=["understand_anything"],
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert (workspace / ".understand-anything" / "knowledge-graph.json").read_text(encoding="utf-8") == "seed"
+    assert (seed_graph / "knowledge-graph.json").read_text(encoding="utf-8") == "seed"
+
+
+def test_graph_state_export_does_not_replace_newer_published_commit(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    state_root = tmp_path / "state"
+    workspace_graph = workspace / ".codegraph"
+    published_graph = state_root / ".codegraph"
+    workspace_graph.mkdir(parents=True)
+    published_graph.mkdir(parents=True)
+    (workspace_graph / "codegraph.db").write_text("old-task", encoding="utf-8")
+    (published_graph / "codegraph.db").write_text("new-published", encoding="utf-8")
+    (published_graph / ".aistock-state.json").write_text(
+        json.dumps({"git_commit": "new456"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "old123"})
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
+
+    payload = adapter.transfer_graph_state(
+        root=workspace,
+        state_root=state_root,
+        direction="export",
+        providers=["codegraph"],
+    )
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["transferred"] == []
+    assert "newer than" in payload["warnings"][0]
+    assert (published_graph / "codegraph.db").read_text(encoding="utf-8") == "new-published"
+
+
+def test_ua_refresh_skips_claude_for_metadata_only_change(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_graph_refresh_plan",
+        lambda **kwargs: {
+            "current_commit": "head456",
+            "understand_anything": {"action": "metadata_advance", "source_changed_count": 0},
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "advance_understand_anything_metadata",
+        lambda **kwargs: {"workflow_gate": "ready", "advanced": True, "commit": "head456"},
+    )
+    monkeypatch.setattr(adapter, "_run_command", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Claude must not run")))
+
+    payload = adapter.refresh_understand_anything(root=tmp_path)
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["action"] == "metadata_advance"
+    assert payload["publish_ready"] is True
+
+
+def test_codegraph_sync_uses_incremental_sync_for_existing_index(tmp_path: Path, monkeypatch) -> None:
+    index = tmp_path / ".codegraph" / "codegraph.db"
+    index.parent.mkdir()
+    index.write_text("index", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, **kwargs: commands.append(args) or {"ok": True, "returncode": 0, "stdout": "ok", "stderr": ""},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "build_codegraph_freshness_artifact",
+        lambda **kwargs: {"freshness": "fresh", "workflow_gate": "ready"},
+    )
+
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+
+    assert commands == [["codegraph", "sync", str(tmp_path.resolve())]]
+    assert payload["action"] == "sync"
+    assert payload["publish_ready"] is True
+
+
+def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, **kwargs: commands.append(args) or {"ok": False, "returncode": 1, "stdout": "", "stderr": "failed"},
+    )
+
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+
+    assert commands == [["codegraph", "index", str(tmp_path.resolve())]]
+    assert payload["action"] == "index"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["publish_ready"] is False
+
+
+def test_ua_semantic_refresh_uses_plugin_budget_and_isolated_workspace(tmp_path: Path, monkeypatch) -> None:
+    plugin_root = tmp_path / "plugin"
+    (plugin_root / "skills" / "understand").mkdir(parents=True)
+    (plugin_root / "skills" / "understand" / "SKILL.md").write_text("skill", encoding="utf-8")
+    graph_dir = tmp_path / ".understand-anything"
+    graph_dir.mkdir()
+    (graph_dir / "fingerprints.json").write_text("{}", encoding="utf-8")
+    commands: list[list[str]] = []
+    redirect_values: list[str | None] = []
+    monkeypatch.setattr(
+        adapter,
+        "build_graph_refresh_plan",
+        lambda **kwargs: {
+            "current_commit": "head456",
+            "understand_anything": {"action": "incremental_update", "source_changed_count": 1},
+        },
+    )
+    monkeypatch.setattr(adapter, "_ua_plugin_root_candidates", lambda: [plugin_root])
+    monkeypatch.setattr(adapter.shutil, "which", lambda command: "claude" if command == "claude" else None)
+
+    def fake_run(args, **kwargs):
+        commands.append(args)
+        redirect_values.append(adapter.os.environ.get("UNDERSTAND_NO_WORKTREE_REDIRECT"))
+        return {"ok": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+    monkeypatch.setattr(adapter, "understand_anything_status", lambda *args, **kwargs: {"freshness": "fresh"})
+    monkeypatch.delenv("UNDERSTAND_NO_WORKTREE_REDIRECT", raising=False)
+
+    payload = adapter.refresh_understand_anything(root=tmp_path, max_budget_usd=2.0)
+
+    command = commands[0]
+    assert command[command.index("--plugin-dir") + 1] == str(plugin_root)
+    assert command[command.index("--max-budget-usd") + 1] == "2.0"
+    assert "--no-session-persistence" in command
+    assert "Agent,Skill" in command[command.index("--allowedTools") + 1]
+    assert redirect_values == ["1"]
+    assert "UNDERSTAND_NO_WORKTREE_REDIRECT" not in adapter.os.environ
+    assert payload["publish_ready"] is True
+
+
+def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped() -> None:
+    push_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
+    nightly = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+    assert "push:\n    branches: [main]\n    paths:" in push_workflow
+    assert "pull_request:" not in push_workflow
+    assert "group: code-intelligence-refresh-main" in push_workflow
+    assert "continue-on-error: true" in push_workflow
+    assert "refresh-plan `\n            --trigger main_push" in push_workflow
+    assert "ua-refresh" not in push_workflow
+    assert "code-intelligence-refresh-main" in nightly
+    assert "name: Code intelligence daily graph refresh and summary" in nightly
+    assert "scripts/code_intelligence_adapter.py codegraph-sync" in nightly
+    assert "scripts/code_intelligence_adapter.py ua-refresh" in nightly
+    assert "--max-budget-usd 2" in nightly
+    assert "if ($ua.publish_ready)" in nightly
+
+
 def test_verify_clients_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         adapter,

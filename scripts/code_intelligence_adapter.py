@@ -61,6 +61,30 @@ DEFAULT_UNDERSTAND_IGNORE = [
     "*.mp4",
     "*.zip",
 ]
+GRAPH_SOURCE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".php",
+    ".py",
+    ".rb",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+}
+GRAPH_STATE_PROVIDERS = {
+    "codegraph": ".codegraph",
+    "understand_anything": ".understand-anything",
+}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -842,6 +866,325 @@ def _claude_understand_plugin_status(*, skip_external: bool = False) -> dict[str
 
 def _understand_generate_command(root: Path) -> str:
     return f"/understand {root} --language zh --no-auto-update"
+
+
+def _graph_changed_files(root: Path, base: str, head: str = "HEAD") -> tuple[list[str], str | None]:
+    result = _git(["diff", "--name-only", "--diff-filter=ACMRD", f"{base}..{head}"], cwd=root)
+    if not result.get("ok"):
+        return [], str(result.get("stderr") or result.get("stdout") or "git diff failed")
+    return [line.strip().replace("\\", "/") for line in str(result.get("stdout") or "").splitlines() if line.strip()], None
+
+
+def _graph_source_files(paths: list[str]) -> list[str]:
+    return sorted({path for path in paths if Path(path).suffix.lower() in GRAPH_SOURCE_SUFFIXES})
+
+
+def build_graph_refresh_plan(
+    *,
+    root: Path | None = None,
+    trigger: str = "nightly",
+) -> dict[str, Any]:
+    root = (root or REPO_ROOT).resolve()
+    trigger = str(trigger or "nightly").strip().lower()
+    if trigger not in {"main_push", "nightly", "manual"}:
+        raise CodeIntelligenceError(f"unsupported graph refresh trigger: {trigger}")
+
+    git = _git_snapshot(root)
+    current_commit = git.get("head")
+    codegraph_action = "sync" if _codegraph_index_path(root).exists() else "index"
+    graph = _read_json_object(_understand_graph_path(root))
+    meta = _read_json_object(root / ".understand-anything" / "meta.json")
+    graph_project = graph.get("project") if isinstance(graph.get("project"), dict) else {}
+    ua_commit = graph_project.get("gitCommitHash") or meta.get("gitCommitHash")
+    fingerprints_path = root / ".understand-anything" / "fingerprints.json"
+    changed_files: list[str] = []
+    diff_error: str | None = None
+    if ua_commit and current_commit and str(ua_commit) != str(current_commit):
+        changed_files, diff_error = _graph_changed_files(root, str(ua_commit), str(current_commit))
+    source_files = _graph_source_files(changed_files)
+
+    if not graph or not ua_commit:
+        ua_action = "full_rebuild"
+        ua_reason = "missing_graph_or_metadata"
+    elif str(ua_commit) == str(current_commit):
+        ua_action = "skip"
+        ua_reason = "already_current"
+    elif diff_error:
+        ua_action = "full_rebuild"
+        ua_reason = "graph_base_commit_unavailable"
+    elif not source_files:
+        ua_action = "metadata_advance"
+        ua_reason = "no_source_changes"
+    else:
+        ua_action = "incremental_update"
+        ua_reason = "source_changes_since_graph_commit" if fingerprints_path.exists() else "source_changes_bootstrap_fingerprints_after_update"
+
+    run_ua_semantic = trigger in {"nightly", "manual"} and ua_action in {"full_rebuild", "incremental_update"}
+    deferred_to_nightly = trigger == "main_push" and ua_action in {"full_rebuild", "incremental_update"}
+    return {
+        "schema_version": "aistock_graph_refresh_plan_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "ready" if git.get("ok") else "warning",
+        "warning_only": True,
+        "trigger": trigger,
+        "root": str(root),
+        "current_commit": current_commit,
+        "codegraph": {
+            "action": codegraph_action,
+            "index_exists": _codegraph_index_path(root).exists(),
+            "run_now": True,
+        },
+        "understand_anything": {
+            "action": ua_action,
+            "reason": ua_reason,
+            "graph_commit": ua_commit,
+            "graph_exists": bool(graph),
+            "fingerprints_exist": fingerprints_path.exists(),
+            "changed_files": changed_files,
+            "source_changed_files": source_files,
+            "source_changed_count": len(source_files),
+            "run_semantic_now": run_ua_semantic,
+            "deferred_to_nightly": deferred_to_nightly,
+            "diff_error": diff_error,
+        },
+    }
+
+
+def _copy_graph_state_directory(source: Path, target: Path) -> None:
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target)
+
+
+def _graph_state_manifest(path: Path) -> dict[str, Any]:
+    return _read_json_object(path / ".aistock-state.json")
+
+
+def _write_graph_state_manifest(path: Path, *, provider: str, commit: str | None) -> None:
+    _write_json(
+        path / ".aistock-state.json",
+        {
+            "schema_version": "aistock_graph_state_manifest_v1",
+            "provider": provider,
+            "git_commit": commit,
+            "published_at": _utc_now(),
+        },
+    )
+
+
+def transfer_graph_state(
+    *,
+    root: Path,
+    state_root: Path,
+    direction: str,
+    providers: list[str] | None = None,
+    seed_root: Path | None = None,
+) -> dict[str, Any]:
+    root = root.resolve()
+    state_root = state_root.resolve()
+    seed_root = seed_root.resolve() if seed_root else None
+    direction = direction.strip().lower()
+    if direction not in {"import", "export"}:
+        raise CodeIntelligenceError(f"unsupported graph state direction: {direction}")
+    selected = providers or list(GRAPH_STATE_PROVIDERS)
+    unknown = [item for item in selected if item not in GRAPH_STATE_PROVIDERS]
+    if unknown:
+        raise CodeIntelligenceError(f"unknown graph state provider(s): {', '.join(unknown)}")
+
+    transferred: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    current_commit = _git_snapshot(root).get("head")
+    for provider in selected:
+        dirname = GRAPH_STATE_PROVIDERS[provider]
+        workspace_path = root / dirname
+        state_path = state_root / dirname
+        if direction == "import":
+            source = state_path if state_path.exists() else ((seed_root / dirname) if seed_root and (seed_root / dirname).exists() else None)
+            if source is None:
+                warnings.append(f"{provider} state is missing; the refresh command will bootstrap it")
+                continue
+            _copy_graph_state_directory(source, workspace_path)
+            transferred.append({"provider": provider, "source": str(source), "target": str(workspace_path)})
+            continue
+
+        if not workspace_path.exists():
+            warnings.append(f"{provider} workspace state is missing; previous published state was preserved")
+            continue
+        published_commit = _graph_state_manifest(state_path).get("git_commit") if state_path.exists() else None
+        if current_commit and published_commit and current_commit != published_commit:
+            relation = _git_commit_is_ancestor(root, str(current_commit), str(published_commit))
+            if relation:
+                warnings.append(
+                    f"{provider} export skipped because published commit {published_commit} is newer than {current_commit}"
+                )
+                continue
+        staging = state_root / f"{dirname}.staging"
+        backup = state_root / f"{dirname}.backup"
+        state_root.mkdir(parents=True, exist_ok=True)
+        if backup.exists() and not state_path.exists():
+            backup.rename(state_path)
+        elif backup.exists():
+            shutil.rmtree(backup)
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(workspace_path, staging)
+        _write_graph_state_manifest(staging, provider=provider, commit=str(current_commit) if current_commit else None)
+        replaced_existing = state_path.exists()
+        try:
+            if replaced_existing:
+                state_path.rename(backup)
+            staging.rename(state_path)
+        except Exception:
+            if replaced_existing and backup.exists() and not state_path.exists():
+                backup.rename(state_path)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+        transferred.append({"provider": provider, "source": str(workspace_path), "target": str(state_path)})
+
+    return {
+        "schema_version": "aistock_graph_state_transfer_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "ready" if transferred or not warnings else "warning",
+        "direction": direction,
+        "warning_only": True,
+        "root": str(root),
+        "state_root": str(state_root),
+        "transferred": transferred,
+        "warnings": warnings,
+    }
+
+
+def sync_codegraph_index(*, root: Path | None = None, output_dir: Path | None = None) -> dict[str, Any]:
+    root = (root or REPO_ROOT).resolve()
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / "graph-refresh"
+    command = _codegraph_command()
+    action = "sync" if _codegraph_index_path(root).exists() else "index"
+    if not command:
+        result = {"ok": False, "returncode": None, "stdout": "", "stderr": "CodeGraph CLI is unavailable"}
+    else:
+        result = _run_command([command, action, str(root)], cwd=root, timeout=900)
+    configured_root = os.environ.pop(GRAPH_SOURCE_ROOT_ENV, None)
+    try:
+        freshness = build_codegraph_freshness_artifact(root=root, output_dir=output_dir) if result.get("ok") else None
+    finally:
+        if configured_root is not None:
+            os.environ[GRAPH_SOURCE_ROOT_ENV] = configured_root
+    gate = "ready" if result.get("ok") and (freshness or {}).get("freshness") == "fresh" else "warning"
+    payload = {
+        "schema_version": "aistock_codegraph_sync_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": gate,
+        "warning_only": True,
+        "action": action,
+        "root": str(root),
+        "command_result": _compact_command_result(result, success_summary=f"codegraph {action} completed"),
+        "freshness": freshness,
+        "publish_ready": gate == "ready",
+    }
+    _write_json(output_dir / "codegraph-sync.json", payload)
+    return payload
+
+
+def advance_understand_anything_metadata(*, root: Path, commit: str | None = None) -> dict[str, Any]:
+    root = root.resolve()
+    graph_path = _understand_graph_path(root)
+    meta_path = root / ".understand-anything" / "meta.json"
+    graph = _read_json_object(graph_path)
+    meta = _read_json_object(meta_path)
+    target_commit = commit or _git_snapshot(root).get("head")
+    if not graph or not target_commit:
+        return {"workflow_gate": "warning", "advanced": False, "reason": "graph_or_commit_missing"}
+    project = graph.setdefault("project", {})
+    if not isinstance(project, dict):
+        project = {}
+        graph["project"] = project
+    project["gitCommitHash"] = target_commit
+    project["analyzedAt"] = _utc_now()
+    meta["gitCommitHash"] = target_commit
+    meta["lastAnalyzedAt"] = project["analyzedAt"]
+    _write_json(graph_path, graph)
+    _write_json(meta_path, meta)
+    return {"workflow_gate": "ready", "advanced": True, "commit": target_commit}
+
+
+def refresh_understand_anything(
+    *,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+    max_budget_usd: float = 2.0,
+) -> dict[str, Any]:
+    root = (root or REPO_ROOT).resolve()
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / "graph-refresh"
+    plan = build_graph_refresh_plan(root=root, trigger="nightly")
+    ua_plan = plan["understand_anything"]
+    action = str(ua_plan.get("action") or "skip")
+    if action == "skip":
+        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": "ready", "warning_only": True, "action": action, "publish_ready": True, "plan": ua_plan}
+        _write_json(output_dir / "understand-anything-refresh.json", payload)
+        return payload
+    if action == "metadata_advance":
+        advanced = advance_understand_anything_metadata(root=root, commit=plan.get("current_commit"))
+        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": advanced.get("workflow_gate"), "warning_only": True, "action": action, "publish_ready": bool(advanced.get("advanced")), "plan": ua_plan, "metadata": advanced}
+        _write_json(output_dir / "understand-anything-refresh.json", payload)
+        return payload
+
+    plugin_root = next((path for path in _ua_plugin_root_candidates() if (path / "skills" / "understand" / "SKILL.md").exists()), None)
+    claude = shutil.which("claude")
+    full_flag = " --full" if action == "full_rebuild" else ""
+    prompt = (
+        f"Run /understand {root} --language zh --no-auto-update{full_flag}. "
+        "This is an approved non-interactive AIstock Nightly graph refresh. The existing .understandignore is approved; proceed without asking questions. "
+        "Use the incremental path when available, keep every failure visible, do not launch the dashboard, and only write under .understand-anything."
+    )
+    if not claude or plugin_root is None:
+        result = {"ok": False, "returncode": None, "stdout": "", "stderr": "Claude Code or Understand Anything plugin root is unavailable"}
+    else:
+        previous_redirect = os.environ.get("UNDERSTAND_NO_WORKTREE_REDIRECT")
+        os.environ["UNDERSTAND_NO_WORKTREE_REDIRECT"] = "1"
+        try:
+            result = _run_command(
+                [
+                    claude,
+                    "--print",
+                    "--output-format",
+                    "json",
+                    "--no-session-persistence",
+                    "--plugin-dir",
+                    str(plugin_root),
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--allowedTools",
+                    "Read,Write,Edit,Glob,Grep,Bash,Agent,Skill",
+                    "--max-budget-usd",
+                    str(max_budget_usd),
+                    prompt,
+                ],
+                cwd=root,
+                timeout=1800,
+            )
+        finally:
+            if previous_redirect is None:
+                os.environ.pop("UNDERSTAND_NO_WORKTREE_REDIRECT", None)
+            else:
+                os.environ["UNDERSTAND_NO_WORKTREE_REDIRECT"] = previous_redirect
+    status = understand_anything_status(root, skip_external=True)
+    publish_ready = bool(result.get("ok") and status.get("freshness") == "fresh" and (root / ".understand-anything" / "fingerprints.json").exists())
+    payload = {
+        "schema_version": "aistock_understand_anything_refresh_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "ready" if publish_ready else "warning",
+        "warning_only": True,
+        "action": action,
+        "max_budget_usd": max_budget_usd,
+        "publish_ready": publish_ready,
+        "plan": ua_plan,
+        "command_result": _compact_command_result(result, success_summary="Understand Anything refresh completed"),
+        "status": status,
+    }
+    _write_json(output_dir / "understand-anything-refresh.json", payload)
+    return payload
 
 
 def _understand_install_commands(home: Path | None = None) -> dict[str, str]:
@@ -3477,6 +3820,94 @@ def cmd_latest_freshness(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refresh_plan(args: argparse.Namespace) -> int:
+    payload = build_graph_refresh_plan(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        trigger=args.trigger,
+    )
+    ua = payload.get("understand_anything") if isinstance(payload.get("understand_anything"), dict) else {}
+    _emit_compact_line(
+        "graph-refresh-plan",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "trigger": payload.get("trigger"),
+            "codegraph": (payload.get("codegraph") or {}).get("action"),
+            "ua": ua.get("action"),
+            "source_changes": ua.get("source_changed_count"),
+            "run_ua_now": str(bool(ua.get("run_semantic_now"))).lower(),
+            "deferred": str(bool(ua.get("deferred_to_nightly"))).lower(),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
+def cmd_graph_state(args: argparse.Namespace) -> int:
+    payload = transfer_graph_state(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        state_root=Path(args.state_root),
+        direction=args.direction,
+        providers=list(args.provider or []),
+        seed_root=Path(args.seed_root) if args.seed_root else None,
+    )
+    _emit_compact_line(
+        "graph-state",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "direction": payload.get("direction"),
+            "transferred": len(payload.get("transferred") or []),
+            "warnings": len(payload.get("warnings") or []),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
+def cmd_codegraph_sync(args: argparse.Namespace) -> int:
+    payload = sync_codegraph_index(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+    )
+    _emit_compact_line(
+        "codegraph-sync",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "action": payload.get("action"),
+            "publish_ready": str(bool(payload.get("publish_ready"))).lower(),
+            "freshness": (payload.get("freshness") or {}).get("freshness"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
+def cmd_ua_refresh(args: argparse.Namespace) -> int:
+    payload = refresh_understand_anything(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        max_budget_usd=args.max_budget_usd,
+    )
+    _emit_compact_line(
+        "ua-refresh",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "action": payload.get("action"),
+            "publish_ready": str(bool(payload.get("publish_ready"))).lower(),
+            "budget_usd": payload.get("max_budget_usd"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
 def cmd_run_manifest(args: argparse.Namespace) -> int:
     payload = build_code_intelligence_run_manifest(
         root=Path(args.root) if args.root else REPO_ROOT,
@@ -3797,6 +4228,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stdout format. Compact prints status and artifact refs only; full-json emits the complete payload.",
     )
     latest_freshness.set_defaults(func=cmd_latest_freshness)
+
+    refresh_plan = sub.add_parser(
+        "refresh-plan",
+        help="Classify warning-only CodeGraph and Understand Anything refresh work for main push or Nightly.",
+    )
+    refresh_plan.add_argument("--root")
+    refresh_plan.add_argument("--trigger", choices=("main_push", "nightly", "manual"), default="nightly")
+    refresh_plan.add_argument("--output")
+    refresh_plan.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    refresh_plan.set_defaults(func=cmd_refresh_plan)
+
+    graph_state = sub.add_parser(
+        "graph-state",
+        help="Import or atomically export ignored graph state between a disposable workspace and a persistent state root.",
+    )
+    graph_state.add_argument("--root")
+    graph_state.add_argument("--state-root", required=True)
+    graph_state.add_argument("--direction", choices=("import", "export"), required=True)
+    graph_state.add_argument("--provider", action="append", choices=tuple(GRAPH_STATE_PROVIDERS))
+    graph_state.add_argument("--seed-root")
+    graph_state.add_argument("--output")
+    graph_state.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    graph_state.set_defaults(func=cmd_graph_state)
+
+    codegraph_sync = sub.add_parser("codegraph-sync", help="Run warning-only incremental CodeGraph sync and verify freshness.")
+    codegraph_sync.add_argument("--root")
+    codegraph_sync.add_argument("--output-dir")
+    codegraph_sync.add_argument("--output")
+    codegraph_sync.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    codegraph_sync.set_defaults(func=cmd_codegraph_sync)
+
+    ua_refresh = sub.add_parser(
+        "ua-refresh",
+        help="Run a budget-capped Understand Anything refresh only when the Nightly refresh plan requires semantic work.",
+    )
+    ua_refresh.add_argument("--root")
+    ua_refresh.add_argument("--output-dir")
+    ua_refresh.add_argument("--max-budget-usd", type=float, default=2.0)
+    ua_refresh.add_argument("--output")
+    ua_refresh.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    ua_refresh.set_defaults(func=cmd_ua_refresh)
 
     run_manifest = sub.add_parser(
         "run-manifest",
