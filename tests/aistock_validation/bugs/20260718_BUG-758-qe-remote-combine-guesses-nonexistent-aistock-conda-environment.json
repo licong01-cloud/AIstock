@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-758",
-  "closed_at": null,
+  "closed_at": "2026-07-18T09:23:12Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "Use the remote QE service inherited Python by default; activate conda only when remote_conda_env is explicitly configured.",
   "first_seen_at": "2026-07-18T09:11:03.655833Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "433c78c7ac36efe0735720d365305386411c3635",
+  "fixed_at": "2026-07-18T09:23:54.075726Z",
   "github_issue_number": 2427,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2427",
   "last_seen_at": "2026-07-18T09:11:03.655833Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2429",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -59,6 +60,12 @@
     "fingerprint": "d58008bb5ed939cd21a272e8",
     "source_event_id": "FE-20260718-d58008bb5ed9"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -> 27 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s qe_read_backend -> 14 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
