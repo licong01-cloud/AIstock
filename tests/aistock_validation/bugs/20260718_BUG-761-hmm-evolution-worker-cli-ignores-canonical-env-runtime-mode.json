@@ -2,7 +2,9 @@
   "actual": "The canonical F:/Dev/AIstock/.env sets HMM_EVOLUTION_RUNTIME_MODE=api_worker and the API runtime is active, but invoking python scripts/hmm_evolution_worker.py --once reads only the process environment and falls back to disabled. The command fails with hmm_evolution_runtime_disabled until an external wrapper manually calls load_dotenv. Expected: the worker entry point loads the canonical repository .env before runtime-mode validation, preserves explicit process-environment overrides, rejects missing or invalid modes fail-closed, and does not change the intentionally bounded --once/--drain execution semantics.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260718_BUG-761-hmm-evolution-worker-cli-ignores-canonical-env-runtime-mode.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/hmm_evolution_worker.py",
+    "backend/tests/hmm_evolution/test_worker_cli.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-761",
