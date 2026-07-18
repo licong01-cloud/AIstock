@@ -446,9 +446,9 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           $rows = @()
           foreach ($item in @(
-            @{Provider="state-import"; Path="$outDir/graph-state-import.json"},
-            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"},
-            @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"}
+            @{Provider="state-import"; Path="$outDir/graph-state-import.json"; RequiresPublish=$false},
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"; RequiresPublish=$true},
+            @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"; RequiresPublish=$true}
           )) {
             if (-not (Test-Path -LiteralPath $item.Path)) {
               Write-Host "::warning title=Daily graph refresh::$($item.Provider) did not produce an artifact"
@@ -463,8 +463,8 @@ jobs:
               continue
             }
             $gate = [string]$payload.workflow_gate
-            $published = [string]$payload.publish_ready
-            if ($gate -ne "ready" -or $published -ne "True") {
+            $published = if ($item.RequiresPublish) { [string]$payload.publish_ready } else { "n/a" }
+            if ($gate -ne "ready" -or ($item.RequiresPublish -and $published -ne "True")) {
               Write-Host "::warning title=Daily graph refresh::$($item.Provider) workflow_gate=$gate publish_ready=$published; previous published state preserved"
             }
             $rows += "| $($item.Provider) | $gate | $published |"
