@@ -5,6 +5,7 @@ rules:
     include:
       - backend/services/advisory_dev_input_onboarding/**
       - backend/services/advisory_phase0a/**
+      - backend/services/advisory_phase1/readiness_plan.py
       - backend/services/advisory_phase1/readiness_plan_store.py
       - backend/services/advisory_phase1/source_capacity.py
       - backend/services/advisory_phase1/source_observer.py
@@ -15,6 +16,7 @@ rules:
       - backend/tests/advisory_phase1/test_source_observer_cli.py
       - scripts/advisory_phase0a_audit.py
       - scripts/advisory_phase1_source_observer.py
+      - scripts/advisory_phase1e_readiness_plan.py
       - scripts/advisory_real_dev_onboarding.py
     primary_module: advisory.dev_input_onboarding
     impact_modules: [tests.backend]

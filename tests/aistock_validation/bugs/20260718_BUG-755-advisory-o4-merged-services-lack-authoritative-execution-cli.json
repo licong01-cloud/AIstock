@@ -19,6 +19,7 @@
     "backend/tests/advisory_dev_input_onboarding",
     "backend/tests/advisory_phase1/test_source_observer_cli.py",
     "docs/architecture/advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260718_BUG-755-advisory-o4-merged-services-lack-authoritative-execution-cli.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -50,6 +51,12 @@
       "actor": "codex",
       "note": "Add O4 typed contracts and O3 historical CAS readback needed by the approved per-Program compiler dependency design; shared Selection, Paper, simulation, StrategyPackage runtime and migrations remain excluded.",
       "timestamp": "2026-07-18T17:31:19.2828771+08:00"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_existing_ownership_mapping",
+      "actor": "codex",
+      "note": "Map the two BUG-755 Advisory O4 files to the existing advisory.dev_input_onboarding module so CI applies the established test plan; no module, gate, approval, or business behavior is added.",
+      "timestamp": "2026-07-18T20:15:00+08:00"
     }
   ],
   "evidence_uris": [],
