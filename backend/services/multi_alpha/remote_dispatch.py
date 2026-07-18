@@ -447,10 +447,11 @@ class RemotePredBacktestExecutor:
 def _resolve_l2_artifact_path(*, workspace: Path, backtest_config: Mapping[str, Any]) -> Path:
     raw = backtest_config.get("combined_factors_path") or backtest_config.get("l2_artifact_path")
     if raw is None:
-        raw = workspace / "combined_factors_df.parquet"
-    path = Path(str(raw))
-    if not path.is_absolute():
-        path = workspace / path
+        path = workspace / "combined_factors_df.parquet"
+    else:
+        path = Path(str(raw))
+        if not path.is_absolute():
+            path = workspace / path
     if not path.exists() or not path.is_file():
         raise MultiAlphaCombineBacktestError(
             f"L2 combined factors parquet is missing for remote dispatch: {path}",

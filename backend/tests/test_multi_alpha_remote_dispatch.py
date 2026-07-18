@@ -14,6 +14,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     _remote_small_files,
     _remote_task_id,
     _remote_wsl_command,
+    _resolve_l2_artifact_path,
     is_remote_compute_node,
 )
 from backend.tests.test_multi_alpha_combine_backtest import _runtime_template, _service
@@ -142,6 +143,34 @@ def test_service_uses_remote_executor_for_remote_node(monkeypatch: pytest.Monkey
     monkeypatch.setattr("backend.services.multi_alpha.remote_dispatch.is_remote_compute_node", lambda node_id: True)
 
     assert isinstance(service._executor_for_node("rdagent-node1"), RemotePredBacktestExecutor)
+
+
+def test_default_l2_artifact_path_does_not_duplicate_relative_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    workspace = Path("rdagent_assets/multi_alpha_combine_backtests/macb_test/combined_equal")
+    artifact = workspace / "combined_factors_df.parquet"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"parquet")
+
+    resolved = _resolve_l2_artifact_path(workspace=workspace, backtest_config={})
+
+    assert resolved == artifact
+    assert resolved.exists()
+
+
+def test_explicit_relative_l2_artifact_path_is_workspace_relative(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    artifact = workspace / "custom" / "factors.parquet"
+    artifact.parent.mkdir()
+    artifact.write_bytes(b"parquet")
+
+    resolved = _resolve_l2_artifact_path(
+        workspace=workspace,
+        backtest_config={"combined_factors_path": "custom/factors.parquet"},
+    )
+
+    assert resolved == artifact
 
 
 def test_is_remote_compute_node_uses_compute_node_registry(monkeypatch: pytest.MonkeyPatch) -> None:
