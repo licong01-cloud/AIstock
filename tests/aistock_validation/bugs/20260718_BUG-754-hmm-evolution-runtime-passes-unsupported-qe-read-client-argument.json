@@ -1,6 +1,8 @@
 {
   "actual": "After first runtime activation with HMM_EVOLUTION_RUNTIME_MODE=api_worker, every /api/v1/hmm-evolution endpoint fails HTTP 500. build_runtime() passes qe_read_client to CandidateArtifactResolver although its constructor accepts qe_asset_reader only. Existing unit tests mock the runtime and do not exercise real build_runtime wiring. Expected: runtime builds successfully, QE reads remain routed through QEExperimentAssetReader, and a regression test fails on constructor drift.",
   "allowed_write_scope": [
+    "backend/services/hmm_evolution/runtime.py",
+    "backend/tests/hmm_evolution/test_runtime.py",
     "tests/aistock_validation/bugs/20260718_BUG-754-hmm-evolution-runtime-passes-unsupported-qe-read-client-argument.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
