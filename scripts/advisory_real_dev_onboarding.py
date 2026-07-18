@@ -433,6 +433,15 @@ def _run_historical(args: argparse.Namespace) -> int:
     return EXIT_VERIFICATION_FAILED
 
 
+def _pending_historical_request_ref(args: argparse.Namespace) -> AdvisoryImmutableArtifactRef:
+    request = RealDevHistoricalRunRequest.model_validate(_read_json(args.historical_request))
+    store = HistoricalOnboardingEvidenceStore(root=args.evidence_root)
+    ref = store.artifact_ref(store.publish(request))
+    if store.load(ref) != request:
+        raise ValueError("pending historical request full readback differs")
+    return ref
+
+
 def _project_admitted_package_inputs(*, conn_factory: Any, package_id: str) -> dict[str, Any]:
     package = StrategyPackageRepository(conn_factory=conn_factory).get(package_id)
     projected = project_advisory_inputs(package.manifest)
@@ -624,15 +633,29 @@ def main(argv: list[str] | None = None) -> int:
     except RealDevOnboardingError as exc:
         reason_code = getattr(exc, "reason_code", "ADVISORY_REAL_DEV_CONTRACT_INVALID")
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
-        _emit(
-            {
-                "ok": False,
-                "command": args.command,
-                "reason_code": reason_code,
-                "message": str(exc),
-                "context": exc.context,
-            }
-        )
+        payload = {
+            "ok": False,
+            "command": args.command,
+            "reason_code": reason_code,
+            "message": str(exc),
+            "context": exc.context,
+        }
+        if args.command == "run-historical" and reason_code == REASON_HISTORICAL_INPUT_PENDING:
+            try:
+                payload["historical_request_ref"] = _pending_historical_request_ref(args)
+            except Exception as ref_exc:
+                _log_sanitized_exception("pending historical request ref publication failed", ref_exc)
+                _emit(
+                    {
+                        "ok": False,
+                        "command": args.command,
+                        "reason_code": REASON_UNEXPECTED_ERROR,
+                        "message": "pending historical request reference publication failed",
+                        "context": {"original_reason_code": reason_code},
+                    }
+                )
+                return EXIT_INTERNAL
+        _emit(payload)
         if reason_code == "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN":
             return EXIT_STATE_UNKNOWN
         if reason_code == REASON_HISTORICAL_INPUT_PENDING:
