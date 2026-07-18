@@ -496,6 +496,35 @@ def test_parse_request_sets_reasonable_timeout_defaults_and_topk(tmp_path: Path)
     assert request.run_timeout_seconds < 6 * 60 * 60
 
 
+def test_parse_request_preserves_explicit_initial_cash_in_backtest_config() -> None:
+    payload = _payload()
+    payload["backtest_config"]["initial_cash"] = 10_000_000
+
+    request = parse_request(payload)
+
+    assert request.backtest_config["initial_cash"] == 10_000_000
+
+
+def test_parse_request_rejects_non_positive_initial_cash() -> None:
+    payload = _payload()
+    payload["backtest_config"]["initial_cash"] = 0
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        parse_request(payload)
+
+    assert excinfo.value.reason_code == "initial_cash_invalid"
+
+
+def test_parse_request_rejects_fractional_initial_cash_without_truncation() -> None:
+    payload = _payload()
+    payload["backtest_config"]["initial_cash"] = 10_000_000.5
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        parse_request(payload)
+
+    assert excinfo.value.reason_code == "initial_cash_invalid"
+
+
 def test_topk_reaches_executor_backtest_config(tmp_path: Path) -> None:
     service, _repo, executor, _checker = _service(tmp_path)
     payload = _payload()
@@ -527,6 +556,54 @@ def test_topk_override_updates_qrun_conf_yaml(tmp_path: Path) -> None:
     assert updated["port_analysis_config"]["strategy"]["kwargs"]["n_drop"] == 2
 
 
+def test_initial_cash_override_updates_qrun_backtest_account(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2024-01-01",
+                "end_time": "2026-06-29",
+                "account": 100_000_000,
+            },
+        },
+    }
+    (workspace / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+
+    apply_pred_backtest_overrides(workspace=workspace, backtest_config={"initial_cash": 10_000_000})
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert updated["port_analysis_config"]["backtest"]["account"] == 10_000_000
+    assert updated["port_analysis_config"]["strategy"]["kwargs"]["topk"] == 25
+
+
+def test_initial_cash_override_inserts_missing_backtest_account(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2024-01-01",
+                "end_time": "2026-06-29",
+            },
+        },
+    }
+    (workspace / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+
+    apply_pred_backtest_overrides(workspace=workspace, backtest_config={"initial_cash": 100_000_000})
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert updated["port_analysis_config"]["backtest"]["account"] == 100_000_000
+
+
 def test_shell_executor_command_path_applies_topk_and_strategy_overrides(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     template = tmp_path / "runtime_template"
     template.mkdir()
@@ -543,6 +620,10 @@ port_analysis_config:
       n_drop: 2
       max_n_drop: 2
       min_n_drop: 0
+  backtest:
+    start_time: 2024-01-01
+    end_time: 2026-06-29
+    account: 100000000
 """.lstrip(),
         encoding="utf-8",
     )
@@ -572,6 +653,7 @@ port_analysis_config:
             "runtime_template_dir": str(template),
             "command": [sys.executable, str(script)],
             "topk": 50,
+            "initial_cash": 10_000_000,
             "strategy_kwargs": {"n_drop": 5, "hold_thresh": 0.12},
             "timeout_seconds": 30,
         },
@@ -583,6 +665,7 @@ port_analysis_config:
     assert re.search(r"(?m)^      hold_thresh: 0\.12$", updated)
     assert re.search(r"(?m)^      max_n_drop: 2$", updated)
     assert re.search(r"(?m)^      min_n_drop: 0$", updated)
+    assert re.search(r"(?m)^    account: 10000000$", updated)
     assert "{{ num_features }}" in updated
     assert "{{ num_timesteps }}" in updated
     assert (workspace / "command_was_run").read_text(encoding="utf-8") == "yes"
@@ -591,6 +674,7 @@ port_analysis_config:
     assert override_logs
     assert override_logs[-1].workspace == str(workspace)
     assert override_logs[-1].effective_topk == 50
+    assert override_logs[-1].effective_initial_cash == 10_000_000
     assert override_logs[-1].strategy_kwargs_keys == ["hold_thresh", "n_drop"]
 
 

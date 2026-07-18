@@ -545,13 +545,15 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
     """Apply explicit runtime overrides before qrun reads conf.yaml.
 
     The production qrun config is a Jinja template, so this must not parse and
-    dump the whole YAML document. Keep the edit scoped to strategy kwargs.
+    dump the whole YAML document. Keep edits scoped to the strategy and
+    backtest mappings that the operator explicitly overrides.
     """
 
     topk = backtest_config.get("topk")
+    initial_cash = backtest_config.get("initial_cash")
     strategy_overrides = backtest_config.get("strategy_kwargs")
     has_strategy_overrides = strategy_overrides is not None
-    if topk is None and not has_strategy_overrides:
+    if topk is None and initial_cash is None and not has_strategy_overrides:
         return
     if has_strategy_overrides and not isinstance(strategy_overrides, Mapping):
         raise MultiAlphaCombineBacktestError(
@@ -560,6 +562,7 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
             context={"workspace": str(workspace), "strategy_kwargs_type": type(strategy_overrides).__name__},
         )
     topk_int = _positive_int(topk, field_name="topk") if topk is not None else None
+    initial_cash_int = _positive_int(initial_cash, field_name="initial_cash") if initial_cash is not None else None
     conf_path = workspace / "conf.yaml"
     strategy_keys: list[str] = []
     if isinstance(strategy_overrides, Mapping):
@@ -569,6 +572,7 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         workspace=workspace,
         conf_path=conf_path,
         topk=topk_int,
+        initial_cash=initial_cash_int,
         strategy_overrides=strategy_overrides if isinstance(strategy_overrides, Mapping) else {},
     )
     conf_path.write_text(updated_conf, encoding="utf-8")
@@ -577,6 +581,7 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         extra={
             "workspace": str(workspace),
             "effective_topk": topk_int,
+            "effective_initial_cash": initial_cash_int,
             "strategy_kwargs_keys": sorted(strategy_keys),
         },
     )
@@ -588,6 +593,7 @@ def _apply_pred_backtest_overrides_text(
     workspace: Path,
     conf_path: Path,
     topk: int | None,
+    initial_cash: int | None,
     strategy_overrides: Mapping[str, Any],
 ) -> str:
     lines = text.splitlines(keepends=True)
@@ -600,6 +606,37 @@ def _apply_pred_backtest_overrides_text(
         workspace=workspace,
     )
     port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
+    if initial_cash is not None:
+        backtest_idx, backtest_indent = _find_conf_mapping_key(
+            lines,
+            key="backtest",
+            start=port_idx + 1,
+            end=port_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="port_analysis_config.backtest",
+        )
+        backtest_end = _conf_block_end(lines, start=backtest_idx + 1, parent_indent=backtest_indent)
+        backtest_child_indent = _infer_conf_child_indent(
+            lines,
+            start=backtest_idx + 1,
+            end=backtest_end,
+            parent_indent=backtest_indent,
+        )
+        _replace_or_insert_conf_mapping_key(
+            lines,
+            key="account",
+            value=initial_cash,
+            start=backtest_idx + 1,
+            end=backtest_end,
+            parent_indent=backtest_indent,
+            child_indent=backtest_child_indent,
+            conf_path=conf_path,
+            workspace=workspace,
+            field_prefix="port_analysis_config.backtest",
+            required=False,
+        )
+        port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
     strategy_idx, strategy_indent = _find_conf_mapping_key(
         lines,
         key="strategy",
@@ -621,7 +658,7 @@ def _apply_pred_backtest_overrides_text(
     kwargs_end = _conf_block_end(lines, start=kwargs_idx + 1, parent_indent=kwargs_indent)
     child_indent = _infer_conf_child_indent(lines, start=kwargs_idx + 1, end=kwargs_end, parent_indent=kwargs_indent)
     if topk is not None:
-        delta = _replace_or_insert_conf_kwargs_key(
+        delta = _replace_or_insert_conf_mapping_key(
             lines,
             key="topk",
             value=topk,
@@ -631,11 +668,12 @@ def _apply_pred_backtest_overrides_text(
             child_indent=child_indent,
             conf_path=conf_path,
             workspace=workspace,
+            field_prefix="port_analysis_config.strategy.kwargs",
             required=True,
         )
         kwargs_end += delta
     for key, value in strategy_overrides.items():
-        delta = _replace_or_insert_conf_kwargs_key(
+        delta = _replace_or_insert_conf_mapping_key(
             lines,
             key=str(key),
             value=value,
@@ -645,6 +683,7 @@ def _apply_pred_backtest_overrides_text(
             child_indent=child_indent,
             conf_path=conf_path,
             workspace=workspace,
+            field_prefix="port_analysis_config.strategy.kwargs",
             required=False,
         )
         kwargs_end += delta
@@ -704,7 +743,7 @@ def _infer_conf_child_indent(lines: Sequence[str], *, start: int, end: int, pare
     return parent_indent + 2
 
 
-def _replace_or_insert_conf_kwargs_key(
+def _replace_or_insert_conf_mapping_key(
     lines: list[str],
     *,
     key: str,
@@ -715,6 +754,7 @@ def _replace_or_insert_conf_kwargs_key(
     child_indent: int,
     conf_path: Path,
     workspace: Path,
+    field_prefix: str,
     required: bool,
 ) -> int:
     pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(key)}\s*:.*$")
@@ -727,28 +767,28 @@ def _replace_or_insert_conf_kwargs_key(
             matches.append((idx, len(match.group("indent"))))
     if len(matches) > 1:
         raise MultiAlphaCombineBacktestError(
-            f"conf.yaml has ambiguous strategy kwarg: {key}",
+            f"conf.yaml has ambiguous mapping field: {field_prefix}.{key}",
             reason_code="pred_backtest_conf_invalid",
-            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"port_analysis_config.strategy.kwargs.{key}", "match_count": len(matches)},
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"{field_prefix}.{key}", "match_count": len(matches)},
         )
     if not matches:
         if required:
             raise MultiAlphaCombineBacktestError(
-                f"conf.yaml missing strategy kwarg: {key}",
+                f"conf.yaml missing mapping field: {field_prefix}.{key}",
                 reason_code="pred_backtest_conf_invalid",
-                context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"port_analysis_config.strategy.kwargs.{key}"},
+                context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"{field_prefix}.{key}"},
             )
-        rendered = _render_conf_kwargs_value(key=key, value=value, indent=child_indent, newline=_conf_newline(lines))
+        rendered = _render_conf_mapping_value(key=key, value=value, indent=child_indent, newline=_conf_newline(lines))
         lines[end:end] = rendered.splitlines(keepends=True)
         return len(rendered.splitlines())
     idx, indent = matches[0]
-    rendered = _render_conf_kwargs_value(key=key, value=value, indent=indent, newline=_conf_line_newline(lines[idx]) or _conf_newline(lines))
+    rendered = _render_conf_mapping_value(key=key, value=value, indent=indent, newline=_conf_line_newline(lines[idx]) or _conf_newline(lines))
     replacement = rendered.splitlines(keepends=True)
     lines[idx : idx + 1] = replacement
     return len(replacement) - 1
 
 
-def _render_conf_kwargs_value(*, key: str, value: Any, indent: int, newline: str) -> str:
+def _render_conf_mapping_value(*, key: str, value: Any, indent: int, newline: str) -> str:
     rendered = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=False)
     rendered = "\n".join(line for line in rendered.splitlines() if line != "...")
     rendered = rendered.replace("\n", newline)
@@ -793,6 +833,7 @@ def _pred_backtest_error_context(*, workspace: Path, node_id: str, backtest_conf
         "backtest_name": str(backtest_config.get("backtest_name") or workspace.name),
         "timeout_seconds": backtest_config.get("timeout_seconds"),
         "topk": backtest_config.get("topk"),
+        "initial_cash": backtest_config.get("initial_cash"),
     }
     if backtest_config.get("weighting_scheme"):
         context["weighting_scheme"] = backtest_config.get("weighting_scheme")
@@ -2248,6 +2289,8 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         run_timeout_seconds = _positive_int(raw_run_timeout, field_name="run_timeout_seconds")
     backtest_config = dict(raw_backtest_config)
     backtest_config["topk"] = topk
+    if raw_backtest_config.get("initial_cash") is not None:
+        backtest_config["initial_cash"] = _positive_int(raw_backtest_config.get("initial_cash"), field_name="initial_cash")
     backtest_config["timeout_seconds"] = min(subprocess_timeout_seconds, scheme_timeout_seconds)
     backtest_config.setdefault("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)
     backtest_config["run_timeout_seconds"] = run_timeout_seconds
@@ -2499,6 +2542,12 @@ def _coerce_panel_spec(item: Mapping[str, Any]) -> PanelLegSpec:
 
 
 def _positive_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must be an integer",
+            reason_code=f"{field_name}_invalid",
+            context={field_name: value},
+        )
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
