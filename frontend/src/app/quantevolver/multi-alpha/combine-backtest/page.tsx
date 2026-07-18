@@ -1,13 +1,11 @@
 ﻿"use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, DownloadCloud, RefreshCw, Trash2 } from "lucide-react";
+import { Activity, DownloadCloud, RefreshCw } from "lucide-react";
 import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const PAGE_SIZE = 50;
-const DELETE_APPROVAL_MESSAGE = "删除属于写操作，当前设计实现为只读查询；如需启用删除端点，请单独审批写入范围。";
-
 type CombineTask = {
   task_id: string;
   task_name: string;
@@ -24,6 +22,11 @@ type CombineTask = {
   default_scheme?: string;
   phase?: string | null;
   running_count?: number;
+  completed_count?: number;
+  partial_failed_count?: number;
+  failed_count?: number;
+  progress?: Record<string, unknown>;
+  heartbeat_at?: string | null;
 };
 
 type TaskListResponse = {
@@ -119,14 +122,24 @@ function schemeText(task: CombineTask): string {
   return schemes.join(" / ");
 }
 
+function taskProgressText(task: CombineTask): string {
+  const progress = task.progress || {};
+  if (progress.completed != null || progress.total != null || progress.pending != null) {
+    return `${String(progress.completed ?? "-")}/${String(progress.total ?? "-")} pending=${String(progress.pending ?? "-")}`;
+  }
+  return task.phase || "-";
+}
+
 export default function MultiAlphaCombineBacktestPage() {
   const [tasks, setTasks] = useState<CombineTask[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "completed" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "completed" | "partial_failed" | "failed">("all");
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshInterval, setRefreshInterval] = useState(5);
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -152,6 +165,21 @@ export default function MultiAlphaCombineBacktestPage() {
   }, [loadTasks]);
 
   const hasRunningTask = useMemo(() => tasks.some((task) => task.status === "running"), [tasks]);
+
+  useEffect(() => {
+    if (!autoRefresh || !hasRunningTask) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadTasks();
+    }, refreshInterval * 1000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadTasks();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [autoRefresh, hasRunningTask, loadTasks, refreshInterval]);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -181,7 +209,22 @@ export default function MultiAlphaCombineBacktestPage() {
             <option value="all">全部状态</option>
             <option value="running">运行中</option>
             <option value="completed">已完成</option>
+            <option value="partial_failed">部分失败</option>
             <option value="failed">已失败</option>
+          </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475569", padding: "7px 9px", borderRadius: 6, border: "1px solid #e2e8f0", backgroundColor: "#fff" }}>
+            <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
+            running 自动刷新
+          </label>
+          <select
+            value={refreshInterval}
+            onChange={(event) => setRefreshInterval(Number(event.target.value))}
+            disabled={!autoRefresh}
+            style={{ padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", color: "#475569", backgroundColor: "#fff", width: "100%" }}
+          >
+            <option value={5}>每 5 秒</option>
+            <option value={10}>每 10 秒</option>
+            <option value={30}>每 30 秒</option>
           </select>
           <button
             onClick={() => void loadTasks()}
@@ -212,7 +255,7 @@ export default function MultiAlphaCombineBacktestPage() {
             <span>{hasRunningTask ? "running visible" : "no running visible"}</span>
           </div>
             <div style={{ fontSize: "11px", color: "#64748b", lineHeight: 1.5 }}>
-              roster=task；窗口×topk run=配置；只读查询 macb_ 组合回测结果。
+              roster=task；窗口×topk run=配置；详情页提供日志、重试、终态删除和入仓。
             </div>
           </div>
 
@@ -229,7 +272,7 @@ export default function MultiAlphaCombineBacktestPage() {
                     有运行中配置
                   </span>
                 )}
-                <span>只读 + 导出；删除需单独审批写操作。</span>
+                <span>自动进度 + 失败证据 + 配置级操作。</span>
               </div>
             </div>
 
@@ -287,7 +330,8 @@ export default function MultiAlphaCombineBacktestPage() {
                         {task.current_loop}/{task.max_loops}
                       </td>
                       <td style={{ padding: "10px 12px", textAlign: "center", fontSize: "11px", color: task.phase ? "#0369a1" : "#64748b", whiteSpace: "nowrap" }}>
-                        {task.phase || "-"}
+                        <div>{task.phase || "-"}</div>
+                        <div style={{ marginTop: 2, fontSize: 9, color: "#64748b" }}>{taskProgressText(task)}</div>
                       </td>
                       <td style={{ padding: "10px 12px", textAlign: "center", fontSize: "11px", color: "#475569" }}>
                         <span title={schemeText(task)} style={{ display: "inline-block", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -295,7 +339,8 @@ export default function MultiAlphaCombineBacktestPage() {
                         </span>
                       </td>
                       <td style={{ padding: "10px 12px", textAlign: "center", fontSize: "11px", color: "#64748b", whiteSpace: "nowrap" }}>
-                        {formatTime(task.updated_at)}
+                        <div>{formatTime(task.updated_at)}</div>
+                        <div style={{ marginTop: 2, fontSize: 9, color: "#94a3b8" }}>HB {formatTime(task.heartbeat_at)}</div>
                       </td>
                       <td style={{ padding: "10px 12px", textAlign: "center" }}>
                         <div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>
@@ -313,13 +358,6 @@ export default function MultiAlphaCombineBacktestPage() {
                             style={{ padding: "4px 8px", border: "1px solid #2563eb", borderRadius: "4px", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
                           >
                             <DownloadCloud size={11} /> 导出
-                          </button>
-                          <button
-                            onClick={(event) => { event.stopPropagation(); alert(DELETE_APPROVAL_MESSAGE); }}
-                            title={DELETE_APPROVAL_MESSAGE}
-                            style={{ padding: "4px 8px", border: "1px solid #fca5a5", borderRadius: "4px", backgroundColor: "#fff", color: "#ef4444", fontSize: "11px", fontWeight: 600, cursor: "not-allowed", display: "flex", alignItems: "center", gap: "3px", opacity: 0.65 }}
-                          >
-                            <Trash2 size={11} /> 删除
                           </button>
                         </div>
                       </td>

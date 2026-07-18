@@ -25,6 +25,8 @@ from backend.services.multi_alpha.combine_backtest import (
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
     RANK_FUSION_WEIGHTING_SCHEMES,
+    REQUEST_SNAPSHOT_KEY,
+    RUN_EVENT_LOG_NAME,
     apply_pred_backtest_overrides,
     ShellPredBacktestExecutor,
     maybe_upload_combined_prediction,
@@ -833,7 +835,7 @@ def test_shell_executor_runs_two_real_wsl_children_concurrently_without_hang(tmp
     run = service.get_run(result["run_id"])
 
     assert run["run"]["status"] == "succeeded"
-    workspaces = sorted((tmp_path / "macb" / result["run_id"]).iterdir())
+    workspaces = sorted(path for path in (tmp_path / "macb" / result["run_id"]).iterdir() if path.is_dir())
     assert len({path.resolve() for path in workspaces}) == 2
     assert {"baseline_leg_a", "combined_equal"} == {path.name for path in workspaces}
     intervals: list[tuple[float, float]] = []
@@ -1340,3 +1342,116 @@ def test_prediction_store_upload_is_explicit_and_fail_loud(tmp_path: Path, monke
     )
 
     assert manifest == {"artifacts": [{"artifact_type": "prediction"}]}
+
+
+def test_run_persists_exact_retry_snapshot_and_lineage(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    first = service.submit_run(_payload(), run_async=False)
+    first_run = service.get_run(first["run_id"])["run"]
+    snapshot = first_run["backtest_config_json"][REQUEST_SNAPSHOT_KEY]
+
+    assert snapshot["weighting_schemes"] == ["equal", "ic_weighted", "risk_parity"]
+    assert snapshot["min_date_coverage"] == pytest.approx(1.0)
+    assert snapshot["roster"][0]["seed_run_ids"] == ["a1", "a2"]
+
+    draft = service.get_retry_draft(first["run_id"])
+    assert draft["exact"] is True
+    assert draft["assumptions"] == []
+
+    service._clock = lambda: datetime(2026, 1, 6, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+    retried = service.retry_run(first["run_id"])
+    deadline = time.time() + 10
+    while service.get_run(retried["run_id"])["run"]["status"] == "running" and time.time() < deadline:
+        time.sleep(0.02)
+
+    retry_run = service.get_run(retried["run_id"])["run"]
+    assert retry_run["status"] == "succeeded"
+    assert retry_run["backtest_config_json"]["retry_of_run_id"] == first["run_id"]
+    assert retry_run["backtest_config_json"]["retry_request_source"] == "exact_snapshot"
+    assert first["run_id"] in repo.runs
+
+
+def test_legacy_retry_requires_explicit_payload_and_exposes_assumptions(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    first = service.submit_run(_payload(), run_async=False)
+    repo.runs[first["run_id"]]["backtest_config_json"].pop(REQUEST_SNAPSHOT_KEY)
+
+    draft = service.get_retry_draft(first["run_id"])
+
+    assert draft["exact"] is False
+    assert draft["source"] == "legacy_reconstruction"
+    assert draft["assumptions"]
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.retry_run(first["run_id"])
+    assert excinfo.value.reason_code == "combine_backtest_retry_payload_required"
+    assert excinfo.value.context["retry_draft"]["payload"]["topk"] == 1
+
+
+def test_run_logs_include_structured_events_and_safe_text_tails(tmp_path: Path) -> None:
+    service, _repo, _executor, _checker = _service(tmp_path)
+    result = service.submit_run(_payload(), run_async=False)
+    run_root = tmp_path / "macb" / result["run_id"]
+    log_path = run_root / "combined_equal" / "run.log"
+    log_path.write_text("line one\nline two\n", encoding="utf-8")
+
+    logs = service.get_run_logs(result["run_id"], tail_lines=500)
+
+    assert logs["history_available"] is True
+    assert any(event.get("event") == "heartbeat" for event in logs["events"])
+    assert any(event.get("event") == "terminal" for event in logs["events"])
+    assert any(item["path"] == "combined_equal/run.log" and "line two" in item["tail"] for item in logs["files"])
+    assert (run_root / RUN_EVENT_LOG_NAME).is_file()
+
+
+def test_delete_terminal_run_cleans_workspace_and_preserves_running_run(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    completed = service.submit_run(_payload(), run_async=False)
+    completed_root = tmp_path / "macb" / completed["run_id"]
+
+    deleted = service.delete_run(completed["run_id"], cleanup_workspace=True)
+
+    assert deleted == {
+        "run_id": completed["run_id"],
+        "deleted": True,
+        "workspace_removed": True,
+        "workspace_cleanup_error": None,
+    }
+    assert completed["run_id"] not in repo.runs
+    assert not completed_root.exists()
+
+    request = parse_request(_payload())
+    running_id = "macb_running_20260102_20260104_20260105T000000000000Z"
+    repo.create_run(run_id=running_id, request=request, roster_hash="running_hash")
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.delete_run(running_id)
+    assert excinfo.value.reason_code == "combine_backtest_delete_not_terminal"
+    assert running_id in repo.runs
+
+
+def test_archive_rejects_running_run_before_archive_handler(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    request = parse_request(_payload())
+    running_id = "macb_running_archive_20260102_20260104_20260105T000000000000Z"
+    repo.create_run(run_id=running_id, request=request, roster_hash="running_archive_hash")
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.archive_run(running_id, dry_run=True)
+
+    assert excinfo.value.reason_code == "combine_backtest_archive_not_terminal"
+    assert excinfo.value.context == {"run_id": running_id, "status": "running"}
+
+
+def test_delete_restores_workspace_when_database_delete_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    completed = service.submit_run(_payload(), run_async=False)
+    workspace = tmp_path / "macb" / completed["run_id"]
+    marker = workspace / "preserve.log"
+    marker.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(repo, "delete_run", lambda _run_id: False)
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.delete_run(completed["run_id"], cleanup_workspace=True)
+
+    assert excinfo.value.reason_code == "combine_backtest_delete_missing"
+    assert workspace.is_dir()
+    assert marker.read_text(encoding="utf-8") == "preserve"

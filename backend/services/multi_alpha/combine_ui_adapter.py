@@ -76,6 +76,14 @@ class CombineLoopRow(BaseModel):
     oos_end: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    raw_status: str | None = None
+    phase: str | None = None
+    progress: dict[str, Any] = Field(default_factory=dict)
+    reason: dict[str, Any] = Field(default_factory=dict)
+    heartbeat_at: str | None = None
+    retryable: bool = False
+    deletable: bool = False
+    scheme_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CombineTaskItem(BaseModel):
@@ -94,6 +102,11 @@ class CombineTaskItem(BaseModel):
     default_scheme: str = DEFAULT_SCHEME
     phase: str | None = None
     running_count: int = 0
+    completed_count: int = 0
+    partial_failed_count: int = 0
+    failed_count: int = 0
+    progress: dict[str, Any] = Field(default_factory=dict)
+    heartbeat_at: str | None = None
 
 
 class CombineTrajectoryResp(BaseModel):
@@ -258,7 +271,8 @@ class MultiAlphaCombineUIAdapter:
                 )
             bundle["run"] = _normalize_run_status(bundle["run"])
             bundles.append(bundle)
-        return _common_schemes(bundles)
+        available_schemes, _computable_schemes = _scheme_inventory(bundles)
+        return available_schemes
 
     def get_loop(self, task_key: str, loop_index: int, *, scheme: str | None = None) -> dict[str, Any]:
         trajectory = self.get_trajectory(task_key, scheme=scheme)
@@ -307,8 +321,13 @@ class MultiAlphaCombineUIAdapter:
     ) -> CombineTaskItem:
         statuses = [str(row.get("status") or "") for row in rows]
         status = _task_status(statuses)
-        running_rows = [row for row in rows if row.get("status") == "running"]
+        running_rows = sorted(
+            (row for row in rows if row.get("status") == "running"),
+            key=lambda row: _parse_timestamp(row.get("updated_at") or row.get("created_at")),
+            reverse=True,
+        )
         terminal_count = sum(1 for row in rows if row.get("status") in TERMINAL_RUN_STATUSES)
+        latest_running_reason = _as_mapping(running_rows[0].get("reason")) if running_rows else {}
         first = rows[0]
         return CombineTaskItem(
             task_id=task_key,
@@ -325,6 +344,11 @@ class MultiAlphaCombineUIAdapter:
             default_scheme=default_scheme,
             phase=_running_phase(running_rows),
             running_count=len(running_rows),
+            completed_count=sum(1 for row in rows if row.get("status") == "succeeded"),
+            partial_failed_count=sum(1 for row in rows if row.get("status") == "partial_failed"),
+            failed_count=sum(1 for row in rows if row.get("status") == "failed"),
+            progress=_as_mapping(latest_running_reason.get("progress")),
+            heartbeat_at=_iso(latest_running_reason.get("heartbeat_at") or (running_rows[0].get("updated_at") if running_rows else None)),
         )
 
     def _build_loops(
@@ -346,17 +370,18 @@ class MultiAlphaCombineUIAdapter:
                 )
             bundle["run"] = _normalize_run_status(bundle["run"])
             bundles.append(bundle)
-        available_schemes = _common_schemes(bundles)
-        selected_scheme, warning = _select_scheme(available_schemes, requested=scheme)
+        available_schemes, computable_schemes = _scheme_inventory(bundles)
+        selected_scheme, warning = _select_scheme(available_schemes, computable_schemes=computable_schemes, requested=scheme)
         window_rank = _window_ranks([bundle["run"] for bundle in bundles])
         sorted_bundles = sorted(bundles, key=lambda bundle: _run_sort_key(bundle["run"]))
         selected_results = [_require_scheme(bundle, selected_scheme) for bundle in sorted_bundles]
-        best_run_id = _best_succeeded_run_id(sorted_bundles, selected_results)
+        best_run_id = _best_computable_run_id(sorted_bundles, selected_results)
 
         loops: list[CombineLoopRow] = []
         for index, (bundle, scheme_result) in enumerate(zip(sorted_bundles, selected_results, strict=True), start=1):
             run = bundle["run"]
             run_id = str(run.get("id") or "")
+            reason = _as_mapping(run.get("reason"))
             config = _loop_config(run, scheme_result, selected_scheme, window_rank.get(_window_key(run), index))
             loop_loo = _loo_for_scheme(bundle.get("loo") or [], selected_scheme)
             loops.append(
@@ -376,6 +401,14 @@ class MultiAlphaCombineUIAdapter:
                     oos_end=_iso(run.get("oos_end")),
                     created_at=_iso(run.get("created_at")),
                     updated_at=_iso(run.get("updated_at") or run.get("created_at")),
+                    raw_status=str(run.get("status") or ""),
+                    phase=str(reason.get("phase") or "") or None,
+                    progress=_as_mapping(reason.get("progress")),
+                    reason=reason,
+                    heartbeat_at=_iso(reason.get("heartbeat_at") or run.get("updated_at") or run.get("created_at")),
+                    retryable=str(run.get("status") or "") in TERMINAL_RUN_STATUSES,
+                    deletable=str(run.get("status") or "") in TERMINAL_RUN_STATUSES,
+                    scheme_results=[_scheme_result_payload(row) for row in _as_list(bundle.get("scheme_results"))],
                 )
             )
         return loops, selected_scheme, available_schemes, warning
@@ -431,7 +464,13 @@ def _task_status(statuses: Sequence[str]) -> str:
         return "running"
     if statuses and all(status == "succeeded" for status in statuses):
         return "completed"
-    if any(status in {"failed", "partial_failed"} for status in statuses):
+    if any(status in {"succeeded", "partial_failed"} for status in statuses) and any(
+        status in {"failed", "partial_failed"} for status in statuses
+    ):
+        return "partial_failed"
+    if statuses and all(status == "partial_failed" for status in statuses):
+        return "partial_failed"
+    if any(status == "failed" for status in statuses):
         return "failed"
     return statuses[0] if statuses else "pending"
 
@@ -446,51 +485,39 @@ def _loop_status(status: str) -> str:
     return status or "pending"
 
 
-def _common_schemes(bundles: Sequence[Mapping[str, Any]]) -> list[str]:
-    # 只对 succeeded run 计算公共 weighting_scheme:failed/partial_failed run 的
-    # scheme_result 可能是部分/无效产物(不同 run 失败时落地的 scheme 集合不一致),
-    # 若纳入交集会把整个 task 的可用 scheme 算空,导致详情/轨迹整体渲染失败。
-    common: set[str] | None = None
-    seen_any = False
+def _scheme_inventory(bundles: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:
+    available: set[str] = set()
+    computable: set[str] = set()
     for bundle in bundles:
-        run = _as_mapping(bundle.get("run"))
-        if run.get("status") != "succeeded":
-            continue
-        schemes = {
-            str(row.get("weighting_scheme"))
-            for row in _as_list(bundle.get("scheme_results"))
-            if row.get("weighting_scheme")
-        }
-        if not schemes:
-            raise CombineUIAdapterError(
-                "succeeded combine run has no scheme_result rows",
-                reason_code="combine_ui_scheme_results_missing",
-                context={"run_id": run.get("id")},
-            )
-        seen_any = True
-        common = schemes if common is None else common & schemes
-    if not seen_any:
-        # 该 task 下没有任何 succeeded run(全部 running/failed)→ 降级到默认 scheme,
-        # 让 UI 可渲染(轨迹/详情对 failed run 自有状态展示),不因无成功 run 而整体崩。
-        return [DEFAULT_SCHEME]
-    if not common:
-        # 走到这里说明存在 succeeded run 但它们之间确实无公共 scheme,
-        # 属真实数据异常,显式报错不掩盖(no-silent-error)。
-        raise CombineUIAdapterError(
-            "combine task has no common weighting_scheme across succeeded runs",
-            reason_code="combine_ui_no_common_weighting_scheme",
-            context={
-                "run_ids": [
-                    _as_mapping(bundle.get("run")).get("id")
-                    for bundle in bundles
-                    if _as_mapping(bundle.get("run")).get("status") == "succeeded"
-                ]
-            },
-        )
-    return sorted(common, key=lambda item: SCHEME_PRIORITY.index(item) if item in SCHEME_PRIORITY else len(SCHEME_PRIORITY))
+        run_config = _as_mapping(_as_mapping(bundle.get("run")).get("backtest_config_json"))
+        request_snapshot = _as_mapping(run_config.get("_combine_request_v1"))
+        for requested in _as_list(request_snapshot.get("weighting_schemes")):
+            if requested:
+                available.add(str(requested))
+        for row in _as_list(bundle.get("scheme_results")):
+            scheme = str(row.get("weighting_scheme") or "").strip()
+            if not scheme:
+                continue
+            available.add(scheme)
+            if not bool(row.get("skipped")) and any(
+                _finite_float(row.get(metric)) is not None for metric in ("cagr", "sharpe", "calmar", "max_drawdown")
+            ):
+                computable.add(scheme)
+    if not available:
+        available.add(DEFAULT_SCHEME)
+
+    def sort_key(item: str) -> int:
+        return SCHEME_PRIORITY.index(item) if item in SCHEME_PRIORITY else len(SCHEME_PRIORITY)
+
+    return sorted(available, key=sort_key), sorted(computable, key=sort_key)
 
 
-def _select_scheme(available_schemes: Sequence[str], *, requested: str | None) -> tuple[str, dict[str, Any] | None]:
+def _select_scheme(
+    available_schemes: Sequence[str],
+    *,
+    computable_schemes: Sequence[str],
+    requested: str | None,
+) -> tuple[str, dict[str, Any] | None]:
     if requested:
         if requested not in available_schemes:
             raise CombineUIAdapterError(
@@ -499,9 +526,9 @@ def _select_scheme(available_schemes: Sequence[str], *, requested: str | None) -
                 context={"requested_scheme": requested, "available_schemes": list(available_schemes)},
             )
         return requested, None
-    if DEFAULT_SCHEME in available_schemes:
+    if DEFAULT_SCHEME in computable_schemes:
         return DEFAULT_SCHEME, None
-    selected = available_schemes[0]
+    selected = (computable_schemes or available_schemes)[0]
     return selected, {
         "reason_code": "combine_ui_default_scheme_unavailable",
         "requested_scheme": DEFAULT_SCHEME,
@@ -515,26 +542,21 @@ def _require_scheme(bundle: Mapping[str, Any], scheme: str) -> dict[str, Any]:
         if row.get("weighting_scheme") == scheme:
             return dict(row)
     run = _as_mapping(bundle.get("run"))
-    if run.get("status") != "succeeded":
-        return {
-            "weighting_scheme": scheme,
-            "weights_json": {},
-            "per_window_weights_json": [],
-            "skipped": True,
-            "skipped_reason": "scheme_result_not_available_for_non_succeeded_run",
-        }
-    raise CombineUIAdapterError(
-        "weighting_scheme row disappeared while building combine UI payload",
-        reason_code="combine_ui_weighting_scheme_missing_for_run",
-        context={"run_id": run.get("id"), "scheme": scheme},
-    )
+    return {
+        "weighting_scheme": scheme,
+        "weights_json": {},
+        "per_window_weights_json": [],
+        "skipped": True,
+        "skipped_reason": "scheme_result_not_persisted_for_run",
+        "run_id": run.get("id"),
+    }
 
 
-def _best_succeeded_run_id(bundles: Sequence[Mapping[str, Any]], scheme_results: Sequence[Mapping[str, Any]]) -> str | None:
+def _best_computable_run_id(bundles: Sequence[Mapping[str, Any]], scheme_results: Sequence[Mapping[str, Any]]) -> str | None:
     candidates: list[tuple[float, float, str]] = []
     for bundle, scheme_result in zip(bundles, scheme_results, strict=True):
         run = _as_mapping(bundle.get("run"))
-        if run.get("status") != "succeeded" or bool(scheme_result.get("skipped")):
+        if run.get("status") == "running" or bool(scheme_result.get("skipped")):
             continue
         cagr = _finite_float(scheme_result.get("cagr"))
         if cagr is None:
@@ -544,6 +566,22 @@ def _best_succeeded_run_id(bundles: Sequence[Mapping[str, Any]], scheme_results:
     if not candidates:
         return None
     return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _scheme_result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "weighting_scheme": row.get("weighting_scheme"),
+        "cagr": _finite_float(row.get("cagr")),
+        "sharpe": _finite_float(row.get("sharpe")),
+        "max_drawdown": _finite_float(row.get("max_drawdown")),
+        "calmar": _finite_float(row.get("calmar")),
+        "turnover": _finite_float(row.get("turnover")),
+        "topk_return_20": _finite_float(row.get("topk_return_20")),
+        "topk_hit_rate_20": _finite_float(row.get("topk_hit_rate_20")),
+        "pred_persisted": bool(row.get("pred_persisted")),
+        "skipped": bool(row.get("skipped")),
+        "skipped_reason": row.get("skipped_reason"),
+    }
 
 
 def _loop_metrics(scheme_result: Mapping[str, Any]) -> CombineLoopMetrics:
