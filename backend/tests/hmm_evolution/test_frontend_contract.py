@@ -45,9 +45,10 @@ def test_phase_one_registers_only_real_evolution_routes() -> None:
     assert not (REPO_ROOT / "frontend/src/app/hmm-research-training").exists()
 
 
-def test_hmm_workspace_uses_full_width_shell_instead_of_legacy_sidebar() -> None:
+def test_hmm_workspace_keeps_the_global_sidebar_alongside_the_research_shell() -> None:
     sidebar = (REPO_ROOT / "frontend/src/app/Sidebar.tsx").read_text(encoding="utf-8")
-    assert 'pathname.startsWith("/hmm-evolution")' in sidebar
+    assert 'pathname.startsWith("/hmm-evolution")' not in sidebar
+    assert '<aside className="sidebar">' in sidebar
 
 
 def test_ui_contains_required_real_states_and_fixed_evidence() -> None:

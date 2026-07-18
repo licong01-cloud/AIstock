@@ -11,19 +11,19 @@ from backend.services.hmm_evolution.errors import SchemaUnavailableError
 
 
 VALID_SPEC = {
-    "schema_version": "hmm_evaluation_spec_v1",
+    "schema_version": "hmm_evaluation_spec_v2",
     "base_loop_ref": "qe_20260706_013235_bbd4/Loop8",
     "window_start": "2025-01-02",
     "window_end": "2025-12-31",
     "as_of": {"policy": "latest_common_completed", "requested_date": None},
     "label_horizon_days": 20,
-    "universe": {"type": "prediction_artifact_all"},
+    "universe": {"type": "source_loop_stock_pool_st_pit"},
     "topk": 50,
     "date_coverage_policy": "batch_common_intersection_with_evidence",
     "missing_sector_policy": "neutral_with_evidence",
     "market_forward_return": {"mode": "required", "horizon_trading_days": 10},
     "sort_policy": "score_desc_symbol_asc_v1",
-    "metric_version": "hmm_replacement_metrics_v1",
+    "metric_version": "hmm_replacement_metrics_v2",
     "recommendation_version": "hmm_recommendation_v1",
 }
 

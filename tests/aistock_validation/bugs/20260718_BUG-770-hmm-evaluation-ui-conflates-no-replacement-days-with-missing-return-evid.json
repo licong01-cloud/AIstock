@@ -4,6 +4,7 @@
     "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
     "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
     "frontend/src/components/hmm-evolution/EvaluationDetailView.tsx",
+    "frontend/src/components/hmm-evolution/DailyMetricChart.tsx",
     "frontend/src/components/hmm-evolution/hmm-evolution.module.css",
     "frontend/tests/hmm-evolution/hmm-evolution.spec.ts",
     "tests/aistock_validation/bugs/20260718_BUG-770-hmm-evaluation-ui-conflates-no-replacement-days-with-missing-return-evid.json",

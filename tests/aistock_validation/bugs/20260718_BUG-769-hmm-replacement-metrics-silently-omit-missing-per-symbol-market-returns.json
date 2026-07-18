@@ -4,8 +4,12 @@
     "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
     "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
     "backend/services/hmm_evolution/evaluator.py",
+    "backend/services/hmm_evolution/executor.py",
+    "backend/services/hmm_evolution/input_adapter.py",
     "backend/services/hmm_evolution/market_repository.py",
     "backend/tests/hmm_evolution/test_evaluator.py",
+    "backend/tests/hmm_evolution/test_executor.py",
+    "backend/tests/hmm_evolution/test_input_adapter.py",
     "backend/tests/hmm_evolution/test_market_repository.py",
     "tests/aistock_validation/bugs/20260718_BUG-769-hmm-replacement-metrics-silently-omit-missing-per-symbol-market-returns.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

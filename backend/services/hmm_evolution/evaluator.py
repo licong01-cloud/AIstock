@@ -23,9 +23,9 @@ from .errors import (
 )
 from .models import EvidenceQuality, canonical_json_sha256
 
-EVALUATOR_VERSION = "hmm_replacement_evaluator_v1"
-METRIC_VERSION = "hmm_replacement_metrics_v1"
-RESULT_SCHEMA_VERSION = "hmm_evaluation_result_v1"
+EVALUATOR_VERSION = "hmm_replacement_evaluator_v2"
+METRIC_VERSION = "hmm_replacement_metrics_v2"
+RESULT_SCHEMA_VERSION = "hmm_evaluation_result_v2"
 
 
 class EvaluationInputError(InvalidSpecError):
@@ -226,6 +226,7 @@ def evaluate_candidate(
     label_horizon_days: int,
     topk: int,
     db_forward_returns: pd.DataFrame | None = None,
+    market_missing_evidence: Sequence[Mapping[str, Any]] = (),
     market_forward_return_mode: str = "required",
     date_coverage_evidence: Mapping[str, Any] | None = None,
     checkpoint: Callable[[int, date], None] | None = None,
@@ -277,8 +278,10 @@ def evaluate_candidate(
 
     label_lookup = _value_lookup(label, "future_return")
     db_lookup = _value_lookup(db_returns, "future_return") if db_returns is not None else {}
+    market_missing_lookup = _market_missing_lookup(market_missing_evidence)
     replacement_rows: list[dict[str, Any]] = []
     daily_rows: list[dict[str, Any]] = []
+    incomplete_return_evidence: list[dict[str, Any]] = []
     missing_sector_occurrences = 0
     missing_sector_symbols: set[str] = set()
     missing_coefficient_occurrences = 0
@@ -336,6 +339,9 @@ def evaluate_candidate(
                 fallback_reason = row["fallback_reason"]
                 if isinstance(fallback_reason, str):
                     neutral_coefficient_replacements += 1
+                label_return = label_lookup.get((trade_date, symbol))
+                db_return = db_lookup.get((trade_date, symbol))
+                market_missing = market_missing_lookup.get((trade_date, symbol))
                 record = {
                     "date": trade_date.isoformat(),
                     "symbol": symbol,
@@ -348,11 +354,46 @@ def evaluate_candidate(
                     "raw_rank": int(raw_rank[symbol]),
                     "adjusted_rank": int(adjusted_rank[symbol]),
                     "rank_delta": int(adjusted_rank[symbol]) - int(raw_rank[symbol]),
-                    "label_return": label_lookup.get((trade_date, symbol)),
-                    "db_return_10d": db_lookup.get((trade_date, symbol)),
+                    "label_return": label_return,
+                    "label_return_missing_reason": (
+                        "label_artifact_return_missing" if label_return is None else None
+                    ),
+                    "db_return_10d": db_return,
+                    "db_return_missing_reason": (
+                        str(market_missing.get("reason"))
+                        if db_return is None and market_missing is not None
+                        else (
+                            "market_return_missing_without_repository_evidence"
+                            if db_return is None and market_forward_return_mode == "required"
+                            else None
+                        )
+                    ),
+                    "db_return_label_date": (
+                        market_missing.get("label_date") if market_missing is not None else None
+                    ),
                 }
                 replacement_rows.append(record)
                 day_replacements.append(record)
+                if label_return is None:
+                    incomplete_return_evidence.append(
+                        _missing_return_record(
+                            record,
+                            evidence_type="label_return",
+                            horizon_days=label_horizon_days,
+                            reason="label_artifact_return_missing",
+                            label_date=None,
+                        )
+                    )
+                if db_return is None and market_forward_return_mode == "required":
+                    incomplete_return_evidence.append(
+                        _missing_return_record(
+                            record,
+                            evidence_type="market_return",
+                            horizon_days=10,
+                            reason=str(record["db_return_missing_reason"]),
+                            label_date=record["db_return_label_date"],
+                        )
+                    )
 
         entered_rows = [item for item in day_replacements if item["replacement_type"] == "entered_by_hmm"]
         dropped_rows = [item for item in day_replacements if item["replacement_type"] == "dropped_by_hmm"]
@@ -362,6 +403,14 @@ def evaluate_candidate(
         daily_net_db, entered_db_count, dropped_db_count = _daily_net(
             entered_rows, dropped_rows, "db_return_10d"
         )
+        if not day_replacements:
+            calculation_status = "no_adjustment"
+        elif daily_net_label is None or (
+            market_forward_return_mode == "required" and daily_net_db is None
+        ):
+            calculation_status = "incomplete_evidence"
+        else:
+            calculation_status = "computed"
         daily_rows.append(
             {
                 "date": trade_date.isoformat(),
@@ -377,6 +426,12 @@ def evaluate_candidate(
                 "entered_db_count": entered_db_count,
                 "dropped_db_count": dropped_db_count,
                 "daily_net_db_10d": daily_net_db,
+                "calculation_status": calculation_status,
+                "missing_return_evidence_count": sum(
+                    1
+                    for item in incomplete_return_evidence
+                    if item["date"] == trade_date.isoformat()
+                ),
             }
         )
 
@@ -415,7 +470,14 @@ def evaluate_candidate(
             {
                 "code": "hmm_evolution_partial_label_coverage",
                 "message": "some changed days lack comparable entered and dropped labels",
-                "context": {"coverage_ratio": label_coverage},
+                "context": {
+                    "coverage_ratio": label_coverage,
+                    "missing_evidence_count": sum(
+                        1
+                        for item in incomplete_return_evidence
+                        if item["evidence_type"] == "label_return"
+                    ),
+                },
             }
         )
     if market_forward_return_mode == "required" and changed_day_count and not db_comparable:
@@ -433,7 +495,14 @@ def evaluate_candidate(
             {
                 "code": "hmm_evolution_partial_market_return_coverage",
                 "message": "some changed days lack comparable entered and dropped market returns",
-                "context": {"coverage_ratio": db_coverage},
+                "context": {
+                    "coverage_ratio": db_coverage,
+                    "missing_evidence_count": sum(
+                        1
+                        for item in incomplete_return_evidence
+                        if item["evidence_type"] == "market_return"
+                    ),
+                },
             }
         )
 
@@ -512,6 +581,7 @@ def evaluate_candidate(
         "coefficient_max": coefficient_max,
         "daily_summary": daily_rows,
         "replacement_samples": durable_samples,
+        "incomplete_return_evidence": incomplete_return_evidence,
     }
     result_hash = _result_hash(
         {
@@ -696,9 +766,58 @@ def _daily_net(
 ) -> tuple[float | None, int, int]:
     entered_values = [float(item[field]) for item in entered if item.get(field) is not None]
     dropped_values = [float(item[field]) for item in dropped if item.get(field) is not None]
-    if not entered_values or not dropped_values:
+    if not entered and not dropped:
+        return None, 0, 0
+    if (
+        len(entered_values) != len(entered)
+        or len(dropped_values) != len(dropped)
+        or not entered_values
+        or not dropped_values
+    ):
         return None, len(entered_values), len(dropped_values)
     return fmean(entered_values) - fmean(dropped_values), len(entered_values), len(dropped_values)
+
+
+def _market_missing_lookup(
+    evidence: Sequence[Mapping[str, Any]],
+) -> dict[tuple[date, str], Mapping[str, Any]]:
+    result: dict[tuple[date, str], Mapping[str, Any]] = {}
+    for item in evidence:
+        try:
+            trade_date = date.fromisoformat(str(item["trade_date"]))
+            symbol = str(item["symbol"]).strip()
+            reason = str(item["reason"]).strip()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EvaluationInputError("market missing-return evidence is invalid") from exc
+        if not symbol or not reason:
+            raise EvaluationInputError("market missing-return evidence is invalid")
+        key = (trade_date, symbol)
+        if key in result:
+            raise EvaluationInputError(
+                "market missing-return evidence contains duplicate date/symbol rows"
+            )
+        result[key] = dict(item)
+    return result
+
+
+def _missing_return_record(
+    replacement: Mapping[str, Any],
+    *,
+    evidence_type: str,
+    horizon_days: int,
+    reason: str,
+    label_date: Any,
+) -> dict[str, Any]:
+    return {
+        "date": str(replacement["date"]),
+        "symbol": str(replacement["symbol"]),
+        "replacement_type": str(replacement["replacement_type"]),
+        "evidence_type": evidence_type,
+        "horizon_trading_days": horizon_days,
+        "required_start_date": str(replacement["date"]),
+        "required_label_date": str(label_date) if label_date is not None else None,
+        "reason": reason,
+    }
 
 
 def _optional_mean(values: Iterable[float | None]) -> float | None:

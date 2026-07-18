@@ -2,6 +2,7 @@
   "actual": "Sidebar.tsx suppresses the entire sidebar when pathname starts with /hmm-evolution.",
   "allowed_write_scope": [
     "frontend/src/app/Sidebar.tsx",
+    "backend/tests/hmm_evolution/test_frontend_contract.py",
     "frontend/tests/hmm-evolution/hmm-evolution.spec.ts",
     "tests/aistock_validation/bugs/20260718_BUG-771-hmm-evolution-routes-hide-the-global-persistent-sidebar.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

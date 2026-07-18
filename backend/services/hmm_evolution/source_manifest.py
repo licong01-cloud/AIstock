@@ -7,9 +7,9 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 
 from .evaluator import DateCoveragePlan
-from .models import CandidateRecord, canonical_json_sha256
+from .models import CandidateRecord
 
-SOURCE_MANIFEST_VERSION = "hmm_evaluation_source_manifest_v1"
+SOURCE_MANIFEST_VERSION = "hmm_evaluation_source_manifest_v2"
 
 
 def build_source_manifest(
@@ -22,6 +22,7 @@ def build_source_manifest(
     date_plan: DateCoveragePlan,
     label_horizon_days: int,
     market_forward_return: Mapping[str, Any],
+    universe_evidence: Mapping[str, Any],
     warnings: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Build a secret/path-free manifest from already verified Phase 0 reads."""
@@ -31,7 +32,6 @@ def build_source_manifest(
         _artifact_entry(name, artifact_source_info.get(name), len(frame))
         for name, frame in (("pred.pkl", predictions), ("label.pkl", labels))
     ]
-    symbols = sorted({str(item).strip() for item in predictions["symbol"] if str(item).strip()})
     prediction_dates = _date_range(predictions)
     label_dates = _date_range(labels)
     candidate_manifest = candidate.artifact_manifest
@@ -46,11 +46,7 @@ def build_source_manifest(
         "prediction_date_range": prediction_dates,
         "label_date_range": label_dates,
         "label_horizon_days": label_horizon_days,
-        "universe": {
-            "type": "prediction_artifact_all",
-            "symbol_count": len(symbols),
-            "universe_hash": canonical_json_sha256(symbols),
-        },
+        "universe": dict(universe_evidence),
         "candidate": {
             "candidate_id": candidate.candidate_id,
             "candidate_manifest_hash": candidate.manifest_hash,

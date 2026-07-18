@@ -137,12 +137,95 @@ test("演进实验室遵循确认视觉和真实业务字段，不出现死 tab 
   await expect(page.getByText("固定证据区")).toBeVisible();
   await expect(page.getByText("91.8").first()).toBeVisible();
   await expect(page.getByText("4.82%", { exact: false })).toBeVisible();
+  await expect(page.locator("aside.sidebar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "HMM 研究模块导航" }).getByRole("link")).toHaveCount(1);
   await expect(page.getByText("板块风险", { exact: true })).toHaveCount(0);
   await expect(page.getByText("滚动训练", { exact: true })).toHaveCount(0);
   await expect(page.locator("pre")).toHaveCount(0);
   await expect(page.locator('[class*="pv2-"]')).toHaveCount(0);
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+});
+
+test("逐日结果区分当日无调整与收益证据缺失并保持全局侧栏", async ({ page }) => {
+  await page.route("**/api/v1/hmm-evolution/evaluations/hmme_ui_contract", (route) => fulfill(route, {
+    eval_id: "hmme_ui_contract",
+    candidate_id: candidate.candidate_id,
+    candidate_display_name: candidate.display_name,
+    candidate_source_type: candidate.source_type,
+    candidate_lifecycle_status: candidate.lifecycle_status,
+    base_loop_ref: "qe_task/Loop8",
+    status: "succeeded",
+    run_generation: 1,
+    source_manifest: {},
+    source_manifest_hash: "c".repeat(64),
+    candidate_manifest_hash: candidate.manifest_hash,
+    evaluation_spec: {
+      schema_version: "hmm_evaluation_spec_v2",
+      base_loop_ref: "qe_task/Loop8",
+      window_start: "2025-01-02",
+      window_end: "2025-12-31",
+      as_of: { policy: "explicit", requested_date: "2025-12-31" },
+      label_horizon_days: 20,
+      universe: { type: "source_loop_stock_pool_st_pit" },
+      topk: 46,
+      date_coverage_policy: "batch_common_intersection_with_evidence",
+      missing_sector_policy: "neutral_with_evidence",
+      market_forward_return: { mode: "required", horizon_trading_days: 10 },
+      sort_policy: "score_desc_symbol_asc_v1",
+      metric_version: "hmm_replacement_metrics_v2",
+      recommendation_version: "hmm_recommendation_v1",
+    },
+    evaluation_spec_hash: "d".repeat(64),
+    evaluator_version: "hmm_replacement_evaluator_v2",
+    input_hash: "e".repeat(64),
+    as_of_date: "2025-12-31",
+    window_start: "2025-01-02",
+    window_end: "2025-12-31",
+    label_horizon_days: 20,
+    universe_id: "filtered_pool_fixture:qe_st_pit_fixture",
+    universe_hash: "f".repeat(64),
+    topk: 46,
+    trading_days_count: 243,
+    changed_day_count: 1,
+    label_comparable_day_count: 1,
+    db_comparable_day_count: 0,
+    replacement_count: 2,
+    primary_coverage_ratio: 1,
+    net_label_return: 0.1,
+    net_db_10d: null,
+    positive_net_label_day_ratio: 1,
+    evidence_quality: "degraded",
+    warnings_json: [{ code: "hmm_evolution_partial_market_return_coverage", message: "部分调整日缺少完整行情收益证据" }],
+    metrics_json: {
+      daily_summary: [
+        { date: "2025-02-17", replacement_count: 0, daily_net_label: null, daily_net_db_10d: null, calculation_status: "no_adjustment", missing_return_evidence_count: 0 },
+        { date: "2025-05-09", replacement_count: 2, daily_net_label: 0.1, daily_net_db_10d: null, calculation_status: "incomplete_evidence", missing_return_evidence_count: 1 },
+      ],
+      incomplete_return_evidence: [
+        { date: "2025-05-09", symbol: "600358.SH", replacement_type: "dropped_by_hmm", evidence_type: "market_return", horizon_trading_days: 10, required_start_date: "2025-05-09", required_label_date: "2025-05-23", reason: "horizon_price_missing" },
+      ],
+    },
+    result_hash: "1".repeat(64),
+    error_code: null,
+    reason_code: null,
+    error_message: null,
+    error_context: null,
+    heartbeat_at: "2026-07-18T00:02:00Z",
+    queued_at: "2026-07-18T00:00:00Z",
+    started_at: "2026-07-18T00:00:10Z",
+    completed_at: "2026-07-18T00:02:00Z",
+    updated_at: "2026-07-18T00:02:00Z",
+  }));
+
+  await page.goto(`${BASE_URL}/hmm-evolution/evaluations/hmme_ui_contract`);
+  await expect(page.locator("aside.sidebar")).toBeVisible();
+  const noAdjustmentRow = page.getByRole("row").filter({ hasText: "2025-02-17" });
+  await expect(noAdjustmentRow.getByText("当日无调整").first()).toBeVisible();
+  const incompleteRow = page.getByRole("row").filter({ hasText: "2025-05-09" }).first();
+  await expect(incompleteRow.getByText("证据缺失 1 项")).toBeVisible();
+  const evidenceRow = page.getByRole("row").filter({ hasText: "600358.SH" });
+  await expect(evidenceRow.getByText("目标交易日有效收盘价缺失（常见于停牌）")).toBeVisible();
+  await expect(page.locator("pre")).toHaveCount(0);
 });
 
 test("API 失败显示 reason code、中文说明和重试条件", async ({ page }) => {

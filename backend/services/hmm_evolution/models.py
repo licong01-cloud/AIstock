@@ -407,13 +407,17 @@ class EvaluationSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["hmm_evaluation_spec_v1"] = "hmm_evaluation_spec_v1"
+    schema_version: Literal["hmm_evaluation_spec_v1", "hmm_evaluation_spec_v2"] = (
+        "hmm_evaluation_spec_v2"
+    )
     base_loop_ref: str
     window_start: date
     window_end: date
     as_of: dict[str, Any]
     label_horizon_days: int = Field(ge=1, le=30)
-    universe: dict[str, Any] = Field(default_factory=lambda: {"type": "prediction_artifact_all"})
+    universe: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "source_loop_stock_pool_st_pit"}
+    )
     topk: int = Field(ge=1)
     date_coverage_policy: Literal[
         "batch_common_intersection_with_evidence", "strict_full"
@@ -421,7 +425,9 @@ class EvaluationSpec(BaseModel):
     missing_sector_policy: Literal["neutral_with_evidence"] = "neutral_with_evidence"
     market_forward_return: dict[str, Any]
     sort_policy: Literal["score_desc_symbol_asc_v1"] = "score_desc_symbol_asc_v1"
-    metric_version: Literal["hmm_replacement_metrics_v1"] = "hmm_replacement_metrics_v1"
+    metric_version: Literal["hmm_replacement_metrics_v1", "hmm_replacement_metrics_v2"] = (
+        "hmm_replacement_metrics_v2"
+    )
     recommendation_version: Literal["hmm_recommendation_v1"] = "hmm_recommendation_v1"
 
     @field_validator("as_of", "universe", "market_forward_return", mode="after")
@@ -433,8 +439,24 @@ class EvaluationSpec(BaseModel):
     def _window(self) -> "EvaluationSpec":
         if self.window_start > self.window_end:
             raise ValueError("window_start must not exceed window_end")
-        if self.universe != {"type": "prediction_artifact_all"}:
-            raise ValueError("Phase 1 v1 supports only prediction_artifact_all universe")
+        expected_universe = (
+            {"type": "prediction_artifact_all"}
+            if self.schema_version == "hmm_evaluation_spec_v1"
+            else {"type": "source_loop_stock_pool_st_pit"}
+        )
+        if self.universe != expected_universe:
+            raise ValueError(
+                f"{self.schema_version} requires universe={expected_universe!r}"
+            )
+        expected_metric_version = (
+            "hmm_replacement_metrics_v1"
+            if self.schema_version == "hmm_evaluation_spec_v1"
+            else "hmm_replacement_metrics_v2"
+        )
+        if self.metric_version != expected_metric_version:
+            raise ValueError(
+                f"{self.schema_version} requires metric_version={expected_metric_version!r}"
+            )
         loop_parts = self.base_loop_ref.split("/")
         if (
             len(loop_parts) != 2
@@ -459,7 +481,7 @@ class EvaluationSpec(BaseModel):
         if market["mode"] not in {"required", "disabled"}:
             raise ValueError("market_forward_return.mode must be required or disabled")
         if market["horizon_trading_days"] != 10:
-            raise ValueError("Phase 1 v1 market forward return horizon must be 10 trading days")
+            raise ValueError("Phase 1 market forward return horizon must be 10 trading days")
         return self
 
     @property

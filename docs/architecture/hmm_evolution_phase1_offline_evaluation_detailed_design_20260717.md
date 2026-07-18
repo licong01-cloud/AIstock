@@ -309,17 +309,17 @@ candidate_id = "hmmc_" + sha256(canonical_json(identity_payload))[0:24]
 
 ## 7. Contracts：evaluation spec、source manifest 与 hash
 
-### 7.1 `hmm_evaluation_spec_v1`
+### 7.1 `hmm_evaluation_spec_v2` 与 legacy v1
 
 ```json
 {
-  "schema_version": "hmm_evaluation_spec_v1",
+  "schema_version": "hmm_evaluation_spec_v2",
   "base_loop_ref": "<task_id>/LoopN",
   "window_start": "YYYY-MM-DD",
   "window_end": "YYYY-MM-DD",
   "as_of": {"policy": "latest_common_completed", "requested_date": null},
   "label_horizon_days": 20,
-  "universe": {"type": "prediction_artifact_all"},
+  "universe": {"type": "source_loop_stock_pool_st_pit"},
   "topk": 50,
   "date_coverage_policy": "batch_common_intersection_with_evidence",
   "missing_sector_policy": "neutral_with_evidence",
@@ -328,14 +328,24 @@ candidate_id = "hmmc_" + sha256(canonical_json(identity_payload))[0:24]
     "horizon_trading_days": 10
   },
   "sort_policy": "score_desc_symbol_asc_v1",
-  "metric_version": "hmm_replacement_metrics_v1",
+  "metric_version": "hmm_replacement_metrics_v2",
   "recommendation_version": "hmm_recommendation_v1"
 }
 ```
 
-v1 universe 只支持 `prediction_artifact_all`。后续自定义股票池必须记录有序 symbol list hash，
-不得只记录显示名称。`as_of.policy` 支持 `explicit` 和 `latest_common_completed`；后者在请求入队
-时解析一次并冻结为 `resolved_as_of_date`，不得在 worker 执行时再次漂移。
+新评估只接受 v2。排名输入必须是“源 QE loop 实际使用的 PIT 股票池区间”与该 QE 数据集绑定的
+不可变 ST-PIT eligible spans 的逐日交集，不能直接对 `pred.pkl` 全量 symbol 排名。股票池从
+completed loop 的持久化 `config_json` 解析，读取 AIstock 本地交付给 QE 的同名 pool 文件，并冻结
+文件 SHA256；ST-PIT 使用 `shsz_st_pit_qe_dataset_<dataset_contract_id>`，冻结 rule version、scope、
+source fingerprint、index policy 和 coverage semantics。任一日交集后的 symbol 数小于 TopK 必须失败。
+
+`hmm_evaluation_spec_v1` / `prediction_artifact_all` 仅用于只读展示已存在的历史 evaluation，不允许
+创建或重试；旧结果保留其原始 hash，不用 v2 evaluator 覆写。未来选股荐股、模拟盘和生产消费者继续使用滚动 live namespace（当前为
+`shsz_st_pit_active_v1`）；历史研究使用不可变 QE dataset namespace。两者执行同一权威 ST-PIT
+规则，但不得混用快照或让历史结果随 live universe 漂移。
+
+`as_of.policy` 支持 `explicit` 和 `latest_common_completed`；后者在请求入队时解析一次并冻结为
+`resolved_as_of_date`，不得在 worker 执行时再次漂移。
 
 ### 7.2 label horizon
 
@@ -347,15 +357,18 @@ v1 universe 只支持 `prediction_artifact_all`。后续自定义股票池必须
 
 ### 7.3 source manifest
 
-`hmm_evaluation_source_manifest_v1` 必须包含：
+`hmm_evaluation_source_manifest_v2` 必须包含；legacy v1 manifest 仅用于历史重放：
 
 - pred/label 与其它被引用 QE assets 的 source、URI、SHA256、size、row count（如适用）、
   trust level、zero-copy/fallback 决策；
 - base loop、task、loop、实际日期范围和 label horizon；
-- 排序后的 universe hash、symbol count；
+- 源 loop、stock pool name/filename/SHA256/interval count，以及逐日 eligible-pair hash、symbol count、
+  过滤前后 row count；
+- QE dataset contract ID、不可变 ST-PIT universe key、rule version、scope、source fingerprint、
+  index policy 和 coverage semantics；
 - candidate ID、candidate manifest hash、artifact SHA；
 - 启用 DB 10 日收益时的 requested policy、resolved as-of、各数据集 max date、共同完成水位、
-  calendar range、price row count、字段名
+  calendar range、price row count、return row count、missing-return count/reason counts、字段名
   `market.kline_daily_raw.close_li` 和只读 transaction receipt；
 - `warnings`、`evidence_quality` 和所有 neutral/missing/degraded 计数；
 - 不包含密码、token、原始绝对路径或配置文件正文；配置正文只通过受控 asset content API 展示。
@@ -388,6 +401,10 @@ input_hash = logical_evaluation_key
 Phase 1 service 不复制诊断脚本的 DB 连接、下载、文件写入或报告生成代码。
 
 ### 8.2 排序与 TopK
+
+进入排序前，input adapter 必须先应用 §7.1 的源 loop stock pool ∩ immutable QE ST-PIT 逐日掩码。
+被 base pool 排除、已按 PIT 规则进入 ST/退市风险不可买区间或不属于源 loop universe 的股票，
+即使存在于 pred/label artifact，也不得参与 raw/adjusted TopK、调入或调出计算。
 
 对每个交易日：
 
@@ -423,11 +440,13 @@ Phase 1 service 不复制诊断脚本的 DB 连接、下载、文件写入或报
 逐日先计算：
 
 ```text
-daily_net_label = mean(entered valid label) - mean(dropped valid label)
-daily_net_db_10d = mean(entered valid db_ret_10d) - mean(dropped valid db_ret_10d)
+daily_net_label = mean(all entered labels) - mean(all dropped labels)
+daily_net_db_10d = mean(all entered db_ret_10d) - mean(all dropped db_ret_10d)
 ```
 
-只有 entered 与 dropped 两侧都至少一个有效值时，该日才是 comparable day。聚合指标：
+只有 entered 与 dropped 两侧的每一只预期股票都有对应收益时，该日才是 comparable day。禁止先
+过滤 null 再用剩余子集计算局部均值。逐日必须记录 `calculation_status`：无调仓为
+`no_adjustment`，证据齐全为 `computed`，任一预期收益缺失为 `incomplete_evidence`。聚合指标：
 
 - `net_label_return`：所有 label comparable days 的 `daily_net_label` 等权均值；
 - `net_db_10d`：所有 DB comparable days 的 `daily_net_db_10d` 等权均值；
@@ -439,6 +458,8 @@ daily_net_db_10d = mean(entered valid db_ret_10d) - mean(dropped valid db_ret_10
 - `db_day_coverage_ratio = db_comparable_day_count / changed_day_count`；
 - `primary_coverage_ratio`：推荐公式按 label coverage 使用；
 - sector fallback、coefficient min/max、daily replacement summary。
+- 每条缺失收益证据的 date、symbol、entered/dropped side、label/market 类型、horizon、所需起止日期
+  和稳定 reason code；
 - `evidence_quality=complete|degraded|insufficient` 和结构化 `warnings`。
 
 若 `changed_day_count=0`，评估可以 `succeeded`，但 efficacy 指标为 null、推荐分数为 null，
@@ -450,6 +471,8 @@ UI 显示“该候选在此窗口未改变 TopK”，不得显示为收益 0 或
   `market.kline_daily_raw(ts_code, trade_date, close_li)`；
 - `T+10` 是同一 symbol 的第 10 个后续交易日，不是自然日；
 - 查询必须批量执行，禁止逐 symbol/date round trip；
+- DB 必须为缺失 pair 返回稳定原因：`forward_horizon_not_completed`、`start_price_missing` 或
+  `horizon_price_missing`，不能只返回一个缺行计数；
 - `mode=required` 时 DB 不可用或覆盖不足导致零 comparable day，评估失败；
 - `mode=disabled` 时不查询 DB，`net_db_10d=null`，source manifest 明确记录 disabled；
 - 不提供 silent best-effort 模式。
@@ -458,14 +481,15 @@ UI 显示“该候选在此窗口未改变 TopK”，不得显示为收益 0 或
 `market.kline_daily_raw` 以及本次显式启用的其它日频数据集最大完成日期，选择共同完成水位；
 `market.sw_index_member` 按该日期验证 PIT 映射覆盖率，不伪造日频 max date。该日期在请求入队
 时固化为 `resolved_as_of_date` 并进入 input hash。禁止直接使用
-`date.today()`、`CURRENT_DATE` 或 worker 开始执行时的动态“最新”。Phase 1 v1 读取日线最新
+`date.today()`、`CURRENT_DATE` 或 worker 开始执行时的动态“最新”。Phase 1 v2 读取日线最新
 共同完成数据，不把盘中未完成 bar 当成完整日线。
 
 ### 8.6 结果体积
 
-DB 保存聚合指标、逐日摘要和最多 100 条按
+DB 保存聚合指标、逐日摘要、全部 `incomplete_return_evidence`，以及最多 100 条按
 `abs(adjusted_rank - raw_rank) DESC, date ASC, symbol ASC` 选取的 deterministic sample。
-不持久化全部 replacement rows；完整结果可由 manifest 重放，避免把数百万行分析明细塞入 DB。
+不持久化全部正常 replacement rows；但缺失证据不得采样或截断，否则 UI 无法解释具体未计算原因。
+完整正常结果可由 manifest 重放，避免把数百万行分析明细塞入 DB。
 
 ## 9. Contracts：推荐公式 `hmm_recommendation_v1`
 
@@ -856,6 +880,10 @@ P1-C 可以建立可扩展的 `HMMResearchNavigation` 外壳，但只展示已�
   候选、评估或推荐主视图，也不能提供执行、导入或应用动作。
 - `changed_day_count=0` 显示“未改变 TopK”，不显示绿色 0 收益或成功门禁；h20 动态显示
   “20 交易日”，不得误写成 10 日收益。
+- 逐日 `replacement_count=0` 必须显示“当日无调整”；changed day 的完整收益缺失必须显示
+  “证据缺失”并在结构化表中列出 symbol、调入/调出、所需日期和原因，不能统一显示“未计算”。
+- HMM 模块自己的研究导航不能替代应用全局左侧导航；`/hmm-evolution` 及其 batch/evaluation 子路由
+  必须始终保留全局左侧导航。
 
 ### 15.4 加载、空态、降级、失败和轮询
 

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { NAV_GROUPS } from "@/lib/navigation/nav-groups";
 import { useCallback, useEffect, useState } from "react";
 
@@ -12,7 +11,6 @@ const API_BASE = (
 ).replace(/\/api\/v1\/?$/, "");
 
 export default function Sidebar() {
-  const pathname = usePathname();
   // 管理每个一级目录的展开状态，默认全部折叠
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [alertCount, setAlertCount] = useState(0);
@@ -45,10 +43,6 @@ export default function Sidebar() {
       return next;
     });
   };
-
-  if (pathname.startsWith("/hmm-evolution")) {
-    return null;
-  }
 
   return (
     <aside className="sidebar">

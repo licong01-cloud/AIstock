@@ -23,6 +23,19 @@ type DailySummary = {
   replacement_count: number;
   daily_net_label: number | null;
   daily_net_db_10d: number | null;
+  calculation_status: "no_adjustment" | "computed" | "incomplete_evidence";
+  missing_return_evidence_count: number;
+};
+
+type IncompleteReturnEvidence = {
+  date: string;
+  symbol: string;
+  replacement_type: "entered_by_hmm" | "dropped_by_hmm";
+  evidence_type: "label_return" | "market_return";
+  horizon_trading_days: number;
+  required_start_date: string;
+  required_label_date: string | null;
+  reason: string;
 };
 
 export default function EvaluationDetailView({ evalId }: { evalId: string }) {
@@ -73,6 +86,10 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
 
   const dailySummaryState = useMemo(
     () => validateDailySummary(evaluation?.metrics_json, evaluation?.status),
+    [evaluation],
+  );
+  const incompleteEvidenceState = useMemo(
+    () => validateIncompleteReturnEvidence(evaluation?.metrics_json),
     [evaluation],
   );
 
@@ -146,6 +163,13 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
               </div>
               {!dailySummaryState.error ? <div className={styles.panelBodyTable}><DailySummaryTable rows={dailySummaryState.rows} horizon={evaluation.label_horizon_days} /></div> : null}
             </section>
+            {incompleteEvidenceState.error ? <VisibleErrorState error={incompleteEvidenceState.error} title="缺失收益证据契约错误" /> : null}
+            {!incompleteEvidenceState.error && incompleteEvidenceState.rows.length > 0 ? (
+              <section className={styles.panel}>
+                <div className={styles.panelHeader}><div><h2 className={styles.panelTitle}>缺失收益证据</h2><div className={styles.panelSubtitle}>逐只股票列出未计算原因；不会用剩余股票的局部均值冒充完整日收益。</div></div></div>
+                <div className={styles.panelBodyTable}><IncompleteEvidenceTable rows={incompleteEvidenceState.rows} /></div>
+              </section>
+            ) : null}
           </div>
         ) : null}
       </main>
@@ -155,7 +179,11 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
 
 function DailySummaryTable({ rows, horizon }: { rows: DailySummary[]; horizon: number }) {
   if (rows.length === 0) return <div className={styles.emptyState}>尚无逐日结果；空集合不会显示为成功收益。</div>;
-  return <table className={styles.table}><thead><tr><th>交易日</th><th>替换数量</th><th>净标签收益 · {horizon}D</th><th>Net DB 10D</th></tr></thead><tbody>{rows.map((row) => <tr key={row.date}><td>{row.date}</td><td>{row.replacement_count}</td><td>{formatPercent(row.daily_net_label)}</td><td>{formatPercent(row.daily_net_db_10d)}</td></tr>)}</tbody></table>;
+  return <table className={styles.table}><thead><tr><th>交易日</th><th>替换数量</th><th>状态</th><th>净标签收益 · {horizon}D</th><th>Net DB 10D</th></tr></thead><tbody>{rows.map((row) => <tr key={row.date}><td>{row.date}</td><td>{row.replacement_count}</td><td>{dailyStatusLabel(row)}</td><td>{formatDailyMetric(row, row.daily_net_label)}</td><td>{formatDailyMetric(row, row.daily_net_db_10d)}</td></tr>)}</tbody></table>;
+}
+
+function IncompleteEvidenceTable({ rows }: { rows: IncompleteReturnEvidence[] }) {
+  return <table className={styles.table}><thead><tr><th>交易日</th><th>股票</th><th>替换方向</th><th>证据</th><th>所需日期</th><th>未计算原因</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.date}-${row.symbol}-${row.evidence_type}`}><td>{row.date}</td><td>{row.symbol}</td><td>{row.replacement_type === "entered_by_hmm" ? "调入" : "调出"}</td><td>{row.evidence_type === "market_return" ? `行情 ${row.horizon_trading_days}D` : `标签 ${row.horizon_trading_days}D`}</td><td>{row.required_start_date} → {row.required_label_date || "尚未形成"}</td><td>{missingReasonLabel(row.reason)}</td></tr>)}</tbody></table>;
 }
 
 function validateDailySummary(
@@ -189,9 +217,53 @@ function validateDailySummary(
       replacement_count: value.replacement_count,
       daily_net_label: typeof value.daily_net_label === "number" ? value.daily_net_label : null,
       daily_net_db_10d: typeof value.daily_net_db_10d === "number" ? value.daily_net_db_10d : null,
+      calculation_status: parseDailyCalculationStatus(value),
+      missing_return_evidence_count: typeof value.missing_return_evidence_count === "number"
+        ? value.missing_return_evidence_count
+        : 0,
     });
   }
   return { rows: parsed, error: null };
+}
+
+function parseDailyCalculationStatus(value: Record<string, unknown>): DailySummary["calculation_status"] {
+  if (["no_adjustment", "computed", "incomplete_evidence"].includes(String(value.calculation_status))) {
+    return value.calculation_status as DailySummary["calculation_status"];
+  }
+  if (value.replacement_count === 0) return "no_adjustment";
+  if (value.daily_net_label === null || value.daily_net_db_10d === null) return "incomplete_evidence";
+  return "computed";
+}
+
+function validateIncompleteReturnEvidence(
+  metrics: Record<string, unknown> | null | undefined,
+): { rows: IncompleteReturnEvidence[]; error: HMMApiError | null } {
+  const evidence = metrics?.incomplete_return_evidence;
+  if (evidence === undefined) return { rows: [], error: null };
+  if (!Array.isArray(evidence)) {
+    return { rows: [], error: dailySummaryContractError("metrics_json.incomplete_return_evidence 必须是数组") };
+  }
+  const rows: IncompleteReturnEvidence[] = [];
+  for (const [index, item] of evidence.entries()) {
+    if (!item || typeof item !== "object") {
+      return { rows: [], error: dailySummaryContractError(`缺失证据第 ${index + 1} 行不是对象`) };
+    }
+    const value = item as Record<string, unknown>;
+    if (
+      typeof value.date !== "string"
+      || typeof value.symbol !== "string"
+      || !["entered_by_hmm", "dropped_by_hmm"].includes(String(value.replacement_type))
+      || !["label_return", "market_return"].includes(String(value.evidence_type))
+      || typeof value.horizon_trading_days !== "number"
+      || typeof value.required_start_date !== "string"
+      || (value.required_label_date !== null && typeof value.required_label_date !== "string")
+      || typeof value.reason !== "string"
+    ) {
+      return { rows: [], error: dailySummaryContractError(`缺失证据第 ${index + 1} 行字段不完整`) };
+    }
+    rows.push(value as IncompleteReturnEvidence);
+  }
+  return { rows, error: null };
 }
 
 function dailySummaryContractError(message: string): HMMApiError {
@@ -222,6 +294,30 @@ function evaluationError(evaluation: EvaluationDetail) {
 
 function Metric({ label, value, note, className }: { label: string; value: string; note: string; className: string }) {
   return <article className={`${styles.metricCard} ${className}`}><div className={styles.metricLabel}>{label}</div><div className={styles.metricValue}>{value}</div><div className={styles.metricNote}>{note}</div></article>;
+}
+
+function dailyStatusLabel(row: DailySummary): string {
+  if (row.calculation_status === "no_adjustment") return "当日无调整";
+  if (row.calculation_status === "incomplete_evidence") return `证据缺失 ${row.missing_return_evidence_count} 项`;
+  return "已完整计算";
+}
+
+function formatDailyMetric(row: DailySummary, value: number | null): string {
+  if (value !== null) return formatPercent(value);
+  if (row.calculation_status === "no_adjustment") return "当日无调整";
+  if (row.calculation_status === "incomplete_evidence") return "证据缺失";
+  return "未生成";
+}
+
+function missingReasonLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    forward_horizon_not_completed: "前瞻交易日尚未完成",
+    start_price_missing: "起始日有效收盘价缺失",
+    horizon_price_missing: "目标交易日有效收盘价缺失（常见于停牌）",
+    label_artifact_return_missing: "QE 标签产物缺少该股票收益",
+    market_return_missing_without_repository_evidence: "行情收益缺失且仓库未返回原因证据",
+  };
+  return labels[reason] || reason;
 }
 
 function formatPercent(value: number | null): string { return value === null ? "未计算" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`; }

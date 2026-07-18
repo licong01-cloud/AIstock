@@ -825,12 +825,14 @@ docs/
 - **F-006 Phase 1 独立候选注册表**：QE 全资产只读 reader、研究候选只写
   `hmm_evolution.*`，artifact manifest 和生命周期可审计。
 - **F-007 Phase 1 评估可重放**：QE asset trust、latest-common watermark、输入、窗口、
-  universe、算法版本、指标定义和 hash 足以复算同一结果。
+  源 loop PIT 股票池、不可变 QE dataset ST-PIT universe、算法版本、指标定义和 hash 足以复算同一结果；
+  新评估禁止 `prediction_artifact_all`，历史 v1 仅可只读展示、不得重试。
 - **F-008 Phase 1 批处理状态机**：幂等、heartbeat、取消、超时、并发上限、部分失败和结构化错误完整。
 - **F-009 Phase 1 推荐语义**：top-3 仅为研究推荐，公式版本化，不自动淘汰方向或修改 QE/Paper。
 - **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文演进实验室、共享
   HMM 研究导航、动态 horizon、主视图 degraded warning、固定证据区和独立详情页完整；禁止
-  Paper v2 依赖、抽屉式列表和 raw JSON 主视图。
+  Paper v2 依赖、抽屉式列表和 raw JSON 主视图；全局左侧导航在 HMM 路由常驻，逐日明确区分
+  “当日无调整”和“证据缺失”，并结构化显示缺失股票与原因。
 - **F-010A Phase 1 自动评估 worker service**：显式独立进程自动消费 API 已登记的 durable queue；
   canonical env、poll bounds、idle wait、SIGINT/SIGTERM、lease/fencing recovery 和 fail-loud exit 完整；
   不创建 batch、不嵌入 FastAPI、不触发 QE 或 Phase 3 训练。
@@ -850,8 +852,10 @@ docs/
 2. **P0-B artifact/cache hardening**：处理 F-004，并补可信 manifest 与容量边界。
 3. **P0-C 验证与文档收敛**：处理 F-005，修正文档、专用 CI、受控 smoke 和 benchmark。
 4. **P1-A asset/schema/repository（已完成外部验收）**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
-5. **P1-B evaluator（已完成）**：从既有诊断脚本抽取纯计算逻辑，交付 F-007/F-009；旧诊断已迁到唯一 evaluator。
-6. **P1-C API/UI（源码与审计硬化已完成，外部验收待完成）**：F-010 API/UI、人工 worker CLI 和 BUG-742～BUG-748 审计修复已实现；F-010A 增加独立自动评估 worker service；继续补 10-case/性能 benchmark、真实 API/UI/Playwright 和首次 runtime activation 证据。
+5. **P1-B evaluator（完整性修复中）**：已从既有诊断脚本抽取唯一纯计算逻辑；2026-07-19 登记
+   BUG-768～BUG-770，补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据完整性和逐日状态语义，
+   修复完成并通过验证后才恢复“已完成”结论。
+6. **P1-C API/UI（源码与审计硬化已完成，外部验收待完成）**：F-010 API/UI、人工 worker CLI 和 BUG-742～BUG-748 审计修复已实现；2026-07-19 追加 BUG-770/BUG-771，修复逐日状态误导与 HMM 路由隐藏全局侧栏；F-010A 增加独立自动评估 worker service；继续补 10-case/性能 benchmark、真实 API/UI/Playwright 和首次 runtime activation 证据。
 7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
 8. **P3 研究训练**：先交付 F-014；F-015 自动调度部分等待独立语义批准。
 

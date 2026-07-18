@@ -81,7 +81,7 @@ def _plan(candidate: CandidateRecord, *, topk: int = 50) -> EvaluationPlan:
         evaluation_spec=spec,
         evaluator_version="hmm_offline_evaluator_v1",
         resolved_as_of_date=date(2026, 4, 15),
-        universe_id="prediction_artifact_all",
+        universe_id="filtered_pool_fixture:qe_st_pit_fixture",
         universe_hash="b" * 64,
     )
 
