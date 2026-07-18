@@ -1,6 +1,8 @@
 {
   "actual": "After PR #2412 merged, the approved F2 design requires advisory_real_dev_onboarding.py to expose observe-source, plan-capacity, build-phase1e-inputs and compile-phase1e with explicit env-file/artifact-root and no target-db selector. Current main exposes only commands through run-historical. The compatibility Phase1E CLI still exposes --target-db and cannot serve as the O4 authority. This blocks real DEV O3/O4/G5 execution; manual JSON or direct internal-service invocation would violate the no-simplification and no-silent-semantic-drift contract. Fix must wire the complete O4 command chain into the authoritative CLI, preserve explicit DEV-only identity, exact artifact refs/readback, existing compatibility behavior where approved, and add direct CLI contract tests mapped to F-906..F-916.",
   "allowed_write_scope": [
+    "backend/services/advisory_dev_input_onboarding/contracts.py",
+    "backend/services/advisory_dev_input_onboarding/historical_onboarding.py",
     "backend/services/advisory_dev_input_onboarding/phase1e_orchestration.py",
     "backend/services/advisory_dev_input_onboarding/phase1e_input_builder.py",
     "backend/services/advisory_dev_input_onboarding/phase1e_inputs.py",
@@ -42,6 +44,12 @@
       "actor": "codex",
       "note": "Add only the authoritative onboarding CLI, O4 orchestration contracts, compatibility entrypoints, direct tests and cited design status; Selection, Paper, simulation and migrations remain excluded.",
       "timestamp": "2026-07-18T08:37:27.9615440Z"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_bug_755_contract_correction",
+      "actor": "codex",
+      "note": "Add O4 typed contracts and O3 historical CAS readback needed by the approved per-Program compiler dependency design; shared Selection, Paper, simulation, StrategyPackage runtime and migrations remain excluded.",
+      "timestamp": "2026-07-18T17:31:19.2828771+08:00"
     }
   ],
   "evidence_uris": [],
