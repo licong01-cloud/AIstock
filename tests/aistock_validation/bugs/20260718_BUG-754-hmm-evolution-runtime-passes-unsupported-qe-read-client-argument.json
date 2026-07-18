@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-754",
-  "closed_at": null,
+  "closed_at": "2026-07-18T08:22:30Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-18T08:13:16.893546Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a4d06e581d2a4907c751a785a55e8eeb32d0ca3d",
+  "fixed_at": "2026-07-18T08:24:38.733950Z",
   "github_issue_number": 2417,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2417",
   "last_seen_at": "2026-07-18T08:13:16.893546Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2418",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "38b4a129e9167f1dbddf346f",
     "source_event_id": "FE-20260718-38b4a129e916"
   },
+  "validation_evidence": [
+    "local targeted 20 passed; production read-only runtime smoke passed; l0/module-registry/hmm_evolution_backend passed with 139 tests and 73.32% coverage; PR #2418 CI CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
