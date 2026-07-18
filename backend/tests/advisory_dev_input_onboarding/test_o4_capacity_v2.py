@@ -167,10 +167,51 @@ def test_capacity_v2_preserves_same_style_program_depths_without_aggregation() -
 
     assert role_projection["program_workload_set_hash"] == request.program_workload_set_hash
     assert role_projection["tiers"]["max"]["role_rows"]["canonical_signals"] == 25
+    assert role_projection["programs"][str(request.program_workloads[0].program_workload_hash)]["tiers"]["max"]["role_rows"]["canonical_signals"] == 5
+    assert role_projection["programs"][str(request.program_workloads[1].program_workload_hash)]["tiers"]["max"]["role_rows"]["canonical_signals"] == 20
     assert memory["estimated_concurrent_peak_bytes"] is not None
     assert staging["max"]["required_free_bytes"] > 0
     assert durable["store_available_bytes"] == 10**12
     assert insufficient is False
+
+
+def test_o4_source_capture_workload_has_no_phase1h_label_dimensions() -> None:
+    workload = Phase1EProgramCapacityWorkload(
+        program_id="program_source_only",
+        decision_trade_date=date(2026, 7, 18),
+        style_family="oversold_rebound",
+        package_id="pkg_source_only",
+        manifest_sha256=SHA_A,
+        alpha_mode=AlphaMode.MULTI,
+        candidate_depth=20,
+        input_universe_count=4300,
+        workload_scope="SOURCE_CAPTURE_ONLY",
+        horizons=(),
+        projection_count=0,
+        stage_projection_factor=0,
+        source_requirement_set_hash=SHA_B,
+    )
+    assert workload.horizons == ()
+    assert workload.projection_count == 0
+
+
+def test_source_capture_workload_rejects_placeholder_label_dimensions() -> None:
+    with pytest.raises(ValueError, match="SOURCE_CAPTURE_ONLY"):
+        Phase1EProgramCapacityWorkload(
+            program_id="program_invalid",
+            decision_trade_date=date(2026, 7, 18),
+            style_family="trend",
+            package_id="pkg_invalid",
+            manifest_sha256=SHA_A,
+            alpha_mode=AlphaMode.SINGLE,
+            candidate_depth=5,
+            input_universe_count=4100,
+            workload_scope="SOURCE_CAPTURE_ONLY",
+            horizons=(5,),
+            projection_count=1,
+            stage_projection_factor=1,
+            source_requirement_set_hash=SHA_B,
+        )
 
 
 def test_capacity_v2_rejects_parquet_outside_explicit_advisory_root(tmp_path: Path) -> None:
