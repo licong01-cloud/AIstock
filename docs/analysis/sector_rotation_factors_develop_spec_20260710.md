@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v5.5（多 Alpha QE 演进底座评估、P0-1～P0-4 基础研发设计与 R12 状态更新，2026-07-18）
+- 当前版本：v5.6（多 Alpha QE 演进底座详细设计审计修订、P0-1～P0-4 语义收口与 R12 状态保持，2026-07-18）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -101,6 +101,8 @@ v5.4 完成 R10/R11 的 Loop 级收口。R10 现为 51/51：LambdaMART 6/6、LGB
 v5.5 对多 Alpha QE 平台做了基于现有代码的能力审计，并将基础研发 P0-1～P0-4 提升为后续第一优先级。结论是：`MultiAlphaCombineBacktestService`、组合器、Prediction Store、远端 pred-backtest、scheme/LOO、场景回放、Archive、`combine_ui_adapter.py` 以及已复用的 `LoopDetailPanel`/`EvolutionTrajectory` 已经构成可继续研究的 Tier-1 底座；但异步提交仍由 FastAPI 进程内 `daemon=True` 线程持有，父子任务、远端 `task_id/loop_id`、节点占用和事件没有形成完整的数据库持久状态，后端重启后不能保证自动重新接管；当前只有整组 retry，没有暂停/恢复/取消和子任务级 `backtest_only/results_only` 恢复；UI 缺少沿用单 Alpha 自动演进页面的正式创建器及完整子任务运行网格。因此不能把平台描述为“未来只需新增模型和因子、无需任何程序研发”。后续不另建多 Alpha v2，不重写组合算法，而是在现有 run/service/router/UI adapter 上增量完成：P0-1 持久化编排与重启接管、P0-2 生命周期控制和子任务恢复、P0-3 QE 自动演进同风格创建器、P0-4 子任务状态/日志/恢复可见性。详细契约见 `multi_alpha_qe_evolution_foundation_f2_design_20260718.md`。
 
 v5.5 同步核对了重启后的当前运行事实：R12G `qe_20260718_040323_9a4a` 已 1/1 完成，RankIC/CAGR/Sharpe/最大回撤/年化换手约为 `0.10569/62.12%/1.8108/-15.78%/5.72`，说明 cooperative execution canary 没有破坏该 Loop 的可训练性；R12P 最新 run `macb_453ca2d0c5b21b40_20240701_20260629_20260718T092728399999Z` 在 baseline 子任务达到 3600 秒后以 `combine_backtest_scheme_timeout` 失败。该失败发生在组合编排/子任务执行层，没有形成可用的四腿 Alpha 比较结果，不能解释为组合方向或任何 Alpha 腿失败；它直接说明子任务状态持久化、单子任务重试、超时后的远端状态核对和后端重启恢复应先于继续批量组合实验完善。
+
+v5.6 对多 Alpha P0 F2 详细设计执行逐项语义审计并完成修订：删除设计矩阵中未经逐项确认的 `APPROVED_BY_USER` 状态，以 `DESIGN_READY/DESIGN_VERIFIED` 只表达设计完整性，代码/DDL/测试仍明确未实现；将 legacy `stop` 固定为现有单 Alpha cancel/kill 兼容语义，pause 只停止新 child 派发；删除 child 的伪远端 pause 状态并补齐 `not_computable`；parent 聚合只按结构化成功/失败事实，不判断“研究价值”；节点容量覆盖现有 QE active execution 来源并按 remote identity 去重；状态 transition 与 DB event 同事务；Archive capture 初始化失败必须 health/event/UI 可见；schema 缺失只让 multi-alpha worker/写接口结构化不可用，FastAPI 和非 QE 模块继续运行；`/quantevolver/evolution` 固定为规范 UI 入口，旧多 Alpha URL 只做兼容映射，并恢复同 viewport screenshot/golden 视觉验收。以上均是实现语义修正，不新增科研门禁或审批。
 
 ### 2.5 当前执行总账（截至 2026-07-18）
 
@@ -928,9 +930,9 @@ h60 的 CAGR/Sharpe 仅小幅变化，RankIC 下降且换手接近 h40 的两倍
 
 #### 9.9.1 基础研发第一优先级：多 Alpha P0-1～P0-4
 
-1. **P0-1 持久化父子任务编排与后端重启接管**：在现有 `multi_alpha_combine_backtest_run`、service、router、Prediction Store 和 `QEWorkspaceClient` 上增量实现 task/run/child/attempt/event 权威状态；用数据库 lease/fencing/CAS 防止重复派发，持久化远端 `qe_task_id/qe_loop_id`，后端重启后先核对远端状态再继续派发或汇总。删除每个 run 一个 daemon thread 的生命周期所有权，但不重写组合、权重、LOO 和 pred-backtest 业务算法。
-2. **P0-2 暂停/恢复/取消与子任务级恢复**：暂停只停止派发新子任务并允许当前子任务完成；恢复继续未完成子任务；取消通过既有 `QEWorkspaceClient.kill_loop` 终止在途子任务并保留成功结果。为 baseline/scheme/LOO 提供 `backtest_only`、`results_only` 和 `rematerialize_and_backtest` 明确模式；缺少所选模式需要的资产时返回稳定错误，不静默切换为其他模式，也不整组覆盖已成功结果。
-3. **P0-3 复用单 Alpha QE 自动演进页面的正式创建器**：不建设独立视觉版本；抽取并复用现有任务列表、创建 Dialog、节点选择、状态 Badge、结果/轨迹/日志组件。创建器覆盖当前后端完整 request：腿及 seed prediction、日期、scheme、normalize、walk-forward、baseline、TopK、资金量、持仓/调仓参数、节点、节点并行和 timeout；不伪造训练字段，不增加人工审批或研究准入步骤。
+1. **P0-1 持久化父子任务编排与后端重启接管**：在现有 `multi_alpha_combine_backtest_run`、service、router、Prediction Store 和 `QEWorkspaceClient` 上增量实现 task/run/child/attempt/event 权威状态；状态 transition 与 event 同一 DB transaction，用 lease/fencing/CAS 防止重复派发，持久化远端 `qe_task_id/qe_loop_id`，后端重启后先核对远端状态再继续派发或汇总。节点容量统一读取现有 QE active execution 来源并按 remote identity 去重；schema/worker 不可用只影响 multi-alpha 写能力，FastAPI 和非 QE 模块继续运行。删除每个 run 一个 daemon thread 的生命周期所有权，但不重写组合、权重、LOO 和 pred-backtest 业务算法。
+2. **P0-2 暂停/恢复/取消与子任务级恢复**：暂停只停止派发新子任务并允许当前子任务完成；恢复继续未完成子任务；取消通过既有 `QEWorkspaceClient.kill_loop` 终止在途子任务并保留成功结果；legacy `stop` 委托 cancel/kill，保持现有单 Alpha 停止语义，禁止改成 pause。为 baseline/scheme/LOO 提供 `backtest_only`、`results_only` 和 `rematerialize_and_backtest` 明确模式；缺少所选模式需要的资产时返回稳定错误，不静默切换为其他模式，也不整组覆盖已成功结果。
+3. **P0-3 复用单 Alpha QE 自动演进页面的正式创建器**：`/quantevolver/evolution` 是规范入口，不建设独立视觉版本；抽取并复用现有任务列表、创建 Dialog、节点选择、状态 Badge、结果/轨迹/日志组件，旧多 Alpha URL 只做兼容映射。创建器覆盖当前后端完整 request：腿及 seed prediction、日期、scheme、normalize、walk-forward、baseline、TopK、资金量、持仓/调仓参数、节点、节点并行和 timeout；不伪造训练字段，不增加人工审批或研究准入步骤；以同 viewport screenshot/golden 证明单 Alpha 前后及多 Alpha 同区域未引入新视觉语言。
 4. **P0-4 子任务运行网格、日志与恢复可见性**：在现有 QE 详情布局中展示每个 baseline/scheme/LOO 的 child key、attempt、节点、远端 task/loop、状态、阶段、耗时、heartbeat、错误、制品和可执行恢复动作；复用 `LogsPanel`、`LoopDetailPanel`、`EvolutionTrajectory` 与 `combine_ui_adapter.py`，DB event 为权威、workspace/远端日志为明细。通信不确定显示 `RECONCILING/REMOTE_STATE_UNKNOWN`，不得显示成功或直接失败。
 
 详细设计和逐文件实施顺序见 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`。P0-1～P0-4 的完成标准是可靠性与 UI 生命周期能力，不是任何 Alpha 方向的 go/stop 条件。
@@ -1075,7 +1077,7 @@ h60 的 CAGR/Sharpe 仅小幅变化，RankIC 下降且换手接近 h40 的两倍
 | F-019 | 多期限迁移完整性 | R8M 独立训练、共享多头、冻结迁移、全量微调四臂；per-head maturity/purge、transfer matrix、LOO、梯度冲突与 F-014 可用指标族并列分析。 |
 | F-020 | 任务级 Alpha 比较 | 不同 horizon/模型名不自动视为独立腿；预测/持仓/入场/板块/P&L/右尾事件/成本重合和固定风险预算 LOO 用于解释互补、冗余与损失，不形成准入门。 |
 | F-021 | Loop 级证据不可丢失 | task 与 Loop 状态分离；任一成功入 QE 数仓的 Loop 都进入 append-only 总账、指标聚合和后续比较；父 task 失败不覆盖成功 Loop，失败 Loop 单列阶段、原因和可用制品。 |
-| F-022 | 多 Alpha QE 演进底座 P0 | 基于现有 combine-backtest 增量实现持久化 task/run/child/attempt/event、重启接管、暂停/恢复/取消、子任务三种恢复模式、QE 自动演进同风格创建器及子任务运行网格；不另建新版本、不改组合业务公式、不新增研究门禁或审批。 |
+| F-022 | 多 Alpha QE 演进底座 P0 | 基于现有 combine-backtest 增量实现持久化 task/run/child/attempt/event、同事务状态/event、重启接管、统一节点占用、暂停/恢复/取消、legacy stop→cancel、`not_computable`、子任务三种恢复模式、QE 自动演进规范页面创建器及子任务运行网格；schema/Archive 错误 QE-scoped 可见，不另建新版本、不改组合业务公式、不新增研究门禁或审批。 |
 
 ## 13. Implementation Plan / 实施计划
 
@@ -1131,9 +1133,9 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 该 Phase 是后续基础研发第一优先级，但不是科研准入条件；实施必须引用 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md` 的稳定 `F-201`～`F-218` 条目。
 
-1. **P0-1 durable orchestration**：在现有 combine-backtest 表和服务上增加 first-class task、child、attempt、event 与 run lease/fencing/CAS；将 `QEWorkspaceClient` 作为 WSL/远端统一执行契约；启动 scanner/worker 在后端重启后核对并接管，不重复提交远端 loop。
-2. **P0-2 lifecycle/recovery**：提供 run 的 pause/resume/cancel/stop alias，提供 child 的 `backtest_only/results_only/rematerialize_and_backtest` retry；所有动作保留 lineage、attempt、远端 ID 和已成功结果，不把未知远端状态静默变成失败。
-3. **P0-3 create/composer UI**：抽取并复用单 Alpha QE 自动演进页面的 shell、task list、create dialog、node selector、status/action 组件；多 Alpha 表单覆盖现有 request 全字段，旧 `/multi-alpha/combine-backtest` 路由保持兼容并复用同一组件。
+1. **P0-1 durable orchestration**：在现有 combine-backtest 表和服务上增加 first-class task、child、attempt、event 与 run lease/fencing/CAS；权威状态和 event 同事务；将 `QEWorkspaceClient` 作为 WSL/远端统一执行契约；统一读取现有 QE active execution 来源并按 remote identity 去重；启动 scanner/worker 在后端重启后核对并接管，不重复提交远端 loop。schema 缺失只让 multi-alpha worker/写接口结构化不可用，不得阻止整个 FastAPI 或非 QE 模块启动。
+2. **P0-2 lifecycle/recovery**：提供 run 的 pause/resume/cancel；legacy stop 委托 cancel/kill 并保持现有单 Alpha 终止语义。提供 child 的 `backtest_only/results_only/rematerialize_and_backtest` retry；所有动作保留 lineage、attempt、远端 ID 和已成功结果，不把未知远端状态静默变成失败，也不创建伪 child pause 状态。
+3. **P0-3 create/composer UI**：以 `/quantevolver/evolution` 为规范入口，抽取并复用单 Alpha QE 自动演进页面的 shell、task list、create dialog、node selector、status/action 组件；多 Alpha 表单覆盖现有 request 全字段，旧 `/multi-alpha/combine-backtest` 路由只做兼容映射并复用同一组件/DOM/样式。
 4. **P0-4 child observability**：在现有 QE 详情布局增加 child/attempt grid、DB event + workspace/remote log、restart reconciliation 状态和单子任务操作；复用 `LoopDetailPanel`、`EvolutionTrajectory`、`LogsPanel` 和现有 combine diagnostics，不增加另一套页面风格。
 5. 完成 backend repository/service/router/startup、additive migration、frontend adapter/components、API/UI/DB 定向测试、restart E2E、并发/取消/恢复/历史回填验证；禁止简化版、静默错误、隐式 fallback、指标伪造和未经用户确认的门禁/审批。
 
@@ -1209,7 +1211,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 | F-019 | 本文 9.6.3、9.9、14 | R8M 四臂、per-head maturity/purge、transfer matrix、LOO、梯度冲突和 F-014 评价 | APPROVED_BY_USER: DESIGN_PLANNED_RESEARCH_OPEN | 尚未创建实验；wiring、多种子、迁移和 F-014 指标族可并行，不预设正迁移。 |
 | F-020 | 本文 9.6.4、9.9、14 | 预测/持仓/入场/板块/P&L/右尾事件/成本重合和固定风险预算 LOO | APPROVED_BY_USER: DESIGN_READY_RESEARCH_OPEN | 长周期腿、R8C 和更多腿均可研究；重合/LOO 结果解释互补、冗余和损失，不形成阻断。 |
 | F-021 | 本文 2.2、2.4、2.5、9.4.5、9.6.5、9.6.6、9.9、Phase G0-E | 6 个顶层失败 task 的 50 个成功 Loop；R2–R5 67/67；R6 30/30；R8 18/18；R9S 24/24；R10 51/51；R11 15/15；task/Loop 状态分离规则 | APPROVED_BY_USER: LOOP_LEVEL_LEDGER_REQUIRED | 主线 Phase0/R1–R11 的成功 Loop 和 R7 两个正式组合回测进入研究总账；R10/R11 已完整收口。父 task 或恢复阶段状态不得过滤成功结果，基础架构错误与模型研究结果分开归因。 |
-| F-022 | 本文 4.11、9.9.1、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | 当前 service/router/UI adapter 代码审计；R12P timeout failure；task/run/child/attempt/event、restart、control/retry、create UI、child grid 的 `F-201`～`F-218` 设计与 F2 validator | APPROVED_BY_USER: F2_DESIGN_IN_PROGRESS_IMPLEMENTATION_PENDING | 当前 Tier-1 组合研究可用，但 durable orchestration、子任务控制、正式创建 UI 和 child observability 尚未实现。后续必须在现有架构上完整实现，不得另起新版本、简化、静默降级、改变组合语义或新增门禁审批。 |
+| F-022 | 本文 4.11、9.9.1、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | 当前 service/router/UI adapter 代码审计；R12P timeout failure；task/run/child/attempt/event、restart、control/retry、create UI、child grid 的 `F-201`～`F-218` 设计与 F2 validator | DESIGN_READY | 无 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
@@ -1219,6 +1221,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 - v5.3 研究进度 rollout：补入 R9S 24/24、R10 48 个成功 Loop、R10 source archive 修复状态、R11A/R11B 运行进度和 BUG-730 源码合入/运行时待加载事实；将图模型从静态 h20 关系预测扩展为正在执行的 h40/h60 基线，以及后续板块时序动态图、回撤 hazard、sector gating 和动态退出。本文只更新蓝图，不写 DB、不启动或中断实验、不重启服务、不启动 F-014 evaluation，也不触发非 QE 模块。
 - v5.4 研究进度 rollout：补入 R10 51/51、R11A 9/9、R11B 6/6、BUG-741/PR #2391 的 results-only 恢复事实和 R11 Archive 15/15；增加 hold10/20/30 matched-seed、EfficientGATs h40/h60 完整均值及 cooperative-execution canary、sector-risk overlay、sector gating 和跨任务 portfolio fusion 顺序。R12G `qe_20260718_040323_9a4a` 与 R12P `macb_453ca2d0c5b21b40_20240701_20260629_20260717T201644965348Z` 已启动；文档与实验均保持 QE-only，不触发非 QE 模块。
 - v5.5 多 Alpha foundation rollout：补入 R12G 1/1 完成与 R12P 最新 run 的 orchestration timeout 事实；新增第 4.11、9.9.1、Phase G0-H、F-022 和 `multi_alpha_qe_evolution_foundation_f2_design_20260718.md`，把 durable orchestration、lifecycle/recovery、QE 同风格创建器和 child observability 列为基础研发 P0-1～P0-4。本 changeset 只更新设计文档，不执行 DDL、不修改代码、不创建/恢复实验、不写 DB、不重启服务；未来实现不在 DDL 前额外导出数据库。
+- v5.6 多 Alpha foundation design audit：修正未经逐项确认的批准标记、stop/pause 语义、child `not_computable` 和聚合规则、跨 QE 路径容量统计、状态/event 原子性、Archive 静默初始化、schema 的 QE-scoped failure 以及规范 UI 入口/逐像素视觉验收。该修订仍只更新设计文档，不执行 DDL、不修改运行代码、不创建/恢复实验、不写 DB、不重启服务。
 - Schema rollout：现有 factor h20 指标已可用；未来 F-014 三表必须通过版本化 migration 和独立 DDL 授权，依赖既有每日备份，不在 DDL 前额外导出数据库。
 - Data rollout：R8–R12 当前继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
 - Rollback：文档按 PR revert；未来 evaluator/schema 可停止新写入并保留历史 receipt，数据回切上一版本；任何回滚不得删除试验台账、预测或评价制品。
@@ -1228,7 +1231,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 | 项目 | 当前状态 | 说明 |
 |---|---|---|
-| source merge | HISTORICAL_SOURCE_BUG730_BUG741_MERGED_V55_DOC_UNMERGED | 历史前置批次、长标签基础架构、R7 combine-backtest、F-014 Phase 1、BUG-730 与 BUG-741 已在 main；v5.5 文档尚在独立分支，PR/merge 状态以实际 GitHub 状态为准，不在文档中预写。 |
+| source merge | HISTORICAL_SOURCE_BUG730_BUG741_MERGED_V56_DOC_UNMERGED | 历史前置批次、长标签基础架构、R7 combine-backtest、F-014 Phase 1、BUG-730 与 BUG-741 已在 main；v5.6 文档尚在独立分支，PR/merge 状态以实际 GitHub 状态为准，不在文档中预写。 |
 | QE dataset | VERIFIED_20260630 | 当前 QE 快照已支持 R6–R12，并被 R8/R9/R10/R11/R12 冻结复用；未来数据切换继续要求版本化快照和回滚保留。 |
 | 唯一硬边界 | QE_ONLY_ZERO_NON_QE_IMPACT | 所有实验、评价、缓存、CAS、表、API/MCP/UI 和写入仅限 QE；不读取、修改、调用或影响任何非 QE 模块。 |
 | factor asset | RESEARCH_AVAILABLE_IN_QE | catalog 1525/1528/1532 可供 QE；本蓝图不接入荐股、模拟盘或生产交易。 |

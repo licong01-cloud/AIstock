@@ -4,10 +4,11 @@
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / QE UI
 - 日期：2026-07-18
 - 状态：`DESIGN_READY_IMPLEMENTATION_PENDING`
-- 用户批准范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性
+- 审计修订：已收口用户批准标记、stop/pause、child 状态、节点容量、event 原子性、Archive/schema 可见性和 QE UI 规范入口；本次仍不代表代码已实现
+- 用户授权本次设计范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性；不代表用户已逐项批准本文全部实现细节或未来偏差
 - 唯一运行边界：QE-only；不得影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行语义或其他非 QE 模块
 - 设计约束：遵循 `DESIGN-COMPLIANCE-001` 四项约束，基于现有架构增量开发，不另建“多 Alpha v2”
-- 研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.5
+- 研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.6
 
 关联基线：
 
@@ -54,7 +55,7 @@ AIstock 当前已经具备可用的多 Alpha 组合研究能力：已有单腿 p
 
 ### 2.2 P0-2：任务控制与子任务恢复
 
-- run 级：pause、stop alias、resume、cancel。
+- run 级：pause、resume、cancel；兼容 `stop` endpoint 必须保持现有单 Alpha 的终止语义并委托 cancel，禁止把 stop 静默改成 pause。
 - child 级：查看 attempts、取消在途 attempt、按明确模式重试失败/取消 child。
 - retry 模式：`backtest_only`、`results_only`、`rematerialize_and_backtest`。
 - 完成 child 的结果保持不可覆盖；父 run 失败不删除或隐藏成功 child。
@@ -177,7 +178,7 @@ QEWorkspaceClient.for_node(node_id)
             └─ existing pred-backtest runtime / artifacts / metrics
 ```
 
-FastAPI lifespan 只启动一个轻量 `MultiAlphaOrchestratorLoop`。它不是任务资产的唯一所有者：所有状态先写数据库，远端 QE loop 独立运行；后端停止期间在途远端 loop 继续，重启后由新 worker 核对并接管。
+FastAPI lifespan 在 multi-alpha schema 可用时启动一个轻量 `MultiAlphaOrchestratorLoop`；schema 不可用时记录 QE-scoped health failure 而不终止整个 FastAPI。worker 不是任务资产的唯一所有者：所有状态先写数据库，远端 QE loop 独立运行；后端停止期间在途远端 loop 继续，重启后由新 worker 核对并接管。
 
 ## 7. Domain Model / 任务层级与身份
 
@@ -274,13 +275,13 @@ cancelled
 | `weighting_scheme` | nullable |
 | `dropped_leg_id` | nullable |
 | `ordinal` | 稳定执行/显示顺序 |
-| `status` | `pending/materializing/queued/running/pause_requested/paused/cancel_requested/cancelling/succeeded/failed/cancelled` |
+| `status` | `pending/materializing/queued/running/reconciling/cancel_requested/cancelling/succeeded/not_computable/failed/cancelled` |
 | `input_manifest_json` | 腿、日期、配置、artifact identity |
 | `prediction_artifact_uri/hash` | 组合 prediction CAS 身份 |
 | `selected_attempt_id` | 当前用于结果展示的 attempt |
 | `created_at/updated_at` | 时间 |
 
-child 表不复制 metrics；scheme 继续写 scheme result 表，LOO 继续写 LOO 表，baseline 指标写 attempt result manifest 并进入 parent reason/diagnostic read model。
+child 表不复制 metrics；scheme 继续写 scheme result 表，LOO 继续写 LOO 表。baseline 指标写入 selected attempt 的版本化 `result_manifest_json.metrics`，并通过与 scheme/LOO 相同的 child-result read model/API 查询；parent reason 只保存结果引用和摘要，不复制完整 metrics，也不得把 baseline 埋在仅日志可见的位置。
 
 ### 8.4 `strategy_pkg.multi_alpha_combine_backtest_child_attempt`（新增）
 
@@ -319,6 +320,8 @@ child 表不复制 metrics；scheme 继续写 scheme result 表，LOO 继续写 
 
 DB event 是 UI、SSE 和重启恢复的权威事件；现有 `run_events.jsonl` 继续作为 workspace 可下载制品，不作为唯一状态源。
 
+每次权威状态变化与对应 event 必须由 repository 在同一个 PostgreSQL transaction 中提交，例如 `transition_with_event()`；event 插入失败时状态变化一并回滚，API 不得返回成功。远端提交、取消等外部副作用采用“先持久化 intent 状态与 event，再调用远端，再以 CAS 持久化结果 event”的顺序，避免状态已改变但审计事件缺失，或远端已执行却没有可恢复 intent。
+
 ### 8.6 历史回填
 
 历史回填只建立关联，不修改 metrics、status、reason、created_at 或 Archive：
@@ -341,21 +344,24 @@ queued -> preparing -> running -> succeeded
                       └-> cancel_requested -> cancelling -> cancelled/partial_failed
 ```
 
-- `partial_failed`：至少一个有研究价值的 child 已成功，另有 child 失败或取消。
-- `failed`：没有可用 child 结果，或输入/组合 materialization 在生成 child 前失败。
+- `partial_failed`：至少一个 `succeeded` child 的 result identity/manifest 已验证通过，同时另有可执行 child 明确 `failed/cancelled`；不根据 IC、收益、主观“研究价值”或方向判断聚合状态。
+- `failed`：没有任何 `succeeded` child，且输入、materialization 或可执行 child 出现明确技术失败；`not_computable` 不单独构成失败。
 - `cancelled`：用户取消且没有成功 child；若已有成功 child，父状态为 `partial_failed`，成功结果继续可见。
+- `not_computable` child 表示当前冻结输入和公式下该 scheme 数学上不可计算，不是基础架构失败、Alpha 失败或研究方向淘汰；只从可执行 child 分母中排除并在 UI/结果中保留原因。
 - heartbeat/lease 过期不直接产生 terminal 状态；新 worker 进入 reconciliation。
 
 ### 9.2 Child / Attempt 状态机
 
 ```text
-child pending -> materializing -> queued -> running -> succeeded/failed/cancelled
-                                      └-> pause_requested -> paused -> queued
+child pending -> materializing -> queued -> running -> reconciling -> succeeded/failed/cancelled
+       └──────────────────────────────────────────────────────────> not_computable
 
 attempt queued -> submitting -> running -> reconciling -> succeeded/failed/cancelled
 ```
 
 `reconciling` 是“本地 worker 正在核对远端事实”，不是失败。远端 API 暂时不可达时保留该状态和最后已知 heartbeat，继续重试核对；不得依据本地 lease 过期推断远端进程已结束。
+
+pause 仅作用于 parent run 的新 child 派发；当前 QE Workspace 不具备真实远端 pause，因此 running child/attempt 不进入 paused 状态，而是继续到明确终态。UI 不得把 parent pause 显示为 child 已被冻结。
 
 ### 9.3 聚合规则
 
@@ -392,13 +398,14 @@ attempt queued -> submitting -> running -> reconciling -> succeeded/failed/cance
 2. request 中 scheme 顺序；
 3. 每个可计算 scheme 的 LOO，按 roster 顺序。
 
-不可计算 scheme 仍建立 child，直接写 `failed` 或 `not_computable` 结果和明确 reason，不调用远端；它不会阻止其他 child。child plan hash 写入 run，重启后相同 request 必须得到相同 plan。
+不可计算 scheme 仍建立 child，确定性写 `not_computable` 和明确 reason，不创建 attempt、不调用远端；它不会阻止其他 child，也不改变其他结果的科研可用性。child plan hash 写入 run，重启后相同 request 必须得到相同 plan。
 
 ### 10.4 节点容量
 
-- 继续读取 `qe_evolution_loops` 的 active 状态，避免与单 Alpha QE 争抢超出用户配置的并发。
-- 同时统计 durable child attempt 的 `submitting/running/reconciling`。
-- 以 PostgreSQL transaction/advisory lock 按 node 串行完成“读取占用 + claim child”，取代 `_NODE_RESERVATIONS`。
+- 新增共享 `QENodeActiveExecutionReader`，基于现有数据库事实构造按 node 的统一 active-execution read model，不另建平行调度平台。至少覆盖 `qe_evolution_loops`、`qe_multi_alpha_groups`、具有 `qe_task_id/qe_loop_id` 的 active `qe_experiments`，以及 durable child attempt 的 `submitting/running/reconciling/cancel_requested`。
+- 以上来源按 `(node_id, qe_task_id, qe_loop_id)` 去重；同一远端 Loop 同时出现在 experiment/group/loop 表时只计一次。无法确认终态但已有 submitted identity 的记录继续占用 slot，直到 reconciliation 得到明确远端事实，不因本地 heartbeat 过期提前释放。
+- capacity API/UI 返回按来源拆分的占用明细和去重后的 total，便于解释为什么排队；不得只返回一个无法核对的整数。
+- 以 PostgreSQL transaction/advisory lock 按 node 串行完成“读取统一占用 + claim child”，取代 `_NODE_RESERVATIONS`。
 - 默认运营上限沿用用户既定规则：WSL 最多 2 个普通 Loop、远端最多 4 个 Loop；图模型训练仍由单 Alpha QE 的模型分类保持 WSL 1 串行。多 Alpha pred-backtest 不改变模型训练并发。
 - 容量不足写 `waiting_capacity` event 并保持 queued，不报 `node_capacity_exhausted` 终态错误。
 
@@ -450,9 +457,9 @@ read_child_logs()        -> safe log/event tail
 
 ## 12. Lifecycle Controls / 暂停、恢复、取消和重试
 
-### 12.1 Pause / Stop
+### 12.1 Pause
 
-- UI “暂停”与兼容 `stop` alias 使用相同语义：停止派发新 child。
+- UI “暂停”只停止派发新 child，并保持 run 可恢复。
 - 已 running child 默认允许完成，完成后 run 进入 paused；UI 明确显示“等待 N 个在途子任务完成”。
 - 不伪造远端 pause。未来若 QE Workspace 提供真实 pause，可作为新能力另行设计。
 
@@ -467,6 +474,7 @@ read_child_logs()        -> safe log/event tail
 - 对 running attempt 调用 `QEWorkspaceClient.kill_loop()`；逐个记录成功/失败。
 - cancel API 只有在远端结果明确后返回当前状态；无法确认的 child 显示 `cancelling/remote_state_unknown`，后台继续 reconcile。
 - 已完成 child 保留；父状态按聚合规则计算。
+- 兼容 `stop` endpoint 委托同一 cancel service，保持现有单 Alpha “终止在途 Loop、取消未完成 Loop”的用户语义；UI 不新增第二套含义相同的 stop/cancel 按钮，也禁止把 stop 改成 cooperative pause。
 
 ### 12.4 Child retry modes
 
@@ -500,27 +508,27 @@ retry 新增 attempt，不重写旧 attempt。UI 必须展示 retry_of、mode、
 
 ### 13.2 Control
 
-- `POST /combine-backtest/runs/{run_id}/pause`
-- `POST /combine-backtest/runs/{run_id}/stop`（pause alias）
-- `POST /combine-backtest/runs/{run_id}/resume`
-- `POST /combine-backtest/runs/{run_id}/cancel`
-- `POST /combine-backtest/runs/{run_id}/reconcile`
+- `POST /api/v1/multi-alpha/combine-backtest/runs/{run_id}/pause`
+- `POST /api/v1/multi-alpha/combine-backtest/runs/{run_id}/stop`（legacy cancel alias）
+- `POST /api/v1/multi-alpha/combine-backtest/runs/{run_id}/resume`
+- `POST /api/v1/multi-alpha/combine-backtest/runs/{run_id}/cancel`
+- `POST /api/v1/multi-alpha/combine-backtest/runs/{run_id}/reconcile`
 
 控制请求支持 `Idempotency-Key`；相同 key + 相同 payload 幂等返回，相同 key + 不同 payload 返回冲突。
 
 ### 13.3 Child / Attempt
 
-- `GET /combine-backtest/runs/{run_id}/children`
-- `GET /combine-backtest/children/{child_id}`
-- `GET /combine-backtest/children/{child_id}/attempts`
-- `POST /combine-backtest/children/{child_id}/retry`
-- `POST /combine-backtest/attempts/{attempt_id}/cancel`
-- `GET /combine-backtest/attempts/{attempt_id}/logs`
+- `GET /api/v1/multi-alpha/combine-backtest/runs/{run_id}/children`
+- `GET /api/v1/multi-alpha/combine-backtest/children/{child_id}`
+- `GET /api/v1/multi-alpha/combine-backtest/children/{child_id}/attempts`
+- `POST /api/v1/multi-alpha/combine-backtest/children/{child_id}/retry`
+- `POST /api/v1/multi-alpha/combine-backtest/attempts/{attempt_id}/cancel`
+- `GET /api/v1/multi-alpha/combine-backtest/attempts/{attempt_id}/logs`
 
 ### 13.4 Events / SSE
 
-- `GET /combine-backtest/runs/{run_id}/events?after_event_id=N`
-- `GET /combine-backtest/runs/{run_id}/logs/stream`（SSE）
+- `GET /api/v1/multi-alpha/combine-backtest/runs/{run_id}/events?after_event_id=N`
+- `GET /api/v1/multi-alpha/combine-backtest/runs/{run_id}/logs/stream`（SSE）
 - 现有 `/logs` polling API 保留，内部合并 DB events 与安全 workspace/remote tail。
 
 ### 13.5 Capabilities
@@ -541,6 +549,13 @@ run/child/attempt 响应返回显式 capabilities：
 
 UI 不自行猜测状态许可，也不把 capability=false 解释成研究门禁；它只表示当前对象和制品是否支持该操作。
 
+### 13.6 QE-scoped health
+
+- `GET /api/v1/multi-alpha/combine/health`
+- 返回 schema、orchestrator、Archive capture、Prediction Store/CAS 和节点 active-execution reader 的独立状态与结构化 reason；任一子能力不可用不得伪造成整体 healthy。
+- schema 缺失时 multi-alpha 创建、控制和重试接口返回 HTTP 503 + `multi_alpha_schema_unavailable`；FastAPI、非 QE router 和不依赖新 schema 的兼容只读能力保持可用。
+- health 只报告技术可用性，不包含 Alpha 方向审批、PASS/KILL 或研究准入判断。
+
 ## 14. UI Architecture / 前端详细设计
 
 ### 14.1 信息架构
@@ -560,7 +575,7 @@ QE 自动演进
             └─ 诊断/Archive/场景 replay
 ```
 
-可以保留 `/quantevolver/multi-alpha/combine-backtest` 和详情 URL，但页面必须引用同一共享 shell/components；旧链接不得失效。不得新增风格不同的“第二版控制台”。
+规范操作入口是现有 `/quantevolver/evolution` 页面，通过 `taskType=single_alpha|multi_alpha_combine` 使用同一 workspace shell、任务列表、创建器框架和详情布局。保留 `/quantevolver/multi-alpha/combine-backtest` 及详情 URL 仅用于兼容旧链接；兼容路由应重定向或薄委托到同一共享页面状态，不得继续维护独立 DOM/样式实现，也不得新增风格不同的“第二版控制台”。
 
 ### 14.2 共享组件抽取
 
@@ -582,7 +597,7 @@ QE 自动演进
 - `LogsPanel`
 - `TopologyPanel` 的状态/卡片语言；child grid 若因语义不同新增组件，也必须复用相同 style constants、Badge 和 action patterns。
 
-抽取顺序必须先保证单 Alpha snapshot/交互不变，再接入多 Alpha；不允许复制 4800 行页面形成第二份分叉。
+抽取顺序必须先保证单 Alpha DOM、视觉截图和交互不变，再接入多 Alpha；不允许复制 4800 行页面形成第二份分叉。新增 child grid 等多 Alpha 专属组件不得定义新的颜色、字号、圆角、间距、阴影、Badge 或布局栅格，只能复用现有 QE 组件或抽取后的共享 token/style constants。
 
 ### 14.3 Data source adapter
 
@@ -602,7 +617,7 @@ interface EvolutionDataSourceAdapter {
 }
 ```
 
-单 Alpha adapter 使用现有 `/quantevolver/evolution/*`；多 Alpha adapter 使用 `/multi-alpha/combine/*`。presentational components 不拼接业务 URL。
+单 Alpha adapter 使用现有 `/api/v1/quantevolver/evolution/*`；多 Alpha adapter 使用 `/api/v1/multi-alpha/combine/*`。presentational components 不拼接业务 URL。
 
 ### 14.4 创建器完整字段
 
@@ -640,7 +655,7 @@ interface EvolutionDataSourceAdapter {
 | Attempt | 当前/历史 attempt、retry mode |
 | Node | node_id |
 | Remote | qe_task_id / qe_loop_id，可复制 |
-| Status | queued/running/reconciling/succeeded/failed/cancelled |
+| Status | pending/materializing/queued/running/reconciling/succeeded/not_computable/failed/cancelled |
 | Phase | materialize/submit/backtest/result ingest/archive |
 | Elapsed | queued/run/total |
 | Heartbeat | 最后本地和远端时间 |
@@ -672,7 +687,7 @@ interface EvolutionDataSourceAdapter {
 
 | reason_code | 场景 |
 |---|---|
-| `multi_alpha_schema_missing` | durable schema 未应用 |
+| `multi_alpha_schema_unavailable` | durable schema 未应用、版本不兼容或 preflight 无法确认；仅 multi-alpha 写能力不可用 |
 | `multi_alpha_identity_payload_conflict` | 同 identity 不同 payload/hash |
 | `multi_alpha_stale_fencing_token` | 旧 worker 写入 |
 | `multi_alpha_remote_status_unavailable` | 节点暂不可达，非终态 |
@@ -686,6 +701,7 @@ interface EvolutionDataSourceAdapter {
 | `results_only_identity_mismatch` | result manifest 不属于当前 attempt |
 | `node_capacity_waiting` | 容量不足，保持 queued |
 | `multi_alpha_event_persist_failed` | 权威 event 写入失败；当前动作不得继续伪装成功 |
+| `multi_alpha_archive_capture_unavailable` | Archive capture 初始化或调用不可用；metrics 保留，状态/event/UI 可见并支持补归档 |
 
 通信错误与 Alpha 结果失败必须分开。task/run/child/attempt 每层都保留 raw status、reason code、context 和可用制品。
 
@@ -703,6 +719,7 @@ interface EvolutionDataSourceAdapter {
 - terminal child result 先进入现有 scheme/LOO 结果表，再由 parent 聚合。
 - parent terminal 后继续调用现有 QE Archive event capture。
 - Archive 失败不改变已经计算出的 Alpha 指标，但必须写独立 `archive_error` event、run reason 和 UI 状态；不得只写日志。
+- `QEArchiveEventCapture` 初始化失败不得继续以 `_archive_event_capture=None` 静默运行。orchestrator health/API 必须暴露 `archive_capture.available=false`、稳定 reason code 和异常摘要；每个受影响的 terminal run 仍写 `archive_error` event。恢复后可对同一 run 幂等重试 Archive，不重算组合或回测。
 - Prediction Store/CAS 保存源腿与组合 prediction identity；DB 不复制二进制。
 - 历史 `artifact_count=0` 或文件缺失保留明确状态，可通过既有回填能力补关联，不伪造文件。
 
@@ -714,7 +731,8 @@ interface EvolutionDataSourceAdapter {
   - 保留请求解析、组合业务函数和 service facade；
   - 移除新 async run 的 per-run daemon thread；
   - `submit_run()` 改为创建 task/run 状态并唤醒 orchestrator；
-  - 旧同步测试通过 durable drain helper。
+  - 旧同步测试通过 durable drain helper；
+  - 删除 Archive capture 初始化失败后仅写日志并保留 `None` 的静默路径，改为 health + run event/reason 可见状态和幂等补归档入口。
 - `backend/services/multi_alpha/remote_dispatch.py`
   - 将同步 `execute_pred_backtest()` 拆为可持久化阶段；
   - 暴露 remote task/loop identity；
@@ -729,7 +747,7 @@ interface EvolutionDataSourceAdapter {
   - 旧 endpoints 委托同一 service。
 - `backend/main.py`
   - lifespan 启动/停止 orchestrator loop；
-  - startup schema preflight fail-loud；不自动 fallback 到 daemon thread。
+  - 执行 QE scoped schema/worker health preflight：缺 schema 时 FastAPI 仍正常启动，禁止回退到 daemon thread；只将 multi-alpha orchestrator 和相关写接口标记为 `multi_alpha_schema_unavailable`，返回结构化 503，并保持非 QE 模块及可兼容的历史只读接口可用。
 
 ### 18.2 新增内部模块（不是新平台版本）
 
@@ -737,6 +755,7 @@ interface EvolutionDataSourceAdapter {
 - `backend/services/multi_alpha/orchestrator.py`
 - `backend/services/multi_alpha/execution_adapter.py`
 - `backend/services/multi_alpha/state_models.py`
+- `backend/services/multi_alpha/health.py`
 - `backend/migrations/multi_alpha_durable_orchestration_20260718.sql`
 - 对应 rollback/preflight/schema contract tests
 
@@ -745,7 +764,7 @@ interface EvolutionDataSourceAdapter {
 ## 19. Frontend File Plan / 前端逐文件方案
 
 - `frontend/src/app/quantevolver/evolution/page.tsx`
-  - 抽取共享 shell/list/dialog/actions，不改变单 Alpha UI 输出。
+  - 作为 single-alpha 与 multi-alpha combine 的规范入口；抽取共享 shell/list/dialog/actions，通过 task-type adapter 切换数据源，不改变单 Alpha UI 输出。
 - `frontend/src/app/quantevolver/evolution/components/*`
   - 增加共享 adapter、runtime panel、status/action components；
   - 复用现有 style constants。
@@ -754,9 +773,9 @@ interface EvolutionDataSourceAdapter {
 - `frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx`
   - 基于 capabilities 隐藏不适用操作；多 Alpha 不调用 single-alpha candidate API。
 - `frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx`
-  - 改为共享 QE workspace shell 的 multi-alpha adapter，不保留独立风格实现。
+  - 改为到规范 evolution workspace 的兼容重定向/薄委托，不保留独立 DOM、状态机或风格实现。
 - `frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx`
-  - 复用共享详情 shell；保留旧 URL/查询参数。
+  - 保留旧 URL/查询参数并映射到共享详情 shell，不复制详情实现。
 - `CombineRunOperationsPanel.tsx`
   - 增加 run control、child retry、reconcile；保留 archive/delete/scenario replay。
 - 新增 `MultiAlphaCreateComposer.tsx`、`MultiAlphaChildGrid.tsx`、`multiAlphaEvolutionAdapter.ts`。
@@ -780,7 +799,7 @@ interface EvolutionDataSourceAdapter {
 
 ### P0-2：control 与 recovery
 
-1. pause/stop/resume/cancel repository + service + remote kill。
+1. pause/resume/cancel repository + service + remote kill；legacy stop 委托 cancel 并保持现有终止语义。
 2. child attempts 和三种 retry mode。
 3. whole-run retry 兼容、legacy stale endpoint 限定。
 4. API/MCP 同一 service adapter，结构化 reason codes。
@@ -790,7 +809,7 @@ interface EvolutionDataSourceAdapter {
 1. 先抽取单 Alpha共享组件并做无视觉/行为回归验证。
 2. 扩展 data source adapter。
 3. 实现完整 multi-alpha create composer 和多场景 runs。
-4. 旧多 Alpha URL 切换到共享 shell。
+4. 旧多 Alpha URL 改为规范页面的兼容重定向/薄委托。
 
 ### P0-4：child grid、日志和恢复展示
 
@@ -820,7 +839,8 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 - 8 worker 并发 claim 只有一个获得相同 attempt；
 - stale fencing token/row_version 写入被拒绝；
 - lease 过期后新 worker 可 reconcile，旧 worker 不能提交；
-- event 写入失败不返回成功。
+- 每个状态 transition 与 event 在同一 transaction 中提交；event 写入失败时状态回滚且 API 不返回成功。
+- capacity fixture 同时写入 `qe_evolution_loops`、`qe_multi_alpha_groups`、`qe_experiments` 和 durable attempts，按 remote identity 去重后严格遵守 WSL 2/远端 4；来源明细可由 API/UI 核对。
 
 ### 21.3 Orchestrator restart matrix
 
@@ -842,6 +862,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 - pause 不再派发新 child，在途 child 完成后 paused；
 - resume 只继续剩余 child；
 - cancel 调用 kill，保留成功 child；
+- legacy stop 与 cancel 使用同一 service/远端 kill/终态聚合，不得表现为 pause；
 - `backtest_only` 不重新组合；
 - `results_only` 不启动回测；
 - `rematerialize_and_backtest` 使用冻结源 identity；
@@ -859,7 +880,9 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 ### 21.6 UI
 
-- single-alpha 页面抽取前后视觉和操作回归；
+- `/quantevolver/evolution` 是规范入口；single-alpha 与 multi-alpha 使用同一共享 shell，旧 multi-alpha URL 只做兼容映射；
+- single-alpha 页面抽取前后在相同 viewport、浏览器和 fixture 下执行 Playwright screenshot/golden 对照，关键区域逐像素无非预期变化；
+- multi-alpha 列表、创建器、详情、child grid 与同区域 single-alpha 截图对照，证明未新增视觉语言、颜色、字号、间距、圆角、阴影或 Badge 样式；
 - 多 Alpha创建器完整 payload snapshot；
 - 多场景 task 创建；
 - task list/detail/trajectory/logs/diagnostics；
@@ -887,14 +910,15 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | remote 404 语义不明 | 区分 never-submitted 与 submitted-unknown；后者不自动重提 |
 | 后端重启丢任务 | remote loop 独立运行；DB scanner 重启接管 |
 | 子任务成功但 parent 失败 | child/attempt/result 独立持久化；parent partial_failed 聚合 |
-| 节点满载 | queued/waiting_capacity，不失败 |
+| 节点满载或跨 QE 路径重复计数 | 统一 active-execution reader 按 remote identity 去重；queued/waiting_capacity，不失败 |
 | pause 被误解为远端冻结 | UI 明确 cooperative pause；in-flight 完成后暂停 |
+| stop 被误实现为 pause | legacy stop 委托 cancel/kill；与当前单 Alpha 停止语义保持一致并做 E2E |
 | cancel 不能确认 | cancelling/remote_state_unknown，持续 reconcile |
 | results-only 读取错 workspace | result manifest + run/child/attempt/hash 校验 |
-| 共享 UI 重构影响单 Alpha | 先做零行为抽取、snapshot/Playwright，再接 multi-alpha |
+| 共享 UI 重构影响单 Alpha | 先做零行为抽取、同 viewport screenshot/golden Playwright，再接 multi-alpha；旧 URL 只做兼容映射 |
 | 旧历史 run 无 child 映射 | 显式 legacy unavailable，不伪造 attempt |
-| Archive 失败覆盖研究结果 | Archive 状态独立，错误可见，metrics 保留 |
-| schema 未部署便重启 | startup preflight fail-loud；禁止 daemon fallback；按正式部署顺序执行 |
+| Archive capture 初始化失败被静默禁用 | worker health + archive_error event/run reason/UI；metrics 保留并支持幂等补归档 |
+| schema 未部署便重启 | FastAPI 保持可用；仅 multi-alpha worker/写接口结构化 503，禁止 daemon fallback，不影响非 QE 模块 |
 
 ## 23. Design Acceptance Index
 
@@ -905,42 +929,44 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-203 | PostgreSQL lease/fencing/row-version CAS 防止重复所有者和旧 worker 写入。 |
 | F-204 | 远端 qe_task_id/qe_loop_id 在提交阶段持久化，后端重启可核对接管。 |
 | F-205 | WSL/远端统一复用 QEWorkspaceClient；new async run 不由 subprocess/daemon thread 持有。 |
-| F-206 | DB-backed node capacity；WSL 2、远端 4；满载排队不失败。 |
-| F-207 | pause/stop/resume/cancel 语义明确且不伪造远端状态。 |
+| F-206 | DB-backed node capacity 覆盖现有 QE active execution 来源并按 remote identity 去重；WSL 2、远端 4；满载排队不失败。 |
+| F-207 | pause/resume/cancel 语义明确；legacy stop 保持 cancel/kill 语义且不伪造远端状态。 |
 | F-208 | child retry 支持 backtest_only/results_only/rematerialize_and_backtest，模式不静默互换。 |
-| F-209 | 成功 child 和历史 attempt append-only 保留，父失败不覆盖成功证据。 |
-| F-210 | DB event 权威、workspace/remote logs 可追溯，错误必须 API/UI 可见。 |
-| F-211 | UI 沿用单 Alpha QE 自动演进页面和共享组件，不改变设计风格。 |
+| F-209 | 成功 child 和历史 attempt append-only 保留；`not_computable` 与技术失败分离；父状态只按结构化结果聚合，不判断研究价值。 |
+| F-210 | DB event 与状态 transition 同事务、workspace/remote logs 可追溯，错误必须 API/UI 可见。 |
+| F-211 | `/quantevolver/evolution` 为规范入口，UI 沿用单 Alpha QE 自动演进页面和共享组件，并以 screenshot/golden 证明不改变设计风格。 |
 | F-212 | 创建器覆盖完整现有 request 和多场景 runs，不重新训练模型。 |
 | F-213 | child/attempt grid 展示节点、远端 ID、状态、阶段、耗时、heartbeat、错误、制品和动作。 |
 | F-214 | legacy run/task key/read APIs 兼容，历史回填不改指标。 |
 | F-215 | 组合、权重、LOO、回测和 Archive 业务结果与现有实现 parity。 |
-| F-216 | QE-only；非 QE 模块零读写/零调用/零运行影响。 |
-| F-217 | 不新增研究门禁、淘汰规则、人工审批或 promotion 审批。 |
+| F-216 | QE-only；schema/worker 不可用仅影响 multi-alpha 写接口，非 QE 模块零读写/零调用/零运行影响。 |
+| F-217 | 不新增研究门禁、淘汰规则、人工审批或 promotion 审批；文档不得以 `APPROVED_BY_USER` 代替真实用户确认。 |
 | F-218 | 完整 restart/concurrency/control/retry/API/UI/DB 验证，禁止简化、静默 fallback 和伪成功。 |
 
 ## 24. Design Acceptance Matrix
 
+本矩阵只表达“设计条目是否已完整定义”，不声称对应代码、DDL、测试或运行证据已经存在。`DESIGN_READY` 表示可进入实现，真实实现状态统一以第 26 节和未来代码 PR 的更新为准；只有用户明确逐项确认时才能写 `APPROVED_BY_USER`，本设计不使用该标记。
+
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 | `backend/services/multi_alpha/{combine_backtest,remote_dispatch,combine_ui_adapter}.py`; `frontend/src/app/quantevolver/{evolution,multi-alpha/combine-backtest}` | `backend/tests/test_multi_alpha_combine_backtest.py`; `backend/tests/test_multi_alpha_combine_ui_adapter.py`; `rtk git diff --check` | APPROVED_BY_USER: DESIGN_VERIFIED_IMPLEMENTATION_PENDING | APPROVED_BY_USER: design-only task; code implementation pending |
-| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718.sql`; durable repository | `backend/tests/multi_alpha/test_durable_schema.py`; `backend/tests/multi_alpha/test_durable_repository.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: DDL 和 repository 尚未实现 |
-| F-203 | repository claim/heartbeat/terminal CAS | `rtk python -m pytest backend/tests/multi_alpha/test_durable_repository.py -q` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: multi-worker dev PG evidence 待实现 |
-| F-204 | execution adapter + attempt remote identity | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: crash-window restart matrix 待实现 |
-| F-205 | `QEWorkspaceClient`、remote dispatch refactor | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: WSL/remote smoke 待实现 |
-| F-206 | DB capacity claim + existing `qe_evolution_loops` | `backend/tests/multi_alpha/test_durable_capacity.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: cross-process capacity test 待实现 |
-| F-207 | control service/router/UI | `backend/tests/multi_alpha/test_durable_control.py`; `frontend/tests/quantevolver/multi-alpha-control.spec.ts` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: pause/resume/cancel E2E 待实现 |
-| F-208 | child attempts/retry APIs | `backend/tests/multi_alpha/test_durable_retry.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: three-mode retry tests 待实现 |
-| F-209 | child result persistence and aggregate rules | `backend/tests/multi_alpha/test_durable_aggregation.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: partial-failure/retry tests 待实现 |
-| F-210 | event table/SSE/log adapter | `backend/tests/multi_alpha/test_durable_events.py`; `frontend/tests/quantevolver/multi-alpha-logs.spec.ts` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: cursor/reconnect/error tests 待实现 |
-| F-211 | shared QE page components | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: single-alpha visual/behavior regression 待实现 |
-| F-212 | multi-alpha create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: request snapshot 和 multi-scenario Playwright 待实现 |
-| F-213 | child grid/runtime panel | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: UI/API E2E 待实现 |
-| F-214 | legacy task/run backfill and aliases | `backend/tests/multi_alpha/test_durable_backfill.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: dry-run/idempotent/readback 待实现 |
-| F-215 | existing combiner/pred-backtest result parity | `backend/tests/multi_alpha/test_durable_parity.py`; existing `backend/tests/test_multi_alpha_combine_backtest.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: old-sync-vs-durable fixture 待实现 |
-| F-216 | changed-file/import/DB scope | `backend/tests/multi_alpha/test_durable_qe_only_contract.py` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: QE-only contract test 待实现 |
-| F-217 | state/API/UI audit | `backend/tests/multi_alpha/test_durable_contract.py`; `frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | APPROVED_BY_USER: DESIGN_VERIFIED_IMPLEMENTATION_PENDING | APPROVED_BY_USER: 实现必须保持无研究门禁/审批 |
-| F-218 | full validation matrix | `rtk python -m pytest backend/tests/multi_alpha -q`; `rtk npm run build`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | APPROVED_BY_USER: DESIGN_READY_IMPLEMENTATION_PENDING | APPROVED_BY_USER: 完整代码和运行证据待实现 |
+| F-201 | `backend/services/multi_alpha/{combine_backtest,remote_dispatch,combine_ui_adapter}.py`; `frontend/src/app/quantevolver/{evolution,multi-alpha/combine-backtest}` | `backend/tests/test_multi_alpha_combine_backtest.py`; `backend/tests/test_multi_alpha_combine_ui_adapter.py`; `rtk git diff --check` | DESIGN_VERIFIED | 无 |
+| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718.sql`; durable repository | `backend/tests/multi_alpha/test_durable_schema.py`; `backend/tests/multi_alpha/test_durable_repository.py` | DESIGN_READY | 无 |
+| F-203 | repository claim/heartbeat/terminal CAS | `rtk python -m pytest backend/tests/multi_alpha/test_durable_repository.py -q` | DESIGN_READY | 无 |
+| F-204 | execution adapter + attempt remote identity | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | DESIGN_READY | 无 |
+| F-205 | `QEWorkspaceClient`、remote dispatch refactor | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | DESIGN_READY | 无 |
+| F-206 | unified active-execution reader + DB capacity claim | `backend/tests/multi_alpha/test_durable_capacity.py` | DESIGN_READY | 无 |
+| F-207 | pause/resume/cancel service/router/UI + legacy stop compatibility | `backend/tests/multi_alpha/test_durable_control.py`; `frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | 无 |
+| F-208 | child attempts/retry APIs | `backend/tests/multi_alpha/test_durable_retry.py` | DESIGN_READY | 无 |
+| F-209 | child result persistence、`not_computable` 和 deterministic aggregate rules | `backend/tests/multi_alpha/test_durable_aggregation.py` | DESIGN_READY | 无 |
+| F-210 | atomic state/event repository、SSE/log adapter | `backend/tests/multi_alpha/test_durable_events.py`; `frontend/tests/quantevolver/multi-alpha-logs.spec.ts` | DESIGN_READY | 无 |
+| F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts` | DESIGN_READY | 无 |
+| F-212 | multi-alpha create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | DESIGN_READY | 无 |
+| F-213 | child grid/runtime panel | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | DESIGN_READY | 无 |
+| F-214 | legacy task/run backfill and aliases | `backend/tests/multi_alpha/test_durable_backfill.py` | DESIGN_READY | 无 |
+| F-215 | existing combiner/pred-backtest result parity + Archive health | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | DESIGN_READY | 无 |
+| F-216 | scoped schema health、changed-file/import/DB scope | `backend/tests/multi_alpha/test_durable_qe_only_contract.py`; `backend/tests/multi_alpha/test_schema_health.py` | DESIGN_READY | 无 |
+| F-217 | state/API/UI audit without research gates or claimed approval | `backend/tests/multi_alpha/test_durable_contract.py`; `frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | DESIGN_VERIFIED | 无 |
+| F-218 | full validation matrix | `rtk python -m pytest backend/tests/multi_alpha -q`; `rtk npm run build`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | DESIGN_READY | 无 |
 
 ## 25. Rollout / Rollback
 
