@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-765",
-  "closed_at": null,
+  "closed_at": "2026-07-18T14:24:01Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "HMM 研究工作台及演进实验室默认显示，/hmm-evolution 及详情页无需环境变量即可访问；未来不得为已批准功能擅自增加 env/审批门禁。",
   "first_seen_at": "2026-07-18T14:08:41.542573Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e89af3bf9239828ee0c7458be6846ab56fccc5ef",
+  "fixed_at": "2026-07-18T14:28:17.574637Z",
   "github_issue_number": 2450,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2450",
   "last_seen_at": "2026-07-18T14:08:41.542573Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2451",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -91,6 +92,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #2451 checks -> all passed; mergeable CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
