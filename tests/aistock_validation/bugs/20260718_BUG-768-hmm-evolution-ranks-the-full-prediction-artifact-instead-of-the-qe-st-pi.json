@@ -18,7 +18,7 @@
     "backend/tests/hmm_evolution/test_executor.py",
     "backend/tests/hmm_evolution/test_service.py",
     "backend/tests/hmm_evolution/test_api.py",
-    "backend/tests/quantevolver/test_stock_pool_sync.py",
+    "backend/tests/hmm_evolution/test_stock_pool_snapshot.py",
     "frontend/src/components/hmm-evolution/EvolutionDashboard.tsx",
     "frontend/src/lib/hmm-research/contracts.ts",
     "tests/aistock_validation/bugs/20260718_BUG-768-hmm-evolution-ranks-the-full-prediction-artifact-instead-of-the-qe-st-pi.json",
