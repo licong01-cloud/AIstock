@@ -1,6 +1,7 @@
 {
   "actual": "用户级启动提示没有AIstock条件路由，必须依赖手工显式调用命令。",
   "allowed_write_scope": [
+    "C:\\Users\\lc999\\.claude\\CLAUDE.md",
     "tests/aistock_validation/bugs/20260718_BUG-763-claude-code-aistock.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -33,15 +34,16 @@
   "last_seen_at": "2026-07-18T12:55:38.333362Z",
   "module": "validation",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not modify Claude settings, credentials, MCP configuration, permissions, or the official isolated Claude profile."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Get-Content C:\\Users\\lc999\\.claude\\CLAUDE.md",
   "required_verification": [
-    "l0",
-    "validation_center_backend"
+    "user_claude_memory_contract",
+    "workflow_smoke"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -58,15 +60,10 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
-      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "User-level Claude startup routing has no Validation Center backend, UI, API, or business-flow dependency."
     },
     "delegated_validation": {
       "receipt_default": "compact",
@@ -95,7 +92,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "user_claude_memory_contract",
+      "workflow_smoke"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -118,15 +116,10 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
-        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "User-level Claude startup routing has no Validation Center backend, UI, API, or business-flow dependency."
       },
       "delegated_validation": {
         "receipt_default": "compact",
@@ -155,7 +148,8 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "user_claude_memory_contract",
+        "workflow_smoke"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
