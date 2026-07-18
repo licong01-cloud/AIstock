@@ -1,6 +1,22 @@
 {
   "actual": "After PR #2412 merged, the approved F2 design requires advisory_real_dev_onboarding.py to expose observe-source, plan-capacity, build-phase1e-inputs and compile-phase1e with explicit env-file/artifact-root and no target-db selector. Current main exposes only commands through run-historical. The compatibility Phase1E CLI still exposes --target-db and cannot serve as the O4 authority. This blocks real DEV O3/O4/G5 execution; manual JSON or direct internal-service invocation would violate the no-simplification and no-silent-semantic-drift contract. Fix must wire the complete O4 command chain into the authoritative CLI, preserve explicit DEV-only identity, exact artifact refs/readback, existing compatibility behavior where approved, and add direct CLI contract tests mapped to F-906..F-916.",
   "allowed_write_scope": [
+    "backend/services/advisory_dev_input_onboarding/phase1e_orchestration.py",
+    "backend/services/advisory_dev_input_onboarding/phase1e_input_builder.py",
+    "backend/services/advisory_dev_input_onboarding/phase1e_inputs.py",
+    "backend/services/advisory_dev_input_onboarding/phase1e_source_mapping.py",
+    "backend/services/advisory_dev_input_onboarding/phase1e_derived_pit.py",
+    "backend/services/advisory_phase1/source_capacity.py",
+    "backend/services/advisory_phase1/source_observer.py",
+    "backend/services/advisory_phase1/source_observer_postgres.py",
+    "backend/services/advisory_phase1/readiness_plan.py",
+    "backend/services/advisory_phase1/readiness_plan_store.py",
+    "scripts/advisory_real_dev_onboarding.py",
+    "scripts/advisory_phase1_source_observer.py",
+    "scripts/advisory_phase1e_readiness_plan.py",
+    "backend/tests/advisory_dev_input_onboarding",
+    "backend/tests/advisory_phase1/test_source_observer_cli.py",
+    "docs/architecture/advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md",
     "tests/aistock_validation/bugs/20260718_BUG-755-advisory-o4-merged-services-lack-authoritative-execution-cli.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,10 +36,16 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260718-345810785e8c",
       "timestamp": "2026-07-18T08:34:46.244874Z"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_authoritative_o4_cli",
+      "actor": "codex",
+      "note": "Add only the authoritative onboarding CLI, O4 orchestration contracts, compatibility entrypoints, direct tests and cited design status; Selection, Paper, simulation and migrations remain excluded.",
+      "timestamp": "2026-07-18T08:37:27.9615440Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The authoritative onboarding CLI exposes the complete O4 DEV-only command chain with exact typed requests, immutable artifact refs and readback verification; compatibility entrypoints delegate to the same contracts without production selectors or alternate semantics.",
   "first_seen_at": "2026-07-18T08:34:46.244879Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,7 +60,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/advisory_real_dev_onboarding.py --help; python scripts/advisory_phase1e_readiness_plan.py compile-batch --help",
   "required_verification": [
     "l0"
   ],
@@ -152,5 +174,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_scope_defined"
 }
