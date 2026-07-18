@@ -1047,6 +1047,113 @@ def test_noncritical_child_failure_records_reason_and_continues(tmp_path: Path) 
     assert {call["workspace"].name for call in executor.calls} >= {"baseline_leg_a", "combined_equal", "loo_equal_drop_leg_a", "loo_equal_drop_leg_c"}
 
 
+def test_noncomputable_scheme_is_persisted_while_other_schemes_continue(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service, repo, executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    payload["weighting_schemes"] = ["equal", "ic_weighted", "risk_parity"]
+    original_combine_legs = combine_backtest_module.combine_legs
+
+    def combine_with_unavailable_ic(*, legs, scheme, request):  # type: ignore[no-untyped-def]
+        if scheme == "ic_weighted":
+            raise MultiAlphaCombineBacktestError(
+                "weighting scheme cannot be computed: no positive IC weights",
+                reason_code="scheme_not_computable",
+                context={"weighting_scheme": scheme},
+            )
+        return original_combine_legs(legs=legs, scheme=scheme, request=request)
+
+    monkeypatch.setattr(combine_backtest_module, "combine_legs", combine_with_unavailable_ic)
+
+    result = service.submit_run(payload, run_async=False)
+    run_id = result["run_id"]
+    run = service.get_run(run_id)
+
+    assert result["status"] == "partial_failed"
+    assert run["run"]["status"] == "partial_failed"
+    assert run["run"]["reason"]["logical_status"] == "partial_failed"
+    failed = run["run"]["reason"]["failed_child_tasks"]
+    assert failed["combined_ic_weighted"]["reason_code"] == "scheme_not_computable"
+
+    schemes = {row["weighting_scheme"]: row for row in run["scheme_results"]}
+    assert set(schemes) == {"equal", "ic_weighted", "risk_parity"}
+    assert schemes["equal"]["skipped"] is False
+    assert schemes["risk_parity"]["skipped"] is False
+    assert schemes["ic_weighted"]["skipped"] is True
+    assert "scheme_not_computable" in schemes["ic_weighted"]["skipped_reason"]
+    assert len(run["loo"]) == 6
+
+    executed_names = {call["workspace"].name for call in executor.calls}
+    assert "combined_equal" in executed_names
+    assert "combined_risk_parity" in executed_names
+    assert "combined_ic_weighted" not in executed_names
+    assert repo.runs[run_id]["status"] == "partial_failed"
+
+
+def test_noncomputable_loo_is_explicit_and_does_not_suppress_peer_loo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service, _repo, executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    original_combine_legs = combine_backtest_module.combine_legs
+
+    def combine_with_one_unavailable_loo(*, legs, scheme, request):  # type: ignore[no-untyped-def]
+        leg_ids = {leg.leg_id for leg in legs}
+        if scheme == "equal" and leg_ids == {"leg_a", "leg_c"}:
+            raise MultiAlphaCombineBacktestError(
+                "LOO score frame is unavailable",
+                reason_code="scheme_not_computable",
+                context={"weighting_scheme": scheme, "dropped_leg_id": "leg_b"},
+            )
+        return original_combine_legs(legs=legs, scheme=scheme, request=request)
+
+    monkeypatch.setattr(combine_backtest_module, "combine_legs", combine_with_one_unavailable_loo)
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert result["status"] == "partial_failed"
+    failed = run["run"]["reason"]["failed_child_tasks"]
+    assert failed["loo_equal_drop_leg_b"]["reason_code"] == "scheme_not_computable"
+    assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_c"}
+    executed_names = {call["workspace"].name for call in executor.calls}
+    assert "loo_equal_drop_leg_a" in executed_names
+    assert "loo_equal_drop_leg_c" in executed_names
+    assert "loo_equal_drop_leg_b" not in executed_names
+
+
+def test_run_fails_when_no_requested_scheme_is_computable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service, repo, executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    payload["weighting_schemes"] = ["ic_weighted"]
+
+    def reject_scheme(*, legs, scheme, request):  # type: ignore[no-untyped-def]
+        raise MultiAlphaCombineBacktestError(
+            "weighting scheme cannot be computed",
+            reason_code="scheme_not_computable",
+            context={"weighting_scheme": scheme},
+        )
+
+    monkeypatch.setattr(combine_backtest_module, "combine_legs", reject_scheme)
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(payload, run_async=False)
+
+    assert excinfo.value.reason_code == "scheme_not_computable"
+    run_id = next(iter(repo.runs))
+    run = service.get_run(run_id)
+    assert run["run"]["status"] == "failed"
+    assert run["scheme_results"][0]["weighting_scheme"] == "ic_weighted"
+    assert run["scheme_results"][0]["skipped"] is True
+    assert {call["workspace"].name for call in executor.calls} == {"baseline_leg_a"}
+
+
 def test_equal_scheme_failure_fails_run_and_marks_scheme_skipped(tmp_path: Path) -> None:
     service, repo, _executor, _checker = _service(
         tmp_path,

@@ -1,6 +1,8 @@
 {
   "actual": "R12P四腿组合回测请求 equal、ic_weighted、risk_parity、orthogonality_aware 等多个方案时，ic_weighted 因负权裁剪后没有正权重触发 scheme_not_computable，当前执行器立即将整个 run 标记 failed，其他已请求方案未继续计算，也没有逐方案失败状态。要求各方案独立执行和持久化：不可计算方案记录显式失败证据，其他方案继续；run 根据实际结果形成 succeeded/partial_failed/failed，禁止静默跳过、默认降级或改变权重语义，并支持修复后重新运行 R12P。",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
     "tests/aistock_validation/bugs/20260718_BUG-751-qe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "单个不可计算的 weighting scheme 不得吞掉其他已请求方案；成功方案及 LOO 结果继续计算并持久化，失败方案保存明确原因，run 根据实际结果形成 succeeded、partial_failed 或 failed。",
   "first_seen_at": "2026-07-18T05:10:37.851918Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,7 +40,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/test_multi_alpha_combine_backtest.py -q",
   "required_verification": [
     "l0"
   ],
