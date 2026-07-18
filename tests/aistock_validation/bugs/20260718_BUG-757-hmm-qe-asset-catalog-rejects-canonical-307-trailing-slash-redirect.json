@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-757",
-  "closed_at": null,
+  "closed_at": "2026-07-18T09:48:26.907243Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -20,6 +20,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260718-cd5ae5fe9d94",
       "timestamp": "2026-07-18T08:42:54.952150Z"
+    },
+    {
+      "action": "runtime_activation_verified",
+      "actor": "codex",
+      "note": "RD-Agent catalog returned complete with 155 assets; AIstock HMM asset API returned 200; batch hmmb_037f84c53f9b4ae487365c17cabf0292 completed 2/2 evaluations without failure or timeout.",
+      "timestamp": "2026-07-18T09:48:26.907243Z"
     }
   ],
   "evidence_uris": [
@@ -29,8 +35,8 @@
   "expected": "After the RD-Agent Results API is restarted from commit 8c6776a5c90b16a57ab68853be72726d9e5305d9 or later, GET /api/v1/qe_workspace/tasks/{task_id}/loops/{loop_id}/files returns HTTP 200 with catalog_completeness and a deterministic read-only files list; the HMM QE asset endpoint then succeeds without redirects or fallback guessing.",
   "first_seen_at": "2026-07-18T08:42:54.952155Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8c6776a5c90b16a57ab68853be72726d9e5305d9",
+  "fixed_at": "2026-07-18T09:48:26.907243Z",
   "github_issue_number": 2423,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2423",
   "last_seen_at": "2026-07-18T08:42:54.952155Z",
@@ -48,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
