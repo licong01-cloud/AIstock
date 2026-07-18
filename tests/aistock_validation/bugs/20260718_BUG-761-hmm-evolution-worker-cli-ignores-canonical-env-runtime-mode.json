@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-761",
-  "closed_at": null,
+  "closed_at": "2026-07-18T10:21:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-18T10:11:24.668431Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f1f4998c514a47c79b7d34afbb03c289ca7f2ea3",
+  "fixed_at": "2026-07-18T10:24:10.911763Z",
   "github_issue_number": 2434,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2434",
   "last_seen_at": "2026-07-18T10:11:24.668431Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2435",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "83f1a335c00afca46accd90c",
     "source_event_id": "FE-20260718-83f1a335c00a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c283e83abc6bdc9f commit=b915980ca4ebc394789a1b0e2760959a2eebf268 kind=nox plan=hmm_evolution_backend status=passed command=python_-m_nox_-s_hmm_evolution_backend result=141_passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
