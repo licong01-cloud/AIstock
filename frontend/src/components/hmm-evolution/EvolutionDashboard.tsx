@@ -188,7 +188,7 @@ export default function EvolutionDashboard() {
               error_code: "HMM_EVOLUTION_CLIENT_TIMEOUT",
               reason_code: "hmm_evolution_client_polling_timeout",
               message: "批次轮询已达到客户端上限，页面停止自动请求。",
-              context: { retry_condition: "确认 worker 与批次状态后手工刷新。" },
+              context: { retry_condition: "确认自动评估 worker 服务与批次状态后手工刷新。" },
             },
             504,
           ),
@@ -471,7 +471,7 @@ export default function EvolutionDashboard() {
             </div>
             <div className={styles.panelBodyTable}>
               {rankedItems.length === 0 ? (
-                <EmptyState title="暂无排行榜结果" detail="创建批次并由人工 worker 完成评估后，这里展示真实指标。" />
+                <EmptyState title="暂无排行榜结果" detail="创建批次并由自动评估 worker 服务完成评估后，这里展示真实指标。" />
               ) : (
                 <RankingTable items={rankedItems} />
               )}

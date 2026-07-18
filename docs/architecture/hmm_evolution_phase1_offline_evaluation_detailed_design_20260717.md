@@ -1,13 +1,13 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.7
+> **版本**：v1.8
 > **日期**：2026-07-17
-> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已实现；真实 QE 10-case、性能、实机截图与 runtime activation 仍待外部验收
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v1.8
+> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已实现；自动评估 worker service 源码已实现；真实 QE 10-case、性能、实机截图与 runtime activation 仍待外部验收
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.0
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
-> **Design Acceptance Index**：复用总体蓝图 `F-006`～`F-010`
+> **Design Acceptance Index**：复用总体蓝图 `F-006`～`F-010A`
 
 本文是总体蓝图 Phase 1 的从属实现设计，不建立第二套架构。总体蓝图定义阶段边界与
 跨阶段约束；本文定义 Phase 1 的数据身份、schema、状态机、离线指标、推荐公式、API、
@@ -51,7 +51,8 @@ Phase 1 v1 包含：
 6. 持久化候选、评估、批次、状态、heartbeat、错误和推荐证据；
 7. 提供真实 API、中文 UI、HMM 研究工作台导航、固定证据区和独立详情页；
 8. 提供单评估、批评估、失败重试、取消和结果复用语义；
-9. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
+9. 提供独立长期运行的自动评估 worker service，只消费 API 已登记的 durable queued work；
+10. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
 
 ## 3. Non-goals（非目标与硬边界）
 
@@ -69,14 +70,15 @@ Phase 1 v1 包含：
 - 不自动提交 QE、不自动淘汰候选、不自动替换生产 snapshot。
 - 不把 top-3、coverage、历史一致性或推荐分数升级为研究停止条件或生产门禁。
 - 不使用 FastAPI `BackgroundTasks` 伪装 durable worker；进程重启后任务状态必须可恢复。
-- 不启用生产 worker、生产 schema、8001/3000/19080 或任何 scheduler。
+- 不在代码合入时自动启用生产 worker、生产 schema、8001/3000/19080 或任何 scheduler；首次 worker service activation 仍是独立运行操作。
+- 自动评估 worker 不创建 batch、不按日历触发研究、不训练 HMM，也不复用 Phase 3 rolling-training scheduler。
 - 不新增裸 `.sql` 文件，不在业务 service 内隐式建表。
 
 ## 4. DESIGN-COMPLIANCE-001 控制
 
 | 控制 | Phase 1 设计要求 |
 |---|---|
-| `no_simplified_delivery` | schema、repository、状态机、纯 evaluator、scorer、API、UI 和验证证据必须按 F-006～F-010 逐项完成后才可报告 Phase 1 完成。 |
+| `no_simplified_delivery` | schema、repository、状态机、纯 evaluator、scorer、API、UI、自动评估 worker service 和验证证据必须按 F-006～F-010A 逐项完成后才可报告 Phase 1 完成。 |
 | `no_silent_error` | 缺 artifact、hash 不符、horizon 不符、无共同日期、DB 数据不足、lease 丢失、取消、图表加载失败和 polling 超时均返回稳定 reason code，不返回中性成功、永久 loading 或空白。 |
 | `no_business_semantic_drift` | 结果仅为研究分析；不产生 `RiskDecision`、`can_buy`、订单、配置变更或生产 snapshot 变更。 |
 | `no_unrequested_gate_or_approval` | 推荐公式不包含淘汰阈值；所有成功候选均展示，证据不足者标记为未排名，不宣告方向无效。 |
@@ -92,7 +94,7 @@ Phase 1 v1 包含：
 
 ### 4.2 门禁与审批最小化
 
-- 只有生产 DDL 和首次生产 runtime activation 属于基础设施变更，需要明确操作授权。
+- 只有生产 DDL 和首次生产 runtime activation 属于基础设施变更，需要明确操作授权；2026-07-18 用户已批准自动评估 worker 的代码设计与实现，但代码合入不等于进程已启动。
 - candidate 注册、QE 资产只读查看、离线评估、批处理、重试、取消和 top-3 查看不新增审批流。
 - 并发上限、路径 containment、manifest 校验、lease/fencing、完整性校验属于技术安全约束，
   不是研究方向门禁。
@@ -121,8 +123,8 @@ Phase 1 v1 包含：
 | `no_business_semantic_drift` | PASS | top-3 仍为 QE 终审前研究推荐；horizon、candidate、watermark 和 evidence identity 保持；不调用 risk gate、不写生产 snapshot、不产生 can_buy/订单。 |
 | `no_unrequested_gate_or_approval` | PASS | 仅生产 DDL 与首次 runtime activation 需要操作授权；候选、评估、批处理、重试、取消、证据查看不新增审批链或淘汰阈值。 |
 
-本结论只表示 v1.5 **设计文本**已消除已知 P0 缺口，不表示 F-010 实现完成。F-010 在真实代码、
-API/UI、E2E、benchmark 和外部证据回填前继续保持 `approved_by_user_for_implementation`。
+本结论只表示 v1.8 **设计文本**已消除已知 P0 缺口，不表示 F-010/F-010A 外部验收完成。对应项在真实代码、
+API/UI、E2E、benchmark 和外部证据回填前继续保持已批准但不得提前宣称 verified 的状态。
 
 ## 5. Architecture（架构）
 
@@ -146,14 +148,16 @@ HMMEvolutionService
         ├── CandidateArtifactResolver    # precomputed coefficient, no generation
         └── PostgreSQL hmm_evolution.*
 
-operator-started HMMEvolutionWorker
-        └── claim batch/evaluation with lease + fencing + heartbeat
+deployment-started HMMEvolutionWorkerService
+        └── poll durable queue -> HMMEvolutionWorker
+                              └── claim batch/evaluation with lease + fencing + heartbeat
 ```
 
 ### 5.1 进程边界
 
 - API 只登记请求、读取结果和设置 cancel flag；不在请求线程执行 10 分钟计算。
-- Worker 是独立、人工启用的进程，不是定时 scheduler。默认不随 backend startup 启动。
+- Worker 是独立进程，不是 FastAPI background task 或定时 scheduler。部署启动后自动轮询已有 durable queue，默认不随 backend startup 隐式启动。
+- Worker service 只消费 API 已创建的 queued batch/evaluation；不得自行创建研究任务、选择候选、修改推荐公式或触发 Phase 3 训练。
 - Repository 使用仓库同步 `get_conn()`；异步 API 通过线程执行器调用同步 repository，禁止
   `async with get_conn()`。
 - Worker 与 API 共享 Pydantic contract 和 repository，不共享内存状态作为权威状态。
@@ -720,6 +724,16 @@ artifact source、冷/热缓存、各阶段耗时、峰值 RSS、并发和结果
 - 10 候选共享输入且受限并发 <30 分钟；
 - 未在指定基准和硬件测量时只能报告 pending，不能用小 fixture 宣称性能完成。
 
+### 13.5 自动评估 worker service 生命周期
+
+- 入口必须是显式 `--serve`，与人工 `--once` / `--drain` 共用同一 runtime、repository、lease 和 fencing 契约；禁止无参数隐式进入无限循环。
+- service 启动前必须加载 canonical `.env`，并要求 `HMM_EVOLUTION_RUNTIME_MODE=api_worker`；显式进程环境优先于 `.env`，配置缺失或非法时 fail closed 并退出非零。
+- queue 非空时连续处理有界 worker slice；queue 为空时使用可中断等待，poll interval 必须有上下界，禁止 busy loop。
+- `SIGINT`/`SIGTERM` 只停止接纳下一轮 claim；当前已 claim slice 继续通过既有 checkpoint、heartbeat 和 terminalization 完成，然后进程退出。
+- `HMMEvolutionError` 或未知基础设施异常不得被吞掉或伪装为 idle；进程结构化记录 reason code/exception chain 后非零退出，由外部 supervisor 按部署策略重启。
+- 自动运行不增加候选审批、评估审批、top-3 阈值或研究停止条件；`api_worker` 仍是 deployment switch/kill switch，而不是产品审批。
+- service 不写健康 JSON 文件、不以进程内计数作为权威任务状态；任务真相仍只来自 `hmm_evolution.*`。运行健康通过进程退出码、结构化日志和 API durable status 交叉核对。
+
 ## 14. API Contracts
 
 Router prefix：`/api/v1/hmm-evolution`。
@@ -1037,6 +1051,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - candidate/evaluation/batch API；
 - worker CLI 与受控启用方式；
+- 显式 `--serve` 自动评估 worker service、可中断 idle polling、信号收敛和 fail-loud 进程退出；
 - `/hmm-evolution` 页面、批次/评估详情、固定证据区和 HMM research navigation shell；
 - schema-aware QE asset view、完整 loading/empty/degraded/failed/stale/terminal 状态；
 - 禁止 Paper v2 依赖、抽屉式列表、raw JSON 主视图和未实现风险/训练 tab；
@@ -1054,7 +1069,8 @@ frontend/src/lib/navigation/nav-groups.ts
 3. 获得生产 DDL 操作授权后执行并保存 receipt；
 4. 合入 P1-B，使用人工 worker CLI 做受控 benchmark；
 5. 合入 P1-C，先在安全验证 app/UI 完成演进页、证据区、错误状态和导航激活边界验收；
-6. 获得一次生产 runtime activation 操作授权后按部署配置启用；API/worker/nav 状态分别记录，
+6. 合入自动评估 worker service，但保持 runtime activation 状态独立；
+7. 获得一次生产 runtime activation 操作授权后按部署配置启动独立 worker service；API/worker/nav 状态分别记录，
    但不得衍生三套产品审批流。
 
 ### 19.2 activation flags
@@ -1101,7 +1117,7 @@ frontend/src/lib/navigation/nav-groups.ts
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
 | `runtime_activation_gate` | noop | pending | pending | pending，首次生产启用需一次操作授权；不新增业务审批流 |
 | `data_write_gate` | docs only | 仅 hmm_evolution.* | 仅评估结果 | 同左 |
-| `service_start_gate` | noop | 禁止自动启动 | 禁止自动启动 | 安全验证与生产启动分离 |
+| `service_start_gate` | noop | 禁止隐式启动 | 禁止隐式启动 | 独立 service 显式启动；不得挂入 FastAPI startup，安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
 
 ## 22. Design Acceptance Index（设计验收索引）
@@ -1117,6 +1133,8 @@ frontend/src/lib/navigation/nav-groups.ts
 - **F-010 Phase 1 API/UI**：真实 QE asset/candidate/evaluation/batch API、中文演进实验室、
   HMM research navigation shell、动态 horizon、schema-aware asset view、主视图 degraded warning、
   固定证据区、独立详情页和可见终止错误；禁止 Paper v2、抽屉式列表、raw JSON 主视图和未实现 tab。
+- **F-010A Phase 1 自动评估 worker service**：显式 `--serve` 独立进程自动消费既有 durable queue；
+  canonical env、poll bounds、idle wait、signal shutdown、lease recovery 和 fail-loud exit 完整；不创建任务、不嵌入 FastAPI、不接入 Phase 3 scheduler。
 
 ## 23. Design Acceptance Matrix（设计验收矩阵）
 
@@ -1127,6 +1145,7 @@ frontend/src/lib/navigation/nav-groups.ts
 | F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,input_adapter,executor,models,errors}.py`；BUG-742/BUG-743 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`：共享 input bundle 单次加载、`candidate_concurrency=1..4` 有界并发、serialized heartbeat/fencing、worker-cycle batch recompute、每轮 lease reaper；既有 dev PostgreSQL 8-worker receipt | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；仍需 dev PostgreSQL 真实双候选并发、进程中断后 lease recovery 和 10 候选耗时 receipt，未标记 verified |
 | F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
 | F-010 | 本文 §14、§15；`backend/routers/hmm_evolution.py`、`backend/services/hmm_evolution/{runtime,asset_content_policy}.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/{app/hmm-evolution,components/hmm-evolution,components/hmm-research,lib/hmm-evolution,lib/hmm-research}`；BUG-744～BUG-748 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；`frontend/tests/hmm-evolution/hmm-evolution.spec.ts`：QE 权威节点、text-only bounded content + redaction、221+ 资产分页搜索、schema-aware 摘要、bounded polling/stale/degraded、daily_summary fail-loud、SVG 曲线、session idempotency | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；真实 API 页面截图、完整 Playwright、10-case、性能 benchmark 和首次 runtime activation 仍待补，未宣称 F-010 verified |
+| F-010A | 本文 §5.1、§13.5、§18～§21；`backend/services/hmm_evolution/worker_service.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/components/hmm-evolution/{EvolutionDashboard,BatchDetailView,EvaluationDetailView}.tsx` | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；覆盖 CLI parser/runtime/env、连续 drain、idle wait、poll bounds、SIGINT/SIGTERM、known/unknown failure propagation 和 nonzero exit contract | approved_by_user_implementation_complete_external_acceptance_pending | 源码和直接测试已完成；CI、首次 service activation、进程重启与真实 queue receipt 待回填 |
 
 ## 24. 设计结论
 
@@ -1142,6 +1161,7 @@ executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完�
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v1.8 | 2026-07-18 | 批准 Phase 1 自动评估 worker service：显式 `--serve` 独立消费 durable queue，固化 canonical env、poll bounds、信号收敛、fail-loud 退出和与 Phase 3 scheduler 的隔离；新增 F-010A |
 | v1.7 | 2026-07-18 | 回填 BUG-742～BUG-748 审计修复：有界并发共享输入、lease reaper、QE 权威节点、内容安全、全资产 schema-aware 浏览、UI fail-loud 状态机和 idempotency；F-008/F-010 标记为源码完成但外部验收待补，不提前宣称 Phase 1 完成 |
 | v1.6 | 2026-07-18 | 回填 P1-C API/UI/worker 实现路径、本地 contract/TypeScript/Next build 证据和仍待完成的真实 UI/10-case/性能外部验收；将 F-006/F-008 测试证据改为 feature validator 可核验命令 |
 | v1.5 | 2026-07-18 | 固化用户确认的三页签最终信息架构和风险热力图默认首页；Phase 1 只激活真实演进页；以固定证据区/独立详情页替代抽屉和 raw JSON；补 UI 状态机、失败语义、legacy guard、可访问性和四项 DESIGN-COMPLIANCE-001 审核 |
