@@ -20,6 +20,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from backend.services.advisory_phase0a.policy import POLICY_REGISTRY_ROOT, canonical_json_text
+from backend.services.advisory_phase1.source_capacity import Phase1ECapacityPolicyV1
 from backend.services.advisory_dev_input_onboarding.contracts import (
     AdvisoryImmutableArtifactRef,
     EvidenceKind,
@@ -141,6 +142,7 @@ def _parser() -> argparse.ArgumentParser:
 
     observe_source = subparsers.add_parser("observe-source", help="append exact DEV source facts for O4 Program scopes")
     observe_source.add_argument("--historical-request-ref", required=True, type=Path)
+    observe_source.add_argument("--capacity-policy", required=True, type=Path)
     observe_source.add_argument("--env-file", required=True, type=Path)
     observe_source.add_argument("--evidence-root", required=True, type=Path)
     observe_source.add_argument("--artifact-root", required=True, type=Path)
@@ -439,6 +441,7 @@ def _o4_service() -> AdvisoryPhase1EOrchestrationService:
 def _observe_source(args: argparse.Namespace) -> int:
     result = _o4_service().observe_source(
         historical_request_ref=_read_o4_ref(args.historical_request_ref),
+        capacity_policy=Phase1ECapacityPolicyV1.model_validate(_read_json(args.capacity_policy)),
         env_file=args.env_file,
         evidence_root=args.evidence_root,
         artifact_root=args.artifact_root,

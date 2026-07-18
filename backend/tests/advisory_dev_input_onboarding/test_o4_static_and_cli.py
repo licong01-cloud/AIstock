@@ -8,8 +8,13 @@ import pytest
 
 from backend.services.advisory_dev_input_onboarding.contracts import (
     AdvisoryImmutableArtifactRef,
+    O4ArtifactKind,
     O4_ARTIFACT_STORE_POLICY_HASH,
 )
+from backend.services.advisory_dev_input_onboarding.phase1e_inputs import Phase1EInputArtifactStore
+from backend.services.advisory_dev_input_onboarding.phase1e_orchestration import AdvisoryPhase1EOrchestrationService
+from backend.services.advisory_phase1.source_capacity import Phase1ECapacityPolicyV1
+from backend.services.advisory_phase1.source_observer import registered_source_observer_configs
 from scripts import advisory_real_dev_onboarding as authoritative_cli
 
 
@@ -122,7 +127,15 @@ def test_authoritative_cli_exposes_all_four_o4_commands_and_compat_has_no_target
 @pytest.mark.parametrize(
     ("command", "extra_args", "expected_code"),
     (
-        ("observe-source", ("--historical-request-ref", "{ref}", "--evidence-root", "{root}"), 0),
+        (
+            "observe-source",
+            (
+                "--historical-request-ref", "{ref}",
+                "--capacity-policy", "{policy}",
+                "--evidence-root", "{root}",
+            ),
+            0,
+        ),
         (
             "build-phase1e-inputs",
             (
@@ -157,6 +170,27 @@ def test_authoritative_cli_dispatches_each_o4_command(
     ref_path.write_text(ref.model_dump_json(), encoding="utf-8")
     env_file = tmp_path / ".env"
     env_file.write_text("TDX_DB_DEV_HOST=unused\n", encoding="utf-8")
+    capacity_policy = Phase1ECapacityPolicyV1(
+        policy_id="phase1e_capacity_dev",
+        policy_version="1",
+        retained_snapshot_count=3,
+        concurrent_build_count=1,
+        staging_copy_count=1,
+        parquet_target_file_bytes=128 * 1024 * 1024,
+        memory_budget_bytes=8 * 1024 * 1024 * 1024,
+        worker_memory_overheads={
+            "arrow_builder_bytes": 256 * 1024 * 1024,
+            "hash_buffer_bytes": 128 * 1024 * 1024,
+            "verifier_bytes": 256 * 1024 * 1024,
+        },
+        orphan_reserve_bytes=1024 * 1024 * 1024,
+        manifest_overhead_bytes_per_snapshot=1024 * 1024,
+        parquet_measurement_snapshot_limit=5,
+        parquet_measurement_file_limit=500,
+    )
+    policy_path = tmp_path / "capacity-policy.json"
+    policy_path.write_text(capacity_policy.model_dump_json(), encoding="utf-8")
+    calls: dict[str, dict[str, object]] = {}
 
     class FakeService:
         class ResultModel:
@@ -169,6 +203,7 @@ def test_authoritative_cli_dispatches_each_o4_command(
                 return {self._field_name: self._value}
 
         def observe_source(self, **kwargs):
+            calls["observe-source"] = kwargs
             return {"ok": True, "aggregate_status": "COMPLETE", "program_results": []}
 
         def build_phase1e_inputs(self, **kwargs):
@@ -184,11 +219,51 @@ def test_authoritative_cli_dispatches_each_o4_command(
     values = {
         "{ref}": str(ref_path),
         "{root}": str(tmp_path),
+        "{policy}": str(policy_path),
     }
     argv = [command]
     argv.extend(values.get(item, item) for item in extra_args)
     argv.extend(("--env-file", str(env_file), "--artifact-root", str(tmp_path)))
     assert authoritative_cli.main(argv) == expected_code
+    if command == "observe-source":
+        observed_policy = calls[command]["capacity_policy"]
+        assert isinstance(observed_policy, Phase1ECapacityPolicyV1)
+        assert observed_policy.policy_hash == capacity_policy.policy_hash
+
+
+def test_common_artifacts_publish_exact_typed_capacity_policy(tmp_path: Path) -> None:
+    policy = Phase1ECapacityPolicyV1(
+        policy_id="phase1e_capacity_dev",
+        policy_version="1",
+        retained_snapshot_count=3,
+        concurrent_build_count=1,
+        staging_copy_count=1,
+        parquet_target_file_bytes=128 * 1024 * 1024,
+        memory_budget_bytes=8 * 1024 * 1024 * 1024,
+        worker_memory_overheads={
+            "arrow_builder_bytes": 256 * 1024 * 1024,
+            "hash_buffer_bytes": 128 * 1024 * 1024,
+            "verifier_bytes": 256 * 1024 * 1024,
+        },
+        orphan_reserve_bytes=1024 * 1024 * 1024,
+        manifest_overhead_bytes_per_snapshot=1024 * 1024,
+        parquet_measurement_snapshot_limit=5,
+        parquet_measurement_file_limit=500,
+    )
+    config = registered_source_observer_configs()[("phase1e_advisory_inputs_dev_v2", "v2")]
+    store = Phase1EInputArtifactStore(root=tmp_path / "artifacts")
+    refs = AdvisoryPhase1EOrchestrationService(repository_root=ROOT)._publish_common_artifacts(
+        store=store,
+        config=config,
+        store_backend_root=tmp_path / "dataset-store",
+        policy=None,
+        capacity_policy=policy,
+    )
+
+    ref = refs["capacity_policy_ref"]
+    assert ref.artifact_kind == O4ArtifactKind.CAPACITY_POLICY.value
+    assert ref.semantic_hash == policy.policy_hash
+    assert store.load(ref=ref, model_type=Phase1ECapacityPolicyV1) == policy
 
 
 def test_strategy_package_projection_has_no_io_or_secondary_validation_calls() -> None:

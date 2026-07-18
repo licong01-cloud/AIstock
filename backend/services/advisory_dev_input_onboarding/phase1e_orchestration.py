@@ -173,6 +173,7 @@ class AdvisoryPhase1EOrchestrationService:
         self,
         *,
         historical_request_ref: AdvisoryImmutableArtifactRef,
+        capacity_policy: Phase1ECapacityPolicyV1,
         env_file: Path,
         evidence_root: Path,
         artifact_root: Path,
@@ -193,6 +194,7 @@ class AdvisoryPhase1EOrchestrationService:
             config=config,
             store_backend_root=self._dataset_store_root(env_file=env_file, explicit_root=None),
             policy=None,
+            capacity_policy=capacity_policy,
         )
         mapping = compiled_o4_source_mapping_registry()
         mapping_ref = store.publish(
@@ -306,6 +308,7 @@ class AdvisoryPhase1EOrchestrationService:
             "command": "observe-source",
             "target_database_identity_hash": request.target_database_identity_hash,
             "source_mapping_registry_ref": mapping_ref,
+            "capacity_policy_ref": common["capacity_policy_ref"],
             "observer_summary": summary.as_dict(),
             "program_results": program_results,
             "aggregate_status": aggregate_status,
@@ -1018,6 +1021,7 @@ class AdvisoryPhase1EOrchestrationService:
         config: SourceObserverConfigBundle,
         store_backend_root: Path,
         policy: Phase0APolicyRegistry | None,
+        capacity_policy: Phase1ECapacityPolicyV1 | None = None,
     ) -> dict[str, AdvisoryImmutableArtifactRef]:
         query = SourceQueryRegistryArtifact(payload=config.query_registry_payload(SOURCE_QUERY_TEMPLATES))
         observer = ObserverConfigArtifact(payload=config.canonical_payload(SOURCE_QUERY_TEMPLATES))
@@ -1049,8 +1053,18 @@ class AdvisoryPhase1EOrchestrationService:
             if phase0.content_hash != policy.registry_content_hash:
                 raise ValueError("Phase0A policy typed artifact hash differs from the frozen registry")
             models["phase0a_policy_registry_ref"] = (O4ArtifactKind.PHASE0A_POLICY_REGISTRY, phase0)
+        if capacity_policy is not None:
+            models["capacity_policy_ref"] = (O4ArtifactKind.CAPACITY_POLICY, capacity_policy)
         return {
-            name: store.publish(artifact_kind=kind, model=model, semantic_hash=str(model.content_hash))
+            name: store.publish(
+                artifact_kind=kind,
+                model=model,
+                semantic_hash=str(
+                    capacity_policy.policy_hash
+                    if kind is O4ArtifactKind.CAPACITY_POLICY
+                    else model.content_hash
+                ),
+            )
             for name, (kind, model) in models.items()
         }
 
