@@ -16,7 +16,8 @@
     "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
     "scripts/backfill_multi_alpha_durable_tasks.py",
     "tests/aistock_validation/bugs/20260718_BUG-767-durable-multi-alpha-orchestration-violates-lease-claim-backfill-and-iden.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-767",
@@ -40,6 +41,12 @@
       "actor": "codex",
       "note": "BUG-767 repairs the same unmerged P0-1A foundation branch, so PR scope includes its already-approved migration, backfill entrypoint, tests, design, and project-memory files; no unrelated runtime scope was added.",
       "timestamp": "2026-07-18T20:38:48.5136308Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "PR CI found the new multi-alpha migration, tests, and backfill entrypoint absent from the existing qe_multi_alpha_services ownership rule; the catalog-only correction maps them to the existing qe.auto_evolution validation plan and adds no runtime behavior.",
+      "timestamp": "2026-07-18T20:48:27.3752587Z"
     }
   ],
   "evidence_uris": [
