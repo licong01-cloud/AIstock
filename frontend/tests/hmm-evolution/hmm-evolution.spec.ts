@@ -117,6 +117,17 @@ async function installOverviewApi(page: Page) {
   }));
 }
 
+test("HMM 演进实验室默认出现在左侧导航且不依赖环境开关", async ({ page }) => {
+  await page.goto(`${BASE_URL}/quantevolver`);
+  const groupTitle = page.locator(".sidebar-group-title").filter({ hasText: "HMM 研究工作台" });
+  await expect(groupTitle).toBeVisible();
+  await groupTitle.click();
+  await expect(page.getByRole("link", { name: "🧭 演进实验室" })).toHaveAttribute(
+    "href",
+    "/hmm-evolution",
+  );
+});
+
 test("演进实验室遵循确认视觉和真实业务字段，不出现死 tab 或 raw JSON", async ({ page }) => {
   await installOverviewApi(page);
   await page.goto(`${BASE_URL}/hmm-evolution`);
