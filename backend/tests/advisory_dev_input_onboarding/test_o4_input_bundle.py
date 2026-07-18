@@ -6,14 +6,26 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     AdvisoryImmutableArtifactRef,
     AdvisorySourceMappingRegistry,
     AdvisorySourceObservationScopeRequest,
+    AdvisorySourceResolutionArtifact,
     AdvisorySourceRequirementRegistry,
+    ArtifactStorePolicyArtifact,
     AggregateInputReadiness,
     AlphaMode,
     ExpectedLogicalInput,
     HistoricalProgramStatus,
+    CalendarIdentityArtifact,
+    ObserverConfigArtifact,
     O4ArtifactKind,
     O4_ARTIFACT_STORE_POLICY_HASH,
+    O4_ARTIFACT_STORE_POLICY_PAYLOAD,
     PartitionGranularity,
+    PartitionPolicyArtifact,
+    Phase0APolicyRegistryArtifact,
+    Phase1ECompileAggregateStatus,
+    Phase1ECompileProgramResult,
+    Phase1ECompileProgramStatus,
+    Phase1ECompileReceipt,
+    Phase1EProgramCompilerDependency,
     Phase1EProgramDateInput,
     Phase1EProgramInputUnit,
     Phase1ERealInputBuildRequest,
@@ -24,10 +36,23 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     ProgramSourceReadiness,
     ProgramSourceRequirementSet,
     SourceBindParameter,
+    SourceQueryRegistryArtifact,
     SourceMappingEntry,
     SourcePartitionRequirement,
     SourcePhysicalRequirementMapping,
+    StoreBackendPolicyArtifact,
 )
+from backend.services.advisory_phase0a.handoff import audit_request_identity_payload
+from backend.services.advisory_phase0a.models import (
+    AuditDateRange,
+    AuditReceipt,
+    AuditRequest,
+    AuditTarget,
+    ExpectedAlphaMode,
+    HandoffReadiness,
+    HandoffReadinessReport,
+)
+from backend.services.advisory_phase0a.policy import canonical_json_sha256
 from backend.services.advisory_dev_input_onboarding.phase1e_inputs import Phase1EInputArtifactStore
 from backend.services.advisory_phase1.readiness_plan import (
     Phase1EProgramDateRequest,
@@ -41,6 +66,18 @@ from backend.services.advisory_phase1.source_capacity import (
     build_capacity_receipt_v2,
     build_capacity_request_v2,
 )
+from backend.services.advisory_phase1.source_ledger import (
+    InMemorySourceAvailabilityLedger,
+    SourceAvailabilityEventRequest,
+    SourceAvailabilityEventType,
+)
+from backend.services.advisory_phase1.source_resolution import (
+    FixtureSourceRevisionResolver,
+    SourceRequirement,
+    SourceRequirementSet,
+    build_source_requirement_common_pit_identity_hash,
+)
+from backend.services.advisory_phase1.source_revision import AvailabilityRequirement, SourceRevisionKind
 from backend.services.strategy_package.advisory_input_projection import project_advisory_inputs
 from backend.services.strategy_package.models import (
     Alpha158SchemaAsset,
@@ -150,8 +187,25 @@ def _policy() -> Phase1ECapacityPolicyV1:
     )
 
 
-def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_path) -> None:
+def test_all_twenty_five_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_path) -> None:
     store = Phase1EInputArtifactStore(root=tmp_path)
+
+    typed_artifacts = (
+        (O4ArtifactKind.PHASE0A_POLICY_REGISTRY, Phase0APolicyRegistryArtifact(payload={"policy": "phase0a-v1"})),
+        (O4ArtifactKind.SOURCE_QUERY_REGISTRY, SourceQueryRegistryArtifact(payload={"queries": ["market_history"]})),
+        (O4ArtifactKind.OBSERVER_CONFIG, ObserverConfigArtifact(payload={"config_id": "observer-dev-v1"})),
+        (O4ArtifactKind.CALENDAR_IDENTITY, CalendarIdentityArtifact(payload={"calendar": "sse-szse-v1"})),
+        (O4ArtifactKind.PARTITION_POLICY, PartitionPolicyArtifact(payload={"partition": "trade-date-v1"})),
+        (O4ArtifactKind.STORE_BACKEND_POLICY, StoreBackendPolicyArtifact(payload={"store": "advisory-dev-v1"})),
+        (
+            O4ArtifactKind.ARTIFACT_STORE_POLICY,
+            ArtifactStorePolicyArtifact(payload=O4_ARTIFACT_STORE_POLICY_PAYLOAD),
+        ),
+    )
+    typed_refs = {
+        kind: store.publish(artifact_kind=kind, model=model, semantic_hash=str(model.content_hash))
+        for kind, model in typed_artifacts
+    }
 
     mapping = AdvisorySourceMappingRegistry(
         registry_id="o4_mapping",
@@ -170,6 +224,83 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         artifact_kind=O4ArtifactKind.SOURCE_MAPPING_REGISTRY,
         model=mapping,
         semantic_hash=str(mapping.registry_hash),
+    )
+
+    audit_target = AuditTarget(
+        audit_target_id="target_o4",
+        program_id="program_o4",
+        package_id="pkg_o4_closure",
+        manifest_sha256=SHA_A,
+        expected_alpha_mode=ExpectedAlphaMode.SINGLE_ALPHA,
+        decision_date_range=AuditDateRange(start_date=date(2026, 7, 18), end_date=date(2026, 7, 18)),
+        decision_dates=[date(2026, 7, 18)],
+        style_family="trend",
+        requested_capabilities=[
+            "candidate_authority",
+            "hmm_vintage",
+            "oos_classification",
+            "runtime_semantics",
+            "source_availability",
+        ],
+        audit_policy_version="phase0a-v1",
+    )
+    audit_request = AuditRequest(
+        audit_id="audit_o4",
+        policy_registry_id="phase0a-policy",
+        audit_policy_version="phase0a-v1",
+        policy_registry_content_hash=typed_refs[O4ArtifactKind.PHASE0A_POLICY_REGISTRY].semantic_hash,
+        targets=[audit_target],
+    )
+    audit_request_hash = canonical_json_sha256(audit_request_identity_payload(audit_request))
+    compiler_dependency = Phase1EProgramCompilerDependency(
+        program_id="program_o4",
+        decision_trade_date=date(2026, 7, 18),
+        package_id="pkg_o4_closure",
+        manifest_sha256=SHA_A,
+        alpha_mode=AlphaMode.SINGLE,
+        style_family="trend",
+        historical_program_run_id="run_o4",
+        historical_batch_receipt_ref=_external_ref("historical_batch_receipt", SHA_C),
+        historical_batch_receipt_hash=SHA_C,
+        phase0a_audit_request=audit_request,
+        phase0a_audit_receipt=AuditReceipt(
+            audit_id=audit_request.audit_id,
+            audit_policy_version=audit_request.audit_policy_version,
+            request_hash=audit_request_hash,
+            audit_manifest_hash=SHA_B,
+            result_hash=SHA_C,
+            results=[],
+        ),
+        handoff_readiness_report=HandoffReadinessReport(
+            audit_id=audit_request.audit_id,
+            audit_manifest_hash=SHA_B,
+            request_hash=audit_request_hash,
+            readiness=HandoffReadiness.READY,
+            handoff_readiness_hash=SHA_A,
+        ),
+        phase0a_policy_registry_ref=typed_refs[O4ArtifactKind.PHASE0A_POLICY_REGISTRY],
+        phase0a_policy_registry_hash=typed_refs[O4ArtifactKind.PHASE0A_POLICY_REGISTRY].semantic_hash,
+        source_query_registry_ref=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY],
+        source_query_registry_hash=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY].semantic_hash,
+        observer_config_ref=typed_refs[O4ArtifactKind.OBSERVER_CONFIG],
+        observer_config_hash=typed_refs[O4ArtifactKind.OBSERVER_CONFIG].semantic_hash,
+        calendar_identity_ref=typed_refs[O4ArtifactKind.CALENDAR_IDENTITY],
+        calendar_identity_hash=typed_refs[O4ArtifactKind.CALENDAR_IDENTITY].semantic_hash,
+        dataset_schema_fingerprint="schema-v1",
+        partition_policy_ref=typed_refs[O4ArtifactKind.PARTITION_POLICY],
+        partition_policy_hash=typed_refs[O4ArtifactKind.PARTITION_POLICY].semantic_hash,
+        store_backend_policy_ref=typed_refs[O4ArtifactKind.STORE_BACKEND_POLICY],
+        store_backend_policy_hash=typed_refs[O4ArtifactKind.STORE_BACKEND_POLICY].semantic_hash,
+        artifact_store_policy_ref=typed_refs[O4ArtifactKind.ARTIFACT_STORE_POLICY],
+        artifact_store_policy_hash=typed_refs[O4ArtifactKind.ARTIFACT_STORE_POLICY].semantic_hash,
+        compiler_version="phase1e-v1",
+        serializer_version="canonical-json-v1",
+        compiler_source_hash=SHA_A,
+    )
+    compiler_dependency_ref = store.publish(
+        artifact_kind=O4ArtifactKind.PROGRAM_COMPILER_DEPENDENCY,
+        model=compiler_dependency,
+        semantic_hash=str(compiler_dependency.dependency_hash),
     )
 
     build_request = Phase1ERealInputBuildRequest(
@@ -191,26 +322,14 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
                 historical_program_run_id="run_o4",
                 historical_batch_receipt_ref=_external_ref("historical_batch_receipt", SHA_C),
                 historical_batch_receipt_hash=SHA_C,
+                compiler_dependency_ref=compiler_dependency_ref,
+                compiler_dependency_hash=str(compiler_dependency.dependency_hash),
             ),
         ),
-        phase0a_policy_registry_ref=_external_ref("phase0a_policy_registry", SHA_A),
-        phase0a_policy_registry_hash=SHA_A,
         source_mapping_registry_ref=mapping_ref,
         source_mapping_registry_hash=str(mapping.registry_hash),
-        source_query_registry_ref=_external_ref("source_query_registry", SHA_B),
-        source_query_registry_hash=SHA_B,
-        calendar_registry_ref=_external_ref("calendar_registry", SHA_C),
-        calendar_registry_hash=SHA_C,
-        label_policy_bundle_ref=_external_ref("label_policy_bundle", SHA_A),
-        label_policy_bundle_hash=SHA_A,
-        partition_policy_ref=_external_ref("partition_policy", SHA_B),
-        partition_policy_hash=SHA_B,
-        store_backend_policy_ref=_external_ref("store_backend_policy", SHA_C),
-        store_backend_policy_hash=SHA_C,
         capacity_policy_ref=_external_ref(O4ArtifactKind.CAPACITY_POLICY.value, SHA_A),
         capacity_policy_hash=SHA_A,
-        phase1e_artifact_store_policy_ref=_external_ref("phase1e_artifact_store_policy", SHA_B),
-        phase1e_artifact_store_policy_hash=SHA_B,
         code_release_id="aa77463b",
         code_release_hash=SHA_C,
     )
@@ -242,8 +361,8 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         strategy_package_input_projection_hash=str(projection.projection_hash),
         source_mapping_registry_ref=mapping_ref,
         source_mapping_registry_hash=str(mapping.registry_hash),
-        source_query_registry_ref=_external_ref("source_query_registry", SHA_B),
-        source_query_registry_hash=SHA_B,
+        source_query_registry_ref=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY],
+        source_query_registry_hash=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY].semantic_hash,
         window_policy_ref=_external_ref("window_policy", SHA_C),
         window_policy_hash=SHA_C,
         decision_cutoff_ts=datetime(2026, 7, 18, 7, 0, tzinfo=timezone.utc),
@@ -294,13 +413,107 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
     requirement_registry = AdvisorySourceRequirementRegistry(
         build_request_hash=str(build_request.build_request_hash),
         source_mapping_registry_hash=str(mapping.registry_hash),
-        source_query_registry_hash=SHA_B,
+        source_query_registry_hash=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY].semantic_hash,
         program_requirement_sets=(requirement_set,),
     )
     requirement_registry_ref = store.publish(
         artifact_kind=O4ArtifactKind.SOURCE_REQUIREMENT_REGISTRY,
         model=requirement_registry,
         semantic_hash=str(requirement_registry.registry_hash),
+    )
+    cutoff = datetime(2026, 7, 18, 7, 0, tzinfo=timezone.utc)
+    common_pit_hash = build_source_requirement_common_pit_identity_hash(
+        admission_scope_id="scope-o4",
+        admission_scope_hash=SHA_A,
+        handoff_readiness_hash=SHA_B,
+        program_id="program_o4",
+        binding_version_id="binding_o4",
+        package_id="pkg_o4_closure",
+        manifest_sha256=SHA_A,
+        alpha_mode="single_alpha",
+        decision_as_of_trade_date=date(2026, 7, 18),
+        requested_source_cutoff=cutoff,
+        query_registry_hash=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY].semantic_hash,
+        calendar_hash=typed_refs[O4ArtifactKind.CALENDAR_IDENTITY].semantic_hash,
+        universe_policy_hash=SHA_C,
+        data_source="DB_HISTORICAL",
+        execution_origin="MANUAL_HISTORICAL_RESEARCH",
+        research_scope="HISTORICAL_RESEARCH_ONLY",
+        execution_prohibited=True,
+        research_only=True,
+    )
+    bound_parameters = {"trade_date": "2026-07-18"}
+    phase1_requirement = SourceRequirement(
+        consumer_scope_id="scope-o4:single:market_history",
+        source_role="market_history",
+        dataset_name="market.kline_daily_raw",
+        query_template_id="market_kline_daily_raw_window_v2",
+        query_template_version="2",
+        query_template_hash=SHA_A,
+        bound_parameters=bound_parameters,
+        bound_parameter_hash=canonical_json_sha256(bound_parameters),
+        partition_key=bound_parameters,
+        revision_kind=SourceRevisionKind.PARTITION_CONTENT_HASH,
+        availability_requirement=AvailabilityRequirement.DECISION_CUTOFF,
+        business_min_date=date(2026, 7, 18),
+        business_max_date=date(2026, 7, 18),
+        requested_cutoff=cutoff,
+        enforced_cutoff_predicate_hash=SHA_B,
+        common_pit_identity_hash=common_pit_hash,
+    )
+    phase1_requirement_set = SourceRequirementSet(
+        admission_scope_id="scope-o4",
+        admission_scope_hash=SHA_A,
+        handoff_readiness_hash=SHA_B,
+        program_id="program_o4",
+        binding_version_id="binding_o4",
+        package_id="pkg_o4_closure",
+        manifest_sha256=SHA_A,
+        alpha_mode="single_alpha",
+        decision_as_of_trade_date=date(2026, 7, 18),
+        requested_source_cutoff=cutoff,
+        label_as_of_ts=cutoff,
+        query_registry_hash=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY].semantic_hash,
+        calendar_hash=typed_refs[O4ArtifactKind.CALENDAR_IDENTITY].semantic_hash,
+        universe_policy_hash=SHA_C,
+        formal_oos_status="RETROSPECTIVE_RESEARCH_ONLY",
+        evidence_scope="RETROSPECTIVE_RESEARCH_ONLY",
+        requirements=(phase1_requirement,),
+    )
+    ledger = InMemorySourceAvailabilityLedger(
+        now_provider=lambda: datetime(2026, 7, 18, 6, 59, tzinfo=timezone.utc)
+    )
+    event = ledger.append(
+        SourceAvailabilityEventRequest(
+            dataset_name="market.kline_daily_raw",
+            source_role="market_history",
+            partition_key=bound_parameters,
+            revision_id="revision-o4",
+            event_revision_no=1,
+            event_type=SourceAvailabilityEventType.INGESTED,
+            schema_fingerprint="schema-v1",
+            row_count=100,
+            partition_content_hash=SHA_C,
+            quality_status="PASS",
+            created_by_service_principal="fixture-observer",
+        )
+    )
+    source_resolution = FixtureSourceRevisionResolver().resolve(
+        requirement_set=phase1_requirement_set,
+        availability_events=(event,),
+    )
+    source_resolution_receipt = AdvisorySourceResolutionArtifact(
+        program_id="program_o4",
+        decision_trade_date=date(2026, 7, 18),
+        physical_requirement_set_ref=requirement_set_ref,
+        physical_requirement_set_hash=str(requirement_set.requirement_set_hash),
+        phase1_requirement_set=phase1_requirement_set,
+        resolution_receipt=source_resolution.receipt,
+    )
+    source_resolution_receipt_ref = store.publish(
+        artifact_kind=O4ArtifactKind.SOURCE_RESOLUTION_RECEIPT,
+        model=source_resolution_receipt,
+        semantic_hash=str(source_resolution_receipt.artifact_hash),
     )
 
     policy = _policy()
@@ -318,9 +531,10 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         alpha_mode=AlphaMode.SINGLE,
         candidate_depth=5,
         input_universe_count=4200,
-        horizons=(5, 10, 20),
-        projection_count=3,
-        stage_projection_factor=2,
+        workload_scope="SOURCE_CAPTURE_ONLY",
+        horizons=(),
+        projection_count=0,
+        stage_projection_factor=0,
         source_requirement_set_hash=str(requirement_set.requirement_set_hash),
     )
     workload_ref = store.publish(
@@ -329,15 +543,15 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         semantic_hash=str(workload.program_workload_hash),
     )
     capacity_request = build_capacity_request_v2(
-        observer_config_ref=_external_ref("observer_config", SHA_A),
-        query_registry_ref=_external_ref("source_query_registry", SHA_B),
+        observer_config_ref=typed_refs[O4ArtifactKind.OBSERVER_CONFIG],
+        query_registry_ref=typed_refs[O4ArtifactKind.SOURCE_QUERY_REGISTRY],
         capacity_policy_ref=policy_ref,
         capacity_policy=policy,
         as_of_ts=datetime(2026, 7, 18, 8, 0, tzinfo=timezone.utc),
         history_start_trade_date=date(2026, 1, 1),
         history_end_trade_date=date(2026, 7, 18),
         program_workloads=(workload,),
-        store_root_ref=_external_ref("store_backend_policy", SHA_C),
+        store_root_ref=typed_refs[O4ArtifactKind.STORE_BACKEND_POLICY],
     )
     capacity_request_ref = store.publish(
         artifact_kind=O4ArtifactKind.CAPACITY_REQUEST,
@@ -409,18 +623,12 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         manifest_sha256=SHA_A,
         alpha_mode=AlphaMode.SINGLE,
         style_family="trend",
-        historical_program_run_ref=_external_ref("historical_program_run", SHA_A),
-        historical_program_run_hash=SHA_A,
-        phase0a_audit_ref=_external_ref("phase0a_audit", SHA_B),
-        phase0a_audit_hash=SHA_B,
-        handoff_readiness_ref=_external_ref("handoff_readiness", SHA_C),
-        handoff_readiness_hash=SHA_C,
-        handoff_bundle_ref=_external_ref("handoff_bundle", SHA_A),
-        handoff_bundle_hash=SHA_A,
+        compiler_dependency_ref=compiler_dependency_ref,
+        compiler_dependency_hash=str(compiler_dependency.dependency_hash),
         source_requirement_set_ref=requirement_set_ref,
         source_requirement_set_hash=str(requirement_set.requirement_set_hash),
-        source_resolution_receipt_ref=_external_ref("source_resolution_receipt", SHA_B),
-        source_resolution_receipt_hash=SHA_B,
+        source_resolution_receipt_ref=source_resolution_receipt_ref,
+        source_resolution_receipt_hash=str(source_resolution_receipt.artifact_hash),
         capacity_program_workload_ref=workload_ref,
         capacity_program_workload_hash=str(workload.program_workload_hash),
         capacity_coverage_ref=coverage_ref,
@@ -442,18 +650,20 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         program_dates=(program_date_request,),
         phase0a_policy_hash=SHA_A,
         source_requirement_registry_hash=str(requirement_registry.registry_hash),
-        query_registry_hash=SHA_B,
-        calendar_hash=SHA_C,
-        label_policy_bundle_hash=SHA_A,
+        query_registry_hash=compiler_dependency.source_query_registry_hash,
+        calendar_hash=compiler_dependency.calendar_identity_hash,
+        label_policy_bundle_hash=None,
         dataset_schema_fingerprint="schema-v1",
-        partition_policy_hash=SHA_B,
-        store_backend_config_hash=SHA_C,
-        capacity_request_ref=capacity_request_ref.relative_path,
-        capacity_receipt_ref=capacity_receipt_ref.relative_path,
+        partition_policy_hash=compiler_dependency.partition_policy_hash,
+        store_backend_config_hash=compiler_dependency.store_backend_policy_hash,
+        capacity_request_ref=capacity_request_ref.semantic_hash,
+        capacity_receipt_ref=capacity_receipt_ref.semantic_hash,
+        capacity_program_workload_hash=str(workload.program_workload_hash),
+        capacity_program_coverage_hash=str(coverage.coverage_hash),
         compiler_version="phase1e-v1",
         serializer_version="canonical-json-v1",
         compiler_source_hash=SHA_A,
-        artifact_store_policy_hash=O4_ARTIFACT_STORE_POLICY_HASH,
+        artifact_store_policy_hash=compiler_dependency.artifact_store_policy_hash,
     )
     batch_request_ref = store.publish(
         artifact_kind=O4ArtifactKind.PHASE1E_BATCH_REQUEST,
@@ -464,22 +674,8 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         build_request_ref=build_ref,
         build_request_hash=str(build_request.build_request_hash),
         target_database_identity_hash=SHA_C,
-        phase0a_policy_registry_ref=_external_ref("phase0a_policy_registry", SHA_A),
-        phase0a_policy_registry_hash=SHA_A,
-        source_query_registry_ref=_external_ref("source_query_registry", SHA_B),
-        source_query_registry_hash=SHA_B,
-        calendar_registry_ref=_external_ref("calendar_registry", SHA_C),
-        calendar_registry_hash=SHA_C,
-        label_policy_bundle_ref=_external_ref("label_policy_bundle", SHA_A),
-        label_policy_bundle_hash=SHA_A,
-        partition_policy_ref=_external_ref("partition_policy", SHA_B),
-        partition_policy_hash=SHA_B,
-        store_backend_policy_ref=_external_ref("store_backend_policy", SHA_C),
-        store_backend_policy_hash=SHA_C,
         capacity_policy_ref=policy_ref,
         capacity_policy_hash=str(policy.policy_hash),
-        phase1e_artifact_store_policy_ref=_external_ref("phase1e_artifact_store_policy", SHA_B),
-        phase1e_artifact_store_policy_hash=SHA_B,
         source_mapping_registry_ref=mapping_ref,
         source_mapping_registry_hash=str(mapping.registry_hash),
         source_requirement_registry_ref=requirement_registry_ref,
@@ -488,8 +684,6 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         capacity_request_hash=str(capacity_request.request_hash),
         capacity_receipt_ref=capacity_receipt_ref,
         capacity_receipt_hash=str(capacity_receipt.receipt_hash),
-        phase1e_revalidation_batch_request_ref=batch_request_ref,
-        phase1e_revalidation_batch_request_hash=str(batch_request.invocation_request_hash),
         program_inputs=(program_input,),
         counts_by_identity_readiness={"COMPLETE": 1},
         counts_by_source_readiness={"READY": 1},
@@ -502,6 +696,28 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         model=bundle,
         semantic_hash=str(bundle.input_bundle_hash),
     )
+    compile_receipt = Phase1ECompileReceipt(
+        input_bundle_ref=bundle_ref,
+        input_bundle_hash=str(bundle.input_bundle_hash),
+        program_results=(
+            Phase1ECompileProgramResult(
+                program_id="program_o4",
+                decision_trade_date=date(2026, 7, 18),
+                status=Phase1ECompileProgramStatus.COMPLETE,
+                phase1e_batch_request_ref=batch_request_ref,
+                phase1e_batch_request_hash=str(batch_request.invocation_request_hash),
+                plan_refs=(_external_ref("phase1e_plan", SHA_A),),
+                batch_receipt_ref=_external_ref("phase1e_plan_batch_receipt", SHA_B),
+                batch_receipt_hash=SHA_B,
+            ),
+        ),
+        aggregate_status=Phase1ECompileAggregateStatus.COMPLETE,
+    )
+    compile_receipt_ref = store.publish(
+        artifact_kind=O4ArtifactKind.PHASE1E_COMPILE_RECEIPT,
+        model=compile_receipt,
+        semantic_hash=str(compile_receipt.compile_receipt_hash),
+    )
 
     refs = {
         build_ref,
@@ -510,6 +726,7 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         observation_ref,
         requirement_registry_ref,
         requirement_set_ref,
+        source_resolution_receipt_ref,
         policy_ref,
         capacity_request_ref,
         workload_ref,
@@ -519,5 +736,8 @@ def test_all_fifteen_o4_artifact_kinds_publish_with_exact_program_hierarchy(tmp_
         bundle_ref,
         program_date_request_ref,
         batch_request_ref,
+        compiler_dependency_ref,
+        compile_receipt_ref,
+        *typed_refs.values(),
     }
     assert {ref.artifact_kind for ref in refs} == {kind.value for kind in O4ArtifactKind}

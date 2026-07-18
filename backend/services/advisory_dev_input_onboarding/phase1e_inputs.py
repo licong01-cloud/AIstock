@@ -95,6 +95,9 @@ class Phase1EInputArtifactStore:
 
 
 def _model_semantic_hash(*, model: BaseModel, artifact_kind: O4ArtifactKind) -> str:
+    declared_kind = getattr(model, "artifact_kind", None)
+    if declared_kind is not None and str(getattr(declared_kind, "value", declared_kind)) != artifact_kind.value:
+        raise ValueError("typed O4 payload kind differs from the publication kind")
     field_by_kind = {
         O4ArtifactKind.REAL_INPUT_BUILD_REQUEST: "build_request_hash",
         O4ArtifactKind.STRATEGY_PACKAGE_INPUT_PROJECTION: "projection_hash",
@@ -102,15 +105,25 @@ def _model_semantic_hash(*, model: BaseModel, artifact_kind: O4ArtifactKind) -> 
         O4ArtifactKind.SOURCE_OBSERVATION_SCOPE_REQUEST: "observation_scope_hash",
         O4ArtifactKind.SOURCE_REQUIREMENT_REGISTRY: "registry_hash",
         O4ArtifactKind.SOURCE_REQUIREMENT_SET: "requirement_set_hash",
+        O4ArtifactKind.SOURCE_RESOLUTION_RECEIPT: "artifact_hash",
         O4ArtifactKind.CAPACITY_POLICY: "policy_hash",
         O4ArtifactKind.CAPACITY_REQUEST: "request_hash",
         O4ArtifactKind.CAPACITY_PROGRAM_WORKLOAD: "program_workload_hash",
         O4ArtifactKind.CAPACITY_RECEIPT: "receipt_hash",
         O4ArtifactKind.CAPACITY_PROGRAM_COVERAGE: "coverage_hash",
+        O4ArtifactKind.PHASE0A_POLICY_REGISTRY: "content_hash",
+        O4ArtifactKind.SOURCE_QUERY_REGISTRY: "content_hash",
+        O4ArtifactKind.OBSERVER_CONFIG: "content_hash",
+        O4ArtifactKind.CALENDAR_IDENTITY: "content_hash",
+        O4ArtifactKind.PARTITION_POLICY: "content_hash",
+        O4ArtifactKind.STORE_BACKEND_POLICY: "content_hash",
+        O4ArtifactKind.ARTIFACT_STORE_POLICY: "content_hash",
+        O4ArtifactKind.PROGRAM_COMPILER_DEPENDENCY: "dependency_hash",
         O4ArtifactKind.PROGRAM_INPUT: "program_input_hash",
         O4ArtifactKind.INPUT_BUNDLE: "input_bundle_hash",
         O4ArtifactKind.PHASE1E_PROGRAM_DATE_REQUEST: "program_date_request_hash",
         O4ArtifactKind.PHASE1E_BATCH_REQUEST: "invocation_request_hash",
+        O4ArtifactKind.PHASE1E_COMPILE_RECEIPT: "compile_receipt_hash",
     }
     field_name = field_by_kind[artifact_kind]
     value = getattr(model, field_name, None)

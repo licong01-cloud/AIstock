@@ -17,7 +17,7 @@ from typing import Any, Iterable, Protocol, Sequence
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.advisory_phase0a.audit_service import AdvisoryPhase0AAuditService
-from backend.services.advisory_phase0a.handoff import Phase0AHandoffNormalizer
+from backend.services.advisory_phase0a.handoff import Phase0AHandoffNormalizer, audit_request_identity_payload
 from backend.services.advisory_phase0a.historical_research import (
     HISTORICAL_RESEARCH_DATA_SOURCE,
     HISTORICAL_RESEARCH_SCOPE,
@@ -51,6 +51,10 @@ from backend.services.advisory_phase1.source_capacity import (
     CapacityPlanningReceipt,
     CapacityPlanningRequest,
     CapacityStatus,
+    Phase1ECapacityPlanningReceiptV2,
+    Phase1ECapacityPlanningRequestV2,
+    Phase1ECapacityProgramCoverageV1,
+    Phase1EProgramCapacityWorkload,
 )
 from backend.services.advisory_phase1.source_ledger import SourceAvailabilityEvent
 from backend.services.advisory_phase1.source_resolution import (
@@ -292,12 +296,14 @@ class Phase1ERevalidationBatchRequest(BaseModel):
     source_requirement_registry_hash: str = Field(min_length=64, max_length=64)
     query_registry_hash: str = Field(min_length=64, max_length=64)
     calendar_hash: str = Field(min_length=64, max_length=64)
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    label_policy_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
     dataset_schema_fingerprint: str = Field(min_length=1, max_length=160)
     partition_policy_hash: str = Field(min_length=64, max_length=64)
     store_backend_config_hash: str = Field(min_length=64, max_length=64)
     capacity_request_ref: str = Field(min_length=1, max_length=400)
     capacity_receipt_ref: str = Field(min_length=1, max_length=400)
+    capacity_program_workload_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    capacity_program_coverage_hash: str | None = Field(default=None, min_length=64, max_length=64)
     compiler_version: str = Field(min_length=1, max_length=160)
     serializer_version: str = Field(min_length=1, max_length=160)
     compiler_source_hash: str = Field(min_length=64, max_length=64)
@@ -314,6 +320,8 @@ class Phase1ERevalidationBatchRequest(BaseModel):
         "store_backend_config_hash",
         "compiler_source_hash",
         "artifact_store_policy_hash",
+        "capacity_program_workload_hash",
+        "capacity_program_coverage_hash",
         "invocation_request_hash",
     )
     @classmethod
@@ -337,6 +345,8 @@ class Phase1ERevalidationBatchRequest(BaseModel):
             "store_backend_config_hash": self.store_backend_config_hash,
             "capacity_request_ref": self.capacity_request_ref,
             "capacity_receipt_ref": self.capacity_receipt_ref,
+            "capacity_program_workload_hash": self.capacity_program_workload_hash,
+            "capacity_program_coverage_hash": self.capacity_program_coverage_hash,
             "compiler_version": self.compiler_version,
             "serializer_version": self.serializer_version,
             "compiler_source_hash": self.compiler_source_hash,
@@ -1103,13 +1113,17 @@ class Phase1EReadinessPlanCompiler:
         self,
         *,
         source_requirement_compiler: RegistrySourceRequirementCompiler,
-        capacity_request: CapacityPlanningRequest,
-        capacity_receipt: CapacityPlanningReceipt,
+        capacity_request: CapacityPlanningRequest | Phase1ECapacityPlanningRequestV2,
+        capacity_receipt: CapacityPlanningReceipt | Phase1ECapacityPlanningReceiptV2,
+        capacity_program_coverage: Phase1ECapacityProgramCoverageV1 | None = None,
+        precomputed_audit_outcome: Phase1EAuditOutcome | None = None,
         artifact_store: Phase1EArtifactStore | None = None,
     ) -> None:
         self._source_requirement_compiler = source_requirement_compiler
         self._capacity_request = capacity_request
         self._capacity_receipt = capacity_receipt
+        self._capacity_program_coverage = capacity_program_coverage
+        self._precomputed_audit_outcome = precomputed_audit_outcome
         self._artifact_store = artifact_store
 
     def compile_batch(
@@ -1225,6 +1239,29 @@ class Phase1EReadinessPlanCompiler:
             )
         return plans, receipt
 
+    @classmethod
+    def prepare_program_audit(
+        cls,
+        *,
+        program_date: Phase1EProgramDateRequest,
+        evidence: Phase1EProgramDateEvidence,
+    ) -> tuple[str, Phase1EAuditOutcome, Any, tuple[HandoffAdmissionScope, ...]]:
+        """Build the exact audit/handoff closure used later by the compiler without capacity input."""
+
+        cls._validate_historical_input(program_date=program_date, evidence=evidence)
+        cls._validate_identity_assertions(program_date=program_date, evidence=evidence)
+        evidence_request_hash = cls._evidence_request_hash(program_date=program_date, evidence=evidence)
+        outcome = cls._run_audit(
+            program_date=program_date,
+            evidence=evidence,
+            evidence_request_hash=evidence_request_hash,
+        )
+        target = cls._audit_target(outcome.receipt, audit_target_id=f"p1e_target_{evidence_request_hash[:20]}")
+        if target is None:
+            raise Phase1EError(REASON_AUDIT_HANDOFF_MISMATCH, "audit did not return the deterministic target")
+        scopes = tuple(cls._matching_scopes(outcome.handoff_report, target.audit_target_id))
+        return evidence_request_hash, outcome, target, scopes
+
     def _validate_batch_dependencies(self, request: Phase1ERevalidationBatchRequest) -> None:
         if request.source_requirement_registry_hash != self._source_requirement_compiler.registry_hash:
             raise Phase1EError(REASON_SOURCE_RESOLUTION_CONFLICT, "source requirement registry hash does not match batch request")
@@ -1242,6 +1279,23 @@ class Phase1EReadinessPlanCompiler:
                 REASON_CAPACITY_REFERENCE_MISMATCH,
                 "batch capacity receipt reference does not match the loaded canonical receipt",
             )
+        if isinstance(self._capacity_request, Phase1ECapacityPlanningRequestV2):
+            if request.capacity_program_workload_hash is None or request.capacity_program_coverage_hash is None:
+                raise Phase1EError(
+                    REASON_CAPACITY_REFERENCE_MISMATCH,
+                    "capacity v2 batch request requires exact Program workload and coverage hashes",
+                )
+            coverage = self._capacity_program_coverage
+            if coverage is None or coverage.coverage_hash != request.capacity_program_coverage_hash:
+                raise Phase1EError(
+                    REASON_CAPACITY_REFERENCE_MISMATCH,
+                    "loaded Program capacity coverage does not match the batch request",
+                )
+            if coverage.program_workload_hash != request.capacity_program_workload_hash:
+                raise Phase1EError(
+                    REASON_CAPACITY_REFERENCE_MISMATCH,
+                    "Program capacity coverage does not bind the requested workload",
+                )
 
     def _compile_program_date(
         self,
@@ -1273,11 +1327,23 @@ class Phase1EReadinessPlanCompiler:
             raise Phase1EError(REASON_HISTORICAL_RECEIPT_CONFLICT, "immutable package/evidence/artifact readback is incomplete")
         self._validate_identity_assertions(program_date=program_date, evidence=evidence)
         evidence_request_hash = self._evidence_request_hash(program_date=program_date, evidence=evidence)
-        audit_outcome = self._run_audit(
+        audit_outcome = self._precomputed_audit_outcome or self._run_audit(
             program_date=program_date,
             evidence=evidence,
             evidence_request_hash=evidence_request_hash,
         )
+        if self._precomputed_audit_outcome is not None:
+            expected_request_hash = canonical_json_sha256(
+                audit_request_identity_payload(audit_outcome.request)
+            )
+            if (
+                audit_outcome.receipt.request_hash != expected_request_hash
+                or audit_outcome.handoff_report.request_hash != expected_request_hash
+            ):
+                raise Phase1EError(
+                    REASON_AUDIT_HANDOFF_MISMATCH,
+                    "precomputed audit/handoff closure does not bind its request",
+                )
         self._publish_audit(audit_outcome=audit_outcome, evidence_request_hash=evidence_request_hash)
         target = self._audit_target(audit_outcome.receipt, audit_target_id=f"p1e_target_{evidence_request_hash[:20]}")
         if target is None:
@@ -1524,8 +1590,9 @@ class Phase1EReadinessPlanCompiler:
             }
         )
 
+    @classmethod
     def _run_audit(
-        self,
+        cls,
         *,
         program_date: Phase1EProgramDateRequest,
         evidence: Phase1EProgramDateEvidence,
@@ -1537,7 +1604,7 @@ class Phase1EReadinessPlanCompiler:
         audit_id = f"p1e_audit_{evidence_request_hash[:20]}"
         audit_target_id = f"p1e_target_{evidence_request_hash[:20]}"
         alpha_mode = ExpectedAlphaMode(str(getattr(package.alpha_mode, "value", package.alpha_mode)))
-        style = self._resolved_style(evidence=evidence)
+        style = cls._resolved_style(evidence=evidence)
         request = AuditRequest(
             audit_id=audit_id,
             policy_registry_id=str(evidence.policy.policy_registry_id),
@@ -1557,6 +1624,13 @@ class Phase1EReadinessPlanCompiler:
                     decision_dates=[program_date.decision_trade_date],
                     selection_evidence_ids_by_decision_date={program_date.decision_trade_date: str(run.evidence_id)},
                     style_family=style,
+                    requested_capabilities=[
+                        "candidate_authority",
+                        "hmm_vintage",
+                        "oos_classification",
+                        "runtime_semantics",
+                        "source_availability",
+                    ],
                     audit_policy_version=evidence.policy.policy_version,
                 )
             ],
@@ -1732,6 +1806,7 @@ class Phase1EReadinessPlanCompiler:
             ) from exc
         workload = self._workload_projection(
             scope_plan_hash=scope_plan_hash,
+            program_id=program_date.program_id,
             binding=binding,
             scope=scope,
             decision_trade_date=program_date.decision_trade_date,
@@ -1740,6 +1815,8 @@ class Phase1EReadinessPlanCompiler:
             source_result=resolution,
         )
         coverage, coverage_reasons = self._capacity_coverage(workload=workload, style_family=binding.resolved_style_family)
+        capacity_status = self._program_capacity_status()
+        capacity_missing = self._program_capacity_missing()
         bounded_staging_capture_allowed = self._bounded_staging_capture_allowed(
             workload=workload,
             style_family=binding.resolved_style_family,
@@ -1774,9 +1851,9 @@ class Phase1EReadinessPlanCompiler:
         reasons = list(scope.blocking_reason_codes)
         reasons.extend(resolution.receipt.reason_codes)
         reasons.extend(coverage_reasons)
-        if self._capacity_receipt.status is CapacityStatus.PARTIAL:
+        if capacity_status is CapacityStatus.PARTIAL:
             reasons.append(REASON_CAPACITY_MEASUREMENT_PARTIAL)
-        elif self._capacity_receipt.status is CapacityStatus.INSUFFICIENT:
+        elif capacity_status is CapacityStatus.INSUFFICIENT:
             reasons.append(REASON_CAPACITY_INSUFFICIENT)
         return Phase1EExecutionPlan(
             evidence_request_hash=evidence_request_hash,
@@ -1796,7 +1873,7 @@ class Phase1EReadinessPlanCompiler:
             evidence_binding=binding,
             handoff_readiness=scope.readiness,
             source_readiness=resolution.receipt.readiness,
-            capacity_status=self._capacity_receipt.status,
+            capacity_status=capacity_status,
             reason_codes=_sorted_strings(reasons),
             missing_evidence=tuple(
                 {"reason_code": reason}
@@ -1806,15 +1883,21 @@ class Phase1EReadinessPlanCompiler:
             ),
             planned_operations=operations,
             workload_projection=workload,
-            resource_budget_by_role=self._resource_budget_by_role(),
+            resource_budget_by_role=self._resource_budget_by_role(
+                program_workload_hash=(
+                    str(self._capacity_program_coverage.program_workload_hash)
+                    if self._capacity_program_coverage is not None
+                    else None
+                )
+            ),
             memory_budget=self._capacity_receipt.memory_budget_summary,
             temporary_store_budget=self._capacity_receipt.staging_store_summary,
             durable_store_budget=self._capacity_receipt.durable_store_summary,
-            missing_capacity_measurements=self._capacity_receipt.missing_measurements,
+            missing_capacity_measurements=capacity_missing,
             capacity_request_hash=self._capacity_request.request_hash,
             capacity_receipt_hash=self._capacity_receipt.receipt_hash,
             capacity_workload_covered=coverage,
-            resource_values_frozen=self._capacity_receipt.status is CapacityStatus.MEASURED and coverage,
+            resource_values_frozen=capacity_status is CapacityStatus.MEASURED and coverage,
         )
 
     def _blocked_admission_plan(
@@ -1853,12 +1936,13 @@ class Phase1EReadinessPlanCompiler:
             evidence_binding=binding,
             handoff_readiness=scope.readiness,
             source_readiness=None,
-            capacity_status=self._capacity_receipt.status,
+            capacity_status=self._program_capacity_status(),
             reason_codes=_sorted_strings(scope.blocking_reason_codes),
             missing_evidence=tuple({"reason_code": code} for code in scope.blocking_reason_codes),
             planned_operations=operations,
             workload_projection=self._zero_workload(
                 scope_plan_hash=scope_plan_hash,
+                program_id=program_date.program_id,
                 style_family=binding.resolved_style_family,
                 decision_trade_date=program_date.decision_trade_date,
             ),
@@ -1866,7 +1950,7 @@ class Phase1EReadinessPlanCompiler:
             memory_budget=self._capacity_receipt.memory_budget_summary,
             temporary_store_budget=self._capacity_receipt.staging_store_summary,
             durable_store_budget=self._capacity_receipt.durable_store_summary,
-            missing_capacity_measurements=self._capacity_receipt.missing_measurements,
+            missing_capacity_measurements=self._program_capacity_missing(),
             capacity_request_hash=self._capacity_request.request_hash,
             capacity_receipt_hash=self._capacity_receipt.receipt_hash,
             capacity_workload_covered=False,
@@ -1926,12 +2010,13 @@ class Phase1EReadinessPlanCompiler:
             evidence_binding=binding,
             handoff_readiness=scope.readiness,
             source_readiness=ResearchReadiness.BLOCKED,
-            capacity_status=self._capacity_receipt.status,
+            capacity_status=self._program_capacity_status(),
             reason_codes=(REASON_SOURCE_RESOLUTION_BLOCKED, REASON_REQUEST_TEMPLATE_INCOMPLETE),
             missing_evidence=tuple({"slot": value} for value in missing),
             planned_operations=operations,
             workload_projection=self._zero_workload(
                 scope_plan_hash=scope_plan_hash,
+                program_id=program_date.program_id,
                 style_family=binding.resolved_style_family,
                 decision_trade_date=program_date.decision_trade_date,
             ),
@@ -1939,15 +2024,16 @@ class Phase1EReadinessPlanCompiler:
             memory_budget=self._capacity_receipt.memory_budget_summary,
             temporary_store_budget=self._capacity_receipt.staging_store_summary,
             durable_store_budget=self._capacity_receipt.durable_store_summary,
-            missing_capacity_measurements=self._capacity_receipt.missing_measurements,
+            missing_capacity_measurements=self._program_capacity_missing(),
             capacity_request_hash=self._capacity_request.request_hash,
             capacity_receipt_hash=self._capacity_receipt.receipt_hash,
             capacity_workload_covered=False,
             resource_values_frozen=False,
         )
 
+    @classmethod
     def _evidence_binding(
-        self,
+        cls,
         *,
         program_date: Phase1EProgramDateRequest,
         evidence: Phase1EProgramDateEvidence,
@@ -1963,7 +2049,7 @@ class Phase1EReadinessPlanCompiler:
         selection_evidence = evidence.selection_evidence
         artifact = evidence.selection_artifact
         assert all(value is not None for value in (batch, receipt, run, binding, package, selection_evidence, artifact))
-        style = self._resolved_style(evidence=evidence)
+        style = cls._resolved_style(evidence=evidence)
         alpha_mode = str(getattr(package.alpha_mode, "value", package.alpha_mode))
         manifest_components = getattr(getattr(package, "manifest", None), "alpha_components", ()) or ()
         alpha_component_ids = tuple(
@@ -2073,38 +2159,56 @@ class Phase1EReadinessPlanCompiler:
         candidate_depth: int,
         requirements: SourceRequirementSet,
         source_result: SourceResolutionResult,
+        program_id: str | None = None,
     ) -> Phase1EWorkloadProjection:
         request = self._capacity_request
-        horizons = tuple(sorted(set(request.horizons)))
+        program_workload = self._program_capacity_workload(
+            program_id=program_id,
+            decision_trade_date=decision_trade_date,
+        )
+        if program_workload is None:
+            horizons = tuple(sorted(set(request.horizons)))
+            projection_count = request.projection_count
+            stage_projection_factor = request.stage_projection_factor
+            universe_p50 = request.universe_size_p50
+            universe_p95 = request.universe_size_p95
+            universe_max = request.universe_size_max
+        else:
+            horizons = program_workload.horizons
+            projection_count = program_workload.projection_count
+            stage_projection_factor = program_workload.stage_projection_factor
+            universe_p50 = program_workload.input_universe_count
+            universe_p95 = program_workload.input_universe_count
+            universe_max = program_workload.input_universe_count
         source_roles: dict[str, int] = {}
         for requirement in requirements.requirements:
             source_roles[requirement.source_role] = source_roles.get(requirement.source_role, 0) + 1
         base = max(candidate_depth, 0)
         signal = base
-        stage = signal * request.stage_projection_factor
-        labels = signal * len(horizons) * request.projection_count
+        stage = signal * stage_projection_factor
+        labels = signal * len(horizons) * projection_count
         def rows(universe: int) -> dict[str, int]:
             return {
                 "canonical_signals": signal,
                 "stage_candidates": stage,
                 "outcome_labels": labels,
-                "universe_outcomes": universe * len(horizons) * request.projection_count,
+                "universe_outcomes": universe * len(horizons) * projection_count,
                 "source_revisions": len(source_result.source_revision_set.members) if source_result.source_revision_set is not None else 0,
             }
-        rows_p50 = rows(request.universe_size_p50)
-        rows_p95 = rows(request.universe_size_p95)
-        rows_max = rows(request.universe_size_max)
+        rows_p50 = rows(universe_p50)
+        rows_p95 = rows(universe_p95)
+        rows_max = rows(universe_max)
         return Phase1EWorkloadProjection(
             scope_plan_request_hash=scope_plan_hash,
             style_family=binding.resolved_style_family,
             decision_trade_date=decision_trade_date,
             candidate_depth=base,
             horizons=horizons,
-            projection_count=request.projection_count,
-            stage_projection_factor=request.stage_projection_factor,
-            universe_size_p50=request.universe_size_p50,
-            universe_size_p95=request.universe_size_p95,
-            universe_size_max=request.universe_size_max,
+            projection_count=projection_count,
+            stage_projection_factor=stage_projection_factor,
+            universe_size_p50=universe_p50,
+            universe_size_p95=universe_p95,
+            universe_size_max=universe_max,
             source_role_counts=source_roles,
             role_rows_p50=rows_p50,
             role_rows_p95=rows_p95,
@@ -2121,19 +2225,33 @@ class Phase1EReadinessPlanCompiler:
         self,
         *,
         scope_plan_hash: str,
+        program_id: str,
         style_family: str,
         decision_trade_date: date,
     ) -> Phase1EWorkloadProjection:
         request = self._capacity_request
+        program_workload = self._program_capacity_workload(
+            program_id=program_id,
+            decision_trade_date=decision_trade_date,
+        )
+        horizons = (
+            program_workload.horizons
+            if program_workload is not None
+            else tuple(sorted(set(request.horizons)))
+        )
+        projection_count = program_workload.projection_count if program_workload is not None else request.projection_count
+        stage_projection_factor = (
+            program_workload.stage_projection_factor if program_workload is not None else request.stage_projection_factor
+        )
         zero = {role: 0 for role in CAPACITY_LOGICAL_ROLES}
         return Phase1EWorkloadProjection(
             scope_plan_request_hash=scope_plan_hash,
             style_family=style_family,
             decision_trade_date=decision_trade_date,
             candidate_depth=0,
-            horizons=tuple(sorted(set(request.horizons))),
-            projection_count=request.projection_count,
-            stage_projection_factor=request.stage_projection_factor,
+            horizons=horizons,
+            projection_count=projection_count,
+            stage_projection_factor=stage_projection_factor,
             universe_size_p50=0,
             universe_size_p95=0,
             universe_size_max=0,
@@ -2147,6 +2265,41 @@ class Phase1EReadinessPlanCompiler:
             role_parquet_bytes_p95=self._project_role_bytes(zero, measurement_key="parquet_bytes_per_row_p95"),
             role_parquet_bytes_max=self._project_role_bytes(zero, measurement_key="parquet_bytes_per_row_p95"),
         )
+
+    def _program_capacity_workload(
+        self,
+        *,
+        program_id: str | None,
+        decision_trade_date: date,
+    ) -> Phase1EProgramCapacityWorkload | None:
+        request = self._capacity_request
+        if not isinstance(request, Phase1ECapacityPlanningRequestV2):
+            return None
+        matches = [
+            item
+            for item in request.program_workloads
+            if item.decision_trade_date == decision_trade_date and (program_id is None or item.program_id == program_id)
+        ]
+        if len(matches) != 1:
+            raise Phase1EError(
+                REASON_CAPACITY_WORKLOAD_NOT_COVERED,
+                "capacity v2 request must contain one exact workload for the Program/date",
+                context={
+                    "program_id": program_id,
+                    "decision_trade_date": decision_trade_date.isoformat(),
+                    "match_count": len(matches),
+                },
+            )
+        workload = matches[0]
+        if (
+            self._capacity_program_coverage is not None
+            and self._capacity_program_coverage.program_workload_hash != workload.program_workload_hash
+        ):
+            raise Phase1EError(
+                REASON_CAPACITY_REFERENCE_MISMATCH,
+                "capacity coverage binds a different Program workload",
+            )
+        return workload
 
     def _project_role_bytes(self, role_rows: dict[str, int], *, measurement_key: str) -> dict[str, int | None]:
         summary = self._capacity_receipt.parquet_measurement_summary
@@ -2179,6 +2332,30 @@ class Phase1EReadinessPlanCompiler:
             reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
         if not (request.history_start_trade_date <= workload.decision_trade_date <= request.history_end_trade_date):
             reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+        if isinstance(request, Phase1ECapacityPlanningRequestV2):
+            exact = self._program_capacity_workload(
+                program_id=str(self._capacity_program_coverage.program_id) if self._capacity_program_coverage else None,
+                decision_trade_date=workload.decision_trade_date,
+            )
+            coverage = self._capacity_program_coverage
+            if exact is None or coverage is None:
+                reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+            else:
+                if (
+                    exact.program_workload_hash != coverage.program_workload_hash
+                    or exact.candidate_depth != workload.candidate_depth
+                    or exact.horizons != workload.horizons
+                    or exact.projection_count != workload.projection_count
+                    or exact.stage_projection_factor != workload.stage_projection_factor
+                    or exact.input_universe_count != workload.universe_size_max
+                ):
+                    reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+                if (
+                    coverage.capacity_request_hash != request.request_hash
+                    or coverage.capacity_receipt_hash != receipt.receipt_hash
+                ):
+                    reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+            return (not reasons, _sorted_strings(reasons))
         if request.program_count_by_style.get(style_family, 0) < workload.program_count:
             reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
         if request.candidate_depth_by_program.get(style_family, 0) < workload.candidate_depth:
@@ -2205,6 +2382,24 @@ class Phase1EReadinessPlanCompiler:
                 break
         return (not reasons, _sorted_strings(reasons))
 
+    def _program_capacity_status(self) -> CapacityStatus:
+        coverage = self._capacity_program_coverage
+        if isinstance(self._capacity_receipt, Phase1ECapacityPlanningReceiptV2):
+            if coverage is None:
+                return CapacityStatus.PARTIAL
+            if coverage.status.value == "MEASURED":
+                return CapacityStatus.MEASURED
+            if coverage.status.value == "INSUFFICIENT":
+                return CapacityStatus.INSUFFICIENT
+            return CapacityStatus.PARTIAL
+        return self._capacity_receipt.status
+
+    def _program_capacity_missing(self) -> tuple[str, ...]:
+        coverage = self._capacity_program_coverage
+        if isinstance(self._capacity_receipt, Phase1ECapacityPlanningReceiptV2) and coverage is not None:
+            return coverage.missing_measurements
+        return self._capacity_receipt.missing_measurements
+
     def _capacity_coverage(self, *, workload: Phase1EWorkloadProjection, style_family: str) -> tuple[bool, tuple[str, ...]]:
         """Require fully measured role-row and byte dominance before calling capacity covered."""
 
@@ -2214,6 +2409,13 @@ class Phase1EReadinessPlanCompiler:
         )
         reasons = list(structural_reasons)
         receipt = self._capacity_receipt
+        if isinstance(receipt, Phase1ECapacityPlanningReceiptV2):
+            coverage = self._capacity_program_coverage
+            if coverage is None or coverage.status.value != "MEASURED":
+                reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+            elif coverage.program_workload_hash not in receipt.measured_program_workload_hashes:
+                reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
+            return (structurally_covered and not reasons, _sorted_strings(reasons))
         if receipt.status is not CapacityStatus.MEASURED:
             reasons.append(REASON_CAPACITY_WORKLOAD_NOT_COVERED)
         tiers = receipt.role_projection_summary.get("tiers") if isinstance(receipt.role_projection_summary, dict) else None
@@ -2248,6 +2450,13 @@ class Phase1EReadinessPlanCompiler:
             workload=workload,
             style_family=style_family,
         )
+        coverage = self._capacity_program_coverage
+        if isinstance(self._capacity_receipt, Phase1ECapacityPlanningReceiptV2):
+            if not structurally_covered or coverage is None or coverage.status.value != "PARTIAL":
+                return False
+            return bool(coverage.missing_measurements) and all(
+                self._is_staging_measurement_gap(value) for value in coverage.missing_measurements
+            )
         if not structurally_covered or self._capacity_receipt.status is not CapacityStatus.PARTIAL:
             return False
         return bool(self._capacity_receipt.missing_measurements) and all(
@@ -2738,8 +2947,13 @@ class Phase1EReadinessPlanCompiler:
         )
         return tuple(operations)
 
-    def _resource_budget_by_role(self) -> dict[str, Any]:
-        tiers = self._capacity_receipt.role_projection_summary.get("tiers", {})
+    def _resource_budget_by_role(self, *, program_workload_hash: str | None = None) -> dict[str, Any]:
+        summary = self._capacity_receipt.role_projection_summary
+        tiers = summary.get("tiers", {})
+        if program_workload_hash is not None and isinstance(summary.get("programs"), dict):
+            program_summary = summary["programs"].get(program_workload_hash, {})
+            if isinstance(program_summary, dict):
+                tiers = program_summary.get("tiers", tiers)
         return {
             role: {
                 tier: {
