@@ -38,6 +38,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-on-guardrail-fail.yml",
     ".github/workflows/issue-on-test-fail.yml",
     ".github/workflows/codeql.yml",
+    ".github/workflows/code-intelligence-refresh.yml",
     ".github/workflows/nightly.yml",
     ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",

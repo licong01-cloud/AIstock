@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     ".github/workflows/code-intelligence-refresh.yml",
     ".github/workflows/nightly.yml",
+    "scripts/ci_change_classifier.py",
     "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "tests/aistock_validation/catalog/code_intelligence.yaml",
     "tests/aistock_validation/catalog/file_ownership.yaml",
