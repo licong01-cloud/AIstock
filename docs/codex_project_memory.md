@@ -7,6 +7,21 @@ It must stay stable, short, and operational. Do not use it as a changelog, modul
 
 Default rule: load this file only for AIstock architecture, backend, frontend, data pipeline, trading, issue workflow, CI/CD, or production-adjacent work. For ordinary issue work, prefer the issue Context Pack and relevant files over full historical documents.
 
+## Active Multi-Alpha QE Foundation Resume Snapshot
+
+This is the compact active-work snapshot as of 2026-07-19. Replace or remove it after the feature is merged and activated; detailed research history and implementation evidence remain in the authoritative design rather than this memory file.
+
+- Design authority: `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`. It contains the complete progress ledger, experiment-facing constraints, acceptance IDs F-201 through F-218, and P0-1A through P0-4 implementation order.
+- Active worktree: `F:\Dev\AIstock_worktrees\multi-alpha-durable-foundation-p0-20260718`.
+- Active branch: `feature/multi-alpha-durable-foundation-p0-20260718`.
+- Completed checkpoint: commit `011ec1ea` (`feat(multi-alpha): add durable orchestration repository foundation`). It has not been pushed, opened as a PR, or merged.
+- Cleanup completed before implementation: removed the three untracked legacy one-shot production DML scripts `scripts/onboard_multialpha_sim_binding.py`, `scripts/reset_multialpha_sim_run.py`, and `scripts/seed_multialpha_sim_virtual_account.py`; root `main` remained clean.
+- P0-1A completed: additive preflight/forward/guarded-rollback SQL; durable task/run/child/attempt/event models and repository; canonical request/artifact identity; explicit state machines; PostgreSQL claim, lease, fencing and row-version CAS; atomic state/event transactions; historical task/run/result-child dry-run, execute and readback without fabricated attempts or changes to historical metrics/status/reason/created_at/Archive.
+- P0-1A validation: Ruff and compile passed; existing plus new targeted matrix passed with `82 passed, 4 skipped`; the four opt-in PostgreSQL tests separately passed in a disposable PostgreSQL 16 container. That run verified two consecutive migrations without catalog drift, idempotent historical backfill, eight-worker single claim, event-failure transaction rollback, stale fencing rejection, and child/attempt remote identity/result persistence.
+- Production state: no production DDL or DML was executed, no database export was created, no backend/frontend service was restarted, and the current combine-backtest runtime path was not switched. `production_ddl_gate=pending`; frontend/backend dependency gates are `noop`.
+- Remaining order: P0-1B execution adapter and persistent orchestrator with unified WSL/remote capacity and restart takeover; P0-2 pause/resume/cancel and retry/recovery; P0-3 reuse the existing QE evolution page and complete multi-alpha creator; P0-4 child/attempt grid, DB events/logs, recovery and Archive visibility; then full F2 compliance, PR, merge and authorized runtime activation.
+- Non-negotiable scope: QE-only isolation; reuse the current combine-backtest/QE Workspace/QE UI architecture; no parallel platform, simplified implementation, silent error/fallback, business-logic drift, research admission gate, or approval workflow. Missing data/artifacts must stay visible and recoverable rather than eliminate a research direction. Production DDL/restart remains a separate explicit user-authorized step, and no extra DB export is performed before DDL.
+
 ## Repository And Runtime Map
 
 - Canonical repository root: `F:\Dev\AIstock`.
