@@ -1,5 +1,5 @@
 {
-  "actual": "R12P child backtests fail with OSError WinError 1920 while scanning child workspace bak_basic.h5.",
+  "actual": "R12P child backtests first fail with OSError WinError 1920 while scanning child workspace bak_basic.h5; after filtering WSL factor symlinks, the 16.9MB combined_prediction.pkl would exceed the 10MB qe_file_sync per-file limit.",
   "allowed_write_scope": [
     "backend/services/multi_alpha/remote_dispatch.py",
     "backend/tests/test_multi_alpha_remote_dispatch.py",
@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-18T08:04:55.118560Z",
-  "description": "R12P child backtests fail with OSError WinError 1920 while scanning child workspace bak_basic.h5.",
+  "description": "Remote combine small-file packaging dereferences DrvFS Linux factor symlinks before filtering them and incorrectly routes the large combined prediction through the 10MB small-file channel instead of the existing content-addressed Artifact Store.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,7 +27,7 @@
   "evidence_uris": [
     "macb_453ca2d0c5b21b40_20240701_20260629_20260718T070807607324Z"
   ],
-  "expected": "Filter dataset artifacts by name and suffix before any Windows stat/dereference; package only declared small files and run the remote pred-backtest.",
+  "expected": "Filter dataset artifacts by name and suffix before any Windows stat/dereference; send only declared runtime files through qe_file_sync; publish combined_prediction.pkl through the content-addressed Artifact Store and link it in the remote workspace.",
   "first_seen_at": "2026-07-18T08:04:55.118560Z",
   "fix_branch": null,
   "fix_commit": null,

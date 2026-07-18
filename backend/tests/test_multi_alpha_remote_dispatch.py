@@ -188,8 +188,9 @@ class _FakeArtifactClient:
 
     def ensure_artifact(self, path: Path, *, node_id: str, verify_after_upload: bool = True) -> dict[str, Any]:
         self.calls.append(path)
+        sha256 = ("b" if path.suffix == ".pkl" else "a") * 64
         return {
-            "sha256": "a" * 64,
+            "sha256": sha256,
             "size": path.stat().st_size,
             "uploaded": False,
             "status": {"exists": True, "size": path.stat().st_size, "artifact_store_root": "/remote/artifacts"},
@@ -250,16 +251,19 @@ def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: 
     )
 
     assert metrics["cagr"] == 1.0
-    assert fake_artifact.calls == [l2]
+    assert fake_artifact.calls == [l2, pred]
     assert fake_workspace.payloads
     payload = fake_workspace.payloads[0]
     assert payload["experiment_files"] == {}
     assert small_sync_calls and small_sync_calls[0]["task_id"].startswith("macb_remote_")
     assert small_sync_calls[0]["task_id"].endswith("_workspace")
     assert small_sync_calls[0]["loop_index"] == 1
-    assert "combined_prediction.pkl.b64" in small_sync_calls[0]["files"]
+    assert "combined_prediction.pkl.b64" not in small_sync_calls[0]["files"]
     assert "bash -lc" in payload["wsl_command"]
     assert "/remote/artifacts/" + "a" * 64 in payload["wsl_command"]
+    assert "/remote/artifacts/" + "b" * 64 in payload["wsl_command"]
+    assert payload["wsl_command"].count("ln -sfn") == 2
+    assert "combined_prediction.pkl" in payload["wsl_command"]
     assert "*.b64" in payload["wsl_command"]
     assert "../combined_prediction.pkl.b64" not in payload["wsl_command"]
     assert "--pred-backtest combined_prediction.pkl" in payload["wsl_command"]
@@ -277,7 +281,7 @@ def test_remote_small_files_include_runtime_deps_and_exclude_outputs(tmp_path: P
     pred = workspace / "combined_prediction.pkl"
     pred.write_bytes(b"pred")
 
-    files = _remote_small_files(workspace=workspace, pred_pkl=pred)
+    files = _remote_small_files(workspace=workspace, pred_pkl=pred, include_prediction=True)
 
     assert "conf.yaml" in files
     assert "qe_suspend_filter.json" in files
@@ -287,6 +291,78 @@ def test_remote_small_files_include_runtime_deps_and_exclude_outputs(tmp_path: P
     assert "combined_factors_df.parquet" not in files
     assert "combined_factors_df.parquet.b64" not in files
     assert "qlib_results_enhanced.json" not in files
+
+
+def test_remote_small_file_scan_filters_factor_symlinks_before_windows_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    factor_link_names = {"bak_basic.h5", "static_factors.parquet"}
+    for name in factor_link_names:
+        (workspace / name).write_bytes(b"")
+    pred = workspace / "combined_prediction.pkl"
+    pred.write_bytes(b"pred")
+    original_is_file = Path.is_file
+
+    def guarded_is_file(path: Path) -> bool:
+        if path.name in factor_link_names:
+            raise OSError(1920, "simulated DrvFS Linux symlink dereference failure")
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+
+    files = _remote_small_files(workspace=workspace, pred_pkl=pred, include_prediction=True)
+
+    assert "bak_basic.h5" not in files
+    assert "static_factors.parquet" not in files
+    assert "static_factors.parquet.b64" not in files
+    assert "combined_prediction.pkl.b64" in files
+
+
+def test_remote_small_file_scan_reports_supported_unreadable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    unreadable = workspace / "runtime.yaml"
+    unreadable.write_text("content", encoding="utf-8")
+    pred = workspace / "combined_prediction.pkl"
+    pred.write_bytes(b"pred")
+    original_is_file = Path.is_file
+
+    def guarded_is_file(path: Path) -> bool:
+        if path == unreadable:
+            raise OSError(1920, "simulated unreadable runtime file")
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_small_files(workspace=workspace, pred_pkl=pred, include_prediction=True)
+
+    assert excinfo.value.reason_code == "remote_workspace_file_scan_failed"
+    assert excinfo.value.context["path"] == str(unreadable)
+
+
+def test_remote_small_files_leave_oversized_prediction_to_artifact_store(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    pred = workspace / "combined_prediction.pkl"
+    pred.write_bytes(b"p" * (10 * 1024 * 1024 + 1))
+
+    files = _remote_small_files(workspace=workspace, pred_pkl=pred, include_prediction=False)
+
+    assert "combined_prediction.pkl.b64" not in files
+    assert set(files) == {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
 
 
 def test_remote_small_file_sync_posts_loop_scoped_files(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -492,7 +568,7 @@ def test_remote_loop_timeout_is_loud() -> None:
 def test_remote_wsl_command_uses_remote_paths_not_local_paths() -> None:
     command = _remote_wsl_command(
         workspace=Path("/mnt/f/local/workspace"),
-        remote_paths={"artifact_path": "/remote/artifacts/abc", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
         backtest_config={"remote_conda_env": "AIstock"},
     )
 
@@ -507,7 +583,7 @@ def test_remote_wsl_command_uses_remote_paths_not_local_paths() -> None:
 def test_remote_wsl_command_exports_jinja_runtime_env() -> None:
     command = _remote_wsl_command(
         workspace=Path("/mnt/f/local/workspace"),
-        remote_paths={"artifact_path": "/remote/artifacts/abc", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
         backtest_config={"num_features": 44, "num_timesteps": 20, "remote_env": {"CUSTOM_FLAG": "yes"}},
     )
 
@@ -521,6 +597,7 @@ def test_remote_wsl_command_cd_to_uploaded_loop_workspace_when_available() -> No
         workspace=Path("/mnt/f/local/run/combined_ic_weighted"),
         remote_paths={
             "artifact_path": "/remote/artifacts/abc",
+            "prediction_artifact_path": "/remote/artifacts/pred",
             "qlib_data_path": "/home/node/qlib",
             "factor_cache_dir": "/home/node/factor_values",
             "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
@@ -536,7 +613,7 @@ def test_remote_wsl_command_rejects_invalid_env_key() -> None:
     with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
         _remote_wsl_command(
             workspace=Path("/mnt/f/local/workspace"),
-            remote_paths={"artifact_path": "/remote/artifacts/abc", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+            remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
             backtest_config={"remote_env": {"bad-key": "x"}},
         )
 

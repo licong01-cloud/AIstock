@@ -51,6 +51,7 @@ _REMOTE_SMALL_EXCLUDED_NAMES = {
     "ret_schema.parquet",
     "signals.json",
     "signals.parquet",
+    "static_factors.parquet",
 }
 _REMOTE_SMALL_EXCLUDED_PREFIXES = ("minute_trades", "minute_summary")
 
@@ -288,16 +289,18 @@ class RemotePredBacktestExecutor:
         l2_path = _resolve_l2_artifact_path(workspace=workspace, backtest_config=backtest_config)
         artifact_client = self._artifact_client_factory(node_id) if self._artifact_client_factory else WorkspaceArtifactSyncClient.for_node(node_id)
         artifact_manifest = artifact_client.ensure_artifact(l2_path, node_id=node_id)
+        prediction_artifact_manifest = artifact_client.ensure_artifact(pred_pkl, node_id=node_id)
         remote_paths = _remote_paths(
             node=node,
             backtest_config=backtest_config,
             artifact_sha256=str(artifact_manifest["sha256"]),
             artifact_manifest=artifact_manifest,
+            prediction_artifact_sha256=str(prediction_artifact_manifest["sha256"]),
         )
         task_id = _remote_task_id(backtest_config=backtest_config, workspace=workspace)
         loop_index = _remote_loop_index(backtest_config=backtest_config)
         timeout_seconds = int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS))
-        small_files = _remote_small_files(workspace=workspace, pred_pkl=pred_pkl)
+        small_files = _remote_small_files(workspace=workspace, pred_pkl=pred_pkl, include_prediction=False)
         self._sync_small_files(node=node, task_id=task_id, loop_index=loop_index, files=small_files, timeout_seconds=timeout_seconds)
         wsl_command = _remote_wsl_command(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
         try:
@@ -311,6 +314,7 @@ class RemotePredBacktestExecutor:
                         "workspace": str(workspace),
                         "backtest_name": str(backtest_config.get("backtest_name") or workspace.name),
                         "artifact_manifest": artifact_manifest,
+                        "prediction_artifact_manifest": prediction_artifact_manifest,
                         "remote_paths": remote_paths,
                     },
                     experiment_files={},
@@ -334,6 +338,7 @@ class RemotePredBacktestExecutor:
             "task_id": task_id,
             "loop_id": loop_id,
             "artifact_manifest": artifact_manifest,
+            "prediction_artifact_manifest": prediction_artifact_manifest,
         }
         return metrics
 
@@ -476,6 +481,7 @@ def _remote_paths(
     backtest_config: Mapping[str, Any],
     artifact_sha256: str,
     artifact_manifest: Mapping[str, Any],
+    prediction_artifact_sha256: str,
 ) -> dict[str, str]:
     status = artifact_manifest.get("status") if isinstance(artifact_manifest.get("status"), Mapping) else {}
     artifact_root = (
@@ -513,6 +519,7 @@ def _remote_paths(
     _require_remote_linux_path(path_name="factor_cache_dir", value=factor_cache_dir, node=node)
     paths = {
         "artifact_path": f"{artifact_root.rstrip('/')}/{artifact_sha256}",
+        "prediction_artifact_path": f"{artifact_root.rstrip('/')}/{prediction_artifact_sha256}",
         "qlib_data_path": qlib_data_path,
         "factor_cache_dir": factor_cache_dir,
     }
@@ -560,7 +567,7 @@ def _remote_loop_index(*, backtest_config: Mapping[str, Any]) -> int:
     return loop_index
 
 
-def _remote_small_files(*, workspace: Path, pred_pkl: Path) -> dict[str, str]:
+def _remote_small_files(*, workspace: Path, pred_pkl: Path, include_prediction: bool) -> dict[str, str]:
     files: dict[str, str] = {}
     for name in sorted(_iter_remote_small_file_names(workspace=workspace)):
         path = workspace / name
@@ -581,7 +588,8 @@ def _remote_small_files(*, workspace: Path, pred_pkl: Path) -> dict[str, str]:
                     reason_code="remote_workspace_file_packaging_failed",
                     context={"path": str(path), "workspace": str(workspace)},
                 ) from exc
-    files[f"{pred_pkl.name}.b64"] = _b64_file(pred_pkl)
+    if include_prediction:
+        files[f"{pred_pkl.name}.b64"] = _b64_file(pred_pkl)
     too_large = {name: len(content.encode("utf-8")) for name, content in files.items() if len(content.encode("utf-8")) > _QE_FILE_SYNC_MAX_FILE_SIZE}
     if too_large:
         raise MultiAlphaCombineBacktestError(
@@ -596,13 +604,21 @@ def _iter_remote_small_file_names(*, workspace: Path) -> set[str]:
     required = {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
     names: set[str] = set(required)
     for path in workspace.iterdir():
-        if not path.is_file():
-            continue
         name = path.name
         suffix = path.suffix.lower()
         if name in _REMOTE_SMALL_EXCLUDED_NAMES or name.startswith(_REMOTE_SMALL_EXCLUDED_PREFIXES):
             continue
-        if suffix in _REMOTE_SMALL_TEXT_SUFFIXES or suffix in _REMOTE_SMALL_BINARY_SUFFIXES:
+        if suffix not in _REMOTE_SMALL_TEXT_SUFFIXES and suffix not in _REMOTE_SMALL_BINARY_SUFFIXES:
+            continue
+        try:
+            is_file = path.is_file()
+        except OSError as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"failed to inspect remote small-file candidate: {type(exc).__name__}: {exc}",
+                reason_code="remote_workspace_file_scan_failed",
+                context={"path": str(path), "workspace": str(workspace)},
+            ) from exc
+        if is_file:
             names.add(name)
     return names
 
@@ -621,6 +637,7 @@ def _b64_file(path: Path) -> str:
 def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:
     conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "AIstock")
     artifact_path = _shell_quote(remote_paths["artifact_path"])
+    prediction_artifact_path = _shell_quote(remote_paths["prediction_artifact_path"])
     qlib_path = _shell_quote(remote_paths["qlib_data_path"])
     factor_cache = _shell_quote(remote_paths["factor_cache_dir"])
     env_exports = _remote_env_exports(backtest_config)
@@ -633,6 +650,8 @@ def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], bac
             "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').glob('*.b64')]\"; ",
             "ln -sfn " + artifact_path + " combined_factors_df.parquet; ",
             "test -f combined_factors_df.parquet; ",
+            "ln -sfn " + prediction_artifact_path + " combined_prediction.pkl; ",
+            "test -f combined_prediction.pkl; ",
             "test -d " + qlib_path + "; ",
             "test -d " + factor_cache + "; ",
             "export QLIB_DATA_PATH=" + qlib_path + "; ",
