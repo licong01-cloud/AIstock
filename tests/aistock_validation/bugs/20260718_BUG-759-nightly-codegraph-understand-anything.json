@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-759",
-  "closed_at": null,
+  "closed_at": "2026-07-18T11:41:15Z",
   "closure_requirements": [
     "Nightly reconciles CodeGraph and Understand Anything against the latest shared main graph root.",
     "Main source-code merges trigger an asynchronous deduplicated CodeGraph sync and UA change assessment without adding a merge gate.",
@@ -37,8 +37,8 @@
   "expected": "每日Nightly将两个图谱同步到最新main；代码合入触发异步去重刷新；文档或close-sync等无结构变化零成本跳过；更新失败保留上一成功图并明确stale。",
   "first_seen_at": "2026-07-18T09:12:46.237058Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d866195fe7df1aca5c5cf4731bd65e2c40f29ccf",
+  "fixed_at": "2026-07-18T11:44:05.041536Z",
   "github_issue_number": 2428,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2428",
   "last_seen_at": "2026-07-18T09:12:46.237058Z",
@@ -48,6 +48,7 @@
     "Do not make graph refresh a required PR or merge gate.",
     "Do not run Understand Anything semantic analysis for docs-only or close-sync changes."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2432",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -69,6 +70,15 @@
     "fingerprint": "d904ef9346ddd403cd8d08bb",
     "source_event_id": "FE-20260718-d904ef9346dd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> 79 passed",
+    "python -m py_compile scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-759 ... -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
