@@ -49,7 +49,10 @@ from backend.services.advisory_dev_input_onboarding.production_projection import
     load_exact_release_receipt,
 )
 from backend.services.advisory_dev_input_onboarding.dev_importer import RealDevPackageImporter
-from backend.services.advisory_dev_input_onboarding.historical_onboarding import RealDevHistoricalOnboardingService
+from backend.services.advisory_dev_input_onboarding.historical_onboarding import (
+    HistoricalOnboardingEvidenceStore,
+    RealDevHistoricalOnboardingService,
+)
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
 from backend.services.strategy_package.advisory_input_projection import project_advisory_inputs
 from backend.services.strategy_package.repository import StrategyPackageRepository
@@ -392,10 +395,15 @@ def _run_historical(args: argparse.Namespace) -> int:
         target_package_asset_root=args.target_package_asset_root,
         repository_root=REPOSITORY_ROOT,
     )
+    historical_store = HistoricalOnboardingEvidenceStore(root=args.evidence_root)
+    request_ref = historical_store.artifact_ref(historical_store.publish(request))
+    receipt_ref = historical_store.artifact_ref(stored)
     _emit(
         {
             "ok": receipt.batch_status == "COMPLETE",
             "command": "run-historical",
+            "historical_request_ref": request_ref,
+            "historical_receipt_ref": receipt_ref,
             "historical_request_hash": receipt.historical_request_hash,
             "historical_receipt_hash": receipt.receipt_hash,
             "formal_batch_receipt_hash": receipt.formal_batch_receipt_hash,

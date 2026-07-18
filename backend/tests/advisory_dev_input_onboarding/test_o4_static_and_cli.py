@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import subprocess
@@ -9,11 +10,21 @@ import pytest
 
 from backend.services.advisory_dev_input_onboarding.contracts import (
     AdvisoryImmutableArtifactRef,
+    HistoricalProgramResult,
+    HistoricalProgramSpec,
+    HistoricalProgramStatus,
     O4ArtifactKind,
     O4_ARTIFACT_STORE_POLICY_HASH,
+    RealDevHistoricalRunReceipt,
+    RealDevHistoricalRunRequest,
+)
+from backend.services.advisory_dev_input_onboarding.historical_onboarding import (
+    HistoricalOnboardingEvidenceStore,
+    target_package_asset_root_hash,
 )
 from backend.services.advisory_dev_input_onboarding.phase1e_inputs import Phase1EInputArtifactStore
 from backend.services.advisory_dev_input_onboarding.phase1e_orchestration import AdvisoryPhase1EOrchestrationService
+from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
 from backend.services.advisory_phase1.source_capacity import Phase1ECapacityPolicyV1
 from backend.services.advisory_phase1.source_observer import registered_source_observer_configs
 from scripts import advisory_real_dev_onboarding as authoritative_cli
@@ -236,6 +247,7 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
     tmp_path: Path,
     monkeypatch,
     capsys,
+    onboarding_request,
 ) -> None:
     def artifact_ref(kind: str, marker: str) -> AdvisoryImmutableArtifactRef:
         return AdvisoryImmutableArtifactRef(
@@ -257,8 +269,6 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         assert isinstance(parsed, dict)
         return parsed
 
-    historical_request_ref = artifact_ref("historical_run_request", "a")
-    historical_receipt_ref = artifact_ref("historical_run_receipt", "b")
     source_mapping_ref = artifact_ref(O4ArtifactKind.SOURCE_MAPPING_REGISTRY.value, "c")
     capacity_policy_ref = artifact_ref(O4ArtifactKind.CAPACITY_POLICY.value, "d")
     observation_scope_refs = (
@@ -269,6 +279,54 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
     post_capacity_bundle_ref = artifact_ref(O4ArtifactKind.INPUT_BUNDLE.value, "2")
     compile_receipt_ref = artifact_ref(O4ArtifactKind.PHASE1E_COMPILE_RECEIPT.value, "3")
     calls: list[tuple[str, dict[str, object]]] = []
+    historical_run_count = 0
+
+    target_package_asset_root = tmp_path / "target-package-assets"
+    target_package_asset_root.mkdir()
+    evidence_root = tmp_path / "evidence"
+    onboarding_store = RealDevOnboardingEvidenceStore(root=evidence_root)
+    onboarding_ref = onboarding_store.publish(onboarding_request).ref
+    historical_request = RealDevHistoricalRunRequest(
+        onboarding_request_ref=onboarding_ref,
+        onboarding_request_hash=onboarding_request.request_hash,
+        target_database_identity_hash="7" * 64,
+        target_package_asset_root_hash=target_package_asset_root_hash(target_package_asset_root),
+        program_specs=tuple(
+            HistoricalProgramSpec(
+                program_id=item.program_id,
+                program_name=f"Historical {item.style}",
+                package_id=item.package_id,
+                alpha_mode=item.alpha_mode,
+                style=item.style,
+                target_count=item.target_count,
+                review_policy=item.review_policy,
+                runtime_config={
+                    "runtime_profile": {
+                        "selection": {"top_k": item.target_count},
+                        "hmm": {"enabled": False},
+                        "risk_policy": {"enabled": False},
+                        "tradability": {"exclude_suspended": False},
+                        "industry_blacklist": [],
+                    },
+                    "selection_artifact_config": {
+                        "auto_generate": True,
+                        "inference_backend": "wsl",
+                        "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+                    },
+                },
+            )
+            for item in onboarding_request.target_dev_program_specs
+        ),
+        binding_effective_from_trade_date=onboarding_request.binding_effective_from_trade_date,
+        decision_trade_date=onboarding_request.decision_trade_date,
+        policy_registry_id=onboarding_request.policy_registry_id,
+        policy_registry_version=onboarding_request.policy_registry_version,
+        policy_registry_hash=onboarding_request.policy_registry_hash,
+        code_release_id="8" * 40,
+        code_release_hash="9" * 64,
+    )
+    historical_request_path = tmp_path / "historical-request.json"
+    historical_request_path.write_text(historical_request.model_dump_json(), encoding="utf-8")
 
     class ResultModel:
         def __init__(self, field_name: str, value: str) -> None:
@@ -334,13 +392,50 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
                 "ok": True,
             }
 
+    class FakeHistoricalService:
+        def run(self, **kwargs):
+            nonlocal historical_run_count
+            historical_run_count += 1
+            request = kwargs["request"]
+            store = HistoricalOnboardingEvidenceStore(root=kwargs["evidence_root"])
+            store.publish(request)
+            program_results = tuple(
+                HistoricalProgramResult(
+                    program_id=spec.program_id,
+                    package_id=spec.package_id,
+                    alpha_mode=spec.alpha_mode,
+                    status=HistoricalProgramStatus.COMPLETE,
+                    program_payload_sha256=str(index) * 64,
+                    binding_version_id=f"binding-{index}",
+                    binding_payload_hash=str(index + 2) * 64,
+                    selection_run_id=f"selection-{index}",
+                    evidence_id=f"evidence-{index}",
+                    evidence_hash=str(index + 4) * 64,
+                    artifact_id=f"artifact-{index}",
+                    artifact_payload_hash=str(index + 6) * 64,
+                    historical_program_run_id=f"historical-run-{index}",
+                )
+                for index, spec in enumerate(request.program_specs, start=1)
+            )
+            now = datetime(2026, 7, 18, 8, 0, tzinfo=UTC)
+            receipt = RealDevHistoricalRunReceipt(
+                historical_request_hash=request.historical_request_hash,
+                target_database_identity_hash=request.target_database_identity_hash,
+                target_package_asset_root_hash=request.target_package_asset_root_hash,
+                batch_id="batch-o3-cli-chain",
+                batch_key="a" * 64,
+                batch_status="COMPLETE",
+                formal_batch_receipt_hash="b" * 64,
+                program_results=program_results,
+                started_at=now,
+                finished_at=now,
+            )
+            return receipt, store.publish(receipt)
+
     monkeypatch.setattr(authoritative_cli, "_o4_service", lambda: FakeService())
+    monkeypatch.setattr(authoritative_cli, "RealDevHistoricalOnboardingService", FakeHistoricalService)
     env_file = tmp_path / ".env"
     env_file.write_text("TDX_DB_DEV_HOST=unused\n", encoding="utf-8")
-    historical_request_path = tmp_path / "historical-request-ref.json"
-    historical_request_path.write_text(historical_request_ref.model_dump_json(), encoding="utf-8")
-    historical_receipt_path = tmp_path / "historical-receipt-ref.json"
-    historical_receipt_path.write_text(historical_receipt_ref.model_dump_json(), encoding="utf-8")
     capacity_policy = Phase1ECapacityPolicyV1(
         policy_id="phase1e_capacity_dev",
         policy_version="1",
@@ -362,7 +457,6 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
     capacity_policy_path = tmp_path / "capacity-policy.json"
     capacity_policy_path.write_text(capacity_policy.model_dump_json(), encoding="utf-8")
     artifact_root = tmp_path / "artifacts"
-    evidence_root = tmp_path / "evidence"
     policy_registry_root = tmp_path / "policy-registry"
     advisory_store_root = tmp_path / "advisory-store"
     common_args = [
@@ -372,10 +466,29 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         "--config-version", "v2",
     ]
 
+    initial_historical = run_cli(
+        [
+            "run-historical",
+            "--historical-request", str(historical_request_path),
+            "--env-file", str(env_file),
+            "--evidence-root", str(evidence_root),
+            "--target-package-asset-root", str(target_package_asset_root),
+        ]
+    )
+    historical_request_ref = AdvisoryImmutableArtifactRef.model_validate(
+        initial_historical["historical_request_ref"]
+    )
+    historical_request_ref_path = write_ref(
+        tmp_path / "historical-request-ref.json",
+        initial_historical["historical_request_ref"],
+    )
+    historical_store = HistoricalOnboardingEvidenceStore(root=evidence_root)
+    assert historical_store.load(historical_request_ref) == historical_request
+
     observed = run_cli(
         [
             "observe-source",
-            "--historical-request-ref", str(historical_request_path),
+            "--historical-request-ref", str(historical_request_ref_path),
             "--capacity-policy", str(capacity_policy_path),
             "--evidence-root", str(evidence_root),
             *common_args,
@@ -388,9 +501,28 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         for index, item in enumerate(observed["program_results"], start=1)
     ]
 
+    completed_historical = run_cli(
+        [
+            "run-historical",
+            "--historical-request", str(historical_request_path),
+            "--env-file", str(env_file),
+            "--evidence-root", str(evidence_root),
+            "--target-package-asset-root", str(target_package_asset_root),
+        ]
+    )
+    assert completed_historical["historical_request_ref"] == initial_historical["historical_request_ref"]
+    historical_receipt_ref = AdvisoryImmutableArtifactRef.model_validate(
+        completed_historical["historical_receipt_ref"]
+    )
+    assert historical_store.load(historical_receipt_ref).receipt_hash == completed_historical["historical_receipt_hash"]
+    historical_receipt_path = write_ref(
+        tmp_path / "historical-receipt-ref.json",
+        completed_historical["historical_receipt_ref"],
+    )
+
     build_args = [
         "build-phase1e-inputs",
-        "--historical-request-ref", str(historical_request_path),
+        "--historical-request-ref", str(historical_request_ref_path),
         "--historical-receipt-ref", str(historical_receipt_path),
         "--source-mapping-registry-ref", str(mapping_path),
         "--capacity-policy-ref", str(policy_ref_path),
@@ -429,6 +561,7 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         "plan-capacity",
         "compile-phase1e",
     ]
+    assert historical_run_count == 2
 
 
 def test_common_artifacts_publish_exact_typed_capacity_policy(tmp_path: Path) -> None:
