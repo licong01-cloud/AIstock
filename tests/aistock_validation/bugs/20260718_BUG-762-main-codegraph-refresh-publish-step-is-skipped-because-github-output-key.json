@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-762",
-  "closed_at": null,
+  "closed_at": "2026-07-18T12:06:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,8 +28,8 @@
   "expected": "When CodeGraph sync returns publish_ready=true, the same warning-only step atomically exports the updated state without a cross-step GITHUB_OUTPUT handoff.",
   "first_seen_at": "2026-07-18T11:53:13.765522Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "076cb31d203a5b72372e76a1e6eac684d76d300a",
+  "fixed_at": "2026-07-18T12:07:13.845968Z",
   "github_issue_number": 2441,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2441",
   "last_seen_at": "2026-07-18T11:53:13.765522Z",
@@ -39,6 +39,7 @@
     "Do not add a PR or merge gate.",
     "Do not run unrelated backend, frontend, or business-module test matrices."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2442",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,14 @@
     "fingerprint": "763bfd063f944b2980bffac7",
     "source_event_id": "FE-20260718-763bfd063f94"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py::test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped -q -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-762 ... -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
