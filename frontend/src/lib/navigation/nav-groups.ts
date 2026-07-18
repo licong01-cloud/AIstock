@@ -8,8 +8,6 @@ export type NavGroup = {
   items: NavItem[];
 };
 
-const HMM_EVOLUTION_ENABLED = process.env.NEXT_PUBLIC_HMM_EVOLUTION_ENABLED === "true";
-
 export const NAV_GROUPS: NavGroup[] = [
   {
     title: "QuantEvolver",
@@ -33,14 +31,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/quantevolver/prompts", label: "\u{1F4DD} \u63D0\u793A\u8BCD\u914D\u7F6E" },
     ],
   },
-  ...(HMM_EVOLUTION_ENABLED
-    ? [
-        {
-          title: "HMM 研究工作台",
-          items: [{ href: "/hmm-evolution", label: "🧭 演进实验室" }],
-        },
-      ]
-    : []),
+  {
+    title: "HMM 研究工作台",
+    items: [{ href: "/hmm-evolution", label: "🧭 演进实验室" }],
+  },
   {
     title: "RD-Agent\u7BA1\u7406",
     items: [
