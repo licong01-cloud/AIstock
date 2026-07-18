@@ -110,6 +110,38 @@ def test_graph_refresh_plan_advances_metadata_for_docs_only_change(tmp_path: Pat
     assert payload["understand_anything"]["run_semantic_now"] is False
 
 
+def test_graph_refresh_plan_treats_pipeline_config_as_semantic_change(tmp_path: Path, monkeypatch) -> None:
+    graph_dir = tmp_path / ".understand-anything"
+    graph_dir.mkdir()
+    (graph_dir / "knowledge-graph.json").write_text(
+        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
+        encoding="utf-8",
+    )
+    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
+    monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
+    monkeypatch.setattr(
+        adapter,
+        "_graph_changed_files",
+        lambda root, base, head="HEAD": ([".github/workflows/nightly.yml"], None),
+    )
+
+    payload = adapter.build_graph_refresh_plan(root=tmp_path, trigger="nightly")
+
+    assert payload["understand_anything"]["action"] == "incremental_update"
+    assert payload["understand_anything"]["source_changed_files"] == [".github/workflows/nightly.yml"]
+    assert payload["understand_anything"]["run_semantic_now"] is True
+
+
+def test_graph_source_files_exclude_bug_registry_close_sync() -> None:
+    assert adapter._graph_source_files(
+        [
+            "tests/aistock_validation/bugs/20260718_BUG-759.json",
+            "package.json",
+            "deploy/Dockerfile",
+        ]
+    ) == ["deploy/Dockerfile", "package.json"]
+
+
 def test_graph_state_export_replaces_published_state_atomically(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     state_root = tmp_path / "state"
@@ -292,6 +324,7 @@ def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped
     nightly = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
     assert "push:\n    branches: [main]\n    paths:" in push_workflow
+    assert "!tests/aistock_validation/bugs/**" in push_workflow
     assert "pull_request:" not in push_workflow
     assert "group: code-intelligence-refresh-main" in push_workflow
     assert "continue-on-error: true" in push_workflow

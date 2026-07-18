@@ -62,25 +62,50 @@ DEFAULT_UNDERSTAND_IGNORE = [
     "*.zip",
 ]
 GRAPH_SOURCE_SUFFIXES = {
+    ".bash",
+    ".bat",
     ".c",
     ".cc",
+    ".cfg",
+    ".cmd",
     ".cpp",
     ".cs",
+    ".gql",
     ".go",
+    ".graphql",
     ".h",
+    ".hcl",
     ".hpp",
+    ".html",
+    ".ini",
     ".java",
     ".js",
+    ".json",
     ".jsx",
     ".kt",
+    ".mjs",
+    ".mts",
     ".php",
+    ".proto",
+    ".ps1",
     ".py",
     ".rb",
     ".rs",
+    ".sh",
+    ".sql",
+    ".svelte",
     ".swift",
+    ".tf",
+    ".toml",
     ".ts",
     ".tsx",
+    ".vue",
+    ".xml",
+    ".yaml",
+    ".yml",
 }
+GRAPH_SOURCE_FILENAMES = {"Dockerfile", "Makefile"}
+GRAPH_NON_SOURCE_PREFIXES = {"tests/aistock_validation/bugs/"}
 GRAPH_STATE_PROVIDERS = {
     "codegraph": ".codegraph",
     "understand_anything": ".understand-anything",
@@ -876,7 +901,14 @@ def _graph_changed_files(root: Path, base: str, head: str = "HEAD") -> tuple[lis
 
 
 def _graph_source_files(paths: list[str]) -> list[str]:
-    return sorted({path for path in paths if Path(path).suffix.lower() in GRAPH_SOURCE_SUFFIXES})
+    return sorted(
+        {
+            path
+            for path in paths
+            if not any(path.startswith(prefix) for prefix in GRAPH_NON_SOURCE_PREFIXES)
+            and (Path(path).suffix.lower() in GRAPH_SOURCE_SUFFIXES or Path(path).name in GRAPH_SOURCE_FILENAMES)
+        }
+    )
 
 
 def build_graph_refresh_plan(
