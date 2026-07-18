@@ -6,6 +6,30 @@ from pathlib import Path
 import scripts.code_intelligence_adapter as adapter
 
 
+def _write_valid_ua_state(root: Path, *, commit: str, inventory: list[str] | None = None) -> None:
+    graph_dir = root / ".understand-anything"
+    intermediate = graph_dir / "intermediate"
+    intermediate.mkdir(parents=True, exist_ok=True)
+    (graph_dir / "knowledge-graph.json").write_text(
+        json.dumps({"project": {"gitCommitHash": commit}, "nodes": [], "edges": []}),
+        encoding="utf-8",
+    )
+    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": commit}), encoding="utf-8")
+    (graph_dir / "fingerprints.json").write_text(
+        json.dumps({"gitCommitHash": commit, "files": {"sentinel": "hash"}}),
+        encoding="utf-8",
+    )
+    (intermediate / "scan-result.json").write_text(
+        json.dumps(
+            {
+                "scriptCompleted": True,
+                "files": [{"path": path, "fileCategory": "code"} for path in (inventory or [])],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -68,14 +92,7 @@ def test_latest_freshness_command_defaults_to_compact_stdout(tmp_path: Path, mon
 
 
 def test_graph_refresh_plan_defers_ua_semantic_work_on_main_push(tmp_path: Path, monkeypatch) -> None:
-    graph_dir = tmp_path / ".understand-anything"
-    graph_dir.mkdir()
-    (graph_dir / "knowledge-graph.json").write_text(
-        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
-        encoding="utf-8",
-    )
-    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
-    (graph_dir / "fingerprints.json").write_text("{}", encoding="utf-8")
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=["backend/service.py", "docs/readme.md"])
     monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
     monkeypatch.setattr(
         adapter,
@@ -87,37 +104,25 @@ def test_graph_refresh_plan_defers_ua_semantic_work_on_main_push(tmp_path: Path,
 
     assert payload["warning_only"] is True
     assert payload["understand_anything"]["action"] == "incremental_update"
-    assert payload["understand_anything"]["source_changed_files"] == ["backend/service.py"]
+    assert payload["understand_anything"]["source_changed_files"] == ["backend/service.py", "docs/readme.md"]
     assert payload["understand_anything"]["run_semantic_now"] is False
     assert payload["understand_anything"]["deferred_to_nightly"] is True
 
 
-def test_graph_refresh_plan_advances_metadata_for_docs_only_change(tmp_path: Path, monkeypatch) -> None:
-    graph_dir = tmp_path / ".understand-anything"
-    graph_dir.mkdir()
-    (graph_dir / "knowledge-graph.json").write_text(
-        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
-        encoding="utf-8",
-    )
-    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
+def test_graph_refresh_plan_updates_docs_that_are_present_in_ua_inventory(tmp_path: Path, monkeypatch) -> None:
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=["docs/readme.md"])
     monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
     monkeypatch.setattr(adapter, "_graph_changed_files", lambda root, base, head="HEAD": (["docs/readme.md"], None))
 
     payload = adapter.build_graph_refresh_plan(root=tmp_path, trigger="nightly")
 
-    assert payload["understand_anything"]["action"] == "metadata_advance"
-    assert payload["understand_anything"]["source_changed_count"] == 0
-    assert payload["understand_anything"]["run_semantic_now"] is False
+    assert payload["understand_anything"]["action"] == "incremental_update"
+    assert payload["understand_anything"]["source_changed_files"] == ["docs/readme.md"]
+    assert payload["understand_anything"]["run_semantic_now"] is True
 
 
 def test_graph_refresh_plan_treats_pipeline_config_as_semantic_change(tmp_path: Path, monkeypatch) -> None:
-    graph_dir = tmp_path / ".understand-anything"
-    graph_dir.mkdir()
-    (graph_dir / "knowledge-graph.json").write_text(
-        json.dumps({"project": {"gitCommitHash": "base123"}, "nodes": [], "edges": []}),
-        encoding="utf-8",
-    )
-    (graph_dir / "meta.json").write_text(json.dumps({"gitCommitHash": "base123"}), encoding="utf-8")
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=[".github/workflows/nightly.yml"])
     monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
     monkeypatch.setattr(
         adapter,
@@ -132,14 +137,51 @@ def test_graph_refresh_plan_treats_pipeline_config_as_semantic_change(tmp_path: 
     assert payload["understand_anything"]["run_semantic_now"] is True
 
 
-def test_graph_source_files_exclude_bug_registry_close_sync() -> None:
-    assert adapter._graph_source_files(
+def test_graph_input_files_exclude_bug_registry_close_sync(tmp_path: Path) -> None:
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=["package.json"])
+
+    inputs, warnings = adapter._graph_input_files(
+        tmp_path,
         [
             "tests/aistock_validation/bugs/20260718_BUG-759.json",
             "package.json",
             "deploy/Dockerfile",
-        ]
-    ) == ["deploy/Dockerfile", "package.json"]
+        ],
+    )
+
+    assert inputs == ["deploy/Dockerfile", "package.json"]
+    assert warnings == []
+
+
+def test_graph_refresh_plan_rebuilds_corrupt_graph_at_current_commit(tmp_path: Path, monkeypatch) -> None:
+    _write_valid_ua_state(tmp_path, commit="head456", inventory=["backend/service.py"])
+    (tmp_path / ".understand-anything" / "knowledge-graph.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_git_snapshot", lambda root: {"ok": True, "head": "head456"})
+
+    payload = adapter.build_graph_refresh_plan(root=tmp_path, trigger="nightly")
+
+    assert payload["understand_anything"]["action"] == "full_rebuild"
+    assert payload["understand_anything"]["reason"] == "invalid_or_incomplete_graph_state"
+    assert payload["understand_anything"]["integrity"]["valid"] is False
+
+
+def test_ua_skip_refuses_to_publish_incomplete_state(tmp_path: Path, monkeypatch) -> None:
+    _write_valid_ua_state(tmp_path, commit="head456", inventory=["backend/service.py"])
+    (tmp_path / ".understand-anything" / "fingerprints.json").unlink()
+    monkeypatch.setattr(
+        adapter,
+        "build_graph_refresh_plan",
+        lambda **kwargs: {
+            "current_commit": "head456",
+            "understand_anything": {"action": "skip", "source_changed_count": 0},
+        },
+    )
+
+    payload = adapter.refresh_understand_anything(root=tmp_path)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["publish_ready"] is False
+    assert "structural fingerprints are missing or unreadable" in payload["integrity"]["issues"]
 
 
 def test_graph_state_export_replaces_published_state_atomically(tmp_path: Path) -> None:
@@ -237,6 +279,35 @@ def test_ua_refresh_skips_claude_for_metadata_only_change(tmp_path: Path, monkey
     assert payload["publish_ready"] is True
 
 
+def test_metadata_advance_keeps_graph_meta_and_fingerprints_commits_aligned(tmp_path: Path) -> None:
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=["backend/service.py"])
+
+    payload = adapter.advance_understand_anything_metadata(root=tmp_path, commit="head456")
+
+    graph_dir = tmp_path / ".understand-anything"
+    graph = json.loads((graph_dir / "knowledge-graph.json").read_text(encoding="utf-8"))
+    meta = json.loads((graph_dir / "meta.json").read_text(encoding="utf-8"))
+    fingerprints = json.loads((graph_dir / "fingerprints.json").read_text(encoding="utf-8"))
+    assert payload["workflow_gate"] == "ready"
+    assert graph["project"]["gitCommitHash"] == "head456"
+    assert meta["gitCommitHash"] == "head456"
+    assert fingerprints["gitCommitHash"] == "head456"
+    assert "analyzedAt" not in graph["project"]
+    assert "lastAnalyzedAt" not in meta
+
+
+def test_metadata_advance_refuses_corrupt_graph_without_partial_writes(tmp_path: Path) -> None:
+    _write_valid_ua_state(tmp_path, commit="base123", inventory=["backend/service.py"])
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.write_text("{broken", encoding="utf-8")
+
+    payload = adapter.advance_understand_anything_metadata(root=tmp_path, commit="head456")
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["advanced"] is False
+    assert graph_path.read_text(encoding="utf-8") == "{broken"
+
+
 def test_codegraph_sync_uses_incremental_sync_for_existing_index(tmp_path: Path, monkeypatch) -> None:
     index = tmp_path / ".codegraph" / "codegraph.db"
     index.parent.mkdir()
@@ -305,6 +376,11 @@ def test_ua_semantic_refresh_uses_plugin_budget_and_isolated_workspace(tmp_path:
 
     monkeypatch.setattr(adapter, "_run_command", fake_run)
     monkeypatch.setattr(adapter, "understand_anything_status", lambda *args, **kwargs: {"freshness": "fresh"})
+    monkeypatch.setattr(
+        adapter,
+        "_ua_state_integrity",
+        lambda *args, **kwargs: {"valid": True, "issues": [], "fingerprints_exist": True},
+    )
     monkeypatch.delenv("UNDERSTAND_NO_WORKTREE_REDIRECT", raising=False)
 
     payload = adapter.refresh_understand_anything(root=tmp_path, max_budget_usd=2.0)
@@ -323,8 +399,8 @@ def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped
     push_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
     nightly = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
-    assert "push:\n    branches: [main]\n    paths:" in push_workflow
-    assert "!tests/aistock_validation/bugs/**" in push_workflow
+    assert "push:\n    branches: [main]\n    paths-ignore:" in push_workflow
+    assert "tests/aistock_validation/bugs/**" in push_workflow
     assert "pull_request:" not in push_workflow
     assert "group: code-intelligence-refresh-main" in push_workflow
     assert "continue-on-error: true" in push_workflow
@@ -336,6 +412,12 @@ def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped
     assert "scripts/code_intelligence_adapter.py ua-refresh" in nightly
     assert "--max-budget-usd 2" in nightly
     assert "if ($ua.publish_ready)" in nightly
+    assert "GITHUB_STEP_SUMMARY" in push_workflow
+    assert "::warning title=Code intelligence refresh" in push_workflow
+    assert "artifact is unreadable" in push_workflow
+    assert "GITHUB_STEP_SUMMARY" in nightly
+    assert "::warning title=Daily graph refresh" in nightly
+    assert "artifact is unreadable" in nightly
 
 
 def test_verify_clients_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:

@@ -3,51 +3,8 @@ name: AIstock Code Intelligence Refresh
 on:
   push:
     branches: [main]
-    paths:
-      - '**/*.bash'
-      - '**/*.bat'
-      - '**/*.c'
-      - '**/*.cc'
-      - '**/*.cfg'
-      - '**/*.cmd'
-      - '**/*.cpp'
-      - '**/*.cs'
-      - '**/*.gql'
-      - '**/*.go'
-      - '**/*.graphql'
-      - '**/*.h'
-      - '**/*.hcl'
-      - '**/*.hpp'
-      - '**/*.html'
-      - '**/*.ini'
-      - '**/*.java'
-      - '**/*.js'
-      - '**/*.json'
-      - '**/*.jsx'
-      - '**/*.kt'
-      - '**/*.mjs'
-      - '**/*.mts'
-      - '**/*.php'
-      - '**/*.proto'
-      - '**/*.ps1'
-      - '**/*.py'
-      - '**/*.rb'
-      - '**/*.rs'
-      - '**/*.sh'
-      - '**/*.sql'
-      - '**/*.svelte'
-      - '**/*.swift'
-      - '**/*.tf'
-      - '**/*.toml'
-      - '**/*.ts'
-      - '**/*.tsx'
-      - '**/*.vue'
-      - '**/*.xml'
-      - '**/*.yaml'
-      - '**/*.yml'
-      - '**/Dockerfile'
-      - '**/Makefile'
-      - '!tests/aistock_validation/bugs/**'
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch:
 
 permissions:
@@ -85,11 +42,16 @@ jobs:
           "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT=${env:GITHUB_WORKSPACE}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Import persistent graph state
+        id: graph_state_import
+        continue-on-error: true
         run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           python scripts/code_intelligence_adapter.py graph-state `
             --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
             --seed-root "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
-            --direction import
+            --direction import `
+            --output "$outDir/graph-state-import.json"
 
       - name: Sync CodeGraph incrementally
         id: codegraph
@@ -111,11 +73,48 @@ jobs:
             --provider codegraph
 
       - name: Assess Understand Anything work without LLM
+        id: ua_assessment
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py refresh-plan `
             --trigger main_push `
             --output "$outDir/graph-refresh-plan.json"
+
+      - name: Report warning-only refresh status
+        if: always()
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          $rows = @()
+          foreach ($item in @(
+            @{Provider="state-import"; Path="$outDir/graph-state-import.json"},
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"},
+            @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"}
+          )) {
+            if (-not (Test-Path -LiteralPath $item.Path)) {
+              Write-Host "::warning title=Code intelligence refresh::$($item.Provider) did not produce an artifact"
+              $rows += "| $($item.Provider) | warning | missing artifact |"
+              continue
+            }
+            try {
+              $payload = Get-Content -LiteralPath $item.Path -Raw | ConvertFrom-Json
+            } catch {
+              Write-Host "::warning title=Code intelligence refresh::$($item.Provider) artifact is unreadable: $($_.Exception.Message)"
+              $rows += "| $($item.Provider) | warning | unreadable artifact |"
+              continue
+            }
+            $gate = [string]$payload.workflow_gate
+            if ($gate -notin @("ready", "passed")) {
+              Write-Host "::warning title=Code intelligence refresh::$($item.Provider) workflow_gate=$gate"
+            }
+            $rows += "| $($item.Provider) | $gate | warning-only; not a merge gate |"
+          }
+          @(
+            "## Code intelligence refresh",
+            "",
+            "| Provider | Status | Policy |",
+            "| --- | --- | --- |"
+          ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Upload warning-only refresh evidence
         if: always()

@@ -61,51 +61,7 @@ DEFAULT_UNDERSTAND_IGNORE = [
     "*.mp4",
     "*.zip",
 ]
-GRAPH_SOURCE_SUFFIXES = {
-    ".bash",
-    ".bat",
-    ".c",
-    ".cc",
-    ".cfg",
-    ".cmd",
-    ".cpp",
-    ".cs",
-    ".gql",
-    ".go",
-    ".graphql",
-    ".h",
-    ".hcl",
-    ".hpp",
-    ".html",
-    ".ini",
-    ".java",
-    ".js",
-    ".json",
-    ".jsx",
-    ".kt",
-    ".mjs",
-    ".mts",
-    ".php",
-    ".proto",
-    ".ps1",
-    ".py",
-    ".rb",
-    ".rs",
-    ".sh",
-    ".sql",
-    ".svelte",
-    ".swift",
-    ".tf",
-    ".toml",
-    ".ts",
-    ".tsx",
-    ".vue",
-    ".xml",
-    ".yaml",
-    ".yml",
-}
-GRAPH_SOURCE_FILENAMES = {"Dockerfile", "Makefile"}
-GRAPH_NON_SOURCE_PREFIXES = {"tests/aistock_validation/bugs/"}
+GRAPH_METADATA_ONLY_PREFIXES = {"tests/aistock_validation/bugs/"}
 GRAPH_STATE_PROVIDERS = {
     "codegraph": ".codegraph",
     "understand_anything": ".understand-anything",
@@ -900,15 +856,87 @@ def _graph_changed_files(root: Path, base: str, head: str = "HEAD") -> tuple[lis
     return [line.strip().replace("\\", "/") for line in str(result.get("stdout") or "").splitlines() if line.strip()], None
 
 
-def _graph_source_files(paths: list[str]) -> list[str]:
-    return sorted(
-        {
-            path
-            for path in paths
-            if not any(path.startswith(prefix) for prefix in GRAPH_NON_SOURCE_PREFIXES)
-            and (Path(path).suffix.lower() in GRAPH_SOURCE_SUFFIXES or Path(path).name in GRAPH_SOURCE_FILENAMES)
-        }
-    )
+def _ua_scan_inventory(root: Path) -> tuple[set[str], list[str]]:
+    scan_path = root / ".understand-anything" / "intermediate" / "scan-result.json"
+    scan = _read_json_object(scan_path)
+    warnings: list[str] = []
+    if not scan_path.exists():
+        return set(), ["Understand Anything scan inventory is missing"]
+    if scan.get("read_error"):
+        return set(), [f"Understand Anything scan inventory is unreadable: {scan['read_error']}"]
+    files = scan.get("files")
+    if scan.get("scriptCompleted") is not True or not isinstance(files, list):
+        return set(), ["Understand Anything scan inventory is incomplete"]
+    inventory = {
+        str(item.get("path") or "").replace("\\", "/").lstrip("./")
+        for item in files
+        if isinstance(item, dict) and item.get("path")
+    }
+    if not inventory:
+        warnings.append("Understand Anything scan inventory contains no files")
+    return inventory, warnings
+
+
+def _graph_input_files(root: Path, paths: list[str]) -> tuple[list[str], list[str]]:
+    inventory, warnings = _ua_scan_inventory(root)
+    candidates = {
+        path
+        for path in paths
+        if not any(path.startswith(prefix) for prefix in GRAPH_METADATA_ONLY_PREFIXES)
+    }
+    # Existing inventory entries include docs, styles, config and code. Unknown
+    # additions are conservative graph inputs so a new file cannot be silently skipped.
+    known = {path for path in candidates if path in inventory}
+    unknown = candidates - known
+    return sorted(known | unknown), warnings
+
+
+def _ua_state_integrity(root: Path, *, expected_commit: str | None = None) -> dict[str, Any]:
+    graph_path = _understand_graph_path(root)
+    meta_path = root / ".understand-anything" / "meta.json"
+    fingerprints_path = root / ".understand-anything" / "fingerprints.json"
+    graph = _read_json_object(graph_path)
+    meta = _read_json_object(meta_path)
+    fingerprints = _read_json_object(fingerprints_path)
+    issues: list[str] = []
+    if not graph_path.exists():
+        issues.append("knowledge graph is missing")
+    elif graph.get("read_error"):
+        issues.append(f"knowledge graph is unreadable: {graph['read_error']}")
+    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
+        issues.append("knowledge graph nodes/edges are incomplete")
+    graph_project = graph.get("project") if isinstance(graph.get("project"), dict) else {}
+    graph_commit = graph_project.get("gitCommitHash")
+    if not graph_commit:
+        issues.append("knowledge graph commit is missing")
+    if not meta_path.exists() or meta.get("read_error"):
+        issues.append("knowledge graph metadata is missing or unreadable")
+    meta_commit = meta.get("gitCommitHash")
+    if not meta_commit:
+        issues.append("knowledge graph metadata commit is missing")
+    if graph_commit and meta_commit and str(graph_commit) != str(meta_commit):
+        issues.append("knowledge graph and metadata commits differ")
+    if expected_commit and graph_commit and str(graph_commit) != str(expected_commit):
+        issues.append(f"knowledge graph commit {graph_commit} does not match {expected_commit}")
+    if not fingerprints_path.exists() or fingerprints.get("read_error"):
+        issues.append("structural fingerprints are missing or unreadable")
+    else:
+        fingerprint_commit = fingerprints.get("gitCommitHash")
+        if not fingerprint_commit:
+            issues.append("structural fingerprints commit is missing")
+        if not isinstance(fingerprints.get("files"), dict):
+            issues.append("structural fingerprints files are incomplete")
+        if graph_commit and fingerprint_commit and str(graph_commit) != str(fingerprint_commit):
+            issues.append("knowledge graph and structural fingerprint commits differ")
+    _, scan_warnings = _ua_scan_inventory(root)
+    issues.extend(scan_warnings)
+    return {
+        "valid": not issues,
+        "issues": issues,
+        "graph_commit": graph_commit,
+        "meta_commit": meta_commit,
+        "fingerprints_exist": fingerprints_path.exists(),
+    }
 
 
 def build_graph_refresh_plan(
@@ -924,20 +952,17 @@ def build_graph_refresh_plan(
     git = _git_snapshot(root)
     current_commit = git.get("head")
     codegraph_action = "sync" if _codegraph_index_path(root).exists() else "index"
-    graph = _read_json_object(_understand_graph_path(root))
-    meta = _read_json_object(root / ".understand-anything" / "meta.json")
-    graph_project = graph.get("project") if isinstance(graph.get("project"), dict) else {}
-    ua_commit = graph_project.get("gitCommitHash") or meta.get("gitCommitHash")
-    fingerprints_path = root / ".understand-anything" / "fingerprints.json"
+    integrity = _ua_state_integrity(root)
+    ua_commit = integrity.get("graph_commit") or integrity.get("meta_commit")
     changed_files: list[str] = []
     diff_error: str | None = None
     if ua_commit and current_commit and str(ua_commit) != str(current_commit):
         changed_files, diff_error = _graph_changed_files(root, str(ua_commit), str(current_commit))
-    source_files = _graph_source_files(changed_files)
+    source_files, scan_warnings = _graph_input_files(root, changed_files)
 
-    if not graph or not ua_commit:
+    if not integrity.get("valid"):
         ua_action = "full_rebuild"
-        ua_reason = "missing_graph_or_metadata"
+        ua_reason = "invalid_or_incomplete_graph_state"
     elif str(ua_commit) == str(current_commit):
         ua_action = "skip"
         ua_reason = "already_current"
@@ -949,7 +974,7 @@ def build_graph_refresh_plan(
         ua_reason = "no_source_changes"
     else:
         ua_action = "incremental_update"
-        ua_reason = "source_changes_since_graph_commit" if fingerprints_path.exists() else "source_changes_bootstrap_fingerprints_after_update"
+        ua_reason = "graph_inputs_changed_since_graph_commit"
 
     run_ua_semantic = trigger in {"nightly", "manual"} and ua_action in {"full_rebuild", "incremental_update"}
     deferred_to_nightly = trigger == "main_push" and ua_action in {"full_rebuild", "incremental_update"}
@@ -970,8 +995,10 @@ def build_graph_refresh_plan(
             "action": ua_action,
             "reason": ua_reason,
             "graph_commit": ua_commit,
-            "graph_exists": bool(graph),
-            "fingerprints_exist": fingerprints_path.exists(),
+            "graph_exists": _understand_graph_path(root).exists(),
+            "fingerprints_exist": bool(integrity.get("fingerprints_exist")),
+            "integrity": integrity,
+            "scan_warnings": scan_warnings,
             "changed_files": changed_files,
             "source_changed_files": source_files,
             "source_changed_count": len(source_files),
@@ -1123,21 +1150,33 @@ def advance_understand_anything_metadata(*, root: Path, commit: str | None = Non
     root = root.resolve()
     graph_path = _understand_graph_path(root)
     meta_path = root / ".understand-anything" / "meta.json"
+    fingerprints_path = root / ".understand-anything" / "fingerprints.json"
     graph = _read_json_object(graph_path)
     meta = _read_json_object(meta_path)
+    fingerprints = _read_json_object(fingerprints_path)
     target_commit = commit or _git_snapshot(root).get("head")
-    if not graph or not target_commit:
-        return {"workflow_gate": "warning", "advanced": False, "reason": "graph_or_commit_missing"}
+    integrity = _ua_state_integrity(root)
+    if not integrity.get("valid") or not target_commit:
+        return {
+            "workflow_gate": "warning",
+            "advanced": False,
+            "reason": "graph_state_or_commit_invalid",
+            "integrity": integrity,
+        }
     project = graph.setdefault("project", {})
     if not isinstance(project, dict):
         project = {}
         graph["project"] = project
+    advanced_at = _utc_now()
     project["gitCommitHash"] = target_commit
-    project["analyzedAt"] = _utc_now()
+    project["metadataAdvancedAt"] = advanced_at
     meta["gitCommitHash"] = target_commit
-    meta["lastAnalyzedAt"] = project["analyzedAt"]
+    meta["lastMetadataAdvancedAt"] = advanced_at
+    fingerprints["gitCommitHash"] = target_commit
+    fingerprints["metadataAdvancedAt"] = advanced_at
     _write_json(graph_path, graph)
     _write_json(meta_path, meta)
+    _write_json(fingerprints_path, fingerprints)
     return {"workflow_gate": "ready", "advanced": True, "commit": target_commit}
 
 
@@ -1153,7 +1192,8 @@ def refresh_understand_anything(
     ua_plan = plan["understand_anything"]
     action = str(ua_plan.get("action") or "skip")
     if action == "skip":
-        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": "ready", "warning_only": True, "action": action, "publish_ready": True, "plan": ua_plan}
+        integrity = _ua_state_integrity(root, expected_commit=plan.get("current_commit"))
+        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": "ready" if integrity["valid"] else "warning", "warning_only": True, "action": action, "publish_ready": bool(integrity["valid"]), "plan": ua_plan, "integrity": integrity}
         _write_json(output_dir / "understand-anything-refresh.json", payload)
         return payload
     if action == "metadata_advance":
@@ -1202,7 +1242,8 @@ def refresh_understand_anything(
             else:
                 os.environ["UNDERSTAND_NO_WORKTREE_REDIRECT"] = previous_redirect
     status = understand_anything_status(root, skip_external=True)
-    publish_ready = bool(result.get("ok") and status.get("freshness") == "fresh" and (root / ".understand-anything" / "fingerprints.json").exists())
+    integrity = _ua_state_integrity(root, expected_commit=plan.get("current_commit"))
+    publish_ready = bool(result.get("ok") and status.get("freshness") == "fresh" and integrity.get("valid"))
     payload = {
         "schema_version": "aistock_understand_anything_refresh_v1",
         "generated_at": _utc_now(),
@@ -1214,6 +1255,7 @@ def refresh_understand_anything(
         "plan": ua_plan,
         "command_result": _compact_command_result(result, success_summary="Understand Anything refresh completed"),
         "status": status,
+        "integrity": integrity,
     }
     _write_json(output_dir / "understand-anything-refresh.json", payload)
     return payload

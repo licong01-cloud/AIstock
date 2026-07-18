@@ -400,12 +400,14 @@ jobs:
           "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT=${env:GITHUB_WORKSPACE}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Import persistent graph state
+        id: graph_state_import
         continue-on-error: true
         run: |
           conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
             --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
             --seed-root "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
-            --direction import
+            --direction import `
+            --output "tmp/validation/code-intelligence/${{ github.run_id }}/graph-state-import.json"
 
       - name: Reconcile CodeGraph and Understand Anything
         id: graph_refresh
@@ -437,6 +439,42 @@ jobs:
               --direction export `
               --provider understand_anything
           }
+
+      - name: Report daily graph refresh status
+        if: always()
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          $rows = @()
+          foreach ($item in @(
+            @{Provider="state-import"; Path="$outDir/graph-state-import.json"},
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"},
+            @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"}
+          )) {
+            if (-not (Test-Path -LiteralPath $item.Path)) {
+              Write-Host "::warning title=Daily graph refresh::$($item.Provider) did not produce an artifact"
+              $rows += "| $($item.Provider) | warning | missing artifact |"
+              continue
+            }
+            try {
+              $payload = Get-Content -LiteralPath $item.Path -Raw | ConvertFrom-Json
+            } catch {
+              Write-Host "::warning title=Daily graph refresh::$($item.Provider) artifact is unreadable: $($_.Exception.Message)"
+              $rows += "| $($item.Provider) | warning | unreadable artifact |"
+              continue
+            }
+            $gate = [string]$payload.workflow_gate
+            $published = [string]$payload.publish_ready
+            if ($gate -ne "ready" -or $published -ne "True") {
+              Write-Host "::warning title=Daily graph refresh::$($item.Provider) workflow_gate=$gate publish_ready=$published; previous published state preserved"
+            }
+            $rows += "| $($item.Provider) | $gate | $published |"
+          }
+          @(
+            "## Daily graph refresh",
+            "",
+            "| Provider | Status | Published |",
+            "| --- | --- | --- |"
+          ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Build CodeGraph freshness artifact
         run: |
