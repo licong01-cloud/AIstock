@@ -91,6 +91,34 @@ The current issue Context Pack, explicit user request, and relevant code paths a
   - `production_backend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.
 - If a merged change needs new DB objects, apply and verify the committed production migration before claiming production readiness; otherwise report `production_ddl_pending`.
 
+## Advisory Research Program Working Memory
+
+Current durable state as of 2026-07-19. Detailed contracts and acceptance evidence remain in the architecture documents, BUG records, and PR history rather than this file.
+
+### Fixed Product And Isolation Constraints
+
+- Advisory is historical/academic research output only. It may rank candidates and later estimate research-only holding periods, returns, or price ranges, but it must not create orders, execution instructions, or real-trading integration.
+- Multiple Advisory Programs and strategy packages run independently at the same time. Each Program binds either one admitted single-Alpha package or one admitted native multi-Alpha parent package. Manual cross-package Alpha composition in the Advisory page is retired and must not return.
+- A strategy package is validated when admitted. Advisory, Selection, simulation, and Paper consumers must not add a second package asset/executability admission gate. Runtime validation is limited to the exact data, identity, PIT, lineage, and artifact contracts required for that operation.
+- Advisory must remain isolated from Selection, simulation, Paper, QE/RD-Agent, Qlib/backtest, QMT, and trading runtime ownership. Shared production ST PIT data may be used by Selection and simulation, but Advisory/QE research evidence and all backtest PIT files remain isolated. Advisory must not consume backtest results or backtest Parquet as runtime input.
+- Advisory market and training inputs come from the configured database and immutable Advisory evidence stores. Database connection details are read from the explicit `.env`; never guess them. Training extraction may materialize files to avoid repeated database reads.
+- All Advisory model training runs in the WSL Conda environment, not Windows Python. No trained ranking/return/holding-period/price model is activated yet.
+- Do not introduce roles, approvals, acknowledgements, backup gates, enable flags, package re-approval, or other manual workflow gates without explicit user confirmation. DDL is a development/release action only, uses committed migrations and explicit authorization, and does not require a per-DDL full database backup gate.
+
+### Current Phase Status
+
+- Parent authority: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`. Real DEV dual-track authority: `docs/architecture/advisory_real_dev_dual_track_input_onboarding_f2_design_20260716.md`.
+- Phase 0A multi-package delivery supports admitted single-Alpha packages and admitted native multi-Alpha parent packages with independent Program execution. Historical evidence, PIT lineage, capacity, and compiler work must preserve Program isolation.
+- O3 real DEV dual-track onboarding has created two Programs and two non-overlapping ACTIVE bindings effective from 2026-07-20. The exact request hash is `ba3f0c230b2f4efe3f1d85f15b1de2268f0ad2a3622661f83cfe79deaf8eed6f`. The earlier run correctly remained input-pending before that decision date completed.
+- O4 Phase 1E implementation is merged. PR #2444 supplied the main O4 orchestration; BUG-764 PR #2449 and close-sync PR #2454 completed the authoritative typed capacity policy producer and the exact historical request/receipt ref chain. `run-historical` now emits typed refs that feed `observe-source`, `build-phase1e-inputs`, `plan-capacity`, and `compile-phase1e` without CAS scans or handwritten artifact payloads.
+- BUG-764 is fixed and closed. Source merge commit: `69722f054218c1352f583bc9f9f1022c97821c86`; close-sync/main commit: `247237b75afca7b50937ff3addc6c24959ec5a4c`. Its production DDL and dependency gates were all `noop`; no runtime service or database was changed.
+- Real O4 L3/L4 completion is still pending the completed 2026-07-20 ingestion and prospective DSE/receipt. After that, execute the exact sequence `observe-source -> run-historical -> build-phase1e-inputs -> plan-capacity -> compile-phase1e`, preserving every emitted ref. Do not claim Phase 1E or G5 real DEV completion before that evidence exists.
+- G5/O5 must consume the exact O4 plan only after the real chain completes. Phase 0B model-quality and trainability work starts after the real sealed input boundary is available; no model training or Advisory runtime activation should be inferred from the completed infrastructure code.
+
+### Workspace Residual
+
+- As of 2026-07-19, `scripts/onboard_multialpha_sim_binding.py`, `scripts/reset_multialpha_sim_run.py`, and `scripts/seed_multialpha_sim_virtual_account.py` are absent and untracked. Do not assume they exist or recreate them from memory; obtain an authoritative source or new explicit design if they are needed.
+
 ## UI Rules
 
 - New AIstock operator-facing UI defaults to shadcn/ui Blocks visual language, shadcn-compatible tokens, clear component boundaries, and human-friendly layout density.
