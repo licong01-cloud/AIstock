@@ -1,10 +1,8 @@
 {
-  "actual": "After runtime activation, GET /api/v1/hmm-evolution/qe-assets/{task}/{loop} returns 503. ManagedQEWorkspaceReadClient calls the QE workspace files collection URL without the canonical trailing slash; the node responds 307 to the slash-suffixed URL, while QEWorkspaceClient treats the redirect as an error. Expected: build the canonical collection URL or safely follow same-origin redirects while preserving authoritative-node routing, bounded reads, and fail-loud errors.",
+  "actual": "GET /api/v1/hmm-evolution/qe-assets/{task}/{loop} returns 503 because the running RD-Agent Results API process predates the merged loop asset catalog contract. Its OpenAPI schema has only /files/{file_path}; requesting the intended /files collection falls through to a 307 slash redirect and then a 404 for an empty file path. RD-Agent PR #4 already added the exact /files collection endpoint, but the process started on 2026-07-15 and has not loaded that merged code.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260718_BUG-757-hmm-qe-asset-catalog-rejects-canonical-307-trailing-slash-redirect.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "backend/services/quantevolver/qe_workspace_client.py",
-    "backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-757",
@@ -15,7 +13,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-18T08:42:54.952155Z",
-  "description": "After runtime activation, GET /api/v1/hmm-evolution/qe-assets/{task}/{loop} returns 503. ManagedQEWorkspaceReadClient calls the QE workspace files collection URL without the canonical trailing slash; the node responds 307 to the slash-suffixed URL, while QEWorkspaceClient treats the redirect as an error. Expected: build the canonical collection URL or safely follow same-origin redirects while preserving authoritative-node routing, bounded reads, and fail-loud errors.",
+  "description": "The AIstock client already requests the correct exact collection route. RD-Agent PR #4 (commit 8c6776a5c90b16a57ab68853be72726d9e5305d9) implements that route, but the active Results API process is still serving the older route table. Activate the merged RD-Agent code and verify a complete read-only catalog before closing this BUG; do not add a redirect-following or guessed-file fallback in AIstock.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,8 +22,11 @@
       "timestamp": "2026-07-18T08:42:54.952150Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/RD-Agent/pull/4",
+    "https://github.com/licong01-cloud/RD-Agent/commit/8c6776a5c90b16a57ab68853be72726d9e5305d9"
+  ],
+  "expected": "After the RD-Agent Results API is restarted from commit 8c6776a5c90b16a57ab68853be72726d9e5305d9 or later, GET /api/v1/qe_workspace/tasks/{task_id}/loops/{loop_id}/files returns HTTP 200 with catalog_completeness and a deterministic read-only files list; the HMM QE asset endpoint then succeeds without redirects or fallback guessing.",
   "first_seen_at": "2026-07-18T08:42:54.952155Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -51,7 +52,7 @@
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "HMM QE asset catalog rejects canonical 307 trailing-slash redirect",
+  "title": "HMM QE asset catalog runtime is behind merged RD-Agent catalog contract",
   "trigger_condition": {
     "fingerprint": "cd5ae5fe9d94e69f4c76a110",
     "source_event_id": "FE-20260718-cd5ae5fe9d94"
