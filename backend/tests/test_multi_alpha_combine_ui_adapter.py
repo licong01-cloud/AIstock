@@ -184,16 +184,16 @@ def test_requested_missing_scheme_fails_loud() -> None:
     assert excinfo.value.context["requested_scheme"] == "ic_weighted"
 
 
-def test_succeeded_run_missing_scheme_results_fails_loud() -> None:
+def test_succeeded_run_missing_scheme_results_stays_visible_as_explicit_skip() -> None:
     run = _run("run_missing")
     task_key = task_key_for_run(run)
     adapter = _adapter({"run_missing": {"run": run, "scheme_results": [], "loo": []}})
 
-    with pytest.raises(CombineUIAdapterError) as excinfo:
-        adapter.get_trajectory(task_key)
+    result = adapter.get_trajectory(task_key)
 
-    assert excinfo.value.reason_code == "combine_ui_scheme_results_missing"
-    assert excinfo.value.context["run_id"] == "run_missing"
+    assert result["available_schemes"] == ["ic_weighted"]
+    assert result["trajectory"][0]["metrics_json"]["annualized_return"] is None
+    assert result["trajectory"][0]["reason"] == {}
 
 
 def test_running_run_without_scheme_result_uses_placeholder_not_silent_success() -> None:
@@ -212,9 +212,46 @@ def test_running_run_without_scheme_result_uses_placeholder_not_silent_success()
     assert loop["config_json"]["weights_json"] == {}
 
 
+def test_task_progress_uses_latest_running_run_heartbeat() -> None:
+    run_old = _run(
+        "run_running_old",
+        status="running",
+        topk=25,
+        created_at="2026-06-26T01:00:00+00:00",
+        reason={
+            "phase": "scheme_combined",
+            "heartbeat_at": "2026-06-26T01:10:00+00:00",
+            "progress": {"completed": 1, "total": 4, "pending": 3},
+        },
+    )
+    run_old["updated_at"] = "2026-06-26T01:10:00+00:00"
+    run_new = _run(
+        "run_running_new",
+        status="running",
+        topk=50,
+        created_at="2026-06-26T02:00:00+00:00",
+        reason={
+            "phase": "backtests_running",
+            "heartbeat_at": "2026-06-26T02:20:00+00:00",
+            "progress": {"completed": 3, "total": 4, "pending": 1},
+        },
+    )
+    run_new["updated_at"] = "2026-06-26T02:20:00+00:00"
+    task_key = task_key_for_run(run_old)
+    adapter = _adapter({
+        "run_running_old": {"run": run_old, "scheme_results": [], "loo": []},
+        "run_running_new": {"run": run_new, "scheme_results": [], "loo": []},
+    })
+
+    task = adapter.get_task(task_key)["task"]
+
+    assert task["phase"] == "backtests_running"
+    assert task["progress"] == {"completed": 3, "total": 4, "pending": 1}
+    assert task["heartbeat_at"] == "2026-06-26T02:20:00+00:00"
+
+
 def test_failed_runs_with_disjoint_schemes_do_not_break_task_render() -> None:
-    # BUG-541: failed run 的 scheme_result 不应参与 common scheme 交集计算。
-    # 一个 succeeded run(ic_weighted) + 两个 scheme 互不相交的 failed run。
+    # Failed/partial run 已持久化的 scheme 结果也是研究证据，必须保留并可切换。
     run_ok = _run("run_ok", status="succeeded")
     run_fail_a = _run("run_fail_a", status="failed", oos_start="2024-07-02", oos_end="2025-05-31")
     run_fail_b = _run("run_fail_b", status="failed", oos_start="2025-06-01", oos_end="2026-03-10")
@@ -227,13 +264,18 @@ def test_failed_runs_with_disjoint_schemes_do_not_break_task_render() -> None:
 
     result = adapter.get_trajectory(task_key)
 
-    # 只取 succeeded run 的交集 → ic_weighted;不再抛 combine_ui_no_common_weighting_scheme
-    assert result["available_schemes"] == ["ic_weighted"]
+    assert result["available_schemes"] == [
+        "ic_weighted",
+        "orthogonality_aware",
+        "equal",
+        "rank_fusion_rrf",
+        "rank_fusion_borda",
+    ]
     assert result["scheme"] == "ic_weighted"
 
 
 def test_all_runs_failed_falls_back_to_default_scheme_not_crash() -> None:
-    # 全部 run 非 succeeded(无成功 run)→ 降级 default scheme,不崩。
+    # 全部 run failed 时仍展示真实持久化 scheme，而不是伪造默认 scheme。
     run_fail_a = _run("run_fa", status="failed")
     run_fail_b = _run("run_fb", status="failed")
     task_key = task_key_for_run(run_fail_a)
@@ -244,11 +286,11 @@ def test_all_runs_failed_falls_back_to_default_scheme_not_crash() -> None:
 
     result = adapter.get_trajectory(task_key)
 
-    assert result["available_schemes"] == ["ic_weighted"]  # DEFAULT_SCHEME
+    assert result["available_schemes"] == ["equal", "rank_fusion_rrf"]
+    assert result["scheme"] == "equal"
 
 
-def test_succeeded_runs_with_truly_disjoint_schemes_still_raise() -> None:
-    # 真实异常不掩盖:两个 succeeded run scheme 无交集 → 仍显式报错。
+def test_succeeded_runs_with_disjoint_schemes_render_sparse_comparison() -> None:
     run_a = _run("run_sa", status="succeeded", oos_start="2024-07-02", oos_end="2025-05-31")
     run_b = _run("run_sb", status="succeeded", oos_start="2025-06-01", oos_end="2026-03-10")
     task_key = task_key_for_run(run_a)
@@ -257,8 +299,46 @@ def test_succeeded_runs_with_truly_disjoint_schemes_still_raise() -> None:
         "run_sb": {"run": run_b, "scheme_results": [_scheme("ic_weighted")], "loo": []},
     })
 
-    with pytest.raises(CombineUIAdapterError) as excinfo:
-        adapter.get_trajectory(task_key)
+    result = adapter.get_trajectory(task_key)
 
-    assert excinfo.value.reason_code == "combine_ui_no_common_weighting_scheme"
-    assert set(excinfo.value.context["run_ids"]) == {"run_sa", "run_sb"}
+    assert result["available_schemes"] == ["ic_weighted", "equal"]
+    assert result["scheme"] == "ic_weighted"
+    assert result["trajectory"][0]["metrics_json"]["annualized_return"] is None
+    assert result["trajectory"][1]["metrics_json"]["annualized_return"] == pytest.approx(1.0)
+
+
+def test_partial_failed_run_keeps_computable_scheme_progress_and_sota() -> None:
+    run_ok = _run("run_ok", status="succeeded", topk=25)
+    run_partial = _run(
+        "run_partial",
+        status="failed",
+        topk=50,
+        reason={
+            "logical_status": "partial_failed",
+            "phase": "completed",
+            "heartbeat_at": "2026-06-26T03:00:00+00:00",
+            "progress": {"completed": 3, "total": 4, "pending": 0},
+        },
+    )
+    task_key = task_key_for_run(run_ok)
+    adapter = _adapter({
+        "run_ok": {"run": run_ok, "scheme_results": [_scheme("equal", cagr=0.8)], "loo": []},
+        "run_partial": {
+            "run": run_partial,
+            "scheme_results": [
+                _scheme("equal", cagr=1.2),
+                {"weighting_scheme": "ic_weighted", "skipped": True, "skipped_reason": "no positive weights"},
+            ],
+            "loo": [],
+        },
+    })
+
+    result = adapter.get_task(task_key, scheme="equal")
+    partial_loop = next(loop for loop in result["loops"] if loop["run_id"] == "run_partial")
+
+    assert result["task"]["status"] == "partial_failed"
+    assert result["task"]["partial_failed_count"] == 1
+    assert partial_loop["raw_status"] == "partial_failed"
+    assert partial_loop["progress"] == {"completed": 3, "total": 4, "pending": 0}
+    assert partial_loop["is_sota"] is True
+    assert partial_loop["scheme_results"][1]["skipped_reason"] == "no positive weights"

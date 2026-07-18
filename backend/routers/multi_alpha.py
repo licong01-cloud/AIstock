@@ -66,6 +66,14 @@ class CombineBacktestStaleFailRequest(BaseModel):
     confirmation: str | None = None
 
 
+class CombineBacktestRetryRequest(BaseModel):
+    payload: CombineBacktestRunRequest | None = None
+
+
+class CombineBacktestArchiveRequest(BaseModel):
+    dry_run: bool = True
+
+
 def _parse_run_ids(values: list[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -119,6 +127,82 @@ def get_multi_alpha_combine_backtest(run_id: str) -> dict:
     except MultiAlphaCombineBacktestError as exc:
         status_code = 404 if exc.reason_code == "run_not_found" else 400
         raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine-backtest/runs/{run_id}/retry-draft", summary="Build an auditable retry payload for a combine-backtest run")
+def get_multi_alpha_combine_backtest_retry_draft(run_id: str) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().get_retry_draft(run_id)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.post("/combine-backtest/runs/{run_id}/retry", summary="Create a new combine-backtest run from a frozen or explicit retry payload")
+def retry_multi_alpha_combine_backtest(run_id: str, request: CombineBacktestRetryRequest) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().retry_run(
+            run_id,
+            payload=request.payload.model_dump() if request.payload is not None else None,
+        )
+    except MultiAlphaCombineBacktestError as exc:
+        if exc.reason_code == "run_not_found":
+            status_code = 404
+        elif exc.reason_code == "combine_backtest_retry_payload_required":
+            status_code = 409
+        else:
+            status_code = 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.delete("/combine-backtest/runs/{run_id}", summary="Delete one terminal combine-backtest run and optionally its workspace")
+def delete_multi_alpha_combine_backtest(run_id: str, cleanup_workspace: bool = True) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().delete_run(run_id, cleanup_workspace=cleanup_workspace)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code in {"run_not_found", "combine_backtest_delete_missing"} else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine-backtest/runs/{run_id}/logs", summary="Get structured progress events and safe workspace log tails")
+def get_multi_alpha_combine_backtest_logs(
+    run_id: str,
+    tail_lines: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().get_run_logs(run_id, tail_lines=tail_lines)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine-backtest/runs/{run_id}/archive-status", summary="Get QE Archive status for one combine-backtest run")
+def get_multi_alpha_combine_backtest_archive_status(run_id: str) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().get_archive_status(run_id)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.post("/combine-backtest/runs/{run_id}/archive", summary="Preview or write one combine-backtest run to QE Archive")
+def archive_multi_alpha_combine_backtest(run_id: str, request: CombineBacktestArchiveRequest) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().archive_run(run_id, dry_run=request.dry_run)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason_code": "combine_backtest_archive_failed", "message": str(exc)},
+        ) from exc
     return {"status": "success", "data": data}
 
 

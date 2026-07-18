@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, ArrowLeft, DownloadCloud, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
+import { Activity, ArrowLeft, DownloadCloud, PackagePlus, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
@@ -9,10 +9,9 @@ import LoopDetailPanel from "../../../evolution/components/LoopDetailPanel";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
 import type { DataSourceAdapter } from "../../../components/EvolutionTrajectory";
 import CombineDiagnosticsPanel, { type CombineDiagnosticsLoop } from "../components/CombineDiagnosticsPanel";
+import CombineRunOperationsPanel, { type CombineRunLoop } from "../components/CombineRunOperationsPanel";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
-const DELETE_APPROVAL_MESSAGE = "删除属于写操作，当前设计实现为只读查询；如需启用删除端点，请单独审批写入范围。";
-
 type CombineTask = {
   task_id: string;
   task_name: string;
@@ -29,11 +28,16 @@ type CombineTask = {
   default_scheme?: string;
   phase?: string | null;
   running_count?: number;
+  completed_count?: number;
+  partial_failed_count?: number;
+  failed_count?: number;
+  progress?: Record<string, unknown>;
+  heartbeat_at?: string | null;
 };
 
 type CombineTaskDetail = {
   task: CombineTask;
-  loops: Loop[];
+  loops: CombineRunLoop[];
   scheme: string;
   available_schemes: string[];
   scheme_warning?: Record<string, any> | null;
@@ -94,6 +98,11 @@ function formatTime(value?: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function timestampOf(value?: string | null): number {
+  const parsed = Date.parse(value || "");
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function formatPct(value: any, digits = 2): string {
@@ -168,16 +177,20 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   const [selectedScheme, setSelectedScheme] = useState("");
   const [selectedLoopIndex, setSelectedLoopIndex] = useState<number | null>(null);
   const [rightPanelView, setRightPanelView] = useState<"loop" | "trajectory">("trajectory");
-  const [pageTab, setPageTab] = useState<"detail" | "diagnostics">(requestedTab === "diagnostics" ? "diagnostics" : "detail");
+  const [pageTab, setPageTab] = useState<"detail" | "runtime" | "diagnostics">(
+    requestedTab === "diagnostics" ? "diagnostics" : requestedTab === "runtime" ? "runtime" : "detail",
+  );
   const [detailTab, setDetailTab] = useState("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [packageExporting, setPackageExporting] = useState(false);
   const [packageExportMessage, setPackageExportMessage] = useState<{ ok: boolean; text: string; packageId?: string } | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshInterval, setRefreshInterval] = useState(5);
   const selectionRunId = searchParams.get("selection_run_id");
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (preferredRunId?: string) => {
     setLoading(true);
     setError(null);
     const query = selectedScheme ? `?scheme=${encodeURIComponent(selectedScheme)}` : "";
@@ -186,8 +199,18 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
       setDetail(data);
       setSelectedScheme(data.scheme || selectedScheme || "ic_weighted");
       setSelectedLoopIndex((current) => {
+        if (preferredRunId) {
+          const preferred = data.loops.find((loop) => exportRunId(loop) === preferredRunId);
+          if (preferred) return preferred.loop_index;
+        }
         if (current && data.loops.some((loop) => loop.loop_index === current)) return current;
-        return data.loops.find((loop) => loop.is_sota)?.loop_index ?? data.loops[0]?.loop_index ?? null;
+        const latestRunning = data.loops
+          .filter((loop) => loop.raw_status === "running" || loop.status === "running")
+          .sort((left, right) => timestampOf(right.heartbeat_at || right.updated_at) - timestampOf(left.heartbeat_at || left.updated_at))[0];
+        return latestRunning?.loop_index
+          ?? data.loops.find((loop) => loop.is_sota)?.loop_index
+          ?? data.loops[data.loops.length - 1]?.loop_index
+          ?? null;
       });
       setLastLoadedAt(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (exc) {
@@ -203,13 +226,27 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   }, [loadDetail]);
 
   useEffect(() => {
-    if (requestedTab === "diagnostics") {
-      setPageTab("diagnostics");
-    }
+    if (requestedTab === "diagnostics") setPageTab("diagnostics");
+    if (requestedTab === "runtime") setPageTab("runtime");
   }, [requestedTab]);
 
   const loops = useMemo(() => detail?.loops || [], [detail?.loops]);
   const task = detail?.task || null;
+
+  useEffect(() => {
+    if (!autoRefresh || task?.status !== "running") return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadDetail();
+    }, refreshInterval * 1000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadDetail();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [autoRefresh, loadDetail, refreshInterval, task?.status]);
   const activeLoopData = useMemo(() => {
     if (selectedLoopIndex == null) return undefined;
     return loops.find((loop) => loop.loop_index === selectedLoopIndex);
@@ -224,9 +261,10 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
     scheme: detail?.scheme || selectedScheme,
   }), [detail?.scheme, selectedScheme]);
   const statusInfo = combineStatusInfo(task?.status || "pending");
-  const completedCount = loops.filter((loop) => loop.status === "completed").length;
-  const failedCount = loops.filter((loop) => loop.status === "failed").length;
-  const runningCount = loops.filter((loop) => loop.status === "running").length;
+  const completedCount = loops.filter((loop) => loop.raw_status === "succeeded" || loop.status === "completed").length;
+  const partialFailedCount = loops.filter((loop) => loop.raw_status === "partial_failed").length;
+  const failedCount = loops.filter((loop) => loop.raw_status === "failed").length;
+  const runningCount = loops.filter((loop) => loop.raw_status === "running" || loop.status === "running").length;
   const bestLoop = loops.find((loop) => loop.is_sota);
   const exportLoop = bestLoop || loops.find((loop) => loop.status === "completed") || activeLoopData;
   const packageExportRunId = exportRunId(exportLoop);
@@ -287,6 +325,20 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#475569", backgroundColor: "#fff", border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 8px" }}>
+            <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
+            自动刷新
+          </label>
+          <select
+            value={refreshInterval}
+            onChange={(event) => setRefreshInterval(Number(event.target.value))}
+            disabled={!autoRefresh}
+            style={{ padding: "7px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "11px", color: "#475569", backgroundColor: "#fff" }}
+          >
+            <option value={5}>5秒</option>
+            <option value={10}>10秒</option>
+            <option value={30}>30秒</option>
+          </select>
           <select
             value={selectedScheme}
             onChange={(event) => { setSelectedScheme(event.target.value); setRightPanelView("trajectory"); }}
@@ -319,13 +371,6 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
           >
             <PackagePlus size={12} /> {packageExporting ? "导出中..." : "导出为策略包"}
           </button>
-          <button
-            onClick={() => alert(DELETE_APPROVAL_MESSAGE)}
-            title={DELETE_APPROVAL_MESSAGE}
-            style={{ padding: "6px 14px", backgroundColor: "#fff", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "not-allowed", display: "flex", alignItems: "center", gap: "6px", opacity: 0.65 }}
-          >
-            <Trash2 size={12} /> 删除
-          </button>
         </div>
       </div>
 
@@ -356,10 +401,11 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
         {[
           { label: "状态", value: statusInfo.label, color: statusInfo.color },
           { label: "配置数", value: `${task?.current_loop ?? 0}/${task?.max_loops ?? 0}`, color: "#0f172a" },
-          { label: "完成/失败/运行", value: `${completedCount}/${failedCount}/${runningCount}`, color: "#64748b" },
+          { label: "完成/部分失败/失败/运行", value: `${completedCount}/${partialFailedCount}/${failedCount}/${runningCount}`, color: "#64748b" },
+          { label: "当前阶段", value: task?.phase || "-", color: "#0369a1" },
           { label: "最佳 CAGR", value: formatPct(metricValue(bestLoop, "annualized_return")), color: "#059669" },
           { label: "最佳 Sharpe", value: formatNum(metricValue(bestLoop, "sharpe"), 2), color: "#3b82f6" },
-          { label: "更新时间", value: formatTime(task?.updated_at), color: "#64748b" },
+          { label: "最后心跳", value: formatTime(task?.heartbeat_at || task?.updated_at), color: "#64748b" },
         ].map((item) => (
           <div key={item.label} style={{ textAlign: "center", padding: "16px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
             <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 600, textTransform: "uppercase" }}>{item.label}</div>
@@ -371,6 +417,7 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {[
           { key: "detail" as const, label: "配置详情" },
+          { key: "runtime" as const, label: "运行与日志" },
           { key: "diagnostics" as const, label: "诊断" },
         ].map((tab) => (
           <button
@@ -392,7 +439,15 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
         ))}
       </div>
 
-      {pageTab === "diagnostics" ? (
+      {pageTab === "runtime" ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <CombineRunOperationsPanel
+            apiBase={API}
+            loop={activeLoopData}
+            onChanged={async (newRunId) => { await loadDetail(newRunId); }}
+          />
+        </div>
+      ) : pageTab === "diagnostics" ? (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <CombineDiagnosticsPanel
             apiBase={API}
@@ -419,6 +474,8 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
               {loops.map((loop) => {
                 const isActive = selectedLoopIndex === loop.loop_index;
                 const label = loop.config_json?.label || `配置 ${loop.loop_index}`;
+                const rawStatus = loop.raw_status || loop.status;
+                const loopStatusInfo = combineStatusInfo(rawStatus || "pending");
                 return (
                   <div
                     key={loop.loop_id}
@@ -429,7 +486,7 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
                       <span>配置 {loop.loop_index}</span>
                       <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                         {loop.is_sota && <span style={{ fontSize: "10px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: "4px" }}>最优配置</span>}
-                        <span style={{ fontSize: "10px", color: loop.status === "completed" ? "#22c55e" : loop.status === "running" ? "#3b82f6" : "#ef4444", backgroundColor: loop.status === "completed" ? "#f0fdf4" : loop.status === "running" ? "#dbeafe" : "#fef2f2", padding: "2px 6px", borderRadius: "4px" }}>{loop.status}</span>
+                        <span style={{ fontSize: "10px", color: loopStatusInfo.color, backgroundColor: loopStatusInfo.bgColor, padding: "2px 6px", borderRadius: "4px" }}>{loopStatusInfo.label}</span>
                       </div>
                     </div>
                     <div title={label} style={{ marginTop: "8px", padding: "8px 10px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", color: "#475569", fontSize: "11px", lineHeight: 1.5 }}>
@@ -438,6 +495,11 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
                     <div style={{ display: "flex", gap: "8px", marginTop: "6px", fontSize: "11px", color: "#475569", fontFamily: "monospace" }}>
                       <span>CAGR:{formatPct(loop.metrics_json?.annualized_return, 1)}</span>
                       <span>Sh:{formatNum(loop.metrics_json?.sharpe, 2)}</span>
+                    </div>
+                    <div style={{ marginTop: 6, display: "grid", gap: 3, fontSize: 10, color: "#64748b", fontFamily: "monospace" }}>
+                      <span title={loop.run_id || ""}>run: {loop.run_id || "-"}</span>
+                      <span>phase: {loop.phase || "-"}</span>
+                      <span>heartbeat: {formatTime(loop.heartbeat_at || loop.updated_at)}</span>
                     </div>
                   </div>
                 );

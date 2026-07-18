@@ -55,8 +55,13 @@ DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
 RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
+REQUEST_SNAPSHOT_KEY = "_combine_request_v1"
+RUN_EVENT_LOG_NAME = "run_events.jsonl"
+MAX_LOG_FILES = 100
+MAX_LOG_TAIL_CHARS = 20_000
 _NODE_RESERVATIONS: dict[str, int] = {}
 _NODE_RESERVATIONS_LOCK = threading.Lock()
+_RUN_EVENT_LOG_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
@@ -879,6 +884,7 @@ class MultiAlphaCombineBacktestRepository:
         return self._run_has_updated_at_cache
 
     def create_run(self, *, run_id: str, request: CombineBacktestRequest, roster_hash: str) -> None:
+        persisted_backtest_config = persisted_backtest_config_for(request)
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 if self._run_has_updated_at(conn):
@@ -897,7 +903,7 @@ class MultiAlphaCombineBacktestRepository:
                             request.oos_end,
                             request.normalize_method,
                             Json(dict(request.walk_forward)),
-                            Json(dict(request.backtest_config)),
+                            Json(persisted_backtest_config),
                             request.baseline_leg_id,
                         ),
                     )
@@ -917,7 +923,7 @@ class MultiAlphaCombineBacktestRepository:
                             request.oos_end,
                             request.normalize_method,
                             Json(dict(request.walk_forward)),
-                            Json(dict(request.backtest_config)),
+                            Json(persisted_backtest_config),
                             request.baseline_leg_id,
                         ),
                     )
@@ -1081,6 +1087,15 @@ class MultiAlphaCombineBacktestRepository:
             payloads = [row for row in payloads if row.get("status") == status]
         return payloads
 
+    def delete_run(self, run_id: str) -> bool:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM strategy_pkg.multi_alpha_combine_backtest_run WHERE id = %s RETURNING id",
+                    (run_id,),
+                )
+                return cur.fetchone() is not None
+
     def mark_stale_running_runs_failed(
         self,
         *,
@@ -1159,7 +1174,7 @@ class InMemoryCombineBacktestRepository:
             "oos_end": request.oos_end,
             "normalize_method": request.normalize_method,
             "walk_forward_json": dict(request.walk_forward),
-            "backtest_config_json": dict(request.backtest_config),
+            "backtest_config_json": persisted_backtest_config_for(request),
             "baseline_leg_id": request.baseline_leg_id,
             "status": "running",
             "reason": None,
@@ -1205,6 +1220,15 @@ class InMemoryCombineBacktestRepository:
             if status:
                 rows = [row for row in rows if row["status"] == status]
         return rows[:limit]
+
+    def delete_run(self, run_id: str) -> bool:
+        with self._lock:
+            if run_id not in self.runs:
+                return False
+            del self.runs[run_id]
+            self.scheme_results = [row for row in self.scheme_results if row["run_id"] != run_id]
+            self.loo = [row for row in self.loo if row["run_id"] != run_id]
+            return True
 
     def mark_stale_running_runs_failed(
         self,
@@ -1320,7 +1344,9 @@ class MultiAlphaCombineBacktestService:
             except Exception:
                 current_status = "running"
             if current_status == "running":
-                self._repository.update_run_status(run_id, status="failed", reason=terminal_error_payload(exc, run_id=run_id))
+                reason = terminal_error_payload(exc, run_id=run_id)
+                self._repository.update_run_status(run_id, status="failed", reason=reason)
+                self._append_run_event(run_id, {"event": "terminal", "status": "failed", "reason": reason})
             return
 
     def execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
@@ -1338,6 +1364,7 @@ class MultiAlphaCombineBacktestService:
             )
             reason["archive_event"] = archive_event
             self._repository.update_run_status(run_id, status="failed", reason=reason)
+            self._append_run_event(run_id, {"event": "terminal", "status": "failed", "reason": reason})
             raise
         status = str(payload.get("status") or "succeeded")
         reason = payload.get("reason") if isinstance(payload.get("reason"), Mapping) else None
@@ -1353,6 +1380,15 @@ class MultiAlphaCombineBacktestService:
             reason = _reason_with_archive_event(reason, status=status, archive_event=archive_event)
             payload["reason"] = reason
             self._repository.update_run_status(run_id, status=_persisted_run_status(status), reason=reason)
+        self._append_run_event(
+            run_id,
+            {
+                "event": "terminal",
+                "status": status,
+                "reason": dict(reason or {}),
+                "archive_event": dict(archive_event),
+            },
+        )
         if status == "failed":
             first_child_error = _first_child_error(reason)
             raise MultiAlphaCombineBacktestError(
@@ -1401,6 +1437,162 @@ class MultiAlphaCombineBacktestService:
 
     def list_runs(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         return self._repository.list_runs(status=status, limit=limit)
+
+    def get_retry_draft(self, run_id: str) -> dict[str, Any]:
+        bundle = self.get_run(run_id)
+        run = dict(bundle.get("run") or {})
+        return retry_draft_from_bundle(bundle, retryable=str(run.get("status") or "") in TERMINAL_STATUSES)
+
+    def retry_run(self, run_id: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        bundle = self.get_run(run_id)
+        run = dict(bundle.get("run") or {})
+        status = str(run.get("status") or "")
+        if status not in TERMINAL_STATUSES:
+            raise MultiAlphaCombineBacktestError(
+                "only terminal combine-backtest runs can be retried",
+                reason_code="combine_backtest_retry_not_terminal",
+                context={"run_id": run_id, "status": status},
+            )
+        draft = retry_draft_from_bundle(bundle, retryable=True)
+        if payload is None:
+            if not draft["exact"]:
+                raise MultiAlphaCombineBacktestError(
+                    "legacy combine run requires an explicit retry payload because the original request snapshot is incomplete",
+                    reason_code="combine_backtest_retry_payload_required",
+                    context={"run_id": run_id, "retry_draft": draft},
+                )
+            retry_payload = dict(draft["payload"])
+        else:
+            retry_payload = dict(payload)
+        backtest_config = dict(retry_payload.get("backtest_config") or {})
+        backtest_config.pop(REQUEST_SNAPSHOT_KEY, None)
+        backtest_config.update(
+            {
+                "retry_of_run_id": run_id,
+                "retry_requested_at": utc_now_iso(),
+                "retry_request_source": "exact_snapshot" if draft["exact"] and payload is None else "explicit_retry_payload",
+            }
+        )
+        retry_payload["backtest_config"] = backtest_config
+        retry_payload["run_async"] = True
+        result = self.submit_run(retry_payload, run_async=True)
+        return {**result, "retry_of_run_id": run_id, "retry_source": backtest_config["retry_request_source"]}
+
+    def delete_run(self, run_id: str, *, cleanup_workspace: bool = True) -> dict[str, Any]:
+        bundle = self.get_run(run_id)
+        status = str((bundle.get("run") or {}).get("status") or "")
+        if status not in TERMINAL_STATUSES:
+            raise MultiAlphaCombineBacktestError(
+                "running combine-backtest run cannot be deleted because deletion is not cancellation",
+                reason_code="combine_backtest_delete_not_terminal",
+                context={"run_id": run_id, "status": status},
+            )
+        workspace = self._safe_run_workspace(run_id)
+        quarantine: Path | None = None
+        if cleanup_workspace and workspace.exists():
+            quarantine = workspace.with_name(f".{workspace.name}.deleting-{int(time.time() * 1000)}")
+            try:
+                workspace.rename(quarantine)
+            except OSError as exc:
+                raise MultiAlphaCombineBacktestError(
+                    "failed to quarantine combine-backtest workspace before deleting DB rows",
+                    reason_code="combine_backtest_delete_workspace_quarantine_failed",
+                    context={"run_id": run_id, "workspace": str(workspace), "error": f"{type(exc).__name__}: {exc}"},
+                ) from exc
+        try:
+            if not hasattr(self._repository, "delete_run") or not self._repository.delete_run(run_id):
+                raise MultiAlphaCombineBacktestError(
+                    "combine-backtest run disappeared before deletion completed",
+                    reason_code="combine_backtest_delete_missing",
+                    context={"run_id": run_id},
+                )
+        except Exception as exc:
+            if quarantine is not None and quarantine.exists() and not workspace.exists():
+                try:
+                    quarantine.rename(workspace)
+                except OSError as restore_exc:
+                    raise MultiAlphaCombineBacktestError(
+                        "DB deletion failed and the quarantined workspace could not be restored",
+                        reason_code="combine_backtest_delete_rollback_failed",
+                        context={
+                            "run_id": run_id,
+                            "workspace": str(workspace),
+                            "delete_error": f"{type(exc).__name__}: {exc}",
+                            "restore_error": f"{type(restore_exc).__name__}: {restore_exc}",
+                        },
+                    ) from restore_exc
+            raise
+        cleanup_error = None
+        if quarantine is not None and quarantine.exists():
+            try:
+                shutil.rmtree(quarantine)
+            except OSError as exc:
+                cleanup_error = f"{type(exc).__name__}: {exc}"
+        return {
+            "run_id": run_id,
+            "deleted": True,
+            "workspace_removed": quarantine is not None and cleanup_error is None,
+            "workspace_cleanup_error": cleanup_error,
+        }
+
+    def get_run_logs(self, run_id: str, *, tail_lines: int = 200) -> dict[str, Any]:
+        bundle = self.get_run(run_id)
+        run = dict(bundle.get("run") or {})
+        workspace = self._safe_run_workspace(run_id)
+        events_path = workspace / RUN_EVENT_LOG_NAME
+        try:
+            events = read_jsonl_tail(events_path, max(1, min(int(tail_lines), 1000)))
+            files = list_run_log_files(workspace)
+        except OSError as exc:
+            raise MultiAlphaCombineBacktestError(
+                "failed to read combine-backtest workspace logs",
+                reason_code="combine_backtest_logs_read_failed",
+                context={"run_id": run_id, "workspace": str(workspace), "error": f"{type(exc).__name__}: {exc}"},
+            ) from exc
+        reason = dict(run.get("reason") or {}) if isinstance(run.get("reason"), Mapping) else {}
+        return {
+            "run_id": run_id,
+            "status": run.get("status"),
+            "phase": reason.get("phase"),
+            "progress": dict(reason.get("progress") or {}) if isinstance(reason.get("progress"), Mapping) else {},
+            "heartbeat_at": reason.get("heartbeat_at") or run.get("updated_at"),
+            "reason": reason,
+            "history_available": events_path.is_file(),
+            "events": events,
+            "files": files,
+        }
+
+    def get_archive_status(self, run_id: str) -> dict[str, Any]:
+        self.get_run(run_id)
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, status, research_valid, invalid_reason, archived_at
+                    FROM qe_archive.run
+                    WHERE run_id = %s AND run_type = 'multi_alpha_combine'
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+        return {
+            "run_id": run_id,
+            "archive_status": "archived" if row else "not_archived",
+            "archive_run": dict(row) if row else None,
+        }
+
+    def archive_run(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
+        bundle = self.get_run(run_id)
+        status = str((bundle.get("run") or {}).get("status") or "")
+        if status not in TERMINAL_STATUSES:
+            raise MultiAlphaCombineBacktestError(
+                "only terminal combine-backtest runs can be archived",
+                reason_code="combine_backtest_archive_not_terminal",
+                context={"run_id": run_id, "status": status},
+            )
+        from backend.services.qe_archive.backfill_service import QEArchiveBackfillService
+
+        return QEArchiveBackfillService().archive_multi_alpha_combine_completed(run_id=run_id, dry_run=dry_run)
 
     def mark_stale_running_runs_failed(
         self,
@@ -1645,10 +1837,43 @@ class MultiAlphaCombineBacktestService:
             reason["progress"] = dict(progress)
         if extra:
             reason.update(dict(extra))
+        event_log_error = self._append_run_event(run_id, {"event": "heartbeat", **reason})
+        if event_log_error:
+            reason["event_log_error"] = event_log_error
         if hasattr(self._repository, "heartbeat_run"):
             self._repository.heartbeat_run(run_id, reason=reason)
         else:
             self._repository.update_run_status(run_id, status="running", reason=reason)
+
+    def _safe_run_workspace(self, run_id: str) -> Path:
+        if not re.fullmatch(r"macb_[A-Za-z0-9_.-]+", str(run_id or "")):
+            raise MultiAlphaCombineBacktestError(
+                "invalid combine-backtest run id for workspace access",
+                reason_code="combine_backtest_workspace_run_id_invalid",
+                context={"run_id": run_id},
+            )
+        root = self._workspace_root.resolve()
+        workspace = (root / run_id).resolve()
+        if not workspace.is_relative_to(root):
+            raise MultiAlphaCombineBacktestError(
+                "combine-backtest workspace escaped configured root",
+                reason_code="combine_backtest_workspace_escape",
+                context={"run_id": run_id, "workspace": str(workspace), "root": str(root)},
+            )
+        return workspace
+
+    def _append_run_event(self, run_id: str, event: Mapping[str, Any]) -> str | None:
+        workspace = self._safe_run_workspace(run_id)
+        try:
+            workspace.mkdir(parents=True, exist_ok=True)
+            payload = {"recorded_at": utc_now_iso(), **dict(event)}
+            with _RUN_EVENT_LOG_LOCK:
+                with (workspace / RUN_EVENT_LOG_NAME).open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        except OSError as exc:
+            logger.exception("failed to append combine-backtest run event run_id=%s", run_id)
+            return f"{type(exc).__name__}: {exc}"
+        return None
 
     def _raise_if_run_timed_out(
         self,
@@ -2063,6 +2288,201 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
     }
     data.update(updates)
     return CombineBacktestRequest(**data)
+
+
+def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
+    backtest_config = dict(request.backtest_config)
+    backtest_config.pop(REQUEST_SNAPSHOT_KEY, None)
+    return {
+        "roster": _roster_payload(request.roster),
+        "oos_start": request.oos_start,
+        "oos_end": request.oos_end,
+        "weighting_schemes": list(request.weighting_schemes),
+        "normalize_method": request.normalize_method,
+        "walk_forward": dict(request.walk_forward),
+        "rank_fusion": dict(request.rank_fusion),
+        "backtest_config": backtest_config,
+        "baseline_leg_id": request.baseline_leg_id,
+        "topk": request.topk,
+        "min_date_coverage": request.min_date_coverage,
+        "run_async": True,
+        "scheme_timeout_seconds": request.scheme_timeout_seconds,
+        "run_timeout_seconds": request.run_timeout_seconds,
+    }
+
+
+def persisted_backtest_config_for(request: CombineBacktestRequest) -> dict[str, Any]:
+    config = dict(request.backtest_config)
+    config[REQUEST_SNAPSHOT_KEY] = request_snapshot_for(request)
+    return config
+
+
+def retry_draft_from_bundle(bundle: Mapping[str, Any], *, retryable: bool) -> dict[str, Any]:
+    run = dict(bundle.get("run") or {})
+    config = json_mapping(run.get("backtest_config_json"), field_name="backtest_config_json")
+    snapshot = config.get(REQUEST_SNAPSHOT_KEY)
+    if isinstance(snapshot, Mapping):
+        return {
+            "run_id": run.get("id"),
+            "retryable": retryable,
+            "exact": True,
+            "source": "exact_snapshot",
+            "assumptions": [],
+            "payload": dict(snapshot),
+        }
+
+    persisted_schemes = [
+        str(row.get("weighting_scheme"))
+        for row in bundle.get("scheme_results") or []
+        if isinstance(row, Mapping) and row.get("weighting_scheme")
+    ]
+    reason = json_mapping(run.get("reason"), field_name="reason")
+    reason_context = json_mapping(reason.get("context"), field_name="reason.context")
+    failed_scheme = str(reason_context.get("weighting_scheme") or reason.get("weighting_scheme") or "").strip()
+    if failed_scheme:
+        persisted_schemes.append(failed_scheme)
+    if persisted_schemes:
+        requested_schemes = sorted(
+            set(persisted_schemes),
+            key=lambda item: SUPPORTED_WEIGHTING_SCHEMES.index(item) if item in SUPPORTED_WEIGHTING_SCHEMES else len(SUPPORTED_WEIGHTING_SCHEMES),
+        )
+        scheme_assumption = "weighting_schemes reconstructed from persisted scheme rows and terminal reason; schemes that failed before persistence may be absent"
+    else:
+        requested_schemes = list(DEFAULT_WEIGHTING_SCHEMES)
+        scheme_assumption = "weighting_schemes were not persisted; service defaults are prefilled"
+
+    topk = int(config.get("topk") or 20)
+    min_date_coverage = float(config.get("min_date_coverage") or 0.8)
+    scheme_timeout = int(config.get("scheme_timeout_seconds") or config.get("timeout_seconds") or DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)
+    run_timeout = int(config.get("run_timeout_seconds") or (scheme_timeout + DEFAULT_RUN_TIMEOUT_GRACE_SECONDS))
+    clean_config = {key: value for key, value in config.items() if key != REQUEST_SNAPSHOT_KEY}
+    payload = {
+        "roster": json_list(run.get("roster_json"), field_name="roster_json"),
+        "oos_start": str(run.get("oos_start") or ""),
+        "oos_end": str(run.get("oos_end") or ""),
+        "weighting_schemes": requested_schemes,
+        "normalize_method": str(run.get("normalize_method") or "zscore"),
+        "walk_forward": json_mapping(run.get("walk_forward_json"), field_name="walk_forward_json"),
+        "rank_fusion": json_mapping(config.get("rank_fusion"), field_name="rank_fusion"),
+        "backtest_config": clean_config,
+        "baseline_leg_id": run.get("baseline_leg_id"),
+        "topk": topk,
+        "min_date_coverage": min_date_coverage,
+        "run_async": True,
+        "scheme_timeout_seconds": scheme_timeout,
+        "run_timeout_seconds": run_timeout,
+    }
+    assumptions = [
+        scheme_assumption,
+        "min_date_coverage was not persisted separately before request snapshots; current stored value or service default is prefilled",
+        "rank_fusion request options may be incomplete for legacy runs unless present in backtest_config_json",
+    ]
+    return {
+        "run_id": run.get("id"),
+        "retryable": retryable,
+        "exact": False,
+        "source": "legacy_reconstruction",
+        "assumptions": assumptions,
+        "payload": payload,
+    }
+
+
+def json_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"{field_name} contains invalid JSON",
+                reason_code="combine_backtest_retry_json_invalid",
+                context={"field_name": field_name, "value_preview": value[:160]},
+            ) from exc
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+    raise MultiAlphaCombineBacktestError(
+        f"{field_name} must be a JSON object",
+        reason_code="combine_backtest_retry_json_type_invalid",
+        context={"field_name": field_name, "value_type": type(value).__name__},
+    )
+
+
+def json_list(value: Any, *, field_name: str) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"{field_name} contains invalid JSON",
+                reason_code="combine_backtest_retry_json_invalid",
+                context={"field_name": field_name, "value_preview": value[:160]},
+            ) from exc
+        if isinstance(parsed, list):
+            return parsed
+    raise MultiAlphaCombineBacktestError(
+        f"{field_name} must be a JSON array",
+        reason_code="combine_backtest_retry_json_type_invalid",
+        context={"field_name": field_name, "value_type": type(value).__name__},
+    )
+
+
+def read_jsonl_tail(path: Path, tail_lines: int) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_lines:]
+    result: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            result.append({"event": "invalid_event_line", "raw": line})
+            continue
+        result.append(dict(value) if isinstance(value, Mapping) else {"event": "event_value", "value": value})
+    return result
+
+
+def list_run_log_files(workspace: Path) -> list[dict[str, Any]]:
+    if not workspace.is_dir():
+        return []
+    root = workspace.resolve()
+    result: list[dict[str, Any]] = []
+    candidates = sorted(
+        [path for path in workspace.rglob("*.log") if path.is_file()] + ([workspace / RUN_EVENT_LOG_NAME] if (workspace / RUN_EVENT_LOG_NAME).is_file() else []),
+        key=lambda path: str(path),
+    )
+    for path in candidates[:MAX_LOG_FILES]:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):
+            continue
+        stat = resolved.stat()
+        result.append(
+            {
+                "path": resolved.relative_to(root).as_posix(),
+                "size": stat.st_size,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "tail": read_text_tail(resolved, MAX_LOG_TAIL_CHARS),
+            }
+        )
+    return result
+
+
+def read_text_tail(path: Path, max_chars: int) -> str:
+    max_bytes = max_chars * 4
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+        data = handle.read()
+    return data.decode("utf-8", errors="replace")[-max_chars:]
 
 
 def _coerce_panel_spec(item: Mapping[str, Any]) -> PanelLegSpec:
