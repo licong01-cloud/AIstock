@@ -7,10 +7,11 @@ import logging
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Protocol
 
 from backend.services.advisory_dev_input_onboarding.contracts import (
     AdvisoryImmutableArtifactRef,
+    AdvisoryStrategyPackageInputProjectionV1,
     AdvisorySourceRequirementRegistry,
     AdvisorySourceResolutionArtifact,
     ArtifactStorePolicyArtifact,
@@ -106,8 +107,6 @@ from backend.services.advisory_phase1.source_resolution import (
 )
 from backend.services.advisory_phase1.source_revision import AvailabilityRequirement, SourceRevisionKind
 from backend.services.advisory_program import AdvisoryProgramPGRepository, _binding_payload
-from backend.services.strategy_package.advisory_input_projection import project_advisory_inputs
-from backend.services.strategy_package.repository import StrategyPackageRepository
 
 
 LOGGER = logging.getLogger(__name__)
@@ -154,10 +153,21 @@ class FrozenO4SourceRequirementCompiler:
         return requirement_set
 
 
+class PackageProjectionProvider(Protocol):
+    def __call__(self, *, conn_factory: Any, package_id: str) -> Mapping[str, Any]: ...
+
+
 class AdvisoryPhase1EOrchestrationService:
-    def __init__(self, *, repository_root: Path, now_provider: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repository_root: Path,
+        now_provider: Any | None = None,
+        package_projection_provider: PackageProjectionProvider | None = None,
+    ) -> None:
         self.repository_root = repository_root.resolve()
         self.now_provider = now_provider or (lambda: datetime.now(UTC))
+        self.package_projection_provider = package_projection_provider
 
     def observe_source(
         self,
@@ -169,6 +179,8 @@ class AdvisoryPhase1EOrchestrationService:
         config_id: str = "phase1e_advisory_inputs_dev_v2",
         config_version: str = "v2",
     ) -> dict[str, Any]:
+        if self.package_projection_provider is None:
+            raise RuntimeError("observe-source requires an explicitly injected package projection provider")
         historical_store = HistoricalOnboardingEvidenceStore(root=evidence_root)
         request = historical_store.load(historical_request_ref)
         if not isinstance(request, RealDevHistoricalRunRequest):
@@ -188,7 +200,6 @@ class AdvisoryPhase1EOrchestrationService:
             model=mapping,
             semantic_hash=str(mapping.registry_hash),
         )
-        package_repository = StrategyPackageRepository(conn_factory=write_factory)
         program_repository = AdvisoryProgramPGRepository(conn_factory=write_factory)
         program_results: list[dict[str, Any]] = []
         for spec in request.program_specs:
@@ -199,10 +210,19 @@ class AdvisoryPhase1EOrchestrationService:
                     trade_date=request.decision_trade_date,
                     package_id=spec.package_id,
                 )
-                package = package_repository.get(spec.package_id)
-                if package.manifest_sha256 != spec.manifest_sha256:
+                projection_payload = self.package_projection_provider(
+                    conn_factory=write_factory,
+                    package_id=spec.package_id,
+                )
+                try:
+                    projection = AdvisoryStrategyPackageInputProjectionV1.model_validate(projection_payload)
+                except (TypeError, ValueError) as exc:
+                    raise RealDevOnboardingError(
+                        REASON_SOURCE_MAPPING_CONFLICT,
+                        "package projection provider returned an invalid Advisory projection DTO",
+                    ) from exc
+                if projection.package_id != spec.package_id or projection.manifest_sha256 != spec.manifest_sha256:
                     raise RealDevOnboardingError(REASON_SOURCE_MAPPING_CONFLICT, "dated package manifest differs from request")
-                projection = project_advisory_inputs(package.manifest)
                 projection_ref = store.publish(
                     artifact_kind=O4ArtifactKind.STRATEGY_PACKAGE_INPUT_PROJECTION,
                     model=projection,

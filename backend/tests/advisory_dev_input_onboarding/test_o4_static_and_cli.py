@@ -81,6 +81,7 @@ def test_o4_files_contain_no_unrequested_gate_approval_or_production_switch() ->
 def test_o4_orchestration_does_not_import_selection_simulation_paper_or_trading_runtime() -> None:
     imports = _imports(ORCHESTRATION_MODULE)
     forbidden = (
+        "backend.services.strategy_package",
         "backend.services.selection_center",
         "backend.services.simulation_runtime",
         "backend.services.paper_trading",
@@ -91,27 +92,31 @@ def test_o4_orchestration_does_not_import_selection_simulation_paper_or_trading_
     assert not {name for name in imports if name.startswith(forbidden)}
 
 
+def test_authoritative_cli_injects_standalone_package_projection_provider() -> None:
+    service = authoritative_cli._o4_service()
+
+    assert service.package_projection_provider is authoritative_cli._project_admitted_package_inputs
+
+
 def test_authoritative_cli_exposes_all_four_o4_commands_and_compat_has_no_target_selector() -> None:
     authoritative = subprocess.run(
         [sys.executable, str(ROOT / "scripts/advisory_real_dev_onboarding.py"), "--help"],
         cwd=ROOT,
         capture_output=True,
-        text=True,
         check=False,
     )
     assert authoritative.returncode == 0
     for command in ("observe-source", "build-phase1e-inputs", "plan-capacity", "compile-phase1e"):
-        assert command in authoritative.stdout
+        assert command.encode("ascii") in authoritative.stdout
     compatibility = subprocess.run(
         [sys.executable, str(ROOT / "scripts/advisory_phase1e_readiness_plan.py"), "compile-batch", "--help"],
         cwd=ROOT,
         capture_output=True,
-        text=True,
         check=False,
     )
     assert compatibility.returncode == 0
-    assert "--input-bundle-ref" in compatibility.stdout
-    assert "--target-db" not in compatibility.stdout
+    assert b"--input-bundle-ref" in compatibility.stdout
+    assert b"--target-db" not in compatibility.stdout
 
 
 @pytest.mark.parametrize(

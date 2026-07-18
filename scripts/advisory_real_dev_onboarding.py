@@ -50,6 +50,8 @@ from backend.services.advisory_dev_input_onboarding.production_projection import
 from backend.services.advisory_dev_input_onboarding.dev_importer import RealDevPackageImporter
 from backend.services.advisory_dev_input_onboarding.historical_onboarding import RealDevHistoricalOnboardingService
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
+from backend.services.strategy_package.advisory_input_projection import project_advisory_inputs
+from backend.services.strategy_package.repository import StrategyPackageRepository
 
 
 LOGGER = logging.getLogger("advisory_real_dev_onboarding")
@@ -421,8 +423,17 @@ def _run_historical(args: argparse.Namespace) -> int:
     return EXIT_VERIFICATION_FAILED
 
 
+def _project_admitted_package_inputs(*, conn_factory: Any, package_id: str) -> dict[str, Any]:
+    package = StrategyPackageRepository(conn_factory=conn_factory).get(package_id)
+    projected = project_advisory_inputs(package.manifest)
+    return projected.model_dump(mode="json")
+
+
 def _o4_service() -> AdvisoryPhase1EOrchestrationService:
-    return AdvisoryPhase1EOrchestrationService(repository_root=REPOSITORY_ROOT)
+    return AdvisoryPhase1EOrchestrationService(
+        repository_root=REPOSITORY_ROOT,
+        package_projection_provider=_project_admitted_package_inputs,
+    )
 
 
 def _observe_source(args: argparse.Namespace) -> int:
