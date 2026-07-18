@@ -31,11 +31,24 @@ def test_compile_plan_maps_legacy_tasks_and_result_children_without_attempts() -
     run = _run()
     schemes = [
         {"id": 10, "run_id": run["id"], "weighting_scheme": "equal", "skipped": False},
-        {"id": 11, "run_id": run["id"], "weighting_scheme": "risk_parity", "skipped": True},
+        {
+            "id": 11,
+            "run_id": run["id"],
+            "weighting_scheme": "risk_parity",
+            "skipped": True,
+            "skipped_reason": '{"reason_code":"scheme_not_computable"}',
+        },
+        {
+            "id": 12,
+            "run_id": run["id"],
+            "weighting_scheme": "ic_weighted",
+            "skipped": True,
+            "skipped_reason": '{"reason_code":"pred_backtest_failed"}',
+        },
     ]
     loo = [
         {
-            "id": 12,
+            "id": 13,
             "run_id": run["id"],
             "weighting_scheme": "equal",
             "dropped_leg_id": "L2",
@@ -53,12 +66,35 @@ def test_compile_plan_maps_legacy_tasks_and_result_children_without_attempts() -
     assert plan.assignments[0].task_id == plan.tasks[0].task_id
     assert [child.child_key for child in plan.children] == [
         "scheme:equal",
+        "scheme:ic_weighted",
         "scheme:risk_parity",
         "loo:equal:drop:L2",
     ]
-    assert [child.status for child in plan.children] == ["succeeded", "not_computable", "succeeded"]
+    assert [child.status for child in plan.children] == ["succeeded", "failed", "not_computable", "succeeded"]
     assert all(child.source_kind == "legacy_result_backfill" for child in plan.children)
     assert "attempt" not in plan.summary()
+
+
+def test_compile_plan_excludes_modern_first_class_runs() -> None:
+    legacy = _run()
+    modern = {
+        **_run(),
+        "id": "macb_modern",
+        "task_id": "mact_modern",
+        "durable_task_source_kind": "api",
+    }
+    plan = MultiAlphaLegacyBackfill.compile_plan(
+        runs=[legacy, modern],
+        schemes=[
+            {"id": 1, "run_id": legacy["id"], "weighting_scheme": "equal", "skipped": False},
+            {"id": 2, "run_id": modern["id"], "weighting_scheme": "equal", "skipped": False},
+        ],
+        loo_rows=[],
+        protected_digest="protected",
+    )
+
+    assert [assignment.run_id for assignment in plan.assignments] == [legacy["id"]]
+    assert {child.run_id for child in plan.children} == {legacy["id"]}
 
 
 class NullCursor:
@@ -111,7 +147,8 @@ class BackfillHarness(MultiAlphaLegacyBackfill):
     def _upsert_child(self, cur: Any, child: Any) -> None:
         self.applied.append(f"child:{child.child_id}")
 
-    def _protected_digest(self, cur: Any) -> str:
+    def _protected_digest(self, cur: Any, *, run_ids: list[str]) -> str:
+        assert run_ids == [_run()["id"]]
         return self.digest_after
 
     def _readback(self, cur: Any, plan: Any) -> dict[str, Any]:

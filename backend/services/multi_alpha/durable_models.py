@@ -161,6 +161,27 @@ class DurableRunSpec:
                 reason_code="multi_alpha_invalid_run_window",
                 context={"oos_start": str(self.oos_start), "oos_end": str(self.oos_end)},
             )
+        expected_hash = request_hash_for(self.canonical_request_payload())
+        if self.request_hash != expected_hash:
+            raise DurableContractError(
+                "request_hash does not match the canonical durable run request",
+                reason_code="multi_alpha_identity_hash_mismatch",
+                context={"field": "request_hash", "expected": expected_hash, "actual": self.request_hash},
+            )
+
+    def canonical_request_payload(self) -> dict[str, Any]:
+        return durable_run_request_payload(
+            roster_hash=self.roster_hash,
+            roster=self.roster,
+            oos_start=self.oos_start,
+            oos_end=self.oos_end,
+            normalize_method=self.normalize_method,
+            walk_forward=self.walk_forward,
+            backtest_config=self.backtest_config,
+            baseline_leg_id=self.baseline_leg_id,
+            retry_of_run_id=self.retry_of_run_id,
+            node_parallelism=self.node_parallelism,
+        )
 
 
 @dataclass(frozen=True)
@@ -187,6 +208,17 @@ class DurableChildSpec:
         _require_choice(self.status, CHILD_STATUSES, field="status")
         _require_choice(self.source_kind, CHILD_SOURCE_KINDS, field="source_kind")
         _require_sha256(self.input_manifest_hash, field="input_manifest_hash")
+        expected_manifest_hash = artifact_manifest_hash_for(self.input_manifest)
+        if self.input_manifest_hash != expected_manifest_hash:
+            raise DurableContractError(
+                "input_manifest_hash does not match the canonical child input manifest",
+                reason_code="multi_alpha_identity_hash_mismatch",
+                context={
+                    "field": "input_manifest_hash",
+                    "expected": expected_manifest_hash,
+                    "actual": self.input_manifest_hash,
+                },
+            )
         if self.prediction_artifact_hash is not None:
             _require_sha256(self.prediction_artifact_hash, field="prediction_artifact_hash")
         if self.ordinal < 0:
@@ -257,8 +289,38 @@ class DurableAttemptSpec:
                 "qe_task_id and qe_loop_id must both be present or both be absent",
                 reason_code="multi_alpha_invalid_remote_identity",
             )
-        if self.submission_intent_hash is not None:
+        if self.qe_task_id is None:
+            if self.submission_intent_hash is not None:
+                raise DurableContractError(
+                    "submission_intent_hash requires a complete remote identity",
+                    reason_code="multi_alpha_invalid_remote_identity",
+                )
+        else:
+            if self.submission_intent_hash is None:
+                raise DurableContractError(
+                    "remote identity requires submission_intent_hash",
+                    reason_code="multi_alpha_invalid_remote_identity",
+                )
             _require_sha256(self.submission_intent_hash, field="submission_intent_hash")
+            expected_intent_hash = submission_intent_hash_for(
+                child_id=self.child_id,
+                attempt_no=self.attempt_no,
+                retry_mode=self.retry_mode,
+                retry_of_attempt_id=self.retry_of_attempt_id,
+                node_id=self.node_id,
+                qe_task_id=self.qe_task_id,
+                qe_loop_id=self.qe_loop_id,
+            )
+            if self.submission_intent_hash != expected_intent_hash:
+                raise DurableContractError(
+                    "submission_intent_hash does not match the canonical remote submission intent",
+                    reason_code="multi_alpha_identity_hash_mismatch",
+                    context={
+                        "field": "submission_intent_hash",
+                        "expected": expected_intent_hash,
+                        "actual": self.submission_intent_hash,
+                    },
+                )
 
 
 def canonical_json(value: Any) -> str:
@@ -275,6 +337,77 @@ def request_hash_for(request_payload: Mapping[str, Any]) -> str:
 
 def artifact_manifest_hash_for(manifest: Mapping[str, Any]) -> str:
     return sha256_identity(manifest)
+
+
+def durable_run_request_payload(
+    *,
+    roster_hash: str,
+    roster: Sequence[Mapping[str, Any]],
+    oos_start: date | str,
+    oos_end: date | str,
+    normalize_method: str,
+    walk_forward: Mapping[str, Any],
+    backtest_config: Mapping[str, Any],
+    baseline_leg_id: str | None = None,
+    retry_of_run_id: str | None = None,
+    node_parallelism: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "roster_hash": roster_hash,
+        "roster": [dict(item) for item in roster],
+        "oos_start": _as_date(oos_start).isoformat(),
+        "oos_end": _as_date(oos_end).isoformat(),
+        "normalize_method": normalize_method,
+        "walk_forward": dict(walk_forward),
+        "backtest_config": dict(backtest_config),
+        "baseline_leg_id": baseline_leg_id,
+        "retry_of_run_id": retry_of_run_id,
+        "node_parallelism": dict(node_parallelism or {}),
+    }
+
+
+def submission_intent_payload(
+    *,
+    child_id: str,
+    attempt_no: int,
+    retry_mode: str,
+    retry_of_attempt_id: str | None,
+    node_id: str | None,
+    qe_task_id: str,
+    qe_loop_id: str,
+) -> dict[str, Any]:
+    return {
+        "child_id": child_id,
+        "attempt_no": attempt_no,
+        "retry_mode": retry_mode,
+        "retry_of_attempt_id": retry_of_attempt_id,
+        "node_id": node_id,
+        "qe_task_id": qe_task_id,
+        "qe_loop_id": qe_loop_id,
+    }
+
+
+def submission_intent_hash_for(
+    *,
+    child_id: str,
+    attempt_no: int,
+    retry_mode: str,
+    retry_of_attempt_id: str | None,
+    node_id: str | None,
+    qe_task_id: str,
+    qe_loop_id: str,
+) -> str:
+    return sha256_identity(
+        submission_intent_payload(
+            child_id=child_id,
+            attempt_no=attempt_no,
+            retry_mode=retry_mode,
+            retry_of_attempt_id=retry_of_attempt_id,
+            node_id=node_id,
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+        )
+    )
 
 
 def make_task_id() -> str:

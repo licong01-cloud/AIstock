@@ -34,8 +34,8 @@ RUN_TRANSITIONS: Mapping[str, frozenset[str]] = {
     ),
     "pause_requested": frozenset({"paused", "cancel_requested", "partial_failed", "failed"}),
     "paused": frozenset({"running", "cancel_requested", "failed"}),
-    "cancel_requested": frozenset({"cancelling", "cancelled", "partial_failed", "failed"}),
-    "cancelling": frozenset({"cancelled", "partial_failed", "failed"}),
+    "cancel_requested": frozenset({"cancelling", "cancelled", "partial_failed"}),
+    "cancelling": frozenset({"cancelled", "partial_failed"}),
     "succeeded": frozenset(),
     "partial_failed": frozenset(),
     "failed": frozenset(),
@@ -63,6 +63,17 @@ ATTEMPT_TRANSITIONS: Mapping[str, frozenset[str]] = {
     "failed": frozenset(),
     "cancelled": frozenset(),
 }
+ATTEMPT_CLAIM_POLICIES: Mapping[str, tuple[frozenset[str], frozenset[str]]] = {
+    "dispatch": (frozenset({"queued"}), frozenset({"preparing", "running"})),
+    "reconcile": (
+        frozenset({"submitting", "running", "reconciling"}),
+        frozenset({"preparing", "running", "pause_requested", "cancel_requested", "cancelling"}),
+    ),
+    "cancel": (
+        frozenset({"submitting", "running", "reconciling"}),
+        frozenset({"cancel_requested", "cancelling"}),
+    ),
+}
 
 
 def _transaction_connection() -> AbstractContextManager[Any]:
@@ -81,12 +92,23 @@ class SchemaHealth:
     ready: bool
     missing_tables: tuple[str, ...]
     missing_columns: Mapping[str, tuple[str, ...]]
+    type_mismatches: Mapping[str, Mapping[str, Mapping[str, str]]]
+    missing_constraints: tuple[str, ...]
+    missing_indexes: tuple[str, ...]
+    missing_table_comments: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "ready": self.ready,
             "missing_tables": list(self.missing_tables),
             "missing_columns": {key: list(value) for key, value in self.missing_columns.items()},
+            "type_mismatches": {
+                table: {column: dict(detail) for column, detail in columns.items()}
+                for table, columns in self.type_mismatches.items()
+            },
+            "missing_constraints": list(self.missing_constraints),
+            "missing_indexes": list(self.missing_indexes),
+            "missing_table_comments": list(self.missing_table_comments),
         }
 
 
@@ -98,105 +120,318 @@ class MultiAlphaDurableRepository:
     execution adapter and restart reconciliation are available.
     """
 
-    REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
-        "multi_alpha_combine_task": frozenset(
-            {
-                "task_id",
-                "task_name",
-                "roster_hash",
-                "roster_json",
-                "default_request_json",
-                "legacy_group_key",
-                "source_kind",
-                "created_at",
-                "updated_at",
-            }
-        ),
-        "multi_alpha_combine_backtest_run": frozenset(
-            {
-                "id",
-                "task_id",
-                "request_hash",
-                "status",
-                "phase",
-                "progress_json",
-                "row_version",
-                "owner_id",
-                "fencing_token",
-                "lease_expires_at",
-                "heartbeat_at",
-                "updated_at",
-                "error_code",
-                "error_json",
-            }
-        ),
-        "multi_alpha_combine_backtest_child": frozenset(
-            {
-                "child_id",
-                "run_id",
-                "child_key",
-                "child_kind",
-                "status",
-                "input_manifest_json",
-                "input_manifest_hash",
-                "selected_attempt_id",
-                "source_kind",
-            }
-        ),
-        "multi_alpha_combine_backtest_child_attempt": frozenset(
-            {
-                "attempt_id",
-                "child_id",
-                "attempt_no",
-                "retry_mode",
-                "qe_task_id",
-                "qe_loop_id",
-                "submission_intent_hash",
-                "status",
-                "row_version",
-                "owner_id",
-                "fencing_token",
-                "lease_expires_at",
-                "artifact_manifest_json",
-                "result_manifest_json",
-            }
-        ),
-        "multi_alpha_combine_backtest_event": frozenset(
-            {"event_id", "run_id", "child_id", "attempt_id", "event_type", "payload_json", "created_at"}
-        ),
+    REQUIRED_COLUMN_TYPES: Mapping[str, Mapping[str, str]] = {
+        "multi_alpha_combine_task": {
+            "task_id": "text",
+            "task_name": "text",
+            "task_type": "text",
+            "description": "text",
+            "roster_hash": "text",
+            "roster_json": "jsonb",
+            "default_request_json": "jsonb",
+            "legacy_group_key": "text",
+            "source_kind": "text",
+            "created_by": "text",
+            "created_at": "timestamp with time zone",
+            "updated_at": "timestamp with time zone",
+        },
+        "multi_alpha_combine_backtest_run": {
+            "id": "text",
+            "roster_hash": "text",
+            "roster_json": "jsonb",
+            "oos_start": "date",
+            "oos_end": "date",
+            "normalize_method": "text",
+            "walk_forward_json": "jsonb",
+            "backtest_config_json": "jsonb",
+            "baseline_leg_id": "text",
+            "status": "text",
+            "reason": "jsonb",
+            "created_at": "timestamp with time zone",
+            "task_id": "text",
+            "request_hash": "text",
+            "retry_of_run_id": "text",
+            "phase": "text",
+            "progress_json": "jsonb",
+            "row_version": "bigint",
+            "owner_id": "text",
+            "fencing_token": "bigint",
+            "lease_expires_at": "timestamp with time zone",
+            "heartbeat_at": "timestamp with time zone",
+            "pause_requested_at": "timestamp with time zone",
+            "pause_requested_by": "text",
+            "cancel_requested_at": "timestamp with time zone",
+            "cancel_requested_by": "text",
+            "node_parallelism_json": "jsonb",
+            "started_at": "timestamp with time zone",
+            "finished_at": "timestamp with time zone",
+            "updated_at": "timestamp with time zone",
+            "error_code": "text",
+            "error_json": "jsonb",
+        },
+        "multi_alpha_combine_backtest_scheme_result": {
+            "id": "bigint",
+            "run_id": "text",
+            "weighting_scheme": "text",
+            "weights_json": "jsonb",
+            "per_window_weights_json": "jsonb",
+            "cagr": "double precision",
+            "max_drawdown": "double precision",
+            "sharpe": "double precision",
+            "calmar": "double precision",
+            "topk_return_20": "double precision",
+            "topk_hit_rate_20": "double precision",
+            "turnover": "double precision",
+            "vs_baseline_sharpe_delta": "double precision",
+            "vs_baseline_calmar_delta": "double precision",
+            "pred_persisted": "boolean",
+            "skipped": "boolean",
+            "skipped_reason": "text",
+            "created_at": "timestamp with time zone",
+        },
+        "multi_alpha_combine_backtest_loo": {
+            "id": "bigint",
+            "run_id": "text",
+            "weighting_scheme": "text",
+            "dropped_leg_id": "text",
+            "marginal_sharpe": "double precision",
+            "marginal_calmar": "double precision",
+            "marginal_cagr": "double precision",
+            "created_at": "timestamp with time zone",
+        },
+        "multi_alpha_combine_backtest_child": {
+            "child_id": "text",
+            "run_id": "text",
+            "child_key": "text",
+            "child_kind": "text",
+            "weighting_scheme": "text",
+            "dropped_leg_id": "text",
+            "ordinal": "integer",
+            "status": "text",
+            "input_manifest_json": "jsonb",
+            "input_manifest_hash": "text",
+            "prediction_artifact_uri": "text",
+            "prediction_artifact_hash": "text",
+            "selected_attempt_id": "text",
+            "source_kind": "text",
+            "created_at": "timestamp with time zone",
+            "updated_at": "timestamp with time zone",
+        },
+        "multi_alpha_combine_backtest_child_attempt": {
+            "attempt_id": "text",
+            "child_id": "text",
+            "attempt_no": "integer",
+            "retry_mode": "text",
+            "retry_of_attempt_id": "text",
+            "node_id": "text",
+            "qe_task_id": "text",
+            "qe_loop_id": "text",
+            "submission_intent_hash": "text",
+            "remote_status": "text",
+            "status": "text",
+            "phase": "text",
+            "row_version": "bigint",
+            "owner_id": "text",
+            "fencing_token": "bigint",
+            "lease_expires_at": "timestamp with time zone",
+            "heartbeat_at": "timestamp with time zone",
+            "artifact_manifest_json": "jsonb",
+            "result_manifest_json": "jsonb",
+            "error_code": "text",
+            "error_json": "jsonb",
+            "queued_at": "timestamp with time zone",
+            "submitted_at": "timestamp with time zone",
+            "started_at": "timestamp with time zone",
+            "finished_at": "timestamp with time zone",
+            "created_at": "timestamp with time zone",
+            "updated_at": "timestamp with time zone",
+        },
+        "multi_alpha_combine_backtest_event": {
+            "event_id": "bigint",
+            "run_id": "text",
+            "child_id": "text",
+            "attempt_id": "text",
+            "event_type": "text",
+            "phase": "text",
+            "reason_code": "text",
+            "payload_json": "jsonb",
+            "created_at": "timestamp with time zone",
+        },
     }
+    REQUIRED_CONSTRAINTS = frozenset(
+        {
+            "ck_macb_run_status",
+            "ck_macb_run_window",
+            "ck_macb_run_roster_json",
+            "ck_macb_run_normalize_method",
+            "fk_macb_run_task",
+            "fk_macb_run_retry_of",
+            "ck_macb_run_progress_json",
+            "ck_macb_run_parallelism_json",
+            "ck_macb_run_error_json",
+            "ck_macb_run_row_version",
+            "ck_macb_run_fencing_token",
+            "ck_macb_run_request_hash",
+            "uq_macb_scheme_result",
+            "ck_macb_scheme_supported",
+            "ck_macb_scheme_weights_json",
+            "ck_macb_scheme_window_weights_json",
+            "ck_macb_scheme_skip_reason",
+            "uq_macb_loo",
+            "ck_macb_loo_scheme_supported",
+            "ck_mact_id",
+            "ck_mact_type",
+            "ck_mact_source",
+            "ck_mact_roster_json",
+            "ck_mact_default_request_json",
+            "uq_macb_child_key",
+            "ck_macb_child_id",
+            "ck_macb_child_kind",
+            "ck_macb_child_status",
+            "ck_macb_child_source",
+            "ck_macb_child_ordinal",
+            "ck_macb_child_manifest",
+            "ck_macb_child_manifest_hash",
+            "ck_macb_child_prediction_hash",
+            "ck_macb_child_kind_fields",
+            "fk_macb_child_selected_attempt",
+            "uq_macb_attempt_no",
+            "ck_macb_attempt_id",
+            "ck_macb_attempt_no",
+            "ck_macb_attempt_retry_mode",
+            "ck_macb_attempt_status",
+            "fk_macb_attempt_retry_of",
+            "ck_macb_attempt_lineage",
+            "ck_macb_attempt_remote_identity",
+            "ck_macb_attempt_submission_hash",
+            "ck_macb_attempt_row_version",
+            "ck_macb_attempt_fencing_token",
+            "ck_macb_attempt_artifact_manifest",
+            "ck_macb_attempt_result_manifest",
+            "ck_macb_attempt_error_json",
+            "ck_macb_event_type",
+            "ck_macb_event_payload",
+            "ck_macb_event_attempt_scope",
+        }
+    )
+    REQUIRED_INDEXES = frozenset(
+        {
+            "uq_mact_legacy_group_key",
+            "idx_mact_created_at",
+            "idx_mact_roster_hash",
+            "idx_macb_run_created_at",
+            "idx_macb_run_status_created_at",
+            "idx_macb_run_task_created_at",
+            "idx_macb_run_request_hash",
+            "idx_macb_run_claim",
+            "idx_macb_scheme_result_run",
+            "idx_macb_loo_run",
+            "idx_macb_child_run_ordinal",
+            "idx_macb_child_status",
+            "uq_macb_attempt_remote_identity",
+            "idx_macb_attempt_child_created",
+            "idx_macb_attempt_claim",
+            "idx_macb_attempt_node_active",
+            "idx_macb_event_run_cursor",
+            "idx_macb_event_child_cursor",
+            "idx_macb_event_attempt_cursor",
+            "idx_macb_event_created_at",
+        }
+    )
+    REQUIRED_TABLE_COMMENTS = frozenset(REQUIRED_COLUMN_TYPES)
 
     def __init__(self, connection_provider: ConnectionProvider = _transaction_connection) -> None:
         self._connection_provider = connection_provider
 
     def preflight_schema(self, *, raise_on_error: bool = False) -> SchemaHealth:
-        tables = tuple(self.REQUIRED_COLUMNS)
+        tables = tuple(self.REQUIRED_COLUMN_TYPES)
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT table_name, column_name
+                    SELECT table_name, column_name, data_type
                     FROM information_schema.columns
                     WHERE table_schema = 'strategy_pkg'
                       AND table_name = ANY(%s)
                     """,
                     (list(tables),),
                 )
-                present: dict[str, set[str]] = {table: set() for table in tables}
+                present: dict[str, dict[str, str]] = {table: {} for table in tables}
                 for row in cur.fetchall():
                     item = dict(row)
-                    present.setdefault(str(item["table_name"]), set()).add(str(item["column_name"]))
+                    present.setdefault(str(item["table_name"]), {})[str(item["column_name"])] = str(item["data_type"])
+                cur.execute(
+                    """
+                    SELECT con.conname
+                    FROM pg_constraint AS con
+                    JOIN pg_class AS cls ON cls.oid = con.conrelid
+                    JOIN pg_namespace AS ns ON ns.oid = cls.relnamespace
+                    WHERE ns.nspname = 'strategy_pkg'
+                      AND cls.relname = ANY(%s)
+                    """,
+                    (list(tables),),
+                )
+                present_constraints = {str(dict(row)["conname"]) for row in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'strategy_pkg'
+                      AND tablename = ANY(%s)
+                    """,
+                    (list(tables),),
+                )
+                present_indexes = {str(dict(row)["indexname"]) for row in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT cls.relname AS table_name, obj_description(cls.oid, 'pg_class') AS table_comment
+                    FROM pg_class AS cls
+                    JOIN pg_namespace AS ns ON ns.oid = cls.relnamespace
+                    WHERE ns.nspname = 'strategy_pkg'
+                      AND cls.relname = ANY(%s)
+                    """,
+                    (list(tables),),
+                )
+                present_comments = {
+                    str(item["table_name"])
+                    for raw in cur.fetchall()
+                    for item in (dict(raw),)
+                    if item.get("table_comment")
+                }
 
         missing_tables = tuple(sorted(table for table, columns in present.items() if not columns))
         missing_columns = {
-            table: tuple(sorted(required - present.get(table, set())))
-            for table, required in self.REQUIRED_COLUMNS.items()
-            if present.get(table) and required - present.get(table, set())
+            table: tuple(sorted(set(required) - set(present.get(table, {}))))
+            for table, required in self.REQUIRED_COLUMN_TYPES.items()
+            if present.get(table) and set(required) - set(present.get(table, {}))
         }
+        type_mismatches: dict[str, dict[str, dict[str, str]]] = {}
+        for table, required in self.REQUIRED_COLUMN_TYPES.items():
+            for column, expected_type in required.items():
+                actual_type = present.get(table, {}).get(column)
+                if actual_type is not None and actual_type != expected_type:
+                    type_mismatches.setdefault(table, {})[column] = {
+                        "expected": expected_type,
+                        "actual": actual_type,
+                    }
+        missing_constraints = tuple(sorted(self.REQUIRED_CONSTRAINTS - present_constraints))
+        missing_indexes = tuple(sorted(self.REQUIRED_INDEXES - present_indexes))
+        missing_table_comments = tuple(sorted(self.REQUIRED_TABLE_COMMENTS - present_comments))
         health = SchemaHealth(
-            ready=not missing_tables and not missing_columns,
+            ready=not (
+                missing_tables
+                or missing_columns
+                or type_mismatches
+                or missing_constraints
+                or missing_indexes
+                or missing_table_comments
+            ),
             missing_tables=missing_tables,
             missing_columns=missing_columns,
+            type_mismatches=type_mismatches,
+            missing_constraints=missing_constraints,
+            missing_indexes=missing_indexes,
+            missing_table_comments=missing_table_comments,
         )
         if raise_on_error and not health.ready:
             raise MultiAlphaDurableRepositoryError(
@@ -352,13 +587,7 @@ class MultiAlphaDurableRepository:
                         context={"run_id": spec.run_id},
                     )
                 row = dict(existing)
-                if row.get("request_hash") != spec.request_hash or row.get("task_id") != spec.task_id:
-                    self._raise_identity_conflict(
-                        entity="run",
-                        identity=spec.run_id,
-                        expected={"request_hash": spec.request_hash, "task_id": spec.task_id},
-                        actual={"request_hash": row.get("request_hash"), "task_id": row.get("task_id")},
-                    )
+                self._assert_run_identity(row, spec)
                 return row
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
@@ -459,20 +688,7 @@ class MultiAlphaDurableRepository:
                         context={"child_id": spec.child_id, "run_id": spec.run_id, "child_key": spec.child_key},
                     )
                 row = dict(existing)
-                expected = {
-                    "child_id": spec.child_id,
-                    "run_id": spec.run_id,
-                    "child_key": spec.child_key,
-                    "input_manifest_hash": spec.input_manifest_hash,
-                }
-                actual = {key: row.get(key) for key in expected}
-                if actual != expected:
-                    self._raise_identity_conflict(
-                        entity="child",
-                        identity=spec.child_id,
-                        expected=expected,
-                        actual=actual,
-                    )
+                self._assert_child_identity(row, spec)
                 return row
 
     def list_children(self, run_id: str) -> list[dict[str, Any]]:
@@ -583,24 +799,7 @@ class MultiAlphaDurableRepository:
                         context={"attempt_id": spec.attempt_id, "child_id": spec.child_id},
                     )
                 row = dict(existing)
-                expected = {
-                    "attempt_id": spec.attempt_id,
-                    "child_id": spec.child_id,
-                    "attempt_no": spec.attempt_no,
-                    "retry_mode": spec.retry_mode,
-                    "retry_of_attempt_id": spec.retry_of_attempt_id,
-                    "submission_intent_hash": spec.submission_intent_hash,
-                    "qe_task_id": spec.qe_task_id,
-                    "qe_loop_id": spec.qe_loop_id,
-                }
-                actual = {key: row.get(key) for key in expected}
-                if actual != expected:
-                    self._raise_identity_conflict(
-                        entity="attempt",
-                        identity=spec.attempt_id,
-                        expected=expected,
-                        actual=actual,
-                    )
+                self._assert_attempt_identity(row, spec)
                 return row
 
     def list_attempts(self, child_id: str) -> list[dict[str, Any]]:
@@ -642,7 +841,13 @@ class MultiAlphaDurableRepository:
                         SELECT id
                         FROM strategy_pkg.multi_alpha_combine_backtest_run
                         WHERE status = ANY(%s)
-                          AND (owner_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < NOW())
+                          AND task_id IS NOT NULL
+                          AND request_hash IS NOT NULL
+                          AND (
+                              owner_id IS NULL
+                              OR lease_expires_at IS NULL
+                              OR lease_expires_at < clock_timestamp()
+                          )
                         ORDER BY created_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -650,8 +855,8 @@ class MultiAlphaDurableRepository:
                     UPDATE strategy_pkg.multi_alpha_combine_backtest_run AS run
                     SET owner_id = %s,
                         fencing_token = run.fencing_token + 1,
-                        lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
-                        heartbeat_at = NOW(),
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
+                        heartbeat_at = clock_timestamp(),
                         row_version = run.row_version + 1,
                         updated_at = NOW()
                     FROM candidate
@@ -683,28 +888,29 @@ class MultiAlphaDurableRepository:
         *,
         owner_id: str,
         lease_seconds: int,
-        statuses: Sequence[str] = ("queued", "submitting", "running", "reconciling"),
-        run_statuses: Sequence[str] = ("preparing", "running", "cancel_requested", "cancelling"),
+        claim_kind: str = "dispatch",
         node_id: str | None = None,
     ) -> dict[str, Any] | None:
+        policy = ATTEMPT_CLAIM_POLICIES.get(claim_kind)
+        if policy is None:
+            raise MultiAlphaDurableRepositoryError(
+                "attempt claim kind is invalid",
+                reason_code="multi_alpha_invalid_attempt_claim_kind",
+                context={"claim_kind": claim_kind, "allowed": sorted(ATTEMPT_CLAIM_POLICIES)},
+            )
+        statuses, run_statuses = policy
         self._validate_claim_inputs(
             owner_id=owner_id,
             lease_seconds=lease_seconds,
-            statuses=statuses,
+            statuses=tuple(statuses),
             allowed=ATTEMPT_STATUSES,
         )
-        if not run_statuses or any(status not in RUN_STATUSES for status in run_statuses):
-            raise MultiAlphaDurableRepositoryError(
-                "attempt claim parent run status set is invalid",
-                reason_code="multi_alpha_invalid_state_transition",
-                context={"run_statuses": list(run_statuses), "allowed": sorted(RUN_STATUSES)},
-            )
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
                     WITH candidate AS (
-                        SELECT attempt.attempt_id
+                        SELECT attempt.attempt_id, child.run_id, run.status AS run_status
                         FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
                         JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
                           ON child.child_id = attempt.child_id
@@ -712,9 +918,14 @@ class MultiAlphaDurableRepository:
                           ON run.id = child.run_id
                         WHERE attempt.status = ANY(%s)
                           AND run.status = ANY(%s)
+                          AND run.task_id IS NOT NULL
+                          AND run.request_hash IS NOT NULL
                           AND (%s IS NULL OR attempt.node_id = %s)
-                          AND (attempt.owner_id IS NULL OR attempt.lease_expires_at IS NULL
-                               OR attempt.lease_expires_at < NOW())
+                          AND (
+                              attempt.owner_id IS NULL
+                              OR attempt.lease_expires_at IS NULL
+                              OR attempt.lease_expires_at < clock_timestamp()
+                          )
                         ORDER BY attempt.queued_at, attempt.attempt_id
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -722,21 +933,21 @@ class MultiAlphaDurableRepository:
                     UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
                     SET owner_id = %s,
                         fencing_token = attempt.fencing_token + 1,
-                        lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
-                        heartbeat_at = NOW(),
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
+                        heartbeat_at = clock_timestamp(),
                         row_version = attempt.row_version + 1,
                         updated_at = NOW()
                     FROM candidate
                     WHERE attempt.attempt_id = candidate.attempt_id
-                    RETURNING attempt.*
+                    RETURNING attempt.*, candidate.run_id, candidate.run_status
                     """,
-                    (list(statuses), list(run_statuses), node_id, node_id, owner_id, lease_seconds),
+                    (sorted(statuses), sorted(run_statuses), node_id, node_id, owner_id, lease_seconds),
                 )
                 claimed = cur.fetchone()
                 if not claimed:
                     return None
                 row = dict(claimed)
-                run_id = self._run_id_for_child(cur, str(row["child_id"]))
+                run_id = str(row["run_id"])
                 self._insert_event(
                     cur,
                     run_id=run_id,
@@ -750,9 +961,10 @@ class MultiAlphaDurableRepository:
                         "row_version": row["row_version"],
                         "lease_seconds": lease_seconds,
                         "node_id": row.get("node_id"),
+                        "claim_kind": claim_kind,
+                        "run_status": row.get("run_status"),
                     },
                 )
-                row["run_id"] = run_id
                 return row
 
     def heartbeat_run(self, run_id: str, *, token: OwnershipToken, lease_seconds: int) -> dict[str, Any]:
@@ -807,6 +1019,11 @@ class MultiAlphaDurableRepository:
                     expected_statuses=expected_statuses,
                 )
                 terminal = next_status in TERMINAL_RUN_STATUSES
+                persisted_error_code, persisted_error = self._resolve_error_columns(
+                    next_status=next_status,
+                    reason_code=reason_code,
+                    error=error,
+                )
                 compatibility_reason = {
                     "phase": phase,
                     "progress": dict(progress or {}),
@@ -814,8 +1031,8 @@ class MultiAlphaDurableRepository:
                     "durable": True,
                     "reason_code": reason_code,
                 }
-                if error:
-                    compatibility_reason["error"] = dict(error)
+                if persisted_error is not None:
+                    compatibility_reason["error"] = persisted_error
                 cur.execute(
                     """
                     UPDATE strategy_pkg.multi_alpha_combine_backtest_run
@@ -829,13 +1046,14 @@ class MultiAlphaDurableRepository:
                         finished_at = CASE WHEN %s THEN NOW() ELSE finished_at END,
                         owner_id = CASE WHEN %s THEN NULL ELSE owner_id END,
                         lease_expires_at = CASE WHEN %s THEN NULL ELSE lease_expires_at END,
-                        heartbeat_at = NOW(),
+                        heartbeat_at = clock_timestamp(),
                         row_version = row_version + 1,
                         updated_at = NOW()
                     WHERE id = %s
                       AND owner_id = %s
                       AND fencing_token = %s
                       AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
                     RETURNING *
                     """,
                     (
@@ -843,8 +1061,8 @@ class MultiAlphaDurableRepository:
                         phase,
                         Json(dict(progress or {})),
                         Json(compatibility_reason),
-                        reason_code,
-                        Json(dict(error)) if error is not None else None,
+                        persisted_error_code,
+                        Json(persisted_error) if persisted_error is not None else None,
                         next_status,
                         terminal,
                         terminal,
@@ -989,6 +1207,11 @@ class MultiAlphaDurableRepository:
                     expected_statuses=expected_statuses,
                 )
                 terminal = next_status in TERMINAL_ATTEMPT_STATUSES
+                persisted_error_code, persisted_error = self._resolve_error_columns(
+                    next_status=next_status,
+                    reason_code=reason_code,
+                    error=error,
+                )
                 cur.execute(
                     """
                     UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt
@@ -1004,13 +1227,14 @@ class MultiAlphaDurableRepository:
                         finished_at = CASE WHEN %s THEN NOW() ELSE finished_at END,
                         owner_id = CASE WHEN %s THEN NULL ELSE owner_id END,
                         lease_expires_at = CASE WHEN %s THEN NULL ELSE lease_expires_at END,
-                        heartbeat_at = NOW(),
+                        heartbeat_at = clock_timestamp(),
                         row_version = row_version + 1,
                         updated_at = NOW()
                     WHERE attempt_id = %s
                       AND owner_id = %s
                       AND fencing_token = %s
                       AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
                     RETURNING *
                     """,
                     (
@@ -1019,8 +1243,8 @@ class MultiAlphaDurableRepository:
                         remote_status,
                         Json(dict(artifact_manifest)) if artifact_manifest is not None else None,
                         Json(dict(result_manifest)) if result_manifest is not None else None,
-                        reason_code,
-                        Json(dict(error)) if error is not None else None,
+                        persisted_error_code,
+                        Json(persisted_error) if persisted_error is not None else None,
                         next_status,
                         next_status,
                         terminal,
@@ -1133,14 +1357,15 @@ class MultiAlphaDurableRepository:
                 cur.execute(
                     f"""
                     UPDATE {table}
-                    SET heartbeat_at = NOW(),
-                        lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
+                    SET heartbeat_at = clock_timestamp(),
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
                         row_version = row_version + 1,
                         updated_at = NOW()
                     WHERE {id_column} = %s
                       AND owner_id = %s
                       AND fencing_token = %s
                       AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
                     RETURNING *
                     """,
                     (lease_seconds, entity_id, token.owner_id, token.fencing_token, token.row_version),
@@ -1161,7 +1386,18 @@ class MultiAlphaDurableRepository:
         token: OwnershipToken,
         expected_statuses: Sequence[str],
     ) -> dict[str, Any]:
-        cur.execute(f"SELECT * FROM {table} WHERE {id_column} = %s FOR UPDATE", (entity_id,))
+        cur.execute(
+            f"""
+            SELECT *, (
+                lease_expires_at IS NOT NULL
+                AND lease_expires_at > clock_timestamp()
+            ) AS lease_valid
+            FROM {table}
+            WHERE {id_column} = %s
+            FOR UPDATE
+            """,
+            (entity_id,),
+        )
         current = cur.fetchone()
         if not current:
             self._raise_not_found(entity, entity_id)
@@ -1190,6 +1426,8 @@ class MultiAlphaDurableRepository:
                     "actual_row_version": row.get("row_version"),
                 },
             )
+        if not bool(row.get("lease_valid")):
+            self._raise_lease_expired(entity, entity_id, row.get("lease_expires_at"))
         if row.get("status") not in expected_statuses:
             self._raise_state_conflict(entity, entity_id, str(row.get("status")), expected_statuses)
         return row
@@ -1204,7 +1442,15 @@ class MultiAlphaDurableRepository:
         token: OwnershipToken,
     ) -> None:
         cur.execute(
-            f"SELECT owner_id, fencing_token, row_version, status FROM {table} WHERE {id_column} = %s",
+            f"""
+            SELECT owner_id, fencing_token, row_version, status, lease_expires_at,
+                   (
+                       lease_expires_at IS NOT NULL
+                       AND lease_expires_at > clock_timestamp()
+                   ) AS lease_valid
+            FROM {table}
+            WHERE {id_column} = %s
+            """,
             (entity_id,),
         )
         row = cur.fetchone()
@@ -1217,6 +1463,8 @@ class MultiAlphaDurableRepository:
                 reason_code="multi_alpha_stale_fencing_token",
                 context={"entity": entity, "identity": entity_id, "current": current},
             )
+        if int(current.get("row_version") or 0) == token.row_version and not bool(current.get("lease_valid")):
+            self._raise_lease_expired(entity, entity_id, current.get("lease_expires_at"))
         raise MultiAlphaDurableRepositoryError(
             "row version changed before durable write",
             reason_code="multi_alpha_row_version_conflict",
@@ -1226,6 +1474,14 @@ class MultiAlphaDurableRepository:
                 "expected_row_version": token.row_version,
                 "actual_row_version": current.get("row_version"),
             },
+        )
+
+    @staticmethod
+    def _raise_lease_expired(entity: str, identity: str, lease_expires_at: Any) -> None:
+        raise MultiAlphaDurableRepositoryError(
+            "worker lease expired before the durable write",
+            reason_code="multi_alpha_lease_expired",
+            context={"entity": entity, "identity": identity, "lease_expires_at": lease_expires_at},
         )
 
     def _validate_attempt_lineage(self, cur: Any, spec: DurableAttemptSpec) -> None:
@@ -1440,6 +1696,31 @@ class MultiAlphaDurableRepository:
             )
 
     @staticmethod
+    def _resolve_error_columns(
+        *,
+        next_status: str,
+        reason_code: str | None,
+        error: Mapping[str, Any] | None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        if error is None:
+            if next_status == "failed":
+                raise MultiAlphaDurableRepositoryError(
+                    "failed state requires structured error context",
+                    reason_code="multi_alpha_failed_state_error_required",
+                    context={"next_status": next_status, "reason_code": reason_code},
+                )
+            return None, None
+        payload = dict(error)
+        error_code = payload.get("reason_code") or reason_code
+        if not error_code:
+            raise MultiAlphaDurableRepositoryError(
+                "structured error context requires a stable reason code",
+                reason_code="multi_alpha_error_reason_code_required",
+                context={"next_status": next_status, "error": payload},
+            )
+        return str(error_code), payload
+
+    @staticmethod
     def _assert_task_identity(row: Mapping[str, Any], spec: DurableTaskSpec) -> None:
         expected = {
             "task_id": spec.task_id,
@@ -1459,6 +1740,88 @@ class MultiAlphaDurableRepository:
             MultiAlphaDurableRepository._raise_identity_conflict(
                 entity="task",
                 identity=spec.task_id,
+                expected=expected,
+                actual=actual,
+            )
+
+    @staticmethod
+    def _assert_run_identity(row: Mapping[str, Any], spec: DurableRunSpec) -> None:
+        expected = {
+            "id": spec.run_id,
+            "task_id": spec.task_id,
+            "request_hash": spec.request_hash,
+            "request_payload": canonical_json(spec.canonical_request_payload()),
+        }
+        actual_payload = {
+            "roster_hash": row.get("roster_hash"),
+            "roster": row.get("roster_json"),
+            "oos_start": row.get("oos_start"),
+            "oos_end": row.get("oos_end"),
+            "normalize_method": row.get("normalize_method"),
+            "walk_forward": row.get("walk_forward_json"),
+            "backtest_config": row.get("backtest_config_json"),
+            "baseline_leg_id": row.get("baseline_leg_id"),
+            "retry_of_run_id": row.get("retry_of_run_id"),
+            "node_parallelism": row.get("node_parallelism_json") or {},
+        }
+        actual = {
+            "id": row.get("id"),
+            "task_id": row.get("task_id"),
+            "request_hash": row.get("request_hash"),
+            "request_payload": canonical_json(actual_payload),
+        }
+        if actual != expected:
+            MultiAlphaDurableRepository._raise_identity_conflict(
+                entity="run",
+                identity=spec.run_id,
+                expected=expected,
+                actual=actual,
+            )
+
+    @staticmethod
+    def _assert_child_identity(row: Mapping[str, Any], spec: DurableChildSpec) -> None:
+        expected = {
+            "child_id": spec.child_id,
+            "run_id": spec.run_id,
+            "child_key": spec.child_key,
+            "child_kind": spec.child_kind,
+            "weighting_scheme": spec.weighting_scheme,
+            "dropped_leg_id": spec.dropped_leg_id,
+            "ordinal": spec.ordinal,
+            "input_manifest_json": canonical_json(spec.input_manifest),
+            "input_manifest_hash": spec.input_manifest_hash,
+            "source_kind": spec.source_kind,
+        }
+        actual = {
+            **{key: row.get(key) for key in expected if key != "input_manifest_json"},
+            "input_manifest_json": canonical_json(row.get("input_manifest_json")),
+        }
+        if actual != expected:
+            MultiAlphaDurableRepository._raise_identity_conflict(
+                entity="child",
+                identity=spec.child_id,
+                expected=expected,
+                actual=actual,
+            )
+
+    @staticmethod
+    def _assert_attempt_identity(row: Mapping[str, Any], spec: DurableAttemptSpec) -> None:
+        expected = {
+            "attempt_id": spec.attempt_id,
+            "child_id": spec.child_id,
+            "attempt_no": spec.attempt_no,
+            "retry_mode": spec.retry_mode,
+            "retry_of_attempt_id": spec.retry_of_attempt_id,
+            "node_id": spec.node_id,
+            "submission_intent_hash": spec.submission_intent_hash,
+            "qe_task_id": spec.qe_task_id,
+            "qe_loop_id": spec.qe_loop_id,
+        }
+        actual = {key: row.get(key) for key in expected}
+        if actual != expected:
+            MultiAlphaDurableRepository._raise_identity_conflict(
+                entity="attempt",
+                identity=spec.attempt_id,
                 expected=expected,
                 actual=actual,
             )

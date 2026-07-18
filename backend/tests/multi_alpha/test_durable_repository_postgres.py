@@ -20,9 +20,11 @@ from backend.services.multi_alpha.durable_models import (
     DurableTaskSpec,
     OwnershipToken,
     artifact_manifest_hash_for,
+    durable_run_request_payload,
     make_attempt_id,
     make_child_id,
     request_hash_for,
+    submission_intent_hash_for,
 )
 from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
@@ -101,6 +103,27 @@ def disposable_schema() -> Iterator[None]:
             )
             cur.execute(
                 """
+                INSERT INTO strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                    (run_id, weighting_scheme, weights_json, skipped, skipped_reason)
+                VALUES
+                    (
+                        'macb_legacy_pg',
+                        'risk_parity',
+                        '{"L1":0.5,"L2":0.5}'::jsonb,
+                        TRUE,
+                        '{"reason_code":"scheme_not_computable","detail":"zero covariance"}'
+                    ),
+                    (
+                        'macb_legacy_pg',
+                        'ic_weighted',
+                        '{"L1":0.5,"L2":0.5}'::jsonb,
+                        TRUE,
+                        '{"reason_code":"pred_backtest_failed","detail":"artifact unavailable"}'
+                    )
+                """
+            )
+            cur.execute(
+                """
                 INSERT INTO strategy_pkg.multi_alpha_combine_backtest_loo
                     (run_id, weighting_scheme, dropped_leg_id, marginal_sharpe)
                 VALUES ('macb_legacy_pg', 'equal', 'L2', 0.11)
@@ -154,6 +177,91 @@ def test_schema_has_required_comments_constraints_and_indexes() -> None:
             assert len(comments) == 4
             assert all(comments.values())
 
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                ALTER TABLE strategy_pkg.multi_alpha_combine_backtest_event
+                DROP CONSTRAINT ck_macb_event_type
+                """
+            )
+    try:
+        health = repository.preflight_schema()
+        assert health.ready is False
+        assert "ck_macb_event_type" in health.missing_constraints
+        with pytest.raises(MultiAlphaDurableRepositoryError) as caught:
+            repository.preflight_schema(raise_on_error=True)
+        assert caught.value.reason_code == "multi_alpha_schema_unavailable"
+    finally:
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    ALTER TABLE strategy_pkg.multi_alpha_combine_backtest_event
+                    ADD CONSTRAINT ck_macb_event_type CHECK (
+                        event_type IN (
+                            'created', 'claimed', 'submitted', 'status', 'log', 'reconciled',
+                            'control', 'result', 'error', 'terminal'
+                        )
+                    )
+                    """
+                )
+    assert repository.preflight_schema(raise_on_error=True).ready is True
+
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE strategy_pkg.multi_alpha_combine_task ALTER COLUMN description TYPE VARCHAR(100)"
+            )
+    try:
+        health = repository.preflight_schema()
+        assert health.ready is False
+        assert health.type_mismatches["multi_alpha_combine_task"]["description"] == {
+            "expected": "text",
+            "actual": "character varying",
+        }
+    finally:
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE strategy_pkg.multi_alpha_combine_task ALTER COLUMN description TYPE TEXT"
+                )
+
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP INDEX strategy_pkg.idx_mact_roster_hash")
+    try:
+        health = repository.preflight_schema()
+        assert health.ready is False
+        assert "idx_mact_roster_hash" in health.missing_indexes
+    finally:
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE INDEX idx_mact_roster_hash
+                    ON strategy_pkg.multi_alpha_combine_task(roster_hash, created_at DESC)
+                    """
+                )
+
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute("COMMENT ON TABLE strategy_pkg.multi_alpha_combine_task IS NULL")
+    try:
+        health = repository.preflight_schema()
+        assert health.ready is False
+        assert "multi_alpha_combine_task" in health.missing_table_comments
+    finally:
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    COMMENT ON TABLE strategy_pkg.multi_alpha_combine_task IS
+                    'First-class QE-only multi-alpha combine research task. Status and metrics are derived from runs; no approval semantics.'
+                    """
+                )
+    assert repository.preflight_schema(raise_on_error=True).ready is True
+
 
 def test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason() -> None:
     with _connection_provider() as conn:
@@ -172,6 +280,41 @@ def test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason()
     backfill = MultiAlphaLegacyBackfill(connection_provider=_connection_provider)
     assert backfill.dry_run()["run_assignment_count"] == 1
     first = backfill.execute()
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    modern_task = DurableTaskSpec(
+        task_id="mact_pg_modern_backfill_guard",
+        task_name="Modern first-class run excluded from legacy backfill",
+        roster_hash="modern_roster",
+        roster=[{"leg_id": "L1"}],
+        default_request={"topk": 25},
+        source_kind="api",
+        created_by="pytest",
+    )
+    repository.create_task(modern_task)
+    modern_request = durable_run_request_payload(
+        roster_hash=modern_task.roster_hash,
+        roster=modern_task.roster,
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
+    repository.create_run(
+        DurableRunSpec(
+            run_id="macb_pg_modern_backfill_guard",
+            task_id=modern_task.task_id,
+            request_hash=request_hash_for(modern_request),
+            roster_hash=modern_task.roster_hash,
+            roster=modern_task.roster,
+            oos_start="2026-01-01",
+            oos_end="2026-06-29",
+            normalize_method="rank",
+            walk_forward={"enabled": True},
+            backtest_config={"topk": 25},
+        )
+    )
+    assert backfill.dry_run()["run_assignment_count"] == 1
     second = backfill.execute()
     assert first["readback"]["ready"] is True
     assert second["readback"]["ready"] is True
@@ -191,14 +334,38 @@ def test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason()
             after = dict(cur.fetchone())
             cur.execute(
                 """
-                SELECT COUNT(*) AS child_count
+                SELECT child_key, status
                 FROM strategy_pkg.multi_alpha_combine_backtest_child
                 WHERE run_id = 'macb_legacy_pg' AND source_kind = 'legacy_result_backfill'
+                ORDER BY child_key
                 """
             )
-            child_count = int(cur.fetchone()["child_count"])
+            legacy_children = {row["child_key"]: row["status"] for row in cur.fetchall()}
+            cur.execute(
+                """
+                SELECT COUNT(*) AS child_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_child
+                WHERE run_id = 'macb_pg_modern_backfill_guard'
+                  AND source_kind = 'legacy_result_backfill'
+                """
+            )
+            modern_legacy_child_count = int(cur.fetchone()["child_count"])
     assert after == before
-    assert child_count == 2
+    assert legacy_children == {
+        "loo:equal:drop:L2": "succeeded",
+        "scheme:equal": "succeeded",
+        "scheme:ic_weighted": "failed",
+        "scheme:risk_parity": "not_computable",
+    }
+    assert modern_legacy_child_count == 0
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM strategy_pkg.multi_alpha_combine_backtest_run WHERE id = %s", (
+                "macb_pg_modern_backfill_guard",
+            ))
+            cur.execute("DELETE FROM strategy_pkg.multi_alpha_combine_task WHERE task_id = %s", (
+                "mact_pg_modern_backfill_guard",
+            ))
 
 
 def test_eight_workers_claim_once_event_rollback_and_stale_fencing() -> None:
@@ -213,14 +380,15 @@ def test_eight_workers_claim_once_event_rollback_and_stale_fencing() -> None:
         created_by="pytest",
     )
     repository.create_task(task)
-    request = {
-        "roster": list(task.roster),
-        "oos_start": "2026-01-01",
-        "oos_end": "2026-06-29",
-        "normalize_method": "rank",
-        "walk_forward": {"enabled": True},
-        "backtest_config": {"topk": 25},
-    }
+    request = durable_run_request_payload(
+        roster_hash=task.roster_hash,
+        roster=task.roster,
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
     repository.create_run(
         DurableRunSpec(
             run_id="macb_pg_concurrency",
@@ -303,6 +471,18 @@ def test_eight_workers_claim_once_event_rollback_and_stale_fencing() -> None:
                 WHERE id = 'macb_pg_concurrency'
                 """
             )
+    with pytest.raises(MultiAlphaDurableRepositoryError) as expired_heartbeat:
+        repository.heartbeat_run("macb_pg_concurrency", token=old_token, lease_seconds=30)
+    assert expired_heartbeat.value.reason_code == "multi_alpha_lease_expired"
+    with pytest.raises(MultiAlphaDurableRepositoryError) as expired_transition:
+        repository.transition_run_with_event(
+            "macb_pg_concurrency",
+            token=old_token,
+            expected_statuses=("queued",),
+            next_status="preparing",
+            phase="prepare",
+        )
+    assert expired_transition.value.reason_code == "multi_alpha_lease_expired"
     new_owner = repository.claim_next_run(owner_id="worker_new", lease_seconds=30, statuses=("queued",))
     assert new_owner is not None
     with pytest.raises(MultiAlphaDurableRepositoryError) as caught:
@@ -328,14 +508,15 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
         created_by="pytest",
     )
     repository.create_task(task)
-    request = {
-        "roster": list(task.roster),
-        "oos_start": "2026-01-01",
-        "oos_end": "2026-06-29",
-        "normalize_method": "rank",
-        "walk_forward": {"enabled": True},
-        "backtest_config": {"topk": 25},
-    }
+    request = durable_run_request_payload(
+        roster_hash=task.roster_hash,
+        roster=task.roster,
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
     repository.create_run(
         DurableRunSpec(
             run_id="macb_pg_attempt",
@@ -369,12 +550,17 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
         fencing_token=int(preparing_run["fencing_token"]),
         row_version=int(preparing_run["row_version"]),
     )
-    repository.transition_run_with_event(
+    running_run = repository.transition_run_with_event(
         "macb_pg_attempt",
         token=run_token,
         expected_statuses=("preparing",),
         next_status="running",
         phase="execute",
+    )
+    running_run_token = OwnershipToken(
+        owner_id="attempt_run_worker",
+        fencing_token=int(running_run["fencing_token"]),
+        row_version=int(running_run["row_version"]),
     )
     child_key = "scheme:equal"
     child_id = make_child_id("macb_pg_attempt", child_key)
@@ -392,6 +578,15 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
         )
     )
     attempt_id = make_attempt_id(child_id, 1)
+    submission_hash = submission_intent_hash_for(
+        child_id=child_id,
+        attempt_no=1,
+        retry_mode="initial",
+        retry_of_attempt_id=None,
+        node_id="wsl2-5080",
+        qe_task_id="qe_pg_attempt",
+        qe_loop_id="Loop1",
+    )
     repository.create_attempt(
         DurableAttemptSpec(
             attempt_id=attempt_id,
@@ -401,11 +596,11 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
             node_id="wsl2-5080",
             qe_task_id="qe_pg_attempt",
             qe_loop_id="Loop1",
-            submission_intent_hash="d" * 64,
+            submission_intent_hash=submission_hash,
         )
     )
     claimed = repository.claim_next_attempt(
-        owner_id="attempt_worker", lease_seconds=30, statuses=("queued",), node_id="wsl2-5080"
+        owner_id="attempt_worker", lease_seconds=30, claim_kind="dispatch", node_id="wsl2-5080"
     )
     assert claimed is not None
     token = OwnershipToken(
@@ -478,6 +673,49 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
     listed_task = next(row for row in repository.list_tasks(source_kind="api") if row["task_id"] == task.task_id)
     assert int(listed_task["run_count"]) == 1
     assert int(listed_task["run_status_counts"]["running"]) == 1
+
+    repository.transition_run_with_event(
+        "macb_pg_attempt",
+        token=running_run_token,
+        expected_statuses=("running",),
+        next_status="cancel_requested",
+        phase="cancel_requested",
+        reason_code="user_requested_cancel",
+    )
+    queued_child_key = "scheme:risk_parity"
+    queued_child_id = make_child_id("macb_pg_attempt", queued_child_key)
+    queued_manifest = {"run_id": "macb_pg_attempt", "child_key": queued_child_key, "topk": 25}
+    repository.create_child(
+        DurableChildSpec(
+            child_id=queued_child_id,
+            run_id="macb_pg_attempt",
+            child_key=queued_child_key,
+            child_kind="scheme",
+            weighting_scheme="risk_parity",
+            ordinal=1,
+            input_manifest=queued_manifest,
+            input_manifest_hash=artifact_manifest_hash_for(queued_manifest),
+        )
+    )
+    queued_attempt_id = make_attempt_id(queued_child_id, 1)
+    repository.create_attempt(
+        DurableAttemptSpec(
+            attempt_id=queued_attempt_id,
+            child_id=queued_child_id,
+            attempt_no=1,
+            retry_mode="initial",
+            node_id="wsl2-5080",
+        )
+    )
+    assert repository.claim_next_attempt(
+        owner_id="cancel_worker",
+        lease_seconds=30,
+        claim_kind="cancel",
+        node_id="wsl2-5080",
+    ) is None
+    queued_attempt = repository.get_attempt(queued_attempt_id)
+    assert queued_attempt is not None
+    assert queued_attempt["owner_id"] is None
 
 
 def _schema_digest(cur: Any) -> str:

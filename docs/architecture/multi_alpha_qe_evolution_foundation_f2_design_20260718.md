@@ -951,7 +951,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 |---|---|---|---|---|
 | F-201 | `backend/services/multi_alpha/{combine_backtest,remote_dispatch,combine_ui_adapter}.py`; `frontend/src/app/quantevolver/{evolution,multi-alpha/combine-backtest}` | `backend/tests/test_multi_alpha_combine_backtest.py`; `backend/tests/test_multi_alpha_combine_ui_adapter.py`; `rtk git diff --check` | DESIGN_VERIFIED | 无 |
 | F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718{,.preflight,.rollback}.sql`; `backend/services/multi_alpha/{durable_models,durable_repository}.py` | `backend/tests/multi_alpha/test_durable_{schema,repository,repository_postgres}.py` | P0_1A_LOCAL_VERIFIED | 无 |
-| F-203 | `MultiAlphaDurableRepository` claim/heartbeat/transition CAS，lease/fencing/row-version | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_eight_workers_claim_once_event_rollback_and_stale_fencing` | P0_1A_LOCAL_VERIFIED | 无 |
+| F-203 | `MultiAlphaDurableRepository` claim/heartbeat/transition CAS，lease/fencing/row-version；lease 使用数据库真实时钟判定，过期 owner 在新 owner claim 前也立即失权 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_eight_workers_claim_once_event_rollback_and_stale_fencing` | P0_1A_LOCAL_VERIFIED | 无 |
 | F-204 | execution adapter + attempt remote identity | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | DESIGN_READY | 无 |
 | F-205 | `QEWorkspaceClient`、remote dispatch refactor | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | DESIGN_READY | 无 |
 | F-206 | unified active-execution reader + DB capacity claim | `backend/tests/multi_alpha/test_durable_capacity.py` | DESIGN_READY | 无 |
@@ -962,9 +962,9 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts` | DESIGN_READY | 无 |
 | F-212 | multi-alpha create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | DESIGN_READY | 无 |
 | F-213 | child grid/runtime panel | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | DESIGN_READY | 无 |
-| F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason` | P0_1A_LOCAL_VERIFIED | 无 |
+| F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py`；只扫描 `legacy_backfill`/未绑定历史 run，技术失败与数学不可计算分别映射为 `failed`/`not_computable` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason` | P0_1A_LOCAL_VERIFIED | 无 |
 | F-215 | existing combiner/pred-backtest result parity + Archive health | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | DESIGN_READY | 无 |
-| F-216 | `MultiAlphaDurableRepository.preflight_schema()`；migration 仅修改 `strategy_pkg.multi_alpha_combine*` | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped` | DESIGN_READY | 无 |
+| F-216 | `MultiAlphaDurableRepository.preflight_schema()` 对基础结果表和 durable 表执行完整列类型、命名约束、索引、表注释核对；migration 仅修改 `strategy_pkg.multi_alpha_combine*` | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_schema_has_required_comments_constraints_and_indexes` | P0_1A_LOCAL_VERIFIED | 无 |
 | F-217 | state/API/UI audit without research gates or claimed approval | `backend/tests/multi_alpha/test_durable_contract.py`; `frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | DESIGN_VERIFIED | 无 |
 | F-218 | full validation matrix | `rtk python -m pytest backend/tests/multi_alpha -q`; `rtk npm run build`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | DESIGN_READY | 无 |
 
@@ -991,15 +991,16 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | 项目 | 当前状态 |
 |---|---|
 | design | `P0_1A_LOCAL_VALIDATED_P0_1B_PENDING` |
-| source code | P0-1A 已实现 durable models/repository/backfill；现有 combine-backtest 运行路径未切换 |
+| source code | P0-1A 已实现 durable models/repository/backfill，并完成 BUG-767 的 lease、claim、canonical identity、legacy backfill、schema preflight、cancel/reason/error 语义修复；现有 combine-backtest 运行路径未切换 |
 | migration | preflight/forward/guarded rollback 已创建；未应用 |
-| P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等、8 worker 单一 claim、event 失败整事务回滚、lease 过期后 stale fencing 拒绝 |
+| P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等且不扫描 first-class run、技术失败/不可计算分类准确、8 worker 单一 claim、event 失败整事务回滚、lease 过期 owner 在重新 claim 前被拒绝且新 owner claim 后 stale fencing 被拒绝、schema 类型/约束/索引/注释缺失均 fail-loud |
+| BUG-767 | 本地修复与针对性/隔离 PostgreSQL 验证完成；不修改 GPU、显存监测、模型训练、预测或回测公式路径 |
 | production DB | 未写入 |
 | backend/frontend runtime | 用户已完成此前后端重启；本设计任务不再次重启 |
 | QE experiments | 本设计不创建、停止、恢复或修改实验 |
 | non-QE impact | `NONE_REQUIRED` |
 | research gates/approvals | `NONE_ADDED` |
-| production_ddl_gate | `noop_for_docs`；未来实现预计需要 additive DDL |
+| production_ddl_gate | P0-1A feature migration 仍未应用；BUG-767 未新增或执行 DDL |
 | production_frontend_dependency_gate | `noop` |
 | production_backend_dependency_gate | `noop` |
 

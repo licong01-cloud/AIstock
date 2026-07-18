@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
+import json
 import math
 from typing import Any, Callable, Mapping
 
@@ -83,7 +84,8 @@ class MultiAlphaLegacyBackfill:
                 for child in plan.children:
                     self._upsert_child(cur, child)
 
-                after = self._protected_digest(cur)
+                run_ids = [assignment.run_id for assignment in plan.assignments]
+                after = self._protected_digest(cur, run_ids=run_ids)
                 if before != after:
                     raise MultiAlphaDurableRepositoryError(
                         "historical protected data changed during durable backfill",
@@ -108,9 +110,12 @@ class MultiAlphaLegacyBackfill:
     def _build_plan(self, cur: Any) -> LegacyBackfillPlan:
         cur.execute(
             """
-            SELECT *
-            FROM strategy_pkg.multi_alpha_combine_backtest_run
-            ORDER BY created_at, id
+            SELECT run.*, task.source_kind AS durable_task_source_kind
+            FROM strategy_pkg.multi_alpha_combine_backtest_run AS run
+            LEFT JOIN strategy_pkg.multi_alpha_combine_task AS task
+              ON task.task_id = run.task_id
+            WHERE run.task_id IS NULL OR task.source_kind = 'legacy_backfill'
+            ORDER BY run.created_at, run.id
             """
         )
         runs = [dict(row) for row in cur.fetchall()]
@@ -143,7 +148,7 @@ class MultiAlphaLegacyBackfill:
             runs=runs,
             schemes=schemes,
             loo_rows=loo_rows,
-            protected_digest=self._protected_digest(cur),
+            protected_digest=self._protected_digest(cur, run_ids=run_ids),
         )
 
     @staticmethod
@@ -154,7 +159,15 @@ class MultiAlphaLegacyBackfill:
         loo_rows: list[dict[str, Any]],
         protected_digest: str,
     ) -> LegacyBackfillPlan:
+        runs = [
+            run
+            for run in runs
+            if run.get("task_id") is None or run.get("durable_task_source_kind") == "legacy_backfill"
+        ]
         runs = sorted(runs, key=lambda row: (str(row.get("created_at") or ""), str(row.get("id") or "")))
+        legacy_run_ids = {str(run.get("id") or "") for run in runs}
+        schemes = [row for row in schemes if str(row.get("run_id") or "") in legacy_run_ids]
+        loo_rows = [row for row in loo_rows if str(row.get("run_id") or "") in legacy_run_ids]
         schemes = sorted(schemes, key=lambda row: (str(row.get("run_id") or ""), str(row.get("weighting_scheme") or "")))
         loo_rows = sorted(
             loo_rows,
@@ -240,12 +253,18 @@ class MultiAlphaLegacyBackfill:
             run_id = str(row["run_id"])
             scheme = str(row["weighting_scheme"])
             child_key = f"scheme:{scheme}"
+            child_status, status_reason_code = _legacy_scheme_child_status(row)
             manifest = {
                 "source": "legacy_result_backfill",
                 "run_id": run_id,
                 "child_kind": "scheme",
                 "weighting_scheme": scheme,
                 "result_identity": {"table": "multi_alpha_combine_backtest_scheme_result", "id": row.get("id")},
+                "legacy_status_evidence": {
+                    "skipped": bool(row.get("skipped")),
+                    "skipped_reason": row.get("skipped_reason"),
+                    "classified_reason_code": status_reason_code,
+                },
             }
             children.append(
                 DurableChildSpec(
@@ -255,7 +274,7 @@ class MultiAlphaLegacyBackfill:
                     child_kind="scheme",
                     weighting_scheme=scheme,
                     ordinal=ordinals[run_id],
-                    status="not_computable" if bool(row.get("skipped")) else "succeeded",
+                    status=child_status,
                     input_manifest=manifest,
                     input_manifest_hash=artifact_manifest_hash_for(manifest),
                     source_kind="legacy_result_backfill",
@@ -481,7 +500,10 @@ class MultiAlphaLegacyBackfill:
             """
         )
         attempt_count = int(dict(cur.fetchone() or {}).get("attempt_count") or 0)
-        protected_digest = self._protected_digest(cur)
+        protected_digest = self._protected_digest(
+            cur,
+            run_ids=[assignment.run_id for assignment in plan.assignments],
+        )
         protected_unchanged = protected_digest == plan.protected_digest
         return {
             "ready": not missing_tasks
@@ -498,8 +520,18 @@ class MultiAlphaLegacyBackfill:
         }
 
     @staticmethod
-    def _protected_digest(cur: Any) -> str:
-        cur.execute("SELECT * FROM strategy_pkg.multi_alpha_combine_backtest_run ORDER BY id")
+    def _protected_digest(cur: Any, *, run_ids: list[str]) -> str:
+        if not run_ids:
+            return sha256_identity({"runs": [], "scheme_results": [], "loo": []})
+        cur.execute(
+            """
+            SELECT *
+            FROM strategy_pkg.multi_alpha_combine_backtest_run
+            WHERE id = ANY(%s)
+            ORDER BY id
+            """,
+            (run_ids,),
+        )
         runs: list[dict[str, Any]] = []
         for raw in cur.fetchall():
             row = dict(raw)
@@ -507,11 +539,23 @@ class MultiAlphaLegacyBackfill:
             row.pop("updated_at", None)
             runs.append(row)
         cur.execute(
-            "SELECT * FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result ORDER BY run_id, weighting_scheme"
+            """
+            SELECT *
+            FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+            WHERE run_id = ANY(%s)
+            ORDER BY run_id, weighting_scheme
+            """,
+            (run_ids,),
         )
         schemes = [dict(row) for row in cur.fetchall()]
         cur.execute(
-            "SELECT * FROM strategy_pkg.multi_alpha_combine_backtest_loo ORDER BY run_id, weighting_scheme, dropped_leg_id"
+            """
+            SELECT *
+            FROM strategy_pkg.multi_alpha_combine_backtest_loo
+            WHERE run_id = ANY(%s)
+            ORDER BY run_id, weighting_scheme, dropped_leg_id
+            """,
+            (run_ids,),
         )
         loo_rows = [dict(row) for row in cur.fetchall()]
         return sha256_identity(_normalize_protected_value({"runs": runs, "scheme_results": schemes, "loo": loo_rows}))
@@ -546,6 +590,41 @@ def _legacy_task_name(run: Mapping[str, Any], roster: list[dict[str, Any]]) -> s
     if len(leg_ids) > 4:
         roster_label += f" +{len(leg_ids) - 4}"
     return f"Legacy multi-alpha · {roster_label}"
+
+
+def _legacy_scheme_child_status(row: Mapping[str, Any]) -> tuple[str, str | None]:
+    if not bool(row.get("skipped")):
+        return "succeeded", None
+    reason = row.get("skipped_reason")
+    parsed: Any = reason
+    if isinstance(reason, str):
+        try:
+            parsed = json.loads(reason)
+        except (TypeError, ValueError):
+            parsed = reason
+    reason_code = _find_reason_code(parsed)
+    if reason_code == "scheme_not_computable":
+        return "not_computable", reason_code
+    if reason_code is None and isinstance(reason, str) and reason.strip() == "scheme_not_computable":
+        return "not_computable", "scheme_not_computable"
+    return "failed", reason_code or "legacy_scheme_execution_failed"
+
+
+def _find_reason_code(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        direct = value.get("reason_code")
+        if direct:
+            return str(direct)
+        for nested in value.values():
+            found = _find_reason_code(nested)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for nested in value:
+            found = _find_reason_code(nested)
+            if found:
+                return found
+    return None
 
 
 def _normalize_protected_value(value: Any) -> Any:

@@ -1,14 +1,20 @@
 {
   "actual": "Current unmerged P0-1A implementation violates those contracts although it is not wired into runtime and has no GPU calls.",
   "allowed_write_scope": [
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.preflight.sql",
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.rollback.sql",
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.sql",
     "backend/services/multi_alpha/durable_models.py",
     "backend/services/multi_alpha/durable_repository.py",
     "backend/services/multi_alpha/durable_backfill.py",
+    "backend/tests/multi_alpha/__init__.py",
     "backend/tests/multi_alpha/test_durable_repository.py",
     "backend/tests/multi_alpha/test_durable_backfill.py",
     "backend/tests/multi_alpha/test_durable_repository_postgres.py",
     "backend/tests/multi_alpha/test_durable_schema.py",
+    "docs/codex_project_memory.md",
     "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+    "scripts/backfill_multi_alpha_durable_tasks.py",
     "tests/aistock_validation/bugs/20260718_BUG-767-durable-multi-alpha-orchestration-violates-lease-claim-backfill-and-iden.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -28,6 +34,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260718-cdc1aa8d8dfb",
       "timestamp": "2026-07-18T19:58:14.414428Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "BUG-767 repairs the same unmerged P0-1A foundation branch, so PR scope includes its already-approved migration, backfill entrypoint, tests, design, and project-memory files; no unrelated runtime scope was added.",
+      "timestamp": "2026-07-18T20:38:48.5136308Z"
     }
   ],
   "evidence_uris": [
