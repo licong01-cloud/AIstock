@@ -79,19 +79,25 @@ def _artifact_entry(
     uri = str(source_info.get("uri") or "").strip()
     size_bytes = source_info.get("size_bytes")
     declared_rows = source_info.get("row_count")
-    if not source or not uri or len(sha256) != 64 or size_bytes is None:
+    if (
+        not source
+        or not uri
+        or len(sha256) != 64
+        or size_bytes is None
+        or declared_rows is None
+    ):
         raise ValueError(f"source information is incomplete for {artifact_name}")
-    if declared_rows is not None and int(declared_rows) != actual_row_count:
-        raise ValueError(
-            f"source row count mismatch for {artifact_name}: declared={declared_rows}, actual={actual_row_count}"
-        )
+    artifact_row_count = int(declared_rows)
+    if artifact_row_count < 1:
+        raise ValueError(f"source row count must be positive for {artifact_name}")
     return {
         "artifact_name": artifact_name,
         "source": source,
         "uri": uri,
         "sha256": sha256,
         "size_bytes": int(size_bytes),
-        "row_count": actual_row_count,
+        "row_count": artifact_row_count,
+        "selected_row_count": actual_row_count,
         "trust_level": str(source_info.get("trust_level") or "trusted_computational_input"),
         "zero_copy": bool(source_info.get("zero_copy", False)),
         "fallback": bool(source_info.get("fallback", False)),
