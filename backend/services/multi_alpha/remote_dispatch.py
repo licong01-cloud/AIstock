@@ -635,7 +635,13 @@ def _b64_file(path: Path) -> str:
 
 
 def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:
-    conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "AIstock")
+    conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "").strip()
+    conda_activation = ""
+    if conda_env:
+        conda_activation = (
+            "source ~/miniconda3/etc/profile.d/conda.sh; "
+            "conda activate " + _shell_quote(conda_env) + "; "
+        )
     artifact_path = _shell_quote(remote_paths["artifact_path"])
     prediction_artifact_path = _shell_quote(remote_paths["prediction_artifact_path"])
     qlib_path = _shell_quote(remote_paths["qlib_data_path"])
@@ -660,8 +666,7 @@ def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], bac
             "export RDAGENT_FACTOR_DATA_WSL=" + factor_cache + "; ",
             "export FACTOR_CACHE_DATA_MODE='backtest_factor_data_dir'; ",
             env_exports,
-            "source ~/miniconda3/etc/profile.d/conda.sh; ",
-            "conda activate " + _shell_quote(conda_env) + "; ",
+            conda_activation,
             "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl; ",
             "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py",
         ]
