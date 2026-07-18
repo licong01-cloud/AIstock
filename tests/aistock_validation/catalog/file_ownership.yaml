@@ -172,6 +172,18 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: QE archive code persists and audits experiment data.
+  - rule_id: qe_multi_alpha_services
+    priority: 90
+    include:
+      - backend/services/multi_alpha/**
+      - backend/routers/multi_alpha.py
+      - backend/tests/test_multi_alpha*.py
+      - backend/tests/strategy_package/test_multi_alpha*.py
+    primary_module: qe.auto_evolution
+    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: QE multi-alpha services combine experiment legs, execute portfolio backtests, persist scheme and LOO evidence, and expose the operator UI contract.
   - rule_id: qe_services
     priority: 80
     include:

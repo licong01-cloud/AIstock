@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/services/multi_alpha/combine_backtest.py",
     "backend/tests/test_multi_alpha_combine_backtest.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
     "tests/aistock_validation/bugs/20260718_BUG-751-qe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
