@@ -578,6 +578,8 @@ def test_remote_wsl_command_uses_remote_paths_not_local_paths() -> None:
     assert "RDAGENT_FACTOR_DATA_WSL=" in command
     assert "FACTOR_CACHE_DATA_MODE=" in command
     assert "/mnt/f/local/workspace" not in command
+    assert "source ~/miniconda3/etc/profile.d/conda.sh" in command
+    assert "conda activate" in command and "AIstock" in command
 
 
 def test_remote_wsl_command_exports_jinja_runtime_env() -> None:
@@ -590,6 +592,21 @@ def test_remote_wsl_command_exports_jinja_runtime_env() -> None:
     assert "export num_features=" in command and "44" in command
     assert "export num_timesteps=" in command and "20" in command
     assert "export CUSTOM_FLAG=" in command and "yes" in command
+    assert "source ~/miniconda3/etc/profile.d/conda.sh" not in command
+    assert "conda activate" not in command
+    assert "python qrun_limit_minute.py" in command
+
+
+def test_remote_wsl_command_activates_only_explicit_conda_env() -> None:
+    command = _remote_wsl_command(
+        workspace=Path("/mnt/f/local/workspace"),
+        remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        backtest_config={"remote_conda_env": "rdagent-gpu"},
+    )
+
+    assert "source ~/miniconda3/etc/profile.d/conda.sh" in command
+    assert "conda activate" in command and "rdagent-gpu" in command
+    assert "python qrun_limit_minute.py" in command
 
 
 def test_remote_wsl_command_cd_to_uploaded_loop_workspace_when_available() -> None:
