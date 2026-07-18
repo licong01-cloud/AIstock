@@ -55,7 +55,7 @@ export default function BatchDetailView({ batchId }: { batchId: string }) {
         error_code: "HMM_EVOLUTION_CLIENT_TIMEOUT",
         reason_code: "hmm_evolution_client_polling_timeout",
         message: "批次自动轮询已达到 15 分钟上限，页面保留最后一次数据并停止自动请求。",
-        context: { retry_condition: "核对 worker 与 durable state 后手动刷新。" },
+        context: { retry_condition: "核对自动评估 worker 服务与 durable state 后手动刷新。" },
       }, 504));
       return;
     }
