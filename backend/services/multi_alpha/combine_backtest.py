@@ -1481,10 +1481,37 @@ class MultiAlphaCombineBacktestService:
             message="building combined score frames for requested schemes and LOO tasks",
             progress={"scheme_count": len(request.weighting_schemes)},
         )
+        build_failures: list[_PredictionTaskOutcome] = []
         for scheme in request.weighting_schemes:
             self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="combining_scores")
             combine_input = prediction_legs if is_rank_fusion_scheme(scheme) else panels
-            result = combine_legs(legs=combine_input, scheme=scheme, request=request)
+            try:
+                result = combine_legs(legs=combine_input, scheme=scheme, request=request)
+            except MultiAlphaCombineBacktestError as exc:
+                failed_task = _PredictionTask(
+                    name=f"combined_{scheme}",
+                    kind="scheme",
+                    scheme=scheme,
+                    frame=pd.DataFrame(),
+                    critical=scheme == "equal",
+                )
+                failure = _PredictionTaskOutcome(task=failed_task, error=error_payload(exc))
+                build_failures.append(failure)
+                self._heartbeat_run(
+                    run_id,
+                    request,
+                    phase="scheme_combine_failed",
+                    message=f"weighting scheme could not build a combined score frame: scheme={scheme}",
+                    scheme=scheme,
+                    child_task=failed_task.name,
+                    progress={
+                        "requested_scheme_count": len(request.weighting_schemes),
+                        "build_failure_count": len(build_failures),
+                        "backtest_task_count": len(task_specs),
+                    },
+                    extra={"error": dict(failure.error or {})},
+                )
+                continue
             self._heartbeat_run(
                 run_id,
                 request,
@@ -1509,10 +1536,37 @@ class MultiAlphaCombineBacktestService:
             for dropped_leg in sorted(leg_by_id):
                 source_legs = prediction_legs if is_rank_fusion_scheme(scheme) else panels
                 loo_legs = [leg for leg in source_legs if leg.leg_id != dropped_leg]
-                loo_result = combine_legs(legs=loo_legs, scheme=scheme, request=request)
+                loo_task_name = f"loo_{scheme}_drop_{dropped_leg}"
+                try:
+                    loo_result = combine_legs(legs=loo_legs, scheme=scheme, request=request)
+                except MultiAlphaCombineBacktestError as exc:
+                    failed_task = _PredictionTask(
+                        name=loo_task_name,
+                        kind="loo",
+                        scheme=scheme,
+                        dropped_leg_id=dropped_leg,
+                        frame=pd.DataFrame(),
+                    )
+                    failure = _PredictionTaskOutcome(task=failed_task, error=error_payload(exc))
+                    build_failures.append(failure)
+                    self._heartbeat_run(
+                        run_id,
+                        request,
+                        phase="loo_combine_failed",
+                        message=f"LOO score frame could not be built: scheme={scheme}, dropped_leg={dropped_leg}",
+                        scheme=scheme,
+                        child_task=loo_task_name,
+                        progress={
+                            "requested_scheme_count": len(request.weighting_schemes),
+                            "build_failure_count": len(build_failures),
+                            "backtest_task_count": len(task_specs),
+                        },
+                        extra={"error": dict(failure.error or {})},
+                    )
+                    continue
                 task_specs.append(
                     _PredictionTask(
-                        name=f"loo_{scheme}_drop_{dropped_leg}",
+                        name=loo_task_name,
                         kind="loo",
                         scheme=scheme,
                         dropped_leg_id=dropped_leg,
@@ -1526,9 +1580,14 @@ class MultiAlphaCombineBacktestService:
             request,
             phase="backtests_running",
             message="starting pred-backtest child tasks",
-            progress={"task_count": len(task_specs), "node_id": node_id, "node_parallelism_limit": node_parallelism[node_id]},
+            progress={
+                "task_count": len(task_specs),
+                "build_failure_count": len(build_failures),
+                "node_id": node_id,
+                "node_parallelism_limit": node_parallelism[node_id],
+            },
         )
-        outcomes = self._run_prediction_tasks(
+        executed_outcomes = self._run_prediction_tasks(
             run_id=run_id,
             tasks=task_specs,
             node_id=node_id,
@@ -1536,6 +1595,7 @@ class MultiAlphaCombineBacktestService:
             request=request,
             run_started_monotonic=run_started,
         )
+        outcomes = [*build_failures, *executed_outcomes]
         self._heartbeat_run(
             run_id,
             request,
@@ -1852,7 +1912,8 @@ class MultiAlphaCombineBacktestService:
             loo_payloads.append(row)
 
         critical_failures = [outcome for outcome in failed if outcome.task.critical or outcome.task.kind == "baseline"]
-        if critical_failures:
+        successful_scheme_count = sum(1 for outcome in outcomes if outcome.task.kind == "scheme" and outcome.succeeded)
+        if critical_failures or successful_scheme_count == 0:
             status = "failed"
         elif failed_by_name:
             status = LOGICAL_PARTIAL_FAILED_STATUS

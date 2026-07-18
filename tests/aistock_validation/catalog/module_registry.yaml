@@ -60,6 +60,7 @@ modules:
     description: QE automated loop evolution and agent orchestration.
     description_zh: 覆盖自动演进、智能体编排、候选生成、SOTA/优先级判断和自动化 loop 调度。
     ui_routes: [/quantevolver/evolution, /quantevolver/evolution/sota, /quantevolver/multi-alpha/combine-backtest, /quantevolver/multi-alpha/orthogonality]
+    api_routes: [/api/v1/multi-alpha/*]
     test_plans:
       required_on_change: [l0, qe_read_backend]
       recommended: [qe_read_l3]
