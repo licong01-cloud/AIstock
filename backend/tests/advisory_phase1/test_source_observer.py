@@ -229,6 +229,7 @@ def test_not_eligible_audit_has_reason_and_never_builds_event() -> None:
     receipt = build_observation_receipt(
         config=config,
         registry=SOURCE_QUERY_TEMPLATES,
+        spec=spec,
         audit=audit,
         source_role="FEATURE_T",
         decision=decision,
