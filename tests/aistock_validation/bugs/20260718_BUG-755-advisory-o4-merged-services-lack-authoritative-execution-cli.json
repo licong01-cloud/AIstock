@@ -25,7 +25,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-755",
-  "closed_at": null,
+  "closed_at": "2026-07-18T13:00:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -63,8 +63,8 @@
   "expected": "The authoritative onboarding CLI exposes the complete O4 DEV-only command chain with exact typed requests, immutable artifact refs and readback verification; compatibility entrypoints delegate to the same contracts without production selectors or alternate semantics.",
   "first_seen_at": "2026-07-18T08:34:46.244879Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "16f43317ed857410297e3e9c951dd94cd61dca80",
+  "fixed_at": "2026-07-18T13:02:52.178359Z",
   "github_issue_number": 2421,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2421",
   "last_seen_at": "2026-07-18T08:34:46.244879Z",
@@ -72,6 +72,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2444",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -82,7 +83,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -91,6 +92,9 @@
     "fingerprint": "345810785e8c910719657ead",
     "source_event_id": "FE-20260718-345810785e8c"
   },
+  "validation_evidence": [
+    "PR #2444 CI verdict and selected checks -> passed; advisory_dev_input_onboarding_backend -> 234 passed, 9 skipped; F2 design validation -> 39/39"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
