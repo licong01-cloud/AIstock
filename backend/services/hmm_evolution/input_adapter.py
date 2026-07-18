@@ -508,7 +508,8 @@ def _verify_artifact_receipts(
             "uri": str(current.get("uri") or ""),
             "sha256": str(current.get("sha256") or "").lower(),
             "size_bytes": int(current.get("size_bytes") or -1),
-            "row_count": len(frame),
+            "row_count": int(current.get("row_count") or -1),
+            "selected_row_count": len(frame),
             "zero_copy": bool(current.get("zero_copy", False)),
             "fallback": bool(current.get("fallback", False)),
         }

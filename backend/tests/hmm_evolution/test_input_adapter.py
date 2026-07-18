@@ -19,10 +19,20 @@ from backend.services.hmm_evolution.models import (
 
 
 class _Source:
-    def __init__(self, predictions, labels, *, pred_sha="b" * 64):
+    def __init__(
+        self,
+        predictions,
+        labels,
+        *,
+        pred_sha="b" * 64,
+        pred_artifact_rows=None,
+        label_artifact_rows=None,
+    ):
         self.predictions = predictions
         self.labels = labels
         self.pred_sha = pred_sha
+        self.pred_artifact_rows = pred_artifact_rows or len(predictions)
+        self.label_artifact_rows = label_artifact_rows or len(labels)
 
     async def __aenter__(self):
         return self
@@ -43,7 +53,7 @@ class _Source:
                 "uri": "cas://qe/pred.pkl",
                 "sha256": self.pred_sha,
                 "size_bytes": 100,
-                "row_count": len(self.predictions),
+                "row_count": self.pred_artifact_rows,
                 "zero_copy": True,
             },
             "label.pkl": {
@@ -51,7 +61,7 @@ class _Source:
                 "uri": "cas://qe/label.pkl",
                 "sha256": "c" * 64,
                 "size_bytes": 100,
-                "row_count": len(self.labels),
+                "row_count": self.label_artifact_rows,
                 "zero_copy": True,
             },
         }
@@ -155,7 +165,12 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
         topk=1,
         market_forward_return={"mode": "required", "horizon_trading_days": 10},
     )
-    source = _Source(predictions, labels)
+    source = _Source(
+        predictions,
+        labels,
+        pred_artifact_rows=20,
+        label_artifact_rows=18,
+    )
     preferences = []
     market_repository = _MarketRepository()
     adapter = HMMEvaluationInputAdapter(
@@ -170,6 +185,8 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     plan = prepared.plans[0]
     assert plan.resolved_as_of_date == date(2026, 1, 30)
     assert plan.source_manifest["artifacts"][0]["zero_copy"] is True
+    assert [item["row_count"] for item in plan.source_manifest["artifacts"]] == [20, 18]
+    assert [item["selected_row_count"] for item in plan.source_manifest["artifacts"]] == [2, 2]
     assert plan.source_manifest["market_forward_return"]["price_row_count"] == 4
     assert prepared.market_returns is not None
     assert len(prepared.market_returns) == 2

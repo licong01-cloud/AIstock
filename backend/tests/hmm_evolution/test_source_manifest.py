@@ -84,10 +84,13 @@ def test_source_manifest_keeps_phase0_receipts_without_absolute_paths() -> None:
             "uri": f"cas://qe/{name}",
             "sha256": sha,
             "size_bytes": 10,
-            "row_count": 2,
+            "row_count": artifact_rows,
             "zero_copy": True,
         }
-        for name, sha in (("pred.pkl", "b" * 64), ("label.pkl", "c" * 64))
+        for name, sha, artifact_rows in (
+            ("pred.pkl", "b" * 64, 20),
+            ("label.pkl", "c" * 64, 18),
+        )
     }
 
     manifest = build_source_manifest(
@@ -106,6 +109,8 @@ def test_source_manifest_keeps_phase0_receipts_without_absolute_paths() -> None:
         "pred.pkl",
         "label.pkl",
     ]
+    assert [item["row_count"] for item in manifest["artifacts"]] == [20, 18]
+    assert [item["selected_row_count"] for item in manifest["artifacts"]] == [2, 2]
     assert "F:/" not in str(manifest)
     assert all(item["zero_copy"] for item in manifest["artifacts"])
 
