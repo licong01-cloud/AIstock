@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-751",
-  "closed_at": null,
+  "closed_at": "2026-07-18T05:39:46Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "单个不可计算的 weighting scheme 不得吞掉其他已请求方案；成功方案及 LOO 结果继续计算并持久化，失败方案保存明确原因，run 根据实际结果形成 succeeded、partial_failed 或 failed。",
   "first_seen_at": "2026-07-18T05:10:37.851918Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4bfaef758035e01805bb29a86e69fd24661b080b",
+  "fixed_at": "2026-07-18T05:42:32.403845Z",
   "github_issue_number": 2409,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2409",
   "last_seen_at": "2026-07-18T05:10:37.851918Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2410",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "c174867703b15d15cb2ba299",
     "source_event_id": "FE-20260718-c174867703b1"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_multi_alpha_combine_backtest.py -q -> 44 passed; py_compile + ruff -> passed; module ownership classifier -> passed; nox l0 + validation_module_registry_l0 -> passed; PR CI -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
