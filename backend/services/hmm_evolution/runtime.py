@@ -240,7 +240,6 @@ def build_runtime() -> HMMEvolutionRuntime:
         artifact_roots=artifact_roots,
         snapshot_provider=ReadOnlySnapshotCoefficientProvider(),
         qe_asset_reader=qe_reader,
-        qe_read_client=qe_client,
         max_artifact_bytes=_positive_int_env(
             "HMM_EVOLUTION_CANDIDATE_MAX_BYTES",
             64 * 1024 * 1024,
@@ -257,6 +256,7 @@ def build_runtime() -> HMMEvolutionRuntime:
         repository=repository,
         service=service,
         qe_asset_reader=qe_reader,
+        qe_read_client=qe_client,
         artifact_resolver=resolver,
         input_adapter=input_adapter,
         executor=HMMEvaluationExecutor(input_adapter),
