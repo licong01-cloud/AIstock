@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-760",
-  "closed_at": null,
+  "closed_at": "2026-07-18T11:18:40Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,8 +32,8 @@
   "expected": "From one existing combine run, submit explicit QE-only backtest scenarios with initial_cash, topk, and holding/turnover strategy parameters; persist effective configuration, reuse existing predictions through pred-backtest, never retrain models, and surface each new run in the combine UI.",
   "first_seen_at": "2026-07-18T10:10:24.135790Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "acf8df94c92776ecd51ec7b4b0ac114f6c6dc17a",
+  "fixed_at": "2026-07-18T11:19:53.266881Z",
   "github_issue_number": 2433,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2433",
   "last_seen_at": "2026-07-18T10:10:24.135790Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2437",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -92,6 +93,11 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_combine_backtest.py -q -p no:cacheprovider -> 55 passed",
+    "python -m ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
