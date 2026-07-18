@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Database, FileText, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Database, FileText, PlayCircle, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
 
 export type CombineRunLoop = Loop & {
@@ -53,6 +53,22 @@ type ArchiveStatus = {
   archive_run?: Record<string, unknown> | null;
 };
 
+type ScenarioForm = {
+  scenarioName: string;
+  initialCash: string;
+  topk: string;
+  nDrop: string;
+  maxNDrop: string;
+  minNDrop: string;
+  holdThresh: string;
+};
+
+const SCENARIO_PRESETS = [
+  { key: "10m-top20", label: "1000万 / Top20", initialCash: "10000000", topk: "20" },
+  { key: "10m-top25", label: "1000万 / Top25", initialCash: "10000000", topk: "25" },
+  { key: "100m-top50", label: "1亿 / Top50", initialCash: "100000000", topk: "50" },
+] as const;
+
 type Props = {
   apiBase: string;
   loop?: CombineRunLoop;
@@ -79,6 +95,88 @@ const buttonStyle: React.CSSProperties = {
   alignItems: "center",
   gap: 6,
 };
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  marginTop: 4,
+  padding: "7px 8px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  color: "#0f172a",
+  backgroundColor: "#fff",
+  fontSize: 12,
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function displayScenarioValue(value: unknown, fallback: number): string {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? String(parsed) : String(fallback);
+}
+
+function scenarioFormFromDraft(draft: RetryDraft): ScenarioForm {
+  const payload = asRecord(draft.payload);
+  const backtestConfig = asRecord(payload.backtest_config);
+  const strategyKwargs = asRecord(backtestConfig.strategy_kwargs);
+  const topk = displayScenarioValue(payload.topk ?? backtestConfig.topk, 50);
+  const nDrop = displayScenarioValue(strategyKwargs.n_drop, 5);
+  return {
+    scenarioName: `capital_${displayScenarioValue(backtestConfig.initial_cash, 100_000_000)}_topk${topk}`,
+    initialCash: displayScenarioValue(backtestConfig.initial_cash, 100_000_000),
+    topk,
+    nDrop,
+    maxNDrop: displayScenarioValue(strategyKwargs.max_n_drop, Number(nDrop)),
+    minNDrop: displayScenarioValue(strategyKwargs.min_n_drop, 0),
+    holdThresh: displayScenarioValue(strategyKwargs.hold_thresh, 0),
+  };
+}
+
+function scenarioInteger(value: string, label: string, minimum: number): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+    throw new Error(`${label} 必须是大于等于 ${minimum} 的整数`);
+  }
+  return parsed;
+}
+
+function buildScenarioRetryPayload(draft: RetryDraft, form: ScenarioForm): Record<string, unknown> {
+  const initialCash = scenarioInteger(form.initialCash, "初始资金", 1);
+  const topk = scenarioInteger(form.topk, "TopK", 1);
+  const nDrop = scenarioInteger(form.nDrop, "n_drop", 0);
+  const maxNDrop = scenarioInteger(form.maxNDrop, "max_n_drop", 0);
+  const minNDrop = scenarioInteger(form.minNDrop, "min_n_drop", 0);
+  const holdThresh = scenarioInteger(form.holdThresh, "最短持仓天数", 0);
+  if (minNDrop > maxNDrop) {
+    throw new Error("min_n_drop 不能大于 max_n_drop");
+  }
+  if (nDrop > topk || maxNDrop > topk) {
+    throw new Error("n_drop 和 max_n_drop 不能大于 TopK");
+  }
+
+  const payload = { ...asRecord(draft.payload) };
+  const backtestConfig = { ...asRecord(payload.backtest_config) };
+  const strategyKwargs = { ...asRecord(backtestConfig.strategy_kwargs) };
+  payload.topk = topk;
+  payload.run_async = true;
+  payload.backtest_config = {
+    ...backtestConfig,
+    topk,
+    initial_cash: initialCash,
+    scenario_name: form.scenarioName.trim() || `capital_${initialCash}_topk${topk}`,
+    scenario_type: "capital_holding_pred_replay",
+    strategy_kwargs: {
+      ...strategyKwargs,
+      n_drop: nDrop,
+      max_n_drop: maxNDrop,
+      min_n_drop: minNDrop,
+      hold_thresh: holdThresh,
+    },
+  };
+  return payload;
+}
 
 function normalizeError(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
@@ -138,6 +236,8 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [retryDraft, setRetryDraft] = useState<RetryDraft | null>(null);
   const [retryPayloadText, setRetryPayloadText] = useState("");
+  const [scenarioDraft, setScenarioDraft] = useState<RetryDraft | null>(null);
+  const [scenarioForm, setScenarioForm] = useState<ScenarioForm | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -172,6 +272,8 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
     setArchiveError(null);
     setRetryDraft(null);
     setRetryPayloadText("");
+    setScenarioDraft(null);
+    setScenarioForm(null);
     setMessage(null);
     void loadEvidence();
   }, [loadEvidence]);
@@ -229,6 +331,40 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
       setBusy(null);
     }
   }, [apiBase, onChanged, retryDraft, retryPayloadText, runId]);
+
+  const openScenarioDraft = useCallback(async () => {
+    if (!runId) return;
+    setBusy("scenario-draft");
+    setMessage(null);
+    try {
+      const draft = await apiRequest<RetryDraft>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/retry-draft`);
+      setScenarioDraft(draft);
+      setScenarioForm(scenarioFormFromDraft(draft));
+    } catch (error) {
+      setMessage({ ok: false, text: `场景配置读取失败: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, runId]);
+
+  const submitScenario = useCallback(async () => {
+    if (!runId || !scenarioDraft || !scenarioForm) return;
+    setBusy("scenario-submit");
+    setMessage(null);
+    try {
+      const payload = buildScenarioRetryPayload(scenarioDraft, scenarioForm);
+      const result = await apiRequest<{ run_id: string }>(
+        `${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/retry`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payload }) },
+      );
+      setMessage({ ok: true, text: `已创建预测复用场景回测: ${result.run_id}` });
+      await onChanged();
+    } catch (error) {
+      setMessage({ ok: false, text: `场景回测提交失败: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, onChanged, runId, scenarioDraft, scenarioForm]);
 
   const deleteRun = useCallback(async () => {
     if (!runId) return;
@@ -315,6 +451,9 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
           <button onClick={() => void openRetryDraft()} disabled={!loop.retryable || busy != null} style={{ ...buttonStyle, opacity: loop.retryable ? 1 : 0.5, cursor: loop.retryable && !busy ? "pointer" : "not-allowed", color: "#1d4ed8", borderColor: "#bfdbfe", backgroundColor: "#eff6ff" }}>
             <RotateCcw size={12} /> {loop.raw_status === "succeeded" ? "按原配置再跑" : "重试配置"}
           </button>
+          <button onClick={() => void openScenarioDraft()} disabled={!loop.retryable || busy != null} style={{ ...buttonStyle, opacity: loop.retryable ? 1 : 0.5, cursor: loop.retryable && !busy ? "pointer" : "not-allowed", color: "#7c3aed", borderColor: "#ddd6fe", backgroundColor: "#f5f3ff" }}>
+            <PlayCircle size={12} /> {busy === "scenario-draft" ? "读取中..." : "新建资金/持仓场景"}
+          </button>
           <button onClick={() => void archiveRun(true)} disabled={busy != null || !isTerminal} style={{ ...buttonStyle, color: "#7c3aed", borderColor: "#ddd6fe", backgroundColor: "#f5f3ff", opacity: isTerminal ? 1 : 0.5, cursor: isTerminal && !busy ? "pointer" : "not-allowed" }}>
             <Database size={12} /> 入仓预览
           </button>
@@ -326,6 +465,81 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
           </button>
         </div>
       </div>
+
+      {scenarioDraft && scenarioForm && (
+        <div style={{ ...cardStyle, borderColor: "#c4b5fd" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a" }}>资金/持仓场景回测</div>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#5b21b6", lineHeight: 1.6 }}>
+                复用源 run 的冻结预测、组合腿和样本区间，仅重新执行组合回测；不会重新训练模型。每次提交生成一个可审计的新 run。
+              </div>
+              <div style={{ marginTop: 2, fontSize: 10, color: scenarioDraft.exact ? "#047857" : "#92400e" }}>
+                快照来源: {scenarioDraft.source} · {scenarioDraft.exact ? "完整冻结快照" : "历史重建快照，假设如下"}
+              </div>
+            </div>
+            <button onClick={() => { setScenarioDraft(null); setScenarioForm(null); }} style={buttonStyle}>关闭</button>
+          </div>
+          {scenarioDraft.assumptions.length > 0 && (
+            <ul style={{ margin: "10px 0", paddingLeft: 20, color: "#92400e", fontSize: 11, lineHeight: 1.6 }}>
+              {scenarioDraft.assumptions.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {SCENARIO_PRESETS.map((preset) => (
+              <button
+                key={preset.key}
+                data-testid={`scenario-preset-${preset.key}`}
+                onClick={() => setScenarioForm((current) => current ? {
+                  ...current,
+                  scenarioName: preset.key,
+                  initialCash: preset.initialCash,
+                  topk: preset.topk,
+                } : current)}
+                style={{ ...buttonStyle, color: "#6d28d9", borderColor: "#c4b5fd", backgroundColor: "#faf5ff" }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginTop: 12 }}>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              场景名称
+              <input data-testid="scenario-name" value={scenarioForm.scenarioName} onChange={(event) => setScenarioForm({ ...scenarioForm, scenarioName: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              初始资金（元）
+              <input data-testid="scenario-initial-cash" type="number" min={1} step={1} value={scenarioForm.initialCash} onChange={(event) => setScenarioForm({ ...scenarioForm, initialCash: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              TopK
+              <input data-testid="scenario-topk" type="number" min={1} step={1} value={scenarioForm.topk} onChange={(event) => setScenarioForm({ ...scenarioForm, topk: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              n_drop
+              <input data-testid="scenario-n-drop" type="number" min={0} step={1} value={scenarioForm.nDrop} onChange={(event) => setScenarioForm({ ...scenarioForm, nDrop: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              max_n_drop
+              <input data-testid="scenario-max-n-drop" type="number" min={0} step={1} value={scenarioForm.maxNDrop} onChange={(event) => setScenarioForm({ ...scenarioForm, maxNDrop: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              min_n_drop
+              <input data-testid="scenario-min-n-drop" type="number" min={0} step={1} value={scenarioForm.minNDrop} onChange={(event) => setScenarioForm({ ...scenarioForm, minNDrop: event.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+              最短持仓天数
+              <input data-testid="scenario-hold-thresh" type="number" min={0} step={1} value={scenarioForm.holdThresh} onChange={(event) => setScenarioForm({ ...scenarioForm, holdThresh: event.target.value })} style={inputStyle} />
+            </label>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12 }}>
+            <div style={{ fontSize: 10, color: "#64748b" }}>提交后保留当前源 run，可继续创建下一组场景；节点并发仍由现有 QE 容量控制。</div>
+            <button data-testid="scenario-submit" onClick={() => void submitScenario()} disabled={busy != null} style={{ ...buttonStyle, color: "#fff", borderColor: "#7c3aed", backgroundColor: "#7c3aed", cursor: busy ? "wait" : "pointer" }}>
+              <PlayCircle size={12} /> {busy === "scenario-submit" ? "提交中..." : "创建场景回测"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {retryDraft && (
         <div style={{ ...cardStyle, borderColor: retryDraft.exact ? "#86efac" : "#fbbf24" }}>

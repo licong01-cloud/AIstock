@@ -86,9 +86,9 @@
       "frontend/tests/multi-alpha-combine-backtest.spec.ts"
     ],
     "ui_issue": true,
-    "ui_route": "/100M",
+    "ui_route": "/quantevolver/multi-alpha/combine-backtest/[taskKey]?tab=runtime",
     "ui_routes": [
-      "/100M"
+      "/quantevolver/multi-alpha/combine-backtest/[taskKey]?tab=runtime"
     ],
     "visual_acceptance_required": true
   },
