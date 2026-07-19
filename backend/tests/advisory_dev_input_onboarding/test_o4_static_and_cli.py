@@ -17,6 +17,8 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     O4_ARTIFACT_STORE_POLICY_HASH,
     RealDevHistoricalRunReceipt,
     RealDevHistoricalRunRequest,
+    RealDevOnboardingError,
+    REASON_HISTORICAL_INPUT_PENDING,
 )
 from backend.services.advisory_dev_input_onboarding.historical_onboarding import (
     HistoricalOnboardingEvidenceStore,
@@ -262,8 +264,8 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
         return path
 
-    def run_cli(argv: list[str]) -> dict[str, object]:
-        assert authoritative_cli.main(argv) == 0
+    def run_cli(argv: list[str], *, expected_code: int = 0) -> dict[str, object]:
+        assert authoritative_cli.main(argv) == expected_code
         output = capsys.readouterr().out.strip()
         parsed = json.loads(output)
         assert isinstance(parsed, dict)
@@ -399,6 +401,12 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
             request = kwargs["request"]
             store = HistoricalOnboardingEvidenceStore(root=kwargs["evidence_root"])
             store.publish(request)
+            if historical_run_count == 1:
+                raise RealDevOnboardingError(
+                    REASON_HISTORICAL_INPUT_PENDING,
+                    "decision_trade_date is not completed yet",
+                    context={"decision_trade_date": request.decision_trade_date.isoformat()},
+                )
             program_results = tuple(
                 HistoricalProgramResult(
                     program_id=spec.program_id,
@@ -473,8 +481,11 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
             "--env-file", str(env_file),
             "--evidence-root", str(evidence_root),
             "--target-package-asset-root", str(target_package_asset_root),
-        ]
+        ],
+        expected_code=authoritative_cli.EXIT_INPUT_PENDING,
     )
+    assert initial_historical["ok"] is False
+    assert initial_historical["reason_code"] == REASON_HISTORICAL_INPUT_PENDING
     historical_request_ref = AdvisoryImmutableArtifactRef.model_validate(
         initial_historical["historical_request_ref"]
     )
@@ -562,6 +573,44 @@ def test_authoritative_cli_outputs_form_exact_o4_command_chain_without_fixture_r
         "compile-phase1e",
     ]
     assert historical_run_count == 2
+
+
+def test_pending_historical_request_ref_failure_returns_explicit_internal_error(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    def raise_pending(_args):
+        raise RealDevOnboardingError(
+            REASON_HISTORICAL_INPUT_PENDING,
+            "decision_trade_date is not completed yet",
+        )
+
+    def fail_ref_publication(_args):
+        raise ValueError("forced request ref failure")
+
+    monkeypatch.setattr(authoritative_cli, "_run_historical", raise_pending)
+    monkeypatch.setattr(authoritative_cli, "_pending_historical_request_ref", fail_ref_publication)
+
+    code = authoritative_cli.main(
+        [
+            "run-historical",
+            "--historical-request", str(tmp_path / "request.json"),
+            "--env-file", str(tmp_path / ".env"),
+            "--evidence-root", str(tmp_path / "evidence"),
+            "--target-package-asset-root", str(tmp_path / "assets"),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert code == authoritative_cli.EXIT_INTERNAL
+    assert payload == {
+        "command": "run-historical",
+        "context": {"original_reason_code": REASON_HISTORICAL_INPUT_PENDING},
+        "message": "pending historical request reference publication failed",
+        "ok": False,
+        "reason_code": "ADVISORY_REAL_DEV_UNEXPECTED_ERROR",
+    }
 
 
 def test_common_artifacts_publish_exact_typed_capacity_policy(tmp_path: Path) -> None:
