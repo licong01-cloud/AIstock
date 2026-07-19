@@ -102,9 +102,11 @@ async function installOverviewApi(page: Page) {
       net_db_10d: 0.031,
       positive_net_label_day_ratio: 0.634,
       evidence_quality: "complete",
+      result_validity: "valid",
+      result_validity_reason: "content_verified",
       warnings_json: [],
       recommendation_score: 91.8,
-      evidence_confidence: 1,
+      metric_availability_ratio: 1,
       recommendation_rank: 1,
       is_top3: true,
       recommendation_components: { thresholds: null },
@@ -195,6 +197,8 @@ test("逐日结果区分当日无调整与收益证据缺失并保持全局侧�
     net_db_10d: null,
     positive_net_label_day_ratio: 1,
     evidence_quality: "degraded",
+    result_validity: "valid",
+    result_validity_reason: "content_verified",
     warnings_json: [{ code: "hmm_evolution_partial_market_return_coverage", message: "部分调整日缺少完整行情收益证据" }],
     metrics_json: {
       daily_summary: [

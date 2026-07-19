@@ -35,12 +35,12 @@ class _Service:
     def list_candidates(self, **_kwargs: Any) -> list[Any]:
         return []
 
-    async def prepare_and_create_batch(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+    def submit_batch(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
         self.captured = kwargs
         return (
             {
                 "batch_id": "hmmb_test",
-                "status": "queued",
+                "status": "preparation_queued",
                 "candidate_count": len(kwargs["candidate_ids"]),
             },
             True,

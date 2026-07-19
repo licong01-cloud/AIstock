@@ -1,9 +1,9 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.9
+> **版本**：v2.0
 > **日期**：2026-07-17
-> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及审计硬化已实现；Windows 独立 worker 已完成首次 activation 与真实 Loop10 v2 queue receipt；真实 QE 10-case、10 候选性能和实机 UI/Playwright 仍待外部验收
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.1
+> **状态**：P1-A/P1-B/P1-C 源码已实现；BUG-773～BUG-777 修复行情收益正确性、内容校验重放、durable preparation receipt、指标命名与验收证据；Windows 独立 worker 已有首次旧 schema receipt，schema v2 生产 DDL/重启与真实 QE 10-case、10 候选性能、实机 UI/Playwright 仍待外部验收
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.2
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -30,7 +30,7 @@ entered/dropped 集合，并使用 label 或 market forward return 衡量替换�
 只读 repository 获取，label horizon 显式保留，QE config 不下载，意外转换/合同错误 fail loud。
 该脚本仍只是研究诊断入口，不是第二套 evaluator 或 API service。
 
-Phase 1 要把其中的纯计算语义抽取成可重放、可批量执行、可取消、可审计的研究服务，
+Phase 1 要把其中的纯计算语义抽取成内容可校验重放、可批量执行、可取消、可审计的研究服务，
 并允许研究人员只读查看 QE 实验的全部资产以及数据库中的最新共同完成行情水位，同时保持
 以下边界：
 
@@ -52,7 +52,7 @@ Phase 1 v1 包含：
 7. 提供真实 API、中文 UI、HMM 研究工作台导航、固定证据区和独立详情页；
 8. 提供单评估、批评估、失败重试、取消和结果复用语义；
 9. 提供独立长期运行的自动评估 worker service，只消费 API 已登记的 durable queued work；
-10. 通过独立 Python bootstrap 创建 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
+10. 通过独立 Python bootstrap 创建/升级 `hmm_evolution.*`，代码合入不等于生产 DDL 已执行。
 
 ## 3. Non-goals（非目标与硬边界）
 
@@ -155,9 +155,9 @@ deployment-started HMMEvolutionWorkerService
 
 ### 5.1 进程边界
 
-- API 只登记请求、读取结果和设置 cancel flag；不在请求线程执行 10 分钟计算。
+- API 只校验轻量 request/candidate identity 并持久化 `preparation_queued` batch receipt；不读取 QE/market artifact。worker claim 为 `preparing` 后在 lease/heartbeat 下冻结一次输入，并原子创建 evaluation/item；不在请求线程执行长耗时 preparation 或评估。
 - Worker 是独立进程，不是 FastAPI background task 或定时 scheduler。部署启动后自动轮询已有 durable queue，默认不随 backend startup 隐式启动。
-- Worker service 只消费 API 已创建的 queued batch/evaluation；不得自行创建研究任务、选择候选、修改推荐公式或触发 Phase 3 训练。
+- Worker service 只消费 API 已创建的 `preparation_queued` receipt 与其物化后的 queued evaluation；不得自行发起用户意图、选择候选、修改推荐公式或触发 Phase 3 训练。
 - Repository 使用仓库同步 `get_conn()`；异步 API 通过线程执行器调用同步 repository，禁止
   `async with get_conn()`。
 - Worker 与 API 共享 Pydantic contract 和 repository，不共享内存状态作为权威状态。
@@ -344,8 +344,16 @@ source fingerprint、index policy 和 coverage semantics。任一日交集后的
 `shsz_st_pit_active_v1`）；历史研究使用不可变 QE dataset namespace。两者执行同一权威 ST-PIT
 规则，但不得混用快照或让历史结果随 live universe 漂移。
 
-`as_of.policy` 支持 `explicit` 和 `latest_common_completed`；后者在请求入队时解析一次并冻结为
-`resolved_as_of_date`，不得在 worker 执行时再次漂移。
+completed legacy loop 若历史上没有 immutable dataset namespace，只允许一次受控兼容路径：读取
+`shsz_st_pit_active_v1` 对应的冻结 runtime artifact，并在 source manifest 标记
+`binding_mode=legacy_frozen_runtime_artifact_v1`。兼容前必须同时满足 source loop=`completed`、
+pool artifact `ready=true/dirty=false`、pool 文件 SHA、ST-PIT rule version、config hash、source
+fingerprint、coverage semantics 与冻结 receipt 完全一致；任一项缺失或变化即 fail loud。该例外不允许
+把当前 live namespace 静默当成历史权威，也不允许回写 QE/Paper/生产配置。
+
+`as_of.policy` 支持 `explicit` 和 `latest_common_completed`；API 先写 durable receipt，worker 在
+`preparing` lease 内解析一次并冻结为 `resolved_as_of_date`。后续 evaluation replay 必须核对冻结
+manifest 的内容 hash，不能在执行阶段接受相同计数但不同值的漂移。
 
 ### 7.2 label horizon
 
@@ -357,7 +365,8 @@ source fingerprint、index policy 和 coverage semantics。任一日交集后的
 
 ### 7.3 source manifest
 
-`hmm_evaluation_source_manifest_v2` 必须包含；legacy v1 manifest 仅用于历史重放：
+新评估必须使用 `hmm_evaluation_source_manifest_v3`；v3 在 v2 universe/asset identity 上新增强制的
+market calculator version 与 return/missing content hash。legacy v1/v2 manifest 仅用于历史只读审计：
 
 - pred/label 与其它被引用 QE assets 的 source、URI、SHA256、size、row count（如适用）、
   trust level、zero-copy/fallback 决策；
@@ -369,7 +378,8 @@ source fingerprint、index policy 和 coverage semantics。任一日交集后的
 - candidate ID、candidate manifest hash、artifact SHA；
 - 启用 DB 10 日收益时的 requested policy、resolved as-of、各数据集 max date、共同完成水位、
   calendar range、price row count、return row count、missing-return count/reason counts、字段名
-  `market.kline_daily_raw.close_li` 和只读 transaction receipt；
+  `market.kline_daily_raw.close_li`、`market_return_calculator_version`、按日期/股票排序后的
+  return+missing-evidence content SHA256 和只读 transaction receipt；
 - `warnings`、`evidence_quality` 和所有 neutral/missing/degraded 计数；
 - 不包含密码、token、原始绝对路径或配置文件正文；配置正文只通过受控 asset content API 展示。
 
@@ -391,6 +401,11 @@ input_hash = logical_evaluation_key
 ```
 
 结果另保存 `result_hash`，对有限浮点使用 12 位有效数字的十进制定长字符串后再 canonicalize。
+market return content hash 使用数据库显式 `DOUBLE PRECISION` 计算后的 IEEE-754 hex 值，并包含
+`trade_date/symbol/horizon/label_date` 与完整 missing evidence。Phase 1 不为行情创建额外永久副本，
+因此保证的是同一来源可访问时的内容校验重放与 drift fail-loud；不得写成“无限期离线可重建”。
+缺少新 calculator version/content hash 的既有 market-required 结果标为
+`known_invalid/legacy_integer_division_market_returns`，只读审计且不得复用或参与新推荐。
 
 ## 8. Contracts：离线 evaluator
 
@@ -517,19 +532,21 @@ n > 1: percentile = (average_rank - 1) / (n - 1)
 ```text
 available_weight = sum(weight of non-null metrics)
 recommendation_score = 100 * sum(weight * percentile) / available_weight
-evidence_confidence = available_weight
+metric_availability_ratio = available_weight
 ```
 
 至少 `net_label_return` 或 `net_db_10d` 有一个非 null 才生成 score；只有 coverage 的候选
 保持未排名，但仍完整展示。缺失指标按剩余权重归一化，不填 0、不假装失败；只要发生权重
 重归一化，`evidence_quality` 至少为 degraded，排行榜必须显示缺失组件和实际 available weight。
+该值只表示公式中可用权重占比，不表示统计置信度、样本可靠性或结果正确概率。数据库历史列名
+`evidence_confidence` 可暂作内部兼容存储，但 API/UI 只能暴露 `metric_availability_ratio`。
 
 ### 9.3 排名与 top-3
 
 排序键：
 
 1. `recommendation_score DESC NULLS LAST`
-2. `evidence_confidence DESC`
+2. `metric_availability_ratio DESC`
 3. `net_db_10d DESC NULLS LAST`
 4. `candidate_id ASC`
 
@@ -542,7 +559,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 
 目标文件：`backend/db/init_hmm_evolution_schema.py`。
 
-- `SCHEMA_VERSION = "hmm_evolution_v1"`；
+- `SCHEMA_VERSION = "hmm_evolution_v2"`；v1 已部署，v2 forward migration 增加 durable request payload 与 preparation 状态；
 - DDL 列表在一个 transaction 内按序执行；
 - 全部 schema/table/column 有 `COMMENT ON`；
 - `CREATE ... IF NOT EXISTS` 只用于首次 bootstrap；已有对象结构不符时 verify 失败，禁止
@@ -602,7 +619,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 
 | 字段组 | 关键字段 |
 |---|---|
-| identity | `batch_id` PK、`request_hash` UNIQUE、`idempotency_key` nullable UNIQUE |
+| identity | `batch_id` PK、`request_hash` UNIQUE、`idempotency_key` nullable UNIQUE、`request_payload` JSONB |
 | retry | `retry_of_batch_id` self FK、`retry_generation` INT |
 | state | `status`、`owner_id`、`fencing_token`、`lease_expires_at`、`heartbeat_at`、`cancel_requested_at/by`、`row_version` |
 | summary | candidate/queued/running/succeeded/failed/cancelled/timed_out count |
@@ -610,7 +627,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 | error | `error_code`、`reason_code`、`error_context` |
 | audit | `created_by`、`created_at`、`started_at`、`completed_at`、`updated_at` |
 
-状态 CHECK：`queued/running/cancel_requested/completed/partial_failed/failed/cancelled/timed_out`。
+状态 CHECK：`preparation_queued/preparing/queued/running/cancel_requested/completed/partial_failed/failed/cancelled/timed_out`。
 
 ### 10.6 `hmm_evolution.batch_test_item`
 
@@ -622,7 +639,7 @@ rejected，只标记 `is_top3=false`。公式、权重、percentile、组件值�
 | `ordinal` | INT | request order；UNIQUE(batch, ordinal) |
 | `item_status` | TEXT | pending/waiting_shared/reused/queued/running/succeeded/failed/cancelled/timed_out |
 | `recommendation_score` | DOUBLE | nullable |
-| `evidence_confidence` | DOUBLE | nullable 0..1 |
+| `evidence_confidence` | DOUBLE | legacy internal storage；API/UI 名称固定为 `metric_availability_ratio`，nullable 0..1 |
 | `recommendation_rank` | INT | nullable |
 | `is_top3` | BOOL | NOT NULL default false |
 | `recommendation_components` | JSONB | nullable |
@@ -652,6 +669,8 @@ Repository 必须提供：
 
 - `register_candidate()` / `get_candidate()` / `list_candidates()` / `retire_candidate()`；
 - `create_or_get_evaluation()`；
+- `create_or_get_submission()` / `claim_batch_preparation()` / `heartbeat_batch_preparation()` /
+  `materialize_prepared_batch()` / `fail_batch_preparation()`；
 - `create_or_get_batch()` / `get_batch()` / `list_batches()`；
 - `claim_batch()` / `claim_evaluation()`，使用 `FOR UPDATE SKIP LOCKED`；
 - `heartbeat_*()`，带 `fencing_token + row_version` compare-and-set；
@@ -671,6 +690,11 @@ code、记录 trace id，并将任务置为 failed；cleanup 次级失败作为 
 ### 12.1 batch 状态机
 
 ```text
+preparation_queued ──claim──> preparing ──atomic materialize──> queued
+       │                         │                                  │
+       └──cancel──────────────> cancelled                           ├──claim──> running ──all success──> completed
+                                 └──explicit failure──────────────> failed
+
 queued ──claim──> running ──all success──> completed
   │                  │  ├──mixed terminal──> partial_failed
   │                  │  ├──all failure─────> failed
@@ -697,18 +721,20 @@ queued -> running -> succeeded
 - claim 时递增 `fencing_token`；
 - heartbeat/complete/fail 必须匹配 owner + token + row_version；
 - token 失配返回 `hmm_evolution_stale_fencing_token`，旧 worker 不得提交结果；
-- worker 不自动无限重试；lease 超时进入 timed_out，由显式 retry API 处理。
+- evaluation worker 不自动无限重试；evaluation lease 超时进入 timed_out，由显式 retry API 处理。
+- preparation lease 过期表示输入尚未物化，安全回到 `preparation_queued`，不能生成空 batch 成功或
+  把 receipt 标成 evaluation timed_out；任何准备错误必须落为 batch failed + reason/context。
 
 ### 12.4 request 幂等
 
-- `request_hash` 由排序后的 candidate IDs、evaluation spec、recommendation spec 计算；
+- `request_hash` 由 submission schema、保持展示顺序的 candidate IDs、evaluation spec、recommendation spec/version 与 created_by 计算；
 - 相同请求返回原 batch，响应标记 `idempotent_replay=true`；
 - 相同 `Idempotency-Key` 对应不同 request hash 返回 HTTP 409；
 - batch candidate IDs 必须去重，原始展示顺序记录在 ordinal，不影响 request hash。
 
 ### 12.5 shared evaluation
 
-创建 batch 时：
+worker 完成 input freeze 并原子物化 batch 时：
 
 - 已有 succeeded evaluation：item=`reused`，不重算；
 - 已有 queued/running evaluation：item=`waiting_shared`，等待同一结果；
@@ -740,7 +766,9 @@ DB enrichment 前后、结果提交前。取消不会留下 succeeded 假状态�
 ### 13.4 性能 receipt
 
 每次 benchmark 记录：硬件、Python/pandas 版本、base loop、行数、日期数、candidate 数、
-artifact source、冷/热缓存、各阶段耗时、峰值 RSS、并发和结果 hash。
+artifact source、冷/热缓存、峰值 RSS、并发和结果 hash。耗时必须至少拆为：API receipt persist、
+preparation queue wait、QE/source load、universe resolve、market freeze、evaluation queue wait、compute、
+result persist，以及 request-to-terminal 总耗时；只报 `started_at → completed_at` 不足以验收 API 目标。
 
 验收基准：
 
@@ -748,11 +776,20 @@ artifact source、冷/热缓存、各阶段耗时、峰值 RSS、并发和结果
 - 10 候选共享输入且受限并发 <30 分钟；
 - 未在指定基准和硬件测量时只能报告 pending，不能用小 fixture 宣称性能完成。
 
+2026-07-19 旧同步 preparation 路径的事实记录（非通过回执）：API 返回 202 前约 66～69 秒；
+batch `created_at → completed_at` 为 Loop1 146.638s、Loop2 222.352s、Loop3 304.339s、
+Loop4 377.703s、Loop5 450.539s、Loop6 522.748s、Loop7 585.680s、Loop8 663.290s、
+Loop9 10-candidate batch 990.449s、Loop10 125.938s。Loop8 request-to-terminal 超过 12 分钟；
+Loop9 item 195.781s 不能作为单候选测试。BUG-775 改造后必须重新跑同一标准基准，旧数据只用于
+指出口径问题，不能证明新路径达标。
+
 ### 13.5 自动评估 worker service 生命周期
 
 - 入口必须是显式 `--serve`，与人工 `--once` / `--drain` 共用同一 runtime、repository、lease 和 fencing 契约；禁止无参数隐式进入无限循环。
 - service 启动前必须加载 canonical `.env`，并要求 `HMM_EVOLUTION_RUNTIME_MODE=api_worker`；显式进程环境优先于 `.env`，配置缺失或非法时 fail closed 并退出非零。
 - queue 非空时连续处理有界 worker slice；queue 为空时使用可中断等待，poll interval 必须有上下界，禁止 busy loop。
+- 每轮先回收过期 preparation lease，再优先 claim 一个 `preparation_queued` receipt；准备完成后下一轮
+  才 claim queued evaluation。API 和 evaluation worker 不得各自重复读取同一批输入。
 - `SIGINT`/`SIGTERM` 只停止接纳下一轮 claim；当前已 claim slice 继续通过既有 checkpoint、heartbeat 和 terminalization 完成，然后进程退出。
 - `HMMEvolutionError` 或未知基础设施异常不得被吞掉或伪装为 idle；进程结构化记录 reason code/exception chain 后非零退出，由外部 supervisor 按部署策略重启。
 - 自动运行不增加候选审批、评估审批、top-3 阈值或研究停止条件；`api_worker` 仍是 deployment switch/kill switch，而不是产品审批。
@@ -791,8 +828,8 @@ schema id 和 trust level 选择专用摘要/表格；未知结构化格式只�
 
 | 方法 | 路径 | 语义 |
 |---|---|---|
-| POST | `/evaluate` | 单候选；内部创建一项 batch；返回 202 |
-| POST | `/batch` | 1..50 个去重候选；返回 202 |
+| POST | `/evaluate` | 单候选；快速持久化 `preparation_queued` batch receipt；返回 202/幂等 200，不读取 QE/market asset |
+| POST | `/batch` | 1..50 个去重候选；快速持久化同一 durable receipt，前端按 batch_id 轮询 preparation/evaluation 状态 |
 | GET | `/evaluations/{eval_id}` | 状态、指标、daily summary、错误 |
 | GET | `/batches` | 分页历史 |
 | GET | `/batches/{batch_id}` | batch、items、top-3、progress |
@@ -864,7 +901,7 @@ P1-C 可以建立可扩展的 `HMMResearchNavigation` 外壳，但只展示已�
 2. **QE 资产浏览**：task/loop 资产目录、来源、hash、trust level 和 schema-aware 摘要；
 3. **新建评估**：base loop、日期/as-of policy、label horizon、TopK、DB 10 日收益模式、候选多选；
 4. **运行中批次**：进度、heartbeat、耗时、取消和 item 级状态；
-5. **历史排行榜**：推荐分数、证据置信度、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；
+5. **历史排行榜**：推荐分数、指标可用比例、净标签收益（动态 horizon）、Net DB 10D、正值日比例、coverage；不得把 available weight 称为置信度；
 6. **top-3 研究推荐**：明确标注“研究推荐，需 QE 终审”，未入选候选仍完整展示；
 7. **证据质量**：watermark、candidate/source/evaluator version、degraded warnings 在主视图可见。
 
@@ -890,6 +927,7 @@ P1-C 可以建立可扩展的 `HMMResearchNavigation` 外壳，但只展示已�
 | 状态 | 页面行为 |
 |---|---|
 | loading | 显示有界 skeleton 和正在加载的资源名；超过客户端阈值进入 timed-out，不无限旋转 |
+| preparation_queued/preparing | 明确显示“等待输入冻结/正在冻结输入”，evaluation 列表可暂为空；不得把 receipt 当作已完成输入校验 |
 | empty | 说明“无候选/无批次/无结果”的具体原因与下一步，不返回空白成功 |
 | degraded | 主视图显示 warning、受影响指标、裁剪范围和可用证据；不只写技术 context |
 | failed/timed_out | 固定错误区显示 reason code、中文解释、trace id、失败阶段和可重试条件 |
@@ -947,6 +985,8 @@ frontend/src/lib/navigation/nav-groups.ts
 | market DB 不可用且 mode=required | failed + market_data_unavailable |
 | 无 TopK 替换 | succeeded + unranked，不伪造 0 收益 |
 | worker 崩溃/lease 过期 | timed_out；旧 fencing token 不得提交 |
+| preparation worker 崩溃/lease 过期 | receipt 回到 preparation_queued 并保留审计；不得创建空 evaluation 或假成功 |
+| 旧整数除法行情结果 | known-invalid/view-only；Net DB 10D 与推荐不可复用，详情页显式解释 |
 | 部分 candidate 失败 | batch=partial_failed；成功结果仍可读 |
 | cancel 与 complete 竞争 | CAS/fencing 决定唯一 terminal 状态 |
 | schema 未部署 | API 503 schema_unavailable；不得隐式 DDL |
@@ -1128,7 +1168,8 @@ frontend/src/lib/navigation/nav-groups.ts
 ### 19.2 activation flags
 
 - `HMM_EVOLUTION_RUNTIME_MODE=disabled|api_only|api_worker`，默认 disabled；
-- `NEXT_PUBLIC_HMM_EVOLUTION_ENABLED=false` 默认；
+- HMM 演进页面与左侧导航无前端 env gate，构建后默认可见；后端 runtime mode 只控制真实 API/worker 能力，
+  页面必须以可见错误说明 runtime disabled，不能隐藏功能入口；
 - artifact roots 为空时 candidate local source 不可用，不回退任意路径。
 
 上述配置是 deployment switch/kill switch，不是候选注册、评估或推荐的业务审批条件。
@@ -1164,10 +1205,10 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | applied_and_verified（hmm_evolution_v1：5 tables / 115 columns / 41 constraints / 7 indexes） | noop | noop |
+| `production_ddl_gate` | noop | v1 production applied；v2 已在 5433/aistock_dev bootstrap/verify，production pending | noop | v2 生产应用前 pending |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
-| `runtime_activation_gate` | noop | pending | pending | pending，首次生产启用需一次操作授权；不新增业务审批流 |
+| `runtime_activation_gate` | noop | 旧 schema worker 已受控 activation；v2 应用后需显式重启 | 同左 | 不新增业务审批流 |
 | `data_write_gate` | docs only | 仅 hmm_evolution.* | 仅评估结果 | 同左 |
 | `service_start_gate` | noop | 禁止隐式启动 | 禁止隐式启动 | 独立 service 显式启动；不得挂入 FastAPI startup，安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
@@ -1176,9 +1217,9 @@ frontend/src/lib/navigation/nav-groups.ts
 
 - **F-006 Phase 1 独立候选注册表**：QE 全资产只读 reader、内容寻址 candidate、可信
   coefficient manifest、research-only lifecycle、只写 `hmm_evolution.*`。
-- **F-007 Phase 1 评估可重放**：显式 horizon、QE asset trust receipt、latest-common watermark、
-  source/candidate/spec/evaluator hash、稳定排序、交易日 forward return 和 result hash。
-- **F-008 Phase 1 批处理状态机**：batch/evaluation/item 分层、幂等、lease、fencing、heartbeat、
+- **F-007 Phase 1 内容校验重放**：显式 horizon、QE asset trust receipt、latest-common watermark、
+  source/candidate/spec/evaluator hash、版本化行情值/缺失证据 content hash、稳定排序、交易日 forward return 和 result hash；不夸大为永久离线重建。
+- **F-008 Phase 1 批处理状态机**：durable receipt、preparation_queued/preparing 输入冻结、batch/evaluation/item 分层、幂等、lease、fencing、heartbeat、
   取消、超时、重试、shared result 和 partial failure。
 - **F-009 Phase 1 推荐语义**：`hmm_recommendation_v1` 版本化、batch-relative、无淘汰阈值、
   top-3 仅为 QE 终审前研究推荐。
@@ -1193,20 +1234,22 @@ frontend/src/lib/navigation/nav-groups.ts
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt见 §17.4.1 | verified | 无 |
-| F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor,universe}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py`；BUG-772/PR #2471 | `python -m nox -s hmm_evolution_backend`：172 passed / 74.12% coverage；`backend/tests/hmm_evolution/test_universe.py`：9 passed；真实 Loop10 v2 receipt 固化 source pool 与冻结 `shsz_st_pit_active_v1` runtime artifact，5161 spans、4497 symbols，batch/evaluation succeeded | verified | 无 |
-| F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,input_adapter,executor,models,errors}.py`；BUG-742/BUG-743 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`：共享 input bundle 单次加载、`candidate_concurrency=1..4` 有界并发、serialized heartbeat/fencing、worker-cycle batch recompute、每轮 lease reaper；既有 dev PostgreSQL 8-worker receipt | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；仍需 dev PostgreSQL 真实双候选并发、进程中断后 lease recovery 和 10 候选耗时 receipt，未标记 verified |
-| F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
+| F-007 | 本文 §7、§8；`evaluator.py`、`input_adapter.py`、`market_repository.py`、`source_manifest.py`、`universe.py`；BUG-772～BUG-774 | `python -m pytest backend/tests/hmm_evolution/test_market_repository.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_universe.py -q`；calculator version/content hash/value drift fail-loud | approved_by_user_implementation_complete_external_acceptance_pending | 旧 market-required 结果 known-invalid/view-only；部署后真实重跑待补 |
+| F-008 | 本文 §10～§13；`repository.py`、`service.py`、`worker.py`、`input_adapter.py`、`models.py`；BUG-775 | `python -m pytest backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_schema_and_state_machine.py -q`；durable receipt、preparation heartbeat/fencing、atomic materialize、失败终态 | approved_by_user_implementation_complete_external_acceptance_pending | schema v2 production DDL/重启、进程中断 recovery 和 10 候选耗时 receipt 待补 |
+| F-009 | 本文 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；metric availability、percentile/tie/missing renormalization/stable top-3 | verified | 历史受 BUG-773 污染的推荐只读审计 |
 | F-010 | 本文 §14、§15；真实 API/UI 路径；BUG-744～BUG-748、BUG-770～BUG-772 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-19 POST v2 HTTP 202，Loop10 evaluation succeeded；此前点名的四个未计算日期均产生完整逐日替换指标 | approved_by_user_implementation_complete_external_acceptance_partial | 真实 API/worker 单 case 已通过；真实页面截图、完整 Playwright、10-case 和标准性能 benchmark 仍待补，未宣称 F-010 verified |
 | F-010A | 本文 §5.1、§13.5、§17.4.2、§18～§21；`worker_service.py`、`hmm_evolution_worker.py --serve` | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；Windows worker stop/start、5 秒 polling、真实 queue claim、约 121 秒 terminal receipt，1 succeeded / 0 failed / 0 timeout | approved_by_user_implementation_complete_external_acceptance_partial | 首次 activation、进程重启与真实 queue receipt 已完成；长期监督、进程中断 lease recovery、双候选/10 候选负载仍待补 |
 
 ## 24. 设计结论
 
-P1-A 的 QE 全资产只读 reader、candidate identity、schema 和 durable state machine 已完成
-源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。P1-B 已实现 pure
+P1-A 的 QE 全资产只读 reader、candidate identity 与 v1 schema 已完成源码、真实 dev PostgreSQL、
+生产 schema 与真实 QE workspace 外部验收；BUG-775 的 v2 durable preparation migration 尚未应用生产。
+P1-B 已实现 pure
 evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只读 repository、durable
 executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算
-路径迁移；F-007/F-009 已验证。P1-C 的 API/UI/worker 源码及审计硬化已完成，BUG-772 和
-Windows 独立 worker 的首次真实 Loop10 v2 runtime receipt 已通过；但受控 10-case、10 候选性能、
+路径迁移；BUG-773/BUG-774 修复了行情收益整数除法并将重放收紧为 content-verified/fail-on-drift，
+旧 market-required receipt 只读无效。P1-C 的 API/UI/worker 源码及审计硬化已完成，BUG-775/BUG-776
+补齐 durable receipt 和诚实指标语义；但受控 10-case、10 候选性能、
 进程中断 lease recovery 与真实页面/Playwright 仍待外部验收。Phase 1 API/worker 已有受控运行证据，
 不得将其扩大表述为整个 Phase 1 verified、Phase 2/3 已启用或已接入 QE/Paper 生产链。
 
@@ -1214,6 +1257,7 @@ Windows 独立 worker 的首次真实 Loop10 v2 runtime receipt 已通过；但�
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.0 | 2026-07-19 | 对齐 BUG-773～BUG-777：显式浮点行情收益、版本化 return/missing content hash、known-invalid 历史结果、durable preparation receipt/状态机、`metric_availability_ratio`、真实性能分段口径、legacy ST-PIT 兼容约束、移除前端 env gate；schema v2 生产 DDL/重启独立 pending |
 | v1.9 | 2026-07-19 | 回填 BUG-772/PR #2471 与首次 Windows worker runtime activation：真实 Loop10 v2 API 202、冻结 ST-PIT universe、约 121 秒 queue terminal receipt和显式 degraded evidence；保留 10-case、10 候选、lease recovery 与 UI/Playwright 缺口 |
 | v1.8 | 2026-07-18 | 批准 Phase 1 自动评估 worker service：显式 `--serve` 独立消费 durable queue，固化 canonical env、poll bounds、信号收敛、fail-loud 退出和与 Phase 3 scheduler 的隔离；新增 F-010A |
 | v1.7 | 2026-07-18 | 回填 BUG-742～BUG-748 审计修复：有界并发共享输入、lease reaper、QE 权威节点、内容安全、全资产 schema-aware 浏览、UI fail-loud 状态机和 idempotency；F-008/F-010 标记为源码完成但外部验收待补，不提前宣称 Phase 1 完成 |

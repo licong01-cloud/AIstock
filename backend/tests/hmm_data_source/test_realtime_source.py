@@ -242,4 +242,6 @@ def test_repository_realized_return_query_uses_ts_code_and_close_li():
     assert "market.trading_calendar" in query
     assert "k1.ts_code" in query
     assert "k1.close_li" in query
+    assert "k2.close_li::DOUBLE PRECISION" in query
+    assert "k1.close_li::DOUBLE PRECISION" in query
     assert "CURRENT_DATE" not in query

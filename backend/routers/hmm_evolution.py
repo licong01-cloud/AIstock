@@ -292,6 +292,8 @@ def _evaluation_summary(row: dict[str, Any]) -> dict[str, Any]:
         "net_db_10d",
         "positive_net_label_day_ratio",
         "evidence_quality",
+        "result_validity",
+        "result_validity_reason",
         "reason_code",
         "queued_at",
         "started_at",
@@ -584,7 +586,8 @@ async def _create_batch(
     request: EvaluateRequest | BatchCreateRequest,
     idempotency_key: str | None,
 ) -> ApiSuccess:
-    batch, created = await runtime.service.prepare_and_create_batch(
+    batch, created = await asyncio.to_thread(
+        runtime.service.submit_batch,
         candidate_ids=candidate_ids,
         evaluation_spec=request.evaluation_spec,
         recommendation_spec=_recommendation_spec(),

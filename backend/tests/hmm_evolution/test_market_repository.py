@@ -3,7 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date
 
-from backend.services.hmm_evolution.market_repository import HMMMarketReturnRepository
+from backend.services.hmm_evolution.market_repository import (
+    MARKET_RETURN_CALCULATOR_VERSION,
+    HMMMarketReturnRepository,
+)
 
 
 class _Cursor:
@@ -94,6 +97,8 @@ def test_forward_returns_use_one_bulk_trading_calendar_query() -> None:
     query = cursor.queries[1]
     assert "LEAD(cal_date, %s)" in query[0]
     assert "market.kline_daily_raw" in query[0]
+    assert "end_close::DOUBLE PRECISION" in query[0]
+    assert "start_close::DOUBLE PRECISION" in query[0]
     assert query[1][-2] == ["A", "B"]
     assert read.price_row_count == 4
     assert read.missing_evidence == ()
@@ -129,5 +134,31 @@ def test_forward_returns_persist_exact_missing_price_reason() -> None:
         },
     )
     manifest = read.as_manifest_evidence()
+    assert manifest["market_return_calculator_version"] == MARKET_RETURN_CALCULATOR_VERSION
+    assert len(manifest["market_return_content_hash"]) == 64
     assert manifest["missing_return_count"] == 1
     assert manifest["missing_return_reason_counts"] == {"horizon_price_missing": 1}
+
+
+def test_market_return_content_hash_changes_when_values_change_without_count_change() -> None:
+    cursor = _Cursor(
+        [
+            [(date(2026, 1, 5), "A", 10, 0.1, date(2026, 1, 19), 2)],
+            [],
+            [(date(2026, 1, 5), "A", 10, 0.2, date(2026, 1, 19), 2)],
+            [],
+        ]
+    )
+    repository = HMMMarketReturnRepository(_factory(cursor))
+    kwargs = {
+        "symbols": ["A"],
+        "trade_dates": [date(2026, 1, 5)],
+        "horizon_trading_days": 10,
+        "as_of_date": date(2026, 1, 19),
+    }
+
+    first = repository.read_forward_returns(**kwargs).as_manifest_evidence()
+    second = repository.read_forward_returns(**kwargs).as_manifest_evidence()
+
+    assert first["return_row_count"] == second["return_row_count"] == 1
+    assert first["market_return_content_hash"] != second["market_return_content_hash"]

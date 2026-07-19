@@ -14,6 +14,8 @@ export type EvaluationStatus =
   | "timed_out";
 
 export type BatchStatus =
+  | "preparation_queued"
+  | "preparing"
   | "queued"
   | "running"
   | "cancel_requested"
@@ -180,9 +182,11 @@ export interface BatchItem {
   net_db_10d: number | null;
   positive_net_label_day_ratio: number | null;
   evidence_quality: EvidenceQuality;
+  result_validity: "valid" | "known_invalid";
+  result_validity_reason: string;
   warnings_json: Array<Record<string, unknown>>;
   recommendation_score: number | null;
-  evidence_confidence: number | null;
+  metric_availability_ratio: number | null;
   recommendation_rank: number | null;
   is_top3: boolean;
   recommendation_components: Record<string, unknown> | null;
@@ -232,6 +236,8 @@ export interface EvaluationDetail {
   net_db_10d: number | null;
   positive_net_label_day_ratio: number | null;
   evidence_quality: EvidenceQuality;
+  result_validity: "valid" | "known_invalid";
+  result_validity_reason: string;
   warnings_json: Array<Record<string, unknown>>;
   metrics_json: Record<string, unknown> | null;
   result_hash: string | null;
@@ -267,6 +273,8 @@ export type EvaluationSummary = Pick<
   | "net_db_10d"
   | "positive_net_label_day_ratio"
   | "evidence_quality"
+  | "result_validity"
+  | "result_validity_reason"
   | "reason_code"
   | "queued_at"
   | "started_at"

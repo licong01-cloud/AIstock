@@ -631,7 +631,7 @@ function RecommendationCard({ item }: { item: BatchItem }) {
             {item.candidate_display_name}
           </Link>
           <div className={styles.candidateMeta}>
-            证据置信度 {formatPercent(item.evidence_confidence)} · {item.evidence_quality || "未标记"}
+            指标可用比例 {formatPercent(item.metric_availability_ratio)} · {item.evidence_quality || "未标记"}
           </div>
         </div>
         <div className={styles.recommendScore}>{formatNumber(item.recommendation_score, 1)}</div>
@@ -654,6 +654,7 @@ function CurrentBatchPanel({
   onRetry: () => void;
 }) {
   const terminal = batch ? TERMINAL_BATCH_STATUSES.has(batch.status) : false;
+  const preparing = batch ? ["preparation_queued", "preparing"].includes(batch.status) : false;
   return (
     <section className={styles.panel}>
       <div className={styles.panelHeader}>
@@ -665,8 +666,8 @@ function CurrentBatchPanel({
       </div>
       <div className={styles.panelBody}>
         <div className={styles.steps}>
-          <Step index="01" name="输入校验" state={batch ? "done" : "idle"} />
-          <Step index="02" name="评估计算" state={batch?.running_count ? "active" : progress > 0 ? "done" : "idle"} />
+          <Step index="01" name="输入冻结" state={preparing ? "active" : batch ? "done" : "idle"} />
+          <Step index="02" name="评估计算" state={preparing ? "idle" : batch?.running_count ? "active" : progress > 0 ? "done" : "idle"} />
           <Step index="03" name="证据归集" state={terminal ? "done" : progress > 0 ? "active" : "idle"} />
           <Step index="04" name="研究推荐" state={batch?.status === "completed" || batch?.status === "partial_failed" ? "done" : "idle"} />
         </div>

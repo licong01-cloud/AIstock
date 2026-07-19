@@ -118,6 +118,7 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
             </section>
 
             {evaluation.evidence_quality === "degraded" ? <div className={`${styles.notice} ${styles.noticeWarning}`}><strong>证据降级</strong><span>{warningSummary(evaluation.warnings_json)}</span></div> : null}
+            {evaluation.result_validity === "known_invalid" ? <div className={`${styles.notice} ${styles.noticeWarning}`}><strong>历史结果仅供审计</strong><span>该评估使用旧版整数除法行情收益，Net DB 10D 与推荐分数无效；新任务不会复用此结果。</span></div> : null}
             {["failed", "timed_out", "cancelled"].includes(evaluation.status) ? <VisibleErrorState error={evaluationError(evaluation)} title="评估未成功完成" /> : null}
 
             <section className={styles.detailGrid}>
@@ -144,6 +145,7 @@ export default function EvaluationDetailView({ evalId }: { evalId: string }) {
                 { label: "Candidate SHA", value: shortHash(evaluation.candidate_manifest_hash) },
                 { label: "Input SHA", value: shortHash(evaluation.input_hash) },
                 { label: "Result SHA", value: evaluation.result_hash ? shortHash(evaluation.result_hash) : "未生成" },
+                { label: "结果有效性", value: evaluation.result_validity === "valid" ? "有效" : "历史无效（只读）" },
               ] }]} /></div></div>
               <div className={styles.panel}><div className={styles.panelHeader}><h2 className={styles.panelTitle}>执行状态</h2></div><div className={styles.panelBody}><EvidencePanel sections={[{ title: "Durable state", rows: [
                 { label: "状态", value: evaluation.status },

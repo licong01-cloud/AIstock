@@ -102,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             owner_id=owner_id,
             config=WorkerConfig(runtime_mode=mode),
             executor=runtime.executor,
+            submission_preparer=runtime.service,
         )
         if args.serve:
             stop_event = Event()

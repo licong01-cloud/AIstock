@@ -94,6 +94,80 @@ def test_repository_default_connection_is_an_atomic_managed_transaction(
     assert calls == [{"autocommit": False, "manage_transaction": True}]
 
 
+def test_submission_receipt_is_persisted_before_batch_items_exist() -> None:
+    repository, cursor = _repository(
+        [
+            {
+                "contains": "INSERT INTO hmm_evolution.batch_test_run",
+                "one": {
+                    "batch_id": "hmmb_receipt",
+                    "status": "preparation_queued",
+                    "candidate_count": 2,
+                },
+            }
+        ]
+    )
+
+    receipt, created = repository.create_or_get_submission(
+        request_hash="a" * 64,
+        request_payload={
+            "schema_version": "hmm_batch_submission_v1",
+            "candidate_ids": ["c1", "c2"],
+        },
+        candidate_count=2,
+        recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+        recommendation_version="hmm_recommendation_v1",
+        created_by="tester",
+        idempotency_key="intent-1",
+    )
+
+    assert created is True
+    assert receipt["status"] == "preparation_queued"
+    assert all("batch_test_item" not in query for query, _params in cursor.queries)
+
+
+def test_failed_preparation_receipt_can_be_retried_without_fake_items() -> None:
+    repository, cursor = _repository(
+        [
+            {
+                "contains": "WHERE batch_id = %s FOR UPDATE",
+                "one": {
+                    "batch_id": "hmmb_failed",
+                    "status": "failed",
+                    "retry_generation": 1,
+                    "request_payload": {
+                        "schema_version": "hmm_batch_submission_v1",
+                        "candidate_ids": ["c1"],
+                    },
+                    "candidate_count": 1,
+                    "recommendation_spec": {"schema_version": "hmm_recommendation_spec_v1"},
+                    "recommendation_spec_hash": "b" * 64,
+                    "recommendation_version": "hmm_recommendation_v1",
+                },
+            },
+            {"contains": "SELECT COUNT(*) AS item_count", "one": {"item_count": 0}},
+            {
+                "contains": "'preparation_queued'",
+                "one": {
+                    "batch_id": "hmmb_retry",
+                    "status": "preparation_queued",
+                    "retry_generation": 2,
+                },
+            },
+        ]
+    )
+
+    retried = repository.create_retry_batch(
+        batch_id="hmmb_failed",
+        created_by="tester",
+        idempotency_key="retry-intent",
+    )
+
+    assert retried["batch_id"] == "hmmb_retry"
+    assert retried["status"] == "preparation_queued"
+    assert cursor.steps == []
+
+
 def _preview(
     *,
     source_type: CandidateSourceType,
@@ -335,6 +409,12 @@ class _EmptyClaimRepository:
         self.reaper_calls += 1
         return {"evaluations": 0, "batches": 0}
 
+    def recover_expired_preparations(self):
+        return 0
+
+    def claim_batch_preparation(self, **_kwargs):
+        return None
+
     def claim_batch(self, **kwargs):
         return {
             "batch_id": "hmmb_shared",
@@ -355,6 +435,59 @@ class _Executor:
         raise AssertionError("executor must not run without a claimed evaluation")
 
 
+class _SubmissionPreparer:
+    async def prepare_claimed_submission(self, **_kwargs):  # pragma: no cover - no receipt exists.
+        raise AssertionError("submission preparer must not run without a claimed receipt")
+
+
+class _PreparationRepository:
+    def __init__(self) -> None:
+        self.batch_claim_calls = 0
+
+    def recover_expired_preparations(self):
+        return 0
+
+    def mark_expired_leases_timed_out(self):
+        return {"evaluations": 0, "batches": 0}
+
+    def claim_batch_preparation(self, **_kwargs):
+        return {
+            "batch_id": "hmmb_receipt",
+            "status": "preparing",
+            "fencing_token": 1,
+            "row_version": 2,
+        }
+
+    def claim_batch(self, **_kwargs):  # pragma: no cover - preparation has priority.
+        self.batch_claim_calls += 1
+        raise AssertionError("evaluation claim ran before durable preparation")
+
+
+class _RecordingSubmissionPreparer:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def prepare_claimed_submission(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"batch_id": kwargs["batch"]["batch_id"], "status": "queued"}
+
+
+def test_worker_prioritizes_durable_submission_preparation() -> None:
+    repository = _PreparationRepository()
+    preparer = _RecordingSubmissionPreparer()
+    worker = HMMEvolutionWorker(
+        repository,  # type: ignore[arg-type]
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker"),
+        executor=_Executor(),
+        submission_preparer=preparer,
+    )
+
+    assert worker.run_once() is True
+    assert [call["batch"]["batch_id"] for call in preparer.calls] == ["hmmb_receipt"]
+    assert repository.batch_claim_calls == 0
+
+
 def test_worker_releases_batch_when_shared_evaluation_is_claimed_elsewhere() -> None:
     repository = _EmptyClaimRepository()
     worker = HMMEvolutionWorker(
@@ -362,6 +495,7 @@ def test_worker_releases_batch_when_shared_evaluation_is_claimed_elsewhere() -> 
         owner_id="worker-1",
         config=WorkerConfig(runtime_mode="api_worker"),
         executor=_Executor(),
+        submission_preparer=_SubmissionPreparer(),
     )
 
     assert worker.run_once() is True
@@ -382,6 +516,12 @@ class _NoBatchRepository:
         self.reaper_calls += 1
         return {"evaluations": 1, "batches": 1}
 
+    def recover_expired_preparations(self):
+        return 0
+
+    def claim_batch_preparation(self, **_kwargs):
+        return None
+
     def claim_batch(self, **_kwargs):
         return None
 
@@ -393,6 +533,7 @@ def test_worker_reaps_expired_leases_before_looking_for_new_work() -> None:
         owner_id="worker-1",
         config=WorkerConfig(runtime_mode="api_worker"),
         executor=_Executor(),
+        submission_preparer=_SubmissionPreparer(),
     )
 
     assert worker.run_once() is False
@@ -409,6 +550,12 @@ class _ConcurrentRepository:
 
     def mark_expired_leases_timed_out(self):
         return {"evaluations": 0, "batches": 0}
+
+    def recover_expired_preparations(self):
+        return 0
+
+    def claim_batch_preparation(self, **_kwargs):
+        return None
 
     def claim_batch(self, **_kwargs):
         return {
@@ -492,6 +639,7 @@ def test_worker_uses_shared_inputs_and_bounded_candidate_concurrency() -> None:
         owner_id="worker-1",
         config=WorkerConfig(runtime_mode="api_worker", candidate_concurrency=2),
         executor=executor,
+        submission_preparer=_SubmissionPreparer(),
     )
 
     assert worker.run_once() is True

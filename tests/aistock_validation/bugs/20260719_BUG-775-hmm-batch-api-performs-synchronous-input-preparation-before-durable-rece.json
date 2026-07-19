@@ -5,11 +5,14 @@
     "backend/services/hmm_evolution/models.py",
     "backend/services/hmm_evolution/repository.py",
     "backend/services/hmm_evolution/service.py",
+    "backend/services/hmm_evolution/worker.py",
     "backend/services/hmm_evolution/worker_service.py",
+    "scripts/hmm_evolution_worker.py",
     "backend/routers/hmm_evolution.py",
     "frontend/src/lib/hmm-research/contracts.ts",
     "frontend/src/lib/hmm-evolution/api.ts",
     "frontend/src/components/hmm-evolution/EvolutionDashboard.tsx",
+    "frontend/src/components/hmm-research/StatusBadge.tsx",
     "backend/tests/hmm_evolution/test_schema_and_state_machine.py",
     "backend/tests/hmm_evolution/test_repository_integration.py",
     "backend/tests/hmm_evolution/test_repository_dev_postgres.py",
@@ -55,7 +58,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_worker_service.py -q",
   "required_verification": [

@@ -25,9 +25,15 @@ from .evaluator import (
     DateCoveragePlan,
     resolve_batch_common_dates,
 )
-from .market_repository import HMMMarketReturnRepository, MarketReturnRead, MarketWatermark
+from .market_repository import (
+    MARKET_RETURN_CALCULATOR_VERSION,
+    HMMMarketReturnRepository,
+    MarketReturnRead,
+    MarketWatermark,
+    market_return_content_hash,
+)
 from .models import CandidateRecord, EvaluationPlan, EvaluationSpec
-from .source_manifest import build_source_manifest
+from .source_manifest import SOURCE_MANIFEST_VERSION, build_source_manifest
 from .universe import QEExecutionUniverseResolver
 
 
@@ -100,6 +106,7 @@ class HMMEvaluationInputAdapter:
         *,
         candidates: Sequence[CandidateRecord],
         evaluation_spec: EvaluationSpec,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> PreparedBatchInputs:
         if not 1 <= len(candidates) <= 50:
             raise InvalidSpecError("an HMM evaluation batch must contain 1..50 candidates")
@@ -109,10 +116,16 @@ class HMMEvaluationInputAdapter:
 
         coefficient_inputs: dict[str, CandidateCoefficients] = {}
         for candidate in candidates:
+            if checkpoint:
+                checkpoint(f"before_candidate_artifact_{candidate.candidate_id}")
             resolved = await self._candidate_resolver.resolve_registered_candidate(candidate)
             coefficient_inputs[candidate.candidate_id] = CandidateCoefficients.from_payload(resolved.payload)
+            if checkpoint:
+                checkpoint(f"after_candidate_artifact_{candidate.candidate_id}")
 
         source = self._source_factory(evaluation_spec, "prediction_store_first")
+        if checkpoint:
+            checkpoint("before_shared_source_inputs")
         try:
             async with source:
                 predictions = await source.get_predictions(
@@ -132,6 +145,8 @@ class HMMEvaluationInputAdapter:
                 "failed to load frozen Phase 0 prediction and label inputs",
                 context={"error_type": type(exc).__name__},
             ) from exc
+        if checkpoint:
+            checkpoint("after_shared_source_inputs")
 
         if evaluation_spec.schema_version != "hmm_evaluation_spec_v2":
             raise InvalidSpecError(
@@ -145,6 +160,8 @@ class HMMEvaluationInputAdapter:
         )
         predictions = universe_read.predictions
         labels = universe_read.labels
+        if checkpoint:
+            checkpoint("after_universe_resolution")
 
         date_plan = resolve_batch_common_dates(
             predictions=predictions,
@@ -160,6 +177,8 @@ class HMMEvaluationInputAdapter:
         market_read: MarketReturnRead | None = None
         market_returns: pd.DataFrame | None = None
         if market_mode == "required":
+            if checkpoint:
+                checkpoint("before_market_watermark")
             market_watermark = await asyncio.to_thread(
                 self._market_repository.resolve_watermark,
                 policy=str(evaluation_spec.as_of["policy"]),
@@ -175,6 +194,8 @@ class HMMEvaluationInputAdapter:
                 as_of_date=resolved_as_of_date,
             )
             market_returns = market_read.returns
+            if checkpoint:
+                checkpoint("after_market_returns")
             market_evidence = {
                 "mode": "required",
                 "horizon_trading_days": 10,
@@ -386,13 +407,19 @@ class HMMEvaluationInputAdapter:
             )
         market_mode = next(iter(market_modes))
         if market_mode == "required":
-            identities: set[tuple[date, int]] = set()
+            identities: set[tuple[date, int, str]] = set()
             for eval_id, market in market_manifests.items():
                 try:
+                    if manifests[eval_id].get("schema_version") != SOURCE_MANIFEST_VERSION:
+                        raise ValueError("legacy source manifest is view-only")
+                    calculator_version = str(market["market_return_calculator_version"])
+                    if calculator_version != MARKET_RETURN_CALCULATOR_VERSION:
+                        raise ValueError("unsupported market return calculator version")
                     identities.add(
                         (
                             date.fromisoformat(str(market["resolved_as_of_date"])),
                             int(market["horizon_trading_days"]),
+                            calculator_version,
                         )
                     )
                 except (KeyError, TypeError, ValueError) as exc:
@@ -404,7 +431,7 @@ class HMMEvaluationInputAdapter:
                 raise ArtifactHashMismatchError("claimed batch evaluations use different market return identities")
             if checkpoint:
                 checkpoint("before_shared_market_returns")
-            resolved_as_of_date, horizon = next(iter(identities))
+            resolved_as_of_date, horizon, _calculator_version = next(iter(identities))
             symbols = sorted({str(item).strip() for item in predictions["symbol"] if str(item).strip()})
             union_dates = tuple(sorted({item for dates in evaluation_dates_by_id.values() for item in dates}))
             market_read = await asyncio.to_thread(
@@ -461,6 +488,24 @@ class HMMEvaluationInputAdapter:
                                 "actual_missing_count": len(actual_missing),
                             },
                         )
+                date_mask = market_returns["trade_date"].isin(evaluation_dates)
+                actual_content_hash = market_return_content_hash(
+                    market_returns.loc[date_mask].copy(),
+                    actual_missing,
+                )
+                expected_content_hash = str(
+                    market_manifests[eval_id].get("market_return_content_hash") or ""
+                )
+                if actual_content_hash != expected_content_hash:
+                    raise ArtifactHashMismatchError(
+                        "market return values changed since evaluation enqueue",
+                        context={
+                            "eval_id": eval_id,
+                            "expected_content_hash": expected_content_hash,
+                            "actual_content_hash": actual_content_hash,
+                            "market_return_calculator_version": MARKET_RETURN_CALCULATOR_VERSION,
+                        },
+                    )
             if checkpoint:
                 checkpoint("after_shared_market_returns")
         elif market_mode != "disabled":

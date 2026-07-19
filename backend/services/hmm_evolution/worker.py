@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
-from .errors import EvaluationCancelledError, HMMEvolutionError, InvalidSpecError
+from .errors import (
+    EvaluationCancelledError,
+    HMMEvolutionError,
+    InvalidSpecError,
+    sanitized_exception_chain,
+)
 from .input_adapter import BatchExecutionInputs, EvaluationExecutionInputs
 from .models import LeaseConfig
 from .repository import HMMEvolutionRepository
@@ -49,6 +55,16 @@ class EvaluationExecutor(Protocol):
         checkpoint: Callable[[str], tuple[dict[str, Any], dict[str, Any]]],
         defer_batch_recompute: bool,
     ) -> None: ...
+
+
+class SubmissionPreparer(Protocol):
+    async def prepare_claimed_submission(
+        self,
+        *,
+        batch: Mapping[str, Any],
+        owner_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]: ...
 
 
 class _ConcurrentLeaseCoordinator:
@@ -162,11 +178,13 @@ class HMMEvolutionWorker:
         owner_id: str,
         config: WorkerConfig | None = None,
         executor: EvaluationExecutor | None = None,
+        submission_preparer: SubmissionPreparer | None = None,
     ) -> None:
         self._repository = repository
         self._owner_id = str(owner_id or "").strip()
         self._config = config or WorkerConfig()
         self._executor = executor
+        self._submission_preparer = submission_preparer
         if not self._owner_id:
             raise ValueError("worker owner_id is required")
 
@@ -178,6 +196,8 @@ class HMMEvolutionWorker:
             )
         if self._executor is None:
             raise InvalidSpecError("HMM evolution evaluator is not installed; P1-B is required before execution")
+        if self._submission_preparer is None:
+            raise InvalidSpecError("HMM evolution durable submission preparer is not installed")
 
     def run_once(self) -> bool:
         """Execute one bounded concurrent slice from a durable batch."""
@@ -186,7 +206,15 @@ class HMMEvolutionWorker:
         # Recovery is part of every worker cycle, not an optional maintenance
         # command.  A crashed process must leave durable rows that the next
         # worker can terminalize before it claims more work.
+        self._repository.recover_expired_preparations()
         self._repository.mark_expired_leases_timed_out()
+        preparation = self._repository.claim_batch_preparation(
+            owner_id=self._owner_id,
+            lease_seconds=self._config.lease.lease_seconds,
+        )
+        if preparation is not None:
+            self._prepare_submission(preparation)
+            return True
         batch = self._repository.claim_batch(
             owner_id=self._owner_id,
             lease_seconds=self._config.lease.lease_seconds,
@@ -284,3 +312,52 @@ class HMMEvolutionWorker:
         if failures:
             raise failures[0]
         return True
+
+    def _prepare_submission(self, batch: dict[str, Any]) -> None:
+        preparer = self._submission_preparer
+        if preparer is None:  # pragma: no cover - assert_runnable rejects this.
+            raise InvalidSpecError("HMM evolution durable submission preparer is not installed")
+        try:
+            asyncio.run(
+                preparer.prepare_claimed_submission(
+                    batch=batch,
+                    owner_id=self._owner_id,
+                    lease_seconds=self._config.lease.lease_seconds,
+                )
+            )
+        except HMMEvolutionError as exc:
+            self._fail_claimed_preparation(
+                batch_id=str(batch["batch_id"]),
+                error_code=exc.error_code,
+                reason_code=exc.reason_code,
+                error_context={"message": exc.message, **dict(exc.context)},
+            )
+        except Exception as exc:
+            self._fail_claimed_preparation(
+                batch_id=str(batch["batch_id"]),
+                error_code="HMM_EVOLUTION_ERROR",
+                reason_code="hmm_evolution_unexpected_preparation_failure",
+                error_context={"exception_chain": sanitized_exception_chain(exc)},
+            )
+            raise
+
+    def _fail_claimed_preparation(
+        self,
+        *,
+        batch_id: str,
+        error_code: str,
+        reason_code: str,
+        error_context: Mapping[str, Any],
+    ) -> None:
+        latest = self._repository.get_batch(batch_id)
+        if str(latest.get("status")) != "preparing":
+            return
+        self._repository.fail_batch_preparation(
+            batch_id=batch_id,
+            owner_id=self._owner_id,
+            fencing_token=int(latest["fencing_token"]),
+            expected_row_version=int(latest["row_version"]),
+            error_code=error_code,
+            reason_code=reason_code,
+            error_context=error_context,
+        )
