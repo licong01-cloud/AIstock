@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-777",
-  "closed_at": null,
+  "closed_at": "2026-07-19T16:44:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "Align designs with current Phase 0/1 truth, preserve isolation, prohibit simplified/silent behavior, separate benchmark phases, define legacy and Phase 2 contracts, and pass the F2 design validator without overstating implementation.",
   "first_seen_at": "2026-07-19T15:50:04.411802Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0430b12eea191cf16045f51ad31215ea3dfa6ff7",
+  "fixed_at": "2026-07-19T16:49:08.043903Z",
   "github_issue_number": 2480,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2480",
   "last_seen_at": "2026-07-19T15:50:04.411802Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2482",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm_evolution"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "5290908a0655060c24f63e00",
     "source_event_id": "FE-20260719-5290908a0655"
   },
+  "validation_evidence": [
+    "validation-receipt: id=8dee392a67a834d8 commit=2deb8e5265eaf1ec917b09e894ad151e07dab239 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_evolution backend/tests/hmm_data_source -q` result=`passed: 248 passed, 8 skipped`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
