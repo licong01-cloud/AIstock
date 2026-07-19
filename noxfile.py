@@ -524,6 +524,18 @@ def advisory_dev_input_onboarding_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_historical_range_backend(session: nox.Session) -> None:
+    """Run the isolated Advisory Phase 1R historical-range foundation tests."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_historical_range",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [

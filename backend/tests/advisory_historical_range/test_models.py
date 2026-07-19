@@ -9,12 +9,14 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactEnvelopeV1,
     HistoricalRangeArtifactKind,
     HistoricalRangeDayAttemptV1,
+    HistoricalRangeDatePlanV1,
     HistoricalRangeFrozenProgramV1,
     HistoricalRangeListAction,
     HistoricalRangeListItemFactV1,
     HistoricalRangeResearchBatchRequestV1,
     HistoricalRangeSourceRevisionRefV1,
     ResearchProgramSpecV1,
+    ResolvedHistoricalRangeRequestV1,
     derive_day_run_id,
     derive_episode_id,
 )
@@ -142,11 +144,17 @@ def test_request_rejects_naive_requested_at() -> None:
 
 def test_resolved_request_requires_one_warmup_contract_per_program() -> None:
     resolved = resolved_request()
-    invalid_plan = resolved.date_plan.model_copy(update={"per_program_input_warmup_ranges": {"wrong-program": {}}})
+    plan_payload = resolved.date_plan.model_dump(mode="json")
+    warmup = next(iter(plan_payload["per_program_input_warmup_ranges"].values()))
+    warmup["research_program_id"] = "wrong-program"
+    plan_payload["per_program_input_warmup_ranges"] = {"wrong-program": warmup}
+    plan_payload.pop("per_program_input_warmup_ranges_hash", None)
+    plan_payload.pop("date_plan_hash", None)
+    invalid_plan = HistoricalRangeDatePlanV1.model_validate(plan_payload)
+    resolved_payload = resolved.model_dump(mode="json")
+    resolved_payload["date_plan"] = invalid_plan.model_dump(mode="json")
     with pytest.raises(ValidationError):
-        resolved.model_copy(update={"date_plan": invalid_plan}).model_validate(
-            resolved.model_copy(update={"date_plan": invalid_plan}).model_dump()
-        )
+        ResolvedHistoricalRangeRequestV1.model_validate(resolved_payload)
 
 
 def test_fact_hash_is_derived_and_cannot_be_silently_overridden() -> None:

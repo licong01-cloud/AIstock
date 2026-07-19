@@ -54,6 +54,8 @@
 - `python -m pytest backend/tests/advisory_historical_range -q`：41 passed，2 skipped；skip 分别为未提供显式 DEV catalog DSN 和 disposable PostgreSQL DSN。
 - `python -m ruff check backend/services/advisory_historical_range backend/tests/advisory_historical_range`：PASS。
 - `python -m compileall -q backend/services/advisory_historical_range backend/tests/advisory_historical_range`：PASS。
+- `python scripts/ci_change_classifier.py --changed-files-file <phase1r files>`：`targeted_ci_required`，`backend_sessions=[advisory_historical_range_backend]`，`unmapped_code_files=[]`。
+- `python -m nox -s advisory_historical_range_backend l0 validation_module_registry_l0 validation_catalog_integrity`：全部 PASS。
 - `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md --tier F2`：PASS，39/39，0 warnings。
 - Disposable PostgreSQL 16：首次 migration PASS；携带真实数据 exact reapply PASS；13 张独立 Phase 1R 表可见。
 - `AISTOCK_PHASE1R_TEST_DSN=<disposable>` 显式执行：1 passed；真实 repository batch/run/day 合法链闭合为 `COMPLETED/COMPLETED/VALID_NO_CANDIDATE`，exact retry 完成 candidate/list/episode/attempt 全量 readback。
