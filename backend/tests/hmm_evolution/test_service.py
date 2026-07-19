@@ -92,6 +92,7 @@ class _Repository:
         self.status = status
         self.created = created
         self.batch_args = None
+        self.submission_args = None
 
     def get_candidate(self, candidate_id: str):
         assert candidate_id == self.candidate.candidate_id
@@ -104,6 +105,15 @@ class _Repository:
         self.batch_args = kwargs
         return {"batch_id": "hmmb_1", "request_hash": kwargs["request_hash"]}, True
 
+    def create_or_get_submission(self, **kwargs):
+        self.submission_args = kwargs
+        return {
+            "batch_id": "hmmb_submission",
+            "request_hash": kwargs["request_hash"],
+            "request_payload": kwargs["request_payload"],
+            "status": "preparation_queued",
+        }, True
+
 
 class _MultiRepository(_Repository):
     def __init__(self, candidates: list[CandidateRecord]):
@@ -111,6 +121,8 @@ class _MultiRepository(_Repository):
         self.candidates = {candidate.candidate_id: candidate for candidate in candidates}
         self.request_hashes: list[str] = []
         self.eval_index = 0
+        self.materialized = None
+        self.heartbeat_version = 2
 
     def get_candidate(self, candidate_id: str):
         return self.candidates[candidate_id]
@@ -125,6 +137,19 @@ class _MultiRepository(_Repository):
             "batch_id": f"hmmb_{len(self.request_hashes)}",
             "request_hash": kwargs["request_hash"],
         }, True
+
+    def heartbeat_batch_preparation(self, **kwargs):
+        self.heartbeat_version += 1
+        return {
+            "batch_id": kwargs["batch_id"],
+            "status": "preparing",
+            "fencing_token": kwargs["fencing_token"],
+            "row_version": self.heartbeat_version,
+        }
+
+    def materialize_prepared_batch(self, **kwargs):
+        self.materialized = kwargs
+        return {"batch_id": kwargs["batch_id"], "status": "queued"}
 
 
 @pytest.mark.parametrize(
@@ -276,8 +301,10 @@ def test_prepare_and_create_batch_uses_real_input_adapter_plans() -> None:
     repository = _MultiRepository([candidate_a, candidate_b])
 
     class _InputAdapter:
-        async def prepare_batch(self, *, candidates, evaluation_spec):
+        async def prepare_batch(self, *, candidates, evaluation_spec, checkpoint=None):
             assert [candidate.candidate_id for candidate in candidates] == ["hmmc_a", "hmmc_b"]
+            if checkpoint:
+                checkpoint("prepared")
             return SimpleNamespace(
                 plans=tuple(_plan(candidate, topk=evaluation_spec.topk) for candidate in candidates)
             )
@@ -298,3 +325,65 @@ def test_prepare_and_create_batch_uses_real_input_adapter_plans() -> None:
     assert created is True
     assert batch["batch_id"] == "hmmb_1"
     assert repository.eval_index == 2
+
+
+def test_submit_batch_persists_receipt_without_preparing_inputs() -> None:
+    candidate = _candidate()
+    repository = _Repository(candidate)
+
+    class _InputAdapter:
+        async def prepare_batch(self, **_kwargs):  # pragma: no cover - API receipt must not prepare.
+            raise AssertionError("submission unexpectedly prepared remote inputs")
+
+    service = HMMEvolutionService(repository, input_adapter=_InputAdapter())  # type: ignore[arg-type]
+    batch, created = service.submit_batch(
+        candidate_ids=[candidate.candidate_id],
+        evaluation_spec=_plan(candidate).evaluation_spec,
+        recommendation_spec={"schema_version": "hmm_recommendation_spec_v1"},
+        recommendation_version="hmm_recommendation_v1",
+        created_by="tester",
+        idempotency_key="intent-1",
+    )
+
+    assert created is True
+    assert batch["status"] == "preparation_queued"
+    assert repository.submission_args["candidate_count"] == 1
+    assert repository.submission_args["request_payload"]["candidate_ids"] == [candidate.candidate_id]
+
+
+def test_worker_preparation_materializes_claimed_receipt_after_heartbeats() -> None:
+    candidate = _candidate()
+    repository = _MultiRepository([candidate])
+
+    class _InputAdapter:
+        async def prepare_batch(self, *, candidates, evaluation_spec, checkpoint=None):
+            assert [item.candidate_id for item in candidates] == [candidate.candidate_id]
+            if checkpoint:
+                checkpoint("before-freeze")
+            return SimpleNamespace(plans=(_plan(candidate, topk=evaluation_spec.topk),))
+
+    service = HMMEvolutionService(repository, input_adapter=_InputAdapter())  # type: ignore[arg-type]
+    result = asyncio.run(
+        service.prepare_claimed_submission(
+            batch={
+                "batch_id": "hmmb_submission",
+                "status": "preparing",
+                "fencing_token": 3,
+                "row_version": 2,
+                "request_payload": {
+                    "schema_version": "hmm_batch_submission_v1",
+                    "candidate_ids": [candidate.candidate_id],
+                    "evaluation_spec": _plan(candidate).evaluation_spec.model_dump(mode="json"),
+                    "recommendation_spec": {"schema_version": "hmm_recommendation_spec_v1"},
+                    "recommendation_version": "hmm_recommendation_v1",
+                    "created_by": "tester",
+                },
+            },
+            owner_id="worker-1",
+            lease_seconds=90,
+        )
+    )
+
+    assert result == {"batch_id": "hmmb_submission", "status": "queued"}
+    assert repository.materialized["expected_row_version"] == repository.heartbeat_version
+    assert len(repository.materialized["plans"]) == 1

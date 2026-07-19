@@ -28,8 +28,10 @@ from .models import (
     CandidatePreview,
     CandidateRecord,
     EvaluationStatus,
+    EvaluationPlan,
     canonical_json_sha256,
 )
+from .market_repository import MARKET_RETURN_CALCULATOR_VERSION
 from .scorer import RECOMMENDATION_VERSION, RecommendationCandidate, score_batch
 
 WRITABLE_RELATIONS = frozenset(
@@ -84,6 +86,26 @@ def _managed_transaction_conn() -> Any:
     """Return the repository's required atomic PostgreSQL transaction context."""
 
     return get_conn(autocommit=False, manage_transaction=True)
+
+
+def _market_return_result_validity(source_manifest: Any) -> dict[str, str]:
+    manifest = dict(source_manifest) if isinstance(source_manifest, Mapping) else {}
+    market = manifest.get("market_forward_return")
+    evidence = dict(market) if isinstance(market, Mapping) else {}
+    if str(evidence.get("mode") or "") != "required":
+        return {"result_validity": "valid", "result_validity_reason": "market_return_not_required"}
+    version = str(evidence.get("market_return_calculator_version") or "")
+    content_hash = str(evidence.get("market_return_content_hash") or "")
+    if (
+        manifest.get("schema_version") == "hmm_evaluation_source_manifest_v3"
+        and version == MARKET_RETURN_CALCULATOR_VERSION
+        and len(content_hash) == 64
+    ):
+        return {"result_validity": "valid", "result_validity_reason": "content_verified"}
+    return {
+        "result_validity": "known_invalid",
+        "result_validity_reason": "legacy_integer_division_market_returns",
+    }
 
 
 class HMMEvolutionRepository:
@@ -302,59 +324,79 @@ class HMMEvolutionRepository:
 
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                eval_id = _new_id("hmme")
+                return self._create_or_get_evaluation_with_cursor(
+                    cursor,
+                    candidate_id=candidate_id,
+                    logical_evaluation_key=logical_evaluation_key,
+                    base_loop_ref=base_loop_ref,
+                    source_manifest=source_manifest,
+                    source_manifest_hash=source_manifest_hash,
+                    candidate_manifest_hash=candidate_manifest_hash,
+                    evaluation_spec=evaluation_spec,
+                    evaluation_spec_hash=evaluation_spec_hash,
+                    evaluator_version=evaluator_version,
+                    as_of_date=as_of_date,
+                    window_start=window_start,
+                    window_end=window_end,
+                    label_horizon_days=label_horizon_days,
+                    universe_id=universe_id,
+                    universe_hash=universe_hash,
+                    topk=topk,
+                )
+
+    def create_or_get_submission(
+        self,
+        *,
+        request_hash: str,
+        request_payload: Mapping[str, Any],
+        candidate_count: int,
+        recommendation_spec: Mapping[str, Any],
+        recommendation_version: str,
+        created_by: str,
+        idempotency_key: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist a fast durable receipt before any remote/input preparation."""
+
+        if not 1 <= candidate_count <= 50:
+            raise ValueError("a batch submission must contain 1..50 candidates")
+        recommendation_hash = canonical_json_sha256(dict(recommendation_spec))
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                batch_id = _new_id("hmmb")
                 cursor.execute(
                     """
-                    INSERT INTO hmm_evolution.offline_evaluation (
-                        eval_id, logical_evaluation_key, run_generation, candidate_id,
-                        base_loop_ref, source_manifest, source_manifest_hash,
-                        candidate_manifest_hash, evaluation_spec, evaluation_spec_hash,
-                        evaluator_version, input_hash, as_of_date, window_start, window_end,
-                        label_horizon_days, universe_id, universe_hash, topk
-                    ) VALUES (
-                        %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (logical_evaluation_key, run_generation) DO NOTHING
+                    INSERT INTO hmm_evolution.batch_test_run (
+                        batch_id, request_hash, idempotency_key, request_payload,
+                        status, candidate_count, recommendation_spec,
+                        recommendation_spec_hash, recommendation_version, created_by
+                    ) VALUES (%s, %s, %s, %s, 'preparation_queued', %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
                     (
-                        eval_id,
-                        logical_evaluation_key,
-                        candidate_id,
-                        base_loop_ref,
-                        _json(dict(source_manifest)),
-                        source_manifest_hash,
-                        candidate_manifest_hash,
-                        _json(dict(evaluation_spec)),
-                        evaluation_spec_hash,
-                        evaluator_version,
-                        logical_evaluation_key,
-                        as_of_date,
-                        window_start,
-                        window_end,
-                        label_horizon_days,
-                        universe_id,
-                        universe_hash,
-                        topk,
+                        batch_id,
+                        request_hash,
+                        idempotency_key,
+                        _json(dict(request_payload)),
+                        candidate_count,
+                        _json(dict(recommendation_spec)),
+                        recommendation_hash,
+                        recommendation_version,
+                        created_by,
                     ),
                 )
-                row = cursor.fetchone()
-                if row is not None:
-                    return dict(row), True
-                cursor.execute(
-                    """
-                    SELECT * FROM hmm_evolution.offline_evaluation
-                    WHERE logical_evaluation_key = %s
-                    ORDER BY run_generation DESC
-                    LIMIT 1
-                    """,
-                    (logical_evaluation_key,),
+                batch = cursor.fetchone()
+                if batch is not None:
+                    return dict(batch), True
+                return (
+                    self._existing_batch_after_conflict(
+                        cursor,
+                        request_hash=request_hash,
+                        idempotency_key=idempotency_key,
+                        conflict_message=("Idempotency-Key was already used for a different request"),
+                    ),
+                    False,
                 )
-                existing = cursor.fetchone()
-                if existing is None:  # pragma: no cover - conflict row must be visible.
-                    raise SchemaUnavailableError("evaluation conflict row was not visible")
-                return dict(existing), False
 
     def create_or_get_batch(
         self,
@@ -390,10 +432,10 @@ class HMMEvolutionRepository:
                     """
                     INSERT INTO hmm_evolution.batch_test_run (
                         batch_id, request_hash, idempotency_key, retry_of_batch_id,
-                        retry_generation, candidate_count, queued_count,
+                        retry_generation, status, candidate_count, queued_count,
                         recommendation_spec, recommendation_spec_hash,
                         recommendation_version, created_by
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
@@ -480,6 +522,7 @@ class HMMEvolutionRepository:
                            evaluation.positive_net_label_day_ratio,
                            evaluation.evidence_quality,
                            evaluation.warnings_json,
+                           evaluation.source_manifest,
                            evaluation.error_message AS evaluation_error_message,
                            evaluation.reason_code AS evaluation_reason_code,
                            evaluation.started_at AS evaluation_started_at,
@@ -493,10 +536,231 @@ class HMMEvolutionRepository:
                     """,
                     (batch_id,),
                 )
-                items = [dict(row) for row in cursor.fetchall()]
+                items = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item["metric_availability_ratio"] = item.pop(
+                        "evidence_confidence",
+                        None,
+                    )
+                    item.update(_market_return_result_validity(item.pop("source_manifest", {})))
+                    items.append(item)
         payload = dict(batch)
         payload["items"] = items
         return payload
+
+    def claim_batch_preparation(
+        self,
+        *,
+        owner_id: str,
+        lease_seconds: int = 90,
+    ) -> dict[str, Any] | None:
+        """Claim one durable submission receipt for input freezing."""
+
+        if not owner_id or lease_seconds < 1:
+            raise ValueError("owner_id and positive lease_seconds are required")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT batch_id
+                    FROM hmm_evolution.batch_test_run
+                    WHERE status = 'preparation_queued'
+                    ORDER BY created_at ASC, batch_id ASC
+                    FOR UPDATE SKIP LOCKED LIMIT 1
+                    """
+                )
+                selected = cursor.fetchone()
+                if selected is None:
+                    return None
+                cursor.execute(
+                    """
+                    UPDATE hmm_evolution.batch_test_run
+                    SET status = 'preparing', owner_id = %s,
+                        fencing_token = fencing_token + 1,
+                        lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
+                        heartbeat_at = clock_timestamp(),
+                        started_at = COALESCE(started_at, clock_timestamp()),
+                        updated_at = clock_timestamp(), row_version = row_version + 1
+                    WHERE batch_id = %s AND status = 'preparation_queued'
+                    RETURNING *
+                    """,
+                    (owner_id, lease_seconds, selected["batch_id"]),
+                )
+                claimed = cursor.fetchone()
+                if claimed is None:  # pragma: no cover - locked row cannot race.
+                    raise InvalidStateTransitionError("preparation claim lost its locked row")
+                return dict(claimed)
+
+    def heartbeat_batch_preparation(
+        self,
+        *,
+        batch_id: str,
+        owner_id: str,
+        fencing_token: int,
+        expected_row_version: int,
+        lease_seconds: int = 90,
+    ) -> dict[str, Any]:
+        return self._heartbeat(
+            relation="batch_test_run",
+            id_column="batch_id",
+            object_id=batch_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_row_version=expected_row_version,
+            lease_seconds=lease_seconds,
+            statuses=(BatchStatus.PREPARING.value,),
+        )
+
+    def recover_expired_preparations(self) -> int:
+        """Return abandoned input-freeze receipts to the durable preparation queue."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE hmm_evolution.batch_test_run
+                    SET status = 'preparation_queued', owner_id = NULL,
+                        lease_expires_at = NULL, heartbeat_at = NULL,
+                        updated_at = clock_timestamp(), row_version = row_version + 1
+                    WHERE status = 'preparing'
+                      AND lease_expires_at < clock_timestamp()
+                    """
+                )
+                return int(cursor.rowcount)
+
+    def materialize_prepared_batch(
+        self,
+        *,
+        batch_id: str,
+        plans: Sequence[EvaluationPlan],
+        owner_id: str,
+        fencing_token: int,
+        expected_row_version: int,
+    ) -> dict[str, Any]:
+        """Atomically turn a claimed receipt into evaluations and batch items."""
+
+        if not plans:
+            raise ValueError("prepared batch requires at least one evaluation plan")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM hmm_evolution.batch_test_run
+                    WHERE batch_id = %s AND status = 'preparing' AND owner_id = %s
+                      AND fencing_token = %s AND row_version = %s
+                    FOR UPDATE
+                    """,
+                    (batch_id, owner_id, fencing_token, expected_row_version),
+                )
+                batch = cursor.fetchone()
+                if batch is None:
+                    self._raise_stale_fence(batch_id, "batch_preparation")
+                if int(batch["candidate_count"]) != len(plans):
+                    raise InvalidStateTransitionError(
+                        "prepared plan count differs from the durable submission receipt",
+                        context={
+                            "batch_id": batch_id,
+                            "expected_count": int(batch["candidate_count"]),
+                            "actual_count": len(plans),
+                        },
+                    )
+                for ordinal, plan in enumerate(plans):
+                    evaluation, created = self._create_or_get_evaluation_with_cursor(
+                        cursor,
+                        candidate_id=plan.candidate_id,
+                        logical_evaluation_key=plan.logical_evaluation_key,
+                        base_loop_ref=plan.base_loop_ref,
+                        source_manifest=plan.source_manifest,
+                        source_manifest_hash=plan.source_manifest_hash,
+                        candidate_manifest_hash=plan.candidate_manifest_hash,
+                        evaluation_spec=plan.evaluation_spec.model_dump(mode="json"),
+                        evaluation_spec_hash=plan.evaluation_spec_hash,
+                        evaluator_version=plan.evaluator_version,
+                        as_of_date=plan.resolved_as_of_date,
+                        window_start=plan.evaluation_spec.window_start,
+                        window_end=plan.evaluation_spec.window_end,
+                        label_horizon_days=plan.evaluation_spec.label_horizon_days,
+                        universe_id=plan.universe_id,
+                        universe_hash=plan.universe_hash,
+                        topk=plan.evaluation_spec.topk,
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO hmm_evolution.batch_test_item (
+                            batch_id, candidate_id, eval_id, ordinal, item_status
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            batch_id,
+                            plan.candidate_id,
+                            evaluation["eval_id"],
+                            ordinal,
+                            self._item_status_for_evaluation(
+                                str(evaluation["status"]),
+                                created=created,
+                            ),
+                        ),
+                    )
+                materialized = self._recompute_batch_state_with_cursor(
+                    cursor,
+                    batch_id,
+                    release_lease=True,
+                    locked_batch=dict(batch),
+                )
+                if materialized["status"] in TERMINAL_BATCH_STATUSES:
+                    self._apply_recommendations_with_cursor(cursor, batch_id)
+                return materialized
+
+    def fail_batch_preparation(
+        self,
+        *,
+        batch_id: str,
+        owner_id: str,
+        fencing_token: int,
+        expected_row_version: int,
+        error_code: str,
+        reason_code: str,
+        error_context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist an explicit terminal preparation failure without fake empty success."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM hmm_evolution.batch_test_run WHERE batch_id = %s FOR UPDATE",
+                    (batch_id,),
+                )
+                current = cursor.fetchone()
+                if current is None:
+                    raise BatchNotFoundError("batch was not found", context={"batch_id": batch_id})
+                if current["status"] in TERMINAL_BATCH_STATUSES:
+                    return dict(current)
+                cursor.execute(
+                    """
+                    UPDATE hmm_evolution.batch_test_run
+                    SET status = 'failed', error_code = %s, reason_code = %s,
+                        error_context = %s, completed_at = clock_timestamp(),
+                        owner_id = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+                        updated_at = clock_timestamp(), row_version = row_version + 1
+                    WHERE batch_id = %s AND status = 'preparing' AND owner_id = %s
+                      AND fencing_token = %s AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        error_code,
+                        reason_code,
+                        _json(dict(error_context)),
+                        batch_id,
+                        owner_id,
+                        fencing_token,
+                        expected_row_version,
+                    ),
+                )
+                failed = cursor.fetchone()
+                if failed is None:
+                    self._raise_stale_fence(batch_id, "batch_preparation")
+                return dict(failed)
 
     def get_evaluation(self, eval_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
@@ -520,7 +784,9 @@ class HMMEvolutionRepository:
                 "evaluation was not found",
                 context={"eval_id": eval_id},
             )
-        return dict(row)
+        payload = dict(row)
+        payload.update(_market_return_result_validity(payload.get("source_manifest")))
+        return payload
 
     def list_evaluations(
         self,
@@ -550,7 +816,12 @@ class HMMEvolutionRepository:
                     """,  # noqa: S608 - where is selected from one fixed clause.
                     tuple(params),
                 )
-                return [dict(row) for row in cursor.fetchall()]
+                rows = []
+                for row in cursor.fetchall():
+                    payload = dict(row)
+                    payload.update(_market_return_result_validity(payload.get("source_manifest")))
+                    rows.append(payload)
+                return rows
 
     def list_batches(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500 or offset < 0:
@@ -805,7 +1076,12 @@ class HMMEvolutionRepository:
                     return dict(batch)
                 target_status = (
                     BatchStatus.CANCELLED.value
-                    if batch["status"] == BatchStatus.QUEUED.value
+                    if batch["status"]
+                    in {
+                        BatchStatus.PREPARATION_QUEUED.value,
+                        BatchStatus.PREPARING.value,
+                        BatchStatus.QUEUED.value,
+                    }
                     else BatchStatus.CANCEL_REQUESTED.value
                 )
                 cursor.execute(
@@ -814,10 +1090,21 @@ class HMMEvolutionRepository:
                     SET status = %s, cancel_requested_at = COALESCE(cancel_requested_at, clock_timestamp()),
                         cancel_requested_by = COALESCE(cancel_requested_by, %s),
                         completed_at = CASE WHEN %s = 'cancelled' THEN clock_timestamp() ELSE completed_at END,
+                        owner_id = CASE WHEN %s = 'cancelled' THEN NULL ELSE owner_id END,
+                        lease_expires_at = CASE WHEN %s = 'cancelled' THEN NULL ELSE lease_expires_at END,
+                        heartbeat_at = CASE WHEN %s = 'cancelled' THEN NULL ELSE heartbeat_at END,
                         updated_at = clock_timestamp(), row_version = row_version + 1
                     WHERE batch_id = %s RETURNING *
                     """,
-                    (target_status, requested_by, target_status, batch_id),
+                    (
+                        target_status,
+                        requested_by,
+                        target_status,
+                        target_status,
+                        target_status,
+                        target_status,
+                        batch_id,
+                    ),
                 )
                 updated = cursor.fetchone()
                 cursor.execute(
@@ -959,7 +1246,7 @@ class HMMEvolutionRepository:
         batch_id: str,
         candidate_id: str,
         score: float | None,
-        confidence: float | None,
+        metric_availability_ratio: float | None,
         rank: int | None,
         is_top3: bool,
         components: Mapping[str, Any] | None,
@@ -978,7 +1265,7 @@ class HMMEvolutionRepository:
                     """,
                     (
                         score,
-                        confidence,
+                        metric_availability_ratio,
                         rank,
                         is_top3,
                         _json(dict(components or {})),
@@ -1023,6 +1310,71 @@ class HMMEvolutionRepository:
                         "retry requires a terminal source batch",
                         context={"batch_id": batch_id},
                     )
+                request_payload = dict(original.get("request_payload") or {})
+                if (
+                    request_payload.get("schema_version") == "hmm_batch_submission_v1"
+                    and original["status"]
+                    in {BatchStatus.FAILED.value, BatchStatus.CANCELLED.value}
+                ):
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS item_count
+                        FROM hmm_evolution.batch_test_item
+                        WHERE batch_id = %s
+                        """,
+                        (batch_id,),
+                    )
+                    item_count_row = cursor.fetchone()
+                    if int(item_count_row["item_count"] if item_count_row else 0) == 0:
+                        generation = int(original["retry_generation"]) + 1
+                        request_hash = canonical_json_sha256(
+                            {
+                                "schema_version": "hmm_batch_submission_retry_v1",
+                                "retry_of_batch_id": batch_id,
+                                "retry_generation": generation,
+                                "request_payload": request_payload,
+                            }
+                        )
+                        new_batch_id = _new_id("hmmb")
+                        cursor.execute(
+                            """
+                            INSERT INTO hmm_evolution.batch_test_run (
+                                batch_id, request_hash, idempotency_key, request_payload,
+                                retry_of_batch_id, retry_generation, status, candidate_count,
+                                recommendation_spec, recommendation_spec_hash,
+                                recommendation_version, created_by
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, 'preparation_queued', %s,
+                                %s, %s, %s, %s
+                            )
+                            ON CONFLICT DO NOTHING
+                            RETURNING *
+                            """,
+                            (
+                                new_batch_id,
+                                request_hash,
+                                idempotency_key,
+                                _json(request_payload),
+                                batch_id,
+                                generation,
+                                int(original["candidate_count"]),
+                                _json(original["recommendation_spec"]),
+                                original["recommendation_spec_hash"],
+                                original["recommendation_version"],
+                                created_by,
+                            ),
+                        )
+                        retried_submission = cursor.fetchone()
+                        if retried_submission is None:
+                            return self._existing_batch_after_conflict(
+                                cursor,
+                                request_hash=request_hash,
+                                idempotency_key=idempotency_key,
+                                conflict_message=(
+                                    "Idempotency-Key was already used for a different retry"
+                                ),
+                            )
+                        return dict(retried_submission)
                 cursor.execute(
                     """
                     SELECT i.*, e.*
@@ -1055,10 +1407,10 @@ class HMMEvolutionRepository:
                     """
                     INSERT INTO hmm_evolution.batch_test_run (
                         batch_id, request_hash, idempotency_key, retry_of_batch_id,
-                        retry_generation, candidate_count, queued_count,
+                        retry_generation, status, candidate_count, queued_count,
                         recommendation_spec, recommendation_spec_hash,
                         recommendation_version, created_by
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     RETURNING *
                     """,
@@ -1285,6 +1637,100 @@ class HMMEvolutionRepository:
                     )
                 return dict(row)
 
+    @staticmethod
+    def _create_or_get_evaluation_with_cursor(
+        cursor: Any,
+        *,
+        candidate_id: str,
+        logical_evaluation_key: str,
+        base_loop_ref: str,
+        source_manifest: Mapping[str, Any],
+        source_manifest_hash: str,
+        candidate_manifest_hash: str,
+        evaluation_spec: Mapping[str, Any],
+        evaluation_spec_hash: str,
+        evaluator_version: str,
+        as_of_date: date,
+        window_start: date,
+        window_end: date,
+        label_horizon_days: int,
+        universe_id: str,
+        universe_hash: str,
+        topk: int,
+    ) -> tuple[dict[str, Any], bool]:
+        eval_id = _new_id("hmme")
+        cursor.execute(
+            """
+            INSERT INTO hmm_evolution.offline_evaluation (
+                eval_id, logical_evaluation_key, run_generation, candidate_id,
+                base_loop_ref, source_manifest, source_manifest_hash,
+                candidate_manifest_hash, evaluation_spec, evaluation_spec_hash,
+                evaluator_version, input_hash, as_of_date, window_start, window_end,
+                label_horizon_days, universe_id, universe_hash, topk
+            ) VALUES (
+                %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (logical_evaluation_key, run_generation) DO NOTHING
+            RETURNING *
+            """,
+            (
+                eval_id,
+                logical_evaluation_key,
+                candidate_id,
+                base_loop_ref,
+                _json(dict(source_manifest)),
+                source_manifest_hash,
+                candidate_manifest_hash,
+                _json(dict(evaluation_spec)),
+                evaluation_spec_hash,
+                evaluator_version,
+                logical_evaluation_key,
+                as_of_date,
+                window_start,
+                window_end,
+                label_horizon_days,
+                universe_id,
+                universe_hash,
+                topk,
+            ),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return dict(row), True
+        cursor.execute(
+            """
+            SELECT * FROM hmm_evolution.offline_evaluation
+            WHERE logical_evaluation_key = %s
+            ORDER BY run_generation DESC
+            LIMIT 1
+            """,
+            (logical_evaluation_key,),
+        )
+        existing = cursor.fetchone()
+        if existing is None:  # pragma: no cover - conflict row must be visible.
+            raise SchemaUnavailableError("evaluation conflict row was not visible")
+        return dict(existing), False
+
+    @staticmethod
+    def _item_status_for_evaluation(status: str, *, created: bool) -> str:
+        if created:
+            return BatchItemStatus.QUEUED.value
+        if status == EvaluationStatus.SUCCEEDED.value:
+            return BatchItemStatus.REUSED.value
+        if status in {EvaluationStatus.QUEUED.value, EvaluationStatus.RUNNING.value}:
+            return BatchItemStatus.WAITING_SHARED.value
+        if status in {
+            EvaluationStatus.FAILED.value,
+            EvaluationStatus.CANCELLED.value,
+            EvaluationStatus.TIMED_OUT.value,
+        }:
+            return status
+        raise InvalidStateTransitionError(
+            "evaluation has an unsupported durable status",
+            context={"status": status},
+        )
+
     def _heartbeat(
         self,
         *,
@@ -1496,7 +1942,7 @@ class HMMEvolutionRepository:
                 """,
                 (
                     recommendation.score,
-                    recommendation.confidence,
+                    recommendation.metric_availability_ratio,
                     recommendation.rank,
                     recommendation.is_top3,
                     _json(dict(recommendation.components)),

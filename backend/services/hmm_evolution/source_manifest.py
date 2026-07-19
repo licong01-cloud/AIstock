@@ -9,7 +9,7 @@ import pandas as pd
 from .evaluator import DateCoveragePlan
 from .models import CandidateRecord
 
-SOURCE_MANIFEST_VERSION = "hmm_evaluation_source_manifest_v2"
+SOURCE_MANIFEST_VERSION = "hmm_evaluation_source_manifest_v3"
 
 
 def build_source_manifest(

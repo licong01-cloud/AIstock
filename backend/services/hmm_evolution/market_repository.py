@@ -12,6 +12,10 @@ import pandas as pd
 from backend.db.pg_pool import get_conn
 
 from .errors import MarketDataUnavailableError
+from .models import canonical_json_sha256
+
+
+MARKET_RETURN_CALCULATOR_VERSION = "hmm_market_forward_return_v2_float_close_li"
 
 
 def _readonly_transaction_conn() -> Any:
@@ -72,6 +76,11 @@ class MarketReturnRead:
             str(item.get("reason") or "unknown") for item in self.missing_evidence
         )
         return {
+            "market_return_calculator_version": MARKET_RETURN_CALCULATOR_VERSION,
+            "market_return_content_hash": market_return_content_hash(
+                self.returns,
+                self.missing_evidence,
+            ),
             "price_row_count": self.price_row_count,
             "return_row_count": len(self.returns),
             "requested_symbol_count": self.requested_symbol_count,
@@ -252,7 +261,11 @@ class HMMMarketReturnRepository:
                             p.trade_date,
                             p.symbol,
                             %s AS horizon_days,
-                            (p.end_close / NULLIF(p.start_close, 0) - 1.0) AS future_return,
+                            (
+                                p.end_close::DOUBLE PRECISION
+                                / NULLIF(p.start_close::DOUBLE PRECISION, 0.0)
+                                - 1.0
+                            ) AS future_return,
                             p.label_date,
                             (SELECT COUNT(*) FROM price_points) AS price_row_count
                         FROM priced p
@@ -360,3 +373,71 @@ class HMMMarketReturnRepository:
             "isolation_level": "repeatable_read",
             "write_relations": [],
         }
+
+
+def market_return_content_hash(
+    returns: pd.DataFrame,
+    missing_evidence: Sequence[Mapping[str, Any]],
+) -> str:
+    """Hash canonical return values and missing evidence, not merely their counts."""
+
+    required_columns = {
+        "trade_date",
+        "symbol",
+        "horizon_days",
+        "future_return",
+        "label_date",
+    }
+    if not required_columns.issubset(returns.columns):
+        raise ValueError("market return frame is missing canonical identity columns")
+    return_rows = sorted(
+        (
+            {
+                "trade_date": _iso_date(row.trade_date),
+                "symbol": str(row.symbol).strip(),
+                "horizon_days": int(row.horizon_days),
+                "future_return_hex": float(row.future_return).hex(),
+                "label_date": _iso_date(row.label_date),
+            }
+            for row in returns.loc[:, sorted(required_columns)].itertuples(index=False)
+        ),
+        key=lambda item: (
+            item["trade_date"],
+            item["symbol"],
+            item["horizon_days"],
+            item["label_date"],
+        ),
+    )
+    missing_rows = sorted(
+        (
+            {
+                "trade_date": str(item.get("trade_date") or ""),
+                "symbol": str(item.get("symbol") or "").strip(),
+                "label_date": (
+                    str(item.get("label_date")) if item.get("label_date") is not None else None
+                ),
+                "reason": str(item.get("reason") or "unknown"),
+            }
+            for item in missing_evidence
+        ),
+        key=lambda item: (
+            item["trade_date"],
+            item["symbol"],
+            str(item["label_date"] or ""),
+            item["reason"],
+        ),
+    )
+    return canonical_json_sha256(
+        {
+            "schema_version": "hmm_market_return_content_v1",
+            "calculator_version": MARKET_RETURN_CALCULATOR_VERSION,
+            "returns": return_rows,
+            "missing_evidence": missing_rows,
+        }
+    )
+
+
+def _iso_date(value: Any) -> str:
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)

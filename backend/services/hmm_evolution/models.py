@@ -135,6 +135,8 @@ class EvaluationStatus(str, Enum):
 
 
 class BatchStatus(str, Enum):
+    PREPARATION_QUEUED = "preparation_queued"
+    PREPARING = "preparing"
     QUEUED = "queued"
     RUNNING = "running"
     CANCEL_REQUESTED = "cancel_requested"

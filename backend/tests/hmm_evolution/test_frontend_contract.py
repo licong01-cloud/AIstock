@@ -64,8 +64,13 @@ def test_ui_contains_required_real_states_and_fixed_evidence() -> None:
         "partial_failed",
         "timed_out",
         "evidence_quality",
+        "preparation_queued",
+        "metric_availability_ratio",
+        "历史结果仅供审计",
     ):
         assert required in combined
+    assert "证据置信度" not in combined
+    assert "NEXT_PUBLIC_HMM_EVOLUTION_ENABLED" not in combined
 
 
 def test_mutating_requests_reuse_session_scoped_idempotency_intents() -> None:

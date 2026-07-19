@@ -26,7 +26,7 @@ class RecommendationCandidate:
 class Recommendation:
     candidate_id: str
     score: float | None
-    confidence: float | None
+    metric_availability_ratio: float | None
     rank: int | None
     is_top3: bool
     components: Mapping[str, Any]
@@ -83,7 +83,7 @@ def score_batch(
             {
                 "candidate": candidate,
                 "score": score,
-                "confidence": available_weight if available_weight > 0 else None,
+                "metric_availability_ratio": available_weight if available_weight > 0 else None,
                 "components": {
                     "schema_version": "hmm_recommendation_components_v1",
                     "recommendation_version": RECOMMENDATION_VERSION,
@@ -106,7 +106,7 @@ def score_batch(
         (item for item in provisional if item["score"] is not None),
         key=lambda item: (
             -float(item["score"]),
-            -float(item["confidence"]),
+            -float(item["metric_availability_ratio"]),
             _descending_nullable(item["candidate"].metrics.get("net_db_10d")),
             item["candidate"].candidate_id,
         ),
@@ -117,7 +117,7 @@ def score_batch(
         Recommendation(
             candidate_id=item["candidate"].candidate_id,
             score=item["score"],
-            confidence=item["confidence"],
+            metric_availability_ratio=item["metric_availability_ratio"],
             rank=ranks.get(item["candidate"].candidate_id),
             is_top3=item["candidate"].candidate_id in top3,
             components=item["components"],

@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - direct script invocation support.
     from backend.db.pg_pool import get_conn
 
 SCHEMA_NAME = "hmm_evolution"
-SCHEMA_VERSION = "hmm_evolution_v1"
+SCHEMA_VERSION = "hmm_evolution_v2"
 SCHEMA_COMMENT = "Isolated HMM evolution research state; never trading control state."
 
 EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
@@ -127,6 +127,7 @@ EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
         "started_at",
         "completed_at",
         "updated_at",
+        "request_payload",
     ),
     "batch_test_item": (
         "batch_id",
@@ -273,7 +274,7 @@ _COLUMN_TYPE_GROUPS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
             "lease_expires_at", "heartbeat_at", "cancel_requested_at", "created_at",
             "started_at", "completed_at", "updated_at",
         ),
-        "jsonb": ("recommendation_spec", "error_context"),
+        "jsonb": ("request_payload", "recommendation_spec", "error_context"),
     },
     "batch_test_item": {
         "text": (
@@ -334,7 +335,8 @@ _COLUMN_DEFAULTS: Mapping[str, Mapping[str, str]] = {
         "created_at": "clock_timestamp()", "updated_at": "clock_timestamp()",
     },
     "batch_test_run": {
-        "retry_generation": "1", "status": "'queued'::text", "fencing_token": "0",
+        "retry_generation": "1", "status": "'preparation_queued'::text",
+        "request_payload": "'{}'::jsonb", "fencing_token": "0",
         "row_version": "1", "queued_count": "0", "running_count": "0",
         "succeeded_count": "0", "failed_count": "0", "cancelled_count": "0",
         "timed_out_count": "0", "created_at": "clock_timestamp()",
@@ -411,7 +413,7 @@ EXPECTED_CONSTRAINT_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
         "batch_test_run_retry_fk": "FOREIGN KEY (retry_of_batch_id) REFERENCES hmm_evolution.batch_test_run(batch_id)",
         "batch_test_run_hashes_ck": "CHECK (request_hash ~ '^[0-9a-f]{64}$' AND recommendation_spec_hash ~ '^[0-9a-f]{64}$')",
         "batch_test_run_retry_generation_ck": "CHECK (retry_generation >= 1)",
-        "batch_test_run_status_ck": "CHECK (status IN ('queued', 'running', 'cancel_requested', 'completed', 'partial_failed', 'failed', 'cancelled', 'timed_out'))",
+        "batch_test_run_status_ck": "CHECK (status IN ('preparation_queued', 'preparing', 'queued', 'running', 'cancel_requested', 'completed', 'partial_failed', 'failed', 'cancelled', 'timed_out'))",
         "batch_test_run_fencing_ck": "CHECK (fencing_token >= 0)",
         "batch_test_run_row_version_ck": "CHECK (row_version >= 1)",
         "batch_test_run_counts_ck": "CHECK (candidate_count BETWEEN 1 AND 50 AND queued_count >= 0 AND running_count >= 0 AND succeeded_count >= 0 AND failed_count >= 0 AND cancelled_count >= 0 AND timed_out_count >= 0)",
@@ -584,7 +586,7 @@ TABLE_DDL: list[str] = [
         idempotency_key TEXT CONSTRAINT batch_test_run_idempotency_key_key UNIQUE,
         retry_of_batch_id TEXT,
         retry_generation INTEGER NOT NULL DEFAULT 1,
-        status TEXT NOT NULL DEFAULT 'queued',
+        status TEXT NOT NULL DEFAULT 'preparation_queued',
         owner_id TEXT,
         fencing_token BIGINT NOT NULL DEFAULT 0,
         lease_expires_at TIMESTAMPTZ,
@@ -610,6 +612,7 @@ TABLE_DDL: list[str] = [
         started_at TIMESTAMPTZ,
         completed_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
         CONSTRAINT batch_test_run_retry_fk FOREIGN KEY (retry_of_batch_id)
             REFERENCES hmm_evolution.batch_test_run(batch_id),
         CONSTRAINT batch_test_run_hashes_ck CHECK (
@@ -619,7 +622,8 @@ TABLE_DDL: list[str] = [
         CONSTRAINT batch_test_run_retry_generation_ck CHECK (retry_generation >= 1),
         CONSTRAINT batch_test_run_status_ck CHECK (
             status IN (
-                'queued', 'running', 'cancel_requested', 'completed',
+                'preparation_queued', 'preparing', 'queued', 'running',
+                'cancel_requested', 'completed',
                 'partial_failed', 'failed', 'cancelled', 'timed_out'
             )
         ),
@@ -629,6 +633,28 @@ TABLE_DDL: list[str] = [
             candidate_count BETWEEN 1 AND 50
             AND queued_count >= 0 AND running_count >= 0 AND succeeded_count >= 0
             AND failed_count >= 0 AND cancelled_count >= 0 AND timed_out_count >= 0
+        )
+    )
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD COLUMN IF NOT EXISTS request_payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ALTER COLUMN status SET DEFAULT 'preparation_queued'
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    DROP CONSTRAINT IF EXISTS batch_test_run_status_ck
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD CONSTRAINT batch_test_run_status_ck CHECK (
+        status IN (
+            'preparation_queued', 'preparing', 'queued', 'running',
+            'cancel_requested', 'completed', 'partial_failed', 'failed',
+            'cancelled', 'timed_out'
         )
     )
     """,
@@ -682,7 +708,7 @@ TABLE_DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS batch_test_item_eval_idx ON hmm_evolution.batch_test_item (eval_id, item_status)",
     """
     INSERT INTO hmm_evolution.schema_version(version, description)
-    VALUES ('hmm_evolution_v1', 'HMM evolution Phase 1 candidate and durable batch state')
+    VALUES ('hmm_evolution_v2', 'HMM evolution durable asynchronous input preparation')
     ON CONFLICT (version) DO NOTHING
     """,
 ]

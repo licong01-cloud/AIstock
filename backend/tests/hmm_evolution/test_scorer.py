@@ -70,7 +70,7 @@ def test_singleton_percentiles_are_half() -> None:
         ]
     )[0]
     assert recommendation.score == pytest.approx(50.0)
-    assert recommendation.confidence == pytest.approx(1.0)
+    assert recommendation.metric_availability_ratio == pytest.approx(1.0)
     assert set(recommendation.components["percentiles"].values()) == {0.5}
 
 
@@ -91,7 +91,7 @@ def test_missing_metrics_renormalize_and_degrade_without_zero_fill() -> None:
         [_candidate("partial", net_label_return=0.1, primary_coverage_ratio=0.8)]
     )[0]
     assert recommendation.score == pytest.approx(50.0)
-    assert recommendation.confidence == pytest.approx(0.55)
+    assert recommendation.metric_availability_ratio == pytest.approx(0.55)
     assert recommendation.components["evidence_quality"] == "degraded"
     assert recommendation.components["missing_metrics"] == [
         "net_db_10d",
@@ -104,7 +104,7 @@ def test_coverage_only_candidate_remains_unranked() -> None:
         [_candidate("coverage", primary_coverage_ratio=1.0)]
     )[0]
     assert recommendation.score is None
-    assert recommendation.confidence == pytest.approx(0.10)
+    assert recommendation.metric_availability_ratio == pytest.approx(0.10)
     assert recommendation.rank is None
     assert recommendation.is_top3 is False
 

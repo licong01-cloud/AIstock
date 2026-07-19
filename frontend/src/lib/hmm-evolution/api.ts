@@ -194,7 +194,7 @@ export async function createBatch(payload: {
     method: "POST",
     body: JSON.stringify(payload),
     headers: { "Idempotency-Key": idempotencyKey },
-  }, 120_000);
+  });
 }
 
 export function readQEAssetText(
