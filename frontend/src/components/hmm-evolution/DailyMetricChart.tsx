@@ -32,8 +32,8 @@ export default function DailyMetricChart({
   const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
   const x = (index: number) => MARGIN.left + (index / (rows.length - 1)) * plotWidth;
   const y = (value: number) => MARGIN.top + ((maxValue - value) / span) * plotHeight;
-  const labelPoints = linePoints(rows, "daily_net_label", x, y);
-  const dbPoints = linePoints(rows, "daily_net_db_10d", x, y);
+  const labelSegments = lineSegments(rows, "daily_net_label", x, y);
+  const dbSegments = lineSegments(rows, "daily_net_db_10d", x, y);
   const zeroY = y(0);
   const tickIndexes = Array.from(new Set([0, Math.floor((rows.length - 1) / 2), rows.length - 1]));
 
@@ -58,8 +58,8 @@ export default function DailyMetricChart({
             </text>
           </g>
         ))}
-        {labelPoints ? <polyline points={labelPoints} className={styles.chartLineLabel} /> : null}
-        {dbPoints ? <polyline points={dbPoints} className={styles.chartLineDb} /> : null}
+        {labelSegments.map((points) => <polyline key={`label-${points}`} points={points} className={styles.chartLineLabel} />)}
+        {dbSegments.map((points) => <polyline key={`db-${points}`} points={points} className={styles.chartLineDb} />)}
         {tickIndexes.map((index) => (
           <text key={index} x={x(index)} y={HEIGHT - 12} textAnchor="middle" className={styles.chartAxisText}>
             {rows[index].date}
@@ -70,14 +70,23 @@ export default function DailyMetricChart({
   );
 }
 
-function linePoints(
+function lineSegments(
   rows: DailyMetricPoint[],
   key: "daily_net_label" | "daily_net_db_10d",
   x: (index: number) => number,
   y: (value: number) => number,
-): string {
-  return rows
-    .map((row, index) => row[key] === null ? null : `${x(index).toFixed(2)},${y(row[key] as number).toFixed(2)}`)
-    .filter((value): value is string => value !== null)
-    .join(" ");
+): string[] {
+  const segments: string[] = [];
+  let current: string[] = [];
+  rows.forEach((row, index) => {
+    const value = row[key];
+    if (value === null) {
+      if (current.length > 1) segments.push(current.join(" "));
+      current = [];
+      return;
+    }
+    current.push(`${x(index).toFixed(2)},${y(value).toFixed(2)}`);
+  });
+  if (current.length > 1) segments.push(current.join(" "));
+  return segments;
 }

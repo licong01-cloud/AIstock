@@ -837,19 +837,19 @@ function buildEvaluationSpec(form: EvaluationForm): EvaluationSpecPayload {
   if (!Number.isInteger(topk) || topk < 1) throw new Error("TopK 必须是正整数。 ");
   if (form.asOfPolicy === "explicit" && !form.requestedDate) throw new Error("显式 as-of policy 必须选择日期。 ");
   return {
-    schema_version: "hmm_evaluation_spec_v1",
+    schema_version: "hmm_evaluation_spec_v2",
     base_loop_ref: form.baseLoopRef.trim(),
     window_start: form.windowStart,
     window_end: form.windowEnd,
     as_of: { policy: form.asOfPolicy, requested_date: form.asOfPolicy === "explicit" ? form.requestedDate : null },
     label_horizon_days: labelHorizonDays,
-    universe: { type: "prediction_artifact_all" },
+    universe: { type: "source_loop_stock_pool_st_pit" },
     topk,
     date_coverage_policy: "batch_common_intersection_with_evidence",
     missing_sector_policy: "neutral_with_evidence",
     market_forward_return: { mode: form.marketMode, horizon_trading_days: 10 },
     sort_policy: "score_desc_symbol_asc_v1",
-    metric_version: "hmm_replacement_metrics_v1",
+    metric_version: "hmm_replacement_metrics_v2",
     recommendation_version: "hmm_recommendation_v1",
   };
 }

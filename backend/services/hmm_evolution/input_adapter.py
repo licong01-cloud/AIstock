@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -27,6 +28,7 @@ from .evaluator import (
 from .market_repository import HMMMarketReturnRepository, MarketReturnRead, MarketWatermark
 from .models import CandidateRecord, EvaluationPlan, EvaluationSpec
 from .source_manifest import build_source_manifest
+from .universe import QEExecutionUniverseResolver
 
 
 class Phase0BacktestSource(Protocol):
@@ -66,6 +68,7 @@ class EvaluationExecutionInputs:
     evaluation_dates: tuple[date, ...]
     date_coverage_evidence: Mapping[str, Any]
     market_returns: pd.DataFrame | None
+    market_missing_evidence: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,10 +88,12 @@ class HMMEvaluationInputAdapter:
         candidate_resolver: CandidateArtifactResolver,
         market_repository: HMMMarketReturnRepository | None = None,
         source_factory: Callable[[EvaluationSpec, str], Phase0BacktestSource] | None = None,
+        universe_resolver: QEExecutionUniverseResolver | None = None,
     ) -> None:
         self._candidate_resolver = candidate_resolver
         self._market_repository = market_repository or HMMMarketReturnRepository()
         self._source_factory = source_factory or self._default_source_factory
+        self._universe_resolver = universe_resolver or QEExecutionUniverseResolver()
 
     async def prepare_batch(
         self,
@@ -127,6 +132,19 @@ class HMMEvaluationInputAdapter:
                 "failed to load frozen Phase 0 prediction and label inputs",
                 context={"error_type": type(exc).__name__},
             ) from exc
+
+        if evaluation_spec.schema_version != "hmm_evaluation_spec_v2":
+            raise InvalidSpecError(
+                "new HMM evaluations must use the source-loop stock pool and ST-PIT universe contract"
+            )
+        universe_read = await asyncio.to_thread(
+            self._universe_resolver.resolve,
+            evaluation_spec=evaluation_spec,
+            predictions=predictions,
+            labels=labels,
+        )
+        predictions = universe_read.predictions
+        labels = universe_read.labels
 
         date_plan = resolve_batch_common_dates(
             predictions=predictions,
@@ -202,9 +220,10 @@ class HMMEvaluationInputAdapter:
                 date_plan=date_plan,
                 label_horizon_days=evaluation_spec.label_horizon_days,
                 market_forward_return=market_evidence,
+                universe_evidence=universe_read.evidence,
                 warnings=warnings,
             )
-            universe = source_manifest["universe"]
+            universe = dict(source_manifest["universe"])
             plans.append(
                 EvaluationPlan.build(
                     candidate_id=candidate.candidate_id,
@@ -213,7 +232,7 @@ class HMMEvaluationInputAdapter:
                     evaluation_spec=evaluation_spec,
                     evaluator_version=EVALUATOR_VERSION,
                     resolved_as_of_date=resolved_as_of_date,
-                    universe_id="prediction_artifact_all",
+                    universe_id=str(universe["universe_id"]),
                     universe_hash=str(universe["universe_hash"]),
                 )
             )
@@ -272,6 +291,10 @@ class HMMEvaluationInputAdapter:
         }
         first_eval_id = eval_ids[0]
         first_spec = specs[first_eval_id]
+        if first_spec.schema_version != "hmm_evaluation_spec_v2":
+            raise InvalidSpecError(
+                "legacy HMM evaluation v1 records are view-only and cannot be executed or retried"
+            )
         first_spec_payload = first_spec.model_dump(mode="json")
         for eval_id, spec in specs.items():
             if spec.model_dump(mode="json") != first_spec_payload:
@@ -316,11 +339,24 @@ class HMMEvaluationInputAdapter:
         if checkpoint:
             checkpoint("after_shared_source_inputs")
 
+        universe_read = await asyncio.to_thread(
+            self._universe_resolver.resolve,
+            evaluation_spec=first_spec,
+            predictions=predictions,
+            labels=labels,
+        )
+        predictions = universe_read.predictions
+        labels = universe_read.labels
+
         evaluation_dates_by_id: dict[str, tuple[date, ...]] = {}
         date_evidence_by_id: dict[str, Mapping[str, Any]] = {}
         for eval_id, manifest in manifests.items():
             _verify_artifact_receipts(manifest, current_source_info, predictions, labels)
-            _verify_universe(manifest, predictions)
+            _verify_universe(
+                manifest,
+                predictions,
+                actual_evidence=universe_read.evidence,
+            )
             date_coverage = dict(manifest.get("date_coverage") or {})
             try:
                 evaluation_dates = tuple(date.fromisoformat(str(item)) for item in date_coverage["evaluation_dates"])
@@ -338,6 +374,7 @@ class HMMEvaluationInputAdapter:
             date_evidence_by_id[eval_id] = date_coverage
 
         market_returns: pd.DataFrame | None = None
+        market_missing_evidence: tuple[Mapping[str, Any], ...] = ()
         market_manifests = {
             eval_id: dict(manifest.get("market_forward_return") or {}) for eval_id, manifest in manifests.items()
         }
@@ -378,6 +415,7 @@ class HMMEvaluationInputAdapter:
                 as_of_date=resolved_as_of_date,
             )
             market_returns = market_read.returns
+            market_missing_evidence = market_read.missing_evidence
             for eval_id, evaluation_dates in evaluation_dates_by_id.items():
                 expected_count = int(market_manifests[eval_id].get("return_row_count", -1))
                 actual_count = len(market_returns.loc[market_returns["trade_date"].isin(evaluation_dates)])
@@ -390,6 +428,39 @@ class HMMEvaluationInputAdapter:
                             "actual_row_count": actual_count,
                         },
                     )
+                date_values = {item.isoformat() for item in evaluation_dates}
+                actual_missing = tuple(
+                    item
+                    for item in market_missing_evidence
+                    if str(item.get("trade_date") or "") in date_values
+                )
+                if "missing_return_count" in market_manifests[eval_id]:
+                    expected_missing_count = int(
+                        market_manifests[eval_id]["missing_return_count"]
+                    )
+                    expected_reason_counts = dict(
+                        market_manifests[eval_id].get("missing_return_reason_counts") or {}
+                    )
+                    actual_reason_counts = dict(
+                        sorted(
+                            Counter(
+                                str(item.get("reason") or "unknown")
+                                for item in actual_missing
+                            ).items()
+                        )
+                    )
+                    if (
+                        len(actual_missing) != expected_missing_count
+                        or actual_reason_counts != expected_reason_counts
+                    ):
+                        raise ArtifactHashMismatchError(
+                            "market return missing-evidence changed since evaluation enqueue",
+                            context={
+                                "eval_id": eval_id,
+                                "expected_missing_count": expected_missing_count,
+                                "actual_missing_count": len(actual_missing),
+                            },
+                        )
             if checkpoint:
                 checkpoint("after_shared_market_returns")
         elif market_mode != "disabled":
@@ -440,6 +511,7 @@ class HMMEvaluationInputAdapter:
                     evaluation_dates=evaluation_dates_by_id[eval_id],
                     date_coverage_evidence=date_evidence_by_id[eval_id],
                     market_returns=market_returns,
+                    market_missing_evidence=market_missing_evidence,
                 )
                 for eval_id in eval_ids
                 if eval_id in resolved_coefficients
@@ -525,8 +597,23 @@ def _verify_artifact_receipts(
             )
 
 
-def _verify_universe(source_manifest: Mapping[str, Any], predictions: pd.DataFrame) -> None:
+def _verify_universe(
+    source_manifest: Mapping[str, Any],
+    predictions: pd.DataFrame,
+    *,
+    actual_evidence: Mapping[str, Any] | None,
+) -> None:
     universe = dict(source_manifest.get("universe") or {})
+    if actual_evidence is not None:
+        if universe != dict(actual_evidence):
+            raise ArtifactHashMismatchError(
+                "source-loop stock pool or ST-PIT universe changed since evaluation enqueue",
+                context={
+                    "expected_universe_hash": universe.get("universe_hash"),
+                    "actual_universe_hash": actual_evidence.get("universe_hash"),
+                },
+            )
+        return
     symbols = sorted({str(item).strip() for item in predictions["symbol"] if str(item).strip()})
     from .models import canonical_json_sha256
 

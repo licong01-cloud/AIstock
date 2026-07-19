@@ -113,7 +113,7 @@ export interface QEAssetTextContent {
 }
 
 export interface EvaluationSpecPayload {
-  schema_version: "hmm_evaluation_spec_v1";
+  schema_version: "hmm_evaluation_spec_v2";
   base_loop_ref: string;
   window_start: string;
   window_end: string;
@@ -122,7 +122,7 @@ export interface EvaluationSpecPayload {
     requested_date: string | null;
   };
   label_horizon_days: number;
-  universe: { type: "prediction_artifact_all" };
+  universe: { type: "source_loop_stock_pool_st_pit" };
   topk: number;
   date_coverage_policy: "batch_common_intersection_with_evidence" | "strict_full";
   missing_sector_policy: "neutral_with_evidence";
@@ -131,7 +131,7 @@ export interface EvaluationSpecPayload {
     horizon_trading_days: 10;
   };
   sort_policy: "score_desc_symbol_asc_v1";
-  metric_version: "hmm_replacement_metrics_v1";
+  metric_version: "hmm_replacement_metrics_v2";
   recommendation_version: "hmm_recommendation_v1";
 }
 

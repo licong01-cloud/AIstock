@@ -76,7 +76,8 @@ def test_forward_returns_use_one_bulk_trading_calendar_query() -> None:
             [
                 (date(2026, 1, 5), "A", 10, 0.1, date(2026, 1, 19), 4),
                 (date(2026, 1, 5), "B", 10, -0.1, date(2026, 1, 19), 4),
-            ]
+            ],
+            [],
         ]
     )
     repository = HMMMarketReturnRepository(_factory(cursor))
@@ -95,4 +96,38 @@ def test_forward_returns_use_one_bulk_trading_calendar_query() -> None:
     assert "market.kline_daily_raw" in query[0]
     assert query[1][-2] == ["A", "B"]
     assert read.price_row_count == 4
-    assert len(cursor.queries) == 2
+    assert read.missing_evidence == ()
+    assert len(cursor.queries) == 3
+
+
+def test_forward_returns_persist_exact_missing_price_reason() -> None:
+    cursor = _Cursor(
+        [
+            [
+                (date(2025, 5, 9), "603557.SH", 10, 0.2, date(2025, 5, 23), 2),
+            ],
+            [
+                (date(2025, 5, 9), "600358.SH", date(2025, 5, 23), "horizon_price_missing"),
+            ],
+        ]
+    )
+    repository = HMMMarketReturnRepository(_factory(cursor))
+
+    read = repository.read_forward_returns(
+        symbols=["600358.SH", "603557.SH"],
+        trade_dates=[date(2025, 5, 9)],
+        horizon_trading_days=10,
+        as_of_date=date(2025, 5, 23),
+    )
+
+    assert read.missing_evidence == (
+        {
+            "trade_date": "2025-05-09",
+            "symbol": "600358.SH",
+            "label_date": "2025-05-23",
+            "reason": "horizon_price_missing",
+        },
+    )
+    manifest = read.as_manifest_evidence()
+    assert manifest["missing_return_count"] == 1
+    assert manifest["missing_return_reason_counts"] == {"horizon_price_missing": 1}

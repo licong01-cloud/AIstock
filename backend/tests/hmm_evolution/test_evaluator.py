@@ -151,6 +151,7 @@ def test_tie_break_is_score_desc_symbol_asc_independent_of_input_order() -> None
     assert first.result["changed_day_count"] == 0
     assert first.result["net_label_return"] is None
     assert first.result["evidence_quality"] == "insufficient"
+    assert first.result["metrics_json"]["daily_summary"][0]["calculation_status"] == "no_adjustment"
 
 
 def test_neutral_fallback_is_explicit_and_degrades_evidence() -> None:
@@ -238,6 +239,89 @@ def test_required_market_returns_cannot_succeed_without_comparable_days() -> Non
             db_forward_returns=_returns([]),
         )
     assert exc_info.value.reason_code == "hmm_evolution_market_data_unavailable"
+
+
+def test_partial_symbol_returns_never_compute_a_partial_daily_net() -> None:
+    trade_date = date(2025, 5, 9)
+    complete_date = date(2025, 5, 12)
+    coefficients = CandidateCoefficients.from_payload(
+        {
+            "daily_coefficients": {
+                item.isoformat(): {"S1": 1.0, "S2": 5.0}
+                for item in (trade_date, complete_date)
+            },
+            "stock_sector_map": {"A": "S1", "B": "S1", "C": "S2", "D": "S2"},
+        }
+    )
+    computation = evaluate_candidate(
+        candidate_id="hmmc_missing_symbol_return",
+        predictions=_predictions(
+            [
+                (trade_date, "A", 4.0),
+                (trade_date, "B", 3.0),
+                (trade_date, "C", 2.0),
+                (trade_date, "D", 1.0),
+                (complete_date, "A", 4.0),
+                (complete_date, "B", 3.0),
+                (complete_date, "C", 2.0),
+                (complete_date, "D", 1.0),
+            ]
+        ),
+        labels=_labels(
+            [
+                (trade_date, "A", 0.1),
+                (trade_date, "B", 0.2),
+                (trade_date, "C", 0.3),
+                (trade_date, "D", 0.4),
+                (complete_date, "A", 0.1),
+                (complete_date, "B", 0.2),
+                (complete_date, "C", 0.3),
+                (complete_date, "D", 0.4),
+            ]
+        ),
+        coefficients=coefficients,
+        evaluation_dates=[trade_date, complete_date],
+        label_horizon_days=10,
+        topk=2,
+        db_forward_returns=_returns(
+            [
+                (trade_date, "A", 0.1),
+                (trade_date, "B", 0.2),
+                (trade_date, "C", 0.3),
+                (complete_date, "A", 0.1),
+                (complete_date, "B", 0.2),
+                (complete_date, "C", 0.3),
+                (complete_date, "D", 0.4),
+            ]
+        ),
+        market_missing_evidence=(
+            {
+                "trade_date": trade_date.isoformat(),
+                "symbol": "D",
+                "label_date": "2025-05-23",
+                "reason": "horizon_price_missing",
+            },
+        ),
+    )
+
+    daily = computation.result["metrics_json"]["daily_summary"][0]
+    assert daily["entered_db_count"] == 1
+    assert daily["dropped_db_count"] == 2
+    assert daily["daily_net_db_10d"] is None
+    assert daily["calculation_status"] == "incomplete_evidence"
+    assert computation.result["metrics_json"]["incomplete_return_evidence"] == [
+        {
+            "date": trade_date.isoformat(),
+            "symbol": "D",
+            "replacement_type": "entered_by_hmm",
+            "evidence_type": "market_return",
+            "horizon_trading_days": 10,
+            "required_start_date": trade_date.isoformat(),
+            "required_label_date": "2025-05-23",
+            "reason": "horizon_price_missing",
+        }
+    ]
+    assert computation.result["evidence_quality"] == "degraded"
 
 
 def test_batch_common_intersection_records_dropped_dates_and_strict_rejects() -> None:

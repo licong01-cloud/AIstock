@@ -102,8 +102,17 @@ def test_source_manifest_keeps_phase0_receipts_without_absolute_paths() -> None:
         date_plan=plan,
         label_horizon_days=20,
         market_forward_return={"mode": "disabled"},
+        universe_evidence={
+            "type": "source_loop_stock_pool_st_pit",
+            "universe_id": "filtered_pool_fixture:qe_st_pit_fixture",
+            "universe_hash": "d" * 64,
+            "symbol_count": 2,
+            "eligible_pair_count": 2,
+        },
     )
 
+    assert manifest["universe"]["type"] == "source_loop_stock_pool_st_pit"
+    assert manifest["universe"]["universe_hash"] == "d" * 64
     assert manifest["universe"]["symbol_count"] == 2
     assert [item["artifact_name"] for item in manifest["artifacts"]] == [
         "pred.pkl",
@@ -148,4 +157,9 @@ def test_source_manifest_rejects_incomplete_artifact_receipt() -> None:
             date_plan=plan,
             label_horizon_days=10,
             market_forward_return={"mode": "disabled"},
+            universe_evidence={
+                "type": "source_loop_stock_pool_st_pit",
+                "universe_id": "filtered_pool_fixture:qe_st_pit_fixture",
+                "universe_hash": "d" * 64,
+            },
         )

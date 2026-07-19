@@ -131,6 +131,7 @@ class HMMEvaluationExecutor:
                 label_horizon_days=spec.label_horizon_days,
                 topk=spec.topk,
                 db_forward_returns=inputs.market_returns,
+                market_missing_evidence=inputs.market_missing_evidence,
                 market_forward_return_mode=str(spec.market_forward_return["mode"]),
                 date_coverage_evidence=inputs.date_coverage_evidence,
                 checkpoint=date_checkpoint,

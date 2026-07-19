@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pandas as pd
 
@@ -64,8 +65,12 @@ class MarketReturnRead:
     horizon_trading_days: int
     as_of_date: date
     read_only_transaction: dict[str, Any]
+    missing_evidence: tuple[Mapping[str, Any], ...] = ()
 
     def as_manifest_evidence(self) -> dict[str, Any]:
+        missing_reason_counts = Counter(
+            str(item.get("reason") or "unknown") for item in self.missing_evidence
+        )
         return {
             "price_row_count": self.price_row_count,
             "return_row_count": len(self.returns),
@@ -73,6 +78,8 @@ class MarketReturnRead:
             "requested_date_count": self.requested_date_count,
             "horizon_trading_days": self.horizon_trading_days,
             "as_of_date": self.as_of_date.isoformat(),
+            "missing_return_count": len(self.missing_evidence),
+            "missing_return_reason_counts": dict(sorted(missing_reason_counts.items())),
             "price_field": "market.kline_daily_raw.close_li",
             "read_only_transaction": dict(self.read_only_transaction),
         }
@@ -262,6 +269,56 @@ class HMMMarketReturnRepository:
                         ),
                     )
                     rows = cursor.fetchall()
+                    cursor.execute(
+                        """
+                        WITH calendar AS (
+                            SELECT
+                                cal_date AS trade_date,
+                                LEAD(cal_date, %s) OVER (ORDER BY cal_date) AS label_date
+                            FROM market.trading_calendar
+                            WHERE is_trading = TRUE
+                              AND cal_date >= %s
+                              AND cal_date <= %s
+                        ), selected_calendar AS (
+                            SELECT trade_date, label_date
+                            FROM calendar
+                            WHERE trade_date = ANY(%s)
+                        ), requested_pairs AS (
+                            SELECT c.trade_date, c.label_date, requested.symbol
+                            FROM selected_calendar c
+                            CROSS JOIN UNNEST(%s::text[]) AS requested(symbol)
+                        )
+                        SELECT
+                            requested.trade_date,
+                            requested.symbol,
+                            requested.label_date,
+                            CASE
+                                WHEN requested.label_date IS NULL THEN 'forward_horizon_not_completed'
+                                WHEN k1.close_li IS NULL OR k1.close_li <= 0 THEN 'start_price_missing'
+                                WHEN k2.close_li IS NULL OR k2.close_li <= 0 THEN 'horizon_price_missing'
+                                ELSE NULL
+                            END AS reason
+                        FROM requested_pairs requested
+                        LEFT JOIN market.kline_daily_raw k1
+                          ON k1.trade_date = requested.trade_date
+                         AND RTRIM(k1.ts_code) = requested.symbol
+                        LEFT JOIN market.kline_daily_raw k2
+                          ON k2.trade_date = requested.label_date
+                         AND RTRIM(k2.ts_code) = requested.symbol
+                        WHERE requested.label_date IS NULL
+                           OR k1.close_li IS NULL OR k1.close_li <= 0
+                           OR k2.close_li IS NULL OR k2.close_li <= 0
+                        ORDER BY requested.trade_date, requested.symbol
+                        """,
+                        (
+                            horizon_trading_days,
+                            normalized_dates[0],
+                            as_of_date,
+                            normalized_dates,
+                            normalized_symbols,
+                        ),
+                    )
+                    missing_rows = cursor.fetchall()
         except Exception as exc:
             raise MarketDataUnavailableError(
                 "failed to read HMM trading-day forward returns",
@@ -272,6 +329,15 @@ class HMMMarketReturnRepository:
             [row[:5] for row in rows],
             columns=["trade_date", "symbol", "horizon_days", "future_return", "label_date"],
         )
+        missing_evidence = tuple(
+            {
+                "trade_date": row[0].isoformat(),
+                "symbol": str(row[1]).strip(),
+                "label_date": row[2].isoformat() if row[2] is not None else None,
+                "reason": str(row[3]),
+            }
+            for row in missing_rows
+        )
         return MarketReturnRead(
             returns=frame,
             price_row_count=price_row_count,
@@ -280,6 +346,7 @@ class HMMMarketReturnRepository:
             horizon_trading_days=horizon_trading_days,
             as_of_date=as_of_date,
             read_only_transaction=self._receipt(),
+            missing_evidence=missing_evidence,
         )
 
     @staticmethod

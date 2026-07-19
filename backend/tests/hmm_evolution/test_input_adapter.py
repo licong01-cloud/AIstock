@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from backend.services.hmm_evolution.candidate_artifact import CandidateArtifactResolver
-from backend.services.hmm_evolution.errors import ArtifactHashMismatchError
+from backend.services.hmm_evolution.errors import ArtifactHashMismatchError, InvalidSpecError
 from backend.services.hmm_evolution.input_adapter import HMMEvaluationInputAdapter
 from backend.services.hmm_evolution.market_repository import MarketReturnRead, MarketWatermark
 from backend.services.hmm_evolution.models import (
@@ -16,6 +16,7 @@ from backend.services.hmm_evolution.models import (
     CandidateRecord,
     EvaluationSpec,
 )
+from backend.services.hmm_evolution.universe import ResolvedEvaluationUniverse
 
 
 class _Source:
@@ -113,6 +114,21 @@ class _MarketRepository:
         )
 
 
+class _UniverseResolver:
+    def resolve(self, *, evaluation_spec, predictions, labels):
+        return ResolvedEvaluationUniverse(
+            predictions=predictions.copy(),
+            labels=labels.copy(),
+            evidence={
+                "type": "source_loop_stock_pool_st_pit",
+                "universe_id": "fixture_pool:fixture_st_pit",
+                "universe_hash": "e" * 64,
+                "symbol_count": int(predictions["symbol"].nunique()),
+                "eligible_pair_count": len(predictions),
+            },
+        )
+
+
 def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path) -> None:
     trade_date = date(2026, 1, 5)
     predictions = pd.DataFrame(
@@ -177,6 +193,7 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
         candidate_resolver=resolver,
         market_repository=market_repository,
         source_factory=lambda _spec, preference: preferences.append(preference) or source,
+        universe_resolver=_UniverseResolver(),
     )
 
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
@@ -301,6 +318,7 @@ def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_
         candidate_resolver=resolver,
         market_repository=market_repository,
         source_factory=lambda _spec, _preference: _Source(predictions, labels),
+        universe_resolver=_UniverseResolver(),
     )
 
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
@@ -369,6 +387,7 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
         candidate_resolver=resolver,
         market_repository=_MarketRepository(),
         source_factory=lambda _spec, _preference: sources.pop(0),
+        universe_resolver=_UniverseResolver(),
     )
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
 
@@ -378,6 +397,30 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
                     evaluation={
                         "eval_id": "hmme_receipt_drift",
                         "evaluation_spec": spec.model_dump(mode="json"),
+                    "source_manifest": prepared.plans[0].source_manifest,
+                },
+                candidate=candidate,
+            )
+        )
+
+    legacy_spec = EvaluationSpec(
+        schema_version="hmm_evaluation_spec_v1",
+        base_loop_ref="qe_task/Loop8",
+        window_start=trade_date,
+        window_end=trade_date,
+        as_of={"policy": "explicit", "requested_date": trade_date.isoformat()},
+        label_horizon_days=10,
+        universe={"type": "prediction_artifact_all"},
+        topk=1,
+        market_forward_return={"mode": "disabled", "horizon_trading_days": 10},
+        metric_version="hmm_replacement_metrics_v1",
+    )
+    with pytest.raises(InvalidSpecError, match="view-only"):
+        asyncio.run(
+            adapter.load_evaluation(
+                evaluation={
+                    "eval_id": "hmme_legacy_v1",
+                    "evaluation_spec": legacy_spec.model_dump(mode="json"),
                     "source_manifest": prepared.plans[0].source_manifest,
                 },
                 candidate=candidate,
