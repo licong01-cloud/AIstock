@@ -1,8 +1,9 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v1
 
 > 日期：2026-07-10
-> 文档类型：F2 顶层架构蓝图，`docs-fast-new` 交付
-> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。2026-07-18 PR #2444 已补齐 O4 authoritative CLI 与逐 Program orchestration；真实预检发现 capacity policy ref producer 缺口，BUG-764 PR #2449 已通过 CI、等待合入，O3/O4 真实 DEV 双轨执行和 O5 G5 closeout仍待完成；尚未进入 Phase 0B 模型价值审计、模型训练或用户可见模型预测。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证和未经确认的 canary/champion/ModelOps 前置链；不存在 Advisory daily scheduler、实时荐股或交易执行路径
+> 修订日期：2026-07-19
+> 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
+> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成。本文于 2026-07-19 增补正式的“历史范围研究与新策略上线前验证”能力边界：它是用户显式启动、可恢复、逐交易日执行的 Advisory 业务功能，不是诊断脚本或自动 daily scheduler。Phase 1R F2 实施级详细设计已形成于 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，代码、DDL、DEV/production 执行和运行激活均未开始；Phase 0B 模型价值审计、模型训练和用户可见模型预测同样尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -15,6 +16,7 @@
 - 总体架构和模块隔离边界。
 - 数据权威、PIT、防泄漏和模型版本规则。
 - 多策略包独立运行、候选重排和 Top5 输出原则。
+- 历史范围研究、新策略上线前验证和逐交易日有界列表演进原则。
 - 超跌反弹与长期趋势两类首批策略专家的目标差异。
 - HMM、行业黑名单、收益预测、持股周期和价格区间的关系。
 - 每个实施阶段的目标、输入条件、交付物、完成判定和回滚边界。
@@ -30,6 +32,8 @@
 4. 较早文档中与以上内容不冲突的部分。
 
 若本蓝图与早期手工多包或荐股生命周期文档冲突，以已落地的原生单包契约为准：一个荐股程序绑定一个单 Alpha 包或一个原生多 Alpha 父包；多个策略包通过多个独立荐股程序并行运行，不在一个荐股程序中手工融合。
+
+若较早 Phase 0A.2/Phase 1 文档把 `replay-program-range` 仅描述为诊断 CLI，或只允许单日 `MANUAL_HISTORICAL_RESEARCH` 进入所有历史数据链，以本文新增的 `HISTORICAL_RANGE_RESEARCH` 总体边界为准。后续 F2 详细设计必须同步修订这些从属契约：范围研究可形成隔离的 retrospective observation/dataset，但不能冒充当时真实运行、正式前瞻 OOS、`PUBLISHED` list 或模型已校准证据。
 
 ## 1. Background / 背景与现状差距
 
@@ -71,7 +75,8 @@
 - HMM 已经调整过分数，若在下游再次固定乘权会重复计算行业影响。
 - 长期趋势目标没有候选池召回率、分层收益目标、趋势生存和捕获率评价。
 - 当前启用单 Alpha Program 已绑定真实包，但 current manifest 尚无 DSE；其 67 条历史 DSE 均属于旧 manifest，不能继承为 current identity 的研究证据。
-- `review_schedule` 只是 legacy Program metadata；历史研究模块明确不实现 daily runner。
+- 当前只有显式单日 historical runner，没有产品级日期范围任务、逐日进度、断点恢复、独立研究列表和新策略上线前收益验证页面。
+- `review_schedule` 只是 legacy Program metadata；历史研究不注册自动 daily scheduler，但允许用户显式启动一个有限日期范围任务并在任务内部按交易日顺序执行。
 
 ### 1.3 前序设计承接
 
@@ -93,6 +98,7 @@
 | Selection `rule_default` 价格区间 | 继承为基线 | 与新模型预测明确分状态展示 |
 | Advisory 固定生命周期参数 | 待风格化设计 | 在用户确认模型排名启用前保持现状，不能在研究或展示阶段静默改变 |
 | `selection_center_advisory_preview` 等旧诊断入口 | legacy diagnostic | 不得作为正式训练观察或荐股入口；物理清理另立设计 |
+| `replay-program-range` 占位 CLI | 提升为正式范围研究能力 | 复用权威单日推理语义，生成独立 `HISTORICAL_RANGE_RESEARCH` 任务、逐日研究列表和收益验证；不得继续停留在一次性诊断输出 |
 | PriceGuard 向 QE/Paper 强制推进路线 | 被最新边界覆盖 | 本蓝图只在 Advisory 落地，不自动注入 QE/Paper |
 
 ## 2. Scope / 范围
@@ -107,6 +113,7 @@
 - 买入、止盈、止损参考区间的 Advisory 决策层。
 - 数据库到不可变 Parquet 的训练数据流水线。
 - 历史 PIT 观察构建、严格 OOS、模型注册、研究验证和用户确认后的 Program 级模型启用。
+- 已准入新策略包的历史范围研究：显式起止交易日、逐日荐股、列表生命周期、收益成熟、任务恢复和上线前验证报告。
 - 荐股页面的解释性展示，最终由人工决定是否买入。
 - 模型缺失、数据不足、校准失效和版本不匹配的 fail-closed 行为。
 
@@ -129,6 +136,8 @@
 - 不把模型概率、收益区间或价格区间描述为确定性预测。
 - 不在第一版直接建设大型神经 MoE、端到端深度交易系统或强化学习交易器。
 - 不允许缺失模型或特征时静默伪装成模型预测结果。
+- 不把历史范围研究任务做成自动调度器、当前荐股列表发布器或 Selection/Paper/模拟盘回放入口。
+- 不把使用当前 manifest/runtime/code 回看历史得到的结果描述为策略当时已经存在、当时真实荐股或正式前瞻 OOS。
 - 不因蓝图结构校验通过而宣称功能已实现或可进入生产。
 
 ## 4. 设计原则与已确定决策
@@ -141,6 +150,7 @@
 4. 模型能力仅属于 Advisory，下游不能反写 Selection、StrategyPackage 或 Paper。
 5. 模型制品、数据快照、包 manifest、HMM snapshot 和预测必须可追溯到不可变版本。
 6. stable 市场样本、evidence version、标签策略和 Program lineage 必须拆分：同一 `canonical_signal_scope_hash` 只形成一个 economic sample，stage/artifact/source 修订只增加 observation version；实际改变 selection semantics/config 或 label policy 才进入不同训练/校准条件分布。Program/binding/review lineage 独立留证并用于部署，不得让两个等价 Program 把同一市场样本重复加权。
+7. 历史范围研究使用数据库中的历史 PIT 行情和当前冻结策略语义逐日重算，统一标记 `HISTORICAL_RANGE_RESEARCH + RETROSPECTIVE_RESEARCH_ONLY`；它可用于功能验证、策略上线前研究和内部模型 bootstrap，但与真实前瞻 observation/OOS 分区隔离。
 
 ### 4.2 模型原则
 
@@ -150,6 +160,7 @@
 4. 新包先使用风格先验，只有正式 OOS 观察足够后才能启用包级校准。
 5. 重排、收益、存活、路径风险和成交概率分别建模，不用一个模型直接猜全部绝对价格。
 6. 允许模型拒绝预测；拒绝比静默给出低质量答案更正确。
+7. 历史范围结果可以训练和比较 research bootstrap，但仅凭回看任务不得发布 `RERANK_READY`、`RETURN_HORIZON_READY`、`PRICE_RANGE_READY` 或用户可见已校准数字。
 
 ### 4.3 投资建议边界
 
@@ -185,12 +196,14 @@
 ### 6.1 总体流程
 
 ```text
-用户手工历史研究请求为每个显式 Program 独立解析已有 Selection evidence
+用户可选择单日精确历史研究，或显式创建有限日期范围研究任务
+  -> 单日精确研究读取 identity/hash 匹配的既有 Selection evidence
+  -> 范围研究按冻结 Program/package/config/code 和交易日序列调用同一权威 StrategyPackage/Selection 推理语义
   -> StrategyPackage 独立生成 Alpha 原始候选
   -> [hmm.enabled=true 时] 现有 HMM 行业分数调整
   -> risk policy 的 can_buy/score multiplier/delta/rank penalty 与重排
   -> 行业黑名单、停牌及其余 decision-as-of cutoff 时已知的可交易性硬过滤
-  -> 完成 Advisory 自有、权威且可追溯的 SelectionRun
+  -> 完成 Advisory 自有、权威且可追溯的候选证据：单日 SelectionRun 或隔离的 range day artifact
   -> Advisory 候选池与完整退出观察深度
   -> strategy_style_profile 显式路由
   -> 风格专属候选重排专家
@@ -228,11 +241,25 @@ SelectionRun 已完成
 
 模型关闭或回滚时恢复的是 `selection_effective_rank`，不是 HMM 前的 `alpha_raw_rank`。五层 rank 必须带各自 stage、生成配置和 hash，禁止继续引入含义不明确的“源排名”新字段。
 
+历史范围研究不进入 `AdvisoryProgramService._evaluate_review` 的当前列表写入路径，而使用独立边界：
+
+```text
+HistoricalRangeResearchOrchestrator
+  -> shared StrategyPackage/Selection inference components
+  -> isolated range candidate evidence
+  -> shared AdvisoryListTransitionEngine
+  -> isolated range list/outcome/report repositories
+```
+
+共享的是无状态推理组件、PIT 数据访问和候选语义，不共享普通 Selection run repository、当前 Advisory list repository、模拟盘/Paper consumer 或可变任务状态。
+
 ### 6.3 权威候选运行与观察深度
 
-- 每个 Program/decision trade date 的候选必须来自 identity/hash 匹配的既有单包 `SelectionRun` artifact/DSE；研究请求不得现场调用 Selection 重算，legacy preview、aggregate 诊断或跨包合成结果不能作为候选源。
+- 单日 `MANUAL_HISTORICAL_RESEARCH` 的候选必须来自 identity/hash 匹配的既有单包 `SelectionRun` artifact/DSE；该路径不得现场重算 Selection，也不得把 current-semantics 结果冒充当时真实 evidence。
+- `HISTORICAL_RANGE_RESEARCH` 为验证当前冻结策略语义，允许通过 Advisory 独立 orchestration adapter 按显式历史交易日调用与现有 Selection 相同的 StrategyPackage 推理、HMM/risk/tradability 和证据生成语义。该 adapter 只能写 Advisory 范围研究命名空间，不得写普通 Selection run、Paper/模拟盘 artifact 或当前荐股 list；不得复制、简化或重新实现第二套选股算法。
+- legacy preview、aggregate 诊断或跨包合成结果在两条路径中都不能作为权威候选源。
 - Advisory 可以在自己的 effective runtime profile 中请求更深的 `selection.top_k`，用于模型候选召回和生命周期退出观察，但不得修改普通 Selection Center 或 Paper v2 的默认运行配置。单 Alpha 仍受 Selection v1 上限 50 约束；原生多 Alpha 父包只能使用 frozen manifest 已声明的 `topk/topk_variants/secondary_topk`，否则现有 runtime 会 `TOPK_RUNTIME_MISMATCH`。缺少所需深度变体时，必须发布经正常验证的新父包版本或另立 Advisory 深池契约，不能临时覆盖。
-- 每次运行必须持久化 `requested_top_k`、manifest top-k variant、Alpha 总评分数量、HMM/risk policy 前后候选数量、硬过滤前后数量、eligible universe 标识及 hash、effective runtime config、SelectionRun id 和 artifact hash。
+- 每次运行必须持久化 `requested_top_k`、manifest top-k variant、Alpha 总评分数量、HMM/risk policy 前后候选数量、硬过滤前后数量、eligible universe 标识及 hash、effective runtime config、候选运行 identity 和 artifact hash；单日精确研究额外记录来源 `SelectionRun id`，范围研究记录独立 `range_day_run_id`，不得伪造 SelectionRun。
 - 候选截断必须同时满足模型特征深度与 `rank_exit_threshold` 观察深度；前者不足使用 `ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT`，后者不足继续使用现有 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT`，两者不得混用。
 - 为 HMM/risk overlay 消融，Phase 1 必须保存同一权威运行的 Alpha 原始深池、HMM 调整后深池、risk policy 调整后深池和硬过滤后正式深池。
 
@@ -244,13 +271,50 @@ SelectionRun 已完成
 - 原生多 Alpha 父包的各 leg 分数、权重、一致度和分歧度可以作为输入，但父包仍是唯一包身份。
 - 不提供跨包总榜、交叉替换或自动择包。
 
-### 6.5 手工历史研究执行与日期边界
+### 6.5 单日手工历史研究执行与日期边界
 
 - `review_schedule` 仅是 legacy Program metadata，研究模块不读取它、不注册 scheduler。请求必须显式指定一个已完成交易日和一个或多个 Program。
 - 唯一业务键是 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)`；binding、manifest、policy、effective config、artifact/DSE 和 source revision hashes 是不可变冲突谓词。
 - 一个 Program 的 WAITING/FAILED/恢复不会回滚或跳过其他 Program；research run 必须单 Program 原子提交或按同一 deterministic identity 恢复，并输出逐 Program 与 batch receipt。
 - 单 Alpha current manifest 与原生多 Alpha parent 只执行无业务写入 research preflight；旧 manifest DSE 不继承，研究路径不发布 package 或创建 binding。
-- 当前设计没有正式 `T0`、daily runner、PUBLISHED list 或实时荐股。PREVIEW、REPLAY、current-semantics 重算和集中回补永久保持独立 retrospective lineage。
+- 单日手工路径不提供日期范围展开、自动 scheduler、`PUBLISHED` list 或实时荐股。PREVIEW、current-semantics range research、集中回补和正式前瞻 evidence 必须保持独立 lineage。
+
+### 6.6 历史范围研究执行器与新策略上线前验证
+
+`HistoricalRangeResearchRun` 是正式 Advisory 研究功能，不是诊断测试。用户可对一个或多个独立 Program 创建有限日期范围任务；每个 Program 仍只绑定一个已准入单 Alpha 包或一个已准入原生多 Alpha 父包。任务必须冻结：
+
+```text
+program_id
+package_id / manifest_sha256 / alpha_mode
+runtime_profile / review_policy / style_profile hashes
+code_release_id / code_release_hash
+start_trade_date / end_trade_date
+calendar_id / calendar_version / ordered_trade_dates_hash
+candidate_observation_top_k / shortlist_top_n / target_count
+origin = HISTORICAL_RANGE_RESEARCH
+research_scope = HISTORICAL_RESEARCH_ONLY
+evidence_level = RETROSPECTIVE_RESEARCH_ONLY
+execution_prohibited = true
+```
+
+- 已有 Advisory Program 时，任务冻结其当前 binding/runtime/review projection，但不会把当前 binding 伪装为历史有效 binding。已准入策略包尚无普通 Advisory Program 时，任务可以携带 hash-closed `research_program_spec` 创建仅存在于范围研究命名空间的稳定 `research_program_id`；它不创建或修改普通 Program/binding，仍保持一 Program 对一 package。
+- `research_program_spec` 只提交 package id 和 Advisory 配置；alpha mode、package version、manifest 与多 Alpha component identity 必须由已准入 package projection 推导，页面不得手工声明或覆盖。
+- 起止日期必须是显式范围，执行器从权威交易日历一次性展开有序交易日集合；不接收自然日循环、`latest` 推断或运行中自动扩展 end date。
+- 每个 Program/原生多 Alpha leg 按冻结 lookback contract 读取 start date 之前的数据库 warmup 数据；warmup 不生成范围外荐股日、列表或 episode，也不改变 v1 首日空 seed。
+- 完整交易日集合保存为 immutable date-plan；长区间按 ordinal cursor 分批物化 day rows，不在 create 事务一次插入全部 Program×日期记录，因此不需要用日期跨度业务上限换取事务安全。
+- `end_trade_date` 不得晚于数据库已完成的最近交易日。收益、MFE/MAE 和持股周期标签可在其 horizon 数据成熟后追加；未成熟状态必须明确，不阻断已完成的荐股日结果。
+- 对新策略包的历史验证固定使用当前已准入 manifest/runtime/code 作用于历史 PIT 数据，回答“当前策略如果从该历史日期开始会怎样”。它不要求、也不得伪造策略包在历史日期已经存在的 binding、model vintage 或真实运行记录。
+- HMM、行业、ST、停牌、涨跌停、风险和行情输入必须逐日按 decision cutoff 解析。任务可以冻结当前 HMM/runtime policy 和代码，但不得把任务创建日的最新 HMM snapshot、行业状态或股票池直接复制到全部历史日期；每日日任务保存实际 as-of snapshot/ref/hash。
+- T 日 ENTER/HOLD/EXIT/WATCH 只使用 T cutoff 已知事实；next-open/next-close 实际价格在后续作为 execution/outcome 追加，不得影响 T 日 action 或 list hash，也不得因为最后一日价格尚未成熟而阻塞范围荐股结果。
+- 策略包准入已经完成后，执行器只读取冻结 package identity 和推理输入，不再次执行资产、模型、因子、组件或包可用性准入检查，不回写 package 状态。
+- Selection current wrapper 的最新 refresh readiness、trade-enabled binding 和共享 repository 不进入范围 pure computation；范围 day 只依据 T/warmup 历史数据库分区和 read receipt，不会被最新交易日状态阻断。
+- 每个 `(range_run_id, program_id, decision_trade_date)` 是独立、幂等、可恢复的日任务。相同 request hash 重试返回原结果；不同 payload 命中相同业务键必须显式冲突。一个 Program/日期失败不回滚其他 Program 或已完成日期。
+- 日期必须按序推进列表状态；前一交易日的 active list 是下一交易日唯一生命周期输入。允许候选计算并行预取，但 list transition 必须按 Program/日期串行提交，禁止跨日乱序覆盖。
+- 每日形成独立 candidate set、`ENTER/HOLD/EXIT/WATCH`、list version、active count、替换配对和 reason codes。稳态 `active_count <= target_count`，退出记录保留但不继续占 active pool，禁止将每日候选简单并集。
+- 当 outcome 数据成熟后，程序追加逐候选、逐 episode、逐 list version 和整个 range 的收益、benchmark、成本、MFE/MAE、回撤、换手、持有天数、胜率/赔率及 Recall@K 研究结果；不得读取 QE 回测、Paper、模拟盘账户或人工买入结果。
+- 范围任务提供持久化状态、进度、失败日期、可重试原因、resume cursor、最终确定性 receipt 和完整 artifact refs。等待输入、恢复和取消是任务状态，不是审批或人工放行门禁。
+- 范围研究结果可以进入 Phase 0B 和内部模型 bootstrap 的独立 retrospective dataset partition；正式 OOS、package calibration 和用户可见模型 capability 仍要求符合 model/data vintage、cutoff、embargo 和 calibration 证据。
+- 多个 Program 的范围任务可并行，但候选、列表、收益、状态和报告永久按 Program 隔离；不生成跨包总榜或自动择包。
 
 ## 7. 策略风格画像与专家路由
 
@@ -622,6 +686,13 @@ ST/风险状态历史复算以现有 `market.stock_universe_pit_spans` 为权威
 
 ### 14.2 历史观察构建
 
+历史观察有两条合法来源，必须分区保存并由 lineage selector 显式选择：
+
+- `MANUAL_HISTORICAL_RESEARCH`：只消费当时 identity/hash 可证明的既有 DSE/source evidence，可参与其证据等级允许的正式研究判断。
+- `HISTORICAL_RANGE_RESEARCH`：使用当前冻结 package/runtime/code 对历史 PIT 数据逐日重算，服务功能验证、策略上线前研究和内部 bootstrap；固定为 `RETROSPECTIVE_RESEARCH_ONLY`，不得提升为真实历史运行或正式前瞻 OOS。
+
+两条来源可以共享 stable economic sample 和 outcome calculation engine，但 observation version、source lineage、dataset partition、evidence level 和可用 capability 必须分别记录。任何 selector 都不得因 formal source 不足而静默退回范围研究数据。
+
 正式训练观察必须满足：
 
 - 候选只使用当时可得数据和时间对应的策略包/模型版本。
@@ -757,7 +828,7 @@ capability；只有合法 OOS/prior 与相应 artifact closure 完整时才可�
 - `PRICE_RANGE_READY(style)`：必须精确依赖兼容的 `RETURN_HORIZON_READY(style)` bundle version/hash，再包含 price path、fill/`IntradayExecutionEventOrderModel`、raw/CNY/yuan 转换、硬风险 policy、校准和分钟覆盖报告；没有 Outcome 依赖时只能显示执行可行性，不能声明价格区间 READY。
 - `LONG_TREND_READY`：必须联合包含 `RERANK_READY(LONG_TREND)` 和 `RETURN_HORIZON_READY(LONG_TREND)`，其中单一 competing-risk hazard 负责 ordered barrier、time-to-hit、trend-stage survival 与 competing event；再加 capture label、校准和长期 OOS 报告。展示价格区间时还必须包含 `PRICE_RANGE_READY(LONG_TREND)`。
 
-## 16. 历史逐日推演与研究列表生命周期
+## 16. 历史逐日推演、范围任务与研究列表生命周期
 
 ### 16.1 有界活跃列表
 
@@ -786,6 +857,10 @@ Top5 展示与 active list 迁移规则：
 - 迁移期允许 `active_count > new_target_count`，但必须有 `migration_state`、旧/新目标、remaining excess 和预计收敛规则；`rank_enter_threshold`、`rank_exit_threshold`、确认期和 replacement budget 随 style/target/policy version 一起版本化。
 - 回滚模型不会复活已经退出的 episode，也不会删除模型生成的 ENTER/HOLD/EXIT 决策；恢复基线后的后续复评继续 append-only 演进。
 
+Phase 1R v1 范围任务固定从首个交易日的空 active state 开始。禁止读取当前线上/当前荐股 active list 作为历史首日状态，否则会把未来状态泄漏到历史研究；未来若需要非空 seed，必须另行修订详细设计并证明来源、日期和 identity 与范围首日严格相邻。
+
+同一范围任务重跑不得复制 list version、episode 或 outcome。执行器必须以日任务 receipt 和前日 list hash 形成 hash chain；缺少前日终态时后续日期保持 `WAITING_PREVIOUS_DAY`，不能跳日后再回填隐藏状态。
+
 ### 16.2 推理审计
 
 每次预测至少记录：
@@ -797,6 +872,7 @@ Top5 展示与 active list 迁移规则：
 - `alpha_raw`、`hmm_adjusted`、`risk_policy_adjusted`、`selection_effective`、`advisory_model` 五层 rank 和 score。
 - model bundle、Program deployment binding、校准层级、capabilities、预测状态和 reason codes。
 - 价格基准、原始价格转换证据和规则硬上限。
+- 范围任务 id/request hash、起止日期、有序交易日集合 hash、当前进度、前日 list hash、日任务 attempt/receipt 和 retrospective lineage。
 
 正式复评的配置合并顺序继续遵守现有契约：active binding 是基础配置，请求配置显式覆盖，PIT cutoff 和目标日期上下文最后写入并保持最终权威；review run 保存实际生效配置。
 
@@ -824,6 +900,10 @@ Top5 展示与 active list 迁移规则：
 | 结果标签 | `app.advisory_outcome_label` | 多期限收益、EXECUTABLE/PATH MFE/MAE、生存和事件标签 |
 | Capture/build control | `app.advisory_capture_batch/advisory_dataset_build_attempt` | capture receipt、checkpoint、lease/fencing 和失败恢复 |
 | 数据快照 | `app.advisory_dataset_snapshot` | final SEALED manifest-content identity、selected versions、blob refs 与 invalidation |
+| 历史范围研究任务 | `app.advisory_historical_range_run` | 冻结 Program/package/config/code、日期范围、交易日集合、状态、进度和最终 receipt |
+| 历史范围日任务 | `app.advisory_historical_range_day_run` | 每 Program/日期的候选生成、attempt、幂等状态、前后 list hash 和失败恢复 |
+| 历史范围研究列表 | `app.advisory_historical_range_list_version/item` | 隔离的逐日 ENTER/HOLD/EXIT/WATCH、active list、替换配对和原因；不写当前荐股 list |
+| 历史范围结果 | `app.advisory_historical_range_outcome/summary` | 成熟标签、逐候选/episode/list/range 收益、风险、换手、Recall 和报告 lineage |
 | 模型版本 | `app.advisory_model_version` | 单模型、数据、代码、校准和不可变制品证据 |
 | 模型 bundle | `app.advisory_model_bundle_version` | 原子绑定全部模型头、能力、期限和 hash |
 | Program 模型部署 | `app.advisory_model_deployment_binding` | Program 级乐观并发版本、当前状态和生效范围 |
@@ -831,24 +911,28 @@ Top5 展示与 active list 迁移规则：
 | 模型预测 | `app.advisory_model_prediction` | 每个候选、期限和模型的不可变预测 |
 | 校准/漂移快照 | `app.advisory_model_monitor_snapshot` | 概率覆盖率、漂移、模型可用性和停用证据 |
 
-现有 `app.advisory_daily_review`、`selection.daily_selection_evidence`、`advisory_review_run`、`advisory_recommendation_list_version`、`advisory_recommendation_list_item` 和 `advisory_episode_return` 继续作为在线证据/生命周期权威，不用模型表替代。
+现有 `app.advisory_daily_review`、`selection.daily_selection_evidence`、`advisory_review_run`、`advisory_recommendation_list_version`、`advisory_recommendation_list_item` 和 `advisory_episode_return` 继续作为当前荐股证据/生命周期权威，不用模型表或历史范围表替代。
 
 ### 17.2 API 契约方向
 
 详细 API 设计至少覆盖：
 
+- 创建历史范围研究任务，显式提交 Program、起止交易日和冻结配置；返回 request hash、交易日数量和任务 identity。
+- 查询范围任务进度、逐日状态、失败原因、resume cursor、每日候选/list/actions、成熟收益和最终报告。
+- 对可重试失败执行幂等 resume/cancel；cancel 只停止未开始日期，不删除已完成研究事实，也不形成审批流程。
 - 读取 Program 当前风格画像、模型部署状态和数据截止时间。
 - 读取某 list version 的五层排名和模型解释。
 - 读取收益、周期、价格区间及校准状态。
 - 读取影子对照和模型不可用原因。
 - 受控启用、停用和回滚某 Program 的 Advisory 模型，不影响 StrategyPackage 或 Paper。
 
-所有写入接口必须使用 `configuration_expected_row_version` 乐观并发语义，不能让过期页面覆盖新配置状态；它是并发控制字段，不是审批或模型晋级门禁。
+Program 模型配置写入必须使用 `configuration_expected_row_version` 乐观并发语义，不能让过期页面覆盖新配置状态。历史范围任务使用 request idempotency key、`range_expected_row_version` 和日任务唯一键控制创建、resume/cancel 并发。两类字段都是程序并发控制，不是审批或模型晋级门禁，不得混用。
 
 ### 17.3 UI 契约
 
 页面按 Program/策略包独立展示：
 
+- 历史范围研究任务创建、进度、逐日时间线、每日荐股列表、ENTER/HOLD/EXIT/WATCH、收益成熟状态和策略上线前验证汇总。
 - Alpha 原始排名、HMM 调整排名、risk policy 调整排名、Selection 正式排名、模型排名及变化。
 - Top5 和“合格 N/5”。
 - 策略风格、校准层级和模型部署状态。
@@ -903,6 +987,14 @@ ADVISORY_MODEL_SHADOW_ONLY
 ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT
 ADVISORY_MODEL_STYLE_DRIFT
 ADVISORY_RESEARCH_EVIDENCE_UNAVAILABLE
+ADVISORY_HISTORICAL_RANGE_INVALID
+ADVISORY_HISTORICAL_RANGE_DATE_NOT_COMPLETED
+ADVISORY_HISTORICAL_RANGE_PAYLOAD_CONFLICT
+ADVISORY_HISTORICAL_RANGE_PREVIOUS_DAY_PENDING
+ADVISORY_HISTORICAL_RANGE_DAY_RETRYABLE
+ADVISORY_HISTORICAL_RANGE_DAY_FAILED
+ADVISORY_HISTORICAL_RANGE_OUTCOME_MATURING
+ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 ```
 
 ## 18. Design Acceptance Index / 设计验收索引
@@ -951,6 +1043,11 @@ ADVISORY_RESEARCH_EVIDENCE_UNAVAILABLE
 | F-038 | 正确历史输入先自动达到 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 后达到 `RESEARCH_READY`，且不影响 Selection/模拟盘/Paper |
 | F-039 | 手工历史 runner 对显式 Program/date 独立运行，Program/date/research-scope key 唯一、持久化可恢复、失败隔离且回执确定 |
 | F-040 | 历史锚点只能是显式已完成交易日；DB_HISTORICAL、manual origin、research scope 与 PREVIEW/REPLAY/PUBLISHED/实时/交易语义永久隔离 |
+| F-041 | 历史范围研究是可持久化、可恢复、用户可见的正式 Advisory 业务功能，不是诊断脚本、测试 helper 或自动 scheduler |
+| F-042 | 范围执行器冻结已准入单 Alpha/原生多 Alpha 父包和 Program/config/code identity，按权威交易日历复用同一 Selection 推理语义逐日生成候选，不做策略包二次准入或第二套选股实现 |
+| F-043 | 每个 Program/日期幂等、失败隔离且按前日 list hash 串行演进；ENTER/HOLD/EXIT/WATCH、替换配对和有界 active list 完整，禁止每日候选无界并集 |
+| F-044 | 新策略包可用当前冻结语义从历史起点执行上线前研究并计算成熟收益，但结果固定为 RETROSPECTIVE_RESEARCH_ONLY，不伪造历史 binding、真实运行或正式前瞻 OOS |
+| F-045 | 范围研究 observation/outcome/SEALED partition 可供 Phase 0B 与内部模型 bootstrap，且与 formal OOS、package calibration、当前荐股 list、Selection、模拟盘、Paper 和 QE 数据永久隔离 |
 
 ## 19. Implementation Plan / 分阶段实施方案
 
@@ -999,16 +1096,28 @@ ADVISORY_RESEARCH_EVIDENCE_UNAVAILABLE
 - 发布/回滚：DDL 只在开发/发布阶段执行；运行时 source/capture/label/build/snapshot/GC 全部由已设计程序、事务和状态机自动约束，无人工审批。
 - 详细设计等级：F2。
 - 已形成父级详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。Phase 1C-3 Batch D 已由 PR `#2056` 合入，并在 DEV PostgreSQL 与 repo-external filesystem 形成真实 SEALED golden；这只证明 fixture/development 离线数据集闭环，不表示生产历史数据积累、模型训练或 runtime consumer 已启用。Phase 1D 已按 `docs/architecture/advisory_phase1d_source_availability_observer_capacity_f2_design_20260714.md` 由 PR `#2067` 合入并完成 DEV E2E，生产 DDL 仍为 `pending`、observer 未激活，当前 capacity receipt 因缺少非空 `universe_outcomes` SEALED Parquet 测量保持 `PARTIAL`。
-- Phase 1E 已按 `docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md` 由 PR `#2094` 合入；O4 authoritative CLI、逐 Program compiler dependency、source mapping、capacity v2 和 compile receipt 又由 PR `#2444` 合入：以 batch-independent `ProgramDateRequest` 编译多 Program 独立历史研究计划，无 scope 时保留 target diagnostic；通过 Advisory read-only projection 单向读取 immutable Selection/package evidence，不调用或修改 Selection、策略推理、模拟盘、Paper、QE/RD-Agent/Qlib runtime；策略包不做二次资产验证。真实命令链预检发现 `capacity_policy_ref` 没有权威 producer，已登记 BUG-764；PR `#2449` 增加显式 typed capacity policy 输入、CAS 发布和 exact ref 输出，当前 CI 已通过但尚待合入。Phase 1E 当前状态为 `code_fix_pending_merge_and_real_dev_execution`，persistent dual-track L4 仍等待真实 DEV immutable DSE/receipt 与 O4 plan，不代表 runtime activation。
+- Phase 1E 已按 `docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md` 由 PR `#2094` 合入；O4 authoritative CLI、逐 Program compiler dependency、source mapping、capacity v2 和 compile receipt 又由 PR `#2444` 合入：以 batch-independent `ProgramDateRequest` 编译多 Program 独立历史研究计划，无 scope 时保留 target diagnostic；通过 Advisory read-only projection 单向读取 immutable Selection/package evidence，不调用或修改 Selection、策略推理、模拟盘、Paper、QE/RD-Agent/Qlib runtime；策略包不做二次资产验证。BUG-764 PR `#2449` 已补齐 typed capacity policy producer；BUG-766 PR `#2458` 已保证 pending historical execution 同时返回可读回的 authoritative request ref。Phase 1E 当前状态为 `code_complete_real_dev_execution_pending`：persistent dual-track L4 仍等待所选决策日真实 DEV immutable DSE/receipt 与 O4 plan，不代表 runtime activation，也不阻塞 Phase 1R 使用已完成历史日期。
 - Phase 1F 已按v1详细设计 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md` 由PR `#2114`合入，并于2026-07-14完成DEV persistent L3 plan/apply/verify/exact-reapply：v1 managed/prerequisite均为`COMPATIBLE`、receipt中`downstream_ready=true`，最终catalog fingerprint一致；只应用order 50 schema migration，零业务DML、零runtime activation。Phase 1G复核发现v1 contract仍有父级偏差：stage/candidate局部hash被错误设为全局UNIQUE，lineage/candidate未按月分区，因此v1 receipt不冒充Phase 1G最终schema。
 - Phase 1F.1 forward修正代码已由PR `#2129`合入并在 disposable PostgreSQL L2通过；2026-07-15依次完成DEV与production plan/apply/new-verify/new-exact-reapply。两个目标均为`COMPATIBLE/COMPATIBLE/downstream_ready=true`，最终catalog fingerprint一致为`106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627`。它采用全局identity、月分区payload和只读compatibility view，保持snapshot读取结果不变；执行中零业务DML、零runtime activation，也未新增审批、角色或备份要求。
 - Phase 1G开工一致性复核发现Phase 1F.1 outbox唯一键及capture-gap identity缺少scope，同一Selection证据无法被多个独立Program合法消费或形成独立失败证据。Phase 1F.2唯一实施级设计`docs/architecture/advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`已完成实现，并通过PR #2144及BUG修复PR #2146/#2150合入；2026-07-15 DEV与production均已plan/apply/new-verify/new-exact-reapply，exact v3 `COMPATIBLE/downstream_ready=true`，最终catalog fingerprint为`95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a`。该状态是schema技术事实，不是审批或人工门禁。
-- Phase 1G唯一父级实施设计为`docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`。G1-G4代码已分别由PR #2158、#2167、#2178、#2191合入；G5唯一实施级设计为`docs/architecture/advisory_phase1g_g5_dev_evidence_f2_design_20260716.md`，代码已由PR #2217合入并完成L0-L2。2026-07-18已从合入主线对O3真实DEV双轨执行首次persistent和exact rerun：两个Program及两个`2026-07-20` future-effective ACTIVE binding已形成，request hash为`ba3f0c230b2f4efe3f1d85f15b1de2268f0ad2a3622661f83cfe79deaf8eed6f`；由于decision date尚未完成，两次均准确返回`ADVISORY_DEV_ONBOARDING_INPUT_PENDING`，未生成DSE v2或formal receipt。O4必须等待2026-07-20真实ingestion后按既定顺序执行，G5 L3/L4继续等待exact Phase 1E plan。Phase 1G在相同PIT cutoff重放并冻结source revision，只读投影immutable DSE/artifact/package evidence，用exact target连接和caller-owned PostgreSQL事务写observation capture，并把稳定result与逐次attempt receipt分离；不补造source event、不重复验证策略包、不调用Selection/推理，不读取回测、Paper或模拟盘数据，也不引入角色、审批、授权或运行时DDL。Phase 1G整体仍需真实DEV evidence，不得越级声明完成。
+- Phase 1G唯一父级实施设计为`docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`。G1-G4代码已分别由PR #2158、#2167、#2178、#2191合入；G5唯一实施级设计为`docs/architecture/advisory_phase1g_g5_dev_evidence_f2_design_20260716.md`，代码已由PR #2217合入并完成L0-L2。2026-07-18已从合入主线对O3真实DEV双轨执行首次persistent和exact rerun：两个Program及两个`2026-07-20` future-effective ACTIVE binding已形成，初始request hash为`ba3f0c230b2f4efe3f1d85f15b1de2268f0ad2a3622661f83cfe79deaf8eed6f`。BUG-766合入后又在冻结代码`d230a33c0d4fe1ab9030401fed5e0cd35b247639`上生成request hash `479b9fa804f7e25d48c607216741a72b914ea7122d831fbb6524e09a6f76df5f`，真实DEV预日期执行准确返回两个Program `WAITING_INPUT`和可完整读回的request ref，未生成DSE v2或formal receipt。O4前瞻验证仍等待所选决策日真实ingestion后按既定顺序执行，G5 L3/L4继续等待exact Phase 1E plan。该等待只属于这次前瞻验收，不是历史范围研究、Phase 0B准备或模型研发必须等待最新交易日的门禁。Phase 1G在相同PIT cutoff重放并冻结source revision，只读投影immutable DSE/artifact/package evidence，用exact target连接和caller-owned PostgreSQL事务写observation capture，并把稳定result与逐次attempt receipt分离；不补造source event、不重复验证策略包、不调用Selection/推理，不读取回测、Paper或模拟盘数据，也不引入角色、审批、授权或运行时DDL。Phase 1G整体仍需真实DEV evidence，不得越级声明完成。
+
+### Phase 1R：历史范围研究与新策略上线前验证
+
+- 目标：把单日权威历史研究能力扩展为正式、有限、可恢复的日期范围业务功能，支持已准入单 Alpha/原生多 Alpha 父包从历史起点逐交易日荐股、演进独立研究列表、成熟 outcome 并形成上线前验证报告。
+- 进入条件：单日 StrategyPackage/Selection 推理语义、历史 PIT 数据访问、Advisory Program/config projection 和列表生命周期契约稳定；不要求等待最新交易日或 O4 所选前瞻日期完成。
+- 交付物：`HistoricalRangeResearchRequest/Run/DayRun/Receipt`、交易日展开、逐日 orchestration、幂等/resume/cancel、前日 list hash chain、研究 list/outcome/summary、API/UI、repo-external artifacts 和 retrospective SEALED dataset bridge。
+- 正确性要求：范围首日无未来 active state；每日日任务只读当日 cutoff 前数据；未来行情只作为成熟 outcome；同一日重试收敛；跨日 list transition 顺序唯一；多 Program 独立；合法数据可从首日贯通到最终报告。
+- 新策略语义：包完成正常准入后即可创建范围任务，不重复验证 package 资产。历史日期早于 package/manifest/code vintage 时仍可运行 current-semantics research，但固定标记 `RETROSPECTIVE_RESEARCH_ONLY`，不得发布 package calibration 或用户可见 READY capability。
+- 模型衔接：范围结果可以立即进入 Phase 0B 和内部 research bootstrap；正式 OOS、概率/区间校准和 Program 模型启用仍由后续阶段独立验收。
+- 隔离：不写普通 Selection run、当前 Advisory list/episode、模拟盘、Paper、QE/Qlib/backtest 或交易表；不创建 scheduler、审批、角色、package re-approval 或运行时 DDL。
+- 发布/回滚：范围任务是显式用户命令/API；关闭该能力只停止新任务和未开始日期，保留已完成研究事实，不影响现有单日 runner 和当前荐股基线。
+- 详细设计等级：F2。已形成 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，并同步修订 Phase 0A.2/Phase 1 对 `REPLAY` 与 observation source 的从属表述；代码尚未开始。
 
 ### Phase 0B：基线质量与可建模性审计
 
 - 目标：基于 Phase 1 的最小 `SEALED` snapshot，确认候选整体 Alpha、内部排名单调性、HMM 边际增益、硬过滤影响和长期赢家 Recall@K。
-- 进入条件：Phase 1 数据最小闭环通过；目标包存在合法 OOS，或已明确只能做 retrospective research。
+- 进入条件：Phase 1 数据最小闭环通过；至少存在一个内容闭合的 formal observation snapshot 或 Phase 1R retrospective snapshot，并明确其 evidence level。只有 retrospective 数据时可以执行候选质量审计和内部 bootstrap 判断，但不得输出已校准用户能力。
 - 交付物：基线审计报告、strategy/conditional Recall 分母与报告、模型价值判断、建议候选深度和目标期限。
 - 关键对照：`alpha_raw`、`hmm_adjusted`、`risk_policy_adjusted`、`selection_effective`、候选等权、候选内随机 5、HMM/risk overlay 启停和行业黑名单消融。
 - 结果分类：明确每个包当前证据是否支持继续重排研究及建议候选深度；逐包输出 `RESEARCH_EVIDENCE_AVAILABLE` 或 `RESEARCH_EVIDENCE_UNAVAILABLE`。该分类不淘汰策略包、不修改荐股基线，也不停止后续数据补采、代理验证或模型迭代。
@@ -1106,18 +1215,19 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过 PIT、OOS、immutabl
 2. research policy、历史 dated binding、manual multi-Program runner、immutable Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
 3. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与原第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
 4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 3 项；模型表与部署表仍由 Phase 2 专项设计闭合。
-5. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
-6. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
-7. HMM、行业黑名单和风格化行业优先级设计。
-8. 超跌反弹候选重排与 Top5 shortlist 约束设计。
-9. 收益分位数、信号存活和持股周期设计。
-10. 分钟路径、成交概率、raw/CNY/yuan 转换和价格区间设计。
-11. 长期趋势、有序目标、生存和捕获率设计。
-12. WSL 训练、项目外 content-addressed artifact store、模型制品、数据快照和调度设计。
-13. Advisory 推理服务、API、缓存、幂等和 reason code 设计。
-14. 荐股页面 capability 影子展示与解释性设计。
-15. Advisory 模型排名启用、Top5 active target 迁移、生命周期、发布和回滚设计；不包含 canary/champion 或审批状态机。
-16. 可选 ModelOps、自动重训、漂移告警和灾备设计；仅在用户另行确认范围后启动。
+5. 历史范围研究执行器与新策略上线前验证 F2 设计：已形成 `advisory_phase1r_historical_range_research_f2_design_20260719.md`，覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离，并同步修订 Phase 0A.2/Phase 1 从属契约。
+6. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
+7. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
+8. HMM、行业黑名单和风格化行业优先级设计。
+9. 超跌反弹候选重排与 Top5 shortlist 约束设计。
+10. 收益分位数、信号存活和持股周期设计。
+11. 分钟路径、成交概率、raw/CNY/yuan 转换和价格区间设计。
+12. 长期趋势、有序目标、生存和捕获率设计。
+13. WSL 训练、项目外 content-addressed artifact store、模型制品、数据快照和调度设计。
+14. Advisory 推理服务、API、缓存、幂等和 reason code 设计。
+15. 荐股页面 capability 影子展示与解释性设计。
+16. Advisory 模型排名启用、Top5 active target 迁移、生命周期、发布和回滚设计；不包含 canary/champion 或审批状态机。
+17. 可选 ModelOps、自动重训、漂移告警和灾备设计；仅在用户另行确认范围后启动。
 
 ## 21. Verification Plan / 验证方案
 
@@ -1134,6 +1244,8 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过 PIT、OOS、immutabl
 - T+1 交易状态只进入 outcome/price-quality label，不进入 T 日候选特征。
 - 长周期标签的 censor、停牌、涨跌停和企业行动处理可复算。
 - 数据缺失不允许静默填充为中性成功。
+- 历史范围任务的交易日集合必须与权威日历一致；首日不得读取未来 active state，日任务特征最大可用时间不得晚于当日 cutoff，outcome 最小日期不得早于对应 entry/holding 时间轴。
+- `HISTORICAL_RANGE_RESEARCH` 与 formal observation 使用不同 lineage/evidence level/dataset partition；selector 不得把 retrospective partition 自动提升为 formal OOS。
 
 ### 21.2 模型验证
 
@@ -1167,6 +1279,9 @@ peak-before-stop path correctness
 - 相同 SelectionRun 在模型关闭时保持当前行为。
 - 五层 rank stage/hash 可追溯；影子模型不能改变 `selection_effective_rank`、Selection 结果或 Paper 意图。
 - 多个 Program/策略包独立运行，互不覆盖模型、列表和生命周期。
+- 历史范围任务可从任意显式已完成历史交易日起步；相同 request exact rerun 结果一致，失败日期恢复后继续按序推进，已完成日期不重复写入。
+- 新策略包历史验证不触发 StrategyPackage 二次准入，不修改普通 Selection、当前 Advisory、模拟盘、Paper 或 QE；范围结果只能进入其独立研究页面和 retrospective dataset。
+- 连续日期中候选变化较大时 active list 仍保持有界，每个退出与进入都有原因和替换关系，不发生候选名单无界膨胀。
 - 行业黑名单股票不会被模型恢复。
 - 稳态 active list 有界；DRAIN_TO_TARGET 迁移可解释收敛；退出股票有记录但不继续占 active count，也不会因回滚复活。
 - 模型缺失、版本不匹配和数据过期返回明确 reason code。
@@ -1176,10 +1291,10 @@ peak-before-stop path correctness
 ### 21.4 测试分层
 
 - L0：schema、纯函数、哈希、标签、价格取整。
-- L1：repository/service/model adapter 契约。
-- L2：DB 数据快照、训练 smoke、模型加载、推理幂等。
-- L3：Advisory API 与业务流程。
-- L4：真实页面 E2E 和影子运行。
+- L1：repository/service/model adapter、范围任务状态机、交易日展开和 list hash chain 契约。
+- L2：DB 数据快照、真实历史多日 runner、恢复/冲突、训练 smoke、模型加载和推理幂等。
+- L3：Advisory API、范围任务创建/进度/恢复/结果和现有业务流程。
+- L4：真实页面 E2E、历史逐日时间线、收益成熟展示和影子运行。
 - L5/nightly：长窗口 OOS、跨模块回归、漂移和长期标签成熟。
 
 长训练、广泛市场阶段验证和 UI/API 业务流交由 Validation Center/CI/nightly；交互开发窗口只保留最小充分本地门禁。
@@ -1230,6 +1345,11 @@ peak-before-stop path correctness
 | F-038 | Phase 0A.2 §14-17/§19 | PARTIAL/HANDOFF/RESEARCH_READY 状态和运行不变量；`backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py` | design_ready | none |
 | F-039 | §6.5、Phase 0A.2 §6.4/§12-16 | manual historical runner、事务恢复和 batch receipt；`backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py` | design_ready | none |
 | F-040 | §6.5、Phase 0A.2 §1.3/§7.2/§11.3 | explicit completed trade date and research isolation；`backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py` | design_ready | none |
+| F-041 | §1.2、§2、§6.6、Phase 1R | 正式范围研究产品边界、持久化任务和用户可见研究结果；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-042 | §6.2-6.3、§6.6、§25.1、Phase 1R | 冻结 package/config/code、复用权威推理语义、零 package 二次准入和零共享模块副作用；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-043 | §6.6、§16.1-16.2、§21.3 | 日任务幂等/恢复、前日 list hash chain、ENTER/HOLD/EXIT/WATCH、有界 active list；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-044 | §4.1、§6.6、§14.2、Phase 1R | 新策略 current-semantics 历史验证、收益成熟和 RETROSPECTIVE_RESEARCH_ONLY 语义；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-045 | §3、§14.2、§17、Phase 1R/0B | retrospective dataset bridge、formal OOS 隔离及 Selection/模拟盘/Paper/QE 隔离；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 
 ## 23. Rollout / Rollback / 发布与回滚
 
@@ -1238,11 +1358,12 @@ peak-before-stop path correctness
 1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、immutable evidence 与 manual historical runner 代码；不创建 scheduler。
 2. 对现有 single current manifest 和 native multi parent 执行只读 research preflight；手工选择已有历史 binding 可解析的 Program/date，不创建 successor binding 或正式 `T0`。
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
-4. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并执行 retrospective research 构建、制品提升和离线训练；observer 不触发荐股，replay 不改变 research scope。
-5. 配置启用仅服务 Advisory 的模型预测 writer；无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。
-6. 再按 capability 发布 UI 影子展示。
-7. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
-8. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
+4. 按 Phase 1R F2 设计发布历史范围研究功能；先以显式历史区间执行单/多 Alpha 独立逐日研究、恢复和收益成熟 E2E，不等待最新交易日，也不改变当前荐股 list。
+5. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并将 formal 与 retrospective source 分区构建为各自 SEALED snapshot；observer 不触发荐股，范围研究不改变 evidence level。
+6. 执行 Phase 0B、模型训练和制品提升；配置启用仅服务 Advisory 的模型预测 writer，无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。
+7. 再按 capability 发布 UI 影子展示。
+8. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
+9. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
 
 每一步都可独立停止。训练任务不得自动修改 Program 当前模型配置。
 
@@ -1275,9 +1396,14 @@ peak-before-stop path correctness
 | 数据库频繁细粒度读取 | 训练 I/O 成为瓶颈 | 一次导出不可变 Parquet，训练只读文件 |
 | 新包没有正式 OOS | 包级预测被误报为已校准 | 合法 prior 才能 `STYLE_PRIOR + SHADOW`；否则 `MODEL_UNAVAILABLE` |
 | current single manifest 继承旧 manifest DSE | 两个 signal identity 被错误合并 | current-manifest smoke 与 manifest-scoped evidence；旧 DSE 仅 retrospective |
-| `review_schedule` 被误当成实际调度 | 历史研究被错误实时化 | 不实现 Advisory scheduler；只接受显式 manual historical batch receipt |
+| `review_schedule` 被误当成实际调度 | 历史研究被错误实时化 | 不实现 Advisory scheduler；只接受显式单日 request 或有限日期范围 request |
 | 一个 Program 失败中断批次 | 多策略包独立性失效 | 稳定 Program 快照、逐 Program 事务/恢复和失败隔离 |
 | replay 或集中回补冒充手工历史研究 | 研究证据混淆 | MANUAL_HISTORICAL_RESEARCH 与 REPLAY/PREVIEW/PUBLISHED 强隔离 |
+| 范围研究被实现成一次性诊断脚本 | 新策略无法重复使用、恢复或比较 | 正式 HistoricalRangeResearchRun/DayRun/List/Outcome/API/UI 契约和确定性 receipt |
+| 当前 active list 被用作历史首日 seed | 未来状态泄漏并污染收益 | Phase 1R v1 只允许空 seed；非空 seed 不在当前范围 |
+| 范围日期并行提交导致列表乱序 | ENTER/HOLD/EXIT 状态分叉 | 候选可预取，list transition 按 Program/日期和前日 list hash 串行提交 |
+| 当前策略回看被误报为当时真实运行 | 虚假 OOS 和错误上线判断 | `HISTORICAL_RANGE_RESEARCH + RETROSPECTIVE_RESEARCH_ONLY` 固定 lineage，禁止伪造历史 binding/vintage |
+| 范围任务重新实现选股算法 | 与 Selection 语义漂移 | 仅通过 Advisory orchestration adapter 调用同一权威 StrategyPackage/Selection 推理组件并做隔离 oracle |
 | 模型和数据版本错配 | 不可复现或错误预测 | 版本/hash 校验和 fail-closed |
 | 模型区间被理解为保证 | 用户决策风险 | 概率、区间、置信度和明确风险说明 |
 | 每日列表简单并集 | active list 膨胀 | 显式 ENTER/HOLD/EXIT 和有界 active count |
@@ -1318,7 +1444,7 @@ peak-before-stop path correctness
 - 状态机 reachability 检查，证明每个非终态都有合法后继，且合法输入不存在“所有分支均拒绝”的死门禁。
 - 生产同构只读或隔离 smoke，验证真实 schema/type/timezone/hash 与 fixture 一致。
 
-荐股正向路径固定为：
+单日精确历史研究正向路径固定为：
 
 ```text
 admitted enabled StrategyPackage identity + dated binding
@@ -1334,6 +1460,22 @@ admitted enabled StrategyPackage identity + dated binding
 
 在已准入策略包、行情准确且配置匹配时，上述路径必须通过。模型、训练数据或 snapshot 子系统不可阻塞现有荐股基线；其不可用只能关闭对应模型能力并输出 reason code。
 
+历史范围研究正向路径固定为：
+
+```text
+admitted StrategyPackage + explicit Program/config snapshot + completed date range
+  -> freeze manifest/runtime/review/style/code/calendar identities without package revalidation
+  -> expand ordered trading dates
+  -> for each Program/date read DB_HISTORICAL PIT inputs at exact cutoff
+  -> invoke the same authoritative StrategyPackage/Selection inference semantics through isolated Advisory adapter
+  -> persist candidate set and day receipt idempotently
+  -> apply ordered ENTER/HOLD/EXIT/WATCH transition from previous list hash
+  -> append mature outcomes when their horizon data becomes available
+  -> deterministic range summary + retrospective SEALED dataset refs
+```
+
+完整历史数据和合法当前策略语义必须能够自动贯通该链路。模型不可用时范围任务继续保存基线候选、列表和规则结果；不得用模型能力作为范围研究总门禁。
+
 ## 26. 开放决策与后续评审点
 
 以下决策必须在对应详细设计中基于 Phase 0A/1/0B 证据确定，不阻断本蓝图：
@@ -1345,5 +1487,7 @@ admitted enabled StrategyPackage identity + dated binding
 - 用户另行确认 ModelOps 后的自动重训频率、配置变更和漂移停用阈值。
 - 分钟数据覆盖不足时允许展示的最粗价格区间等级。
 - 模型预测表按候选、期限展开还是 JSONB 混合存储。
+- Phase 1R 详细设计已决定不设置业务性的最大 Program 数或日期跨度；合法范围通过排队、分块和有界并发推进。v1 吞吐默认值为每进程 2 个 Program、每 Program 预取 2 个候选日期、每个 day-plan 物化事务 500 行、每个 outcome 短事务 500 个稳定 key，后续只可按测量结果调优，不得变成请求审批或业务门禁。
+- Phase 1R 详细设计已决定在现有 Advisory 页面内使用独立“历史验证”tab；它与当前荐股视图共享导航但保持 API、list identity、表和 artifact root 隔离。
 
 这些参数不得在代码阶段临时拍脑袋确定，必须回到相应 F1/F2 详细设计和验收矩阵。

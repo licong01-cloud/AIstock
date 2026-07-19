@@ -10,7 +10,8 @@
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 前置桥接设计：`docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`
 > 前置实现：PR `#1958`，merge commit `6669e00208e6e10c28901d5ba34539d851630b3e`
-> 当前状态：`design_ready`；当前边界固定为手工历史研究、`DB_HISTORICAL` 和 `execution_prohibited=true`。Phase 0A.1/0A.2 历史研究实现已独立合入；Phase 1A source-availability event 与 exact source-revision-set 基础设施已在 DEV DB 通过 rollback-only L4。未实现 observer、capture/build/snapshot 或训练；不存在 daily Advisory scheduler、实时荐股、正式 `T0`、投资建议或交易执行路径
+> 当前状态：`design_ready`；当前已实现边界固定为手工历史研究、`DB_HISTORICAL` 和 `execution_prohibited=true`。Phase 0A.1/0A.2 历史研究实现已独立合入；Phase 1A source-availability event 与 exact source-revision-set 基础设施已在 DEV DB 通过 rollback-only L4。未实现 observer、capture/build/snapshot、Phase 1R bridge 或训练；不存在 daily Advisory scheduler、实时荐股、正式 `T0`、投资建议或交易执行路径
+> 2026-07-19 边界修订：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` 新增独立的 retrospective 历史范围研究来源。现有 formal/research-ready selector 规则不变；Phase 1R lineage 只能进入独立 retrospective partition，不能回退或升级为 formal OOS。本文仅同步设计契约，不宣称 Phase 1R bridge 已实现
 > 实现处置：PR `#1965` 的 authority/approval/authorization 方向已被本次设计取代，不得按原方案合入；后续实现必须基于 deterministic handoff/readiness 和 8 类自动门禁重新开始
 > 设计合并说明：统一闭合父蓝图后续文档清单第 2、3 项，避免 observation/label/snapshot 与 DDL/迁移形成竞争契约
 > 复查修订范围：原位删除 approval/authorization/RBAC，统一 deterministic handoff、source availability、canonical version、label、build attempt、CAS、invalidation、GC 和 gate satisfiability 契约；不存在仅在文末追加的勘误
@@ -259,7 +260,7 @@ existing Selection / StrategyPackage / Advisory / Paper
 | A1-019 | candidate 与 universe 共用确定性现金流、cost、benchmark、corporate-action 和 outcome engine；winner 由版本化定义派生 |
 | A1-020 | build attempt 使用 lease/fencing；generation 终止、base、invalidation、blob refs、durable publish 和 GC cancel/new epoch 采用 fail-closed 状态机 |
 | A1-021 | trace 与 multi-alpha provenance 使用有界、no-throw、版本化 immutable envelope；缺失只降低对应 capability |
-| A1-022 | Phase 1 observation 只消费手工历史研究 runner 的唯一 Program/date receipt 与 exact source revision；PREVIEW、REPLAY、PUBLISHED 和交易语义永久隔离 |
+| A1-022 | Phase 1 formal/research-ready observation 只消费手工历史研究 runner 的唯一 Program/date receipt 与 exact source revision；Phase 1R 只进入独立 retrospective partition；PREVIEW、legacy REPLAY、PUBLISHED 和交易语义永久隔离 |
 
 ## 6. Phase 0A Handoff Readiness
 
@@ -329,7 +330,7 @@ created_at
 
 `PARTIAL` 必须由可枚举的未成熟项产生，例如 `SOURCE_LEDGER_PENDING` 或 `LABEL_SOURCE_PENDING`；identity conflict、manifest mismatch、历史 binding 歧义和伪造 available-at 仍为 `BLOCKED`。双轨正向验证先证明 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 后由新 audit version 提升为 `RESEARCH_READY`。
 
-Phase 1 source observer 只观察数据库 ingestion completion，使用数据库时钟生成首次观察时间；它不触发候选计算或荐股。Observation 只接受 `MANUAL_HISTORICAL_RESEARCH` receipt、`HISTORICAL_RESEARCH_ONLY` scope 和 exact source revision set；唯一业务键为 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)`。`PREVIEW`、`REPLAY`、`PUBLISHED`、旧 manifest 猜测和 current/latest fallback 均不能进入 research-ready observation。
+Phase 1 source observer 只观察数据库 ingestion completion，使用数据库时钟生成首次观察时间；它不触发候选计算或荐股。Formal/research-ready observation 只接受 `MANUAL_HISTORICAL_RESEARCH` receipt、`HISTORICAL_RESEARCH_ONLY` scope 和 exact source revision set；唯一业务键为 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)`。Phase 1R 可按其详细设计写入 `HISTORICAL_RANGE_RESEARCH` lineage，但必须固定 `RETROSPECTIVE_RESEARCH_ONLY`，使用独立 selector/partition，且不能成为上述 formal/research-ready selector 的 fallback。`PREVIEW`、legacy `REPLAY`、`PUBLISHED`、旧 manifest 猜测和 current/latest fallback 均不能进入 research-ready observation。
 
 ### 6.3 Programmatic mutation safety
 
@@ -539,7 +540,7 @@ trace hash反向重算该字段，否则会形成`plan hash -> request hash -> b
 | `evidence_scope` | `RETROSPECTIVE_RESEARCH_ONLY|GAP_ONLY` |
 | `signal_evidence_level/effective_cutoff_date` | formal evidence metadata |
 | `program_id/binding_version_id` | Program lineage |
-| `lineage_source_type` | `PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY` |
+| `lineage_source_type` | `PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY|HISTORICAL_RANGE_RESEARCH`；最后一项仅允许 retrospective partition |
 | `source_run_id` | 非空 deterministic source identity |
 | `review_run_id/list_version_id` | 可空的在线引用 |
 | `lineage_content_hash` | append-only hash |
@@ -2043,7 +2044,7 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 - `app.advisory_source_revision_set/member` 与 `source_revision.py`：每个成员固定 query/parameter/partition/revision/content/hash 与 available-at；`DECISION_CUTOFF` member 必须绑定精确 availability event，event 字段不匹配、质量非 `PASS`、失效或 decision/label cutoff 未满足时 fail-closed。event-free member 只能用于显式 `research_only` 的 `LABEL_AS_OF/POLICY_FROZEN` 历史证据，`WATERMARK_ONLY` 不可用于 decision cutoff。exact retry 必须逐字段比较完整 persisted member set，不能只比较 header 或 member count。
 - 验证包含纯函数链/时间/cutoff/研究边界反例，以及 `AISTOCK_DEV_DB_E2E=1` 下 `127.0.0.1:5433/aistock_dev` 的 schema、append/readback、exact retry、DB immutable trigger 与 rollback-no-residue L4。
 
-本切片不启动 observer，不扫描或改写 market 表，不创建 capture/build/label/snapshot，只消费手工历史研究 evidence，也不改变 Selection、模拟盘、Paper、QMT 或任何交易执行路径。因此它**不标记** F-030、F-037、F-038 或完整 Phase 1 为已完成；后续阶段必须在该不可变 ledger 上实现 observer、capture/build state machine 与 research readiness 消费。
+本切片不启动 observer，不扫描或改写 market 表，不创建 capture/build/label/snapshot，只消费手工历史研究 evidence，也不消费尚未实现的 Phase 1R range lineage；它不改变 Selection、模拟盘、Paper、QMT 或任何交易执行路径。因此它**不标记** F-030、F-037、F-038 或完整 Phase 1 为已完成；后续阶段必须在该不可变 ledger 上实现 observer、capture/build state machine、research readiness 消费和 Phase 1R 独立 retrospective bridge。
 
 ### 22.5 Phase 1B：Stage trace、多 Alpha provenance 与 parity
 
@@ -2277,30 +2278,30 @@ G-RUN-05 artifact_publish_cleanup
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3、§9.4、§22.5 | Null sink、有界 no-throw capture、业务外 writer 和开/关/故障 parity oracle 已定义 | design_ready | none |
-| F-002 | §6.1-6.2、§7、§8.3 | 单原生包 target、逐 scope 自动 readiness、多 Program/audit lineage 与独立失败规则已定义 | design_ready | none |
-| F-003 | §7、§8、§13.5 | stable signal、version chain、lineage 与 snapshot 单版本选择已定义 | design_ready | none |
-| F-004 | §9 | 四层补采、第五层不可用、缺失不反推及 immutable trace closure 已定义 | design_ready | none |
-| F-005 | §9、§11、§16.4、§23 | deep pool、stage hash、universe raw outcome、winner registry 与 capability 已定义 | design_ready | none |
-| F-006 | §3、§8.2、§9.5、§12 | explicit HMM 引用及 generation-on-miss 禁止已定义 | design_ready | none |
-| F-007 | §9、§10、§12 | risk/ST/行业/停牌/涨跌停的 signal/outcome evidence scope 已定义 | design_ready | none |
-| F-015 | §1.4、§12、§15、§16 | DB authority、append-only availability/revision、Parquet derivative、回测/Paper 禁止已定义 | design_ready | none |
-| F-016 | §6.3、§10、§12、§21 | T/E/S/X_h、available-at、survivorship、maturity/terminal/censor/cost/benchmark/leakage 已定义 | design_ready | none |
-| F-017 | §13.3-13.6、§14、§15、§16 | capture、build/attempt、manifest-content snapshot、durable CAS、promotion、invalidation 与 reader gate 已定义 | design_ready | none |
-| F-019 | §6、§7.3、§19、§23 | readiness/version/source/attempt/store fail-closed reason code、gap 与 capability 拒绝已定义 | design_ready | none |
-| F-022 | §22、§23、§24 | Phase 0A.1 至 1J 交付、Phase 0B handoff、停止与回滚已定义 | design_ready | none |
-| F-023 | §21 | readiness、version、label、DB、正向 golden、gate satisfiability、crash/durability、leakage、容量和 GC 验证已定义 | design_ready | none |
-| F-024 | §6.3-6.4、§18、§21.7、§22、§24、§26 | 8 类自动门禁、零人工审批、零运行时 DDL 和合法数据全链路正向可达已定义 | design_ready | none |
-| F-025 | §5、§6、§18、§22.2 | Phase 0A.1 handoff/readiness/scope set、自动分类和无角色/无授权链 CLI 契约已定义 | design_ready | none |
-| F-026 | §7、§8、§13.5、§21 | stable economic sample、evidence revision、selector 与 double-count 防护已定义 | design_ready | none |
-| F-027 | §9.4、§21.4-21.6、§22.5 | trace callback/finalize/outbox/writer 故障隔离、预算和 immutable raw payload 已定义 | design_ready | none |
-| F-028 | §3、§9.1-9.3、§21.2、§22.5 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
-| F-029 | §10、§11、§15、§21 | 时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
-| F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、程序化 generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
-| F-037 | §6.2、§12、§17、§22.4、§22.7 | Phase 0A.2 复用 append-only exact source ledger；历史缺口不补造 event，缺少精确 source 时保持 retrospective/unavailable 已定义 | design_ready | none |
-| F-038 | §6.1-6.4、§17、§18、§21.7、§22.2、§22.8 | 正确双轨历史输入自动形成 PARTIAL/HANDOFF，exact source/label closure 后达到 RESEARCH_READY，且不影响 Selection/模拟盘/Paper | design_ready | none |
-| F-039 | §6.2、§22.3、§22.8、§26 | Phase 1 只消费手工历史 runner 的唯一 Program/date/research-scope receipt，Program 独立、幂等和失败隔离 | design_ready | none |
-| F-040 | §6.2、§22.3、§22.8 | 显式已完成历史日期、DB_HISTORICAL、research-only 与 PREVIEW/REPLAY/PUBLISHED/实时/交易语义隔离 | design_ready | none |
+| F-001 | §3、§9.4、§22.5 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；Null sink、有界 no-throw capture、业务外 writer 和开/关/故障 parity oracle 已定义 | design_ready | none |
+| F-002 | §6.1-6.2、§7、§8.3 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；单原生包 target、逐 scope 自动 readiness、多 Program/audit lineage 与独立失败规则已定义 | design_ready | none |
+| F-003 | §7、§8、§13.5 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；stable signal、version chain、lineage 与 snapshot 单版本选择已定义 | design_ready | none |
+| F-004 | §9 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；四层补采、第五层不可用、缺失不反推及 immutable trace closure 已定义 | design_ready | none |
+| F-005 | §9、§11、§16.4、§23 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；deep pool、stage hash、universe raw outcome、winner registry 与 capability 已定义 | design_ready | none |
+| F-006 | §3、§8.2、§9.5、§12 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；explicit HMM 引用及 generation-on-miss 禁止已定义 | design_ready | none |
+| F-007 | §9、§10、§12 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；risk/ST/行业/停牌/涨跌停的 signal/outcome evidence scope 已定义 | design_ready | none |
+| F-015 | §1.4、§12、§15、§16 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；DB authority、append-only availability/revision、Parquet derivative、回测/Paper 禁止已定义 | design_ready | none |
+| F-016 | §6.3、§10、§12、§21 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；T/E/S/X_h、available-at、survivorship、maturity/terminal/censor/cost/benchmark/leakage 已定义 | design_ready | none |
+| F-017 | §13.3-13.6、§14、§15、§16 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；capture、build/attempt、manifest-content snapshot、durable CAS、promotion、invalidation 与 reader gate 已定义 | design_ready | none |
+| F-019 | §6、§7.3、§19、§23 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；readiness/version/source/attempt/store fail-closed reason code、gap 与 capability 拒绝已定义 | design_ready | none |
+| F-022 | §22、§23、§24 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；Phase 0A.1 至 1J 交付、Phase 0B handoff、停止与回滚已定义 | design_ready | none |
+| F-023 | §21 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；readiness、version、label、DB、正向 golden、gate satisfiability、crash/durability、leakage、容量和 GC 验证已定义 | design_ready | none |
+| F-024 | §6.3-6.4、§18、§21.7、§22、§24、§26 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；8 类自动检查、零人工审批、零运行时 DDL 和合法数据全链路正向可达已定义 | design_ready | none |
+| F-025 | §5、§6、§18、§22.2 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；Phase 0A.1 handoff/readiness/scope set、自动分类和无角色/无授权链 CLI 契约已定义 | design_ready | none |
+| F-026 | §7、§8、§13.5、§21 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；stable economic sample、evidence revision、selector 与 double-count 防护已定义 | design_ready | none |
+| F-027 | §9.4、§21.4-21.6、§22.5 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；trace callback/finalize/outbox/writer 故障隔离、预算和 immutable raw payload 已定义 | design_ready | none |
+| F-028 | §3、§9.1-9.3、§21.2、§22.5 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
+| F-029 | §10、§11、§15、§21 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
+| F-030 | §12-16、§20-21、§25 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；source revision、attempt fencing、程序化 generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
+| F-037 | §6.2、§12、§17、§22.4、§22.7 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；Phase 0A.2 复用 append-only exact source ledger；历史缺口不补造 event，缺少精确 source 时保持 retrospective/unavailable 已定义 | design_ready | none |
+| F-038 | §6.1-6.4、§17、§18、§21.7、§22.2、§22.8 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；正确双轨历史输入自动形成 PARTIAL/HANDOFF，exact source/label closure 后达到 RESEARCH_READY，且不影响 Selection/模拟盘/Paper | design_ready | none |
+| F-039 | §6.2、§8.3、§22.3、§22.8、§26 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；Phase 1 formal/research-ready selector 只消费手工历史 runner 的唯一 Program/date/research-scope receipt；Phase 1R 使用独立 retrospective lineage，Program 独立、幂等和失败隔离 | design_ready | none |
+| F-040 | §6.2、§8.3、§22.3、§22.8 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；显式已完成历史日期、DB_HISTORICAL、manual/range research-only 与 PREVIEW/legacy REPLAY/PUBLISHED/实时/交易语义隔离 | design_ready | none |
 
 ## 28. DESIGN-COMPLIANCE-001 交付前检查
 
