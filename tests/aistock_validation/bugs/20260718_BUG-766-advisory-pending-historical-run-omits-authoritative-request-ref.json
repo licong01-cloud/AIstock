@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-766",
-  "closed_at": null,
+  "closed_at": "2026-07-19T03:44:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "Pending historical execution must fail explicitly while still returning the exact typed historical_request_ref already published by the authoritative O3 store; no CAS scan or handwritten ref is required.",
   "first_seen_at": "2026-07-18T19:51:37.905269Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c73bdde7e2c12b8f672e381afe4e128873e73168",
+  "fixed_at": "2026-07-19T03:49:03.415815Z",
   "github_issue_number": 2457,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2457",
   "last_seen_at": "2026-07-18T19:51:37.905269Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2458",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "0f81ff552ad42a583ff3d3a2",
     "source_event_id": "FE-20260718-0f81ff552ad4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py backend/tests/advisory_dev_input_onboarding/test_o2_static_and_cli.py -q -> 24 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed with 8 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
