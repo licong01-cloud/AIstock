@@ -1,9 +1,9 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v1.8
+> **版本**：v1.9
 > **日期**：2026-07-17
-> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已实现；自动评估 worker service 源码已实现；真实 QE 10-case、性能、实机截图与 runtime activation 仍待外部验收
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.0
+> **状态**：P1-A 已验收；P1-B 已实现；P1-C API/UI/worker 源码及审计硬化已实现；Windows 独立 worker 已完成首次 activation 与真实 Loop10 v2 queue receipt；真实 QE 10-case、10 候选性能和实机 UI/Playwright 仍待外部验收
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.1
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -1031,6 +1031,30 @@ frontend/src/lib/navigation/nav-groups.ts
   更新，未因本验收重启。8001/3000/19080 未由本任务启动，worker/API/UI activation
   继续为 pending。
 
+### 17.4.2 2026-07-19 Phase 1 worker runtime activation receipt
+
+- **运行环境**：Windows 独立 Python 进程显式运行
+  `scripts/hmm_evolution_worker.py --serve --owner-id service-aistock-recovery --poll-seconds 5`；
+  worker 未嵌入 FastAPI startup，也未注册 Phase 3 scheduler。
+- **API 与请求**：重启后的 `/api/v1/health` 返回 200；以候选
+  `hmmc_51125769a3e34f2a8dee4888`、`qe_20260705_004409_4437/Loop10`、
+  `hmm_evaluation_spec_v2`、TopK 46、label horizon 20 提交，HTTP 202，trace
+  `66b589b23be549e5b53fb9728614cb6a`。
+- **durable queue**：batch `hmmb_4a5f9f9b7c064c5287829c35c23f1177` 被 worker 自动认领；
+  evaluation `hmme_7bc7478f392548b2952507530c42d7a8` 在约 121 秒后 succeeded，
+  1 succeeded / 0 failed / 0 timeout，243 个交易日、217 个 changed days。
+- **冻结 universe 身份**：`filtered_pool_20260428 ∩ shsz_st_pit_active_v1`，4497 symbols、
+  5161 ST-PIT spans；binding mode 为 `legacy_frozen_runtime_artifact_v1`，风险策略 artifact
+  `qe_event_risk_policy.json` SHA256 为
+  `8f1a09a0e6e9fba0e5f9e0eb62ad2af02a91ea1059cbdec0257f287c556d4942`。
+- **用户点名日期复核**：2025-02-17、2025-03-18、2025-04-03、2025-04-11 均产生
+  entered/dropped、label 和 market return 指标，不再显示为“未计算”。
+- **显式降级而非静默成功**：结果 `evidence_quality=degraded`，结构化记录 3 条 label artifact
+  缺失和 4 条 market horizon price 缺失；primary coverage 98.62%。该 receipt 证明 BUG-772
+  和首次 worker activation 通过，不将剩余数据证据缺口伪装为 complete。
+- **未完成边界**：真实 10-case、双候选/10 候选 benchmark、进程中断 lease recovery、长期
+  服务监督和真实 UI/Playwright 仍待完成；不得据此宣称整个 Phase 1 verified。
+
 ### 17.5 DESIGN-COMPLIANCE-001
 
 每个实现 PR 逐项检查：
@@ -1060,7 +1084,7 @@ frontend/src/lib/navigation/nav-groups.ts
 
 当前状态：P1-A 源码与外部验收完成；P1-B 与 P1-C 源码完成，P1-C 审计硬化已覆盖共享输入并发、lease recovery、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
 `production_ddl_gate=applied_and_verified`；
-`runtime_activation_gate=pending`。这不代表整个 Phase 1 已通过外部验收；真实 QE 10-case、10 候选性能、实机页面截图和首次 runtime activation 仍未完成。
+`runtime_activation_gate=phase1_worker_activated_and_verified`。这不代表整个 Phase 1 已通过外部验收；真实 QE 10-case、10 候选性能、进程中断 lease recovery 和实机页面/Playwright 仍未完成。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -1169,11 +1193,11 @@ frontend/src/lib/navigation/nav-groups.ts
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt见 §17.4.1 | verified | 无 |
-| F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py` | `backend/tests/hmm_evolution/test_{evaluator,input_adapter,market_repository,source_manifest,executor,legacy_oracle,legacy_diagnostic}.py`；非并列旧诊断 oracle、显式 tie-break、h10/h20/mixed horizon、latest-common/read-only transaction、交易日 forward return、coverage/warning、deterministic result hash；BUG-736/BUG-737 回归覆盖无硬编码凭据、无宽泛异常吞错、无 QE config 下载、Phase 0 缓存复用与 canonical market repository；HMM/Data Source matrix：178 passed / 8 skipped；新核心模块 line coverage 86.76%、branch coverage 70.31%；真实 dev PostgreSQL：空行情 fail-loud + forward-return SQL/只读事务 smoke 1 passed | verified | 无 |
+| F-007 | 本文 §7、§8；`backend/services/hmm_evolution/{evaluator,input_adapter,market_repository,source_manifest,executor,universe}.py`；`backend/services/hmm_data_source/{backtest_source,cache_manager}.py`；`scripts/diagnostics/hmm_offline_diagnostic.py`；BUG-772/PR #2471 | `python -m nox -s hmm_evolution_backend`：172 passed / 74.12% coverage；`backend/tests/hmm_evolution/test_universe.py`：9 passed；真实 Loop10 v2 receipt 固化 source pool 与冻结 `shsz_st_pit_active_v1` runtime artifact，5161 spans、4497 symbols，batch/evaluation succeeded | verified | 无 |
 | F-008 | 本文 §10～§13；`backend/services/hmm_evolution/{repository,service,worker,input_adapter,executor,models,errors}.py`；BUG-742/BUG-743 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`：共享 input bundle 单次加载、`candidate_concurrency=1..4` 有界并发、serialized heartbeat/fencing、worker-cycle batch recompute、每轮 lease reaper；既有 dev PostgreSQL 8-worker receipt | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；仍需 dev PostgreSQL 真实双候选并发、进程中断后 lease recovery 和 10 候选耗时 receipt，未标记 verified |
 | F-009 | 本文 §9；`backend/services/hmm_evolution/scorer.py`、`repository.py::_apply_recommendations_with_cursor()` | `backend/tests/hmm_evolution/test_scorer.py`、`test_repository_integration.py::test_batch_recommendations_persist_only_on_batch_items`；singleton/percentile/tie/missing renormalization/coverage-only unranked/stable top-3/no evaluation-table write；无淘汰阈值、无新增审批，排名只持久化到 batch item | verified | 无 |
-| F-010 | 本文 §14、§15；`backend/routers/hmm_evolution.py`、`backend/services/hmm_evolution/{runtime,asset_content_policy}.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/{app/hmm-evolution,components/hmm-evolution,components/hmm-research,lib/hmm-evolution,lib/hmm-research}`；BUG-744～BUG-748 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；`frontend/tests/hmm-evolution/hmm-evolution.spec.ts`：QE 权威节点、text-only bounded content + redaction、221+ 资产分页搜索、schema-aware 摘要、bounded polling/stale/degraded、daily_summary fail-loud、SVG 曲线、session idempotency | approved_by_user_implementation_complete_external_acceptance_pending | 用户明确批准先完成审计修复并合入、外部验收另行执行；真实 API 页面截图、完整 Playwright、10-case、性能 benchmark 和首次 runtime activation 仍待补，未宣称 F-010 verified |
-| F-010A | 本文 §5.1、§13.5、§18～§21；`backend/services/hmm_evolution/worker_service.py`、`scripts/hmm_evolution_worker.py`、`frontend/src/components/hmm-evolution/{EvolutionDashboard,BatchDetailView,EvaluationDetailView}.tsx` | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；覆盖 CLI parser/runtime/env、连续 drain、idle wait、poll bounds、SIGINT/SIGTERM、known/unknown failure propagation 和 nonzero exit contract | approved_by_user_implementation_complete_external_acceptance_pending | 源码和直接测试已完成；CI、首次 service activation、进程重启与真实 queue receipt 待回填 |
+| F-010 | 本文 §14、§15；真实 API/UI 路径；BUG-744～BUG-748、BUG-770～BUG-772 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-19 POST v2 HTTP 202，Loop10 evaluation succeeded；此前点名的四个未计算日期均产生完整逐日替换指标 | approved_by_user_implementation_complete_external_acceptance_partial | 真实 API/worker 单 case 已通过；真实页面截图、完整 Playwright、10-case 和标准性能 benchmark 仍待补，未宣称 F-010 verified |
+| F-010A | 本文 §5.1、§13.5、§17.4.2、§18～§21；`worker_service.py`、`hmm_evolution_worker.py --serve` | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；Windows worker stop/start、5 秒 polling、真实 queue claim、约 121 秒 terminal receipt，1 succeeded / 0 failed / 0 timeout | approved_by_user_implementation_complete_external_acceptance_partial | 首次 activation、进程重启与真实 queue receipt 已完成；长期监督、进程中断 lease recovery、双候选/10 候选负载仍待补 |
 
 ## 24. 设计结论
 
@@ -1181,14 +1205,16 @@ P1-A 的 QE 全资产只读 reader、candidate identity、schema 和 durable sta
 源码、真实 dev PostgreSQL、生产 schema 与真实 QE workspace 外部验收。P1-B 已实现 pure
 evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只读 repository、durable
 executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算
-路径迁移；F-007/F-009 已验证。P1-C 的 API/UI/worker 源码及 BUG-742～BUG-748 审计硬化已完成，
-但受控 10-case、10 候选性能、真实页面/Playwright 和首次 runtime activation 仍待外部验收。
-生产 worker/API/UI 均未启用，不得把当前状态表述为整个 Phase 1 完成或已具备生产运行状态。
+路径迁移；F-007/F-009 已验证。P1-C 的 API/UI/worker 源码及审计硬化已完成，BUG-772 和
+Windows 独立 worker 的首次真实 Loop10 v2 runtime receipt 已通过；但受控 10-case、10 候选性能、
+进程中断 lease recovery 与真实页面/Playwright 仍待外部验收。Phase 1 API/worker 已有受控运行证据，
+不得将其扩大表述为整个 Phase 1 verified、Phase 2/3 已启用或已接入 QE/Paper 生产链。
 
 ## 25. 变更记录
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v1.9 | 2026-07-19 | 回填 BUG-772/PR #2471 与首次 Windows worker runtime activation：真实 Loop10 v2 API 202、冻结 ST-PIT universe、约 121 秒 queue terminal receipt和显式 degraded evidence；保留 10-case、10 候选、lease recovery 与 UI/Playwright 缺口 |
 | v1.8 | 2026-07-18 | 批准 Phase 1 自动评估 worker service：显式 `--serve` 独立消费 durable queue，固化 canonical env、poll bounds、信号收敛、fail-loud 退出和与 Phase 3 scheduler 的隔离；新增 F-010A |
 | v1.7 | 2026-07-18 | 回填 BUG-742～BUG-748 审计修复：有界并发共享输入、lease reaper、QE 权威节点、内容安全、全资产 schema-aware 浏览、UI fail-loud 状态机和 idempotency；F-008/F-010 标记为源码完成但外部验收待补，不提前宣称 Phase 1 完成 |
 | v1.6 | 2026-07-18 | 回填 P1-C API/UI/worker 实现路径、本地 contract/TypeScript/Next build 证据和仍待完成的真实 UI/10-case/性能外部验收；将 F-006/F-008 测试证据改为 feature validator 可核验命令 |
