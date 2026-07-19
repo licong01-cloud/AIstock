@@ -193,12 +193,15 @@ rules:
   - rule_id: qe_multi_alpha_services
     priority: 90
     include:
+      - backend/migrations/multi_alpha_durable_orchestration_*.sql
       - backend/services/multi_alpha/**
       - backend/routers/multi_alpha.py
+      - backend/tests/multi_alpha/**
       - backend/tests/test_multi_alpha*.py
       - backend/tests/strategy_package/test_multi_alpha*.py
+      - scripts/backfill_multi_alpha_durable_tasks.py
     primary_module: qe.auto_evolution
-    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics]
+    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics, platform.db]
     layer: backend_service
     risk_level: high
     ownership_reason: QE multi-alpha services combine experiment legs, execute portfolio backtests, persist scheme and LOO evidence, and expose the operator UI contract.
