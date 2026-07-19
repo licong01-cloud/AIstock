@@ -3,8 +3,8 @@
 - 文档类型：F2 跨模块架构与实现级详细设计
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / QE UI
 - 日期：2026-07-18
-- 状态：`DESIGN_READY_IMPLEMENTATION_PENDING`
-- 审计修订：已收口用户批准标记、stop/pause、child 状态、节点容量、event 原子性、Archive/schema 可见性和 QE UI 规范入口；本次仍不代表代码已实现
+- 状态：`P0_1A_PRODUCTION_VERIFIED_P0_1B_REVIEWED_DESIGN_READY_CODE_PENDING`
+- 审计修订：P0-1A 已完成源码合入、生产 DDL、历史 task/run/result-child 回填与 readback；P0-1B 从属设计已根据现有 AIstock、生产 schema 与 QE Workspace 服务合同完成二次审核，补齐服务端幂等 receipt、共享 reservation、task/run identity 分离、Archive 和 timeout 语义；运行路径仍未切换
 - 用户授权本次设计范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性；不代表用户已逐项批准本文全部实现细节或未来偏差
 - 唯一运行边界：QE-only；不得影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行语义或其他非 QE 模块
 - 设计约束：遵循 `DESIGN-COMPLIANCE-001` 四项约束，基于现有架构增量开发，不另建“多 Alpha v2”
@@ -15,6 +15,7 @@
 - `docs/architecture/multi_alpha_combine_backtest_ui_reuse_design_20260626.md`
 - `docs/architecture/multi_alpha_combine_backtest_remote_dispatch_design_20260627.md`
 - `docs/architecture/multi_alpha_combine_backtest_qe_ui_parity_design_20260718.md`
+- `docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md`
 - `docs/architecture/multi_alpha_warehouse_archive_f2_design_20260628.md`
 - `backend/services/multi_alpha/combine_backtest.py`
 - `backend/services/multi_alpha/remote_dispatch.py`
@@ -40,6 +41,8 @@ AIstock 当前已经具备可用的多 Alpha 组合研究能力：已有单腿 p
 3. `_NODE_RESERVATIONS` 是进程内字典；重启、多进程或多个后端实例之间不能形成统一节点占用事实。
 4. 当前 retry 是整组新 run；没有暂停、恢复、取消、单子任务 retry 和 results-only 回收。
 5. 当前多 Alpha 页面主要用于查看；没有沿用单 Alpha自动演进页面的完整创建器和子任务级运行面板。
+6. 当前 QE Workspace create API 每次 POST 都注册 background task，request 没有 submission intent/idempotency 字段；确定性 `task_id/Loop1` 只能帮助定位，不能独立保证响应丢失后的 at-most-once execution。
+7. `qe_experiments` 没有统一 node reservation 字段，部分路径又在 POST 成功后才写 node/loop；从多个业务表事后统计 active rows 不能关闭容量超卖窗口。
 
 2026-07-18 重启后的 live evidence 进一步说明这一缺口：R12G 单 Loop 已正常完成；R12P 最新 run 在 baseline child 运行 3600 秒后以 `combine_backtest_scheme_timeout` 终止，父 run 无法保留“远端是否仍运行、是否已有可回收结果”的一等状态，也不能只恢复该 baseline child。该事实是平台编排问题，不是 Alpha 效果结论。
 
@@ -50,7 +53,9 @@ AIstock 当前已经具备可用的多 Alpha 组合研究能力：已有单腿 p
 - 把现有 synthetic task、run、baseline/scheme/LOO child、每次 attempt 和事件持久化为明确层级。
 - 使用 PostgreSQL lease、fencing token、row-version CAS 确保同一 run/attempt 只有一个有效 worker 所有者。
 - 持久化远端 QE `task_id/loop_id`，后端重启后自动重新核对和接管。
+- QE Workspace 服务端以原子 submission receipt 接收 `submission_intent_hash`；相同 identity/hash 重放不再次注册 execution，不同 hash 显式 409。
 - WSL 与远端节点统一通过现有 `QEWorkspaceClient` 执行和查询，不再由本地 subprocess 与远端 client 分别拥有不同生命周期。
+- 所有生产 QE Workspace submit 在 POST 前写统一 `infra.qe_execution_reservation`，reservation INSERT 与 source claim 同一 advisory transaction。
 - 节点容量暂时不足时保持 `queued/waiting_capacity`，不把实验标记为失败。
 
 ### 2.2 P0-2：任务控制与子任务恢复
@@ -84,6 +89,7 @@ AIstock 当前已经具备可用的多 Alpha 组合研究能力：已有单腿 p
 - 不新增 GPU/显存/桌面资源轮询，不调用 `nvidia-smi`、NVML 或其他资源遥测。
 - 不新增研究方向的 PASS/KILL/GO/STOP、数据就绪门槛、人工审批、发布审批或 promotion 审批。
 - 不用新的表替代现有 scheme/LOO 结果表，不复制已有 metrics 和 Archive 数据。
+- 允许新增最小的跨来源 QE execution reservation ledger；它只记录 node/source/remote identity/slot 生命周期，不替代业务表、不存储 Alpha 指标。
 - 不以静态 mock 页面、仅前端按钮、仅 API 声明或仅内存队列作为完成交付。
 
 ## 4. DESIGN-COMPLIANCE-001
@@ -211,7 +217,7 @@ CombineTask
 
 ## 8. DB Contracts / 数据库详细设计
 
-所有 schema 变化使用一个版本化、幂等、additive migration。实现脚本不得自动执行 migration，不得在执行前导出数据库；生产已有每日备份。DDL 应包含表、列、约束、索引、comment 和对应 rollback/preflight 说明。
+每个实施阶段使用独立、版本化、幂等、additive migration：P0-1A durable business schema 已部署，P0-1B 另增 reservation migration。实现脚本不得自动执行 migration，不得在执行前导出数据库；生产已有每日备份。DDL 应包含表、列、约束、索引、comment 和对应 rollback/preflight 说明。
 
 ### 8.1 `strategy_pkg.multi_alpha_combine_task`（新增）
 
@@ -225,13 +231,15 @@ CombineTask
 | `description` | TEXT | 研究说明，不参与算法 |
 | `roster_hash` | TEXT NOT NULL | 复用现有 hash |
 | `roster_json` | JSONB NOT NULL | 腿、seed run、metadata 冻结快照 |
-| `default_request_json` | JSONB NOT NULL | 创建器默认组合/回测/节点参数 |
+| `default_request_json` | JSONB NOT NULL | 创建器默认组合/回测/节点参数；是模板，不是完整 task identity |
 | `legacy_group_key` | TEXT | 历史 UI group 映射；部分唯一索引 |
 | `source_kind` | TEXT NOT NULL | `ui/api/mcp/legacy_backfill` |
 | `created_by` | TEXT | 普通来源标识，不是审批者 |
 | `created_at/updated_at` | TIMESTAMPTZ | 审计时间 |
 
 不在 task 表存储可从 runs 推导的 metrics、best run 或状态，避免双写漂移。task 列表状态由其 runs 聚合。
+
+task immutable identity 只由 canonical roster/roster hash、normalize method 和 walk-forward signature 构成，并对应 `legacy_group_key` 与 deterministic implicit task ID。OOS、TopK、initial cash、持仓参数、baseline、node 与 timeout 是 run 场景参数；同一 task 可以合法承载这些字段不同的多个 run。Repository 不得把完整 `default_request_json` 参与 identity 相等判断，也不得在提交新 run 时隐式覆盖 defaults。
 
 ### 8.2 `strategy_pkg.multi_alpha_combine_backtest_run`（现有表增量）
 
@@ -332,6 +340,22 @@ DB event 是 UI、SSE 和重启恢复的权威事件；现有 `run_events.jsonl`
 4. 对能从 scheme/LOO 结果确定的历史 child，可写 `status=succeeded/failed` 和 `source=legacy_result_backfill`；无法确定远端 attempt 的字段保持 NULL，并在 UI 显示“历史执行映射不可用”。
 5. 回填脚本提供 dry-run/execute/readback，但不输出数据库备份。
 
+回填 task 的 `default_request_json` 可以继续来自组内第一条 run，作为 UI 默认模板；后续 run 复用 task 时只核对 immutable identity，不要求与第一条 run 的完整 backtest config/baseline 相等。
+
+### 8.7 `infra.qe_execution_reservation`（P0-1B 新增）
+
+用途：为所有生产 QE Workspace submit 提供 POST 前、跨进程、跨来源的唯一 slot reservation。它不是第二套实验状态机，也不复制任何 metrics、prediction 或组合结果。
+
+| 字段族 | 字段/语义 |
+|---|---|
+| identity | `reservation_id` PK、`source_kind/source_execution_id` UNIQUE |
+| node/remote | `node_id` FK、`qe_task_id/qe_loop_id/submission_intent_hash`，remote identity UNIQUE |
+| state | `reserved/submitting/running/reconciling/released/failed/cancelled` |
+| ownership | `owner_id/lease_expires_at/fencing_token/row_version`；lease 过期不自动释放 slot |
+| evidence | `remote_status/release_reason_code/reserved_at/heartbeat_at/released_at/created_at/updated_at` |
+
+容量检查、reservation INSERT 与 source row claim 必须在同一 node advisory transaction 中完成。只有权威 remote terminal 或 receipt 明确 `not_reserved` 才能 release；network unknown、deadline exceeded 和本地 lease 过期继续占用。Migration 必须 additive、幂等，包含 comments、partial active index、unique/check constraints、preflight 和 guarded rollback。
+
 ## 9. State Machines / 状态机
 
 ### 9.1 Run 状态机
@@ -360,6 +384,8 @@ attempt queued -> submitting -> running -> reconciling -> succeeded/failed/cance
 ```
 
 `reconciling` 是“本地 worker 正在核对远端事实”，不是失败。远端 API 暂时不可达时保留该状态和最后已知 heartbeat，继续重试核对；不得依据本地 lease 过期推断远端进程已结束。
+
+状态迁移不得跳过关键证据阶段：child 使用 `pending -> materializing -> queued -> running -> reconciling -> terminal`，attempt 使用 `queued -> submitting -> running -> reconciling -> terminal`。远端 receipt 尚为 `reserved_not_started`、network unknown 或 deadline exceeded 时都保持 reconciling，不直接伪造 terminal。
 
 pause 仅作用于 parent run 的新 child 派发；当前 QE Workspace 不具备真实远端 pause，因此 running child/attempt 不进入 paused 状态，而是继续到明确终态。UI 不得把 parent pause 显示为 child 已被冻结。
 
@@ -402,10 +428,10 @@ pause 仅作用于 parent run 的新 child 派发；当前 QE Workspace 不具�
 
 ### 10.4 节点容量
 
-- 新增共享 `QENodeActiveExecutionReader`，基于现有数据库事实构造按 node 的统一 active-execution read model，不另建平行调度平台。至少覆盖 `qe_evolution_loops`、`qe_multi_alpha_groups`、具有 `qe_task_id/qe_loop_id` 的 active `qe_experiments`，以及 durable child attempt 的 `submitting/running/reconciling/cancel_requested`。
-- 以上来源按 `(node_id, qe_task_id, qe_loop_id)` 去重；同一远端 Loop 同时出现在 experiment/group/loop 表时只计一次。无法确认终态但已有 submitted identity 的记录继续占用 slot，直到 reconciliation 得到明确远端事实，不因本地 heartbeat 过期提前释放。
-- capacity API/UI 返回按来源拆分的占用明细和去重后的 total，便于解释为什么排队；不得只返回一个无法核对的整数。
-- 以 PostgreSQL transaction/advisory lock 按 node 串行完成“读取统一占用 + claim child”，取代 `_NODE_RESERVATIONS`。
+- 新增共享 `QEActiveExecutionCapacityService`，实时容量只统计 `infra.qe_execution_reservation` 的 active rows，不把 `qe_evolution_loops`、`qe_multi_alpha_groups`、`qe_experiments` 或 durable attempts 事后拼成近似 reservation。
+- 所有生产 `QEWorkspaceClient.create_and_run_loop()` 调用先进入同一 `QEWorkspaceSubmissionCoordinator`；按 node advisory lock 在同一事务内完成 active count、reservation INSERT 与 source-specific claim，然后才允许远端 POST。
+- `qe_evolution_loops`、`qe_multi_alpha_groups`、`qe_experiments` 和 durable attempts 继续作为各自业务状态权威，只在 P0-1B 激活前导入当前 active execution、以及运行中做一致性核对。无法唯一定位 node 的 active execution 形成结构化诊断，并仅让相关节点 queue-only；不得静默漏计或淘汰研究方向。
+- capacity API/UI 返回 reservation 按来源拆分的占用明细和 total，便于解释为什么排队；不得只返回一个无法核对的整数。
 - 默认运营上限沿用用户既定规则：WSL 最多 2 个普通 Loop、远端最多 4 个 Loop；图模型训练仍由单 Alpha QE 的模型分类保持 WSL 1 串行。多 Alpha pred-backtest 不改变模型训练并发。
 - 容量不足写 `waiting_capacity` event 并保持 queued，不报 `node_capacity_exhausted` 终态错误。
 
@@ -413,15 +439,15 @@ pause 仅作用于 parent run 的新 child 派发；当前 QE Workspace 不具�
 
 对每个非终态 attempt：
 
-1. 若 `qe_task_id/qe_loop_id` 均存在，调用 `get_loop_status()`。
+1. 若 `qe_task_id/qe_loop_id` 均存在，先查询 QE Workspace submission receipt，再调用 `get_loop_status()`。
 2. remote=completed：读取 `qlib_results_enhanced.json`，验证 manifest/hash，幂等写结果。
 3. remote=running：更新 heartbeat/phase，释放本轮 lease，后续继续轮询。
 4. remote=failed/cancelled：读取可用日志并结构化终态。
-5. remote=404 且 attempt 从未确认 submitted：核对 deterministic submission identity 后允许提交。
-6. remote=404 但已有 submitted event：标记 `remote_state_unknown`，保留人工/自动 reconcile；不得立即重复提交。
+5. loop status=404 但 receipt 存在：按 receipt 的 `reserved/started/running/terminal` 事实处理；不得重提。
+6. receipt 权威返回 `not_reserved`：当前 owner 才允许以同一 identity/hash 提交；普通 404 不能证明未接收。
 7. API 暂时不可达：保留 last-known state，写 `remote_status_unavailable` event，不终态化。
 
-为覆盖“远端已接收、后端在保存 response 前崩溃”的窗口，提交前必须先保存确定性的 `qe_task_id/qe_loop_id/submission_intent_hash`。重启时先查询该 identity；只有确认不存在时才提交。
+为覆盖“远端已接收、后端在保存 response 前崩溃”的窗口，提交前必须先保存确定性的 `qe_task_id/qe_loop_id/submission_intent_hash`，并要求 QE Workspace 服务端原子保存同 hash receipt。相同 identity/hash 的重复 POST 返回已有 receipt 而不再次注册 execution；不同 hash 返回 409。若 receipt 已 reserved 但没有 started evidence，保持 `reserved_not_started/reconciling`，P0-2 通过新 attempt 恢复，不覆盖或重放旧 execution。
 
 ### 10.6 Artifact 原子性
 
@@ -453,7 +479,20 @@ read_child_logs()        -> safe log/event tail
 ### 11.2 `run_async=false` 兼容
 
 - REST/UI 默认仍为 async queued。
-- service test 或明确同步调用可以创建 durable run 后调用 `drain_until_terminal(run_id, timeout)`；该函数只是等待 DB/worker 结果，不直接绕过 durable 状态机执行另一套算法。
+- service test 或明确同步调用可以创建 durable run 后调用 `drain_until_terminal(run_id, wait_timeout_seconds)`；该函数只是等待 DB/worker 结果，不直接绕过 durable 状态机执行另一套算法。
+- 等待到期返回 HTTP 202、`wait_timed_out=true` 和当前 durable 状态；连接断开不取消 run、不释放 reservation。`wait_timeout_seconds` 与 transport timeout、`scheme_timeout_seconds/run_timeout_seconds` execution deadline 分离。
+- execution deadline 到期但远端仍 running/unknown 时写 evidence 并保持 reconciling；最终有效结果继续持久化，标记 `completed_after_deadline=true`，不得仅因 deadline 丢弃研究结果。
+
+### 11.3 QE Workspace submission receipt contract
+
+该合同由 QE Workspace owning repository `F:\Dev\RD-Agent-main` 实现，AIstock 只消费，不在客户端伪造：
+
+- `LoopRunRequest` 必填 `submission_intent_hash`；服务端以 `(task_id, loop_id)` 原子持久化 receipt。Canonical request digest 覆盖 `loop_index/config/experiment_files` 内容 hash、`wsl_command/model_source`，排除仅用于通知的 `callback_url`。
+- same identity/same hash replay 返回同一 loop/receipt，不能再次调用 background execution registration。
+- same identity/different hash 返回结构化 HTTP 409。
+- receipt 可独立于 loop status 查询，并在服务重启后恢复；至少覆盖 `reserved/started/running/completed/failed/cancelled`。
+- receipt=`reserved_not_started` 时不自动重放，AIstock 保持 reconciling；后续通过新 attempt retry。
+- WSL 与远端节点必须部署同一 contract；AIstock coordinated submit 不得回退到旧无 receipt POST。
 
 ## 12. Lifecycle Controls / 暂停、恢复、取消和重试
 
@@ -552,7 +591,7 @@ UI 不自行猜测状态许可，也不把 capability=false 解释成研究门�
 ### 13.6 QE-scoped health
 
 - `GET /api/v1/multi-alpha/combine/health`
-- 返回 schema、orchestrator、Archive capture、Prediction Store/CAS 和节点 active-execution reader 的独立状态与结构化 reason；任一子能力不可用不得伪造成整体 healthy。
+- 返回 schema、orchestrator、Archive capture、Prediction Store/CAS、reservation ledger/coordinator 和 QE Workspace receipt contract 的独立状态与结构化 reason；任一子能力不可用不得伪造成整体 healthy。
 - schema 缺失时 multi-alpha 创建、控制和重试接口返回 HTTP 503 + `multi_alpha_schema_unavailable`；FastAPI、非 QE router 和不依赖新 schema 的兼容只读能力保持可用。
 - health 只报告技术可用性，不包含 Alpha 方向审批、PASS/KILL 或研究准入判断。
 
@@ -700,6 +739,11 @@ interface EvolutionDataSourceAdapter {
 | `results_only_artifact_missing` | results-only 缺制品 |
 | `results_only_identity_mismatch` | result manifest 不属于当前 attempt |
 | `node_capacity_waiting` | 容量不足，保持 queued |
+| `qe_capacity_identity_unresolved` | 激活前 active execution 无法唯一定位节点；相关节点 queue-only，已有研究不终止 |
+| `qe_workspace_submission_identity_conflict` | 相同 remote identity 的 submission intent/request digest 不一致，HTTP 409 |
+| `qe_workspace_submission_reserved_not_started` | receipt 已 reserved 但无 started evidence；保持 reconciling，不自动重提 |
+| `multi_alpha_execution_deadline_exceeded` | child/run deadline 到期但远端仍 running/unknown；保留回收 |
+| `multi_alpha_sync_wait_timeout` | 同步等待到期，返回 202，durable run 继续 |
 | `multi_alpha_event_persist_failed` | 权威 event 写入失败；当前动作不得继续伪装成功 |
 | `multi_alpha_archive_capture_unavailable` | Archive capture 初始化或调用不可用；metrics 保留，状态/event/UI 可见并支持补归档 |
 
@@ -717,9 +761,10 @@ interface EvolutionDataSourceAdapter {
 ## 17. Archive 与文件资产
 
 - terminal child result 先进入现有 scheme/LOO 结果表，再由 parent 聚合。
-- parent terminal 后继续调用现有 QE Archive event capture。
-- Archive 失败不改变已经计算出的 Alpha 指标，但必须写独立 `archive_error` event、run reason 和 UI 状态；不得只写日志。
-- `QEArchiveEventCapture` 初始化失败不得继续以 `_archive_event_capture=None` 静默运行。orchestrator health/API 必须暴露 `archive_capture.available=false`、稳定 reason code 和异常摘要；每个受影响的 terminal run 仍写 `archive_error` event。恢复后可对同一 run 幂等重试 Archive，不重算组合或回测。
+- parent terminal transaction 先独立提交；Archive handler 只读取 terminal run，不进入业务终态事务。
+- post-terminal Archive pass 使用由 source/run/schema version 生成的确定性 event ID，继续调用现有 QE Archive event capture；duplicate enqueue 幂等返回，不重复归档。
+- Archive enabled、duplicate、disabled、初始化失败和 enqueue/worker error 都写独立 durable event，并由 run read model 派生 `archive_status/archive_reason`。不得修改已 terminal 的 run status，不覆盖已经计算出的 Alpha 指标，也不得只写日志。
+- `QEArchiveEventCapture` 初始化失败不得继续以 `_archive_event_capture=None` 静默运行。orchestrator health/API 必须暴露 `archive_capture.available=false`、稳定 reason code 和异常摘要；恢复后以同一 event ID 幂等补归档，不重算组合或回测。
 - Prediction Store/CAS 保存源腿与组合 prediction identity；DB 不复制二进制。
 - 历史 `artifact_count=0` 或文件缺失保留明确状态，可通过既有回填能力补关联，不伪造文件。
 
@@ -732,7 +777,7 @@ interface EvolutionDataSourceAdapter {
   - 移除新 async run 的 per-run daemon thread；
   - `submit_run()` 改为创建 task/run 状态并唤醒 orchestrator；
   - 旧同步测试通过 durable drain helper；
-  - 删除 Archive capture 初始化失败后仅写日志并保留 `None` 的静默路径，改为 health + run event/reason 可见状态和幂等补归档入口。
+  - 删除 Archive capture 初始化失败后仅写日志并保留 `None` 的静默路径，改为 health + durable archive event/read-model 状态和幂等补归档入口；不回写 terminal run status。
 - `backend/services/multi_alpha/remote_dispatch.py`
   - 将同步 `execute_pred_backtest()` 拆为可持久化阶段；
   - 暴露 remote task/loop identity；
@@ -756,10 +801,16 @@ interface EvolutionDataSourceAdapter {
 - `backend/services/multi_alpha/execution_adapter.py`
 - `backend/services/multi_alpha/state_models.py`
 - `backend/services/multi_alpha/health.py`
+- `backend/services/quantevolver/qe_execution_reservation.py`
 - `backend/migrations/multi_alpha_durable_orchestration_20260718.sql`
+- `backend/migrations/qe_execution_reservation_20260719{,.preflight,.rollback}.sql`
 - 对应 rollback/preflight/schema contract tests
 
 拆分目的只是降低当前 2000+ 行 service 的职责耦合；公共入口和业务计算继续由现有模块提供。
+
+### 18.3 QE Workspace owning repository 配套变更
+
+在 `F:\Dev\RD-Agent-main\rdagent\app\api_endpoints\qe_evolution_api.py` 与对应测试中实现 submission receipt。该变更单独提交、部署到 WSL/远端节点并验证 OpenAPI/same-hash replay/different-hash 409；AIstock 不复制 QE Workspace server，也不提供旧 schema fallback。
 
 ## 19. Frontend File Plan / 前端逐文件方案
 
@@ -791,11 +842,14 @@ interface EvolutionDataSourceAdapter {
 
 ### P0-1B：execution adapter 与 orchestrator
 
-1. 拆分 remote executor 阶段。
-2. WSL/远端统一走 `QEWorkspaceClient`。
-3. 实现 deterministic child plan、atomic artifacts、DB node capacity claim。
-4. 实现 startup reconcile 和 parent finalization。
-5. 移除新 run 的 daemon thread 所有权。
+1. 在 QE Workspace owning repository 实现 submission receipt，并在 WSL/远端节点验证服务端幂等合同。
+2. 新增 `infra.qe_execution_reservation` migration/repository；容量检查、reservation INSERT 与 source claim 同一事务。
+3. 拆分 remote executor 阶段，WSL/远端统一走携带 `submission_intent_hash` 的 `QEWorkspaceClient`。
+4. 实现 immutable task identity/run scene separation、deterministic child plan、atomic artifacts 和显式状态迁移。
+5. 实现 startup reconcile、deadline/wait 语义、parent finalization 和 post-terminal Archive pass。
+6. 移除新 run 的 daemon thread 所有权，并把所有生产 QE Workspace submit 接入同一 coordinator。
+
+P0-1B 的实现级从属设计为 `docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md`。父蓝图继续作为范围、隔离和总体验收权威；从属设计通过其独立 Design Acceptance Index 细化 F-204、F-205、F-206、F-209、F-210、F-215、F-216、F-218 的文件、状态机、事务、重启和验证合同，不建立平行平台或第二套业务语义。
 
 ### P0-2：control 与 recovery
 
@@ -840,7 +894,9 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 - stale fencing token/row_version 写入被拒绝；
 - lease 过期后新 worker 可 reconcile，旧 worker 不能提交；
 - 每个状态 transition 与 event 在同一 transaction 中提交；event 写入失败时状态回滚且 API 不返回成功。
-- capacity fixture 同时写入 `qe_evolution_loops`、`qe_multi_alpha_groups`、`qe_experiments` 和 durable attempts，按 remote identity 去重后严格遵守 WSL 2/远端 4；来源明细可由 API/UI 核对。
+- reservation migration 连续执行两次无漂移，comments、active partial index、source/remote unique constraints 和 guarded rollback 完整。
+- capacity fixture 验证 reservation INSERT + source claim 同一 advisory transaction，所有生产 submitter 共用 ledger，并严格遵守 WSL 2/远端 4；旧 active source 导入后来源明细可由 API/UI 核对。
+- network unknown、deadline exceeded 和 lease expiry 不释放 reservation；权威 terminal/not-reserved 后恰好释放一次。
 
 ### 21.3 Orchestrator restart matrix
 
@@ -855,7 +911,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 7. remote API 暂时不可达后恢复；
 8. 两个 backend worker 同时启动。
 
-每种场景验证：不重复远端 loop、不丢成功结果、不伪造失败、最终状态可收敛、event/attempt lineage 完整。
+每种场景验证：服务端 receipt 保证不重复注册远端 execution、不丢成功结果、不伪造失败、最终状态可收敛、reservation/event/attempt lineage 完整。另在 RD-Agent owning repository 验证并发 same-hash POST 只执行一次、different-hash 409、receipt 跨服务重启恢复。
 
 ### 21.4 Lifecycle / Retry
 
@@ -877,6 +933,8 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 - events cursor/SSE 断线续传；
 - legacy task key 兼容；
 - durable run 不被 stale-fail endpoint 误终态化。
+- `run_async=false` wait 到期返回 202，连接断开不取消；task identity 允许不同 OOS/TopK/资金/baseline/timeout 场景 run。
+- Archive enabled/disabled/duplicate/error 都由 durable event/read model 可见，补归档使用同一 event ID。
 
 ### 21.6 UI
 
@@ -906,18 +964,20 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 | 风险 | 处置 |
 |---|---|
-| 双 worker 重复提交 | DB claim + fencing + deterministic remote identity + submit-before intent persist |
-| remote 404 语义不明 | 区分 never-submitted 与 submitted-unknown；后者不自动重提 |
+| 双 worker或响应丢失重复提交 | DB claim/fencing + bind-before-submit + QE Workspace 原子 submission receipt；same-hash 不再次注册 execution |
+| remote 404 语义不明 | loop 404 不作为未提交证明；receipt not_reserved 才允许同 identity/hash POST |
 | 后端重启丢任务 | remote loop 独立运行；DB scanner 重启接管 |
 | 子任务成功但 parent 失败 | child/attempt/result 独立持久化；parent partial_failed 聚合 |
-| 节点满载或跨 QE 路径重复计数 | 统一 active-execution reader 按 remote identity 去重；queued/waiting_capacity，不失败 |
+| 节点满载或跨 QE 路径容量竞态 | 单一 reservation ledger；INSERT + source claim 先于 POST且同事务；queued/waiting_capacity，不失败 |
+| 历史 task 的首条 default request 阻止其他场景 | immutable task identity 与 run defaults 分离，场景差异不创建新 task/不报冲突 |
 | pause 被误解为远端冻结 | UI 明确 cooperative pause；in-flight 完成后暂停 |
 | stop 被误实现为 pause | legacy stop 委托 cancel/kill；与当前单 Alpha 停止语义保持一致并做 E2E |
 | cancel 不能确认 | cancelling/remote_state_unknown，持续 reconcile |
 | results-only 读取错 workspace | result manifest + run/child/attempt/hash 校验 |
 | 共享 UI 重构影响单 Alpha | 先做零行为抽取、同 viewport screenshot/golden Playwright，再接 multi-alpha；旧 URL 只做兼容映射 |
 | 旧历史 run 无 child 映射 | 显式 legacy unavailable，不伪造 attempt |
-| Archive capture 初始化失败被静默禁用 | worker health + archive_error event/run reason/UI；metrics 保留并支持幂等补归档 |
+| Archive capture 初始化失败被静默禁用 | post-terminal archive event + outbox-derived status；metrics 保留并以相同 event ID 幂等补归档 |
+| execution deadline 把仍运行或晚到结果判失败 | transport/wait/deadline 分离；running/unknown 保持 reconciling，有效 late result 入库并标记 evidence |
 | schema 未部署便重启 | FastAPI 保持可用；仅 multi-alpha worker/写接口结构化 503，禁止 daemon fallback，不影响非 QE 模块 |
 
 ## 23. Design Acceptance Index
@@ -925,11 +985,11 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | ID | 设计要求 |
 |---|---|
 | F-201 | 只在现有 combine-backtest/QE Workspace/QE UI 上增量实现，不创建新版本或平行平台。 |
-| F-202 | first-class task/run/child/attempt/event 层级和稳定 identity。 |
+| F-202 | first-class task/run/child/attempt/event 层级和稳定 identity；task immutable identity 与可变 run 场景参数分离。 |
 | F-203 | PostgreSQL lease/fencing/row-version CAS 防止重复所有者和旧 worker 写入。 |
-| F-204 | 远端 qe_task_id/qe_loop_id 在提交阶段持久化，后端重启可核对接管。 |
+| F-204 | 远端 qe_task_id/qe_loop_id/submission intent 在提交阶段持久化，并由 QE Workspace receipt 保证响应丢失后不重复执行。 |
 | F-205 | WSL/远端统一复用 QEWorkspaceClient；new async run 不由 subprocess/daemon thread 持有。 |
-| F-206 | DB-backed node capacity 覆盖现有 QE active execution 来源并按 remote identity 去重；WSL 2、远端 4；满载排队不失败。 |
+| F-206 | `infra.qe_execution_reservation` 覆盖所有生产 QE submit 来源；reservation INSERT/source claim 原子，WSL 2、远端 4，满载排队不失败。 |
 | F-207 | pause/resume/cancel 语义明确；legacy stop 保持 cancel/kill 语义且不伪造远端状态。 |
 | F-208 | child retry 支持 backtest_only/results_only/rematerialize_and_backtest，模式不静默互换。 |
 | F-209 | 成功 child 和历史 attempt append-only 保留；`not_computable` 与技术失败分离；父状态只按结构化结果聚合，不判断研究价值。 |
@@ -938,10 +998,10 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-212 | 创建器覆盖完整现有 request 和多场景 runs，不重新训练模型。 |
 | F-213 | child/attempt grid 展示节点、远端 ID、状态、阶段、耗时、heartbeat、错误、制品和动作。 |
 | F-214 | legacy run/task key/read APIs 兼容，历史回填不改指标。 |
-| F-215 | 组合、权重、LOO、回测和 Archive 业务结果与现有实现 parity。 |
+| F-215 | 组合、权重、LOO、回测和 Archive 业务结果与现有实现 parity；Archive delivery 状态独立、可见、可补偿。 |
 | F-216 | QE-only；schema/worker 不可用仅影响 multi-alpha 写接口，非 QE 模块零读写/零调用/零运行影响。 |
 | F-217 | 不新增研究门禁、淘汰规则、人工审批或 promotion 审批；文档不得以 `APPROVED_BY_USER` 代替真实用户确认。 |
-| F-218 | 完整 restart/concurrency/control/retry/API/UI/DB 验证，禁止简化、静默 fallback 和伪成功。 |
+| F-218 | 完整 receipt/restart/reservation concurrency/timeout/Archive/control/retry/API/UI/DB 验证，禁止简化、静默 fallback 和伪成功。 |
 
 ## 24. Design Acceptance Matrix
 
@@ -950,11 +1010,11 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-201 | `backend/services/multi_alpha/{combine_backtest,remote_dispatch,combine_ui_adapter}.py`; `frontend/src/app/quantevolver/{evolution,multi-alpha/combine-backtest}` | `backend/tests/test_multi_alpha_combine_backtest.py`; `backend/tests/test_multi_alpha_combine_ui_adapter.py`; `rtk git diff --check` | DESIGN_VERIFIED | 无 |
-| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718{,.preflight,.rollback}.sql`; `backend/services/multi_alpha/{durable_models,durable_repository}.py` | `backend/tests/multi_alpha/test_durable_{schema,repository,repository_postgres}.py` | P0_1A_LOCAL_VERIFIED | 无 |
-| F-203 | `MultiAlphaDurableRepository` claim/heartbeat/transition CAS，lease/fencing/row-version；lease 使用数据库真实时钟判定，过期 owner 在新 owner claim 前也立即失权 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_eight_workers_claim_once_event_rollback_and_stale_fencing` | P0_1A_LOCAL_VERIFIED | 无 |
-| F-204 | execution adapter + attempt remote identity | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | DESIGN_READY | 无 |
-| F-205 | `QEWorkspaceClient`、remote dispatch refactor | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | DESIGN_READY | 无 |
-| F-206 | unified active-execution reader + DB capacity claim | `backend/tests/multi_alpha/test_durable_capacity.py` | DESIGN_READY | 无 |
+| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718{,.preflight,.rollback}.sql`; `backend/services/multi_alpha/{durable_models,durable_repository}.py`；P0-1B task identity compare 修订 | `backend/tests/multi_alpha/test_durable_schema.py`; `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_submission.py::test_task_identity_allows_distinct_run_scenarios`；2026-07-19 P0-1A 生产 SQL/application preflight | P0_1A_PRODUCTION_VERIFIED_P0_1B_DESIGN_READY | 无 |
+| F-203 | `MultiAlphaDurableRepository` claim/heartbeat/transition CAS，lease/fencing/row-version；lease 使用数据库真实时钟判定，过期 owner 在新 owner claim 前也立即失权 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_eight_workers_claim_once_event_rollback_and_stale_fencing` | P0_1A_PRODUCTION_VERIFIED | 无 |
+| F-204 | execution adapter + attempt remote identity + QE Workspace submission receipt；详见 P0-1B 从属设计的 remote identity/receipt acceptance items | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py`; `F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py` | P0_1B_REVIEWED_DESIGN_READY | 无 |
+| F-205 | `QEWorkspaceClient`、remote dispatch refactor；详见 P0-1B 从属设计的统一执行 adapter/receipt acceptance items | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | P0_1B_REVIEWED_DESIGN_READY | 无 |
+| F-206 | canonical reservation ledger + atomic source claim；详见 P0-1B 从属设计的 capacity/reservation acceptance items | `backend/tests/multi_alpha/test_durable_capacity.py`; `backend/migrations/qe_execution_reservation_20260719.preflight.sql` | P0_1B_REVIEWED_DESIGN_READY | 无 |
 | F-207 | pause/resume/cancel service/router/UI + legacy stop compatibility | `backend/tests/multi_alpha/test_durable_control.py`; `frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | 无 |
 | F-208 | child attempts/retry APIs | `backend/tests/multi_alpha/test_durable_retry.py` | DESIGN_READY | 无 |
 | F-209 | child result persistence、`not_computable` 和 deterministic aggregate rules | `backend/tests/multi_alpha/test_durable_aggregation.py` | DESIGN_READY | 无 |
@@ -962,22 +1022,23 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts` | DESIGN_READY | 无 |
 | F-212 | multi-alpha create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | DESIGN_READY | 无 |
 | F-213 | child grid/runtime panel | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | DESIGN_READY | 无 |
-| F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py`；只扫描 `legacy_backfill`/未绑定历史 run，技术失败与数学不可计算分别映射为 `failed`/`not_computable` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason` | P0_1A_LOCAL_VERIFIED | 无 |
-| F-215 | existing combiner/pred-backtest result parity + Archive health | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | DESIGN_READY | 无 |
-| F-216 | `MultiAlphaDurableRepository.preflight_schema()` 对基础结果表和 durable 表执行完整列类型、命名约束、索引、表注释核对；migration 仅修改 `strategy_pkg.multi_alpha_combine*` | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_schema_has_required_comments_constraints_and_indexes` | P0_1A_LOCAL_VERIFIED | 无 |
+| F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py`；只扫描 `legacy_backfill`/未绑定历史 run，技术失败与数学不可计算分别映射为 `failed`/`not_computable` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason`；生产 12 task/41 run/138 child readback | P0_1A_PRODUCTION_VERIFIED | 无 |
+| F-215 | existing combiner/pred-backtest result parity + post-terminal Archive visibility/retry | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | P0_1B_REVIEWED_DESIGN_READY | 无 |
+| F-216 | P0-1A `MultiAlphaDurableRepository.preflight_schema()` 核对基础结果/durable 表；P0-1B reservation preflight 只新增并核对 `infra.qe_execution_reservation`，两者均保持 QE multi-alpha scoped | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped`; P0-1B reservation schema contract tests；P0-1A 生产 preflight `ready=true` | P0_1A_PRODUCTION_VERIFIED_P0_1B_DESIGN_READY | 无 |
 | F-217 | state/API/UI audit without research gates or claimed approval | `backend/tests/multi_alpha/test_durable_contract.py`; `frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | DESIGN_VERIFIED | 无 |
-| F-218 | full validation matrix | `rtk python -m pytest backend/tests/multi_alpha -q`; `rtk npm run build`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | DESIGN_READY | 无 |
+| F-218 | full receipt/reservation/restart/timeout/Archive/control/API/UI validation matrix | `pytest backend/tests/multi_alpha/test_durable_contract.py`; `playwright test frontend/tests/quantevolver/multi-alpha-control.spec.ts`; `artifact: F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | DESIGN_READY | 无 |
 
 ## 25. Rollout / Rollback
 
 ### 25.1 Rollout 顺序
 
 1. 合入设计文档。
-2. 实现 migration/repository/orchestrator/control/UI，代码合入与运行激活分开。
-3. 用户授权后对生产目标执行 schema preflight、幂等 DDL、comments/readback；不在 DDL 前额外导出数据库。
-4. 后端重启前确认无旧 daemon run 仍需当前进程持有；历史远端 run 仅做状态读取，不猜测接管。
-5. 重启后运行 isolated API、worker status、legacy list/detail、创建一个最小 QE pred-backtest canary、后端重启恢复、child retry/results-only smoke。
-6. UI 验证单 Alpha无回归、多 Alpha创建/控制/日志/恢复完整。
+2. 实现 AIstock reservation migration/repository/orchestrator/control/UI，并在 RD-Agent owning repository 实现 submission receipt；两仓库代码合入、DDL、节点部署和运行激活分开记录。
+3. 用户授权后对生产目标执行 reservation schema preflight、幂等 DDL、comments/readback；不在 DDL 前额外导出数据库。
+4. 先部署并验证 WSL/远端 QE Workspace receipt OpenAPI、same-hash replay 和 different-hash 409，再允许 AIstock coordinated submit 激活；禁止旧 contract fallback。
+5. 后端重启前确认无旧 daemon run 仍需当前进程持有，并把可识别的 active QE executions 导入 reservation ledger；无法唯一定位的节点保持 queue-only、证据可见。
+6. 重启后运行 isolated API、worker status、legacy list/detail、创建一个最小 QE pred-backtest canary、后端重启恢复、child retry/results-only smoke。
+7. UI 验证单 Alpha无回归、多 Alpha创建/控制/日志/恢复完整。
 
 ### 25.2 Rollback
 
@@ -990,22 +1051,24 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 | 项目 | 当前状态 |
 |---|---|
-| design | `P0_1A_LOCAL_VALIDATED_P0_1B_PENDING` |
-| source code | P0-1A 已实现 durable models/repository/backfill，并完成 BUG-767 的 lease、claim、canonical identity、legacy backfill、schema preflight、cancel/reason/error 语义修复；现有 combine-backtest 运行路径未切换 |
-| migration | preflight/forward/guarded rollback 已创建；未应用 |
+| design | `P0_1A_PRODUCTION_VERIFIED_P0_1B_REVIEWED_DESIGN_READY_CODE_PENDING`；P0-1B 从属设计：`docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md`，已补齐 receipt/reservation/task identity/Archive/timeout 合同；父蓝图 18/18、从属设计 32/32 F2 校验通过 |
+| source code | P0-1A 已通过 PR #2464 合入 durable models/repository/backfill，并完成 BUG-767 的 lease、claim、canonical identity、legacy backfill、schema preflight、cancel/reason/error 语义修复；现有 combine-backtest 运行路径仍未切换 |
+| migration | P0-1A migration 已于 2026-07-19 对生产 `127.0.0.1:5432/aistock` 应用并验证，SHA256 `0da061f4d9964958976d704101257895af6dec59ac1e4e765057cc7dfe521595`；P0-1B reservation migration 尚未实现或应用 |
 | P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等且不扫描 first-class run、技术失败/不可计算分类准确、8 worker 单一 claim、event 失败整事务回滚、lease 过期 owner 在重新 claim 前被拒绝且新 owner claim 后 stale fencing 被拒绝、schema 类型/约束/索引/注释缺失均 fail-loud |
-| BUG-767 | 本地修复与针对性/隔离 PostgreSQL 验证完成；不修改 GPU、显存监测、模型训练、预测或回测公式路径 |
-| production DB | 未写入 |
-| backend/frontend runtime | 用户已完成此前后端重启；本设计任务不再次重启 |
+| BUG-767 | PR #2464 / close-sync PR #2467 已合入，GitHub issue #2459 已关闭；BUG JSON 的 `production_ddl_gate` 仍需后续元数据 close-sync，不影响已验证的生产 schema 事实 |
+| production DB | 已创建 durable schema；历史回填 12 task、41/41 run、138 child（59 scheme、79 LOO），attempt/event 均为 0，保护摘要 `733d48413364658972bbef1be625b205e1eb191c5df8e9e0f2465d3bea4bffa4` 不变，readback 无 mismatch/orphan |
+| backend/frontend runtime | 本次 DDL/DML 未重启服务；正式 combine-backtest 仍使用 daemon thread、进程内容量预留和 child ThreadPoolExecutor，P0-1B 尚未激活 |
 | QE experiments | 本设计不创建、停止、恢复或修改实验 |
 | non-QE impact | `NONE_REQUIRED` |
 | research gates/approvals | `NONE_ADDED` |
-| production_ddl_gate | P0-1A feature migration 仍未应用；BUG-767 未新增或执行 DDL |
+| production_ddl_gate | `applied_and_verified`（仅指已完成的 P0-1A 生产事实）；BUG-767 跟踪 JSON尚待元数据同步 |
+| P0-1B reservation DDL | 设计已定义，代码未实现；未来实现合入后仍需用户单独授权才可应用 |
+| production_historical_backfill | `applied_and_verified`；没有伪造 attempt/event，没有修改历史指标、状态、reason、created_at 或 Archive 业务结果 |
 | production_frontend_dependency_gate | `noop` |
 | production_backend_dependency_gate | `noop` |
 
 ## 27. 设计结论
 
-AIstock 不需要重新建设一个多 Alpha 平台。正确路线是把现有 combine-backtest 从“进程内可运行的 Tier-1 研究服务”提升为“数据库持久状态 + QE Workspace 统一执行 + 单 Alpha QE 同风格 UI”的完整演进底座。
+AIstock 不需要重新建设一个多 Alpha 平台。正确路线是把现有 combine-backtest 从“进程内可运行的 Tier-1 研究服务”提升为“数据库持久业务状态 + 共享 execution reservation + QE Workspace 服务端 receipt/统一执行 + 单 Alpha QE 同风格 UI”的完整演进底座。
 
 P0-1～P0-4 完成后，股票截面 prediction 多腿组合、资金/TopK/持仓场景和后续板块轮动组合研究将主要通过配置、模型、因子和策略插件推进；只有出现新的决策层级、执行频率或资产语义时，才需要继续扩展通用接口。任何实现都必须保留现有研究结果、失败证据和业务公式，不得用可靠性缺口淘汰 Alpha 方向。
