@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-771",
-  "closed_at": null,
+  "closed_at": "2026-07-19T04:56:53Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "The global left navigation remains visible on the HMM evolution overview, batch detail, and evaluation detail routes.",
   "first_seen_at": "2026-07-18T20:14:11.347748Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e085962489aa4002a1cad52c5a97d8ab125b8717",
+  "fixed_at": "2026-07-19T05:00:46.707707Z",
   "github_issue_number": 2463,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2463",
   "last_seen_at": "2026-07-18T20:14:11.347748Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2465",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -88,6 +89,11 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s hmm_evolution_backend qe_read_backend -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

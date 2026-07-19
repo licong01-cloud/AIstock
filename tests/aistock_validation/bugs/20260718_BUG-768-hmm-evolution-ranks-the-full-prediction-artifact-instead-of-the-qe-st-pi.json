@@ -26,7 +26,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-768",
-  "closed_at": null,
+  "closed_at": "2026-07-19T04:56:53Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -48,8 +48,8 @@
   "expected": "Historical HMM evaluation must use the exact immutable QE dataset ST-PIT universe and rule version bound to the source loop; future live/simulation consumers must use the authoritative rolling ST-PIT namespace with the same approved rule semantics. Raw and HMM-adjusted TopK must share the identical date-specific eligible set.",
   "first_seen_at": "2026-07-18T20:09:02.750756Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e085962489aa4002a1cad52c5a97d8ab125b8717",
+  "fixed_at": "2026-07-19T04:59:37.689936Z",
   "github_issue_number": 2460,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2460",
   "last_seen_at": "2026-07-18T20:09:02.750756Z",
@@ -57,6 +57,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2465",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -78,6 +79,11 @@
     "fingerprint": "52c557272b3ca3d5da1c3493",
     "source_event_id": "FE-20260718-52c557272b3c"
   },
+  "validation_evidence": [
+    "python -m nox -s hmm_evolution_backend qe_read_backend -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
