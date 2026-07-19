@@ -21,7 +21,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-767",
-  "closed_at": null,
+  "closed_at": "2026-07-19T04:18:37Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -55,8 +55,8 @@
   "expected": "QE-only durable orchestration must reject every expired owner write, claim only durable-managed work with state-pair semantics, backfill only legacy rows while distinguishing technical failure from mathematical not-computable, verify canonical payload hashes, fail closed on the full runtime schema contract, and preserve cancel/reason/error semantics without affecting model training or GPU resources.",
   "first_seen_at": "2026-07-18T19:58:14.414432Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5f698b3be504aff9a8a05354240dba84ef68a8e4",
+  "fixed_at": "2026-07-19T04:19:14.275797Z",
   "github_issue_number": 2459,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2459",
   "last_seen_at": "2026-07-18T19:58:14.414432Z",
@@ -64,8 +64,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2464",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_backfill.py backend/tests/multi_alpha/test_durable_repository_postgres.py -q -p no:cacheprovider",
   "required_verification": [
@@ -75,7 +76,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -84,6 +85,12 @@
     "fingerprint": "cdc1aa8d8dfb8951309241a6",
     "source_event_id": "FE-20260718-cdc1aa8d8dfb"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/test_multi_alpha_combine_ui_adapter.py backend/tests/multi_alpha -q -p no:cacheprovider -> 89 passed, 4 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
