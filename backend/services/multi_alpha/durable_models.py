@@ -129,7 +129,18 @@ class DurableTaskSpec:
                 "roster must be an array",
                 reason_code="multi_alpha_invalid_task",
             )
+        if not isinstance(self.default_request, Mapping):
+            raise DurableContractError(
+                "default_request must be an object",
+                reason_code="multi_alpha_invalid_task",
+            )
         _require_choice(self.source_kind, TASK_SOURCE_KINDS, field="source_kind")
+        durable_task_identity_payload(
+            roster_hash=self.roster_hash,
+            roster=self.roster,
+            default_request=self.default_request,
+            legacy_group_key=self.legacy_group_key,
+        )
 
 
 @dataclass(frozen=True)
@@ -339,6 +350,94 @@ def artifact_manifest_hash_for(manifest: Mapping[str, Any]) -> str:
     return sha256_identity(manifest)
 
 
+def walk_forward_signature_for(walk_forward: Mapping[str, Any]) -> str:
+    enabled = walk_forward.get("enabled", True)
+    window = walk_forward.get("window", "na")
+    min_periods = walk_forward.get("min_periods", "na")
+    expanding = walk_forward.get("expanding", False)
+    return (
+        f"wf_w{window}_min{min_periods}_exp{str(bool(expanding)).lower()}_"
+        f"en{str(bool(enabled)).lower()}"
+    )
+
+
+def implicit_task_group_key(
+    *,
+    roster_hash: str,
+    normalize_method: str,
+    walk_forward: Mapping[str, Any],
+) -> str:
+    if not roster_hash.strip() or not normalize_method.strip():
+        raise DurableContractError(
+            "implicit task identity requires roster_hash and normalize_method",
+            reason_code="multi_alpha_invalid_task_identity",
+            context={
+                "roster_hash": roster_hash,
+                "normalize_method": normalize_method,
+            },
+        )
+    return f"{roster_hash}|{normalize_method}|{walk_forward_signature_for(walk_forward)}"
+
+
+def durable_task_identity_payload(
+    *,
+    roster_hash: str,
+    roster: Sequence[Mapping[str, Any]],
+    default_request: Mapping[str, Any],
+    legacy_group_key: str | None,
+) -> dict[str, Any]:
+    if (
+        not isinstance(roster, Sequence)
+        or isinstance(roster, (str, bytes))
+        or any(not isinstance(item, Mapping) for item in roster)
+    ):
+        raise DurableContractError(
+            "task identity roster must be an array of objects",
+            reason_code="multi_alpha_invalid_task_identity",
+        )
+    if not isinstance(default_request, Mapping):
+        raise DurableContractError(
+            "task identity default_request must be an object",
+            reason_code="multi_alpha_invalid_task_identity",
+        )
+    normalize_method = str(default_request.get("normalize_method") or "").strip()
+    if normalize_method:
+        _require_choice(normalize_method, frozenset({"zscore", "rank"}), field="normalize_method")
+    raw_walk_forward = default_request.get("walk_forward")
+    if raw_walk_forward is not None and not isinstance(raw_walk_forward, Mapping):
+        raise DurableContractError(
+            "task identity walk_forward must be an object",
+            reason_code="multi_alpha_invalid_task_identity",
+        )
+    walk_forward = dict(raw_walk_forward) if isinstance(raw_walk_forward, Mapping) else {}
+    computed_group_key = (
+        implicit_task_group_key(
+            roster_hash=roster_hash,
+            normalize_method=normalize_method,
+            walk_forward=walk_forward,
+        )
+        if normalize_method
+        else None
+    )
+    if legacy_group_key is not None and computed_group_key is not None and legacy_group_key != computed_group_key:
+        raise DurableContractError(
+            "legacy_group_key does not match the immutable task identity",
+            reason_code="multi_alpha_identity_hash_mismatch",
+            context={
+                "field": "legacy_group_key",
+                "expected": computed_group_key,
+                "actual": legacy_group_key,
+            },
+        )
+    return {
+        "roster_hash": roster_hash,
+        "roster": [dict(item) for item in roster],
+        "normalize_method": normalize_method or None,
+        "walk_forward_signature": walk_forward_signature_for(walk_forward) if normalize_method else None,
+        "group_key": computed_group_key or legacy_group_key,
+    }
+
+
 def durable_run_request_payload(
     *,
     roster_hash: str,
@@ -423,6 +522,15 @@ def make_legacy_task_id(legacy_group_key: str) -> str:
     return f"mact_legacy_{hashlib.sha256(legacy_group_key.encode('utf-8')).hexdigest()[:24]}"
 
 
+def make_implicit_task_id(group_key: str) -> str:
+    if not group_key:
+        raise DurableContractError(
+            "implicit task group key must not be empty",
+            reason_code="multi_alpha_invalid_legacy_group_key",
+        )
+    return f"mact_auto_{hashlib.sha256(group_key.encode('utf-8')).hexdigest()[:32]}"
+
+
 def make_child_id(run_id: str, child_key: str) -> str:
     _require_prefixed_identity(run_id, prefix="macb_", field="run_id")
     _require_identity_component(child_key, field="child_key")
@@ -438,8 +546,8 @@ def make_attempt_id(child_id: str, attempt_no: int) -> str:
             reason_code="multi_alpha_invalid_attempt",
             context={"attempt_no": attempt_no},
         )
-    child_suffix = child_id.removeprefix("macbc_")[-16:]
-    return f"macba_{child_suffix}_{attempt_no}_{uuid.uuid4().hex}"
+    digest = hashlib.sha256(f"{child_id}|{attempt_no}".encode("utf-8")).hexdigest()
+    return f"macba_{digest}"
 
 
 def make_remote_task_id(run_id: str, child_id: str, attempt_no: int) -> str:

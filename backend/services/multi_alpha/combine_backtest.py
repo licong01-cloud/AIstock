@@ -1327,6 +1327,8 @@ class MultiAlphaCombineBacktestService:
         capacity_checker: NodeCapacityChecker | None = None,
         workspace_root: str | Path | None = None,
         clock: CallableUtc | None = None,
+        durable_submission_service: Any | None = None,
+        legacy_execution_mode_for_tests: bool = False,
     ) -> None:
         self._panel_builder = panel_builder or MultiAlphaPanelBuilder()
         self._prediction_loader = prediction_loader
@@ -1336,6 +1338,21 @@ class MultiAlphaCombineBacktestService:
         self._capacity_checker = capacity_checker or DatabaseQENodeCapacityChecker()
         self._workspace_root = Path(workspace_root or os.getenv("AISTOCK_MULTI_ALPHA_BACKTEST_ROOT") or "rdagent_assets/multi_alpha_combine_backtests")
         self._clock = clock or utc_now
+        self._legacy_execution_mode_for_tests = legacy_execution_mode_for_tests
+        if legacy_execution_mode_for_tests:
+            if durable_submission_service is not None:
+                raise ValueError(
+                    "durable_submission_service cannot be combined with legacy_execution_mode_for_tests"
+                )
+            self._durable_submission_service = None
+        else:
+            if durable_submission_service is None:
+                from backend.services.multi_alpha.durable_submission import (
+                    DurableCombineSubmissionService,
+                )
+
+                durable_submission_service = DurableCombineSubmissionService(clock=self._clock)
+            self._durable_submission_service = durable_submission_service
         self._local_executor = ShellPredBacktestExecutor()
         self._remote_executor: BacktestExecutor | None = None
         self._archive_event_capture = None
@@ -1350,6 +1367,11 @@ class MultiAlphaCombineBacktestService:
                 logger.exception("multi-alpha QE archive event capture is unavailable")
 
     def submit_run(self, payload: Mapping[str, Any], *, run_async: bool | None = None) -> dict[str, Any]:
+        if not self._legacy_execution_mode_for_tests:
+            return self._durable_submission_service.submit(
+                payload,
+                run_async_override=run_async,
+            )
         request = parse_request(payload)
         if run_async is not None:
             request = _replace_request(request, run_async=run_async)
@@ -1516,6 +1538,8 @@ class MultiAlphaCombineBacktestService:
         )
         retry_payload["backtest_config"] = backtest_config
         retry_payload["run_async"] = True
+        retry_payload["task_id"] = (bundle.get("run") or {}).get("task_id")
+        retry_payload["retry_of_run_id"] = run_id
         result = self.submit_run(retry_payload, run_async=True)
         return {**result, "retry_of_run_id": run_id, "retry_source": backtest_config["retry_request_source"]}
 
@@ -1582,7 +1606,7 @@ class MultiAlphaCombineBacktestService:
         workspace = self._safe_run_workspace(run_id)
         events_path = workspace / RUN_EVENT_LOG_NAME
         try:
-            events = read_jsonl_tail(events_path, max(1, min(int(tail_lines), 1000)))
+            file_events = read_jsonl_tail(events_path, max(1, min(int(tail_lines), 1000)))
             files = list_run_log_files(workspace)
         except OSError as exc:
             raise MultiAlphaCombineBacktestError(
@@ -1590,16 +1614,34 @@ class MultiAlphaCombineBacktestService:
                 reason_code="combine_backtest_logs_read_failed",
                 context={"run_id": run_id, "workspace": str(workspace), "error": f"{type(exc).__name__}: {exc}"},
             ) from exc
+        durable_events: list[dict[str, Any]] = []
+        if run.get("task_id") and run.get("request_hash"):
+            from backend.services.multi_alpha.durable_repository import (
+                MultiAlphaDurableRepository,
+            )
+
+            durable_events = MultiAlphaDurableRepository().list_events(
+                run_id,
+                limit=max(1, min(int(tail_lines), 500)),
+            )
+        events = [*file_events, *durable_events]
         reason = dict(run.get("reason") or {}) if isinstance(run.get("reason"), Mapping) else {}
         return {
             "run_id": run_id,
             "status": run.get("status"),
-            "phase": reason.get("phase"),
-            "progress": dict(reason.get("progress") or {}) if isinstance(reason.get("progress"), Mapping) else {},
+            "phase": run.get("phase") or reason.get("phase"),
+            "progress": (
+                dict(run.get("progress_json") or {})
+                if isinstance(run.get("progress_json"), Mapping)
+                else dict(reason.get("progress") or {})
+                if isinstance(reason.get("progress"), Mapping)
+                else {}
+            ),
             "heartbeat_at": reason.get("heartbeat_at") or run.get("updated_at"),
             "reason": reason,
-            "history_available": events_path.is_file(),
+            "history_available": events_path.is_file() or bool(durable_events),
             "events": events,
+            "durable_events": durable_events,
             "files": files,
         }
 
@@ -1615,11 +1657,53 @@ class MultiAlphaCombineBacktestService:
                     """,
                     (run_id,),
                 )
-                row = cur.fetchone()
+                archive_run = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT phase, reason_code, payload_json, created_at
+                    FROM strategy_pkg.multi_alpha_combine_backtest_event
+                    WHERE run_id = %s
+                      AND phase IN (
+                          'archive_enqueued', 'archive_duplicate',
+                          'archive_skipped_disabled', 'archive_error'
+                      )
+                    ORDER BY event_id DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                )
+                durable_event = cur.fetchone()
+                archive_event_id = None
+                if durable_event and isinstance(durable_event.get("payload_json"), Mapping):
+                    archive_event_id = durable_event["payload_json"].get("archive_event_id")
+                outbox = None
+                if archive_event_id:
+                    cur.execute(
+                        """
+                        SELECT event_id, status, retry_count, next_retry_at,
+                               error_message, created_at, updated_at
+                        FROM qe_archive.outbox_event
+                        WHERE event_id = %s
+                        """,
+                        (archive_event_id,),
+                    )
+                    outbox = cur.fetchone()
+        if archive_run:
+            archive_status = "archived"
+        elif outbox and outbox.get("status") in {"failed", "error"}:
+            archive_status = "archive_error"
+        elif outbox:
+            archive_status = f"archive_{outbox.get('status')}"
+        elif durable_event:
+            archive_status = str(durable_event.get("phase") or "not_archived")
+        else:
+            archive_status = "not_archived"
         return {
             "run_id": run_id,
-            "archive_status": "archived" if row else "not_archived",
-            "archive_run": dict(row) if row else None,
+            "archive_status": archive_status,
+            "archive_run": dict(archive_run) if archive_run else None,
+            "archive_delivery_event": dict(durable_event) if durable_event else None,
+            "archive_outbox": dict(outbox) if outbox else None,
         }
 
     def archive_run(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
@@ -1942,18 +2026,11 @@ class MultiAlphaCombineBacktestService:
         )
 
     def _build_prediction_only_legs(self, request: CombineBacktestRequest) -> list[CombinerLeg]:
-        legs: list[CombinerLeg] = []
-        for spec in request.roster:
-            seed_frames = [self._load_prediction_frame(run_id=run_id, leg_id=spec.leg_id) for run_id in spec.seed_run_ids]
-            ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
-            ensemble = filter_prediction_window(
-                ensemble,
-                leg_id=spec.leg_id,
-                oos_start=request.oos_start,
-                oos_end=request.oos_end,
-            )
-            legs.append(CombinerLeg(leg_id=spec.leg_id, pred_frame=ensemble, metadata=dict(spec.metadata)))
-        return legs
+        return build_prediction_only_legs(
+            request,
+            prediction_loader=self._prediction_loader,
+            model_store=self._model_store,
+        )
 
     def _load_prediction_frame(self, *, run_id: str, leg_id: str) -> pd.DataFrame:
         try:
@@ -2226,6 +2303,7 @@ class MultiAlphaCombineBacktestService:
                     "backtest_name": name,
                     "weighting_scheme": task.scheme if task else None,
                     "dropped_leg_id": task.dropped_leg_id if task else None,
+                    "node_parallelism_limit": node_parallelism_limit,
                 },
             )
         finally:
@@ -2596,6 +2674,53 @@ def seed_ensemble_prediction_only(frames: Sequence[pd.DataFrame], *, leg_id: str
             leg_id=leg_id,
         )
     return out.groupby(["trade_date", "instrument"], as_index=False, sort=True)["score"].mean()
+
+
+def build_prediction_only_legs(
+    request: CombineBacktestRequest,
+    *,
+    prediction_loader: Any | None = None,
+    model_store: ModelStoreService | None = None,
+) -> list[CombinerLeg]:
+    store = model_store or ModelStoreService()
+    legs: list[CombinerLeg] = []
+    for spec in request.roster:
+        seed_frames: list[pd.DataFrame] = []
+        for run_id in spec.seed_run_ids:
+            try:
+                raw = prediction_loader(run_id) if prediction_loader is not None else pd.read_pickle(
+                    store.prediction_path(run_id=run_id)
+                )
+                seed_frames.append(normalize_prediction_frame(raw, run_id=run_id))
+            except (
+                PredictionStoreError,
+                MultiAlphaOrthogonalityError,
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ) as exc:
+                raise MultiAlphaCombineBacktestError(
+                    f"failed to load prediction artifact for rank-fusion: {type(exc).__name__}: {exc}",
+                    reason_code="prediction_missing_or_invalid",
+                    leg_id=spec.leg_id,
+                    context={"run_id": run_id},
+                ) from exc
+        ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
+        ensemble = filter_prediction_window(
+            ensemble,
+            leg_id=spec.leg_id,
+            oos_start=request.oos_start,
+            oos_end=request.oos_end,
+        )
+        legs.append(
+            CombinerLeg(
+                leg_id=spec.leg_id,
+                pred_frame=ensemble,
+                metadata=dict(spec.metadata),
+            )
+        )
+    return legs
 
 
 def filter_prediction_window(frame: pd.DataFrame, *, leg_id: str, oos_start: str, oos_end: str) -> pd.DataFrame:

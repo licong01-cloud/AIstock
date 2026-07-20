@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -219,6 +220,30 @@ class _FakeWorkspaceClient:
         return None
 
 
+class _FakeSubmissionCoordinator:
+    async def submit(self, *, client: Any, source: Any, payload: Any) -> Any:
+        loop_id = await client.create_and_run_loop(
+            payload.task_id,
+            payload.loop_index,
+            dict(payload.config),
+            dict(payload.experiment_files),
+            payload.wsl_command,
+            submission_intent_hash=source.submission_intent_hash,
+        )
+        if loop_id.startswith(f"{payload.task_id}_"):
+            loop_id = loop_id[len(payload.task_id) + 1 :]
+        return SimpleNamespace(
+            loop_id=loop_id,
+            waiting_capacity=False,
+            active_count=1,
+            node_capacity=4,
+            reservation_id="qer_test",
+        )
+
+    def record_authoritative_remote_status(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"status": "released"}
+
+
 def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     template = _runtime_template(tmp_path)
@@ -239,6 +264,7 @@ def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: 
         ),
         artifact_client_factory=lambda _node_id: fake_artifact,
         workspace_client_factory=lambda _node_id: fake_workspace,
+        submission_coordinator=_FakeSubmissionCoordinator(),
         small_file_syncer=lambda **kwargs: small_sync_calls.append(kwargs),
         poll_interval_seconds=0.0,
     )
@@ -519,7 +545,11 @@ def test_remote_loop_failure_includes_run_log_tail() -> None:
             assert file_path == "run.log"
             return "x" * 2100 + "tail"
 
-    executor = RemotePredBacktestExecutor(workspace_client_factory=lambda _node_id: _FailedWorkspaceClient(), poll_interval_seconds=0.0)
+    executor = RemotePredBacktestExecutor(
+        workspace_client_factory=lambda _node_id: _FailedWorkspaceClient(),
+        submission_coordinator=_FakeSubmissionCoordinator(),
+        poll_interval_seconds=0.0,
+    )
 
     with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
         import asyncio
@@ -533,6 +563,9 @@ def test_remote_loop_failure_includes_run_log_tail() -> None:
                 experiment_files={},
                 wsl_command="bash -lc true",
                 timeout_seconds=30,
+                run_id="macb_test",
+                backtest_name="failed_child",
+                requested_node_capacity=4,
             )
         )
 
@@ -545,7 +578,11 @@ def test_remote_loop_timeout_is_loud() -> None:
         async def get_loop_status(self, task_id: str, loop_id: str) -> dict[str, Any]:
             return {"status": "running"}
 
-    executor = RemotePredBacktestExecutor(workspace_client_factory=lambda _node_id: _RunningWorkspaceClient(), poll_interval_seconds=0.0)
+    executor = RemotePredBacktestExecutor(
+        workspace_client_factory=lambda _node_id: _RunningWorkspaceClient(),
+        submission_coordinator=_FakeSubmissionCoordinator(),
+        poll_interval_seconds=0.0,
+    )
 
     with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
         import asyncio
@@ -559,6 +596,9 @@ def test_remote_loop_timeout_is_loud() -> None:
                 experiment_files={},
                 wsl_command="bash -lc true",
                 timeout_seconds=0,
+                run_id="macb_test",
+                backtest_name="running_child",
+                requested_node_capacity=4,
             )
         )
 

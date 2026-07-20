@@ -209,6 +209,7 @@ def _service(
         capacity_checker=checker,
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
+        legacy_execution_mode_for_tests=True,
     )
     service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker
@@ -238,6 +239,7 @@ def test_submit_preflights_missing_runtime_template_before_persisting_run(tmp_pa
         prediction_loader=lambda _run_id: _pred(1.0),
         repository=repo,
         workspace_root=tmp_path / "macb",
+        legacy_execution_mode_for_tests=True,
     )
     payload = _payload()
     payload["backtest_config"] = {
@@ -395,6 +397,7 @@ def _rank_fusion_service(
         capacity_checker=checker,
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
+        legacy_execution_mode_for_tests=True,
     )
     service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker

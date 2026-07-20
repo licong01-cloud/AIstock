@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from backend.services.multi_alpha import (
@@ -21,6 +21,7 @@ from backend.services.multi_alpha.combine_ui_adapter import (
     MultiAlphaCombineUIAdapter,
     error_payload as combine_ui_error_payload,
 )
+from backend.services.multi_alpha.durable_submission import DurableCombineSubmissionError
 
 
 router = APIRouter(prefix="/multi-alpha", tags=["multi-alpha"])
@@ -44,6 +45,7 @@ class CombinePreviewRequest(BaseModel):
 
 
 class CombineBacktestRunRequest(BaseModel):
+    task_id: str | None = None
     roster: list[dict[str, Any]]
     oos_start: str
     oos_end: str
@@ -58,6 +60,7 @@ class CombineBacktestRunRequest(BaseModel):
     run_async: bool = True
     scheme_timeout_seconds: int | None = Field(default=None, ge=1)
     run_timeout_seconds: int | None = Field(default=None, ge=1)
+    wait_timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class CombineBacktestStaleFailRequest(BaseModel):
@@ -110,13 +113,17 @@ def preview_multi_alpha_combination(request: CombinePreviewRequest) -> dict:
 
 
 @router.post("/combine-backtest/run", summary="Submit a Tier-1 multi-alpha combine-backtest job")
-def submit_multi_alpha_combine_backtest(request: CombineBacktestRunRequest) -> dict:
+def submit_multi_alpha_combine_backtest(request: CombineBacktestRunRequest, response: Response) -> dict:
     try:
         data = MultiAlphaCombineBacktestService().submit_run(request.model_dump())
+    except DurableCombineSubmissionError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=error_payload(exc)) from exc
     except MultiAlphaCombineBacktestError as exc:
         raise HTTPException(status_code=400, detail=error_payload(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=error_payload(exc)) from exc
+    if data.get("wait_timed_out") is True:
+        response.status_code = 202
     return {"status": "success", "data": data}
 
 

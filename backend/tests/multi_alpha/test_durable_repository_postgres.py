@@ -4,6 +4,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -13,6 +14,7 @@ from psycopg2.extensions import parse_dsn
 from psycopg2.extras import Json, RealDictCursor
 
 from backend.services.multi_alpha.durable_backfill import MultiAlphaLegacyBackfill
+from backend.services.multi_alpha.combine_backtest import parse_request
 from backend.services.multi_alpha.durable_models import (
     DurableAttemptSpec,
     DurableChildSpec,
@@ -30,6 +32,8 @@ from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
     MultiAlphaDurableRepositoryError,
 )
+from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
+from backend.services.multi_alpha.durable_submission import DurableCombineSubmissionService
 
 
 DSN = os.getenv("AISTOCK_MULTI_ALPHA_TEST_PG_DSN", "").strip()
@@ -716,6 +720,94 @@ def test_child_attempt_repository_persists_remote_identity_and_terminal_result()
     queued_attempt = repository.get_attempt(queued_attempt_id)
     assert queued_attempt is not None
     assert queued_attempt["owner_id"] is None
+
+
+def test_durable_submission_and_planner_are_idempotent_in_postgres() -> None:
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    service = DurableCombineSubmissionService(
+        repository=repository,
+        runtime_preflight=lambda **_kwargs: None,
+        execution_schema_preflight=lambda: None,
+        orchestrator_readiness_preflight=lambda: {"ready": True},
+        clock=lambda: datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+    )
+    first_payload = {
+        "roster": [
+            {"leg_id": "pg_leg_a", "seed_run_ids": ["qe_pg_a_L1"], "metadata": {}},
+            {"leg_id": "pg_leg_b", "seed_run_ids": ["qe_pg_b_L1"], "metadata": {}},
+            {"leg_id": "pg_leg_c", "seed_run_ids": ["qe_pg_c_L1"], "metadata": {}},
+        ],
+        "oos_start": "2024-07-01",
+        "oos_end": "2026-06-29",
+        "weighting_schemes": ["equal", "ic_weighted"],
+        "normalize_method": "rank",
+        "walk_forward": {"enabled": True, "window": 60, "min_periods": 20, "expanding": False},
+        "backtest_config": {
+            "node_id": "wsl2-5080",
+            "node_parallelism": {"wsl2-5080": 2},
+            "topk": 25,
+            "initial_cash": 10_000_000,
+        },
+        "baseline_leg_id": "pg_leg_a",
+        "topk": 25,
+        "run_async": True,
+        "scheme_timeout_seconds": 120,
+        "run_timeout_seconds": 600,
+    }
+    first = service.submit(first_payload)
+    second_payload = dict(first_payload)
+    second_payload["oos_start"] = "2025-01-01"
+    second_payload["topk"] = 50
+    second_payload["baseline_leg_id"] = "pg_leg_b"
+    second_payload["backtest_config"] = {
+        **dict(first_payload["backtest_config"]),
+        "topk": 50,
+        "initial_cash": 100_000_000,
+    }
+    second = service.submit(second_payload)
+
+    assert first["task_id"] == second["task_id"]
+    assert first["run_id"] != second["run_id"]
+    task = repository.get_task(first["task_id"])
+    assert task is not None
+    assert task["default_request_json"]["topk"] == 25
+    assert task["default_request_json"]["backtest_config"]["initial_cash"] == 10_000_000
+    assert len(repository.list_runs(task_id=first["task_id"])) == 2
+
+    run = repository.get_run(first["run_id"])
+    assert run is not None
+    request = parse_request(first_payload)
+    run_spec = DurableRunSpec(
+        run_id=run["id"],
+        task_id=run["task_id"],
+        request_hash=run["request_hash"],
+        roster_hash=run["roster_hash"],
+        roster=run["roster_json"],
+        oos_start=run["oos_start"],
+        oos_end=run["oos_end"],
+        normalize_method=run["normalize_method"],
+        walk_forward=run["walk_forward_json"],
+        backtest_config=run["backtest_config_json"],
+        baseline_leg_id=run["baseline_leg_id"],
+        retry_of_run_id=run["retry_of_run_id"],
+        node_parallelism=run["node_parallelism_json"],
+    )
+    planner = DeterministicChildPlanner(repository)
+    first_plan = planner.plan(run_spec=run_spec, request=request)
+    second_plan = planner.plan(run_spec=run_spec, request=request)
+
+    assert first_plan == second_plan
+    assert len(first_plan.children) == 9
+    assert len(first_plan.initial_attempts) == 0
+    assert len(repository.list_children(first["run_id"])) == 9
+    initial_attempts = [
+        planner.ensure_initial_attempt(
+            child_id=str(child["child_id"]),
+            node_id="wsl2-5080",
+        )
+        for child in first_plan.children
+    ]
+    assert len({row["attempt_id"] for row in initial_attempts}) == 9
 
 
 def _schema_digest(cur: Any) -> str:

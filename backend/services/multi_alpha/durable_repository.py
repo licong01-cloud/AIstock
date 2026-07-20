@@ -18,6 +18,7 @@ from backend.services.multi_alpha.durable_models import (
     DurableTaskSpec,
     OwnershipToken,
     canonical_json,
+    durable_task_identity_payload,
 )
 
 
@@ -115,9 +116,8 @@ class SchemaHealth:
 class MultiAlphaDurableRepository:
     """PostgreSQL authority for durable QE multi-alpha orchestration state.
 
-    This repository is intentionally not wired into the running service in
-    P0-1A. P0-1B will move the existing facade onto these primitives after the
-    execution adapter and restart reconciliation are available.
+    P0-1B wires the existing combine facade and restart-safe orchestrator to
+    these primitives; no parallel business result store is introduced.
     """
 
     REQUIRED_COLUMN_TYPES: Mapping[str, Mapping[str, str]] = {
@@ -497,6 +497,68 @@ class MultiAlphaDurableRepository:
             (task_id,),
         )
 
+    def find_task_for_implicit_group(
+        self,
+        *,
+        legacy_group_key: str,
+        roster_hash: str,
+        roster: Sequence[Mapping[str, Any]],
+        normalize_method: str,
+        walk_forward: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM strategy_pkg.multi_alpha_combine_task
+            WHERE legacy_group_key = %s
+            """,
+            (legacy_group_key,),
+        )
+        if row is None:
+            return None
+        self.assert_task_compatible(
+            row,
+            roster_hash=roster_hash,
+            roster=roster,
+            normalize_method=normalize_method,
+            walk_forward=walk_forward,
+            legacy_group_key=legacy_group_key,
+        )
+        return row
+
+    @staticmethod
+    def assert_task_compatible(
+        row: Mapping[str, Any],
+        *,
+        roster_hash: str,
+        roster: Sequence[Mapping[str, Any]],
+        normalize_method: str,
+        walk_forward: Mapping[str, Any],
+        legacy_group_key: str,
+    ) -> None:
+        expected = durable_task_identity_payload(
+            roster_hash=roster_hash,
+            roster=roster,
+            default_request={
+                "normalize_method": normalize_method,
+                "walk_forward": dict(walk_forward),
+            },
+            legacy_group_key=legacy_group_key,
+        )
+        actual = durable_task_identity_payload(
+            roster_hash=str(row.get("roster_hash") or ""),
+            roster=row.get("roster_json") or [],
+            default_request=row.get("default_request_json") or {},
+            legacy_group_key=row.get("legacy_group_key"),
+        )
+        if canonical_json(actual) != canonical_json(expected):
+            MultiAlphaDurableRepository._raise_identity_conflict(
+                entity="task",
+                identity=str(row.get("task_id") or legacy_group_key),
+                expected=expected,
+                actual=actual,
+            )
+
     def list_tasks(self, *, source_kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 500))
         return self._fetch_all(
@@ -528,7 +590,7 @@ class MultiAlphaDurableRepository:
 
     def create_run(self, spec: DurableRunSpec) -> dict[str, Any]:
         compatibility_reason = {
-            "phase": "queued",
+            "phase": "submitted",
             "progress": {},
             "logical_status": "queued",
             "durable": True,
@@ -543,7 +605,7 @@ class MultiAlphaDurableRepository:
                          backtest_config_json, baseline_leg_id, status, phase, progress_json,
                          node_parallelism_json, reason, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            'queued', 'queued', '{}'::jsonb, %s, %s, NOW())
+                            'queued', 'submitted', '{}'::jsonb, %s, %s, NOW())
                     ON CONFLICT (id) DO NOTHING
                     RETURNING *
                     """,
@@ -571,7 +633,7 @@ class MultiAlphaDurableRepository:
                         cur,
                         run_id=spec.run_id,
                         event_type="created",
-                        phase="queued",
+                        phase="submitted",
                         payload={"task_id": spec.task_id, "request_hash": spec.request_hash},
                     )
                     return row
@@ -825,12 +887,186 @@ class MultiAlphaDurableRepository:
             (attempt_id,),
         )
 
+    def claim_attempt_submission_in_transaction(
+        self,
+        cur: Any,
+        *,
+        attempt_id: str,
+        token: OwnershipToken,
+        node_id: str,
+        qe_task_id: str,
+        qe_loop_id: str,
+        submission_intent_hash: str,
+        artifact_manifest: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        """Bind remote identity and claim queued->submitting in caller transaction."""
+        current = self._lock_owned_row(
+            cur,
+            entity="attempt",
+            table="strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+            id_column="attempt_id",
+            entity_id=attempt_id,
+            token=token,
+            expected_statuses=("queued",),
+        )
+        cur.execute(
+            """
+            UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt
+            SET status = 'submitting',
+                phase = 'submitting',
+                node_id = %s,
+                qe_task_id = %s,
+                qe_loop_id = %s,
+                submission_intent_hash = %s,
+                remote_status = NULL,
+                artifact_manifest_json = %s,
+                submitted_at = COALESCE(submitted_at, NOW()),
+                heartbeat_at = clock_timestamp(),
+                row_version = row_version + 1,
+                updated_at = NOW()
+            WHERE attempt_id = %s
+              AND status = 'queued'
+              AND owner_id = %s
+              AND fencing_token = %s
+              AND row_version = %s
+              AND lease_expires_at > clock_timestamp()
+              AND (node_id IS NULL OR node_id = %s)
+              AND (qe_task_id IS NULL OR qe_task_id = %s)
+              AND (qe_loop_id IS NULL OR qe_loop_id = %s)
+              AND (submission_intent_hash IS NULL OR submission_intent_hash = %s)
+            RETURNING *
+            """,
+            (
+                node_id,
+                qe_task_id,
+                qe_loop_id,
+                submission_intent_hash,
+                Json(dict(artifact_manifest)),
+                attempt_id,
+                token.owner_id,
+                token.fencing_token,
+                token.row_version,
+                node_id,
+                qe_task_id,
+                qe_loop_id,
+                submission_intent_hash,
+            ),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            self._raise_cas_failure(
+                cur,
+                "attempt",
+                "strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                "attempt_id",
+                attempt_id,
+                token,
+            )
+        row = dict(updated)
+        run_id = self._run_id_for_child(cur, str(row["child_id"]))
+        self._insert_event(
+            cur,
+            run_id=run_id,
+            child_id=str(row["child_id"]),
+            attempt_id=attempt_id,
+            event_type="submitted",
+            phase="submitting",
+            payload={
+                "previous_status": current["status"],
+                "status": "submitting",
+                "node_id": node_id,
+                "qe_task_id": qe_task_id,
+                "qe_loop_id": qe_loop_id,
+                "submission_intent_hash": submission_intent_hash,
+                "artifact_manifest_hash": artifact_manifest.get("manifest_hash"),
+                "row_version": row["row_version"],
+            },
+        )
+        return row
+
+    def record_attempt_waiting_capacity_in_transaction(
+        self,
+        cur: Any,
+        *,
+        attempt_id: str,
+        token: OwnershipToken,
+        node_id: str,
+        active_count: int,
+        node_capacity: int,
+    ) -> Mapping[str, Any] | None:
+        """Persist non-terminal capacity waiting evidence in caller transaction."""
+        current = self._lock_owned_row(
+            cur,
+            entity="attempt",
+            table="strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+            id_column="attempt_id",
+            entity_id=attempt_id,
+            token=token,
+            expected_statuses=("queued",),
+        )
+        cur.execute(
+            """
+            UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt
+            SET phase = 'waiting_capacity',
+                node_id = %s,
+                owner_id = NULL,
+                lease_expires_at = NULL,
+                heartbeat_at = clock_timestamp(),
+                row_version = row_version + 1,
+                updated_at = NOW()
+            WHERE attempt_id = %s
+              AND status = 'queued'
+              AND owner_id = %s
+              AND fencing_token = %s
+              AND row_version = %s
+              AND lease_expires_at > clock_timestamp()
+            RETURNING *
+            """,
+            (
+                node_id,
+                attempt_id,
+                token.owner_id,
+                token.fencing_token,
+                token.row_version,
+            ),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            self._raise_cas_failure(
+                cur,
+                "attempt",
+                "strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                "attempt_id",
+                attempt_id,
+                token,
+            )
+        row = dict(updated)
+        run_id = self._run_id_for_child(cur, str(row["child_id"]))
+        self._insert_event(
+            cur,
+            run_id=run_id,
+            child_id=str(row["child_id"]),
+            attempt_id=attempt_id,
+            event_type="status",
+            phase="waiting_capacity",
+            payload={
+                "previous_status": current["status"],
+                "status": "queued",
+                "node_id": node_id,
+                "active_count": int(active_count),
+                "node_capacity": int(node_capacity),
+                "row_version": row["row_version"],
+            },
+        )
+        return row
+
     def claim_next_run(
         self,
         *,
         owner_id: str,
         lease_seconds: int,
         statuses: Sequence[str] = ("queued", "preparing", "running", "cancel_requested", "cancelling"),
+        excluded_run_ids: Sequence[str] = (),
     ) -> dict[str, Any] | None:
         self._validate_claim_inputs(owner_id=owner_id, lease_seconds=lease_seconds, statuses=statuses, allowed=RUN_STATUSES)
         with self._connection_provider() as conn:
@@ -843,6 +1079,7 @@ class MultiAlphaDurableRepository:
                         WHERE status = ANY(%s)
                           AND task_id IS NOT NULL
                           AND request_hash IS NOT NULL
+                          AND NOT (id = ANY(%s))
                           AND (
                               owner_id IS NULL
                               OR lease_expires_at IS NULL
@@ -863,7 +1100,7 @@ class MultiAlphaDurableRepository:
                     WHERE run.id = candidate.id
                     RETURNING run.*
                     """,
-                    (list(statuses), owner_id, lease_seconds),
+                    (list(statuses), list(excluded_run_ids), owner_id, lease_seconds),
                 )
                 claimed = cur.fetchone()
                 if not claimed:
@@ -890,6 +1127,7 @@ class MultiAlphaDurableRepository:
         lease_seconds: int,
         claim_kind: str = "dispatch",
         node_id: str | None = None,
+        excluded_attempt_ids: Sequence[str] = (),
     ) -> dict[str, Any] | None:
         policy = ATTEMPT_CLAIM_POLICIES.get(claim_kind)
         if policy is None:
@@ -921,6 +1159,7 @@ class MultiAlphaDurableRepository:
                           AND run.task_id IS NOT NULL
                           AND run.request_hash IS NOT NULL
                           AND (%s IS NULL OR attempt.node_id = %s)
+                          AND NOT (attempt.attempt_id = ANY(%s))
                           AND (
                               attempt.owner_id IS NULL
                               OR attempt.lease_expires_at IS NULL
@@ -941,7 +1180,15 @@ class MultiAlphaDurableRepository:
                     WHERE attempt.attempt_id = candidate.attempt_id
                     RETURNING attempt.*, candidate.run_id, candidate.run_status
                     """,
-                    (sorted(statuses), sorted(run_statuses), node_id, node_id, owner_id, lease_seconds),
+                    (
+                        sorted(statuses),
+                        sorted(run_statuses),
+                        node_id,
+                        node_id,
+                        list(excluded_attempt_ids),
+                        owner_id,
+                        lease_seconds,
+                    ),
                 )
                 claimed = cur.fetchone()
                 if not claimed:
@@ -991,6 +1238,38 @@ class MultiAlphaDurableRepository:
             entity_id=attempt_id,
             token=token,
             lease_seconds=lease_seconds,
+        )
+
+    def yield_run_ownership(
+        self,
+        run_id: str,
+        *,
+        token: OwnershipToken,
+        phase: str,
+    ) -> dict[str, Any]:
+        return self._yield_owned_entity(
+            entity="run",
+            table="strategy_pkg.multi_alpha_combine_backtest_run",
+            id_column="id",
+            entity_id=run_id,
+            token=token,
+            phase=phase,
+        )
+
+    def yield_attempt_ownership(
+        self,
+        attempt_id: str,
+        *,
+        token: OwnershipToken,
+        phase: str,
+    ) -> dict[str, Any]:
+        return self._yield_owned_entity(
+            entity="attempt",
+            table="strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+            id_column="attempt_id",
+            entity_id=attempt_id,
+            token=token,
+            phase=phase,
         )
 
     def transition_run_with_event(
@@ -1286,6 +1565,141 @@ class MultiAlphaDurableRepository:
                 )
                 return row
 
+    def record_attempt_deadline_evidence(
+        self,
+        attempt_id: str,
+        *,
+        token: OwnershipToken,
+        evidence: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Persist first-observed execution deadline evidence without terminalizing work."""
+
+        allowed_kinds = {"scheme", "run"}
+        normalized = {
+            str(kind): dict(payload)
+            for kind, payload in evidence.items()
+            if str(kind) in allowed_kinds and isinstance(payload, Mapping)
+        }
+        if not normalized or len(normalized) != len(evidence):
+            raise MultiAlphaDurableRepositoryError(
+                "execution deadline evidence must contain scheme/run objects",
+                reason_code="multi_alpha_deadline_evidence_invalid",
+                context={"attempt_id": attempt_id, "kinds": sorted(str(key) for key in evidence)},
+            )
+
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                current = self._lock_owned_row(
+                    cur,
+                    entity="attempt",
+                    table="strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                    id_column="attempt_id",
+                    entity_id=attempt_id,
+                    token=token,
+                    expected_statuses=("submitting", "running", "reconciling"),
+                )
+                result_manifest = dict(current.get("result_manifest_json") or {})
+                existing_raw = result_manifest.get("execution_deadline")
+                if existing_raw is None:
+                    existing: dict[str, Any] = {}
+                elif isinstance(existing_raw, Mapping):
+                    existing = {}
+                    for key, value in existing_raw.items():
+                        if str(key) not in allowed_kinds or not isinstance(value, Mapping):
+                            raise MultiAlphaDurableRepositoryError(
+                                "persisted execution deadline evidence contains an invalid entry",
+                                reason_code="multi_alpha_deadline_evidence_invalid",
+                                context={
+                                    "attempt_id": attempt_id,
+                                    "deadline_kind": key,
+                                },
+                            )
+                        existing[str(key)] = dict(value)
+                else:
+                    raise MultiAlphaDurableRepositoryError(
+                        "persisted execution deadline evidence is not an object",
+                        reason_code="multi_alpha_deadline_evidence_invalid",
+                        context={"attempt_id": attempt_id},
+                    )
+
+                added: dict[str, Mapping[str, Any]] = {}
+                for kind, payload in normalized.items():
+                    prior = existing.get(kind)
+                    if prior is None:
+                        existing[kind] = payload
+                        added[kind] = payload
+                        continue
+                    identity_fields = ("timeout_seconds", "started_at", "deadline_at")
+                    prior_identity = {field: prior.get(field) for field in identity_fields}
+                    requested_identity = {field: payload.get(field) for field in identity_fields}
+                    if canonical_json(prior_identity) != canonical_json(requested_identity):
+                        raise MultiAlphaDurableRepositoryError(
+                            "execution deadline identity changed for the same durable attempt",
+                            reason_code="multi_alpha_deadline_evidence_identity_conflict",
+                            context={
+                                "attempt_id": attempt_id,
+                                "deadline_kind": kind,
+                                "existing": prior_identity,
+                                "requested": requested_identity,
+                            },
+                        )
+
+                if not added:
+                    return current
+
+                result_manifest["execution_deadline"] = existing
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt
+                    SET result_manifest_json = %s,
+                        heartbeat_at = clock_timestamp(),
+                        row_version = row_version + 1,
+                        updated_at = NOW()
+                    WHERE attempt_id = %s
+                      AND owner_id = %s
+                      AND fencing_token = %s
+                      AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
+                    RETURNING *
+                    """,
+                    (
+                        Json(result_manifest),
+                        attempt_id,
+                        token.owner_id,
+                        token.fencing_token,
+                        token.row_version,
+                    ),
+                )
+                updated = cur.fetchone()
+                if updated is None:
+                    self._raise_cas_failure(
+                        cur,
+                        "attempt",
+                        "strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                        "attempt_id",
+                        attempt_id,
+                        token,
+                    )
+                row = dict(updated)
+                run_id = self._run_id_for_child(cur, str(row["child_id"]))
+                self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    child_id=str(row["child_id"]),
+                    attempt_id=attempt_id,
+                    event_type="status",
+                    phase="deadline_exceeded",
+                    reason_code="multi_alpha_execution_deadline_exceeded",
+                    payload={
+                        "status": row["status"],
+                        "new_deadlines": added,
+                        "execution_deadline": existing,
+                        "deadline_exceeded": True,
+                        "row_version": row["row_version"],
+                    },
+                )
+                return row
+
     def append_event(
         self,
         *,
@@ -1374,6 +1788,973 @@ class MultiAlphaDurableRepository:
                 if not updated:
                     self._raise_cas_failure(cur, entity, table, id_column, entity_id, token)
                 return dict(updated)
+
+    def _yield_owned_entity(
+        self,
+        *,
+        entity: str,
+        table: str,
+        id_column: str,
+        entity_id: str,
+        token: OwnershipToken,
+        phase: str,
+    ) -> dict[str, Any]:
+        if not str(phase or "").strip():
+            raise MultiAlphaDurableRepositoryError(
+                "yield phase must not be empty",
+                reason_code="multi_alpha_invalid_contract_value",
+            )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                    SET owner_id = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = clock_timestamp(),
+                        row_version = row_version + 1,
+                        updated_at = NOW()
+                    WHERE {id_column} = %s
+                      AND owner_id = %s
+                      AND fencing_token = %s
+                      AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
+                    RETURNING *
+                    """,
+                    (entity_id, token.owner_id, token.fencing_token, token.row_version),
+                )
+                updated = cur.fetchone()
+                if not updated:
+                    self._raise_cas_failure(cur, entity, table, id_column, entity_id, token)
+                row = dict(updated)
+                run_id = entity_id if entity == "run" else self._run_id_for_child(
+                    cur,
+                    str(row["child_id"]),
+                )
+                self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    child_id=str(row["child_id"]) if entity == "attempt" else None,
+                    attempt_id=entity_id if entity == "attempt" else None,
+                    event_type="status",
+                    phase=phase,
+                    payload={
+                        "ownership_yielded": True,
+                        "owner_id": token.owner_id,
+                        "fencing_token": token.fencing_token,
+                        "row_version": row["row_version"],
+                    },
+                )
+                return row
+
+    def set_child_reconciling_attempt(
+        self,
+        child_id: str,
+        *,
+        selected_attempt_id: str,
+        phase: str,
+        event_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Idempotently bind the authoritative successful attempt to a child."""
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child
+                    WHERE child_id = %s
+                    FOR UPDATE
+                    """,
+                    (child_id,),
+                )
+                current = cur.fetchone()
+                if current is None:
+                    self._raise_not_found("child", child_id)
+                child = dict(current)
+                if child["status"] not in {"running", "reconciling"}:
+                    self._raise_state_conflict(
+                        "child",
+                        child_id,
+                        str(child["status"]),
+                        ("running", "reconciling"),
+                    )
+                cur.execute(
+                    """
+                    SELECT status
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt
+                    WHERE attempt_id = %s AND child_id = %s
+                    FOR UPDATE
+                    """,
+                    (selected_attempt_id, child_id),
+                )
+                attempt = cur.fetchone()
+                if attempt is None:
+                    raise MultiAlphaDurableRepositoryError(
+                        "selected reconciliation attempt does not belong to child",
+                        reason_code="multi_alpha_selected_attempt_scope_mismatch",
+                        context={"child_id": child_id, "attempt_id": selected_attempt_id},
+                    )
+                if attempt["status"] != "succeeded":
+                    raise MultiAlphaDurableRepositoryError(
+                        "selected reconciliation attempt must be succeeded",
+                        reason_code="multi_alpha_business_result_attempt_not_succeeded",
+                        context={
+                            "child_id": child_id,
+                            "attempt_id": selected_attempt_id,
+                            "attempt_status": attempt["status"],
+                        },
+                    )
+                existing_attempt_id = child.get("selected_attempt_id")
+                if existing_attempt_id not in (None, selected_attempt_id):
+                    raise MultiAlphaDurableRepositoryError(
+                        "child already selected a different durable attempt",
+                        reason_code="multi_alpha_selected_attempt_conflict",
+                        context={
+                            "child_id": child_id,
+                            "expected_attempt_id": existing_attempt_id,
+                            "actual_attempt_id": selected_attempt_id,
+                        },
+                    )
+                if child["status"] == "reconciling" and existing_attempt_id == selected_attempt_id:
+                    return child
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_child
+                    SET status = 'reconciling',
+                        selected_attempt_id = %s,
+                        updated_at = NOW()
+                    WHERE child_id = %s
+                      AND status IN ('running', 'reconciling')
+                      AND (selected_attempt_id IS NULL OR selected_attempt_id = %s)
+                    RETURNING *
+                    """,
+                    (selected_attempt_id, child_id, selected_attempt_id),
+                )
+                updated = cur.fetchone()
+                if updated is None:
+                    raise MultiAlphaDurableRepositoryError(
+                        "child reconciliation attempt binding lost its compare-and-set",
+                        reason_code="multi_alpha_selected_attempt_conflict",
+                        context={"child_id": child_id, "attempt_id": selected_attempt_id},
+                    )
+                row = dict(updated)
+                self._insert_event(
+                    cur,
+                    run_id=str(row["run_id"]),
+                    child_id=child_id,
+                    attempt_id=selected_attempt_id,
+                    event_type="reconciled",
+                    phase=phase,
+                    payload={
+                        "previous_status": child["status"],
+                        "status": "reconciling",
+                        "selected_attempt_id": selected_attempt_id,
+                        **dict(event_payload or {}),
+                    },
+                )
+                return row
+
+    def claim_next_finalizable_run(
+        self,
+        *,
+        owner_id: str,
+        lease_seconds: int,
+        excluded_run_ids: Sequence[str] = (),
+    ) -> dict[str, Any] | None:
+        """Claim only runs with business reconciliation or parent finalization work."""
+        self._validate_claim_inputs(
+            owner_id=owner_id,
+            lease_seconds=lease_seconds,
+            statuses=("running",),
+            allowed=RUN_STATUSES,
+        )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH candidate AS (
+                        SELECT run.id
+                        FROM strategy_pkg.multi_alpha_combine_backtest_run AS run
+                        WHERE run.status = 'running'
+                          AND NOT (run.id = ANY(%s))
+                          AND run.task_id IS NOT NULL
+                          AND run.request_hash IS NOT NULL
+                          AND (
+                              run.owner_id IS NULL
+                              OR run.lease_expires_at IS NULL
+                              OR run.lease_expires_at < clock_timestamp()
+                          )
+                          AND EXISTS (
+                              SELECT 1
+                              FROM strategy_pkg.multi_alpha_combine_backtest_child AS child
+                              WHERE child.run_id = run.id
+                          )
+                          AND (
+                              EXISTS (
+                                  SELECT 1
+                                  FROM strategy_pkg.multi_alpha_combine_backtest_child AS child
+                                  WHERE child.run_id = run.id
+                                    AND child.status = 'reconciling'
+                              )
+                              OR NOT EXISTS (
+                                  SELECT 1
+                                  FROM strategy_pkg.multi_alpha_combine_backtest_child AS child
+                                  WHERE child.run_id = run.id
+                                    AND child.status <> ALL(%s)
+                              )
+                          )
+                        ORDER BY run.updated_at, run.created_at, run.id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_run AS run
+                    SET owner_id = %s,
+                        fencing_token = run.fencing_token + 1,
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
+                        heartbeat_at = clock_timestamp(),
+                        row_version = run.row_version + 1,
+                        updated_at = NOW()
+                    FROM candidate
+                    WHERE run.id = candidate.id
+                    RETURNING run.*
+                    """,
+                    (
+                        list(excluded_run_ids),
+                        list(TERMINAL_CHILD_STATUSES),
+                        owner_id,
+                        lease_seconds,
+                    ),
+                )
+                claimed = cur.fetchone()
+                if claimed is None:
+                    return None
+                row = dict(claimed)
+                self._insert_event(
+                    cur,
+                    run_id=str(row["id"]),
+                    event_type="claimed",
+                    phase="business_finalize",
+                    payload={
+                        "owner_id": owner_id,
+                        "fencing_token": row["fencing_token"],
+                        "row_version": row["row_version"],
+                        "lease_seconds": lease_seconds,
+                    },
+                )
+                return row
+
+    def list_runs_pending_archive(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 1000))
+        return self._fetch_all(
+            """
+            SELECT run.*
+            FROM strategy_pkg.multi_alpha_combine_backtest_run AS run
+            WHERE run.status = ANY(%s)
+              AND run.task_id IS NOT NULL
+              AND run.request_hash IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM strategy_pkg.multi_alpha_combine_backtest_event AS event
+                  WHERE event.run_id = run.id
+                    AND event.phase IN ('archive_enqueued', 'archive_duplicate')
+              )
+            ORDER BY run.finished_at NULLS LAST, run.created_at, run.id
+            LIMIT %s
+            """,
+            (list(TERMINAL_RUN_STATUSES), bounded_limit),
+        )
+
+    def append_archive_delivery_event(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        archive_event_id: str,
+        payload: Mapping[str, Any],
+        reason_code: str | None = None,
+    ) -> dict[str, Any]:
+        allowed_phases = {
+            "archive_enqueued",
+            "archive_duplicate",
+            "archive_skipped_disabled",
+            "archive_error",
+        }
+        if phase not in allowed_phases:
+            raise MultiAlphaDurableRepositoryError(
+                "archive delivery phase is invalid",
+                reason_code="multi_alpha_archive_phase_invalid",
+                context={"phase": phase},
+            )
+        if not str(archive_event_id or "").strip():
+            raise MultiAlphaDurableRepositoryError(
+                "archive delivery event requires archive_event_id",
+                reason_code="multi_alpha_archive_event_id_missing",
+            )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"multi_alpha_archive:{run_id}",),
+                )
+                cur.execute(
+                    """
+                    SELECT status
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (run_id,),
+                )
+                run = cur.fetchone()
+                if run is None:
+                    self._raise_not_found("run", run_id)
+                if str(run["status"]) not in TERMINAL_RUN_STATUSES:
+                    raise MultiAlphaDurableRepositoryError(
+                        "archive delivery requires a terminal durable run",
+                        reason_code="multi_alpha_archive_run_not_terminal",
+                        context={"run_id": run_id, "status": run["status"]},
+                    )
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_event
+                    WHERE run_id = %s
+                      AND phase = %s
+                      AND payload_json ->> 'archive_event_id' = %s
+                    ORDER BY event_id DESC
+                    LIMIT 1
+                    """,
+                    (run_id, phase, archive_event_id),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    return dict(existing)
+                return self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    event_type="reconciled" if phase != "archive_error" else "error",
+                    phase=phase,
+                    reason_code=reason_code,
+                    payload={"archive_event_id": archive_event_id, **dict(payload)},
+                )
+
+    def finalize_scheme_child_result(
+        self,
+        child_id: str,
+        *,
+        selected_attempt_id: str,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one successful scheme row and terminal child in one transaction."""
+        desired = self._normalized_scheme_result(result)
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                child = self._lock_business_child(
+                    cur,
+                    child_id=child_id,
+                    expected_statuses=("reconciling",),
+                    expected_kind="scheme",
+                    selected_attempt_id=selected_attempt_id,
+                    require_succeeded_attempt=True,
+                )
+                self._assert_business_identity(
+                    child,
+                    weighting_scheme=desired["weighting_scheme"],
+                    dropped_leg_id=None,
+                )
+                self._insert_or_compare_scheme_result(
+                    cur,
+                    run_id=str(child["run_id"]),
+                    desired=desired,
+                )
+                return self._terminalize_business_child(
+                    cur,
+                    child=child,
+                    next_status="succeeded",
+                    phase="business_result_persisted",
+                    selected_attempt_id=selected_attempt_id,
+                    reason_code=None,
+                    payload={
+                        "weighting_scheme": desired["weighting_scheme"],
+                        "skipped": False,
+                    },
+                )
+
+    def finalize_scheme_child_without_result(
+        self,
+        child_id: str,
+        *,
+        expected_statuses: Sequence[str],
+        next_status: str,
+        reason_code: str,
+        error: Mapping[str, Any],
+        weights: Mapping[str, Any] | None = None,
+        per_window_weights: Sequence[Mapping[str, Any]] | None = None,
+        selected_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist legacy-compatible skipped scheme evidence with its terminal child."""
+        if next_status not in {"not_computable", "failed", "cancelled"}:
+            raise MultiAlphaDurableRepositoryError(
+                "scheme without result requires a non-success terminal child status",
+                reason_code="multi_alpha_invalid_transition",
+                context={"next_status": next_status},
+            )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                child = self._lock_business_child(
+                    cur,
+                    child_id=child_id,
+                    expected_statuses=expected_statuses,
+                    expected_kind="scheme",
+                    selected_attempt_id=selected_attempt_id,
+                    require_succeeded_attempt=False,
+                )
+                desired = self._normalized_scheme_result(
+                    {
+                        "weighting_scheme": child["weighting_scheme"],
+                        "weights_json": dict(weights or {}),
+                        "per_window_weights_json": [
+                            dict(item) for item in (per_window_weights or ())
+                        ],
+                        "pred_persisted": False,
+                        "skipped": True,
+                        "skipped_reason": canonical_json(dict(error)),
+                    }
+                )
+                self._insert_or_compare_scheme_result(
+                    cur,
+                    run_id=str(child["run_id"]),
+                    desired=desired,
+                )
+                return self._terminalize_business_child(
+                    cur,
+                    child=child,
+                    next_status=next_status,
+                    phase="business_result_unavailable",
+                    selected_attempt_id=selected_attempt_id,
+                    reason_code=reason_code,
+                    payload={
+                        "weighting_scheme": desired["weighting_scheme"],
+                        "skipped": True,
+                        "error": dict(error),
+                    },
+                )
+
+    def finalize_loo_child_result(
+        self,
+        child_id: str,
+        *,
+        selected_attempt_id: str,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one successful LOO row and terminal child in one transaction."""
+        desired = self._normalized_loo_result(result)
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                child = self._lock_business_child(
+                    cur,
+                    child_id=child_id,
+                    expected_statuses=("reconciling",),
+                    expected_kind="loo",
+                    selected_attempt_id=selected_attempt_id,
+                    require_succeeded_attempt=True,
+                )
+                self._assert_business_identity(
+                    child,
+                    weighting_scheme=desired["weighting_scheme"],
+                    dropped_leg_id=desired["dropped_leg_id"],
+                )
+                self._insert_or_compare_loo_result(
+                    cur,
+                    run_id=str(child["run_id"]),
+                    desired=desired,
+                )
+                return self._terminalize_business_child(
+                    cur,
+                    child=child,
+                    next_status="succeeded",
+                    phase="business_result_persisted",
+                    selected_attempt_id=selected_attempt_id,
+                    reason_code=None,
+                    payload={
+                        "weighting_scheme": desired["weighting_scheme"],
+                        "dropped_leg_id": desired["dropped_leg_id"],
+                    },
+                )
+
+    def finalize_run_with_business_readback(
+        self,
+        run_id: str,
+        *,
+        token: OwnershipToken,
+        expected_statuses: Sequence[str],
+        next_status: str,
+        expected_child_count: int,
+        expected_scheme_result_count: int,
+        expected_loo_result_count: int,
+        progress: Mapping[str, Any],
+        reason_code: str | None = None,
+        error: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if next_status not in TERMINAL_RUN_STATUSES:
+            raise MultiAlphaDurableRepositoryError(
+                "parent finalization requires a terminal run status",
+                reason_code="multi_alpha_invalid_transition",
+                context={"next_status": next_status},
+            )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                current = self._lock_owned_row(
+                    cur,
+                    entity="run",
+                    table="strategy_pkg.multi_alpha_combine_backtest_run",
+                    id_column="id",
+                    entity_id=run_id,
+                    token=token,
+                    expected_statuses=expected_statuses,
+                )
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS child_count,
+                           COUNT(*) FILTER (
+                               WHERE status = ANY(%s)
+                           ) AS terminal_child_count
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child
+                    WHERE run_id = %s
+                    """,
+                    (list(TERMINAL_CHILD_STATUSES), run_id),
+                )
+                child_readback = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS result_count
+                    FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                scheme_count = int(cur.fetchone()["result_count"])
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS result_count
+                    FROM strategy_pkg.multi_alpha_combine_backtest_loo
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                loo_count = int(cur.fetchone()["result_count"])
+                actual_child_count = int(child_readback["child_count"])
+                terminal_child_count = int(child_readback["terminal_child_count"])
+                expected = {
+                    "child_count": int(expected_child_count),
+                    "scheme_result_count": int(expected_scheme_result_count),
+                    "loo_result_count": int(expected_loo_result_count),
+                }
+                actual = {
+                    "child_count": actual_child_count,
+                    "terminal_child_count": terminal_child_count,
+                    "scheme_result_count": scheme_count,
+                    "loo_result_count": loo_count,
+                }
+                if (
+                    actual_child_count != expected_child_count
+                    or terminal_child_count != expected_child_count
+                    or scheme_count != expected_scheme_result_count
+                    or loo_count != expected_loo_result_count
+                ):
+                    raise MultiAlphaDurableRepositoryError(
+                        "parent finalization business readback does not match the planned children",
+                        reason_code="multi_alpha_parent_readback_mismatch",
+                        context={"run_id": run_id, "expected": expected, "actual": actual},
+                    )
+                persisted_error_code, persisted_error = self._resolve_error_columns(
+                    next_status=next_status,
+                    reason_code=reason_code,
+                    error=error,
+                )
+                compatibility_reason = {
+                    "phase": "completed",
+                    "progress": dict(progress),
+                    "logical_status": next_status,
+                    "durable": True,
+                    "reason_code": reason_code,
+                }
+                if persisted_error is not None:
+                    compatibility_reason["error"] = persisted_error
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                    SET status = %s,
+                        phase = 'completed',
+                        progress_json = %s,
+                        reason = %s,
+                        error_code = %s,
+                        error_json = %s,
+                        finished_at = NOW(),
+                        owner_id = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = clock_timestamp(),
+                        row_version = row_version + 1,
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND owner_id = %s
+                      AND fencing_token = %s
+                      AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
+                    RETURNING *
+                    """,
+                    (
+                        next_status,
+                        Json(dict(progress)),
+                        Json(compatibility_reason),
+                        persisted_error_code,
+                        Json(persisted_error) if persisted_error is not None else None,
+                        run_id,
+                        token.owner_id,
+                        token.fencing_token,
+                        token.row_version,
+                    ),
+                )
+                updated = cur.fetchone()
+                if not updated:
+                    self._raise_cas_failure(
+                        cur,
+                        "run",
+                        "strategy_pkg.multi_alpha_combine_backtest_run",
+                        "id",
+                        run_id,
+                        token,
+                    )
+                row = dict(updated)
+                self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    event_type="terminal",
+                    phase="completed",
+                    reason_code=reason_code,
+                    payload={
+                        "previous_status": current["status"],
+                        "status": next_status,
+                        "business_readback": actual,
+                        "row_version": row["row_version"],
+                    },
+                )
+                return row
+
+    def _lock_business_child(
+        self,
+        cur: Any,
+        *,
+        child_id: str,
+        expected_statuses: Sequence[str],
+        expected_kind: str,
+        selected_attempt_id: str | None,
+        require_succeeded_attempt: bool,
+    ) -> dict[str, Any]:
+        cur.execute(
+            """
+            SELECT *
+            FROM strategy_pkg.multi_alpha_combine_backtest_child
+            WHERE child_id = %s
+            FOR UPDATE
+            """,
+            (child_id,),
+        )
+        current = cur.fetchone()
+        if current is None:
+            self._raise_not_found("child", child_id)
+        child = dict(current)
+        if child["status"] not in expected_statuses:
+            self._raise_state_conflict(
+                "child",
+                child_id,
+                str(child["status"]),
+                expected_statuses,
+            )
+        if child["child_kind"] != expected_kind:
+            raise MultiAlphaDurableRepositoryError(
+                "business result kind does not match the durable child",
+                reason_code="multi_alpha_business_result_scope_mismatch",
+                context={
+                    "child_id": child_id,
+                    "expected_kind": expected_kind,
+                    "actual_kind": child["child_kind"],
+                },
+            )
+        if selected_attempt_id is not None:
+            cur.execute(
+                """
+                SELECT attempt_id, status
+                FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt
+                WHERE attempt_id = %s AND child_id = %s
+                FOR UPDATE
+                """,
+                (selected_attempt_id, child_id),
+            )
+            attempt = cur.fetchone()
+            if attempt is None:
+                raise MultiAlphaDurableRepositoryError(
+                    "selected business result attempt does not belong to the child",
+                    reason_code="multi_alpha_selected_attempt_scope_mismatch",
+                    context={"child_id": child_id, "attempt_id": selected_attempt_id},
+                )
+            if require_succeeded_attempt and attempt["status"] != "succeeded":
+                raise MultiAlphaDurableRepositoryError(
+                    "successful business result requires a succeeded durable attempt",
+                    reason_code="multi_alpha_business_result_attempt_not_succeeded",
+                    context={
+                        "child_id": child_id,
+                        "attempt_id": selected_attempt_id,
+                        "attempt_status": attempt["status"],
+                    },
+                )
+        elif require_succeeded_attempt:
+            raise MultiAlphaDurableRepositoryError(
+                "successful business result requires selected_attempt_id",
+                reason_code="multi_alpha_selected_attempt_required",
+                context={"child_id": child_id},
+            )
+        return child
+
+    @staticmethod
+    def _assert_business_identity(
+        child: Mapping[str, Any],
+        *,
+        weighting_scheme: Any,
+        dropped_leg_id: Any,
+    ) -> None:
+        if str(child.get("weighting_scheme") or "") != str(weighting_scheme or ""):
+            raise MultiAlphaDurableRepositoryError(
+                "business result weighting scheme does not match the durable child",
+                reason_code="multi_alpha_business_result_scope_mismatch",
+                context={
+                    "child_id": child.get("child_id"),
+                    "expected_weighting_scheme": child.get("weighting_scheme"),
+                    "actual_weighting_scheme": weighting_scheme,
+                },
+            )
+        if (child.get("dropped_leg_id") or None) != (dropped_leg_id or None):
+            raise MultiAlphaDurableRepositoryError(
+                "business result dropped leg does not match the durable child",
+                reason_code="multi_alpha_business_result_scope_mismatch",
+                context={
+                    "child_id": child.get("child_id"),
+                    "expected_dropped_leg_id": child.get("dropped_leg_id"),
+                    "actual_dropped_leg_id": dropped_leg_id,
+                },
+            )
+
+    @staticmethod
+    def _normalized_scheme_result(result: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "weighting_scheme": str(result.get("weighting_scheme") or ""),
+            "weights_json": dict(result.get("weights_json") or {}),
+            "per_window_weights_json": [
+                dict(item) for item in (result.get("per_window_weights_json") or ())
+            ],
+            "cagr": result.get("cagr"),
+            "max_drawdown": result.get("max_drawdown"),
+            "sharpe": result.get("sharpe"),
+            "calmar": result.get("calmar"),
+            "topk_return_20": result.get("topk_return_20"),
+            "topk_hit_rate_20": result.get("topk_hit_rate_20"),
+            "turnover": result.get("turnover"),
+            "vs_baseline_sharpe_delta": result.get("vs_baseline_sharpe_delta"),
+            "vs_baseline_calmar_delta": result.get("vs_baseline_calmar_delta"),
+            "pred_persisted": bool(result.get("pred_persisted")),
+            "skipped": bool(result.get("skipped")),
+            "skipped_reason": result.get("skipped_reason"),
+        }
+
+    @staticmethod
+    def _normalized_loo_result(result: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "weighting_scheme": str(result.get("weighting_scheme") or ""),
+            "dropped_leg_id": str(result.get("dropped_leg_id") or ""),
+            "marginal_sharpe": result.get("marginal_sharpe"),
+            "marginal_calmar": result.get("marginal_calmar"),
+            "marginal_cagr": result.get("marginal_cagr"),
+        }
+
+    def _insert_or_compare_scheme_result(
+        self,
+        cur: Any,
+        *,
+        run_id: str,
+        desired: Mapping[str, Any],
+    ) -> None:
+        cur.execute(
+            """
+            SELECT weighting_scheme, weights_json, per_window_weights_json,
+                   cagr, max_drawdown, sharpe, calmar, topk_return_20,
+                   topk_hit_rate_20, turnover, vs_baseline_sharpe_delta,
+                   vs_baseline_calmar_delta, pred_persisted, skipped, skipped_reason
+            FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+            WHERE run_id = %s AND weighting_scheme = %s
+            FOR UPDATE
+            """,
+            (run_id, desired["weighting_scheme"]),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            self._assert_business_row_equal(
+                kind="scheme",
+                identity={
+                    "run_id": run_id,
+                    "weighting_scheme": desired["weighting_scheme"],
+                },
+                existing=dict(existing),
+                desired=desired,
+            )
+            return
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                (run_id, weighting_scheme, weights_json, per_window_weights_json,
+                 cagr, max_drawdown, sharpe, calmar, topk_return_20,
+                 topk_hit_rate_20, turnover, vs_baseline_sharpe_delta,
+                 vs_baseline_calmar_delta, pred_persisted, skipped, skipped_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                run_id,
+                desired["weighting_scheme"],
+                Json(desired["weights_json"]),
+                Json(desired["per_window_weights_json"]),
+                desired["cagr"],
+                desired["max_drawdown"],
+                desired["sharpe"],
+                desired["calmar"],
+                desired["topk_return_20"],
+                desired["topk_hit_rate_20"],
+                desired["turnover"],
+                desired["vs_baseline_sharpe_delta"],
+                desired["vs_baseline_calmar_delta"],
+                desired["pred_persisted"],
+                desired["skipped"],
+                desired["skipped_reason"],
+            ),
+        )
+
+    def _insert_or_compare_loo_result(
+        self,
+        cur: Any,
+        *,
+        run_id: str,
+        desired: Mapping[str, Any],
+    ) -> None:
+        cur.execute(
+            """
+            SELECT weighting_scheme, dropped_leg_id, marginal_sharpe,
+                   marginal_calmar, marginal_cagr
+            FROM strategy_pkg.multi_alpha_combine_backtest_loo
+            WHERE run_id = %s AND weighting_scheme = %s AND dropped_leg_id = %s
+            FOR UPDATE
+            """,
+            (run_id, desired["weighting_scheme"], desired["dropped_leg_id"]),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            self._assert_business_row_equal(
+                kind="loo",
+                identity={
+                    "run_id": run_id,
+                    "weighting_scheme": desired["weighting_scheme"],
+                    "dropped_leg_id": desired["dropped_leg_id"],
+                },
+                existing=dict(existing),
+                desired=desired,
+            )
+            return
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.multi_alpha_combine_backtest_loo
+                (run_id, weighting_scheme, dropped_leg_id,
+                 marginal_sharpe, marginal_calmar, marginal_cagr)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                run_id,
+                desired["weighting_scheme"],
+                desired["dropped_leg_id"],
+                desired["marginal_sharpe"],
+                desired["marginal_calmar"],
+                desired["marginal_cagr"],
+            ),
+        )
+
+    @staticmethod
+    def _assert_business_row_equal(
+        *,
+        kind: str,
+        identity: Mapping[str, Any],
+        existing: Mapping[str, Any],
+        desired: Mapping[str, Any],
+    ) -> None:
+        comparable_existing = {key: existing.get(key) for key in desired}
+        if canonical_json(comparable_existing) != canonical_json(dict(desired)):
+            raise MultiAlphaDurableRepositoryError(
+                "existing business result conflicts with the durable child result",
+                reason_code="multi_alpha_business_result_identity_conflict",
+                context={
+                    "kind": kind,
+                    "identity": dict(identity),
+                    "existing": comparable_existing,
+                    "desired": dict(desired),
+                },
+            )
+
+    def _terminalize_business_child(
+        self,
+        cur: Any,
+        *,
+        child: Mapping[str, Any],
+        next_status: str,
+        phase: str,
+        selected_attempt_id: str | None,
+        reason_code: str | None,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        cur.execute(
+            """
+            UPDATE strategy_pkg.multi_alpha_combine_backtest_child
+            SET status = %s,
+                selected_attempt_id = COALESCE(%s, selected_attempt_id),
+                updated_at = NOW()
+            WHERE child_id = %s AND status = %s
+            RETURNING *
+            """,
+            (
+                next_status,
+                selected_attempt_id,
+                child["child_id"],
+                child["status"],
+            ),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            self._raise_state_conflict(
+                "child",
+                str(child["child_id"]),
+                str(child["status"]),
+                (str(child["status"]),),
+            )
+        row = dict(updated)
+        self._insert_event(
+            cur,
+            run_id=str(row["run_id"]),
+            child_id=str(row["child_id"]),
+            attempt_id=selected_attempt_id,
+            event_type="terminal",
+            phase=phase,
+            reason_code=reason_code,
+            payload={
+                "previous_status": child["status"],
+                "status": next_status,
+                **dict(payload),
+            },
+        )
+        return row
 
     def _lock_owned_row(
         self,
@@ -1723,20 +3104,22 @@ class MultiAlphaDurableRepository:
     @staticmethod
     def _assert_task_identity(row: Mapping[str, Any], spec: DurableTaskSpec) -> None:
         expected = {
-            "task_id": spec.task_id,
-            "roster_hash": spec.roster_hash,
-            "roster_json": canonical_json(list(spec.roster)),
-            "default_request_json": canonical_json(dict(spec.default_request)),
-            "legacy_group_key": spec.legacy_group_key,
+            "identity": durable_task_identity_payload(
+                roster_hash=spec.roster_hash,
+                roster=spec.roster,
+                default_request=spec.default_request,
+                legacy_group_key=spec.legacy_group_key,
+            ),
         }
         actual = {
-            "task_id": row.get("task_id"),
-            "roster_hash": row.get("roster_hash"),
-            "roster_json": canonical_json(row.get("roster_json")),
-            "default_request_json": canonical_json(row.get("default_request_json")),
-            "legacy_group_key": row.get("legacy_group_key"),
+            "identity": durable_task_identity_payload(
+                roster_hash=str(row.get("roster_hash") or ""),
+                roster=row.get("roster_json") or [],
+                default_request=row.get("default_request_json") or {},
+                legacy_group_key=row.get("legacy_group_key"),
+            ),
         }
-        if actual != expected:
+        if canonical_json(actual) != canonical_json(expected):
             MultiAlphaDurableRepository._raise_identity_conflict(
                 entity="task",
                 identity=spec.task_id,

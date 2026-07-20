@@ -6483,7 +6483,12 @@ async def run_experiment(experiment_id: str, engine_mode: Optional[str] = "unifi
     return await _run_experiment_unified(experiment_id, node_id=node_id)
 
 
-async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
+async def _run_multi_alpha_experiment(
+    experiment_id: str,
+    node_id: str = None,
+    *,
+    _capacity_resume: bool = False,
+):
     """多Alpha实验执行路径（支持分布式并行）。
 
     执行策略:
@@ -6496,12 +6501,20 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
     """
     from ..services.quantevolver.config_composer import ConfigComposer
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+    from ..services.quantevolver.qe_active_execution_capacity import (
+        QEExecutionSourceClaimFactory,
+        QEWorkspaceSubmissionCoordinator,
+        QEWorkspaceSubmissionPayload,
+        QEWorkspaceSubmissionSource,
+        qe_submission_owner_id,
+        submission_intent_hash_for_source,
+    )
 
     cc = ConfigComposer()
     exp_record = cc._get_experiment_record(experiment_id)
     if not exp_record:
         raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
-    if exp_record.get("status") == "running":
+    if exp_record.get("status") == "running" and not _capacity_resume:
         raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
 
     experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
@@ -6601,6 +6614,8 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
     }
 
     submitted_nodes: list[dict] = []
+    waiting_nodes: list[dict] = []
+    submission_coordinator = QEWorkspaceSubmissionCoordinator()
 
     if is_distributed:
         # ── 分布式：各节点独立提交 ────────────────────────────
@@ -6638,20 +6653,70 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
                 "is_distributed_node": True,
             }
 
+            source_execution_id = f"{experiment_id}:{n_id}"
+            expected_loop_id = "Loop1"
+            claim_source, record_waiting = QEExecutionSourceClaimFactory.multi_alpha_node(
+                experiment_id=experiment_id,
+                node_id=n_id,
+                qe_loop_id=expected_loop_id,
+                group_names=tuple(g["group_name"] for g in groups),
+            )
+            source = QEWorkspaceSubmissionSource(
+                source_kind="qe_multi_alpha_node",
+                source_execution_id=source_execution_id,
+                node_id=n_id,
+                submission_intent_hash=submission_intent_hash_for_source(
+                    source_kind="qe_multi_alpha_node",
+                    source_execution_id=source_execution_id,
+                    node_id=n_id,
+                    task_id=qe_task_id,
+                    loop_id=expected_loop_id,
+                ),
+                owner_id=qe_submission_owner_id(),
+                claim_source=claim_source,
+                record_waiting_capacity=record_waiting,
+            )
             client = QEWorkspaceClient.for_node(n_id)
             try:
                 async with client:
-                    node_loop_id = await client.create_and_run_loop(
-                        qe_task_id, 1, node_config, node_files, node_command,
-                        callback_url=node_callbacks.get(n_id) or _resolve_qe_experiment_callback_url(n_id),
+                    submission = await submission_coordinator.submit(
+                        client=client,
+                        source=source,
+                        payload=QEWorkspaceSubmissionPayload(
+                            task_id=qe_task_id,
+                            loop_index=1,
+                            config=node_config,
+                            experiment_files=node_files,
+                            wsl_command=node_command,
+                            callback_url=(
+                                node_callbacks.get(n_id)
+                                or _resolve_qe_experiment_callback_url(n_id)
+                            ),
+                        ),
                     )
             except Exception as e:
                 raise RuntimeError(f"节点 {n_id} 提交失败: {e}") from e
+
+            if submission.waiting_capacity:
+                waiting_nodes.append(
+                    {
+                        "node_id": n_id,
+                        "qe_loop_id": expected_loop_id,
+                        "group_names": [g["group_name"] for g in groups],
+                        "status": "waiting_capacity",
+                        "active_count": submission.active_count,
+                        "node_capacity": submission.node_capacity,
+                    }
+                )
+                continue
+
+            node_loop_id = submission.loop_id
 
             submitted_nodes.append({
                 "node_id": n_id,
                 "qe_loop_id": node_loop_id,
                 "group_names": [g["group_name"] for g in groups],
+                "submission_state": submission.state,
             })
             logger.info(f"节点 {n_id}: 提交成功, loop_id={node_loop_id}, groups={[g['group_name'] for g in groups]}")
 
@@ -6660,24 +6725,35 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
             (n["qe_loop_id"] for n in submitted_nodes if n.get("qe_loop_id")),
             None,
         )
+        if not primary_loop_id and waiting_nodes:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_experiments
+                        SET status = 'pending',
+                            qe_task_id = %s,
+                            qe_loop_id = 'Loop1',
+                            updated_at = NOW()
+                        WHERE experiment_id = %s
+                        """,
+                        (qe_task_id, experiment_id),
+                    )
+                conn.commit()
+            return {
+                "ok": True,
+                "experiment_id": experiment_id,
+                "qe_task_id": qe_task_id,
+                "qe_loop_id": "Loop1",
+                "engine": "multi_alpha",
+                "is_distributed": True,
+                "status": "pending",
+                "phase": "waiting_capacity",
+                "nodes": waiting_nodes,
+                "total_groups": engine_result.get("total_groups"),
+            }
         if not primary_loop_id:
             raise RuntimeError(f"多Alpha分布式执行失败: {experiment_id} 没有成功提交的节点")
-
-        # 持久化各节点 loop_id 到 qe_multi_alpha_groups
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for sn in submitted_nodes:
-                    for g_name in sn["group_names"]:
-                        cur.execute(
-                            """UPDATE qe_multi_alpha_groups
-                               SET assigned_node_id = %s,
-                                   qe_loop_id = %s,
-                                   status = 'running',
-                                   error_message = NULL
-                               WHERE parent_experiment_id = %s AND group_name = %s""",
-                            (sn["node_id"], sn["qe_loop_id"], experiment_id, g_name),
-                        )
-            conn.commit()
 
     else:
         # ── 单节点：所有组 + meta_model_runner 一起跑 ───────────
@@ -6707,28 +6783,90 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
             "total_groups": engine_result.get("total_groups"),
         }
 
+        source_execution_id = f"{experiment_id}:{only_node_id}"
+        expected_loop_id = "Loop1"
+        claim_source, record_waiting = QEExecutionSourceClaimFactory.multi_alpha_node(
+            experiment_id=experiment_id,
+            node_id=only_node_id,
+            qe_loop_id=expected_loop_id,
+            group_names=tuple(g["group_name"] for g in group_configs),
+        )
+        source = QEWorkspaceSubmissionSource(
+            source_kind="qe_multi_alpha_node",
+            source_execution_id=source_execution_id,
+            node_id=only_node_id,
+            submission_intent_hash=submission_intent_hash_for_source(
+                source_kind="qe_multi_alpha_node",
+                source_execution_id=source_execution_id,
+                node_id=only_node_id,
+                task_id=qe_task_id,
+                loop_id=expected_loop_id,
+            ),
+            owner_id=qe_submission_owner_id(),
+            claim_source=claim_source,
+            record_waiting_capacity=record_waiting,
+        )
         client = QEWorkspaceClient.for_node(only_node_id)
         async with client:
-            primary_loop_id = await client.create_and_run_loop(
-                qe_task_id, 1, config, all_experiment_files, orchestration_command,
-                callback_url=node_callbacks.get(only_node_id) or _resolve_qe_experiment_callback_url(only_node_id),
+            submission = await submission_coordinator.submit(
+                client=client,
+                source=source,
+                payload=QEWorkspaceSubmissionPayload(
+                    task_id=qe_task_id,
+                    loop_index=1,
+                    config=config,
+                    experiment_files=all_experiment_files,
+                    wsl_command=orchestration_command,
+                    callback_url=(
+                        node_callbacks.get(only_node_id)
+                        or _resolve_qe_experiment_callback_url(only_node_id)
+                    ),
+                ),
             )
+
+        if submission.waiting_capacity:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_experiments
+                        SET status = 'pending', qe_task_id = %s, qe_loop_id = %s,
+                            updated_at = NOW()
+                        WHERE experiment_id = %s
+                        """,
+                        (qe_task_id, expected_loop_id, experiment_id),
+                    )
+                conn.commit()
+            return {
+                "ok": True,
+                "experiment_id": experiment_id,
+                "qe_task_id": qe_task_id,
+                "qe_loop_id": expected_loop_id,
+                "engine": "multi_alpha",
+                "is_distributed": False,
+                "status": "pending",
+                "phase": "waiting_capacity",
+                "nodes": [
+                    {
+                        "node_id": only_node_id,
+                        "qe_loop_id": expected_loop_id,
+                        "group_names": [g["group_name"] for g in group_configs],
+                        "status": "waiting_capacity",
+                        "active_count": submission.active_count,
+                        "node_capacity": submission.node_capacity,
+                    }
+                ],
+                "total_groups": engine_result.get("total_groups"),
+            }
+
+        primary_loop_id = submission.loop_id
 
         submitted_nodes.append({
             "node_id": only_node_id,
             "qe_loop_id": primary_loop_id,
             "group_names": [g["group_name"] for g in group_configs],
+            "submission_state": submission.state,
         })
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """UPDATE qe_multi_alpha_groups
-                       SET assigned_node_id = %s, qe_loop_id = %s, status = 'running'
-                       WHERE parent_experiment_id = %s""",
-                    (only_node_id, primary_loop_id, experiment_id),
-                )
-            conn.commit()
 
     # 更新 qe_experiments
     with get_conn() as conn:
@@ -6751,11 +6889,17 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
         "engine": "multi_alpha",
         "is_distributed": is_distributed,
         "nodes": submitted_nodes,
+        "waiting_nodes": waiting_nodes,
         "total_groups": engine_result.get("total_groups"),
     }
 
 
-async def _run_experiment_unified(experiment_id: str, node_id: str = None):
+async def _run_experiment_unified(
+    experiment_id: str,
+    node_id: str = None,
+    *,
+    _capacity_resume: bool = False,
+):
     """统一引擎路径：使用 ExperimentConfig + BacktestExecutor 执行单次实验（Path 1）。"""
     from ..services.quantevolver.config_composer import ConfigComposer
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
@@ -6768,7 +6912,7 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
         exp_record = cc._get_experiment_record(experiment_id)
         if not exp_record:
             raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
-        if exp_record.get("status") == "running":
+        if exp_record.get("status") == "running" and not _capacity_resume:
             raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
 
         experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
@@ -6826,12 +6970,27 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
             node_id=effective_node_id,
             callback_url=callback_url,
             require_fixed_seed=True,
+            submission_source_kind="qe_experiment",
+            submission_source_execution_id=experiment_id,
         )
 
         client = QEWorkspaceClient.for_node(effective_node_id)
         async with client:
             executor = BacktestExecutor(cc, client)
             result = await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
+
+        if result.status == "waiting_capacity":
+            return {
+                "ok": True,
+                "experiment_id": experiment_id,
+                "qe_task_id": experiment_name,
+                "qe_loop_id": result.job_id,
+                "engine": "unified",
+                "node_id": effective_node_id,
+                "status": "pending",
+                "phase": "waiting_capacity",
+                "qe_submission": (result.detail or {}).get("qe_submission"),
+            }
 
         with get_conn() as conn:
             with conn.cursor() as cur:
