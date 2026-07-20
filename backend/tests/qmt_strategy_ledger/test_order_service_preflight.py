@@ -646,6 +646,34 @@ class DisconnectingBroker(CountingBroker):
         raise error
 
 
+class StatusProbeFailingBroker(CountingBroker):
+    def status(self) -> dict:
+        raise RuntimeError("status transport failed")
+
+    def place_order(self, **kwargs):
+        del kwargs
+        self.place_order_calls += 1
+        raise RuntimeError("submit transport failed")
+
+
+def test_broker_status_probe_failure_is_loud_after_submit_exception() -> None:
+    repo = _repo(cash=Decimal("10000"))
+    broker = StatusProbeFailingBroker()
+    service = _service(repo, broker)
+    request = _buy_request(order_remark="status-probe-failure", quantity=100, price=Decimal("10"))
+
+    with pytest.raises(RuntimeError, match="MINIQMT_BROKER_STATUS_PROBE_FAILED"):
+        service.submit_order(request)
+
+    assert broker.place_order_calls == 1
+    account = repo.get_virtual_account("strat_a")
+    assert account.cash == Decimal("10000")
+    assert account.frozen_cash == Decimal("0")
+    intent = repo.get_order_intent_by_remark(ACCOUNT_ID, "status-probe-failure")
+    assert intent is not None
+    assert intent.submit_status is IntentSubmitStatus.REJECTED
+
+
 def test_broker_disconnect_freeze_has_priority_over_pre_trade_and_cash_gates() -> None:
     repo = _repo(cash=Decimal("1000"))
     broker = DisconnectingBroker()

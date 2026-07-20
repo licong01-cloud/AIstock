@@ -2600,8 +2600,13 @@ def _is_broker_disconnect_exception(broker: Any, exc: BaseException) -> bool:
         return False
     try:
         status = _managed_broker_status(broker)
-    except Exception:
-        return True
+    except Exception as status_exc:  # noqa: BLE001 - a failed status probe must remain visible.
+        raise RuntimeError(
+            "MiniQMT broker status probe failed while classifying a submit exception; "
+            "reason_code=MINIQMT_BROKER_STATUS_PROBE_FAILED, "
+            f"broker_exception_type={type(exc).__name__}, "
+            f"status_exception_type={type(status_exc).__name__}"
+        ) from status_exc
     return bool(status.get("connected")) is False
 
 
