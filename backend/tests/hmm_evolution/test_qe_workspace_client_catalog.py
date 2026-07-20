@@ -61,6 +61,62 @@ def test_workspace_client_requires_explicit_catalog_completeness() -> None:
     asyncio.run(run())
 
 
+def test_workspace_client_ignores_process_proxy_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+
+    client = QEWorkspaceClient(base_url="http://192.168.50.215:9000/api/v1/qe_workspace")
+    try:
+        assert client.client._trust_env is False
+    finally:
+        asyncio.run(client.close())
+
+
+def test_workspace_log_stream_ignores_process_proxy_environment(monkeypatch) -> None:
+    captured: list[bool | None] = []
+
+    class _Response:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            yield "worker-ready"
+
+    class _StreamClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def stream(self, _method: str, _url: str) -> _Response:
+            return _Response()
+
+    def build_client(*, timeout, trust_env=None):
+        del timeout
+        captured.append(trust_env)
+        return _StreamClient()
+
+    client = QEWorkspaceClient(base_url="http://192.168.50.215:9000/api/v1/qe_workspace")
+    asyncio.run(client.close())
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    async def run() -> None:
+        stream = client.stream_task_logs("qe_task")
+        assert await anext(stream) == "worker-ready"
+        await stream.aclose()
+
+    asyncio.run(run())
+    assert captured == [False]
+
+
 def test_workspace_client_list_and_stat_are_read_only_catalog_operations() -> None:
     seen_methods: list[str] = []
 
