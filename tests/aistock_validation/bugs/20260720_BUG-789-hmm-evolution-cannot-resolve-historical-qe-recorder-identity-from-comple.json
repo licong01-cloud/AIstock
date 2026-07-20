@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     "backend/services/hmm_data_source/backtest_source.py",
     "backend/tests/hmm_data_source/test_backtest_source.py",
+    "backend/tests/hmm_data_source/test_isolation_constraints.py",
+    "docs/architecture/HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md",
+    "docs/architecture/hmm_evolution_phase0_data_source_detailed_design_20260716.md",
     "tests/aistock_validation/bugs/20260720_BUG-789-hmm-evolution-cannot-resolve-historical-qe-recorder-identity-from-comple.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
