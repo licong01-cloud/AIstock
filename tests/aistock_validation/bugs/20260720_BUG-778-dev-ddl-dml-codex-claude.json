@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-778",
-  "closed_at": null,
+  "closed_at": "2026-07-20T01:10:10Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,8 +28,8 @@
   "expected": "DEV 验证、生产授权、迁移和回读状态分离；无 schema 变更记录 production_ddl_gate=noop；Codex 与 Claude 按仓库 v1.5 标准和 task-router 执行。",
   "first_seen_at": "2026-07-19T19:01:47.070231Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "474593a97a1ee64d3678e4179828e5637ace977a",
+  "fixed_at": "2026-07-20T01:10:38.181357Z",
   "github_issue_number": 2485,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2485",
   "last_seen_at": "2026-07-19T19:01:47.070231Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2486",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -57,6 +58,12 @@
     "fingerprint": "e82ac78a2799389d8acb7fd1",
     "source_event_id": "FE-20260720-e82ac78a2799"
   },
+  "validation_evidence": [
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-778 --module validation -> passed",
+    "python -m nox -s validation_module_registry_l0 l0 -> passed",
+    "pytest backend/tests/test_aistock_guardrail_scan.py -q -p no:cacheprovider -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {
