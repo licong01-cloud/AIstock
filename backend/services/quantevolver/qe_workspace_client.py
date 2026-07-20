@@ -2,12 +2,89 @@ import logging
 import os
 import aiofiles
 import zipfile
-from typing import Dict, Any, Optional
+import re
+from dataclasses import dataclass
+from typing import Dict, Any, Mapping, Optional
 import httpx
 
 from backend.services.qe_archive.models import normalize_json
 
 logger = logging.getLogger(__name__)
+
+_QE_SUBMISSION_RECEIPT_SCHEMA = "qe_submission_receipt_v1"
+_QE_SUBMISSION_RECEIPT_STATUSES = frozenset(
+    {"not_reserved", "reserved", "started", "running", "completed", "failed", "cancelled"}
+)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_LOOP_ID_RE = re.compile(r"^Loop[1-9][0-9]*$")
+
+
+class QEWorkspaceSubmissionError(RuntimeError):
+    """Base error for the durable QE Workspace submission contract."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        context: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.context = dict(context or {})
+
+
+class QEWorkspaceSubmissionContractError(QEWorkspaceSubmissionError):
+    """The QE node returned a response that violates the receipt contract."""
+
+
+class QEWorkspaceSubmissionRejected(QEWorkspaceSubmissionError):
+    """The QE node authoritatively rejected a submission request."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        reason_code: str,
+        context: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, reason_code=reason_code, context=context)
+        self.status_code = int(status_code)
+
+
+class QEWorkspaceSubmissionTransportError(QEWorkspaceSubmissionError):
+    """Submission transport failed, so remote acceptance remains unknown."""
+
+
+@dataclass(frozen=True)
+class QEWorkspaceSubmissionReceipt:
+    task_id: str
+    loop_id: str
+    submission_intent_hash: str
+    request_digest: str
+    receipt_status: str
+    duplicate_replay: bool
+
+
+@dataclass(frozen=True)
+class QEWorkspaceSubmissionInspection:
+    schema_version: str
+    task_id: str
+    loop_id: str
+    status: str
+    submission_intent_hash: str | None = None
+    request_digest: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    started_at: str | None = None
+    running_at: str | None = None
+    finished_at: str | None = None
+    pid: int | None = None
+
+    @property
+    def is_reserved(self) -> bool:
+        return self.status != "not_reserved"
 
 
 class QELoopWorkspaceCleanupUnavailable(RuntimeError):
@@ -130,10 +207,89 @@ class QEWorkspaceClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
         
+    async def submit_loop(
+        self,
+        task_id: str,
+        loop_index: int,
+        config: Dict[str, Any],
+        experiment_files: Dict[str, str] | None = None,
+        wsl_command: str = "",
+        model_source: Dict[str, Any] | None = None,
+        callback_url: str | None = None,
+        *,
+        submission_intent_hash: str,
+    ) -> QEWorkspaceSubmissionReceipt:
+        """Submit one loop and validate the durable server-side receipt.
+
+        A transport failure is intentionally distinct from a server rejection:
+        callers must reconcile the receipt before deciding whether a second POST
+        is safe.  The client never retries or falls back to the legacy request
+        schema on its own.
+        """
+        normalized_task_id = self._validate_task_id(task_id)
+        normalized_loop_index = self._validate_loop_index(loop_index)
+        normalized_intent_hash = self._validate_sha256(
+            submission_intent_hash,
+            field_name="submission_intent_hash",
+        )
+        expected_loop_id = f"Loop{normalized_loop_index}"
+        url = f"{self.base_url}/tasks/{normalized_task_id}/loops"
+        payload = {
+            "loop_index": normalized_loop_index,
+            "config": config,
+            "experiment_files": experiment_files or {},
+            "wsl_command": wsl_command,
+            "submission_intent_hash": normalized_intent_hash,
+        }
+        if model_source:
+            payload["model_source"] = model_source
+        if callback_url:
+            payload["callback_url"] = callback_url
+
+        try:
+            response = await self.client.post(url, json=normalize_json(payload))
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise self._submission_rejected(exc) from exc
+        except httpx.RequestError as exc:
+            raise QEWorkspaceSubmissionTransportError(
+                "QE Workspace submission transport failed; remote acceptance is unknown",
+                reason_code="qe_workspace_submission_transport_unknown",
+                context={
+                    "task_id": normalized_task_id,
+                    "loop_id": expected_loop_id,
+                    "url": url,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            ) from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace submission response is not valid JSON",
+                reason_code="qe_workspace_submission_response_invalid",
+                context={"task_id": normalized_task_id, "loop_id": expected_loop_id},
+            ) from exc
+        return self._parse_submission_receipt(
+            data,
+            task_id=normalized_task_id,
+            expected_loop_id=expected_loop_id,
+            expected_intent_hash=normalized_intent_hash,
+        )
+
     async def create_and_run_loop(
-        self, task_id: str, loop_index: int, config: Dict[str, Any], experiment_files: Dict[str, str] = None, wsl_command: str = "",
-        model_source: Dict[str, Any] = None,
-        callback_url: str = None,
+        self,
+        task_id: str,
+        loop_index: int,
+        config: Dict[str, Any],
+        experiment_files: Dict[str, str] | None = None,
+        wsl_command: str = "",
+        model_source: Dict[str, Any] | None = None,
+        callback_url: str | None = None,
+        *,
+        submission_intent_hash: str,
     ) -> str:
         """
         通知 RDAgent 根据配置生成代码并启动执行 QLib 回测
@@ -147,29 +303,327 @@ class QEWorkspaceClient:
             }
         callback_url: Loop 完成后回调 AIstock 的 URL（远端节点主动通知）
         """
-        url = f"{self.base_url}/tasks/{task_id}/loops"
-        payload = {
-            "loop_index": loop_index,
-            "config": config,
-            "experiment_files": experiment_files or {},
-            "wsl_command": wsl_command,
-        }
-        if model_source:
-            payload["model_source"] = model_source
-        if callback_url:
-            payload["callback_url"] = callback_url
-        
+        receipt = await self.submit_loop(
+            task_id,
+            loop_index,
+            config,
+            experiment_files,
+            wsl_command,
+            model_source=model_source,
+            callback_url=callback_url,
+            submission_intent_hash=submission_intent_hash,
+        )
+        return receipt.loop_id
+
+    async def inspect_loop_submission(
+        self,
+        task_id: str,
+        loop_id: str,
+        *,
+        submission_intent_hash: str | None = None,
+    ) -> QEWorkspaceSubmissionInspection:
+        """Read the authoritative receipt, including explicit ``not_reserved``."""
+        normalized_task_id = self._validate_task_id(task_id)
+        normalized_loop_id = self._validate_loop_id(
+            self._to_rdagent_loop_id(normalized_task_id, loop_id)
+        )
+        url = (
+            f"{self.base_url}/tasks/{normalized_task_id}/loops/"
+            f"{normalized_loop_id}/submission"
+        )
+        params = None
+        if submission_intent_hash is not None:
+            params = {
+                "submission_intent_hash": self._validate_sha256(
+                    submission_intent_hash,
+                    field_name="submission_intent_hash",
+                )
+            }
         try:
-            response = await self.client.post(url, json=normalize_json(payload))
+            response = await self.client.get(url, params=params)
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise self._submission_rejected(exc) from exc
+        except httpx.RequestError as exc:
+            raise QEWorkspaceSubmissionTransportError(
+                "QE Workspace receipt inspection transport failed",
+                reason_code="qe_workspace_submission_inspection_unavailable",
+                context={
+                    "task_id": normalized_task_id,
+                    "loop_id": normalized_loop_id,
+                    "url": url,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            ) from exc
+        try:
             data = response.json()
-            loop_id = data.get("loop_id")
-            if not isinstance(loop_id, str) or not loop_id:
-                raise ValueError(f"Invalid loop_id in response: {data}")
-            return loop_id
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to create loop {loop_index} for task {task_id}: {str(e)}")
-            raise
+        except ValueError as exc:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt inspection response is not valid JSON",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"task_id": normalized_task_id, "loop_id": normalized_loop_id},
+            ) from exc
+        return self._parse_submission_inspection(
+            data,
+            task_id=normalized_task_id,
+            expected_loop_id=normalized_loop_id,
+        )
+
+    @staticmethod
+    def _validate_task_id(task_id: str) -> str:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace task_id is required",
+                reason_code="qe_workspace_submission_identity_invalid",
+                context={"field": "task_id"},
+            )
+        return normalized
+
+    @staticmethod
+    def _validate_loop_index(loop_index: int) -> int:
+        if isinstance(loop_index, bool):
+            value = 0
+        else:
+            try:
+                value = int(loop_index)
+            except (TypeError, ValueError):
+                value = 0
+        if value < 1:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace loop_index must be a positive integer",
+                reason_code="qe_workspace_submission_identity_invalid",
+                context={"field": "loop_index", "value": loop_index},
+            )
+        return value
+
+    @staticmethod
+    def _validate_loop_id(loop_id: str) -> str:
+        normalized = str(loop_id or "").strip()
+        if not _LOOP_ID_RE.fullmatch(normalized):
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace loop_id must use the canonical LoopN identity",
+                reason_code="qe_workspace_submission_identity_invalid",
+                context={"field": "loop_id", "value": loop_id},
+            )
+        return normalized
+
+    @staticmethod
+    def _validate_sha256(value: Any, *, field_name: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if not _SHA256_RE.fullmatch(normalized):
+            raise QEWorkspaceSubmissionContractError(
+                f"{field_name} must be a lowercase SHA-256 hex digest",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"field": field_name},
+            )
+        return normalized
+
+    @classmethod
+    def _parse_submission_receipt(
+        cls,
+        payload: Any,
+        *,
+        task_id: str,
+        expected_loop_id: str,
+        expected_intent_hash: str,
+    ) -> QEWorkspaceSubmissionReceipt:
+        if not isinstance(payload, Mapping):
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace submission response must be a JSON object",
+                reason_code="qe_workspace_submission_response_invalid",
+                context={"task_id": task_id, "loop_id": expected_loop_id},
+            )
+        required = {
+            "loop_id",
+            "status",
+            "submission_intent_hash",
+            "request_digest",
+            "receipt_status",
+            "duplicate_replay",
+        }
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace submission response is missing receipt fields",
+                reason_code="qe_workspace_submission_response_invalid",
+                context={
+                    "task_id": task_id,
+                    "loop_id": expected_loop_id,
+                    "missing_fields": missing,
+                },
+            )
+        actual_loop_id = cls._validate_loop_id(str(payload.get("loop_id") or ""))
+        if actual_loop_id != expected_loop_id:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace returned a different loop identity",
+                reason_code="qe_workspace_submission_identity_mismatch",
+                context={"expected_loop_id": expected_loop_id, "actual_loop_id": actual_loop_id},
+            )
+        actual_intent_hash = cls._validate_sha256(
+            payload.get("submission_intent_hash"),
+            field_name="submission_intent_hash",
+        )
+        if actual_intent_hash != expected_intent_hash:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace returned a different submission intent hash",
+                reason_code="qe_workspace_submission_identity_mismatch",
+                context={
+                    "task_id": task_id,
+                    "loop_id": expected_loop_id,
+                    "expected_submission_intent_hash": expected_intent_hash,
+                    "actual_submission_intent_hash": actual_intent_hash,
+                },
+            )
+        request_digest = cls._validate_sha256(
+            payload.get("request_digest"),
+            field_name="request_digest",
+        )
+        receipt_status = str(payload.get("receipt_status") or "").strip().lower()
+        if receipt_status not in _QE_SUBMISSION_RECEIPT_STATUSES - {"not_reserved"}:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace returned an invalid receipt status",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"receipt_status": receipt_status},
+            )
+        if str(payload.get("status") or "").strip().lower() != "accepted":
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace submission response did not acknowledge acceptance",
+                reason_code="qe_workspace_submission_response_invalid",
+                context={"status": payload.get("status")},
+            )
+        duplicate_replay = payload.get("duplicate_replay")
+        if not isinstance(duplicate_replay, bool):
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace duplicate_replay must be boolean",
+                reason_code="qe_workspace_submission_response_invalid",
+            )
+        return QEWorkspaceSubmissionReceipt(
+            task_id=task_id,
+            loop_id=actual_loop_id,
+            submission_intent_hash=actual_intent_hash,
+            request_digest=request_digest,
+            receipt_status=receipt_status,
+            duplicate_replay=duplicate_replay,
+        )
+
+    @classmethod
+    def _parse_submission_inspection(
+        cls,
+        payload: Any,
+        *,
+        task_id: str,
+        expected_loop_id: str,
+    ) -> QEWorkspaceSubmissionInspection:
+        if not isinstance(payload, Mapping):
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt inspection must be a JSON object",
+                reason_code="qe_workspace_submission_receipt_invalid",
+            )
+        required = {"schema_version", "task_id", "loop_id", "status"}
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt inspection is missing required fields",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"missing_fields": missing},
+            )
+        schema_version = str(payload.get("schema_version") or "")
+        if schema_version != _QE_SUBMISSION_RECEIPT_SCHEMA:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt schema is unsupported",
+                reason_code="qe_workspace_submission_receipt_schema_unsupported",
+                context={"schema_version": schema_version},
+            )
+        actual_task_id = str(payload.get("task_id") or "").strip()
+        actual_loop_id = cls._validate_loop_id(str(payload.get("loop_id") or ""))
+        if actual_task_id != task_id or actual_loop_id != expected_loop_id:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt identity does not match the requested loop",
+                reason_code="qe_workspace_submission_identity_mismatch",
+                context={
+                    "expected_task_id": task_id,
+                    "actual_task_id": actual_task_id,
+                    "expected_loop_id": expected_loop_id,
+                    "actual_loop_id": actual_loop_id,
+                },
+            )
+        status = str(payload.get("status") or "").strip().lower()
+        if status not in _QE_SUBMISSION_RECEIPT_STATUSES:
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt status is invalid",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"status": status},
+            )
+        intent_hash: str | None = None
+        request_digest: str | None = None
+        if status == "not_reserved":
+            unexpected = [
+                field
+                for field in ("submission_intent_hash", "request_digest")
+                if payload.get(field) not in (None, "")
+            ]
+            if unexpected:
+                raise QEWorkspaceSubmissionContractError(
+                    "not_reserved receipt must not claim a persisted submission identity",
+                    reason_code="qe_workspace_submission_receipt_invalid",
+                    context={"unexpected_fields": unexpected},
+                )
+        else:
+            intent_hash = cls._validate_sha256(
+                payload.get("submission_intent_hash"),
+                field_name="submission_intent_hash",
+            )
+            request_digest = cls._validate_sha256(
+                payload.get("request_digest"),
+                field_name="request_digest",
+            )
+        pid = payload.get("pid")
+        if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
+            raise QEWorkspaceSubmissionContractError(
+                "QE Workspace receipt pid must be a positive integer when present",
+                reason_code="qe_workspace_submission_receipt_invalid",
+                context={"pid": pid},
+            )
+        return QEWorkspaceSubmissionInspection(
+            schema_version=schema_version,
+            task_id=actual_task_id,
+            loop_id=actual_loop_id,
+            status=status,
+            submission_intent_hash=intent_hash,
+            request_digest=request_digest,
+            created_at=payload.get("created_at"),
+            updated_at=payload.get("updated_at"),
+            started_at=payload.get("started_at"),
+            running_at=payload.get("running_at"),
+            finished_at=payload.get("finished_at"),
+            pid=pid,
+        )
+
+    @staticmethod
+    def _submission_rejected(exc: httpx.HTTPStatusError) -> QEWorkspaceSubmissionRejected:
+        response = exc.response
+        reason_code = "qe_workspace_submission_rejected"
+        message = f"QE Workspace rejected the submission with HTTP {response.status_code}"
+        detail: Any = None
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, Mapping):
+            detail = payload.get("detail")
+            if isinstance(detail, Mapping):
+                reason_code = str(detail.get("reason_code") or reason_code)
+                message = str(detail.get("message") or message)
+            elif detail not in (None, ""):
+                message = str(detail)
+        return QEWorkspaceSubmissionRejected(
+            message,
+            status_code=response.status_code,
+            reason_code=reason_code,
+            context={"response_detail": detail},
+        )
         
     async def get_loop_status(self, task_id: str, loop_id: str) -> Dict[str, Any]:
         """

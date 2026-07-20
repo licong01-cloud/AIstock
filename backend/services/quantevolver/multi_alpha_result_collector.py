@@ -956,6 +956,14 @@ class MultiAlphaResultCollector:
         import pickle
 
         from .qe_workspace_client import QEWorkspaceClient
+        from .qe_active_execution_capacity import (
+            QEExecutionSourceClaimFactory,
+            QEWorkspaceSubmissionCoordinator,
+            QEWorkspaceSubmissionPayload,
+            QEWorkspaceSubmissionSource,
+            qe_submission_owner_id,
+            submission_intent_hash_for_source,
+        )
 
         # 1. 选择主节点（第一个节点或 wsl2-5080）
         primary_node_id = None
@@ -983,6 +991,11 @@ class MultiAlphaResultCollector:
         first_node_id = first_group.get("assigned_node_id")
         first_loop_id = first_group.get("qe_loop_id")
         first_group_name = first_group["group_name"]
+        parent_experiment_id = str(first_group.get("parent_experiment_id") or "").strip()
+        if not parent_experiment_id:
+            raise RuntimeError(
+                "distributed unified backtest requires parent_experiment_id on group rows"
+            )
 
         backtest_files = {
             # RD-Agent decodes *.b64 payloads back to the original filename.
@@ -1051,15 +1064,59 @@ class MultiAlphaResultCollector:
             "combined_groups": [g["group_name"] for g in groups],
         }
 
+        expected_loop_id = "Loop2"
+        source_execution_id = f"{parent_experiment_id}:unified_backtest"
+        claim_source, record_waiting = QEExecutionSourceClaimFactory.experiment(
+            experiment_id=parent_experiment_id,
+            node_id=primary_node_id,
+            qe_task_id=qe_task_id,
+            qe_loop_id=expected_loop_id,
+        )
+        source = QEWorkspaceSubmissionSource(
+            source_kind="qe_dispatch_task",
+            source_execution_id=source_execution_id,
+            node_id=primary_node_id,
+            submission_intent_hash=submission_intent_hash_for_source(
+                source_kind="qe_dispatch_task",
+                source_execution_id=source_execution_id,
+                node_id=primary_node_id,
+                task_id=qe_task_id,
+                loop_id=expected_loop_id,
+            ),
+            owner_id=qe_submission_owner_id(),
+            claim_source=claim_source,
+            record_waiting_capacity=record_waiting,
+        )
+        submission_coordinator = QEWorkspaceSubmissionCoordinator()
         primary_client = QEWorkspaceClient.for_node(primary_node_id)
         async with primary_client:
-            loop_id = await primary_client.create_and_run_loop(
-                task_id=qe_task_id,
-                loop_index=2,  # Loop2 = 统一回测
-                config=backtest_config,
-                experiment_files=backtest_files,
-                wsl_command=wsl_command,
-            )
+            submission = None
+            capacity_elapsed = 0
+            capacity_wait_limit = 1800
+            while capacity_elapsed < capacity_wait_limit:
+                submission = await submission_coordinator.submit(
+                    client=primary_client,
+                    source=source,
+                    payload=QEWorkspaceSubmissionPayload(
+                        task_id=qe_task_id,
+                        loop_index=2,
+                        config=backtest_config,
+                        experiment_files=backtest_files,
+                        wsl_command=wsl_command,
+                    ),
+                )
+                if not submission.waiting_capacity:
+                    break
+                await asyncio.sleep(10)
+                capacity_elapsed += 10
+            if submission is None or submission.waiting_capacity:
+                raise RuntimeError(
+                    "distributed unified backtest remains queued for canonical node capacity: "
+                    f"node={primary_node_id} active="
+                    f"{submission.active_count if submission else None}/"
+                    f"{submission.node_capacity if submission else None}"
+                )
+            loop_id = submission.loop_id
             logger.info(f"分布式统一回测 Loop 已触发: loop_id={loop_id}")
 
             # 5. 轮询等待完成（最长 30 分钟）
@@ -1075,9 +1132,19 @@ class MultiAlphaResultCollector:
                 status = status_data.get("status", "")
 
                 if status == "completed":
+                    submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status="completed",
+                    )
                     logger.info(f"分布式统一回测完成: {elapsed}s")
                     break
                 elif status == "failed":
+                    submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status="failed",
+                    )
                     error_msg = status_data.get("error", "unknown")
                     raise RuntimeError(
                         f"分布式统一回测失败: loop={loop_id}, error={error_msg}"

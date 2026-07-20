@@ -52,10 +52,47 @@ class QEExperimentStatusScanner:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT experiment_id, qe_task_id, qe_loop_id, alpha_mode
-                    FROM qe_experiments
-                    WHERE status = 'running'
-                    ORDER BY started_at NULLS FIRST, created_at NULLS FIRST
+                    SELECT e.experiment_id, e.qe_task_id, e.qe_loop_id, e.alpha_mode,
+                           EXISTS (
+                               SELECT 1
+                               FROM qe_multi_alpha_groups g
+                               WHERE g.parent_experiment_id = e.experiment_id
+                                 AND g.status = 'pending'
+                                 AND g.assigned_node_id IS NOT NULL
+                                 AND g.qe_loop_id IS NOT NULL
+                           ) AS has_pending_capacity_groups
+                    FROM qe_experiments e
+                    WHERE e.status = 'running'
+                    ORDER BY e.started_at NULLS FIRST, e.created_at NULLS FIRST
+                    LIMIT %s
+                    """,
+                    (self.batch_size,),
+                )
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def _load_pending_capacity_experiments(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT e.experiment_id, e.qe_task_id, e.qe_loop_id, e.alpha_mode
+                    FROM qe_experiments e
+                    WHERE e.status = 'pending'
+                      AND e.qe_task_id IS NOT NULL
+                      AND e.qe_loop_id IS NOT NULL
+                      AND (
+                          COALESCE(e.alpha_mode, 'single') <> 'multi'
+                          OR EXISTS (
+                              SELECT 1
+                              FROM qe_multi_alpha_groups g
+                              WHERE g.parent_experiment_id = e.experiment_id
+                                AND g.status = 'pending'
+                                AND g.assigned_node_id IS NOT NULL
+                                AND g.qe_loop_id IS NOT NULL
+                          )
+                      )
+                    ORDER BY e.updated_at NULLS FIRST, e.created_at NULLS FIRST
                     LIMIT %s
                     """,
                     (self.batch_size,),
@@ -69,23 +106,69 @@ class QEExperimentStatusScanner:
         Returns counters for monitoring/logging. Individual experiment failures
         are logged and do not abort the whole scan.
         """
+        pending_rows = self._load_pending_capacity_experiments()
         rows = self._load_running_experiments()
         stats = {
+            "pending_checked": 0,
+            "capacity_resubmitted": 0,
+            "capacity_still_waiting": 0,
             "checked": 0,
             "synced_terminal": 0,
             "still_running": 0,
             "malformed_failed": 0,
             "errors": 0,
         }
-        if not rows:
+        if not rows and not pending_rows:
             return stats
 
-        from ...routers.quantevolver import get_experiment_run_status
+        from ...routers.quantevolver import (
+            _run_experiment_unified,
+            _run_multi_alpha_experiment,
+            get_experiment_run_status,
+        )
+
+        for row in pending_rows:
+            experiment_id = row["experiment_id"]
+            alpha_mode = row.get("alpha_mode") or "single"
+            stats["pending_checked"] += 1
+            try:
+                if alpha_mode == "multi":
+                    dispatch = await _run_multi_alpha_experiment(
+                        experiment_id,
+                        _capacity_resume=True,
+                    )
+                else:
+                    dispatch = await _run_experiment_unified(
+                        experiment_id,
+                        _capacity_resume=True,
+                    )
+                if dispatch.get("phase") == "waiting_capacity":
+                    stats["capacity_still_waiting"] += 1
+                else:
+                    stats["capacity_resubmitted"] += 1
+            except Exception as exc:
+                stats["errors"] += 1
+                logger.warning(
+                    "QE capacity-wait resubmission failed: experiment=%s error=%s",
+                    experiment_id,
+                    exc,
+                    exc_info=True,
+                )
+                await asyncio.sleep(0)
 
         for row in rows:
             experiment_id = row["experiment_id"]
             alpha_mode = row.get("alpha_mode") or "single"
             try:
+                if alpha_mode == "multi" and row.get("has_pending_capacity_groups"):
+                    dispatch = await _run_multi_alpha_experiment(
+                        experiment_id,
+                        _capacity_resume=True,
+                    )
+                    if dispatch.get("phase") == "waiting_capacity":
+                        stats["capacity_still_waiting"] += 1
+                    else:
+                        stats["capacity_resubmitted"] += 1
                 if not row.get("qe_task_id"):
                     self._mark_malformed_running_experiment(
                         experiment_id,

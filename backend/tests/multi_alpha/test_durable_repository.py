@@ -12,9 +12,11 @@ from backend.services.multi_alpha.durable_models import (
     DurableChildSpec,
     DurableContractError,
     DurableRunSpec,
+    DurableTaskSpec,
     OwnershipToken,
     artifact_manifest_hash_for,
     durable_run_request_payload,
+    implicit_task_group_key,
     make_attempt_id,
     make_child_id,
     make_remote_task_id,
@@ -118,6 +120,51 @@ def _run_request() -> dict[str, Any]:
         walk_forward={"enabled": True},
         backtest_config={"topk": 25},
     )
+
+
+def test_task_group_collision_reuses_existing_task_and_ignores_scenario_defaults() -> None:
+    group_key = implicit_task_group_key(
+        roster_hash="roster",
+        normalize_method="rank",
+        walk_forward={"enabled": True, "window": 60, "min_periods": 20},
+    )
+    existing = {
+        "task_id": "mact_legacy_existing",
+        "roster_hash": "roster",
+        "roster_json": [{"leg_id": "L1"}],
+        "default_request_json": {
+            "normalize_method": "rank",
+            "walk_forward": {"enabled": True, "window": 60, "min_periods": 20},
+            "topk": 25,
+            "backtest_config": {"initial_cash": 10_000_000},
+        },
+        "legacy_group_key": group_key,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_task", one=None),
+            Step(contains="FROM strategy_pkg.multi_alpha_combine_task", one=existing),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+    spec = DurableTaskSpec(
+        task_id="mact_auto_candidate",
+        task_name="Implicit candidate",
+        roster_hash="roster",
+        roster=[{"leg_id": "L1"}],
+        default_request={
+            "normalize_method": "rank",
+            "walk_forward": {"enabled": True, "window": 60, "min_periods": 20},
+            "topk": 50,
+            "backtest_config": {"initial_cash": 100_000_000},
+        },
+        source_kind="api",
+        legacy_group_key=group_key,
+    )
+
+    assert repository.create_task(spec) == existing
+    assert provider.commits == 1
+    assert provider.rollbacks == 0
 
 
 def test_identity_helpers_are_stable_and_explicit() -> None:
@@ -235,6 +282,84 @@ def test_expired_lease_cannot_heartbeat_or_resurrect_ownership() -> None:
     assert provider.commits == 0
     assert provider.rollbacks == 1
     assert "lease_expires_at > clock_timestamp()" in provider.cursor.executions[0][0]
+
+
+def test_deadline_evidence_and_event_are_one_idempotent_attempt_transaction() -> None:
+    evidence = {
+        "scheme": {
+            "timeout_seconds": 60,
+            "started_at": "2026-01-01T00:00:00Z",
+            "deadline_at": "2026-01-01T00:01:00Z",
+            "effective_observed_at": "2026-01-01T00:02:00Z",
+            "elapsed_seconds": 120.0,
+            "timestamp_source": "submission_receipt.finished_at",
+            "remote_status": "completed",
+        }
+    }
+    current = {
+        "attempt_id": "macba_test",
+        "child_id": "macbc_test",
+        "status": "running",
+        "owner_id": "worker_1",
+        "fencing_token": 1,
+        "row_version": 2,
+        "lease_valid": True,
+        "result_manifest_json": {},
+    }
+    updated = {
+        **current,
+        "row_version": 3,
+        "result_manifest_json": {"execution_deadline": evidence},
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt", one=current),
+            Step(
+                contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                one=updated,
+            ),
+            Step(contains="SELECT run_id FROM strategy_pkg.multi_alpha_combine_backtest_child", one={"run_id": "macb_test"}),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 9, "phase": "deadline_exceeded"},
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    result = repository.record_attempt_deadline_evidence(
+        "macba_test",
+        token=OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=2),
+        evidence=evidence,
+    )
+
+    assert result == updated
+    assert provider.commits == 1
+    assert provider.rollbacks == 0
+    assert provider.cursor.executions[1][1][0].adapted == {
+        "execution_deadline": evidence
+    }
+    event_params = provider.cursor.executions[3][1]
+    assert event_params[4] == "deadline_exceeded"
+    assert event_params[5] == "multi_alpha_execution_deadline_exceeded"
+
+    replay_current = {**updated, "lease_valid": True}
+    replay_provider = ScriptedProvider(
+        [
+            Step(
+                contains="FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                one=replay_current,
+            )
+        ]
+    )
+    replay_repository = MultiAlphaDurableRepository(connection_provider=replay_provider)
+
+    assert replay_repository.record_attempt_deadline_evidence(
+        "macba_test",
+        token=OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=3),
+        evidence=evidence,
+    ) == replay_current
+    assert len(replay_provider.cursor.executions) == 1
 
 
 def test_same_run_identity_with_different_request_hash_fails_loudly() -> None:

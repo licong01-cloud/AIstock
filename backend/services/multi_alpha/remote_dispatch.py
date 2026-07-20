@@ -26,6 +26,14 @@ from backend.services.multi_alpha.combine_backtest import (
     prepare_pred_backtest_workspace,
 )
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEExecutionSourceClaimFactory,
+    QEWorkspaceSubmissionCoordinator,
+    QEWorkspaceSubmissionPayload,
+    QEWorkspaceSubmissionSource,
+    qe_submission_owner_id,
+    submission_intent_hash_for_source,
+)
 
 
 _LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
@@ -249,12 +257,14 @@ class RemotePredBacktestExecutor:
         node_resolver=get_compute_node_info,
         artifact_client_factory: Any | None = None,
         workspace_client_factory: Any | None = None,
+        submission_coordinator: Any | None = None,
         small_file_syncer: Any | None = None,
         poll_interval_seconds: float = 2.0,
     ) -> None:
         self._node_resolver = node_resolver
         self._artifact_client_factory = artifact_client_factory
         self._workspace_client_factory = workspace_client_factory or QEWorkspaceClient.for_node
+        self._submission_coordinator = submission_coordinator or QEWorkspaceSubmissionCoordinator()
         self._small_file_syncer = small_file_syncer
         self._poll_interval_seconds = float(poll_interval_seconds)
 
@@ -320,6 +330,9 @@ class RemotePredBacktestExecutor:
                     experiment_files={},
                     wsl_command=wsl_command,
                     timeout_seconds=timeout_seconds,
+                    run_id=workspace.parent.name,
+                    backtest_name=str(backtest_config.get("backtest_name") or workspace.name),
+                    requested_node_capacity=backtest_config.get("node_parallelism_limit"),
                 )
             )
         except MultiAlphaCombineBacktestError:
@@ -396,23 +409,84 @@ class RemotePredBacktestExecutor:
         experiment_files: dict[str, str],
         wsl_command: str,
         timeout_seconds: int,
+        run_id: str,
+        backtest_name: str,
+        requested_node_capacity: int | None,
     ) -> tuple[str, dict[str, Any]]:
         client = self._workspace_client_factory(node_id)
         try:
-            loop_id = await client.create_and_run_loop(
-                task_id=task_id,
-                loop_index=loop_index,
-                config=config,
-                experiment_files=experiment_files,
-                wsl_command=wsl_command,
+            expected_loop_id = f"Loop{loop_index}"
+            source_execution_id = f"{run_id}:{backtest_name}"
+            claim_source, record_waiting = QEExecutionSourceClaimFactory.pred_backtest_run(
+                run_id=run_id,
+                backtest_name=backtest_name,
+                node_id=node_id,
             )
             deadline = time.monotonic() + timeout_seconds
+            source = QEWorkspaceSubmissionSource(
+                source_kind="multi_alpha_pred_backtest",
+                source_execution_id=source_execution_id,
+                node_id=node_id,
+                submission_intent_hash=submission_intent_hash_for_source(
+                    source_kind="multi_alpha_pred_backtest",
+                    source_execution_id=source_execution_id,
+                    node_id=node_id,
+                    task_id=task_id,
+                    loop_id=expected_loop_id,
+                ),
+                owner_id=qe_submission_owner_id(),
+                claim_source=claim_source,
+                record_waiting_capacity=record_waiting,
+                requested_node_capacity=requested_node_capacity,
+            )
+            submission = await self._submission_coordinator.submit(
+                client=client,
+                source=source,
+                payload=QEWorkspaceSubmissionPayload(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    config=config,
+                    experiment_files=experiment_files,
+                    wsl_command=wsl_command,
+                ),
+            )
+            while submission.waiting_capacity and time.monotonic() <= deadline:
+                await asyncio.sleep(self._poll_interval_seconds)
+                submission = await self._submission_coordinator.submit(
+                    client=client,
+                    source=source,
+                    payload=QEWorkspaceSubmissionPayload(
+                        task_id=task_id,
+                        loop_index=loop_index,
+                        config=config,
+                        experiment_files=experiment_files,
+                        wsl_command=wsl_command,
+                    ),
+                )
+            if submission.waiting_capacity:
+                raise MultiAlphaCombineBacktestError(
+                    "remote pred-backtest remained queued for canonical node capacity",
+                    reason_code="remote_pred_backtest_waiting_capacity_timeout",
+                    context={
+                        "node_id": node_id,
+                        "task_id": task_id,
+                        "loop_id": expected_loop_id,
+                        "active_count": submission.active_count,
+                        "node_capacity": submission.node_capacity,
+                    },
+                )
+            loop_id = submission.loop_id
             last_status: Mapping[str, Any] | None = None
             while time.monotonic() <= deadline:
                 status_payload = await client.get_loop_status(task_id, loop_id)
                 last_status = dict(status_payload or {})
                 status = str(last_status.get("status") or "").lower()
                 if status == "completed":
+                    self._submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status="completed",
+                    )
                     enhanced = await client.get_workspace_file(task_id, loop_id, "qlib_results_enhanced.json")
                     if not isinstance(enhanced, dict):
                         raise MultiAlphaCombineBacktestError(
@@ -427,6 +501,11 @@ class RemotePredBacktestExecutor:
                         )
                     return loop_id, enhanced
                 if status in {"failed", "cancelled"}:
+                    self._submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status=status,
+                    )
                     stderr_tail = ""
                     try:
                         stderr_tail = str(await client.get_workspace_file(task_id, loop_id, "run.log"))[-2000:]

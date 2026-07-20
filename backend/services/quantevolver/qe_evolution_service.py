@@ -112,6 +112,7 @@ QE_LOOP_RETRY_MODES = {
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
     QE_LOOP_RETRY_MODE_RESULTS_ONLY,
 }
+_QE_RETRY_SUBMISSION_KEY = "_qe_retry_submission"
 _QE_LOOP_RETRY_MODE_ALIASES = {
     "backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     "only_backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
@@ -208,7 +209,75 @@ class AutoEvolutionScheduler:
         self._active_log_stream_counts: Dict[str, int] = {}
         self._log_stream_stop_requested: set[str] = set()
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
+        self._retry_resume_tasks: dict[str, asyncio.Task] = {}
         self._resource_schema_not_ready_logged = False
+
+    def _ensure_retry_resume_state(self) -> None:
+        if not hasattr(self, "_retry_resume_tasks"):
+            self._retry_resume_tasks = {}
+
+    @staticmethod
+    def _retry_submission_metadata(config: Any) -> Dict[str, Any] | None:
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(config, dict):
+            return None
+        metadata = config.get(_QE_RETRY_SUBMISSION_KEY)
+        return dict(metadata) if isinstance(metadata, dict) else None
+
+    def _track_retry_resume_task(self, loop_db_id: str, task: asyncio.Task) -> None:
+        self._ensure_retry_resume_state()
+        self._retry_resume_tasks[loop_db_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            self._retry_resume_tasks.pop(loop_db_id, None)
+            if completed.cancelled():
+                logger.error("QE retry capacity resume was cancelled: loop=%s", loop_db_id)
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE retry capacity resume failed: loop=%s error=%s",
+                    loop_db_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    @staticmethod
+    def _set_retry_submission_state(
+        loop_db_id: str,
+        *,
+        retry_attempt_id: str,
+        state: str,
+    ) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_loops
+                    SET config_json = jsonb_set(
+                            config_json,
+                            '{_qe_retry_submission,state}',
+                            to_jsonb(%s::text),
+                            false
+                        ),
+                        updated_at = NOW()
+                    WHERE loop_id = %s
+                      AND config_json #>> '{_qe_retry_submission,retry_attempt_id}' = %s
+                    """,
+                    (state, loop_db_id, retry_attempt_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "retry submission state update lost its persisted attempt identity: "
+                        f"loop={loop_db_id} attempt={retry_attempt_id} state={state}"
+                    )
+            conn.commit()
 
     def _gpu_phase_gate(self, node_id: str) -> ModelAwareGPUPhaseGate:
         event_loop = asyncio.get_running_loop()
@@ -325,6 +394,29 @@ class AutoEvolutionScheduler:
                 )
 
         task.add_done_callback(_done)
+
+    @staticmethod
+    def _mark_resource_session_submitted_after_remote_acceptance(
+        *,
+        service: QEResourcePhaseService,
+        session_id: str,
+        task_id: str,
+        loop_index: int,
+    ) -> None:
+        """Keep accepted remote work authoritative if local resource bookkeeping fails."""
+
+        try:
+            service.mark_session_submitted(session_id)
+        except Exception as exc:
+            logger.error(
+                "QE_RESOURCE_SESSION_POST_ACCEPTANCE_SYNC_FAILED: "
+                "task=%s Loop%s session=%s error=%s; remote execution remains active",
+                task_id,
+                loop_index,
+                session_id,
+                exc,
+                exc_info=True,
+            )
 
     async def _wait_resource_session_until_safe_release(
         self,
@@ -2053,15 +2145,18 @@ class AutoEvolutionScheduler:
                     """, (json.dumps(config), action_type, evolution_loop_db_id))
                 conn.commit()
 
-            client = self._get_workspace_client_for_task(task_id)
+            effective_node_id = self._get_loop_node_id(task_id, evolution_loop_db_id)
+            client = self._get_workspace_client_for_node_id(effective_node_id)
             executor = BacktestExecutor(ConfigComposer(), client)
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=experiment_name,
-                node_id=task.get("node_id"),
+                node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_task(task_id),
                 require_fixed_seed=True,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=evolution_loop_db_id,
             )
             await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
         except Exception as e:
@@ -2648,8 +2743,25 @@ class AutoEvolutionScheduler:
                                 AND l2.status = 'failed'
                                 AND l2.updated_at > NOW() - INTERVAL '10 minutes'
                           )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM qe_evolution_loops l3
+                              WHERE l3.task_id = t.task_id
+                                AND l3.status = 'pending'
+                                AND l3.config_json ? '_qe_retry_submission'
+                          )
                     """)
                     zombie_tasks = cur.fetchall()
+
+                    cur.execute("""
+                        SELECT l.loop_id, l.task_id, l.loop_index
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                        WHERE l.status = 'pending'
+                          AND t.status = 'running'
+                          AND l.config_json ? %s
+                        ORDER BY l.updated_at, l.loop_id
+                    """, (_QE_RETRY_SUBMISSION_KEY,))
+                    pending_retry_loops = cur.fetchall()
 
             # F4: 处理 processing 超时
             for row in stuck_processing:
@@ -2666,6 +2778,20 @@ class AutoEvolutionScheduler:
             for row in zombie_tasks:
                 logger.warning(f"Zombie task detected: {row['task_id']} is running but has no active loops, attempting recovery")
                 asyncio.create_task(self._safe_submit_or_fail(row['task_id']))
+
+            self._ensure_retry_resume_state()
+            for row in pending_retry_loops:
+                loop_db_id = str(row["loop_id"])
+                active = self._retry_resume_tasks.get(loop_db_id)
+                if active is not None and not active.done():
+                    continue
+                task = asyncio.create_task(
+                    self._safe_resume_retry_loop(
+                        str(row["task_id"]),
+                        int(row["loop_index"]),
+                    )
+                )
+                self._track_retry_resume_task(loop_db_id, task)
 
             # 原有逻辑：检查 running 的 loop 在 RDAgent 侧的状态
             for loop_row in running_loops:
@@ -2719,6 +2845,29 @@ class AutoEvolutionScheduler:
             except Exception as db_err:
                 logger.critical(f"FATAL: Failed to mark zombie task {task_id} as failed: {db_err}")
                 raise RuntimeError(f"Failed to mark zombie task {task_id} as failed: {db_err}") from db_err
+
+    async def _safe_resume_retry_loop(self, task_id: str, loop_index: int) -> None:
+        try:
+            result = await self.retry_loop(
+                task_id,
+                loop_index,
+                _capacity_resume=True,
+            )
+            logger.info(
+                "Capacity-waiting retry resume pass completed: task=%s Loop%s result=%s",
+                task_id,
+                loop_index,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Capacity-waiting retry resume failed without changing the business result: "
+                "task=%s Loop%s error=%s",
+                task_id,
+                loop_index,
+                exc,
+                exc_info=True,
+            )
 
     _LLM_TRANSIENT_KEYWORDS = ("disconnected", "timeout", "rate_limit", "503", "502", "429", "connection", "reset by peer")
 
@@ -3801,6 +3950,8 @@ class AutoEvolutionScheduler:
         task_id: str,
         loop_index: int,
         retry_mode: str = QE_LOOP_RETRY_MODE_AUTO,
+        *,
+        _capacity_resume: bool = False,
     ) -> Dict[str, Any]:
         """重试失败的 Loop：自动判断训练是否已完成，决定从训练或回测恢复.
 
@@ -3811,6 +3962,7 @@ class AutoEvolutionScheduler:
         Returns: {"loop_id": str, "mode": "backtest_only"|"full_train"}
         """
         requested_retry_mode = normalize_qe_loop_retry_mode(retry_mode)
+        original_requested_retry_mode = requested_retry_mode
 
         from .config_composer import (
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -3830,7 +3982,24 @@ class AutoEvolutionScheduler:
 
         if not loop_row:
             raise ValueError(f"Loop {evolution_loop_db_id} 不存在")
-        if loop_row["status"] not in ("failed", "cancelled"):
+        config = loop_row["config_json"]
+        if isinstance(config, str):
+            config = json.loads(config)
+        config = dict(config or {})
+        retry_submission = self._retry_submission_metadata(config)
+        if _capacity_resume:
+            if loop_row["status"] != "pending" or not retry_submission:
+                raise ValueError(
+                    f"Loop {evolution_loop_db_id} is not a persisted capacity-waiting retry"
+                )
+            requested_retry_mode = normalize_qe_loop_retry_mode(
+                str(retry_submission.get("resolved_retry_mode") or "")
+            )
+            if requested_retry_mode == QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+                raise ValueError(
+                    "results-only retry cannot enter QE execution capacity waiting"
+                )
+        elif loop_row["status"] not in ("failed", "cancelled"):
             raise ValueError(
                 f"Loop {evolution_loop_db_id} 状态为 '{loop_row['status']}'，"
                 f"只有 failed 或 cancelled 状态的 loop 可以重试"
@@ -3866,9 +4035,6 @@ class AutoEvolutionScheduler:
         await preflight_qe_node(effective_node_id)
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
-        config = loop_row["config_json"]
-        if isinstance(config, str):
-            config = json.loads(config)
         original_backtest_only = bool(isinstance(config, dict) and config.get("backtest_only"))
 
         if requested_retry_mode == QE_LOOP_RETRY_MODE_RESULTS_ONLY:
@@ -3934,7 +4100,32 @@ class AutoEvolutionScheduler:
                 effective_node_id,
             )
 
+        if _capacity_resume:
+            retry_attempt_id = str(retry_submission.get("retry_attempt_id") or "").strip()
+            retry_source_execution_id = str(
+                retry_submission.get("source_execution_id") or ""
+            ).strip()
+            if not retry_attempt_id or not retry_source_execution_id:
+                raise ValueError(
+                    f"Loop {evolution_loop_db_id} has incomplete persisted retry identity"
+                )
+        else:
+            retry_attempt_id = uuid.uuid4().hex
+            retry_source_execution_id = (
+                f"{evolution_loop_db_id}:retry:{retry_attempt_id}"
+            )
+            retry_submission = {
+                "schema_version": "qe_retry_submission_v1",
+                "retry_attempt_id": retry_attempt_id,
+                "source_execution_id": retry_source_execution_id,
+                "requested_retry_mode": original_requested_retry_mode,
+                "resolved_retry_mode": retry_mode_name,
+                "state": "submitting",
+            }
+        config[_QE_RETRY_SUBMISSION_KEY] = dict(retry_submission)
+
         # 4. Custom-evo retries queue until per-node node_parallelism capacity is free.
+        retry_claim_statuses = ["pending"] if _capacity_resume else ["failed", "cancelled"]
         if task.get("task_type") == "custom_evo":
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -3958,12 +4149,22 @@ class AutoEvolutionScheduler:
                     cur.execute(
                         """
                         UPDATE qe_evolution_loops
-                        SET status = 'pending', agent_analysis = NULL, updated_at = NOW()
+                        SET status = 'pending', agent_analysis = NULL,
+                            config_json = %s, updated_at = NOW()
                         WHERE loop_id = %s
-                          AND status NOT IN ('running', 'processing', 'completed')
+                          AND status = ANY(%s)
+                        RETURNING loop_id
                         """,
-                        (evolution_loop_db_id,),
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                            retry_claim_statuses,
+                        ),
                     )
+                    if cur.fetchone() is None:
+                        raise ValueError(
+                            f"Loop {evolution_loop_db_id} retry claim lost before queueing"
+                        )
                 conn.commit()
             slot = await self._mark_custom_evo_loop_running_when_slot_available(
                 task=dict(task),
@@ -3978,9 +4179,24 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE qe_evolution_loops SET status = 'running', agent_analysis = NULL, updated_at = NOW() WHERE loop_id = %s",
-                        (evolution_loop_db_id,),
+                        """
+                        UPDATE qe_evolution_loops
+                        SET status = 'running', agent_analysis = NULL,
+                            config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                          AND status = ANY(%s)
+                        RETURNING loop_id
+                        """,
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                            retry_claim_statuses,
+                        ),
                     )
+                    if cur.fetchone() is None:
+                        raise ValueError(
+                            f"Loop {evolution_loop_db_id} retry claim lost before submission"
+                        )
                     cur.execute(
                         "UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s",
                         (task_id,),
@@ -4083,11 +4299,64 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=retry_resource_session.source_run_key if retry_resource_session else None,
                 resource_session_token=retry_resource_session.token if retry_resource_session else None,
                 phase_pipeline_enabled=retry_phase_pipeline_enabled,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=retry_source_execution_id,
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)
+            if result.status == "waiting_capacity":
+                try:
+                    self._set_retry_submission_state(
+                        evolution_loop_db_id,
+                        retry_attempt_id=retry_attempt_id,
+                        state="waiting_capacity",
+                    )
+                except Exception as state_error:
+                    logger.error(
+                        "Retry entered capacity waiting but its diagnostic state update failed: "
+                        "loop=%s attempt=%s error=%s",
+                        evolution_loop_db_id,
+                        retry_attempt_id,
+                        state_error,
+                        exc_info=True,
+                    )
+                if retry_resource_session is not None:
+                    retry_resource_service.mark_session_terminal(
+                        retry_resource_session.session_id,
+                        status="cancelled",
+                        reason_code="QE_RESOURCE_WAITING_CANONICAL_CAPACITY",
+                    )
+                if retry_gpu_lease is not None:
+                    await retry_gpu_lease.release()
+                    retry_gpu_lease = None
+                return {
+                    "loop_id": evolution_loop_db_id,
+                    "mode": "queued_capacity",
+                    "qe_submission": (result.detail or {}).get("qe_submission"),
+                }
+            try:
+                self._set_retry_submission_state(
+                    evolution_loop_db_id,
+                    retry_attempt_id=retry_attempt_id,
+                    state=result.status,
+                )
+            except Exception as state_error:
+                logger.error(
+                    "Retry was accepted remotely but its diagnostic state update failed: "
+                    "loop=%s attempt=%s state=%s error=%s",
+                    evolution_loop_db_id,
+                    retry_attempt_id,
+                    result.status,
+                    state_error,
+                    exc_info=True,
+                )
             if retry_resource_session is not None:
-                retry_resource_service.mark_session_submitted(retry_resource_session.session_id)
+                self._mark_resource_session_submitted_after_remote_acceptance(
+                    service=retry_resource_service,
+                    session_id=retry_resource_session.session_id,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                )
                 wait_task = asyncio.create_task(
                     self._wait_resource_session_until_safe_release(
                         session_id=retry_resource_session.session_id,
@@ -5177,16 +5446,19 @@ class AutoEvolutionScheduler:
                 target_node_id or "local",
             )
 
-            client = self._get_workspace_client_for_task(task_id)
+            effective_node_id = self._get_loop_node_id(task_id, evolution_loop_db_id)
+            client = self._get_workspace_client_for_node_id(effective_node_id)
             executor = BacktestExecutor(ConfigComposer(), client)
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=experiment_name,
-                node_id=task.get("node_id"),
+                node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_task(task_id),
                 model_source=model_source,
                 extra_experiment_files=extra_experiment_files or None,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=evolution_loop_db_id,
             )
             await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
 
@@ -6995,6 +7267,8 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=resource_session.source_run_key if resource_session else None,
                 resource_session_token=resource_session.token if resource_session else None,
                 phase_pipeline_enabled=phase_pipeline_enabled,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=evolution_loop_db_id,
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -7035,6 +7309,8 @@ class AutoEvolutionScheduler:
                     resource_source_run_key=resource_session.source_run_key if resource_session else None,
                     resource_session_token=resource_session.token if resource_session else None,
                     phase_pipeline_enabled=False,
+                    submission_source_kind="qe_evolution_loop",
+                    submission_source_execution_id=evolution_loop_db_id,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -7048,9 +7324,25 @@ class AutoEvolutionScheduler:
                         f"忽略 backtest_only 配置，执行完整训练"
                     )
                 mode = BacktestMode.FULL_TRAIN
-            await executor.submit(cfg, ctx, mode=mode)
+            result = await executor.submit(cfg, ctx, mode=mode)
+            if result.status == "waiting_capacity":
+                if resource_session is not None:
+                    resource_service.mark_session_terminal(
+                        resource_session.session_id,
+                        status="cancelled",
+                        reason_code="QE_RESOURCE_WAITING_CANONICAL_CAPACITY",
+                    )
+                if gpu_phase_lease is not None:
+                    await gpu_phase_lease.release()
+                    gpu_phase_lease = None
+                return evolution_loop_db_id
             if resource_session is not None:
-                resource_service.mark_session_submitted(resource_session.session_id)
+                self._mark_resource_session_submitted_after_remote_acceptance(
+                    service=resource_service,
+                    session_id=resource_session.session_id,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                )
                 wait_task = asyncio.create_task(
                     self._wait_resource_session_until_safe_release(
                         session_id=resource_session.session_id,

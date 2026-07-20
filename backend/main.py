@@ -390,6 +390,42 @@ async def _lifespan(app: FastAPI):
 
         qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
 
+    qe_reservation_reconcile_task = None
+    async def _qe_reservation_reconcile_loop(stop_event: asyncio.Event):
+        from .services.quantevolver.qe_active_execution_capacity import (
+            QEExecutionReservationReconciler,
+        )
+
+        interval = int(
+            (os.getenv("QE_EXECUTION_RESERVATION_SCAN_INTERVAL_SEC") or "15").strip()
+            or "15"
+        )
+        reconciler = QEExecutionReservationReconciler()
+        while not stop_event.is_set():
+            try:
+                stats = await reconciler.scan_once()
+                if stats.get("checked") or stats.get("errors"):
+                    logging.getLogger("aistock.qe_execution_capacity").info(
+                        "QE execution reservation scan stats: %s",
+                        stats,
+                    )
+            except Exception as e:
+                logging.getLogger("aistock.qe_execution_capacity").error(
+                    "QE execution reservation scan failed: %s",
+                    e,
+                    exc_info=True,
+                )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=max(1, interval))
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    qe_reservation_reconcile_task = asyncio.create_task(
+        _qe_reservation_reconcile_loop(shutdown_event),
+        name="qe-execution-reservation-reconciler",
+    )
+
     qe_archive_worker_task = None
     try:
         from .services.qe_archive.worker_loop import autostart_enabled, run_archive_worker_loop
@@ -400,6 +436,26 @@ async def _lifespan(app: FastAPI):
     except Exception as e:
         logging.getLogger("aistock.qe_archive.worker_loop").warning(
             "QE archive worker autostart setup failed: %s", e, exc_info=True
+        )
+
+    multi_alpha_durable_task = None
+    try:
+        from .services.multi_alpha.durable_orchestrator import (
+            run_durable_multi_alpha_orchestrator,
+        )
+
+        multi_alpha_durable_task = asyncio.create_task(
+            run_durable_multi_alpha_orchestrator(shutdown_event),
+            name="multi-alpha-durable-orchestrator",
+        )
+        logging.getLogger("backend.services.multi_alpha.durable_orchestrator").info(
+            "QE-only multi-alpha durable orchestrator task created"
+        )
+    except Exception as e:
+        logging.getLogger("backend.services.multi_alpha.durable_orchestrator").error(
+            "multi_alpha_durable_startup_failed: %s",
+            e,
+            exc_info=True,
         )
 
     try:
@@ -421,12 +477,32 @@ async def _lifespan(app: FastAPI):
                 await qe_exp_scan_task
             except (asyncio.CancelledError, Exception):
                 pass
+        if qe_reservation_reconcile_task is not None:
+            qe_reservation_reconcile_task.cancel()
+            try:
+                await qe_reservation_reconcile_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if qe_archive_worker_task is not None:
             qe_archive_worker_task.cancel()
             try:
                 await qe_archive_worker_task
             except (asyncio.CancelledError, Exception):
                 pass
+        if multi_alpha_durable_task is not None:
+            multi_alpha_durable_task.cancel()
+            try:
+                await multi_alpha_durable_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logging.getLogger(
+                    "backend.services.multi_alpha.durable_orchestrator"
+                ).error(
+                    "multi_alpha_durable_shutdown_failed: %s",
+                    e,
+                    exc_info=True,
+                )
         # ── 先停所有后台线程（它们可能持有 DB 连接）──
         try:
             ingestion_scheduler.shutdown(wait=False)

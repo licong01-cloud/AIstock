@@ -1,0 +1,209 @@
+{
+  "actual": "Current uncommitted implementation can leak capacity reservations, leave pending work unresubmitted, turn retry into 409/no-op, mark remote-running work failed, reuse successor ownership tokens, accept runs without a live orchestrator, and allow relative paths to escape the Loop workspace.",
+  "allowed_write_scope": [
+    "backend/main.py",
+    "backend/routers/multi_alpha.py",
+    "backend/routers/quantevolver.py",
+    "backend/migrations/qe_execution_reservation_20260719.sql",
+    "backend/migrations/qe_execution_reservation_20260719.preflight.sql",
+    "backend/migrations/qe_execution_reservation_20260719.rollback.sql",
+    "backend/services/quantevolver/qe_execution_reservation.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_experiment_status_scanner.py",
+    "backend/services/quantevolver/qe_workspace_client.py",
+    "backend/services/quantevolver/executors/base.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/multi_alpha_result_collector.py",
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/services/multi_alpha/combine_ui_adapter.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/services/multi_alpha/durable_models.py",
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/durable_plan.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/multi_alpha/durable_runtime_health.py",
+    "backend/services/multi_alpha/durable_submission.py",
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/multi_alpha/test_active_execution_import.py",
+    "backend/tests/multi_alpha/test_archive_health.py",
+    "backend/tests/multi_alpha/test_durable_capacity.py",
+    "backend/tests/multi_alpha/test_durable_contract.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+    "backend/tests/multi_alpha/test_durable_parity.py",
+    "backend/tests/multi_alpha/test_durable_plan.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+    "backend/tests/multi_alpha/test_durable_submission.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "backend/tests/test_qe_evolution_scheduler.py",
+    "backend/tests/test_qe_experiment_status_scanner.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "backend/tests/unified_engine/test_backtest_executor.py",
+    "backend/tests/unified_engine/test_qe_backtest_recorder_isolation_hotfix.py",
+    "backend/tests/unified_engine/test_qe_workspace_submission_receipt.py",
+    "docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md",
+    "tests/aistock_validation/bugs/20260720_BUG-785-p0-1b-qe-reservation-lifecycle-and-receipt-integration-regress-existing.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-785",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-20T03:58:46.360549Z",
+  "description": "Current uncommitted implementation can leak capacity reservations, leave pending work unresubmitted, turn retry into 409/no-op, mark remote-running work failed, reuse successor ownership tokens, accept runs without a live orchestrator, and allow relative paths to escape the Loop workspace.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260720-e7a6b779bad1",
+      "timestamp": "2026-07-20T03:58:46.360545Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md"
+  ],
+  "expected": "All coordinated QE sources preserve existing submit/retry behavior, automatically resume capacity waits, release slots only from authoritative terminal evidence, keep stale workers fenced, expose worker unavailability, and constrain all worker writes to the Loop workspace.",
+  "first_seen_at": "2026-07-20T03:58:46.360549Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2496,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2496",
+  "last_seen_at": "2026-07-20T03:58:46.360549Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "required",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "P0-1B QE reservation lifecycle and receipt integration regress existing execution semantics",
+  "trigger_condition": {
+    "fingerprint": "e7a6b779bad12cf0396fb3be",
+    "source_event_id": "FE-20260720-e7a6b779bad1"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

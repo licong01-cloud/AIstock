@@ -14,6 +14,15 @@ from typing import Any
 
 from ..execution_manifest import build_and_audit_execution_manifest
 from ..experiment_config import ExperimentConfig, extract_qe_random_seed
+from ..qe_active_execution_capacity import (
+    QEExecutionSourceClaimFactory,
+    QEWorkspaceSubmissionCoordinator,
+    QEWorkspaceSubmissionCoordinatorError,
+    QEWorkspaceSubmissionPayload,
+    QEWorkspaceSubmissionSource,
+    qe_submission_owner_id,
+    submission_intent_hash_for_source,
+)
 from ..runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .base import BaseExecutor, ExecutionContext, ExecutionResult
 
@@ -34,7 +43,13 @@ class BacktestExecutor(BaseExecutor):
     无状态设计，依赖通过构造函数注入，方便测试。
     """
 
-    def __init__(self, composer: Any, client: Any):
+    def __init__(
+        self,
+        composer: Any,
+        client: Any,
+        *,
+        submission_coordinator: Any | None = None,
+    ):
         """
         Args:
             composer: ConfigComposer 实例
@@ -42,6 +57,7 @@ class BacktestExecutor(BaseExecutor):
         """
         self.composer = composer
         self.client = client
+        self.submission_coordinator = submission_coordinator or QEWorkspaceSubmissionCoordinator()
 
     async def submit(
         self,
@@ -202,15 +218,20 @@ class BacktestExecutor(BaseExecutor):
         if runtime_contract:
             rdagent_config.update(runtime_contract)
 
-        # 5. 提交到 RDAgent
-        job_id = await self.client.create_and_run_loop(
-            ctx.task_id,
-            ctx.loop_index,
-            rdagent_config,
-            experiment_files,
-            wsl_command,
-            model_source=ctx.model_source,
-            callback_url=ctx.callback_url,
+        # 5. Reserve the canonical cross-source slot before the QE Workspace POST.
+        source = self._submission_source_for_context(ctx)
+        submission_outcome = await self.submission_coordinator.submit(
+            client=self.client,
+            source=source,
+            payload=QEWorkspaceSubmissionPayload(
+                task_id=ctx.task_id,
+                loop_index=ctx.loop_index,
+                config=rdagent_config,
+                experiment_files=experiment_files,
+                wsl_command=wsl_command,
+                model_source=ctx.model_source,
+                callback_url=ctx.callback_url,
+            ),
         )
 
         returned_experiment_files = dict(experiment_files)
@@ -218,12 +239,76 @@ class BacktestExecutor(BaseExecutor):
             returned_experiment_files["qe_resource_session_secret.json"] = "<redacted>"
 
         return ExecutionResult(
-            job_id=job_id,
-            status="submitted",
+            job_id=submission_outcome.loop_id,
+            status=submission_outcome.state,
             experiment_files=returned_experiment_files,
             wsl_command=wsl_command,
             detail={
                 "execution_manifest": execution_manifest,
                 "execution_manifest_sha256": execution_manifest_sha256,
+                "qe_submission": {
+                    "state": submission_outcome.state,
+                    "reservation_id": submission_outcome.reservation_id,
+                    "reservation_status": submission_outcome.reservation_status,
+                    "remote_status": submission_outcome.remote_status,
+                    "active_count": submission_outcome.active_count,
+                    "node_capacity": submission_outcome.node_capacity,
+                    "duplicate_replay": submission_outcome.duplicate_replay,
+                    "remote_acceptance_unknown": submission_outcome.remote_acceptance_unknown,
+                    "detail": dict(submission_outcome.detail or {}),
+                },
             },
+        )
+
+    @staticmethod
+    def _submission_source_for_context(ctx: ExecutionContext) -> QEWorkspaceSubmissionSource:
+        node_id = str(ctx.node_id or "").strip()
+        source_kind = str(ctx.submission_source_kind or "").strip()
+        source_execution_id = str(ctx.submission_source_execution_id or "").strip()
+        if not node_id or not source_kind or not source_execution_id:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "BacktestExecutor requires explicit node and source execution identity",
+                reason_code="qe_execution_source_identity_missing",
+                context={
+                    "task_id": ctx.task_id,
+                    "loop_index": ctx.loop_index,
+                    "node_id": node_id or None,
+                    "source_kind": source_kind or None,
+                    "source_execution_id": source_execution_id or None,
+                },
+            )
+        loop_id = f"Loop{ctx.loop_index}"
+        if source_kind == "qe_evolution_loop":
+            claim_source, record_waiting = QEExecutionSourceClaimFactory.evolution_loop(
+                loop_id=source_execution_id,
+                node_id=node_id,
+            )
+        elif source_kind == "qe_experiment":
+            claim_source, record_waiting = QEExecutionSourceClaimFactory.experiment(
+                experiment_id=source_execution_id,
+                node_id=node_id,
+                qe_task_id=ctx.task_id,
+                qe_loop_id=loop_id,
+            )
+        else:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "BacktestExecutor source kind is not supported by its source claim adapter",
+                reason_code="qe_execution_source_kind_unsupported",
+                context={"source_kind": source_kind},
+            )
+        return QEWorkspaceSubmissionSource(
+            source_kind=source_kind,
+            source_execution_id=source_execution_id,
+            node_id=node_id,
+            submission_intent_hash=submission_intent_hash_for_source(
+                source_kind=source_kind,
+                source_execution_id=source_execution_id,
+                node_id=node_id,
+                task_id=ctx.task_id,
+                loop_id=loop_id,
+            ),
+            owner_id=qe_submission_owner_id(),
+            claim_source=claim_source,
+            record_waiting_capacity=record_waiting,
+            requested_node_capacity=ctx.submission_node_capacity,
         )

@@ -16,6 +16,7 @@ from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
+from backend.services.multi_alpha.durable_models import walk_forward_signature_for
 
 
 DEFAULT_SCHEME = "ic_weighted"
@@ -441,11 +442,7 @@ def _normalize_run_status(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _walk_forward_signature(walk_forward: Mapping[str, Any]) -> str:
-    enabled = walk_forward.get("enabled", True)
-    window = walk_forward.get("window", "na")
-    min_periods = walk_forward.get("min_periods", "na")
-    expanding = walk_forward.get("expanding", False)
-    return f"wf_w{window}_min{min_periods}_exp{str(bool(expanding)).lower()}_en{str(bool(enabled)).lower()}"
+    return walk_forward_signature_for(walk_forward)
 
 
 def _task_name(row: Mapping[str, Any]) -> str:

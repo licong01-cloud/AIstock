@@ -8,6 +8,7 @@ import pytest
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from backend.services.quantevolver.experiment_config import ExperimentConfig
@@ -17,7 +18,10 @@ from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
 )
 from backend.services.quantevolver.executors.base import ExecutionContext
-from backend.services.quantevolver.executors.backtest import BacktestExecutor, BacktestMode
+from backend.services.quantevolver.executors.backtest import (
+    BacktestExecutor as ProductionBacktestExecutor,
+    BacktestMode,
+)
 from tests.fixtures.sample_configs import (
     EVOLUTION_CONFIG_MINIMAL,
     EVOLUTION_TASK_MINIMAL,
@@ -38,6 +42,47 @@ from tests.fixtures.sample_configs import (
 
 MOCK_WSL_COMMAND = "cd /mnt/f && python qrun_limit_minute.py conf.yaml"
 MOCK_EXPERIMENT_FILES = {"conf.yaml": "mock_yaml_content", "factor.py": "mock_factor"}
+
+
+class _UnitSubmissionCoordinator:
+    async def submit(self, *, client, source, payload):
+        loop_id = await client.create_and_run_loop(
+            payload.task_id,
+            payload.loop_index,
+            dict(payload.config),
+            dict(payload.experiment_files),
+            payload.wsl_command,
+            model_source=payload.model_source,
+            callback_url=payload.callback_url,
+            submission_intent_hash=source.submission_intent_hash,
+        )
+        return SimpleNamespace(
+            loop_id=loop_id,
+            state="submitted",
+            reservation_id="qer_unit",
+            reservation_status="submitting",
+            remote_status="reserved",
+            active_count=1,
+            node_capacity=2,
+            duplicate_replay=False,
+            remote_acceptance_unknown=False,
+            detail={},
+        )
+
+
+class BacktestExecutor(ProductionBacktestExecutor):
+    """Unit-only executor with an explicit fake submission coordinator."""
+
+    def __init__(self, composer, client):
+        super().__init__(
+            composer,
+            client,
+            submission_coordinator=_UnitSubmissionCoordinator(),
+        )
+
+    @staticmethod
+    def _submission_source_for_context(_ctx):
+        return SimpleNamespace(submission_intent_hash="a" * 64)
 
 
 def make_mock_composer(wsl_command: str = MOCK_WSL_COMMAND) -> MagicMock:
