@@ -2,7 +2,7 @@
   "actual": "Batch hmmb_d54d78c2b74d41b48f8c363d66f16b55 failed before item creation with hmm_evolution_source_unavailable; worker logs show both recorder sidecars return 404 and the complete catalog contains five pred/label recorder pairs.",
   "allowed_write_scope": [
     "backend/services/hmm_data_source/backtest_source.py",
-    "backend/services/hmm_data_source/legacy_qe_artifact_manifests.json",
+    "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
     "backend/tests/hmm_data_source/test_backtest_source.py",
     "backend/tests/hmm_data_source/test_isolation_constraints.py",
     "docs/architecture/HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md",
