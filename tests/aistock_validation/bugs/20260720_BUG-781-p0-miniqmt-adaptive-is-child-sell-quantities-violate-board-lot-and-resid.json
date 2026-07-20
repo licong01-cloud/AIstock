@@ -12,7 +12,10 @@
     "backend/tests/miniqmt_execution_runtime/test_runtime.py",
     "backend/tests/qmt_strategy_ledger/test_order_service.py",
     "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260720_BUG-781-p0-miniqmt-adaptive-is-child-sell-quantities-violate-board-lot-and-resid.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
