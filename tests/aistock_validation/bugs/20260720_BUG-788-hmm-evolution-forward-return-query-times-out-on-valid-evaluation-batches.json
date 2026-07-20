@@ -30,7 +30,7 @@
   ],
   "expected": "Valid bounded HMM evaluation windows complete read-only forward-return acquisition within the existing statement timeout, preserve exact trading-day horizon and missing-evidence semantics, and never fall back silently.",
   "first_seen_at": "2026-07-20T06:53:09.233679Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-788-hmm-evolution-forward-return-query-times-out-on-20260720",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2504,
