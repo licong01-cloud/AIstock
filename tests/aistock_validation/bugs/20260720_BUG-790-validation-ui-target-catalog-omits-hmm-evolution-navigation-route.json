@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-790",
-  "closed_at": null,
+  "closed_at": "2026-07-20T08:31:01Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "Every frontend navigation href, including /hmm-evolution, must have one authoritative Validation UI target with stable owner, plan keys, tags, and read-only verification metadata.",
   "first_seen_at": "2026-07-20T07:06:40.284300Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dda6c07bda4ea8629960d19d596fb0c9a93f7c83",
+  "fixed_at": "2026-07-20T08:32:24.433023Z",
   "github_issue_number": 2507,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2507",
   "last_seen_at": "2026-07-20T07:06:40.284300Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2508",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -89,6 +90,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #2508 validation_center_backend and CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
