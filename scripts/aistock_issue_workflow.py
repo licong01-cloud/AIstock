@@ -490,6 +490,50 @@ def _build_validation_receipts(
     return receipts, errors
 
 
+def _validation_receipt_plan_coverage(
+    *,
+    validation: dict[str, Any],
+    receipts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    required_plans = flow._unique_strings(validation.get("required_plans") or [])
+    receipt_ids_by_plan: dict[str, list[str]] = {}
+    for receipt in receipts:
+        plan = str(receipt.get("plan") or "").strip()
+        if not plan:
+            continue
+        receipt_ids_by_plan.setdefault(plan, []).append(str(receipt.get("receipt_id") or ""))
+    observed_plans = list(receipt_ids_by_plan)
+    missing_required_plans = [plan for plan in required_plans if plan not in receipt_ids_by_plan]
+    duplicate_plan_receipts = {
+        plan: receipt_ids
+        for plan, receipt_ids in receipt_ids_by_plan.items()
+        if len(receipt_ids) > 1
+    }
+    return {
+        "schema_version": "aistock_validation_receipt_plan_coverage_v1",
+        "required_plans": required_plans,
+        "observed_plans": observed_plans,
+        "missing_required_plans": missing_required_plans,
+        "unexpected_plans": [plan for plan in observed_plans if plan not in required_plans],
+        "duplicate_plan_receipts": duplicate_plan_receipts,
+        "complete": not missing_required_plans,
+    }
+
+
+def _validation_receipt_plan_errors(coverage: dict[str, Any]) -> list[str]:
+    missing = [str(plan) for plan in coverage.get("missing_required_plans") or []]
+    duplicates = {
+        str(plan): [str(receipt_id) for receipt_id in receipt_ids]
+        for plan, receipt_ids in (coverage.get("duplicate_plan_receipts") or {}).items()
+    }
+    errors: list[str] = []
+    if missing:
+        errors.append(f"missing required validation plan receipts: {missing}")
+    if duplicates:
+        errors.append(f"duplicate validation plan receipts are not allowed: {duplicates}")
+    return errors
+
+
 def _render_validation_receipt(receipt: dict[str, Any]) -> str:
     command = str(receipt.get("command") or "").replace("`", "'")
     result = str(receipt.get("result") or "").replace("`", "'")
@@ -704,6 +748,7 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
         "bug_id",
         "workflow_gate",
         "closure_ready",
+        "draft_ready",
         "changed_files",
         "required_verification",
         "recommended_verification",
@@ -5312,7 +5357,11 @@ def build_batch_workflow_smoke_plan() -> dict[str, Any]:
             changed_files=["scripts/aistock_issue_workflow.py"],
             base="origin/main",
             head="HEAD",
-            validation_evidence=["python scripts/aistock_issue_workflow.py batch-workflow-smoke -> passed"],
+            validation_evidence=[
+                "python scripts/aistock_issue_workflow.py batch-workflow-smoke -> passed",
+                "python -m nox -s l0 -> passed",
+                "python -m nox -s guardrail_changed_files -> passed",
+            ],
             issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
             plan_only=False,
             allow_missing_evidence=False,
@@ -5768,8 +5817,18 @@ def build_finish_plan(
         validation["codegraph_suggested_tests"] = codegraph_tests
     raw_evidence = [item for item in validation_evidence if item.strip()]
     validation_receipts, validation_evidence_errors = _build_validation_receipts(raw_evidence, root=REPO_ROOT)
+    validation_receipt_plan_coverage = _validation_receipt_plan_coverage(
+        validation=validation,
+        receipts=validation_receipts,
+    )
+    if validation_receipts:
+        validation_evidence_errors.extend(_validation_receipt_plan_errors(validation_receipt_plan_coverage))
     evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
-    closure_ready = (bool(evidence) or plan_only or allow_missing_evidence) and not validation_evidence_errors
+    closure_ready = bool(evidence) and not validation_evidence_errors
+    draft_ready = (
+        (plan_only or (allow_missing_evidence and not evidence))
+        and not validation_evidence_errors
+    )
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
     pr_body_path = output_dir / "pr-body.md"
     pr_body = render_pr_body(canonical_bug_id, record, changed, validation, pr_quality, evidence, closure_ready)
@@ -5784,7 +5843,9 @@ def build_finish_plan(
             "validation_evidence": evidence,
             "validation_receipts": validation_receipts,
             "validation_evidence_errors": validation_evidence_errors,
+            "validation_receipt_plan_coverage": validation_receipt_plan_coverage,
             "closure_ready": closure_ready,
+            "draft_ready": draft_ready,
             "code_intelligence": _compact_code_intelligence_for_finish(code_intelligence_summary, codegraph_tests),
             "h7_code_intelligence": h7_code_intelligence,
             "artifact_policy": "compact_finish_plan_no_full_selected_validation_pr_quality_or_code_intelligence_payload",
@@ -5793,7 +5854,7 @@ def build_finish_plan(
         with contextlib.suppress(OSError):
             finish_plan_path.unlink()
     _write_text(pr_body_path, pr_body)
-    next_state = "validation_passed" if evidence and not validation_evidence_errors else ("validation_planned" if plan_only else "blocked")
+    next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_bug_id,
         state=next_state,
@@ -5829,7 +5890,7 @@ def build_finish_plan(
             "push_task_branch",
             "create_pr_from_pr_body",
             "watch_ci_before_merge",
-        ] if evidence else ["run_required_validation", "rerun_finish_with_validation_evidence"],
+        ] if closure_ready else ["run_required_validation", "rerun_finish_with_validation_evidence"],
     )
     payload = {
         "schema_version": "aistock_issue_workflow_finish_v1",
@@ -5865,14 +5926,28 @@ def build_finish_plan(
         "validation_evidence": evidence,
         "validation_receipts": validation_receipts,
         "validation_evidence_errors": validation_evidence_errors,
+        "validation_receipt_plan_coverage": validation_receipt_plan_coverage,
         "validation_receipt_summary": _validation_receipt_summary(
             evidence,
             validation.get("deferred_nightly_plans") or [],
         ),
         "closure_ready": closure_ready,
+        "draft_ready": draft_ready,
         "workflow_gate": "ready_for_pr"
         if closure_ready
-        else ("blocked" if validation_evidence_errors else "validation_evidence_missing"),
+        else (
+            "blocked"
+            if validation_evidence_errors
+            else (
+                "plan_ready"
+                if plan_only
+                else (
+                    "validation_evidence_missing_allowed"
+                    if allow_missing_evidence
+                    else "validation_evidence_missing"
+                )
+            )
+        ),
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
@@ -5880,15 +5955,22 @@ def build_finish_plan(
             "pr_body": _size_and_token_estimate(pr_body_path),
             "finish_plan": _size_and_token_estimate(finish_plan_path),
         },
-        "artifact_policy": "diagnostic_json_persisted" if persist_finish_plan else "compact_success_no_finish_plan_json",
+        "artifact_policy": (
+            "compact_success_no_finish_plan_json"
+            if not persist_finish_plan
+            else ("draft_finish_plan_persisted" if draft_ready else "diagnostic_json_persisted")
+        ),
     }
     payload["pre_pr_gate"] = _pre_pr_gate(finish=payload, validation_evidence=evidence, root=REPO_ROOT, run_lint=False)
     if not closure_ready:
-        payload["error"] = (
-            "; ".join(validation_evidence_errors)
-            if validation_evidence_errors
-            else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
-        )
+        if validation_evidence_errors:
+            payload["error"] = "; ".join(validation_evidence_errors)
+        elif plan_only:
+            payload["error"] = "plan-only draft generated; complete required validation evidence before PR readiness"
+        elif allow_missing_evidence:
+            payload["error"] = "missing-evidence draft generated; complete required validation evidence before PR readiness"
+        else:
+            payload["error"] = "validation evidence is required"
     return payload
 
 
@@ -6490,9 +6572,20 @@ def build_finish_batch_plan(
         validation["codegraph_suggested_tests"] = codegraph_tests
     raw_evidence = [item for item in validation_evidence if item.strip()]
     validation_receipts, validation_evidence_errors = _build_validation_receipts(raw_evidence, root=REPO_ROOT)
+    validation_receipt_plan_coverage = _validation_receipt_plan_coverage(
+        validation=validation,
+        receipts=validation_receipts,
+    )
+    if validation_receipts:
+        validation_evidence_errors.extend(_validation_receipt_plan_errors(validation_receipt_plan_coverage))
     evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
     closure_ready = (
-        (bool(evidence) or plan_only or allow_missing_evidence)
+        bool(evidence)
+        and not selector_blocking
+        and not validation_evidence_errors
+    )
+    draft_ready = (
+        (plan_only or (allow_missing_evidence and not evidence))
         and not selector_blocking
         and not validation_evidence_errors
     )
@@ -6511,6 +6604,7 @@ def build_finish_batch_plan(
         "validation_evidence": evidence,
         "validation_receipts": validation_receipts,
         "validation_evidence_errors": validation_evidence_errors,
+        "validation_receipt_plan_coverage": validation_receipt_plan_coverage,
         "per_issue_commit_map": commit_map,
         "per_issue_closure_map": {
             str(record.get("bug_id")): flow._unique_strings(flow._as_list(record.get("closure_requirements")))
@@ -6518,6 +6612,7 @@ def build_finish_batch_plan(
         },
         "code_intelligence": code_intelligence_summary,
         "closure_ready": closure_ready,
+        "draft_ready": draft_ready,
         "production_gates": validation.get("production_gates") or {},
         "blocking": selector_blocking,
     }
@@ -6537,7 +6632,7 @@ def build_finish_batch_plan(
             closure_ready,
         ),
     )
-    next_state = "validation_passed" if evidence and not validation_evidence_errors else ("validation_planned" if plan_only else "blocked")
+    next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_batch_id,
         state=next_state,
@@ -6565,13 +6660,25 @@ def build_finish_batch_plan(
             "push_task_branch",
             "create_pr_from_batch_pr_body",
             "watch_ci_before_merge",
-        ] if evidence else ["run_required_validation", "rerun_finish_batch_with_validation_evidence"],
+        ] if closure_ready else ["run_required_validation", "rerun_finish_batch_with_validation_evidence"],
     )
     payload = {
         **finish_plan,
         "workflow_gate": "ready_for_pr"
         if closure_ready
-        else ("blocked" if selector_blocking or validation_evidence_errors else "validation_evidence_missing"),
+        else (
+            "blocked"
+            if selector_blocking or validation_evidence_errors
+            else (
+                "plan_ready"
+                if plan_only
+                else (
+                    "validation_evidence_missing_allowed"
+                    if allow_missing_evidence
+                    else "validation_evidence_missing"
+                )
+            )
+        ),
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
         "code_intelligence": {
@@ -6588,11 +6695,14 @@ def build_finish_batch_plan(
     }
     if not closure_ready:
         blocking_reasons = selector_blocking + validation_evidence_errors
-        payload["error"] = (
-            "; ".join(blocking_reasons)
-            if blocking_reasons
-            else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
-        )
+        if blocking_reasons:
+            payload["error"] = "; ".join(blocking_reasons)
+        elif plan_only:
+            payload["error"] = "plan-only draft generated; complete required validation evidence before PR readiness"
+        elif allow_missing_evidence:
+            payload["error"] = "missing-evidence draft generated; complete required validation evidence before PR readiness"
+        else:
+            payload["error"] = "validation evidence is required"
     return payload
 
 
@@ -8534,6 +8644,8 @@ def _pre_pr_gate(
         warnings.append(f"uncommitted task file(s) present: {[row['path'] for row in task_dirty_rows]}")
     if not validation_evidence:
         blocking.append("validation evidence is required before PR creation")
+    if finish.get("closure_ready") is False:
+        blocking.append("finish plan is not closure-ready")
     if scope_check.get("status") not in {None, "passed"}:
         blocking.append(f"scope check failed: {scope_check.get('violations') or scope_check.get('status')}")
     if ownership.get("unmapped_count"):
@@ -11152,7 +11264,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
         allow_missing_evidence=args.allow_missing_evidence,
     )
     _emit_args(payload, args)
-    return 0 if payload.get("closure_ready") else 2
+    return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
 
 
 def cmd_triage_p0(args: argparse.Namespace) -> int:
@@ -11198,7 +11310,7 @@ def cmd_finish_batch(args: argparse.Namespace) -> int:
         allow_missing_evidence=args.allow_missing_evidence,
     )
     _emit_args(payload, args)
-    return 0 if payload.get("closure_ready") else 2
+    return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
 
 
 def cmd_fast_path(args: argparse.Namespace) -> int:

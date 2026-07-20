@@ -704,6 +704,8 @@ def test_finish_plan_selects_validation_and_requires_evidence(
         "scripts/aistock_issue_workflow.py",
         "--validation-evidence",
         "python -m nox -s l0 -> passed",
+        "--validation-evidence",
+        "python -m nox -s guardrail_changed_files -> passed",
     ]) == 0
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
@@ -716,6 +718,55 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     assert ready["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
     assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_blocks_partial_required_plan_receipts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(required_verification=["l0", "guardrail_changed_files"]),
+    )
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "guardrail_changed_files"
+    ]
+    assert "missing required validation plan receipts" in payload["error"]
+    assert payload["pre_pr_gate"]["workflow_gate"] == "blocked"
+    assert "finish plan is not closure-ready" in payload["pre_pr_gate"]["blocking"]
+
+    allowed_payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        plan_only=False,
+        allow_missing_evidence=True,
+    )
+
+    assert allowed_payload["closure_ready"] is False
+    assert allowed_payload["draft_ready"] is False
+    assert allowed_payload["workflow_gate"] == "blocked"
+    assert allowed_payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "guardrail_changed_files"
+    ]
 
 
 def test_finish_rejects_unstructured_or_failed_validation_evidence(
@@ -744,6 +795,37 @@ def test_finish_rejects_unstructured_or_failed_validation_evidence(
         assert payload["closure_ready"] is False
         assert payload["validation_receipts"] == []
         assert payload["validation_evidence_errors"]
+
+
+def test_finish_blocks_duplicate_required_plan_receipts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(required_verification=["l0", "guardrail_changed_files"]),
+    )
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert list(payload["validation_receipt_plan_coverage"]["duplicate_plan_receipts"]) == ["l0"]
+    assert "duplicate validation plan receipts are not allowed" in payload["error"]
 
 
 def test_validation_receipt_binds_allowlisted_command_to_current_commit(
@@ -795,8 +877,10 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
         allow_missing_evidence=False,
     )
 
-    assert payload["closure_ready"] is True
-    assert payload["artifact_policy"] == "compact_success_no_finish_plan_json"
+    assert payload["closure_ready"] is False
+    assert payload["draft_ready"] is True
+    assert payload["workflow_gate"] == "plan_ready"
+    assert payload["artifact_policy"] == "draft_finish_plan_persisted"
     assert payload["codegraph_suggested_tests"] == suggested_tests
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     pr_body = isolated_workflow_root / payload["pr_body_path"]
@@ -807,7 +891,32 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     assert suggested_tests[10] not in pr_body_text
     assert "CodeGraph suggested tests omitted: `2` more" in pr_body_text
     assert "missing - run required validation" in pr_body_text
-    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+    assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_draft_flags_exit_success_without_claiming_pr_readiness(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+
+    for flag, expected_gate in [
+        ("--plan-only", "plan_ready"),
+        ("--allow-missing-evidence", "validation_evidence_missing_allowed"),
+    ]:
+        assert workflow.main([
+            "finish",
+            "--issue-json",
+            str(issue),
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            flag,
+        ]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["closure_ready"] is False
+        assert payload["draft_ready"] is True
+        assert payload["workflow_gate"] == expected_gate
+        assert payload["pre_pr_gate"]["workflow_gate"] == "blocked"
 
 
 def test_finish_failure_persists_diagnostic_json(
@@ -1046,7 +1155,11 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
         changed_files=["scripts/aistock_issue_workflow.py"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1068,6 +1181,65 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert "CodeGraph suggested tests omitted: `1` more" in pr_body
 
 
+def test_finish_batch_blocks_when_one_selected_required_plan_has_no_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(
+        bugs_root / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+    original_select_validation = workflow.flow.select_validation
+
+    def selected_validation(changed_files: list[str], module: str | None = None) -> dict[str, Any]:
+        payload = original_select_validation(changed_files, module=module)
+        payload["required_plans"] = ["l0", "validation_center_backend"]
+        return payload
+
+    monkeypatch.setattr(workflow.flow, "select_validation", selected_validation)
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "validation_center_backend"
+    ]
+
+    allowed_payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=True,
+    )
+
+    assert allowed_payload["closure_ready"] is False
+    assert allowed_payload["draft_ready"] is False
+    assert allowed_payload["workflow_gate"] == "blocked"
+
+
 def test_finish_batch_blocks_scope_expansion(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1086,7 +1258,12 @@ def test_finish_batch_blocks_scope_expansion(
         changed_files=["frontend/src/app/page.tsx"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1123,7 +1300,12 @@ def test_finish_batch_scope_check_accepts_glob_scope(
         changed_files=["tests/aistock_validation/bugs/BUG-199.json"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1244,8 +1426,10 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
-    assert payload["finish"]["workflow_gate"] == "ready_for_pr"
-    assert payload["finish"]["artifact_policy"] == "compact_success_no_finish_plan_json"
+    assert payload["finish"]["workflow_gate"] == "plan_ready"
+    assert payload["finish"]["closure_ready"] is False
+    assert payload["finish"]["draft_ready"] is True
+    assert payload["finish"]["artifact_policy"] == "draft_finish_plan_persisted"
     assert payload["postmortem_preview"]["stale_pr_check"] == "skipped_in_smoke_to_avoid_external_github_reads"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
