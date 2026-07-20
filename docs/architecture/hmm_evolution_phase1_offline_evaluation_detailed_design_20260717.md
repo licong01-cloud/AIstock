@@ -1,9 +1,10 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v2.0
+> **版本**：v2.1
 > **日期**：2026-07-17
-> **状态**：P1-A/P1-B/P1-C 源码已实现；BUG-773～BUG-777 修复行情收益正确性、内容校验重放、durable preparation receipt、指标命名与验收证据；Windows 独立 worker 已有首次旧 schema receipt，schema v2 生产 DDL/重启与真实 QE 10-case、10 候选性能、实机 UI/Playwright 仍待外部验收
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.2
+> **修订日期**：2026-07-20
+> **状态**：P1-A/P1-B/P1-C 源码已实现；BUG-773～BUG-777 已合入；`hmm_evolution_v2` 已完成 DEV-first 生产 DDL 与 exact verify；API/worker 尚未在 v2 schema 后重启，真实 QE 10-case、10 候选性能与实机 UI/Playwright 仍待外部验收
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.3
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -1095,6 +1096,22 @@ frontend/src/lib/navigation/nav-groups.ts
 - **未完成边界**：真实 10-case、双候选/10 候选 benchmark、进程中断 lease recovery、长期
   服务监督和真实 UI/Playwright 仍待完成；不得据此宣称整个 Phase 1 verified。
 
+### 17.4.3 2026-07-20 schema v2 DEV-first 生产 DDL receipt
+
+- **DEV 实施**：`127.0.0.1:5433/aistock_dev` 幂等执行 `hmm_evolution_v2` bootstrap，
+  exact column/constraint/index/comment verify 通过；真实 PostgreSQL repository/market integration
+  `2 passed`。
+- **生产 preflight**：目标固定为 `127.0.0.1:5432/aistock`；迁移前只有 v1 version row，
+  `request_payload` 不存在，24 个 completed batch、1 个 timed_out batch，活动 batch 为 0。
+- **生产实施与回读**：单事务升级后 v2 version row 从 0→1，`request_payload JSONB NOT NULL
+  DEFAULT '{}'`、`preparation_queued/preparing` 状态约束及全部 schema/table/column comments
+  exact verify 通过。
+- **业务数据不变量**：迁移前后 candidate/evaluation/batch/item 分别为 10/44/25/44 行；
+  忽略预期新增列后的逐表 SHA-256 完全一致，历史 batch 状态保持 24 completed / 1 timed_out；
+  repository read smoke 通过。
+- **运行态边界**：未重启 API、worker、8001/3000/19080 或其它生产服务；DDL applied 不等于
+  v2 runtime 已激活，必须在后续显式重启后另行验证新 durable preparation receipt。
+
 ### 17.5 DESIGN-COMPLIANCE-001
 
 每个实现 PR 逐项检查：
@@ -1123,8 +1140,8 @@ frontend/src/lib/navigation/nav-groups.ts
 - worker skeleton，不启生产 runtime。
 
 当前状态：P1-A 源码与外部验收完成；P1-B 与 P1-C 源码完成，P1-C 审计硬化已覆盖共享输入并发、lease recovery、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
-`production_ddl_gate=applied_and_verified`；
-`runtime_activation_gate=phase1_worker_activated_and_verified`。这不代表整个 Phase 1 已通过外部验收；真实 QE 10-case、10 候选性能、进程中断 lease recovery 和实机页面/Playwright 仍未完成。
+`production_ddl_gate=applied_and_verified`（2026-07-20，DEV/production exact verify 与受保护数据摘要校验通过）；
+`runtime_activation_gate=restart_required_after_v2`。既有 worker receipt 来自 v2 DDL 前的进程，不证明新 durable preparation 代码已加载。这不代表整个 Phase 1 已通过外部验收；真实 QE 10-case、10 候选性能、进程中断 lease recovery 和实机页面/Playwright 仍未完成。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -1205,13 +1222,15 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | v1 production applied；v2 已在 5433/aistock_dev bootstrap/verify，production pending | noop | v2 生产应用前 pending |
+| `production_ddl_gate` | noop | v1/v2 production applied_and_verified；v2 DEV-first receipt 见 §17.4.3 | noop | v2 已应用，runtime restart 独立 pending |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
-| `runtime_activation_gate` | noop | 旧 schema worker 已受控 activation；v2 应用后需显式重启 | 同左 | 不新增业务审批流 |
+| `runtime_activation_gate` | noop | 旧 schema worker 已受控 activation；v2 已应用但尚未显式重启 | 同左 | 不新增业务审批流 |
 | `data_write_gate` | docs only | 仅 hmm_evolution.* | 仅评估结果 | 同左 |
 | `service_start_gate` | noop | 禁止隐式启动 | 禁止隐式启动 | 独立 service 显式启动；不得挂入 FastAPI startup，安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
+
+2026-07-20 DDL 事实与数据不变量见 §17.4.3；生产 schema 已 applied_and_verified，API/worker 重启与 v2 runtime receipt 仍单独 pending。
 
 ## 22. Design Acceptance Index（设计验收索引）
 
@@ -1233,10 +1252,10 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt见 §17.4.1 | verified | 无 |
+| F-006 | 本文 §5.3、§6、§10、§11；`backend/services/hmm_evolution/{qe_asset_reader,candidate_artifact,models,errors,repository,service}.py`、`backend/services/quantevolver/qe_workspace_client.py`、`backend/db/init_hmm_evolution_schema.py`；RD-Agent PR #4 `qe_workspace_catalog.py` + exact `GET .../files` route | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 `qe_20260706_013235_bbd4/Loop8`：221 unique relative assets、complete catalog、pred/label read receipts、zero extra copy；生产 schema verify receipt 见 §17.4.1/§17.4.3 | verified | 无 |
 | F-007 | 本文 §7、§8；`evaluator.py`、`input_adapter.py`、`market_repository.py`、`source_manifest.py`、`universe.py`；BUG-772～BUG-774 | `python -m pytest backend/tests/hmm_evolution/test_market_repository.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_universe.py -q`；calculator version/content hash/value drift fail-loud | approved_by_user_implementation_complete_external_acceptance_pending | 旧 market-required 结果 known-invalid/view-only；部署后真实重跑待补 |
-| F-008 | 本文 §10～§13；`repository.py`、`service.py`、`worker.py`、`input_adapter.py`、`models.py`；BUG-775 | `python -m pytest backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_schema_and_state_machine.py -q`；durable receipt、preparation heartbeat/fencing、atomic materialize、失败终态 | approved_by_user_implementation_complete_external_acceptance_pending | schema v2 production DDL/重启、进程中断 recovery 和 10 候选耗时 receipt 待补 |
-| F-009 | 本文 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；metric availability、percentile/tie/missing renormalization/stable top-3 | verified | 历史受 BUG-773 污染的推荐只读审计 |
+| F-008 | 本文 §10～§13；`repository.py`、`service.py`、`worker.py`、`input_adapter.py`、`models.py`；BUG-775 | `python -m pytest backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_schema_and_state_machine.py -q`；durable receipt、preparation heartbeat/fencing、atomic materialize、失败终态；生产 DDL 见 §17.4.3 | approved_by_user_implementation_complete_external_acceptance_pending | schema v2 DDL 已 applied_and_verified；API/worker 重启、进程中断 recovery 和 10 候选耗时 receipt 待补 |
+| F-009 | 本文 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；metric availability、percentile/tie/missing renormalization/stable top-3；历史污染推荐 known-invalid/view-only | verified | 无 |
 | F-010 | 本文 §14、§15；真实 API/UI 路径；BUG-744～BUG-748、BUG-770～BUG-772 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-19 POST v2 HTTP 202，Loop10 evaluation succeeded；此前点名的四个未计算日期均产生完整逐日替换指标 | approved_by_user_implementation_complete_external_acceptance_partial | 真实 API/worker 单 case 已通过；真实页面截图、完整 Playwright、10-case 和标准性能 benchmark 仍待补，未宣称 F-010 verified |
 | F-010A | 本文 §5.1、§13.5、§17.4.2、§18～§21；`worker_service.py`、`hmm_evolution_worker.py --serve` | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；Windows worker stop/start、5 秒 polling、真实 queue claim、约 121 秒 terminal receipt，1 succeeded / 0 failed / 0 timeout | approved_by_user_implementation_complete_external_acceptance_partial | 首次 activation、进程重启与真实 queue receipt 已完成；长期监督、进程中断 lease recovery、双候选/10 候选负载仍待补 |
 
@@ -1257,6 +1276,7 @@ executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完�
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.1 | 2026-07-20 | 回填 `hmm_evolution_v2` DEV-first 生产 DDL：exact schema/comment verify、受保护数据摘要不变与 repository read smoke；将 runtime 状态纠正为“v2 后尚未重启”，不把旧 worker receipt 误作新代码已加载 |
 | v2.0 | 2026-07-19 | 对齐 BUG-773～BUG-777：显式浮点行情收益、版本化 return/missing content hash、known-invalid 历史结果、durable preparation receipt/状态机、`metric_availability_ratio`、真实性能分段口径、legacy ST-PIT 兼容约束、移除前端 env gate；schema v2 生产 DDL/重启独立 pending |
 | v1.9 | 2026-07-19 | 回填 BUG-772/PR #2471 与首次 Windows worker runtime activation：真实 Loop10 v2 API 202、冻结 ST-PIT universe、约 121 秒 queue terminal receipt和显式 degraded evidence；保留 10-case、10 候选、lease recovery 与 UI/Playwright 缺口 |
 | v1.8 | 2026-07-18 | 批准 Phase 1 自动评估 worker service：显式 `--serve` 独立消费 durable queue，固化 canonical env、poll bounds、信号收敛、fail-loud 退出和与 Phase 3 scheduler 的隔离；新增 F-010A |

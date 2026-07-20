@@ -20,6 +20,7 @@
     "backend/tests/hmm_evolution/test_worker_service.py",
     "backend/tests/hmm_evolution/test_api.py",
     "frontend/tests/hmm-evolution/hmm-evolution.spec.ts",
+    "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
     "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
     "tests/aistock_validation/bugs/20260719_BUG-775-hmm-batch-api-performs-synchronous-input-preparation-before-durable-rece.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -40,6 +41,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260719-2997294dbe21",
       "timestamp": "2026-07-19T15:47:57.810391Z"
+    },
+    {
+      "action": "production_ddl_applied_and_verified",
+      "actor": "codex",
+      "note": "Applied hmm_evolution_v2 to 127.0.0.1:5432/aistock after DEV verification; exact schema/comment verification and protected data digests passed; services were not restarted.",
+      "timestamp": "2026-07-20T03:19:58.158875Z"
     }
   ],
   "evidence_uris": [
@@ -59,7 +66,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2482",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_service.py backend/tests/hmm_evolution/test_worker_service.py -q",
   "required_verification": [
@@ -124,7 +131,8 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "validation-receipt: id=8dee392a67a834d8 commit=2deb8e5265eaf1ec917b09e894ad151e07dab239 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_evolution backend/tests/hmm_data_source -q` result=`passed: 248 passed, 8 skipped`"
+    "validation-receipt: id=8dee392a67a834d8 commit=2deb8e5265eaf1ec917b09e894ad151e07dab239 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_evolution backend/tests/hmm_data_source -q` result=`passed: 248 passed, 8 skipped`",
+    "production-ddl-receipt: target=127.0.0.1:5432/aistock schema_version=hmm_evolution_v2 applied_at=2026-07-20T11:19:58.158875+08:00 status=applied_and_verified active_batch_rows=0 protected_data_digests=unchanged exact_schema_comments=passed repository_read_smoke=passed services_restarted=false"
   ],
   "verification_budget": {
     "budget": "standard",
