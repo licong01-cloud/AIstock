@@ -30,7 +30,10 @@
   ],
   "evidence_uris": [
     "runtime:hmmb_d54d78c2b74d41b48f8c363d66f16b55",
-    "qe-catalog:qe_20260502_131502_9b54/Loop1:five-recorder-pairs-no-sidecar"
+    "qe-catalog:qe_20260502_131502_9b54/Loop1:five-recorder-pairs-no-sidecar",
+    "qe-workspace:qe_20260502_131502_9b54/Loop1/run.log#sha256=315fe648c87ebedaee0715ac318889e9919bfe6106cffe434b5b30114985b31e",
+    "qe-workspace:qe_20260502_131502_9b54/Loop1/recorder=308973027052385728/5c85da5785e9495b85c36d5b6f6e97b9",
+    "runtime-readonly:BUG-789:pred_rows=569944,label_rows=556892,elapsed_seconds=18.242"
   ],
   "expected": "Historical completed QE loops resolve an immutable authoritative experiment_id/recorder_id through persisted QE metadata or an explicit compatibility manifest. Multiple recorder directories must never be selected by mtime, directory order, or silent fallback.",
   "first_seen_at": "2026-07-20T06:55:07.383320Z",
