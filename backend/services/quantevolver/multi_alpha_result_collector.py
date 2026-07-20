@@ -109,7 +109,10 @@ class MultiAlphaResultCollector:
             # ── 分布式场景：跨节点收集预测 + 本地 meta 合并 ──────
             logger.info(f"分布式多Alpha结果收集: {len(node_ids)} 节点, {len(groups)} 组")
             ma_results = await self._collect_distributed(
-                qe_task_id, groups, multi_alpha_config
+                parent_experiment_id,
+                qe_task_id,
+                groups,
+                multi_alpha_config,
             )
             # 分布式收集后直接拿到完整 ma_results
             combined_metrics = ma_results.pop("_combined_metrics", {})
@@ -499,6 +502,7 @@ class MultiAlphaResultCollector:
 
     async def _collect_distributed(
         self,
+        parent_experiment_id: str,
         qe_task_id: str,
         groups: list[dict],
         multi_alpha_config: dict,
@@ -536,14 +540,27 @@ class MultiAlphaResultCollector:
                 pred_path = g.get("prediction_path")
                 if not pred_path:
                     raise RuntimeError(f"组 {g_name} reuse 模式但缺少 prediction_path")
-                import pickle
                 from pathlib import Path
                 p = Path(pred_path)
                 if not p.exists():
                     raise RuntimeError(f"组 {g_name} prediction_path 不存在: {pred_path}")
-                with open(p, "rb") as f:
-                    group_predictions[g_name] = pickle.load(f)
-                logger.info(f"复用组预测: {g_name} from {pred_path}")
+                file_size_bytes = p.stat().st_size
+                prediction = pd.read_pickle(p)
+                if not isinstance(prediction, pd.DataFrame):
+                    raise TypeError(
+                        f"group {g_name} prediction_path must contain a DataFrame, "
+                        f"got {type(prediction).__name__}"
+                    )
+                memory_bytes = int(prediction.memory_usage(index=True, deep=False).sum())
+                group_predictions[g_name] = prediction
+                logger.info(
+                    "Reuse group prediction loaded: group=%s path=%s file_bytes=%d rows=%d memory_bytes=%d",
+                    g_name,
+                    pred_path,
+                    file_size_bytes,
+                    len(prediction),
+                    memory_bytes,
+                )
                 continue
 
             node_id = g.get("assigned_node_id")
@@ -685,7 +702,11 @@ class MultiAlphaResultCollector:
 
         # 5. 触发主节点执行统一回测（combined prediction → 选股+分钟线回测）
         backtest_metrics = await self._trigger_unified_backtest(
-            qe_task_id, combined_pred, groups, multi_alpha_config
+            parent_experiment_id,
+            qe_task_id,
+            combined_pred,
+            groups,
+            multi_alpha_config,
         )
         # backtest_metrics 包含完整的 enhanced_metrics（IC曲线、收益曲线、持仓等）
         combined_metrics = backtest_metrics
@@ -934,6 +955,7 @@ class MultiAlphaResultCollector:
 
     async def _trigger_unified_backtest(
         self,
+        parent_experiment_id: str,
         qe_task_id: str,
         combined_pred,
         groups: list[dict],
@@ -991,10 +1013,10 @@ class MultiAlphaResultCollector:
         first_node_id = first_group.get("assigned_node_id")
         first_loop_id = first_group.get("qe_loop_id")
         first_group_name = first_group["group_name"]
-        parent_experiment_id = str(first_group.get("parent_experiment_id") or "").strip()
+        parent_experiment_id = str(parent_experiment_id or "").strip()
         if not parent_experiment_id:
             raise RuntimeError(
-                "distributed unified backtest requires parent_experiment_id on group rows"
+                "distributed unified backtest requires an explicit parent_experiment_id"
             )
 
         backtest_files = {

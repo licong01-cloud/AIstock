@@ -211,6 +211,7 @@ rules:
       - backend/routers/multi_alpha.py
       - backend/tests/multi_alpha/**
       - backend/tests/test_multi_alpha*.py
+      - backend/tests/unified_engine/test_multi_alpha*.py
       - backend/tests/strategy_package/test_multi_alpha*.py
       - scripts/backfill_multi_alpha_durable_tasks.py
     primary_module: qe.auto_evolution

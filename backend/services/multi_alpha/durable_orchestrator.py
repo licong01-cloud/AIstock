@@ -1715,7 +1715,14 @@ class DurableMultiAlphaOrchestrator:
                 None,
             )
         except Exception as exc:
-            return {}, (), _exception_payload(exc)
+            failure = _exception_payload(exc)
+            logger.exception(
+                "MULTI_ALPHA_FAILURE_METADATA_LOAD_FAILED run_id=%s child_id=%s attempt_id=%s",
+                run_id,
+                child_id,
+                attempt_id,
+            )
+            return {}, (), failure
 
     def _owned_attempt_token_from_outcome(
         self,

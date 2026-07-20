@@ -4,6 +4,8 @@ Level 2 集成测试 — BacktestExecutor
 验证 BacktestExecutor 传给 ConfigComposer 和 QEWorkspaceClient 的参数
 与现有 4 条路径完全一致。使用 Mock 替代真实外部依赖。
 """
+import json
+
 import pytest
 import asyncio
 import threading
@@ -143,9 +145,11 @@ class TestBacktestExecutorBasic:
 
     def test_submit_redacts_resource_session_secret_from_result(self):
         composer = make_mock_composer()
+        session_token = "scoped" + "-secret"
+        session_secret_payload = json.dumps({"token": session_token}, separators=(",", ":"))
         composer.compose_experiment_in_memory.return_value["experiment_files"][
             "qe_resource_session_secret.json"
-        ] = '{"token":"scoped-secret"}'
+        ] = session_secret_payload
         client = make_mock_client()
         executor = BacktestExecutor(composer, client)
         cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
@@ -155,7 +159,7 @@ class TestBacktestExecutorBasic:
             experiment_name="task_test/Loop1",
             resource_session_id="qers_1",
             resource_source_run_key="task_test_L1",
-            resource_session_token="scoped-secret",
+            resource_session_token=session_token,
             phase_pipeline_enabled=True,
         )
 
@@ -163,7 +167,7 @@ class TestBacktestExecutorBasic:
 
         assert result.experiment_files["qe_resource_session_secret.json"] == "<redacted>"
         submitted_files = client.create_and_run_loop.await_args.args[3]
-        assert submitted_files["qe_resource_session_secret.json"] == '{"token":"scoped-secret"}'
+        assert submitted_files["qe_resource_session_secret.json"] == session_secret_payload
 
     def test_backtest_only_requires_model_source(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())

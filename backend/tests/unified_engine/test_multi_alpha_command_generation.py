@@ -1343,10 +1343,31 @@ class TestMultiAlphaResultCollectorFailFast:
         def for_node(node_id):
             return DummyClient(node_id)
 
+        class DummySubmissionCoordinator:
+            async def submit(self, *, client, source, payload):
+                loop_id = await client.create_and_run_loop(
+                    task_id=payload.task_id,
+                    loop_index=payload.loop_index,
+                    config=payload.config,
+                    experiment_files=payload.experiment_files,
+                    wsl_command=payload.wsl_command,
+                )
+                return SimpleNamespace(
+                    waiting_capacity=False,
+                    loop_id=loop_id,
+                    active_count=0,
+                    node_capacity=4,
+                )
+
+            def record_authoritative_remote_status(self, **kwargs):
+                return None
+
         pred = pd.DataFrame({"score": [0.1, 0.2]})
         with patch("backend.services.quantevolver.qe_workspace_client.QEWorkspaceClient.for_node", side_effect=for_node), \
+             patch("backend.services.quantevolver.qe_active_execution_capacity.QEWorkspaceSubmissionCoordinator", DummySubmissionCoordinator), \
              patch("asyncio.sleep", AsyncMock()):
             result = asyncio.run(collector._trigger_unified_backtest(
+                "exp_1",
                 "task_x",
                 pred,
                 [
@@ -1404,7 +1425,8 @@ class TestMultiAlphaResultCollectorFailFast:
     def test_collect_and_persist_distributed_does_not_require_parent_qe_loop_id(self):
         collector = MultiAlphaResultCollector()
 
-        async def fake_collect_distributed(task_id, groups, multi_alpha_config):
+        async def fake_collect_distributed(parent_experiment_id, task_id, groups, multi_alpha_config):
+            assert parent_experiment_id == "exp_1"
             return {
                 "group_metrics": {
                     "g1": {"ic": 0.1, "icir": 1.0, "sharpe": 1.2},
@@ -1436,7 +1458,8 @@ class TestMultiAlphaResultCollectorFailFast:
     def test_collect_and_persist_distributed_uses_existing_group_metrics(self):
         collector = MultiAlphaResultCollector()
 
-        async def fake_collect_distributed(task_id, groups, multi_alpha_config):
+        async def fake_collect_distributed(parent_experiment_id, task_id, groups, multi_alpha_config):
+            assert parent_experiment_id == "exp_1"
             return {
                 "group_metrics": {},
                 "meta_weights": {"g1": 0.4, "g2": 0.6},
@@ -1490,6 +1513,7 @@ class TestMultiAlphaResultCollectorFailFast:
 
         with pytest.raises(RuntimeError, match="缺少 qe_loop_id"):
             asyncio.run(collector._collect_distributed(
+                "exp_1",
                 "task_x",
                 [
                     {"group_name": "g1", "assigned_node_id": "node1", "qe_loop_id": None},
