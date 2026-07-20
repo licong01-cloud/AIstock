@@ -2,24 +2,29 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
 import backend.services.miniqmt_execution_runtime.client as miniqmt_runtime_client
 
+from backend.execution_algos.vnpy_style import VnpyAction, VnpyActionType
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
     InMemoryMiniQMTExecutionRuntimeRepository,
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrderStatus,
+    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntime,
     MiniQMTExecutionRuntimeClient,
     MiniQMTExecutionRuntimeConfig,
 )
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
+    CashEntryType,
+    CashLedgerEntry,
+    IntentSubmitStatus,
     OrderBatchStatus,
     OrderLedgerRecord,
     PositionLotRecord,
@@ -83,6 +88,7 @@ def _submit_vnpy_child_order(
     target_quantity: int,
     min_volume: int | None = None,
     volume_increment: int | None = None,
+    current_available_quantity: int | None = None,
 ) -> tuple[
     MiniQMTExecutionRuntime,
     InMemoryMiniQMTExecutionRuntimeRepository,
@@ -107,6 +113,13 @@ def _submit_vnpy_child_order(
                 "strategy_id": "strategy_board_lot",
                 "strategy_name": "slot_board_lot",
                 "order_remark": f"remark_board_lot_{symbol}_{side.value}",
+                "parent_intent_metadata": {
+                    "current_available_quantity": (
+                        target_quantity
+                        if current_available_quantity is None and side == OrderSide.SELL
+                        else current_available_quantity
+                    )
+                },
             },
         },
         **kwargs,
@@ -139,7 +152,9 @@ def _preflight() -> OrderPreflightResult:
     )
 
 
-def _ledger_order(*, qmt_order_id: str, order_status: int, traded_volume: int, order_volume: int = 100) -> OrderLedgerRecord:
+def _ledger_order(
+    *, qmt_order_id: str, order_status: int, traded_volume: int, order_volume: int = 100
+) -> OrderLedgerRecord:
     return OrderLedgerRecord(
         intent_id="intent_bug470",
         strategy_id="strategy_bug470",
@@ -231,7 +246,9 @@ def test_runtime_client_managed_child_sync_uses_ledger_partial_status() -> None:
         runtime_id=runtime.config.runtime_id,
         child_order_id=child.child_order_id,
         managed_result=result,
-        ledger_order=_ledger_order(qmt_order_id=child.broker_order_id or "", order_status=STATUS_PART_SUCC, traded_volume=60),
+        ledger_order=_ledger_order(
+            qmt_order_id=child.broker_order_id or "", order_status=STATUS_PART_SUCC, traded_volume=60
+        ),
         source="bug470_unit",
     )
 
@@ -283,6 +300,134 @@ def test_vnpy_create_keeps_star_market_sell_residual_exemption() -> None:
     assert child.quantity == 123
 
 
+def test_vnpy_runtime_rejects_partial_odd_lot_sell_before_gateway_submit() -> None:
+    runtime, repo, gateway = _runtime(gateway=FakeMiniQMTGateway())
+    runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_partial_odd_lot",
+        strategy_slot_id="slot_board_lot",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        target_quantity=83,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+        metadata={
+            "runtime_child_context": {
+                "parent_intent_metadata": {"current_available_quantity": 500},
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="MINIQMT_EVENT_LOOP_CHILD_BOARD_LOT_INVALID"):
+        runtime.on_tick(
+            symbol="000001.SZ",
+            price=10.0,
+            payload={
+                "bid_price_1": 10.0,
+                "bid_volume_1": 83,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 1000,
+            },
+        )
+
+    assert gateway.submitted_orders == []
+    assert repo.list_child_orders(runtime.config.runtime_id, active_only=False) == []
+
+
+def test_vnpy_runtime_rejects_nonincrement_sell_even_when_core_override_is_invalid() -> None:
+    runtime, repo, gateway = _runtime(gateway=FakeMiniQMTGateway())
+    runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_nonincrement_sell",
+        strategy_slot_id="slot_board_lot",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        target_quantity=628,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+        min_volume=100,
+        volume_increment=1,
+        metadata={
+            "runtime_child_context": {
+                "parent_intent_metadata": {"current_available_quantity": 800},
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="MINIQMT_EVENT_LOOP_CHILD_BOARD_LOT_INVALID"):
+        runtime.on_tick(
+            symbol="000001.SZ",
+            price=10.0,
+            payload={
+                "bid_price_1": 10.0,
+                "bid_volume_1": 628,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 1000,
+            },
+        )
+
+    assert gateway.submitted_orders == []
+    assert repo.list_child_orders(runtime.config.runtime_id, active_only=False) == []
+
+
+@pytest.mark.parametrize("raw_quantity", [True, 83.5, "83.5"])
+def test_vnpy_runtime_rejects_non_integer_child_quantity_without_truncation(raw_quantity: object) -> None:
+    runtime, _repo, _gateway = _runtime(gateway=FakeMiniQMTGateway())
+    instance = runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_invalid_numeric_child",
+        strategy_slot_id="slot_board_lot",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        target_quantity=83,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+        metadata={
+            "runtime_child_context": {
+                "parent_intent_metadata": {"current_available_quantity": 83},
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="MINIQMT_EVENT_LOOP_CHILD_BOARD_LOT_INVALID"):
+        runtime._validated_vnpy_child_quantity(
+            instance,
+            VnpyAction(action_type=VnpyActionType.SUBMIT, volume=raw_quantity),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw_available_quantity", "raw_left"),
+    [(83.5, 83), (83, 83.5), (True, 83), (83, True)],
+)
+def test_vnpy_runtime_rejects_non_integer_sell_residual_evidence_without_truncation(
+    raw_available_quantity: object,
+    raw_left: object,
+) -> None:
+    runtime, _repo, _gateway = _runtime(gateway=FakeMiniQMTGateway())
+    instance = runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_invalid_residual_evidence",
+        strategy_slot_id="slot_board_lot",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        target_quantity=83,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+        metadata={
+            "runtime_child_context": {
+                "parent_intent_metadata": {"current_available_quantity": raw_available_quantity},
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="MINIQMT_EVENT_LOOP_CHILD_BOARD_LOT_INVALID"):
+        runtime._validated_vnpy_child_quantity(
+            instance,
+            VnpyAction(
+                action_type=VnpyActionType.SUBMIT,
+                volume=83,
+                metadata={"left": raw_left},
+            ),
+        )
+
+
 @pytest.mark.parametrize("symbol", ["999999.SH", "ABC"])
 def test_vnpy_create_loudly_rejects_unknown_symbol_instead_of_defaulting_to_hundred_lot(symbol: str) -> None:
     runtime, repo, _gateway = _runtime(gateway=FakeMiniQMTGateway())
@@ -318,6 +463,57 @@ def test_vnpy_create_respects_explicit_board_lot_override_for_event_loop_path() 
     assert algo.metadata["volume_increment"] == 100
 
 
+def test_event_loop_uses_single_child_override_only_for_complete_residual_sell() -> None:
+    whole_position_intent = OrderIntent(
+        intent_id="intent_sell_whole_83",
+        package_id="pkg_sell_whole_83",
+        portfolio_id="portfolio_sell_whole_83",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        quantity=83,
+        order_type=OrderType.LIMIT,
+        limit_price=10.0,
+        target_trade_date=TRADE_DATE,
+    )
+
+    whole_position = replace(_preflight(), strategy_available_sell_quantity=83)
+    partial_position = replace(_preflight(), strategy_available_sell_quantity=500)
+
+    assert miniqmt_runtime_client._event_loop_vnpy_volume_override(
+        intent=whole_position_intent,
+        preflight=whole_position,
+    ) == (1, 1)
+    assert miniqmt_runtime_client._event_loop_vnpy_volume_override(
+        intent=whole_position_intent,
+        preflight=partial_position,
+    ) == (None, None)
+
+
+def test_event_loop_child_context_records_ledger_available_sell_authority() -> None:
+    intent = OrderIntent(
+        intent_id="intent_sell_context_83",
+        package_id="pkg_sell_context_83",
+        portfolio_id="portfolio_sell_context_83",
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        quantity=83,
+        order_type=OrderType.LIMIT,
+        limit_price=10.0,
+        target_trade_date=TRADE_DATE,
+        metadata={"current_available_quantity": 500},
+    )
+
+    context = miniqmt_runtime_client._event_loop_child_context_with_preflight(
+        intent=intent,
+        child_context={"parent_intent_metadata": dict(intent.metadata)},
+        preflight=replace(_preflight(), strategy_available_sell_quantity=83),
+    )
+
+    assert context["parent_intent_metadata"]["planned_current_available_quantity"] == 500
+    assert context["parent_intent_metadata"]["current_available_quantity"] == 83
+    assert context["parent_intent_metadata"]["current_available_quantity_source"] == ("qmt_strategy_ledger_preflight")
+
+
 def test_compiler_adapter_rejects_retired_b_route_loudly() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
 
@@ -327,6 +523,7 @@ def test_compiler_adapter_rejects_retired_b_route_loudly() -> None:
     assert exc_info.value.context["reason_code"] == "MINIQMT_SIM_COMPILER_ROUTE_RETIRED"
     assert exc_info.value.context["stage"] == "MINIQMT_RUNTIME_KIND_REJECTED"
     assert repo.list_child_orders("mqrt_compiler_star_board_lot", active_only=False) == []
+
 
 def test_event_loop_submit_rejects_non_broker_quote_source_loudly() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
@@ -362,7 +559,7 @@ def test_event_loop_submit_rejects_non_broker_quote_source_loudly() -> None:
     assert "TDX_REALTIME.batch_quote" in str(exc_info.value.context["quote_source"])
 
 
-def test_event_loop_submit_missing_broker_quote_fails_loudly_before_order() -> None:
+def test_event_loop_submit_missing_broker_quote_persists_wait_before_order() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
     qmt_client.quotes.clear()
     client = MiniQMTExecutionRuntimeClient(
@@ -371,27 +568,33 @@ def test_event_loop_submit_missing_broker_quote_fails_loudly_before_order() -> N
         runtime_kind="event_loop",
     )
 
-    with pytest.raises(BrokerSubmitError) as exc_info:
-        client.submit_event_loop_vnpy_parent_intents(
-            parent_intents=[intent],
-            policy_context=_event_loop_policy(),
-            account_group_id="acct_event_loop",
-            trade_date=TRADE_DATE,
-            runtime_config_hash="runtime_hash_event_loop_missing_quote",
-            runtime_id="mqrt_event_loop_missing_quote",
-            strategy_slot_id="slot_event_loop",
-            qmt_client=qmt_client,
-            strategy_name="strategy_event_loop",
-            order_remark_prefix="evtloop",
-            account_id="acct_event_loop",
-        )
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_missing_quote",
+        runtime_id="mqrt_event_loop_missing_quote",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
 
-    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING"
-    assert exc_info.value.context["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    assert result.batch_status == OrderBatchStatus.SUBMITTING.value
+    assert result.to_dict()["pending"] == 1
     assert qmt_client.place_order_calls == []
+    [wait_event] = [
+        event
+        for event in repo.list_events("mqrt_event_loop_missing_quote", include_archived=True)
+        if event.payload.get("schema_version") == "miniqmt_event_loop_quote_wait_v1"
+    ]
+    assert wait_event.payload["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING"
+    assert wait_event.payload["broker_called"] is False
 
 
-def test_event_loop_submit_requires_l1_depth_from_broker_quote() -> None:
+def test_event_loop_submit_missing_l1_depth_persists_symbol_wait() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
     qmt_client.quotes = {
         "000001.SZ": {
@@ -405,24 +608,205 @@ def test_event_loop_submit_requires_l1_depth_from_broker_quote() -> None:
         runtime_kind="event_loop",
     )
 
-    with pytest.raises(BrokerSubmitError) as exc_info:
-        client.submit_event_loop_vnpy_parent_intents(
-            parent_intents=[intent],
-            policy_context=_event_loop_policy(),
-            account_group_id="acct_event_loop",
-            trade_date=TRADE_DATE,
-            runtime_config_hash="runtime_hash_event_loop_depth",
-            runtime_id="mqrt_event_loop_depth",
-            strategy_slot_id="slot_event_loop",
-            qmt_client=qmt_client,
-            strategy_name="strategy_event_loop",
-            order_remark_prefix="evtloop",
-            account_id="acct_event_loop",
-        )
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_depth",
+        runtime_id="mqrt_event_loop_depth",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
 
-    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING"
-    assert exc_info.value.context["missing_fields"] == ["ask_price_1", "ask_volume_1"]
+    assert result.batch_status == OrderBatchStatus.SUBMITTING.value
+    [wait_event] = [
+        event
+        for event in repo.list_events("mqrt_event_loop_depth", include_archived=True)
+        if event.payload.get("schema_version") == "miniqmt_event_loop_quote_wait_v1"
+    ]
+    assert wait_event.payload["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING"
+    assert wait_event.payload["error_context"]["missing_fields"] == ["ask_price_1", "ask_volume_1"]
     assert qmt_client.place_order_calls == []
+
+
+@pytest.mark.parametrize(
+    ("empty_price", "empty_volume"),
+    [
+        (0, 0),
+        (10.0, 0),
+    ],
+)
+def test_event_loop_empty_depth_isolated_while_healthy_symbol_submits(
+    empty_price: float,
+    empty_volume: int,
+) -> None:
+    repo, qmt_repo, qmt_client, waiting_intent = _event_loop_client_fixture()
+    healthy_intent = waiting_intent.model_copy(
+        update={
+            "intent_id": "intent_event_loop_buy_healthy",
+            "symbol": "000002.SZ",
+            "limit_price": 12.0,
+        }
+    )
+    qmt_client.quotes["000001.SZ"] = {
+        "source": "MINIQMT_REALTIME.broker_quote",
+        "price": 10.0,
+        "ask_price_1": empty_price,
+        "ask_volume_1": empty_volume,
+        "bid_price_1": 9.99,
+        "bid_volume_1": 1000,
+    }
+    qmt_client.quotes["000002.SZ"] = {
+        "source": "MINIQMT_REALTIME.broker_quote",
+        "price": 12.0,
+        "ask_price_1": 12.0,
+        "ask_volume_1": 1000,
+        "bid_price_1": 11.99,
+        "bid_volume_1": 1000,
+    }
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[waiting_intent, healthy_intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_symbol_isolation",
+        runtime_id="mqrt_event_loop_symbol_isolation",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
+
+    assert result.batch_status == OrderBatchStatus.SUBMITTING.value
+    assert result.succeeded == 1
+    assert result.to_dict()["pending"] == 1
+    assert [call["stock_code"] for call in qmt_client.place_order_calls] == ["000002.SZ"]
+    waiting_algos = [
+        algo
+        for algo in repo.list_algo_instances("mqrt_event_loop_symbol_isolation", active_only=True)
+        if algo.parent_intent_id == waiting_intent.intent_id
+    ]
+    assert len(waiting_algos) == 1
+    wait_events = [
+        event
+        for event in repo.list_events("mqrt_event_loop_symbol_isolation", include_archived=True)
+        if event.payload.get("schema_version") == "miniqmt_event_loop_quote_wait_v1"
+    ]
+    assert len(wait_events) == 1
+    assert wait_events[0].payload["symbol"] == "000001.SZ"
+    assert wait_events[0].payload["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_EMPTY"
+    assert wait_events[0].payload["quote_synthesized"] is False
+
+
+@pytest.mark.parametrize(
+    ("waiting_quote", "reason_code"),
+    [
+        (
+            {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 10.5,
+            },
+            "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+        ),
+        (
+            {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": True,
+            },
+            "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+        ),
+        (
+            {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": float("nan"),
+                "ask_volume_1": 100,
+            },
+            "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+        ),
+        (
+            {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": True,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 100,
+            },
+            "MINIQMT_EVENT_LOOP_BROKER_QUOTE_PRICE_INVALID",
+        ),
+    ],
+)
+def test_event_loop_invalid_numeric_quote_isolated_without_truncation_or_false_acceptance(
+    waiting_quote: dict[str, object],
+    reason_code: str,
+) -> None:
+    repo, qmt_repo, qmt_client, waiting_intent = _event_loop_client_fixture()
+    healthy_intent = waiting_intent.model_copy(
+        update={
+            "intent_id": "intent_event_loop_buy_numeric_healthy",
+            "symbol": "000002.SZ",
+            "limit_price": 12.0,
+        }
+    )
+    qmt_client.quotes["000001.SZ"] = waiting_quote
+    qmt_client.quotes["000002.SZ"] = {
+        "source": "MINIQMT_REALTIME.broker_quote",
+        "price": 12.0,
+        "ask_price_1": 12.0,
+        "ask_volume_1": 1000,
+        "bid_price_1": 11.99,
+        "bid_volume_1": 1000,
+    }
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[waiting_intent, healthy_intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_numeric_isolation",
+        runtime_id="mqrt_event_loop_numeric_isolation",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
+
+    assert result.succeeded == 1
+    assert result.to_dict()["pending"] == 1
+    assert [call["stock_code"] for call in qmt_client.place_order_calls] == ["000002.SZ"]
+    [wait_event] = [
+        event
+        for event in repo.list_events("mqrt_event_loop_numeric_isolation", include_archived=True)
+        if event.payload.get("schema_version") == "miniqmt_event_loop_quote_wait_v1"
+    ]
+    assert wait_event.payload["reason_code"] == reason_code
+    assert wait_event.payload["quote_synthesized"] is False
+    raw_ask_price = waiting_quote.get("ask_price_1")
+    if isinstance(raw_ask_price, float) and raw_ask_price != raw_ask_price:
+        invalid_value = wait_event.payload["error_context"]["ask_price_1"]
+        assert invalid_value["schema_version"] == "miniqmt_event_loop_invalid_quote_value_v1"
+        assert invalid_value["value_type"] == "float"
+        assert invalid_value["value_repr"] == "nan"
 
 
 class _EventLoopFakeQmtClient:
@@ -562,6 +946,116 @@ def test_event_loop_valid_durable_batch_replay_preserves_request_result_identity
     assert len(qmt_client.place_order_calls) == initial_broker_calls
 
 
+def test_event_loop_restart_rebuilds_batch_from_recovered_child_and_trade_facts() -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+    children = client.repository.list_child_orders(runtime_id, active_only=False)
+    by_parent = {request.metadata["runtime_parent_intent_id"]: request for request in requests}
+    parent_intents = [
+        OrderIntent(
+            intent_id=parent_id,
+            package_id=request.package_id or "pkg_event_loop",
+            portfolio_id="portfolio_event_loop",
+            symbol=request.symbol,
+            side=OrderSide(request.side),
+            quantity=request.quantity,
+            order_type=OrderType.LIMIT,
+            limit_price=float(request.price),
+            target_trade_date=request.trade_date,
+            metadata=dict(request.metadata.get("parent_intent_metadata") or {}),
+        )
+        for parent_id, request in by_parent.items()
+    ]
+    qmt_client.get_orders = lambda cancelable_only=False: [  # noqa: ARG005
+        {
+            "broker_order_id": child.broker_order_id,
+            "stock_code": child.symbol,
+            "status": "FILLED",
+            "order_volume": child.quantity,
+            "traded_volume": child.quantity,
+        }
+        for child in children
+    ]
+    qmt_client.get_trades = lambda: [
+        {
+            "broker_order_id": child.broker_order_id,
+            "trade_id": f"trade_recovery_{child.parent_intent_id}",
+            "traded_volume": child.quantity,
+            "traded_price": child.price,
+            "trade_time": datetime(2026, 6, 22, 2, 5, tzinfo=UTC),
+        }
+        for child in children
+    ]
+
+    recovered = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=parent_intents,
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_durable_batch",
+        runtime_id=runtime_id,
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+    )
+
+    assert recovered.succeeded == len(children), recovered.to_dict()
+    assert recovered.failed == 0
+    assert recovered.batch_status == OrderBatchStatus.SUCCEEDED.value
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+    rebuilt = qmt_repo.get_order_batch(batch.batch_id)
+    assert rebuilt is not None
+    assert rebuilt.metadata["broker_called"] is True
+    assert rebuilt.metadata["triggered_child_order_count"] == len(children)
+    assert all(result["success"] for result in rebuilt.result_json["results"])
+    trade_events = [
+        event
+        for event in client.repository.list_events(runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+    assert len(trade_events) == len(children)
+
+
+def test_event_loop_parent_projection_keeps_prior_acceptance_when_later_child_rejects() -> None:
+    client, qmt_repo, _qmt_client, batch, requests, _initial_broker_calls = _durable_event_loop_batch_fixture()
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+    accepted_child = client.repository.list_child_orders(runtime_id, active_only=False)[0]
+    rejected_child = client.repository.upsert_child_order(
+        accepted_child.model_copy(
+            update={
+                "child_order_id": "child_later_rejected_783",
+                "status": MiniQMTChildOrderStatus.REJECTED,
+                "broker_order_id": None,
+                "submitted_at": None,
+                "metadata": {
+                    **dict(accepted_child.metadata),
+                    "gateway_message": "later Adaptive IS slice rejected",
+                },
+            }
+        )
+    )
+
+    client._sync_event_loop_triggered_children_to_batches(
+        runtime_id=runtime_id,
+        trade_date=TRADE_DATE,
+        new_children=(accepted_child, rejected_child),
+        managed_request_factory=None,
+        managed_order_service=None,
+        source="unit_test_recovery_projection",
+    )
+
+    rebuilt = qmt_repo.get_order_batch(batch.batch_id)
+    assert rebuilt is not None
+    result_by_parent = {result["intent_id"]: result for result in rebuilt.result_json["results"]}
+    parent_id = requests[0].metadata["runtime_parent_intent_id"]
+    assert result_by_parent[parent_id]["success"] is True
+    assert result_by_parent[parent_id]["qmt_order_id"] == accepted_child.broker_order_id
+    assert rebuilt.result_json["runtime_evidence"]["rejected_child_count"] == 1
+    assert qmt_repo.get_order_intent(parent_id).submit_status is IntentSubmitStatus.ACCEPTED
+
+
 @pytest.mark.parametrize(
     ("case", "reason_code", "field_path"),
     [
@@ -671,9 +1165,9 @@ def test_event_loop_durable_batch_replay_rejects_corruption_without_shift_or_pad
     elif case == "request_batch_identity":
         request_json["orders"][0]["metadata"]["qmt_batch_id"] = "qmtbatch_other"
     elif case == "duplicate_parent":
-        request_json["orders"][1]["metadata"]["runtime_parent_intent_id"] = request_json["orders"][0][
-            "metadata"
-        ]["runtime_parent_intent_id"]
+        request_json["orders"][1]["metadata"]["runtime_parent_intent_id"] = request_json["orders"][0]["metadata"][
+            "runtime_parent_intent_id"
+        ]
     elif case == "string_broker_called":
         raw_results[0]["broker_called"] = "true"
     elif case == "string_amount":
@@ -822,6 +1316,7 @@ def test_event_loop_first_tick_capture_is_sidecar_only_and_keeps_request_identit
     rewritten = qmt_repo.upsert_order_batch(replace(batch, metadata={"fresh_runtime_metadata": True}))
     assert rewritten.metadata["tca_observation_v1"] == sidecar
 
+
 def test_event_loop_tca_policy_missing_is_loud_but_does_not_block_b0() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
     client = MiniQMTExecutionRuntimeClient(
@@ -951,6 +1446,292 @@ def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient
     assert released.metadata["dependent_buy_reason_code"] == "MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE"
     assert released.metadata["dependent_buy_last_context"]["cash_source"] == "qmt_strategy_ledger.virtual_account.cash"
     assert qmt_repo.get_virtual_account("strategy_bug528").cash == Decimal("1000.000000")
+
+
+def test_recovery_replays_owned_buy_fill_once_into_trade_cash_lot_and_algo_lifecycle() -> None:
+    runtime, repo, _gateway, qmt_repo = _dependent_runtime(cash=Decimal("2000"))
+    algo = runtime.create_algo_instance(
+        parent_intent_id="buy_parent_recovery",
+        strategy_slot_id="slot_bug528",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=100,
+        algo_code="SNIPER_MINIQMT",
+    )
+    child = runtime.submit_child_order(
+        algo_instance_id=algo.algo_instance_id,
+        quantity=100,
+        price=12.0,
+        metadata={
+            "strategy_id": "strategy_bug528",
+            "strategy_name": "slot_bug528",
+            "order_remark": "buy_recovery_bug782",
+        },
+    )
+    frozen_account = replace(
+        qmt_repo.get_virtual_account("strategy_bug528"),
+        cash=Decimal("800"),
+        frozen_cash=Decimal("1200"),
+    )
+    qmt_repo.update_virtual_account(frozen_account)
+    qmt_repo.append_cash_entry(
+        CashLedgerEntry(
+            cash_id="cash_recovery_buy_freeze_782",
+            strategy_id="strategy_bug528",
+            entry_type=CashEntryType.FREEZE_BUY,
+            cash_delta=Decimal("-1200"),
+            cash_after=Decimal("800"),
+            frozen_delta=Decimal("1200"),
+            frozen_after=Decimal("1200"),
+            account_id="ag_bug528",
+            trade_date=TRADE_DATE,
+            intent_id=child.parent_intent_id,
+            symbol=child.symbol,
+            reason=CashEntryType.FREEZE_BUY.value,
+        )
+    )
+    recovery_gateway = FakeMiniQMTGateway(
+        orders=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "stock_code": child.symbol,
+                "status": "FILLED",
+                "order_volume": 100,
+                "traded_volume": 100,
+            }
+        ],
+        trades=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "trade_id": "trade_recovery_buy_782",
+                "traded_volume": 100,
+                "traded_price": 10.0,
+                "trade_time": datetime(2026, 6, 19, 2, 1, tzinfo=UTC),
+            }
+        ],
+    )
+    restarted = MiniQMTExecutionRuntime(
+        config=runtime.config,
+        repository=repo,
+        gateway=recovery_gateway,
+        strategy_ledger_repository=qmt_repo,
+        account_id="ag_bug528",
+    )
+
+    first = restarted.recover()
+    second = restarted.recover()
+
+    assert recovery_gateway.submitted_orders == []
+    assert first.active_algo_instances == []
+    assert second.active_algo_instances == []
+    stored_child = repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0]
+    assert stored_child.status is MiniQMTChildOrderStatus.FILLED
+    stored_algo = repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0]
+    assert stored_algo.status is MiniQMTAlgoInstanceStatus.COMPLETED
+    trade_events = [
+        event
+        for event in repo.list_events(runtime.config.runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+    assert len(trade_events) == 1
+    assert trade_events[0].payload["qmt_strategy_trade_id"] == "trade_recovery_buy_782"
+    assert trade_events[0].payload["runtime_trade_date"] == TRADE_DATE.isoformat()
+    assert trade_events[0].payload["broker_trade_date"] == "2026-06-19"
+    assert trade_events[0].payload["broker_trade_date_mismatch"] is True
+    assert trade_events[0].payload["broker_trade_time_utc"] == "2026-06-19T02:01:00+00:00"
+    account = qmt_repo.get_virtual_account("strategy_bug528")
+    assert account.cash == Decimal("1000.000000")
+    assert account.frozen_cash == Decimal("0.000000")
+    lots = qmt_repo.list_position_lots("strategy_bug528", symbol="000001.SZ")
+    assert [(lot.quantity, lot.available_quantity, lot.remaining_quantity) for lot in lots] == [(100, 0, 100)]
+    buy_fill_entries = [entry for entry in qmt_repo.list_cash_entries("strategy_bug528") if entry.trade_id]
+    assert len(buy_fill_entries) == 1
+    assert buy_fill_entries[0].cash_delta == Decimal("200.000000")
+    assert buy_fill_entries[0].metadata["reserved_fill_amount"] == "1200.000000"
+
+
+def test_recovery_replays_owned_sell_fill_once_into_cash_and_lot_close() -> None:
+    runtime, repo, _gateway, qmt_repo = _dependent_runtime(cash=Decimal("0"))
+    child = _submit_dependent_sell(runtime, qmt_repo=qmt_repo, quantity=100, price=Decimal("10"))
+    recovery_gateway = FakeMiniQMTGateway(
+        orders=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "stock_code": child.symbol,
+                "status": "FILLED",
+                "order_volume": 100,
+                "traded_volume": 100,
+            }
+        ],
+        trades=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "trade_id": "trade_recovery_sell_782",
+                "traded_volume": 100,
+                "traded_price": 10.0,
+                "trade_time": datetime(2026, 6, 22, 2, 2, tzinfo=UTC),
+            }
+        ],
+    )
+    restarted = MiniQMTExecutionRuntime(
+        config=runtime.config,
+        repository=repo,
+        gateway=recovery_gateway,
+        strategy_ledger_repository=qmt_repo,
+        account_id="ag_bug528",
+    )
+
+    restarted.recover()
+    restarted.recover()
+
+    assert qmt_repo.get_virtual_account("strategy_bug528").cash == Decimal("1000.000000")
+    [lot] = qmt_repo.list_position_lots("strategy_bug528", symbol="000001.SZ")
+    assert lot.remaining_quantity == 0
+    assert lot.available_quantity == 0
+    trade_events = [
+        event
+        for event in repo.list_events(runtime.config.runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+    assert len(trade_events) == 1
+    assert recovery_gateway.submitted_orders == []
+
+
+def test_recovery_combines_durable_and_partial_broker_trade_snapshots_without_double_settlement() -> None:
+    runtime, repo, _gateway, qmt_repo = _dependent_runtime(cash=Decimal("0"))
+    child = _submit_dependent_sell(runtime, qmt_repo=qmt_repo, quantity=100, price=Decimal("10"))
+    first_trade = {
+        "broker_order_id": child.broker_order_id,
+        "trade_id": "trade_recovery_sell_partial_1",
+        "traded_volume": 40,
+        "traded_price": 10.0,
+        "trade_time": "10:01:00",
+    }
+    second_trade = {
+        "broker_order_id": child.broker_order_id,
+        "trade_id": "trade_recovery_sell_partial_2",
+        "traded_volume": 60,
+        "traded_price": 10.0,
+        "trade_time": "10:02:00",
+    }
+    recovery_gateway = FakeMiniQMTGateway(
+        orders=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "stock_code": child.symbol,
+                "status": "FILLED",
+                "order_volume": 100,
+                "traded_volume": 100,
+            }
+        ],
+        trades=[first_trade, second_trade],
+    )
+    restarted = MiniQMTExecutionRuntime(
+        config=runtime.config,
+        repository=repo,
+        gateway=recovery_gateway,
+        strategy_ledger_repository=qmt_repo,
+        account_id="ag_bug528",
+    )
+
+    restarted.recover()
+    recovery_gateway._trades = [second_trade]
+    restarted.recover()
+
+    trade_events = [
+        event
+        for event in repo.list_events(runtime.config.runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+    assert [event.payload["qmt_strategy_trade_id"] for event in trade_events] == [
+        "trade_recovery_sell_partial_1",
+        "trade_recovery_sell_partial_2",
+    ]
+    assert [event.payload["cumulative_quantity"] for event in trade_events] == [40, 100]
+    assert qmt_repo.get_virtual_account("strategy_bug528").cash == Decimal("1000.000000")
+    [lot] = qmt_repo.list_position_lots("strategy_bug528", symbol="000001.SZ")
+    assert lot.remaining_quantity == 0
+
+
+def test_recovery_rejects_ambiguous_broker_trade_time_without_persisting_trade_fact() -> None:
+    runtime, repo, _gateway, qmt_repo = _dependent_runtime(cash=Decimal("0"))
+    child = _submit_dependent_sell(runtime, qmt_repo=qmt_repo, quantity=100, price=Decimal("10"))
+    recovery_gateway = FakeMiniQMTGateway(
+        trades=[
+            {
+                "broker_order_id": child.broker_order_id,
+                "trade_id": "trade_recovery_time_invalid_784",
+                "traded_volume": 100,
+                "traded_price": 10.0,
+                "trade_time": "178451103100",
+            }
+        ]
+    )
+    restarted = MiniQMTExecutionRuntime(
+        config=runtime.config,
+        repository=repo,
+        gateway=recovery_gateway,
+        strategy_ledger_repository=qmt_repo,
+        account_id="ag_bug528",
+    )
+
+    with pytest.raises(RuntimeError, match="MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID"):
+        restarted.recover()
+
+    assert not [
+        event
+        for event in repo.list_events(runtime.config.runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+
+
+def test_existing_trade_event_retries_missing_cash_lot_settlement_without_duplicate_event() -> None:
+    qmt_repo = _FailOnceSellSettlementRepository()
+    runtime, repo, _gateway, qmt_repo = _dependent_runtime(
+        cash=Decimal("0"),
+        qmt_repo=qmt_repo,
+    )
+    child = _submit_dependent_sell(runtime, qmt_repo=qmt_repo, quantity=100, price=Decimal("10"))
+    payload = {
+        "trade_id": "trade_retry_settlement_782",
+        "cumulative_quantity": 100,
+    }
+
+    with pytest.raises(RuntimeError, match="MINIQMT_DEPENDENT_BUY_SELL_PROCEEDS_SETTLEMENT_FAILED"):
+        runtime.record_trade_event(
+            broker_order_id=child.broker_order_id or "",
+            quantity=100,
+            price=10.0,
+            payload=payload,
+        )
+
+    assert qmt_repo.get_virtual_account("strategy_bug528").cash == Decimal("0")
+    [unsettled_lot] = qmt_repo.list_position_lots("strategy_bug528", symbol="000001.SZ")
+    assert unsettled_lot.remaining_quantity == 100
+    assert (
+        repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0].metadata.get("cumulative_quantity")
+        is None
+    )
+
+    replayed = runtime.record_trade_event(
+        broker_order_id=child.broker_order_id or "",
+        quantity=100,
+        price=10.0,
+        payload=payload,
+    )
+
+    trade_events = [
+        event
+        for event in repo.list_events(runtime.config.runtime_id, include_archived=True)
+        if event.event_type is MiniQMTExecutionEventType.TRADE_EVENT
+    ]
+    assert trade_events == [replayed]
+    assert qmt_repo.get_virtual_account("strategy_bug528").cash == Decimal("1000.000000")
+    [settled_lot] = qmt_repo.list_position_lots("strategy_bug528", symbol="000001.SZ")
+    assert settled_lot.remaining_quantity == 0
+    assert (
+        repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0].status is MiniQMTChildOrderStatus.FILLED
+    )
 
 
 def test_dependent_buy_inferred_from_same_runtime_sell_and_released_by_trade_event() -> None:
@@ -1096,6 +1877,7 @@ def test_dependent_buy_release_requires_qmt_strategy_ledger_authority_not_runtim
 def _dependent_runtime(
     *,
     cash: Decimal,
+    qmt_repo: InMemoryQmtStrategyLedgerRepository | None = None,
 ) -> tuple[
     MiniQMTExecutionRuntime,
     InMemoryMiniQMTExecutionRuntimeRepository,
@@ -1103,7 +1885,7 @@ def _dependent_runtime(
     InMemoryQmtStrategyLedgerRepository,
 ]:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
-    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo = qmt_repo or InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
         VirtualAccount(
             strategy_id="strategy_bug528",
@@ -1131,6 +1913,18 @@ def _dependent_runtime(
     )
     runtime.start()
     return runtime, repo, gateway, qmt_repo
+
+
+class _FailOnceSellSettlementRepository(InMemoryQmtStrategyLedgerRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_sell_settlement = True
+
+    def apply_sell_trade_fill_once(self, *args, **kwargs):
+        if self.fail_next_sell_settlement:
+            self.fail_next_sell_settlement = False
+            raise RuntimeError("injected sell settlement failure")
+        return super().apply_sell_trade_fill_once(*args, **kwargs)
 
 
 def _submit_dependent_sell(

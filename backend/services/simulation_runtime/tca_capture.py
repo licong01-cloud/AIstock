@@ -109,7 +109,9 @@ class ExecutionBenchmarkCapture(BaseModel):
     strategy_decision_quality: str | None = None
     capture_sha256: str
 
-    @field_validator("execution_plan_id", "execution_plan_hash", "parent_intent_id", "symbol", "benchmark_policy_version")
+    @field_validator(
+        "execution_plan_id", "execution_plan_hash", "parent_intent_id", "symbol", "benchmark_policy_version"
+    )
     @classmethod
     def _required_text(cls, value: str) -> str:
         normalized = str(value or "").strip()
@@ -760,11 +762,15 @@ def _quote_observation(
         aliases=("quote_timestamp", "market_time", "timestamp", "time", "stime", "data_time"),
         trade_date=trade_date,
     )
-    quote_received_at = _utc(received_at) if received_at is not None else _optional_time_alias(
-        raw,
-        field="quote_received_at",
-        aliases=("quote_received_at", "received_at", "local_received_at"),
-        trade_date=trade_date,
+    quote_received_at = (
+        _utc(received_at)
+        if received_at is not None
+        else _optional_time_alias(
+            raw,
+            field="quote_received_at",
+            aliases=("quote_received_at", "received_at", "local_received_at"),
+            trade_date=trade_date,
+        )
     )
     return {
         "bid_price_1": bid,
@@ -804,19 +810,54 @@ def _parse_quote_time(
             raw_value=value,
         )
     normalized = text.replace("Z", "+00:00")
+    if normalized.isdecimal():
+        try:
+            if len(normalized) == 10:
+                return datetime.fromtimestamp(int(normalized), tz=UTC)
+            if len(normalized) == 13:
+                return datetime.fromtimestamp(int(normalized) / 1000, tz=UTC)
+            if len(normalized) == 14:
+                return (
+                    datetime.strptime(normalized, "%Y%m%d%H%M%S").replace(tzinfo=TCA_SCHEDULE_TIMEZONE).astimezone(UTC)
+                )
+            if 15 <= len(normalized) <= 20:
+                return (
+                    datetime.strptime(normalized, "%Y%m%d%H%M%S%f")
+                    .replace(tzinfo=TCA_SCHEDULE_TIMEZONE)
+                    .astimezone(UTC)
+                )
+            if len(normalized) == 6:
+                parsed_time = datetime.strptime(normalized, "%H%M%S").time()
+                return datetime.combine(
+                    trade_date,
+                    parsed_time,
+                    tzinfo=TCA_SCHEDULE_TIMEZONE,
+                ).astimezone(UTC)
+        except (OSError, OverflowError, ValueError) as exc:
+            raise TcaCaptureDataError(
+                reason_code,
+                f"{field} must be a supported timestamp",
+                field=field,
+                raw_value=value,
+            ) from exc
+        raise TcaCaptureDataError(
+            reason_code,
+            f"{field} must be a supported timestamp",
+            field=field,
+            raw_value=value,
+        )
     try:
         if "T" in normalized or "-" in normalized:
             return _utc(datetime.fromisoformat(normalized))
     except ValueError:
         pass
-    for fmt in ("%Y%m%d%H%M%S", "%Y%m%d%H%M%S%f"):
+    for fmt in ("%H:%M:%S",):
         try:
-            return datetime.strptime(normalized, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-    for fmt in ("%H%M%S", "%H:%M:%S"):
-        try:
-            return datetime.combine(trade_date, datetime.strptime(normalized, fmt).time(), tzinfo=UTC)
+            return datetime.combine(
+                trade_date,
+                datetime.strptime(normalized, fmt).time(),
+                tzinfo=TCA_SCHEDULE_TIMEZONE,
+            ).astimezone(UTC)
         except ValueError:
             continue
     raise TcaCaptureDataError(
@@ -919,8 +960,7 @@ def _optional_time_alias(
 ) -> datetime | None:
     raw_aliases = _provided_aliases(payload, aliases=aliases)
     parsed = {
-        alias: _parse_quote_time(value, trade_date, field=f"{field}.{alias}")
-        for alias, value in raw_aliases.items()
+        alias: _parse_quote_time(value, trade_date, field=f"{field}.{alias}") for alias, value in raw_aliases.items()
     }
     values = [value for value in parsed.values() if value is not None]
     if not values:
@@ -1044,10 +1084,7 @@ def _bounded_error_value(value: Any) -> Any:
 def _bounded_error_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(context, Mapping):
         return {}
-    return {
-        str(key)[:64]: _bounded_error_value(value)
-        for key, value in list(context.items())[:20]
-    }
+    return {str(key)[:64]: _bounded_error_value(value) for key, value in list(context.items())[:20]}
 
 
 def _optional_text(value: Any) -> str | None:

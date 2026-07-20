@@ -1,47 +1,52 @@
 {
-  "actual": "Run simrun_7c12b6ac98582e1a is FAILED_RETRYABLE with cause Unable to serialize unknown type mappingproxy; no paper_v2 order/fill/event/cash facts or durable receipt/outbox were committed, while submitted_intents=248 is projected.",
+  "actual": "Six nonconforming SELL children were broker-rejected; two increment-aligned children filled. Partial odd-lot sells such as 1 of a 100-share position and 83 of a 500-share position are currently treated as legal by the child helper.",
   "allowed_write_scope": [
-    "backend/services/paper_trading_v2/market_data.py",
-    "backend/services/simulation_runtime/scheduler.py",
-    "backend/services/simulation_runtime/platform_observability.py",
-    "backend/tests/paper_trading_v2/test_market_data.py",
-    "backend/tests/paper_trading_v2/test_localsim_backend.py",
-    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/execution_algos/board_lot.py",
+    "backend/execution_algos/vnpy_style/base.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_twap.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
-    "tests/aistock_validation/bugs/20260720_BUG-779-p0-localsim-immutable-market-snapshot-mappingproxy-prevents-atomic-econo.json",
+    "tests/aistock_validation/bugs/20260720_BUG-781-p0-miniqmt-adaptive-is-child-sell-quantities-violate-board-lot-and-resid.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-779",
+  "bug_id": "BUG-781",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-20T02:58:33.795665Z",
-  "description": "Run simrun_7c12b6ac98582e1a is FAILED_RETRYABLE with cause Unable to serialize unknown type mappingproxy; no paper_v2 order/fill/event/cash facts or durable receipt/outbox were committed, while submitted_intents=248 is projected.",
+  "created_at": "2026-07-20T03:00:36.146311Z",
+  "description": "Six nonconforming SELL children were broker-rejected; two increment-aligned children filled. Partial odd-lot sells such as 1 of a 100-share position and 83 of a 500-share position are currently treated as legal by the child helper.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260720-9478962d3fbc",
-      "timestamp": "2026-07-20T02:58:33.795662Z"
+      "note": "Promoted from IC-20260720-cc06bcc53ef5",
+      "timestamp": "2026-07-20T03:00:36.146307Z"
     }
   ],
   "evidence_uris": [
-    "runtime:simrun_7c12b6ac98582e1a",
-    "reason:LOCAL_SIM_PERSISTENCE_FAILED"
+    "related:BUG-531",
+    "related:BUG-717",
+    "broker_orders:1090520226-1090520234"
   ],
-  "expected": "Immutable cadence snapshots serialize through one canonical JSON boundary; economic facts, receipt, state and outbox commit atomically or expose a typed terminal/retryable failure with zero false submitted projection. Historical portfolio/run integrity diagnostics must expose unreconstructible or lifecycle-divergent state without rewriting data.",
-  "first_seen_at": "2026-07-20T02:58:33.795665Z",
+  "expected": "Every MiniQMT child quantity is legal for its symbol and side. Main-board and ChiNext child quantities use 100-share increments except an exact whole-position residual sell; STAR follows min 200 then increment 1. Parent totals, child totals and broker can_sell remain reconstructible, and an illegal slice fails before broker call with typed context.",
+  "first_seen_at": "2026-07-20T03:00:36.146311Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 2488,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2488",
-  "last_seen_at": "2026-07-20T02:58:33.795665Z",
+  "github_issue_number": 2490,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2490",
+  "last_seen_at": "2026-07-20T03:00:36.146311Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -49,7 +54,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "GET /api/v1/simulation-runtime/platform-diagnostics and inspect simrun_7c12b6ac98582e1a; run the LocalSIM persistence direct test with an immutable LocalSimMarketSnapshotV1 containing mappingproxy values.",
+  "reproduce_command": "Run vn.py-style execution direct tests for main-board SELL parent positions with requested child 1/83/94 and 628/14096; assert only exact whole residual sells pass and all normal children are increment aligned before gateway submit.",
   "required_verification": [
     "l0",
     "miniqmt_execution_runtime_l2",
@@ -63,22 +68,24 @@
   "suspected_modules": [
     "simulation_runtime"
   ],
-  "title": "[P0][LocalSIM] immutable market snapshot mappingproxy prevents atomic economic commit",
+  "title": "[P0][MiniQMT] Adaptive IS child SELL quantities violate board-lot and residual rules",
   "trigger_condition": {
-    "fingerprint": "9478962d3fbc6fca8be8eef7",
-    "source_event_id": "FE-20260720-9478962d3fbc"
+    "fingerprint": "cc06bcc53ef518758ce09306",
+    "source_event_id": "FE-20260720-cc06bcc53ef5"
   },
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
         "simulation_runtime",
+        "simulation_core",
         "paper_v2",
-        "simulation_core"
+        "miniqmt_execution_runtime"
       ],
       "plans": [
+        "simulation_core_l2",
         "paper_v2_backend",
-        "simulation_core_l2"
+        "miniqmt_execution_runtime_l2"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -133,12 +140,14 @@
       "deferred_nightly_verification": {
         "modules": [
           "simulation_runtime",
+          "simulation_core",
           "paper_v2",
-          "simulation_core"
+          "miniqmt_execution_runtime"
         ],
         "plans": [
+          "simulation_core_l2",
           "paper_v2_backend",
-          "simulation_core_l2"
+          "miniqmt_execution_runtime_l2"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"

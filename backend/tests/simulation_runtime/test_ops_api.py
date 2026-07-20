@@ -10,6 +10,10 @@ from fastapi.testclient import TestClient
 
 from backend.routers import simulation_runtime
 from backend.services.miniqmt_execution_runtime.models import (
+    MiniQMTChildOrder,
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionEvent,
+    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeConfig,
     MiniQMTExecutionRuntimeRecord,
 )
@@ -1463,6 +1467,177 @@ def test_platform_diagnostics_supports_exact_runtime_query_before_daily_run_exis
     miniqmt_backend = next(layer for layer in backend_layers if layer["identity"]["backend"] == "minqmt_sim")
     assert miniqmt_backend["facts"]["runtime_id"] == "runtime_platform_diagnostics_only"
     assert miniqmt_backend["facts"]["quote_health_status"] == "DEGRADED"
+    assert payload["runtime_projection_consistency"]["status"] == "NOT_APPLICABLE"
+
+
+def test_platform_diagnostics_degrades_stale_miniqmt_projection_and_auto_clears(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, source_run_id, _plan_id = repo_with_plan
+    source_run = repo.get_simulation_daily_run(source_run_id)
+    release = repo.get_strategy_runtime_release(source_run.release_id)
+    binding = StrategyRuntimeReleaseService(repository=repo).create_binding(
+        strategy_id="strategy_platform_projection_stale",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_platform_projection_stale",
+        strategy_slot_id="slot_platform_projection_stale",
+        strategy_name="PlatformProjectionStale",
+        order_remark_prefix="platform-projection-stale",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
+        approval_state=SimulationBindingApprovalState.SIM_PASSED,
+        created_by="unit-test",
+        created_reason="platform diagnostics runtime projection consistency",
+    )
+    runtime_id = "runtime_platform_projection_stale"
+    batch_id = "batch_platform_projection_stale"
+    pending_result = {
+        "success": False,
+        "intent_id": "parent_platform_projection_stale",
+        "qmt_order_id": None,
+        "broker_message": "event_loop algo dispatched and running; child order pending tick trigger",
+        "broker_called": False,
+        "preflight": {"allowed": True},
+    }
+    run = source_run.model_copy(
+        update={
+            "run_id": "simrun_platform_projection_stale",
+            "strategy_id": binding.strategy_id,
+            "binding_id": binding.binding_id,
+            "binding_hash": binding.binding_hash,
+            "account_group_id": binding.account_group_id,
+            "strategy_slot_id": binding.strategy_slot_id,
+            "broker_backend": SimulationBrokerBackend.MINIQMT_SIM,
+            "execution_plan_id": None,
+            "execution_plan_hash": None,
+            "status": SimulationDailyRunStatus.INTRADAY_RUNNING,
+            "run_payload_json": {
+                "last_stage": "INTRADAY_RUNNING",
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": 0,
+                "pending_intents": 1,
+                "qmt_batch_result": {
+                    "batch_id": batch_id,
+                    "batch_status": "SUBMITTING",
+                    "results": [pending_result],
+                    "total": 1,
+                    "success": True,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "pending": 1,
+                    "runtime_evidence": {
+                        "runtime_id": runtime_id,
+                        "child_order_ids": [],
+                        "submitted_child_count": 0,
+                        "rejected_child_count": 0,
+                        "trade_event_count": 0,
+                    },
+                },
+            },
+        }
+    )
+    repo.save_simulation_daily_run(run)
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id=runtime_id,
+                account_group_id=binding.account_group_id or "ag_platform_projection_stale",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="b" * 64,
+            ).model_dump()
+        )
+    )
+    child = runtime_repository.upsert_child_order(
+        MiniQMTChildOrder(
+            child_order_id="child_platform_projection_stale",
+            runtime_id=runtime_id,
+            algo_instance_id="algo_platform_projection_stale",
+            parent_intent_id="parent_platform_projection_stale",
+            strategy_slot_id=binding.strategy_slot_id or "slot_platform_projection_stale",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            status=MiniQMTChildOrderStatus.SUBMITTED,
+            broker_order_id="100001",
+        )
+    )
+    runtime_repository.append_event(
+        MiniQMTExecutionEvent(
+            event_id="event_platform_projection_stale",
+            runtime_id=runtime_id,
+            sequence=1,
+            event_type=MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+            source="gateway",
+            payload={
+                "child_order_id": child.child_order_id,
+                "broker_order_id": child.broker_order_id,
+                "accepted": True,
+            },
+        )
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=datetime.now(UTC)),  # type: ignore[arg-type]
+    )
+
+    stale = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id=runtime_id,
+        runtime_repository=runtime_repository,
+    )
+
+    assert stale["runtime_projection_consistency"]["status"] == "STALE"
+    durability = stale["layers"]["durability"][0]
+    assert durability["status"] == "DEGRADED"
+    assert durability["reason_code"] == "MINIQMT_RUNTIME_PROJECTION_STALE"
+    assert stale["overall_health"]["status"] != "HEALTHY"
+    assert any(alert["alert_type"] == "MINIQMT_RUNTIME_PROJECTION_STALE" for alert in stale["alerts"]["items"])
+
+    accepted_result = {
+        **pending_result,
+        "success": True,
+        "qmt_order_id": child.broker_order_id,
+        "broker_message": "accepted",
+        "broker_called": True,
+    }
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            "broker_called": True,
+            "submitted_intents": 1,
+            "pending_intents": 0,
+            "qmt_batch_result": {
+                "batch_id": batch_id,
+                "batch_status": "SUCCEEDED",
+                "results": [accepted_result],
+                "total": 1,
+                "success": True,
+                "succeeded": 1,
+                "failed": 0,
+                "pending": 0,
+                "runtime_evidence": {
+                    "runtime_id": runtime_id,
+                    "child_order_ids": [child.child_order_id],
+                    "submitted_child_count": 1,
+                    "rejected_child_count": 0,
+                    "trade_event_count": 0,
+                },
+            },
+        },
+    )
+    consistent = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id=runtime_id,
+        runtime_repository=runtime_repository,
+    )
+    assert consistent["runtime_projection_consistency"]["status"] == "CONSISTENT"
+    assert consistent["layers"]["durability"][0]["reason_code"] == "MINIQMT_DURABLE_BATCH_VALID"
+    assert not any(alert["alert_type"] == "MINIQMT_RUNTIME_PROJECTION_STALE" for alert in consistent["alerts"]["items"])
 
 
 def test_platform_diagnostics_emits_scheduler_tick_lag_metric_and_auto_clear_alert() -> None:
@@ -1552,6 +1727,45 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
     assert metrics["simulation_localsim_active_algo_count"] == 1
     assert metrics["simulation_localsim_partial_count"] == 1
     assert metrics["simulation_localsim_causal_bar_lag_seconds"] == 300.0
+
+
+def test_platform_diagnostics_exposes_unreconstructible_localsim_submitted_projection(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "FAILED_RETRYABLE",
+            "broker_called": False,
+            "submitted_intents": 248,
+            "failed_intents": 0,
+            "pending_intents": 0,
+            "submit_failure": {
+                "stage": "LOCAL_SIM_PERSISTENCE",
+                "reason_code": "LOCALSIM_ECONOMIC_PERSISTENCE_UNEXPECTED",
+                "message": "Unable to serialize unknown type: mappingproxy",
+            },
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    payload = service.platform_diagnostics(run_id=run_id)
+
+    durability = payload["layers"]["durability"][0]
+    assert durability["status"] == "BLOCKED"
+    assert durability["reason_code"] == "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+    assert durability["facts"]["projected_submitted_intents"] == 248
+    assert durability["facts"]["durable_facts_reconstructible"] is False
+    assert any(
+        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
+        and alert["reason_code"] == "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+        for alert in payload["alerts"]["items"]
+    )
 
 
 def test_platform_diagnostics_projects_localsim_outbox_backlog_terminal_failure_and_recovery(
@@ -1685,6 +1899,10 @@ def test_platform_diagnostics_projects_valid_miniqmt_pending_batch_and_rejects_c
                     "runtime_evidence": {
                         "runtime_id": "runtime_platform_valid_miniqmt",
                         "source": "simulation_runtime_event_loop_tick_driver",
+                        "submitted_child_count": 0,
+                        "rejected_child_count": 0,
+                        "pending_algo_count": 1,
+                        "trade_event_count": 0,
                     },
                 },
             },
