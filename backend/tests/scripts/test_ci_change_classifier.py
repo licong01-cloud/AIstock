@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -177,6 +177,24 @@ def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path
     assert payload["classification"] == "targeted_ci_required"
     assert payload["backend_required"] is True
     assert payload["backend_sessions"] == ["paper_v2_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+            "backend/services/qmt_strategy_ledger/order_service.py",
+            "backend/services/qmt_strategy_ledger/repository.py",
+            "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+            "backend/tests/qmt_strategy_ledger/test_repository.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["paper_v2_backend", "miniqmt_execution_runtime_l2"]
     assert payload["unmapped_code_files"] == []
 
 
@@ -510,11 +528,11 @@ def test_workflow_client_instruction_cleanup_change_skips_backend_matrix(tmp_pat
         "backend/tests/scripts/test_ci_change_classifier.py",
         ".codex/skills/aistock-docs-handoff/SKILL.md",
         ".codex/skills/aistock-task-router/SKILL.md",
-            ".codex/skills/fix-aistock-issue/SKILL.md",
-            ".claude/commands/aistock-docs-handoff.md",
-            ".claude/commands/aistock-task-router.md",
-            ".claude/commands/fix-aistock-issue.md",
-            "docs/codex_project_memory.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+        "docs/codex_project_memory.md",
     ]
     _write_bug(
         bug,
@@ -623,11 +641,12 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["frontend_required"].endswith(
         "steps.classify.outputs.frontend_required }}"
     )
-    assert jobs["classify-changes"]["outputs"]["go_required"].endswith(
-        "steps.classify.outputs.go_required }}"
-    )
+    assert jobs["classify-changes"]["outputs"]["go_required"].endswith("steps.classify.outputs.go_required }}")
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
-    assert jobs["backend-tests"]["strategy"]["matrix"]["session"] == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
+    assert (
+        jobs["backend-tests"]["strategy"]["matrix"]["session"]
+        == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
+    )
     assert jobs["workflow-validation-tests"]["if"] == (
         "needs.classify-changes.outputs.workflow_validation_required == 'true'"
     )
@@ -706,7 +725,7 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
     l0_step = next(step for step in nox_steps if step.get("name") == "nox -s l0 -- changed files")
     assert "l0_changed_files.txt" in l0_step["run"]
-    assert "python -m nox -s l0 -- \"${changed_files[@]}\"" in l0_step["run"]
+    assert 'python -m nox -s l0 -- "${changed_files[@]}"' in l0_step["run"]
 
     changed_files_step = next(
         step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
@@ -728,7 +747,9 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert "Semgrep AIstock guardrails (report-only phase)" not in names
     assert not any("Legacy" in name for name in names)
 
-    registry_step = next(step for step in steps if isinstance(step, dict) and step.get("name") == "Build registry-sync quality record")
+    registry_step = next(
+        step for step in steps if isinstance(step, dict) and step.get("name") == "Build registry-sync quality record"
+    )
     assert registry_step["if"] == "steps.quality_lane.outputs.registry_sync == '1'"
     assert "scripts/bug_registry_metadata_check.py" in registry_step["run"]
     assert "--close-sync-only" in registry_step["run"]
@@ -765,14 +786,16 @@ def test_codeql_selects_only_changed_languages() -> None:
     detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
     assert "scripts/ci_change_classifier.py" in detect_step["run"]
     assert "close_sync_metadata_only" in detect_step["run"]
-    assert '*.py) PYTHON_CHANGED=1' in detect_step["run"]
-    assert '*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1' in detect_step["run"]
+    assert "*.py) PYTHON_CHANGED=1" in detect_step["run"]
+    assert "*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1" in detect_step["run"]
     assert "LANGUAGES='[]'" in detect_step["run"]
 
     assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
     assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
     assert not any(step.get("name") == "Fast-lane CodeQL no-op" for step in analyze_steps)
-    gated_steps = [step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}]
+    gated_steps = [
+        step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}
+    ]
     assert gated_steps
     assert all("if" not in step for step in gated_steps)
 
@@ -789,9 +812,7 @@ def test_semgrep_uses_registry_sync_fast_lane() -> None:
     assert "close_sync_metadata_only" in detect_step["run"]
 
     semgrep_steps = [
-        step
-        for step in steps
-        if step.get("name") in {"Set up Python 3.12", "Install Semgrep", "Run Semgrep"}
+        step for step in steps if step.get("name") in {"Set up Python 3.12", "Install Semgrep", "Run Semgrep"}
     ]
     assert semgrep_steps
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in semgrep_steps)
@@ -865,16 +886,21 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
     github_out = tmp_path / "github_output.txt"
     _write_bug(bug, status="closed")
 
-    assert classifier.main([
-        "--repo-root",
-        str(tmp_path),
-        "--changed-file",
-        "tests/aistock_validation/bugs/20260601_BUG-191-example.json",
-        "--output-json",
-        str(out),
-        "--github-output",
-        str(github_out),
-    ]) == 0
+    assert (
+        classifier.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--changed-file",
+                "tests/aistock_validation/bugs/20260601_BUG-191-example.json",
+                "--output-json",
+                str(out),
+                "--github-output",
+                str(github_out),
+            ]
+        )
+        == 0
+    )
 
     assert json.loads(out.read_text(encoding="utf-8"))["backend_required"] is False
     assert "backend_required=false" in github_out.read_text(encoding="utf-8")
@@ -888,16 +914,21 @@ def test_cli_blocks_unmapped_code_and_writes_diagnostics(tmp_path: Path, capsys)
     out = tmp_path / "summary.json"
     github_out = tmp_path / "github_output.txt"
 
-    assert classifier.main([
-        "--repo-root",
-        str(tmp_path),
-        "--changed-file",
-        "backend/infra/qmt_client.py",
-        "--output-json",
-        str(out),
-        "--github-output",
-        str(github_out),
-    ]) == 2
+    assert (
+        classifier.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--changed-file",
+                "backend/infra/qmt_client.py",
+                "--output-json",
+                str(out),
+                "--github-output",
+                str(github_out),
+            ]
+        )
+        == 2
+    )
 
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["workflow_gate"] == "blocked"

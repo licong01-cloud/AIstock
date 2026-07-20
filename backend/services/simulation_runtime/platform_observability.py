@@ -411,6 +411,7 @@ class SimulationPlatformObservability:
         runs: Sequence[SimulationDailyRun],
         query: Mapping[str, Any],
         quote_diagnostics: Mapping[str, Any] | None = None,
+        runtime_projection_consistency: Mapping[str, Any] | None = None,
         generated_at: datetime | None = None,
     ) -> dict[str, Any]:
         now = generated_at or datetime.now(UTC)
@@ -427,6 +428,11 @@ class SimulationPlatformObservability:
         market_phase = self._market_phase(exact_scheduler)
         binding_layers = [self._binding_layer(run) for run in exact_runs]
         durability_layers = [self._durability_layer(run, observed_at=now) for run in exact_runs]
+        if runtime_projection_consistency is not None:
+            durability_layers = self._apply_runtime_projection_consistency(
+                durability_layers=durability_layers,
+                consistency=runtime_projection_consistency,
+            )
         business_layers = [self._business_layer(run) for run in exact_runs]
         backend_layers = self._backend_layers(
             runs=exact_runs,
@@ -474,6 +480,9 @@ class SimulationPlatformObservability:
             "schema_version": PLATFORM_DIAGNOSTICS_SCHEMA_VERSION,
             "generated_at": now.astimezone(UTC).isoformat(),
             "query": dict(query),
+            "runtime_projection_consistency": (
+                dict(runtime_projection_consistency) if runtime_projection_consistency is not None else None
+            ),
             "overall_health": overall,
             "layers": {
                 "process": process_layer,
@@ -535,6 +544,89 @@ class SimulationPlatformObservability:
                 "execution_gate": False,
             },
         }
+
+    @staticmethod
+    def _apply_runtime_projection_consistency(
+        *,
+        durability_layers: Sequence[Mapping[str, Any]],
+        consistency: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        status = _required_text(consistency, "status", field_prefix="runtime_projection_consistency")
+        if status not in {"CONSISTENT", "STALE", "NOT_APPLICABLE"}:
+            raise _invalid(
+                "MiniQMT runtime projection consistency status is unsupported",
+                field="runtime_projection_consistency.status",
+                value=status,
+            )
+        reason_code = _required_text(
+            consistency,
+            "reason_code",
+            field_prefix="runtime_projection_consistency",
+        )
+        runtime_id = _required_text(
+            consistency,
+            "runtime_id",
+            field_prefix="runtime_projection_consistency",
+        )
+        run_id = _optional_text(
+            consistency,
+            "run_id",
+            field_prefix="runtime_projection_consistency",
+        )
+        mismatches = consistency.get("mismatches")
+        if not isinstance(mismatches, list) or any(not isinstance(item, Mapping) for item in mismatches):
+            raise _invalid(
+                "MiniQMT runtime projection mismatches must be a list of mappings",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        if status == "STALE" and not mismatches:
+            raise _invalid(
+                "stale MiniQMT runtime projection requires explicit mismatches",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        if status != "STALE" and mismatches:
+            raise _invalid(
+                "non-stale MiniQMT runtime projection cannot carry mismatches",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        updated: list[dict[str, Any]] = []
+        matched = False
+        for raw_layer in durability_layers:
+            layer = dict(raw_layer)
+            identity = layer.get("identity") if isinstance(layer.get("identity"), Mapping) else {}
+            if run_id is not None and identity.get("run_id") == run_id and identity.get("runtime_id") == runtime_id:
+                matched = True
+                facts = dict(layer.get("facts") or {})
+                facts.update(
+                    {
+                        "runtime_projection_status": status,
+                        "runtime_projection_reason_code": reason_code,
+                        "runtime_projection_mismatch_count": len(mismatches),
+                        "runtime_projection_actual": dict(consistency.get("actual") or {}),
+                        "runtime_projection_projected": (
+                            dict(consistency.get("projected") or {})
+                            if consistency.get("projected") is not None
+                            else None
+                        ),
+                    }
+                )
+                layer["facts"] = facts
+                layer["source"] = f"{layer['source']}+miniqmt_runtime_repository"
+                if status == "STALE" and layer["status"] != "BLOCKED":
+                    layer["status"] = "DEGRADED"
+                    layer["reason_code"] = "MINIQMT_RUNTIME_PROJECTION_STALE"
+            updated.append(layer)
+        if status != "NOT_APPLICABLE" and not matched:
+            raise _invalid(
+                "MiniQMT runtime projection consistency has no matching durability layer",
+                field="runtime_projection_consistency.run_id",
+                value=run_id,
+                runtime_id=runtime_id,
+            )
+        return updated
 
     @staticmethod
     def _market_phase(scheduler_status: Mapping[str, Any]) -> str:
@@ -944,11 +1036,22 @@ class SimulationPlatformObservability:
             else:
                 outbox_status = None
                 outbox_attempt_count = 0
+            projected_submitted = _optional_nonnegative_int(
+                payload,
+                "submitted_intents",
+                field_prefix="run_payload_json",
+            )
             outbox_age_seconds = max(
                 0.0,
                 (observed_at.astimezone(UTC) - run.updated_at.astimezone(UTC)).total_seconds(),
             )
-            if terminal_failure is not None or readback_terminal is not None:
+            if run.status in BLOCKING_RUN_STATUSES and persistence is None and int(projected_submitted or 0) > 0:
+                status = "BLOCKED"
+                reason_code = "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+            elif run.status in BLOCKING_RUN_STATUSES and persistence is None:
+                status = "BLOCKED"
+                reason_code = "LOCAL_SIM_DURABILITY_COMMIT_FAILED"
+            elif terminal_failure is not None or readback_terminal is not None:
                 status = "BLOCKED"
                 reason_code = (
                     _reason_code_from_mapping(terminal_failure)
@@ -993,6 +1096,12 @@ class SimulationPlatformObservability:
                     "outbox_backlog_alert_seconds": LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS,
                     "terminal_failure_present": terminal_failure is not None or readback_terminal is not None,
                     "readback_failure_present": readback_failure is not None,
+                    "projected_submitted_intents": projected_submitted,
+                    "durable_facts_reconstructible": not (
+                        run.status in BLOCKING_RUN_STATUSES
+                        and persistence is None
+                        and int(projected_submitted or 0) > 0
+                    ),
                 },
                 "execution_gate": False,
             }
@@ -1068,6 +1177,70 @@ class SimulationPlatformObservability:
                     **batch_counts,
                 },
             )
+        runtime_evidence = _optional_mapping(
+            batch,
+            "runtime_evidence",
+            field_prefix="run_payload_json.qmt_batch_result",
+        )
+        submitted_child_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "submitted_child_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        rejected_child_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "rejected_child_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        pending_algo_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "pending_algo_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        trade_event_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "trade_event_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        triggered_child_order_count = _optional_nonnegative_int(
+            batch,
+            "triggered_child_order_count",
+            field_prefix="run_payload_json.qmt_batch_result",
+        )
+        if (
+            submitted_child_count is not None
+            and triggered_child_order_count is not None
+            and submitted_child_count != triggered_child_order_count
+        ):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT submitted child counters conflict across durable carriers",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_RUNTIME_CHILD_COUNT_CONFLICT",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "run_id": run.run_id,
+                    "batch_id": batch_id,
+                    "runtime_evidence_submitted_child_count": submitted_child_count,
+                    "triggered_child_order_count": triggered_child_order_count,
+                },
+            )
+        if submitted_child_count is None:
+            submitted_child_count = triggered_child_order_count
         status = (
             "BLOCKED"
             if batch_status in {OrderBatchStatus.FAILED.value, OrderBatchStatus.PREFLIGHT_FAILED.value}
@@ -1087,6 +1260,10 @@ class SimulationPlatformObservability:
                 "total": total,
                 "success": success,
                 **batch_counts,
+                "submitted_child_count": submitted_child_count,
+                "rejected_child_count": rejected_child_count,
+                "pending_algo_count": pending_algo_count,
+                "trade_event_count": trade_event_count,
             },
             "execution_gate": False,
         }
@@ -1418,6 +1595,20 @@ class SimulationPlatformObservability:
                         identity=layer.get("identity"),
                     )
                 )
+            facts = layer.get("facts") if isinstance(layer.get("facts"), Mapping) else {}
+            if facts.get("runtime_projection_status") == "STALE":
+                alerts.append(
+                    _alert(
+                        alert_type="MINIQMT_RUNTIME_PROJECTION_STALE",
+                        status="CRITICAL" if layer["status"] == "BLOCKED" else "WARNING",
+                        reason_code="MINIQMT_RUNTIME_PROJECTION_STALE",
+                        source=str(layer["source"]),
+                        identity=layer.get("identity"),
+                        context={
+                            "mismatch_count": facts.get("runtime_projection_mismatch_count"),
+                        },
+                    )
+                )
         for layer in business_layers:
             if layer["status"] in {"BLOCKED", "DEGRADED"}:
                 alerts.append(
@@ -1648,13 +1839,13 @@ class SimulationPlatformObservability:
             if layer["facts"]["backend"] == SimulationBrokerBackend.LOCAL_SIM.value
         )
         miniqmt_pending = sum(
-            int(layer["facts"].get("pending_intents") or 0)
-            for layer in business_layers
+            int(layer["facts"].get("pending_algo_count") or 0)
+            for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
         )
         miniqmt_submitted = sum(
-            int(layer["facts"].get("submitted_intents") or 0)
-            for layer in business_layers
+            int(layer["facts"].get("submitted_child_count") or 0)
+            for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
         )
         reconcile_mismatch = sum(
@@ -1684,6 +1875,11 @@ class SimulationPlatformObservability:
             for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.LOCAL_SIM.value
         )
+        miniqmt_projection_stale = sum(
+            layer["facts"].get("runtime_projection_status") == "STALE"
+            for layer in durability_layers
+            if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
+        )
         aggregate_specs = (
             ("simulation_localsim_active_algo_count", local_active, SimulationBrokerBackend.LOCAL_SIM.value),
             ("simulation_localsim_partial_count", local_partial, SimulationBrokerBackend.LOCAL_SIM.value),
@@ -1697,6 +1893,11 @@ class SimulationPlatformObservability:
             ("simulation_localsim_outbox_backlog_count", outbox_backlog, SimulationBrokerBackend.LOCAL_SIM.value),
             ("simulation_miniqmt_pending_algo_count", miniqmt_pending, SimulationBrokerBackend.MINIQMT_SIM.value),
             ("simulation_miniqmt_submitted_child_count", miniqmt_submitted, SimulationBrokerBackend.MINIQMT_SIM.value),
+            (
+                "simulation_miniqmt_projection_stale_count",
+                miniqmt_projection_stale,
+                SimulationBrokerBackend.MINIQMT_SIM.value,
+            ),
             (
                 "simulation_miniqmt_reconcile_mismatch_count",
                 reconcile_mismatch,

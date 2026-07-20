@@ -749,8 +749,10 @@ class QmtStrategyLedgerRepository:
         *,
         submitted_at: Any | None = None,
         updated_at: Any | None = None,
+        metadata_patch: dict[str, Any] | None = None,
     ) -> OrderIntentRecord:
         updated_at = updated_at or datetime.now(UTC)
+        patch = dict(metadata_patch or {})
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -758,10 +760,17 @@ class QmtStrategyLedgerRepository:
                     UPDATE qmt_strategy.order_intent
                     SET submit_status = %s,
                         submitted_at = COALESCE(%s, submitted_at),
-                        updated_at = %s
+                        updated_at = %s,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
                     WHERE intent_id = %s
                     """,
-                    (_enum_value(status), submitted_at, updated_at, intent_id),
+                    (
+                        _enum_value(status),
+                        submitted_at,
+                        updated_at,
+                        psycopg2.extras.Json(patch),
+                        intent_id,
+                    ),
                 )
                 if cur.rowcount == 0:
                     raise DataUnavailableError("qmt strategy order intent does not exist", context={"intent_id": intent_id})
@@ -1983,6 +1992,7 @@ class InMemoryQmtStrategyLedgerRepository:
         *,
         submitted_at: Any | None = None,
         updated_at: Any | None = None,
+        metadata_patch: dict[str, Any] | None = None,
     ) -> OrderIntentRecord:
         intent = self.get_order_intent(intent_id)
         updated = replace(
@@ -1990,6 +2000,7 @@ class InMemoryQmtStrategyLedgerRepository:
             submit_status=status,
             submitted_at=submitted_at or intent.submitted_at,
             updated_at=updated_at or intent.updated_at,
+            metadata={**dict(intent.metadata), **dict(metadata_patch or {})},
         )
         self._order_intents[intent_id] = updated
         return updated

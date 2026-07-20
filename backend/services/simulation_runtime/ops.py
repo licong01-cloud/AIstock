@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any, Mapping
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
+from backend.services.miniqmt_execution_runtime.models import (
+    MiniQMTChildOrder,
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionEvent,
+    MiniQMTExecutionEventType,
+)
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan, SimulationBrokerBackend, SimulationDailyRun, SimulationDailyRunStatus
@@ -130,6 +138,315 @@ def _run_projection_bool(
             },
         )
     return value
+
+
+def _projection_identity_digest(values: list[str]) -> str:
+    canonical = json.dumps(sorted(values), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _projection_optional_nonnegative_int(value: Any, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeConfigInvalidError(
+            f"{field} must be a non-negative integer when present",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "field": field,
+                "value": value,
+            },
+        )
+    return value
+
+
+def _projection_optional_identity_list(value: Any, *, field: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise RuntimeConfigInvalidError(
+            f"{field} must be a list of non-empty identities when present",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "field": field,
+                "value_type": type(value).__name__,
+            },
+        )
+    normalized = [item.strip() for item in value]
+    if len(set(normalized)) != len(normalized):
+        raise RuntimeConfigInvalidError(
+            f"{field} contains duplicate identities",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_IDENTITY_CONFLICT",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "field": field,
+            },
+        )
+    return sorted(normalized)
+
+
+def _miniqmt_runtime_projection_consistency(
+    *,
+    run: SimulationDailyRun | None,
+    runtime_repository: MiniQMTExecutionRuntimeRepository,
+    runtime_id: str,
+) -> dict[str, Any]:
+    runtime = runtime_repository.get_runtime(runtime_id)
+    if runtime is None:
+        raise DataUnavailableError(
+            "MiniQMT runtime projection consistency cannot find the runtime",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_NOT_FOUND",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "runtime_id": runtime_id,
+            },
+        )
+    children = runtime_repository.list_child_orders(runtime_id, active_only=False)
+    events = runtime_repository.list_events(runtime_id, include_archived=True)
+    actual_child_ids = sorted(child.child_order_id for child in children)
+    submitted_statuses = {
+        MiniQMTChildOrderStatus.SUBMITTED,
+        MiniQMTChildOrderStatus.PARTIALLY_FILLED,
+        MiniQMTChildOrderStatus.FILLED,
+        MiniQMTChildOrderStatus.CANCELLED,
+    }
+    actual_submitted = sum(child.status in submitted_statuses for child in children)
+    actual_rejected = sum(child.status == MiniQMTChildOrderStatus.REJECTED for child in children)
+    actual_trade_events = sum(event.event_type == MiniQMTExecutionEventType.TRADE_EVENT for event in events)
+    children_by_id = {child.child_order_id: child for child in children}
+    actual_broker_called = any(
+        _runtime_event_broker_called(event, children_by_id=children_by_id)
+        for event in events
+        if event.event_type
+        in {
+            MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+            MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+            MiniQMTExecutionEventType.TRADE_EVENT,
+        }
+    )
+    actual = {
+        "broker_called": actual_broker_called,
+        "child_order_count": len(actual_child_ids),
+        "child_order_ids_sha256": _projection_identity_digest(actual_child_ids),
+        "submitted_child_count": actual_submitted,
+        "rejected_child_count": actual_rejected,
+        "trade_event_count": actual_trade_events,
+    }
+    if run is None:
+        return {
+            "schema_version": "miniqmt_runtime_projection_consistency_v1",
+            "status": "NOT_APPLICABLE",
+            "reason_code": "MINIQMT_RUNTIME_HAS_NO_SIMULATION_DAILY_RUN",
+            "runtime_id": runtime_id,
+            "run_id": None,
+            "projected": None,
+            "actual": actual,
+            "mismatches": [],
+            "read_only": True,
+            "execution_gate": False,
+            "repair_attempted": False,
+        }
+
+    payload = run.run_payload_json
+    raw_batch = payload.get("qmt_batch_result")
+    if raw_batch is not None and not isinstance(raw_batch, Mapping):
+        raise RuntimeConfigInvalidError(
+            "MiniQMT daily-run batch projection must be a mapping",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "run_id": run.run_id,
+                "runtime_id": runtime_id,
+                "field": "run_payload_json.qmt_batch_result",
+                "value_type": type(raw_batch).__name__,
+            },
+        )
+    batch = dict(raw_batch or {})
+    raw_evidence = batch.get("runtime_evidence")
+    if raw_evidence is not None and not isinstance(raw_evidence, Mapping):
+        raise RuntimeConfigInvalidError(
+            "MiniQMT daily-run runtime evidence must be a mapping",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "run_id": run.run_id,
+                "runtime_id": runtime_id,
+                "field": "run_payload_json.qmt_batch_result.runtime_evidence",
+                "value_type": type(raw_evidence).__name__,
+            },
+        )
+    evidence = dict(raw_evidence or {})
+    projected_child_ids = _projection_optional_identity_list(
+        evidence.get("child_order_ids"),
+        field="run_payload_json.qmt_batch_result.runtime_evidence.child_order_ids",
+    )
+    projected_submitted = _projection_optional_nonnegative_int(
+        evidence.get("submitted_child_count"),
+        field="run_payload_json.qmt_batch_result.runtime_evidence.submitted_child_count",
+    )
+    projected_rejected = _projection_optional_nonnegative_int(
+        evidence.get("rejected_child_count"),
+        field="run_payload_json.qmt_batch_result.runtime_evidence.rejected_child_count",
+    )
+    projected_trade_events = _projection_optional_nonnegative_int(
+        evidence.get("trade_event_count"),
+        field="run_payload_json.qmt_batch_result.runtime_evidence.trade_event_count",
+    )
+    raw_top_broker_called = payload.get("broker_called")
+    top_broker_called = None
+    if raw_top_broker_called is not None:
+        if not isinstance(raw_top_broker_called, bool):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT daily-run broker_called projection must be boolean",
+                context={
+                    "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                    "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                    "run_id": run.run_id,
+                    "runtime_id": runtime_id,
+                    "field": "run_payload_json.broker_called",
+                    "value_type": type(raw_top_broker_called).__name__,
+                },
+            )
+        top_broker_called = raw_top_broker_called
+    raw_results = batch.get("results")
+    if raw_results is not None and (
+        not isinstance(raw_results, list) or any(not isinstance(item, Mapping) for item in raw_results)
+    ):
+        raise RuntimeConfigInvalidError(
+            "MiniQMT daily-run batch results must be a list of mappings",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "run_id": run.run_id,
+                "runtime_id": runtime_id,
+                "field": "run_payload_json.qmt_batch_result.results",
+            },
+        )
+    result_broker_called: bool | None = None
+    if isinstance(raw_results, list):
+        broker_flags: list[bool] = []
+        for index, item in enumerate(raw_results):
+            value = item.get("broker_called")
+            if not isinstance(value, bool):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT daily-run result broker_called projection must be boolean",
+                    context={
+                        "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                        "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                        "run_id": run.run_id,
+                        "runtime_id": runtime_id,
+                        "field": f"run_payload_json.qmt_batch_result.results[{index}].broker_called",
+                    },
+                )
+            broker_flags.append(value)
+        result_broker_called = any(broker_flags)
+    projected_broker_called = (
+        bool(top_broker_called or result_broker_called)
+        if top_broker_called is not None or result_broker_called is not None
+        else None
+    )
+    projected = {
+        "broker_called": projected_broker_called,
+        "top_level_broker_called": top_broker_called,
+        "batch_results_broker_called": result_broker_called,
+        "child_order_count": len(projected_child_ids) if projected_child_ids is not None else None,
+        "child_order_ids_sha256": (
+            _projection_identity_digest(projected_child_ids) if projected_child_ids is not None else None
+        ),
+        "submitted_child_count": projected_submitted,
+        "rejected_child_count": projected_rejected,
+        "trade_event_count": projected_trade_events,
+    }
+    mismatches: list[dict[str, Any]] = []
+    if top_broker_called is not None and result_broker_called is not None and top_broker_called != result_broker_called:
+        mismatches.append(
+            {
+                "field": "broker_called_carriers",
+                "projected": {
+                    "run_payload_json.broker_called": top_broker_called,
+                    "qmt_batch_result.results": result_broker_called,
+                },
+                "actual": actual_broker_called,
+            }
+        )
+    for field in (
+        "broker_called",
+        "child_order_count",
+        "child_order_ids_sha256",
+        "submitted_child_count",
+        "rejected_child_count",
+        "trade_event_count",
+    ):
+        projected_value = projected[field]
+        actual_value = actual[field]
+        if projected_value is None:
+            if actual_value not in (False, 0, _projection_identity_digest([])):
+                mismatches.append({"field": field, "projected": None, "actual": actual_value})
+        elif projected_value != actual_value:
+            mismatches.append({"field": field, "projected": projected_value, "actual": actual_value})
+    status = "STALE" if mismatches else "CONSISTENT"
+    return {
+        "schema_version": "miniqmt_runtime_projection_consistency_v1",
+        "status": status,
+        "reason_code": ("MINIQMT_RUNTIME_PROJECTION_STALE" if mismatches else "MINIQMT_RUNTIME_PROJECTION_CONSISTENT"),
+        "runtime_id": runtime_id,
+        "run_id": run.run_id,
+        "projected": projected,
+        "actual": actual,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "read_only": True,
+        "execution_gate": False,
+        "repair_attempted": False,
+    }
+
+
+def _runtime_event_broker_called(
+    event: MiniQMTExecutionEvent,
+    *,
+    children_by_id: Mapping[str, MiniQMTChildOrder],
+) -> bool:
+    explicit = event.payload.get("broker_called")
+    if isinstance(explicit, bool):
+        return explicit
+    if explicit is not None:
+        raise RuntimeConfigInvalidError(
+            "MiniQMT runtime event broker_called fact must be boolean",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "event_id": event.event_id,
+                "field": "event.payload.broker_called",
+                "value_type": type(explicit).__name__,
+            },
+        )
+    if event.event_type in {
+        MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+        MiniQMTExecutionEventType.TRADE_EVENT,
+    }:
+        return True
+    child_id = str(event.payload.get("child_order_id") or "").strip()
+    child = children_by_id.get(child_id)
+    gateway_ack = child.metadata.get("gateway_ack") if child is not None else None
+    if isinstance(gateway_ack, Mapping):
+        ack_value = gateway_ack.get("broker_called")
+        if isinstance(ack_value, bool):
+            return ack_value
+        if gateway_ack.get("error_code") == "QMT_PLACE_ORDER_UNAVAILABLE":
+            return False
+        if gateway_ack.get("gateway") == "qmt_client_miniqmt" and gateway_ack.get("exception_type"):
+            return True
+    raise RuntimeConfigInvalidError(
+        "MiniQMT rejected child event is missing exact broker_called truth",
+        context={
+            "reason_code": "MINIQMT_RUNTIME_BROKER_CALLED_FACT_MISSING",
+            "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+            "event_id": event.event_id,
+            "child_order_id": child_id or None,
+        },
+    )
 
 
 def _runtime_controller_health(registry: dict[str, Any], runtime_id: str) -> dict[str, Any] | None:
@@ -687,6 +1004,7 @@ class SimulationRuntimeOpsService:
         observed_match_count = len(runs)
         selected_runs = runs[:limit]
         quote_diagnostics = None
+        runtime_projection_consistency = None
         if runtime_id is not None:
             if runtime_repository is None:
                 raise RuntimeConfigInvalidError(
@@ -702,6 +1020,21 @@ class SimulationRuntimeOpsService:
                 runtime_id=runtime_id,
                 limit=min(limit, 100),
                 scheduler_status_snapshot=scheduler_status,
+            )
+            if len(selected_runs) > 1:
+                raise RuntimeConfigInvalidError(
+                    "exact MiniQMT runtime diagnostics matched multiple simulation daily runs",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_RUNTIME_IDENTITY_CONFLICT",
+                        "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                        "runtime_id": runtime_id,
+                        "run_ids": [run.run_id for run in selected_runs],
+                    },
+                )
+            runtime_projection_consistency = _miniqmt_runtime_projection_consistency(
+                run=selected_runs[0] if selected_runs else None,
+                runtime_repository=runtime_repository,
+                runtime_id=runtime_id,
             )
         effective_trade_date = trade_date or scan_trade_date or (selected_runs[0].trade_date if selected_runs else None)
         query = {
@@ -723,6 +1056,7 @@ class SimulationRuntimeOpsService:
             runs=selected_runs,
             query=query,
             quote_diagnostics=quote_diagnostics,
+            runtime_projection_consistency=runtime_projection_consistency,
             generated_at=generated_at,
         )
 

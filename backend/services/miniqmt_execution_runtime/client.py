@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Callable, Mapping
 
 from backend.execution_algos.board_lot import board_lot_rule
@@ -111,6 +112,7 @@ class MiniQMTRuntimeEvidence:
     child_order_ids: tuple[str, ...]
     submitted_child_count: int
     rejected_child_count: int
+    trade_event_count: int
     source: str
     active_algo_count: int = 0
     completed_algo_count: int = 0
@@ -127,6 +129,7 @@ class MiniQMTRuntimeEvidence:
             "child_order_ids": list(self.child_order_ids),
             "submitted_child_count": self.submitted_child_count,
             "rejected_child_count": self.rejected_child_count,
+            "trade_event_count": self.trade_event_count,
             "active_algo_count": self.active_algo_count,
             "completed_algo_count": self.completed_algo_count,
             "pending_algo_count": self.pending_algo_count,
@@ -192,8 +195,12 @@ class MiniQMTRuntimeManagedBatchSubmitResult:
             "succeeded": self.succeeded,
             "failed": self.failed,
             "pending": pending,
-            "triggered_child_order_count": self.succeeded,
+            "triggered_child_order_count": (
+                self.runtime_evidence.submitted_child_count if self.runtime_evidence is not None else self.succeeded
+            ),
+            "triggered_parent_intent_count": self.succeeded,
             "pending_child_trigger_count": pending,
+            "pending_parent_intent_count": pending,
             "results": [result.to_dict() for result in self.results],
             "compensation_required": self.compensation_required,
             "compensation_hint": self.compensation_hint,
@@ -685,6 +692,16 @@ class MiniQMTExecutionRuntimeClient:
         )
         runtime.start()
         runtime.recover()
+        recovered_children = tuple(self.repository.list_child_orders(runtime.config.runtime_id, active_only=False))
+        if recovered_children:
+            self._sync_event_loop_triggered_children_to_batches(
+                runtime_id=runtime.config.runtime_id,
+                trade_date=trade_date,
+                new_children=recovered_children,
+                managed_request_factory=managed_request_factory,
+                managed_order_service=managed_order_service,
+                source=f"{source}:recovery_projection",
+            )
         controller: B0QuoteV2Controller | None = None
         if quote_revision is not None:
             assert self.b0_quote_v2_controller_factory is not None
@@ -695,8 +712,7 @@ class MiniQMTExecutionRuntimeClient:
                     for parent_id, assignment in controller.assignments.items()
                 }
                 incoming_assignments = {
-                    parent_id: assignment.canonical_payload()
-                    for parent_id, assignment in quote_assignments.items()
+                    parent_id: assignment.canonical_payload() for parent_id, assignment in quote_assignments.items()
                 }
                 if existing_assignments != incoming_assignments:
                     active_algos = self.repository.list_algo_instances(
@@ -747,6 +763,7 @@ class MiniQMTExecutionRuntimeClient:
             child_context_factory=child_context_factory,
             managed_request_factory=managed_request_factory,
             managed_order_service=managed_order_service,
+            b0_quote_v2_active=controller is not None,
             source=source,
         )
         batch_id = preflight_result.batch_id
@@ -780,23 +797,23 @@ class MiniQMTExecutionRuntimeClient:
                 preflight=result.preflight,
                 source=source,
             )
-            tick_payload = (
-                _required_event_loop_tick_payload(
-                    intent=intent,
-                    quote_provider=quote_provider,
-                    qmt_client=qmt_client,
-                    source=source,
-                )
-                if controller is None
-                else {}
-            )
+            tick_payload = _event_loop_tick_payload_from_request(request) if controller is None else None
             child_context = (
                 child_context_factory(intent, index)
                 if child_context_factory is not None
                 else _event_loop_child_metadata(intent=intent, trade_date=trade_date, source=source, index=index)
             )
+            child_context = _event_loop_child_context_with_preflight(
+                intent=intent,
+                child_context=child_context,
+                preflight=result.preflight,
+            )
             child_context = {**dict(child_context), "qmt_batch_id": batch_id}
-            runtime.create_vnpy_algo_instance(
+            min_volume, volume_increment = _event_loop_vnpy_volume_override(
+                intent=intent,
+                preflight=result.preflight,
+            )
+            algo_instance = runtime.create_vnpy_algo_instance(
                 parent_intent_id=intent.intent_id,
                 strategy_slot_id=strategy_slot_id,
                 symbol=intent.symbol,
@@ -806,15 +823,15 @@ class MiniQMTExecutionRuntimeClient:
                 limit_price=(
                     _limit_price_for_event_loop(
                         intent=intent,
-                        tick_payload=tick_payload,
+                        tick_payload=tick_payload or {},
                         algo_config=dict(policy_json.get("algo_config") or {}),
                     )
-                    if controller is None
+                    if controller is None and tick_payload is not None
                     else _b0_quote_v2_initial_limit_price(intent)
                 ),
                 algo_config=dict(policy_json.get("algo_config") or {}),
-                min_volume=1 if intent.side == OrderSide.SELL else None,
-                volume_increment=1 if intent.side == OrderSide.SELL else None,
+                min_volume=min_volume,
+                volume_increment=volume_increment,
                 metadata={
                     "source": source,
                     "runtime_child_context": child_context,
@@ -824,19 +841,29 @@ class MiniQMTExecutionRuntimeClient:
                     "qmt_batch_id": batch_id,
                     "quote_source": (
                         tick_payload.get("source") or tick_payload.get("quote_source")
-                        if controller is None
+                        if controller is None and tick_payload is not None
                         else "B0_QUOTE_V2_NORMALIZED"
+                        if controller is not None
+                        else MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE
                     ),
                     "marketable_limit_reference_price": (
                         _execution_reference_price(intent=intent, tick_payload=tick_payload)
-                        if controller is None
+                        if controller is None and tick_payload is not None
                         else _b0_quote_v2_initial_limit_price(intent)
                     ),
+                    "quote_wait": dict(request.metadata.get("event_loop_quote_wait") or {}),
                     "marketable_limit_policy": dict(policy_json.get("algo_config") or {}),
                 },
             )
-            if controller is None:
+            if controller is None and tick_payload is not None:
                 gateway.on_tick(tick_payload)
+            elif controller is None:
+                _persist_event_loop_quote_waiting(
+                    runtime=runtime,
+                    instance=algo_instance,
+                    request=request,
+                    source=source,
+                )
         if controller is not None:
             controller.lifecycle_tick()
         runtime_evidence = self._evidence(runtime, source=source)
@@ -1174,15 +1201,39 @@ class MiniQMTExecutionRuntimeClient:
     ) -> dict[str, dict[str, Any]]:
         if not new_children:
             return {}
+        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
+        if not callable(get_batch):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver requires get_order_batch for batch sync",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_REPOSITORY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                    "runtime_id": runtime_id,
+                },
+            )
         results_by_batch_parent: dict[str, dict[str, ManagedOrderSubmitResult]] = {}
         for index, child in enumerate(new_children, start=1):
             request_index = _event_loop_child_request_index(child, fallback=index)
-            request = (
-                managed_request_factory(child, request_index)
-                if managed_request_factory is not None
-                else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
-            )
-            batch_id = str(child.metadata.get("qmt_batch_id") or request.metadata.get("qmt_batch_id") or "").strip()
+            batch_id = str(child.metadata.get("qmt_batch_id") or "").strip()
+            request: ManagedOrderRequest | None = None
+            if batch_id:
+                stored_batch = get_batch(batch_id)
+                if stored_batch is not None:
+                    request = next(
+                        (
+                            item
+                            for item in _event_loop_requests_from_batch(stored_batch)
+                            if _parent_id_from_request(item) == child.parent_intent_id
+                        ),
+                        None,
+                    )
+            if request is None:
+                request = (
+                    managed_request_factory(child, request_index)
+                    if managed_request_factory is not None
+                    else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
+                )
+            batch_id = str(batch_id or request.metadata.get("qmt_batch_id") or "").strip()
             if not batch_id:
                 raise BrokerSubmitError(
                     "MiniQMT event_loop tick driver cannot sync child without qmt_batch_id",
@@ -1211,19 +1262,16 @@ class MiniQMTExecutionRuntimeClient:
                 repository=self.strategy_ledger_repository,
                 source=source,
             )
-            results_by_batch_parent.setdefault(batch_id, {})[child.parent_intent_id] = result
+            parent_results = results_by_batch_parent.setdefault(batch_id, {})
+            existing_result = parent_results.get(child.parent_intent_id)
+            if existing_result is None or result.success or not existing_result.success:
+                # One parent can emit multiple Adaptive IS child slices.  A
+                # later rejected slice must not erase an earlier accepted
+                # broker side effect from the parent-level batch projection;
+                # all child rejections remain exact in runtime_evidence.
+                parent_results[child.parent_intent_id] = result
 
         updated: dict[str, dict[str, Any]] = {}
-        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
-        if not callable(get_batch):
-            raise BrokerSubmitError(
-                "MiniQMT event_loop tick driver requires get_order_batch for batch sync",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_REPOSITORY_MISSING",
-                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
-                    "runtime_id": runtime_id,
-                },
-            )
         for batch_id, parent_results in results_by_batch_parent.items():
             batch = get_batch(batch_id)
             if batch is None:
@@ -1327,6 +1375,7 @@ class MiniQMTExecutionRuntimeClient:
         child_context_factory: Callable[[OrderIntent, int], dict[str, Any]] | None,
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
         managed_order_service: QmtManagedOrderService | None,
+        b0_quote_v2_active: bool,
         source: str,
     ) -> MiniQMTEventLoopPreflightResult:
         parent_by_id = {intent.intent_id: intent for intent in parent_intents}
@@ -1353,6 +1402,7 @@ class MiniQMTExecutionRuntimeClient:
                         )
                     ),
                     managed_request_factory=managed_request_factory,
+                    b0_quote_v2_active=b0_quote_v2_active,
                     source=source,
                     index=index,
                     arrival_capture_context_by_parent=arrival_capture_context_by_parent,
@@ -1394,8 +1444,15 @@ class MiniQMTExecutionRuntimeClient:
         )
         if hard_failed:
             results = tuple(
-                ManagedOrderSubmitResult(False, None, None, "event_loop preflight failed", preflight, False)
-                for preflight in preflights
+                ManagedOrderSubmitResult(
+                    False,
+                    _parent_id_from_request(request) or None,
+                    None,
+                    "event_loop preflight failed",
+                    preflight,
+                    False,
+                )
+                for request, preflight in zip(requests_with_batch, preflights, strict=True)
             )
             self._upsert_event_loop_batch_record(
                 batch_id=batch_id,
@@ -1444,6 +1501,18 @@ class MiniQMTExecutionRuntimeClient:
                         None,
                         None,
                         "buy skipped by funds-only capacity allocator",
+                        preflight,
+                        False,
+                    )
+                )
+                continue
+            if not preflight.allowed:
+                results_list.append(
+                    ManagedOrderSubmitResult(
+                        False,
+                        parent_id or None,
+                        None,
+                        "event_loop parent preflight failed",
                         preflight,
                         False,
                     )
@@ -1499,27 +1568,47 @@ class MiniQMTExecutionRuntimeClient:
         qmt_client: Any,
         child_context: dict[str, Any],
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
+        b0_quote_v2_active: bool,
         source: str,
         index: int,
         arrival_capture_context_by_parent: dict[str, dict[str, Any]],
     ) -> ManagedOrderRequest:
         arrival_time = datetime.now(UTC)
-        tick_payload = _required_event_loop_tick_payload(
-            intent=intent,
-            quote_provider=quote_provider,
-            qmt_client=qmt_client,
-            source=source,
-        )
-        arrival_capture_context_by_parent[intent.intent_id] = {
-            "arrival_time": arrival_time,
-            "arrival_quote_received_at": datetime.now(UTC),
-            "tick_payload": dict(tick_payload),
-        }
+        tick_payload: dict[str, Any] | None = None
+        quote_wait: dict[str, Any] | None = None
+        if not b0_quote_v2_active:
+            try:
+                tick_payload = _required_event_loop_tick_payload(
+                    intent=intent,
+                    quote_provider=quote_provider,
+                    qmt_client=qmt_client,
+                    source=source,
+                )
+            except BrokerSubmitError as exc:
+                if not _is_event_loop_symbol_quote_wait_error(exc):
+                    raise
+                quote_wait = _event_loop_quote_wait_payload(intent=intent, error=exc, source=source)
+        if tick_payload is not None:
+            arrival_capture_context_by_parent[intent.intent_id] = {
+                "arrival_time": arrival_time,
+                "arrival_quote_received_at": datetime.now(UTC),
+                "tick_payload": dict(tick_payload),
+            }
+        elif quote_wait is not None:
+            arrival_capture_context_by_parent[intent.intent_id] = {
+                "arrival_time": arrival_time,
+                "arrival_quote_received_at": None,
+                "quote_wait": dict(quote_wait),
+            }
         policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
-        price = _limit_price_for_event_loop(
-            intent=intent,
-            tick_payload=tick_payload,
-            algo_config=dict(policy_json.get("algo_config") or {}) if isinstance(policy_json, dict) else {},
+        price = (
+            _limit_price_for_event_loop(
+                intent=intent,
+                tick_payload=tick_payload,
+                algo_config=dict(policy_json.get("algo_config") or {}) if isinstance(policy_json, dict) else {},
+            )
+            if tick_payload is not None
+            else _b0_quote_v2_initial_limit_price(intent)
         )
         child_metadata = {
             **dict(child_context),
@@ -1531,7 +1620,24 @@ class MiniQMTExecutionRuntimeClient:
             "execution_policy_id": policy_context.get("validated_execution_policy_id"),
             "execution_policy_sha256": policy_context.get("policy_sha256"),
             "event_loop_preflight": True,
-            "broker_quote_source": tick_payload.get("source") or tick_payload.get("quote_source"),
+            "broker_quote_source": (
+                tick_payload.get("source") or tick_payload.get("quote_source")
+                if tick_payload is not None
+                else MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE
+            ),
+            "event_loop_preflight_price_source": (
+                "broker_quote" if tick_payload is not None else "immutable_parent_limit_reference"
+            ),
+            **(
+                {
+                    "event_loop_tick_payload": _event_loop_tick_snapshot(tick_payload),
+                    "event_loop_tick_payload_sha256": _short_hash(_event_loop_tick_snapshot(tick_payload)),
+                }
+                if tick_payload is not None
+                else {}
+            ),
+            **({"event_loop_quote_wait": quote_wait} if quote_wait is not None else {}),
+            **({"event_loop_quote_control": "B0_QUOTE_V2"} if b0_quote_v2_active else {}),
         }
         synthetic_child = MiniQMTChildOrder(
             runtime_id=runtime.config.runtime_id,
@@ -1615,11 +1721,13 @@ class MiniQMTExecutionRuntimeClient:
         list_intents = getattr(repository, "list_order_intents_by_batch", None)
         if not callable(get_batch) or not callable(list_intents):
             return None
+        found_by_remark = False
         batch = get_batch(batch_id)
         if batch is None:
             batch = self._event_loop_find_dependent_buy_batch_by_logical_key(requests)
         if batch is None:
             batch = self._event_loop_find_owned_failed_batch_by_remarks(requests)
+            found_by_remark = batch is not None
         if batch is None:
             return None
         stored_requests = _event_loop_requests_from_batch(batch)
@@ -1635,6 +1743,22 @@ class MiniQMTExecutionRuntimeClient:
                     "durable_request_count": len(stored_requests),
                 },
             )
+        if found_by_remark:
+            mismatches = _event_loop_owned_retry_request_mismatches(
+                requests=requests,
+                stored_requests=stored_requests,
+            )
+            if mismatches:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop order remarks resolve to a different durable business request",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_REQUEST_MISMATCH",
+                        "stage": "MINIQMT_EVENT_LOOP_EXISTING_BATCH_REPLAY",
+                        "qmt_batch_id": batch.batch_id,
+                        "mismatches": mismatches,
+                        "broker_called": any(result.broker_called for result in stored_results),
+                    },
+                )
         if not isinstance(batch.metadata, dict):
             raise BrokerSubmitError(
                 "MiniQMT event_loop durable batch metadata must be a mapping",
@@ -1734,10 +1858,7 @@ class MiniQMTExecutionRuntimeClient:
                     "broker_called": False,
                 },
             )
-        runtime_ids = {
-            str(request.metadata.get("runtime_id") or "").strip()
-            for request in stored_requests
-        }
+        runtime_ids = {str(request.metadata.get("runtime_id") or "").strip() for request in stored_requests}
         if len(runtime_ids) != 1 or not next(iter(runtime_ids)):
             raise BrokerSubmitError(
                 "MiniQMT event_loop owned retry requires one exact runtime identity",
@@ -1848,9 +1969,7 @@ class MiniQMTExecutionRuntimeClient:
             retry_of_batch_id=batch_id,
             requests=tuple(stored_requests),
             results=tuple(results),
-            request_by_parent_intent_id={
-                _parent_id_from_request(request): request for request in stored_requests
-            },
+            request_by_parent_intent_id={_parent_id_from_request(request): request for request in stored_requests},
             submit_parent_intent_ids=frozenset(submit_parent_ids),
         )
 
@@ -1875,7 +1994,7 @@ class MiniQMTExecutionRuntimeClient:
         if len(batch_ids) != 1:
             return None
         batch = get_batch(next(iter(batch_ids)))
-        return batch if batch is not None and batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED else None
+        return batch
 
     def _event_loop_find_dependent_buy_batch_by_logical_key(
         self,
@@ -2143,16 +2262,18 @@ class MiniQMTExecutionRuntimeClient:
             raise BrokerSubmitError("MiniQMT runtime evidence is missing", context={"runtime_id": runtime_id})
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
         algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        events = tuple(self.repository.list_events(runtime_id, include_archived=True))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime_record.account_group_id,
             trade_date=runtime_record.trade_date,
-            event_count=len(self.repository.list_events(runtime_id)),
+            event_count=len(events),
             algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            trade_event_count=sum(1 for item in events if item.event_type == MiniQMTExecutionEventType.TRADE_EVENT),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
             completed_algo_count=sum(
                 1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
@@ -2196,16 +2317,18 @@ class MiniQMTExecutionRuntimeClient:
         runtime_id = runtime.config.runtime_id
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
         algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        events = tuple(self.repository.list_events(runtime_id, include_archived=True))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime.config.account_group_id,
             trade_date=runtime.config.trade_date,
-            event_count=len(self.repository.list_events(runtime_id)),
+            event_count=len(events),
             algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            trade_event_count=sum(1 for item in events if item.event_type == MiniQMTExecutionEventType.TRADE_EVENT),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
             completed_algo_count=sum(
                 1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
@@ -2300,7 +2423,12 @@ class _PreviewOnlyRuntimeGateway:
         return []
 
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:  # noqa: ARG002
-        return MiniQMTGatewayOrderAck(False, None, "preview gateway cannot submit child orders")
+        return MiniQMTGatewayOrderAck(
+            False,
+            None,
+            "preview gateway cannot submit child orders",
+            {"gateway": "preview_only_runtime_gateway", "broker_called": False},
+        )
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:  # noqa: ARG002
         return MiniQMTGatewayCancelAck(False, order.broker_order_id, "preview gateway cannot cancel child orders")
@@ -2408,6 +2536,237 @@ def _event_loop_child_metadata(*, intent: OrderIntent, trade_date: date, source:
         "parent_intent_metadata": dict(intent.metadata or {}),
         "event_loop_submit": True,
     }
+
+
+def _event_loop_child_context_with_preflight(
+    *,
+    intent: OrderIntent,
+    child_context: dict[str, Any],
+    preflight: OrderPreflightResult,
+) -> dict[str, Any]:
+    context = dict(child_context or {})
+    parent_metadata = dict(context.get("parent_intent_metadata") or intent.metadata or {})
+    if intent.side == OrderSide.SELL and preflight.strategy_available_sell_quantity is not None:
+        raw_planned_available = parent_metadata.get("current_available_quantity")
+        if raw_planned_available is not None:
+            parent_metadata["planned_current_available_quantity"] = raw_planned_available
+        parent_metadata["current_available_quantity"] = int(preflight.strategy_available_sell_quantity)
+        parent_metadata["current_available_quantity_source"] = "qmt_strategy_ledger_preflight"
+    context["parent_intent_metadata"] = parent_metadata
+    return context
+
+
+def _event_loop_vnpy_volume_override(
+    *,
+    intent: OrderIntent,
+    preflight: OrderPreflightResult,
+) -> tuple[int | None, int | None]:
+    if intent.side != OrderSide.SELL:
+        return None, None
+    available_quantity = preflight.strategy_available_sell_quantity
+    if available_quantity is None or int(available_quantity) != int(intent.quantity):
+        return None, None
+    min_volume, volume_increment = _board_lot_for_runtime(intent.symbol)
+    quantity = int(intent.quantity)
+    if quantity >= min_volume and quantity % volume_increment == 0:
+        return None, None
+    # The complete effective position, including its odd-lot tail, must be sent
+    # as one child.  The runtime's final child validator independently checks
+    # the same authoritative available quantity before the gateway is called.
+    return 1, 1
+
+
+_EVENT_LOOP_SYMBOL_QUOTE_WAIT_REASONS = frozenset(
+    {
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_FETCH_FAILED",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_PRICE_INVALID",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_EMPTY",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+    }
+)
+
+
+def _is_event_loop_symbol_quote_wait_error(error: BrokerSubmitError) -> bool:
+    reason_code = str((getattr(error, "context", None) or {}).get("reason_code") or "").strip()
+    return reason_code in _EVENT_LOOP_SYMBOL_QUOTE_WAIT_REASONS
+
+
+def _event_loop_quote_wait_payload(
+    *,
+    intent: OrderIntent,
+    error: BrokerSubmitError,
+    source: str,
+) -> dict[str, Any]:
+    context = _event_loop_json_value(
+        dict(getattr(error, "context", None) or {}),
+        field_path="error_context",
+    )
+    payload = {
+        "schema_version": "miniqmt_event_loop_quote_wait_v1",
+        "intent_id": intent.intent_id,
+        "symbol": intent.symbol,
+        "side": intent.side.value,
+        "reason_code": context.get("reason_code"),
+        "stage": "MINIQMT_EVENT_LOOP_QUOTE_WAIT",
+        "message": str(error),
+        "error_context": context,
+        "source": source,
+        "retryable": True,
+        "broker_called": False,
+        "quote_synthesized": False,
+    }
+    return {**payload, "wait_fingerprint": _short_hash(payload)}
+
+
+def _event_loop_tick_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _event_loop_json_value(dict(payload), field_path="quote")
+    if not isinstance(snapshot, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop quote snapshot is not a JSON object",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                "broker_called": False,
+            },
+        )
+    return snapshot
+
+
+def _event_loop_json_value(value: Any, *, field_path: str) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop quote evidence contains a non-finite number",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                    "field_path": field_path,
+                    "value": str(value),
+                    "broker_called": False,
+                },
+            )
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise BrokerSubmitError(
+                "MiniQMT event_loop quote evidence contains a non-finite decimal",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                    "field_path": field_path,
+                    "value": str(value),
+                    "broker_called": False,
+                },
+            )
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return _event_loop_json_value(value.value, field_path=field_path)
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda row: str(row[0])):
+            if not isinstance(key, str) or not key.strip():
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop quote evidence contains an invalid object key",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                        "field_path": field_path,
+                        "key": str(key),
+                        "broker_called": False,
+                    },
+                )
+            normalized[key] = _event_loop_json_value(item, field_path=f"{field_path}.{key}")
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_event_loop_json_value(item, field_path=f"{field_path}[{index}]") for index, item in enumerate(value)]
+    raise BrokerSubmitError(
+        "MiniQMT event_loop quote evidence contains an unsupported value type",
+        context={
+            "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+            "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+            "field_path": field_path,
+            "value_type": type(value).__name__,
+            "broker_called": False,
+        },
+    )
+
+
+def _event_loop_tick_payload_from_request(request: ManagedOrderRequest) -> dict[str, Any] | None:
+    metadata = dict(request.metadata or {})
+    quote_wait = metadata.get("event_loop_quote_wait")
+    if isinstance(quote_wait, dict):
+        return None
+    payload = metadata.get("event_loop_tick_payload")
+    declared_hash = str(metadata.get("event_loop_tick_payload_sha256") or "").strip()
+    if not isinstance(payload, dict) or not declared_hash:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop request lost its validated preflight quote snapshot",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_QUOTE_READBACK",
+                "parent_intent_id": _parent_id_from_request(request),
+                "symbol": request.symbol,
+                "broker_called": False,
+            },
+        )
+    snapshot = _event_loop_tick_snapshot(payload)
+    computed_hash = _short_hash(snapshot)
+    if computed_hash != declared_hash:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop validated preflight quote snapshot hash conflicts with durable request",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_CONFLICT",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_QUOTE_READBACK",
+                "parent_intent_id": _parent_id_from_request(request),
+                "symbol": request.symbol,
+                "declared_sha256": declared_hash,
+                "computed_sha256": computed_hash,
+                "broker_called": False,
+            },
+        )
+    return snapshot
+
+
+def _persist_event_loop_quote_waiting(
+    *,
+    runtime: MiniQMTExecutionRuntime,
+    instance: MiniQMTExecutionAlgoInstance,
+    request: ManagedOrderRequest,
+    source: str,
+) -> None:
+    wait = request.metadata.get("event_loop_quote_wait")
+    if not isinstance(wait, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop pending quote algo is missing its durable wait reason",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_QUOTE_WAIT_EVIDENCE_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_QUOTE_WAIT_PERSIST",
+                "runtime_id": runtime.config.runtime_id,
+                "parent_intent_id": instance.parent_intent_id,
+                "algo_instance_id": instance.algo_instance_id,
+                "broker_called": False,
+            },
+        )
+    runtime.events.append(
+        runtime_id=runtime.config.runtime_id,
+        event_type=MiniQMTExecutionEventType.TIMER,
+        source="quote_ingress",
+        payload={
+            **_json_safe(wait),
+            "runtime_id": runtime.config.runtime_id,
+            "parent_intent_id": instance.parent_intent_id,
+            "algo_instance_id": instance.algo_instance_id,
+            "qmt_batch_id": request.metadata.get("qmt_batch_id"),
+            "source": source,
+            "broker_called": False,
+        },
+    )
 
 
 def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
@@ -2976,8 +3335,11 @@ def _required_event_loop_tick_payload(
         payload["bid_volume_1"] = bid_volume
     payload["price"] = price
     try:
-        if float(payload["price"]) <= 0:
-            raise ValueError("non-positive")
+        if isinstance(payload["price"], bool):
+            raise ValueError("boolean is not a quote price")
+        parsed_quote_price = float(payload["price"])
+        if parsed_quote_price <= 0 or not math.isfinite(parsed_quote_price):
+            raise ValueError("quote price is not positive and finite")
     except (TypeError, ValueError) as exc:
         raise BrokerSubmitError(
             "MiniQMT event_loop broker quote has invalid price",
@@ -3013,10 +3375,40 @@ def _required_event_loop_tick_payload(
             },
         )
     try:
-        if float(depth_price) <= 0:
+        if isinstance(depth_price, bool) or isinstance(depth_volume, bool):
+            raise ValueError("boolean is not valid L1 depth")
+        parsed_depth_price = float(depth_price)
+        if not math.isfinite(parsed_depth_price):
+            raise ValueError(f"{price_field} non-finite")
+        parsed_depth_volume_decimal = Decimal(str(depth_volume))
+        if (
+            not parsed_depth_volume_decimal.is_finite()
+            or parsed_depth_volume_decimal != parsed_depth_volume_decimal.to_integral_value()
+        ):
+            raise ValueError(f"{volume_field} is not a finite integer")
+        parsed_depth_volume = int(parsed_depth_volume_decimal)
+        if parsed_depth_volume == 0 and parsed_depth_price >= 0:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop broker quote has an empty opposite-side L1 book",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_EMPTY",
+                    "source": source,
+                    "intent_id": intent.intent_id,
+                    "symbol": intent.symbol,
+                    "side": intent.side.value,
+                    price_field: depth_price,
+                    volume_field: depth_volume,
+                    "quote_source": payload.get("quote_source"),
+                    "retryable": True,
+                    "broker_called": False,
+                },
+            )
+        if parsed_depth_price <= 0:
             raise ValueError(f"{price_field} non-positive")
-        if int(depth_volume) < 0:
+        if parsed_depth_volume < 0:
             raise ValueError(f"{volume_field} negative")
+    except BrokerSubmitError:
+        raise
     except (TypeError, ValueError) as exc:
         raise BrokerSubmitError(
             "MiniQMT event_loop broker quote has invalid L1 depth for runtime tick",
@@ -3026,12 +3418,27 @@ def _required_event_loop_tick_payload(
                 "intent_id": intent.intent_id,
                 "symbol": intent.symbol,
                 "side": intent.side.value,
-                price_field: depth_price,
-                volume_field: depth_volume,
+                price_field: _event_loop_quote_error_value(depth_price, field_path=price_field),
+                volume_field: _event_loop_quote_error_value(depth_volume, field_path=volume_field),
                 "quote_source": payload.get("quote_source"),
             },
         ) from exc
     return payload
+
+
+def _event_loop_quote_error_value(value: Any, *, field_path: str) -> Any:
+    try:
+        return _event_loop_json_value(value, field_path=f"quote_error.{field_path}")
+    except BrokerSubmitError as exc:
+        return {
+            "schema_version": "miniqmt_event_loop_invalid_quote_value_v1",
+            "reason_code": str(
+                (getattr(exc, "context", None) or {}).get("reason_code") or "MINIQMT_EVENT_LOOP_QUOTE_VALUE_INVALID"
+            ),
+            "field_path": field_path,
+            "value_type": type(value).__name__,
+            "value_repr": str(value)[:256],
+        }
 
 
 def _tick_payload_for_runtime(
@@ -3662,10 +4069,7 @@ def _event_loop_owned_parent_intent_mismatches(
         "preflight_status": IntentPreflightStatus.PASSED,
         "submit_status": IntentSubmitStatus.SUBMITTED,
     }
-    actual = {
-        key: getattr(intent, key, None)
-        for key in expected
-    }
+    actual = {key: getattr(intent, key, None) for key in expected}
     mismatches = {
         key: {"expected": _diagnostic_value(value), "actual": _diagnostic_value(actual[key])}
         for key, value in expected.items()
@@ -3734,7 +4138,6 @@ def _event_loop_owned_retry_request_mismatches(
             "event_loop_submit",
             "runtime_owner",
             "source",
-            "runtime_child_order_id",
             "runtime_algo_instance_id",
             "execution_policy_id",
             "execution_policy_sha256",
@@ -4200,7 +4603,9 @@ def _event_loop_batch_metadata(
         "capacity_residual_count": capacity_residual_count,
         "event_loop_pending": pending_count > 0,
         "event_loop_pending_count": pending_count,
-        "triggered_child_order_count": sum(1 for result in results if result.success),
+        "triggered_child_order_count": runtime_evidence.submitted_child_count,
+        "triggered_parent_intent_count": sum(1 for result in results if result.success),
+        "rejected_child_order_count": runtime_evidence.rejected_child_count,
         "compensation_required": _event_loop_compensation_required(status, requests, results),
         "compensation_actions": [],
         "broker_called": any(result.broker_called for result in results),
@@ -4371,6 +4776,7 @@ def _event_loop_upsert_order_intent(
     accepted: bool,
     source: str,
 ) -> Any | None:
+    broker_called = _event_loop_child_broker_called(child)
     getter = getattr(repository, "get_order_intent", None)
     creator = getattr(repository, "create_order_intent", None)
     setter = getattr(repository, "set_order_intent_submit_status", None)
@@ -4387,7 +4793,7 @@ def _event_loop_upsert_order_intent(
     existing = None
     try:
         existing = getter(child.parent_intent_id)
-    except Exception:  # noqa: BLE001 - repository miss types differ across test/prod implementations.
+    except DataUnavailableError:
         existing = None
     status = IntentSubmitStatus.ACCEPTED if accepted else IntentSubmitStatus.REJECTED
     if existing is not None:
@@ -4401,16 +4807,40 @@ def _event_loop_upsert_order_intent(
                     "parent_intent_id": child.parent_intent_id,
                     "existing_batch_id": getattr(existing, "batch_id", None),
                     "expected_batch_id": expected_batch_id,
-                    "broker_called": True,
+                    "broker_called": broker_called,
                     "qmt_order_id": child.broker_order_id,
                 },
             )
         if callable(setter):
+            existing_broker_called = existing.metadata.get("broker_called")
+            if existing_broker_called is not None and not isinstance(existing_broker_called, bool):
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop order intent has invalid broker_called history",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_ORDER_INTENT_PERSIST",
+                        "parent_intent_id": child.parent_intent_id,
+                        "value_type": type(existing_broker_called).__name__,
+                    },
+                )
+            projected_broker_called = bool(existing_broker_called is True or broker_called)
+            effective_status = (
+                IntentSubmitStatus.ACCEPTED
+                if existing.submit_status == IntentSubmitStatus.ACCEPTED and status == IntentSubmitStatus.REJECTED
+                else status
+            )
             return setter(
                 child.parent_intent_id,
-                status,
+                effective_status,
                 submitted_at=child.submitted_at or datetime.now(UTC),
                 updated_at=datetime.now(UTC),
+                metadata_patch={
+                    "broker_called": projected_broker_called,
+                    "broker_call_pending": False,
+                    "qmt_order_id": child.broker_order_id or existing.metadata.get("qmt_order_id"),
+                    "runtime_child_order_id": child.child_order_id,
+                    "runtime_algo_instance_id": child.algo_instance_id,
+                },
             )
         return existing
     return creator(
@@ -4442,7 +4872,8 @@ def _event_loop_upsert_order_intent(
                 "runtime_algo_instance_id": child.algo_instance_id,
                 "runtime_parent_intent_id": child.parent_intent_id,
                 "event_loop_submit": True,
-                "broker_called": True,
+                "broker_called": broker_called,
+                "broker_call_pending": False,
                 "qmt_order_id": child.broker_order_id,
             },
             submitted_at=child.submitted_at or datetime.now(UTC),
@@ -4458,6 +4889,7 @@ def _event_loop_child_submit_result(
     repository: Any,
     source: str,
 ) -> ManagedOrderSubmitResult:
+    broker_called = _event_loop_child_broker_called(child)
     accepted = child.status != MiniQMTChildOrderStatus.REJECTED and bool(child.broker_order_id)
     if not accepted:
         error = OrderPreflightError(
@@ -4486,8 +4918,35 @@ def _event_loop_child_submit_result(
         qmt_order_id=child.broker_order_id,
         broker_message=str(child.metadata.get("gateway_message") or ("accepted" if accepted else "rejected")),
         preflight=preflight,
-        broker_called=True,
+        broker_called=broker_called,
     )
+
+
+def _event_loop_child_broker_called(child: MiniQMTChildOrder) -> bool:
+    gateway_ack = child.metadata.get("gateway_ack")
+    if not isinstance(gateway_ack, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop child is missing gateway acknowledgement facts",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_GATEWAY_ACK_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+            },
+        )
+    broker_called = gateway_ack.get("broker_called")
+    if not isinstance(broker_called, bool):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop gateway acknowledgement is missing exact broker_called truth",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+                "value_type": type(broker_called).__name__,
+            },
+        )
+    return broker_called
 
 
 def _timer_iterations(algo_code: str, config: dict[str, Any]) -> int:

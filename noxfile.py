@@ -546,6 +546,7 @@ def paper_v2_backend(session: nox.Session) -> None:
         "backend/tests/trading_core/test_minute_execution.py",
         "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
         "backend/tests/trading_core/test_v25_execution_contract.py",
+        "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
     ]
     if _hosted_ci():
         # Hosted Linux runners have an ephemeral DB, not the pre-seeded local
@@ -773,11 +774,15 @@ def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
         "-m",
         "compileall",
         "backend/services/miniqmt_execution_runtime",
+        "backend/services/qmt_strategy_ledger/order_service.py",
+        "backend/services/qmt_strategy_ledger/repository.py",
         external=True,
     )
     _run_pytest(
         session,
         "backend/tests/miniqmt_execution_runtime",
+        "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+        "backend/tests/qmt_strategy_ledger/test_repository.py",
         "-q",
         "-p",
         "no:cacheprovider",

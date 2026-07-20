@@ -183,6 +183,34 @@ def test_in_memory_repository_enforces_unique_order_remark_per_account() -> None
         repo.create_order_intent(_intent(intent_id="intent_blank", order_remark=" "))
 
 
+def test_in_memory_repository_updates_order_intent_status_and_projection_metadata_atomically() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(_account())
+    repo.create_order_intent(
+        replace(
+            _intent(),
+            metadata={"broker_called": False, "broker_call_pending": True},
+        )
+    )
+
+    updated = repo.set_order_intent_submit_status(
+        "intent_a",
+        IntentSubmitStatus.ACCEPTED,
+        metadata_patch={
+            "broker_called": True,
+            "broker_call_pending": False,
+            "qmt_order_id": "880000001",
+        },
+    )
+
+    assert updated.submit_status == IntentSubmitStatus.ACCEPTED
+    assert updated.metadata == {
+        "broker_called": True,
+        "broker_call_pending": False,
+        "qmt_order_id": "880000001",
+    }
+
+
 def test_in_memory_repository_upserts_trade_ledger_idempotently() -> None:
     repo = InMemoryQmtStrategyLedgerRepository()
     trade = TradeLedgerRecord(
