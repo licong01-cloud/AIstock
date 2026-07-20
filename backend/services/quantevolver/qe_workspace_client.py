@@ -42,7 +42,10 @@ class QEWorkspaceClient:
     """
     def __init__(self, base_url: str = "http://localhost:9000/api/v1/qe_workspace"):
         self.base_url = base_url
-        self.client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0))
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
+            trust_env=False,
+        )
 
     @staticmethod
     def _to_rdagent_loop_id(task_id: str, loop_id: str) -> str:
@@ -251,7 +254,7 @@ class QEWorkspaceClient:
         """
         url = f"{self.base_url}/tasks/{task_id}/logs"
         stream_timeout = httpx.Timeout(connect=30.0, read=None, write=10.0, pool=10.0)
-        async with httpx.AsyncClient(timeout=stream_timeout) as stream_client:
+        async with httpx.AsyncClient(timeout=stream_timeout, trust_env=False) as stream_client:
             async with stream_client.stream("GET", url) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
