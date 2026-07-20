@@ -5,7 +5,7 @@
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_code_merged_r2a_source_delivery_accepted`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入，具体 PR/merge 状态由 GitHub 和 aftercare 回执记录；R2-B 的历史 candidate adapter、R3-R5、API、UI 和真实范围任务仍未实现
+> 当前状态：`r1_code_merged_r2a_source_delivery_accepted_r2b_design_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 详细设计见 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md`，其代码、真实 candidate E2E、R3-R5、API、UI 和真实范围任务仍未实现
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -162,10 +162,18 @@ execution_prohibited = true
 requested_at
 requested_by
 user_request_semantic_hash
-request_payload_sha256
 ```
 
-客户端不提交 `request_payload_sha256`；服务在解析 Program、calendar、code contract 和历史 source revision catalog 后生成 `ResolvedHistoricalRangeRequestV1`，补充：
+客户端不提交 `user_request_semantic_hash` 或 `request_payload_sha256`。服务先解析 Program、calendar、code contract 和 source requirement plan，创建稳定 `batch_id`、`PLANNING` batch 与 `BUILD_SOURCE_CATALOG` operation；此时保存：
+
+```text
+requirement_plan_ref/hash
+catalog_generation/cursor/checkpoint_ref/hash
+request_payload_sha256 = null
+source_revision_catalog_hash/request_ref = null
+```
+
+catalog operation 分块完成 DISCOVER/VERIFY 且所有 requirements 已满足后，服务才生成 `ResolvedHistoricalRangeRequestV1`，补充并一次性封存：
 
 ```text
 ordered_trade_dates_hash
@@ -173,11 +181,14 @@ source_revision_catalog_hash
 selection_semantics_version/hash
 list_semantics_version/hash
 resolved_program_set_hash
+request_payload_sha256
 ```
 
-解析后的 `program_specs[]` 按稳定 `research_program_id` 排序，至少一项。`user_request_semantic_hash` 只覆盖 Program/package/config/date/policy 业务语义，排除 program display name；最终 `request_payload_sha256` 还排除随机 request id、client idempotency key、requested_at 和本地审计标签 requested_by，包含全部解析后的业务 identity。相同 package/config/code/calendar/source revision 语义请求收敛到同一 batch；数据库 ingestion/correction 形成新的 source revision catalog hash 后，同样的用户日期参数会形成新 batch identity，并通过 `supersedes_batch_id` 关联同一 user semantic hash 的前一批次而不改写旧结果。相同调用方 idempotency key 对应不同解析语义必须冲突。`requested_by` 只是单用户本地审计标签，不是角色或授权主体。
+解析后的 `program_specs[]` 按稳定 `research_program_id` 排序，至少一项。`user_request_semantic_hash` 只覆盖 Program/package/config/date/policy 业务语义，排除 program display name；planning exact retry 比较该 hash、requirement plan hash 和原始日期/Program 语义。`batch_id` 是 durable operation identity，不由尚未存在的 catalog hash 反推，也不会在 seal 时变化。
 
-`source_revision_catalog_hash` 优先复用已存在的 Phase 1 source revision identity；某历史分区没有 formal availability event 时，Phase 1R 可对数据库查询结果生成自己的 immutable partition content hash/read receipt。该 retrospective receipt 足以支持当前语义重算，但永远不能据此升级 formal available-at 或 OOS evidence，因此不会要求等待最新前瞻 ingestion 才能创建历史范围任务。
+最终 `request_payload_sha256` 排除随机 request id、client idempotency key、requested_at 和本地审计标签 requested_by，包含全部 sealed 业务 identity。相同 package/config/code/calendar/source revision 语义请求在 seal 时收敛到同一 resolved request hash；数据库 ingestion/correction 形成新的 catalog hash 后，新请求形成 superseding batch，并通过 `supersedes_batch_id` 关联同一 user semantic hash 的前一批次而不改写旧结果。相同调用方 idempotency key 对应不同 planning 语义必须冲突。`requested_by` 只是单用户本地审计标签，不是角色或授权主体。
+
+`source_revision_catalog_hash` 优先复用已存在的 Phase 1 source revision identity；某历史分区没有 formal availability event 时，Phase 1R 可由 catalog operation 对数据库查询结果生成自己的 immutable partition content hash/read receipt。requirement plan 只描述所需输入及稳定依赖 DAG，依赖上游 universe/snapshot identity 的 query 在上游 member 闭合后绑定参数；缺失输入不得伪造成空 revision。缺失时 planning batch 进入 `WAITING_INPUT`，补齐后 resume 同一 batch。完整 sealed catalog 作为 typed payload 保存在 `REQUEST` CAS artifact 中，DB 只保存 requirement/checkpoint/catalog/request refs 与 hashes；逐日 candidate source ref 必须精确属于 sealed catalog。该 retrospective receipt只支持当前语义重算，永远不能升级 formal available-at 或 OOS evidence，也不要求等待最新前瞻 ingestion。
 
 ### 6.2 Program 规格
 
@@ -226,7 +237,7 @@ input_warmup_contract_hash
 - `RESEARCH_PROGRAM_SPEC` 只写 Phase 1R 表/CAS，不创建 `app.advisory_program` 或 binding。
 - `EXISTING_PROGRAM` 的 `research_program_id` 等于 source `program_id`；`RESEARCH_PROGRAM_SPEC` 的 `research_program_id = hrp_<canonical_sha256 前 32 位>`，由 package identity、target/review/runtime/price/style 配置确定性生成，并同时保存完整 config SHA 作为冲突谓词，客户端不得提交。`program_name` 仅用于展示，不进入该稳定 identity。
 - 两种来源都只接受一个单 Alpha 包或一个原生多 Alpha 父包。
-- `alpha_mode`、package version、manifest 和 component identity 全部由 admitted package projection 推导，客户端不得提交或覆盖这些派生字段。
+- `alpha_mode`、package version、manifest 和 component identity 全部由 admitted package projection 推导，客户端不得提交或覆盖这些派生字段。`package_version` 精确沿用 `StrategyPackageRecord.package_version` 的字符串值，Phase 1R model/DB 列使用 string/`TEXT`，不得转换为整数或用 Program version 替代。
 - `review_schedule` 是 legacy 当前运行 metadata，不参与范围请求、hash 或执行；范围日期只来自显式 start/end 和冻结交易日集合。
 - style profile 缺失不阻断候选与列表执行，但必须显式记录 `STYLE_PROFILE_NOT_AVAILABLE`，并只使用冻结 `LabelPolicyBundle` 的默认 outcome horizons；不得静默猜测策略风格。
 - package 读取仅确认请求 identity 与当前 admitted record 一致；不调用 package preflight、health、asset closure 或 model retest。
@@ -258,17 +269,20 @@ per_program_input_warmup_ranges_hash
 ### 7.1 Batch 状态
 
 ```text
+PLANNING -> QUEUED | WAITING_INPUT | DEDUPLICATED | FAILED | CANCELLED
 QUEUED -> RUNNING | CANCELLED
 RUNNING -> PARTIAL | WAITING_INPUT | COMPLETED | FAILED | CANCELLING
 
 PARTIAL -> RUNNING | COMPLETED | FAILED | CANCELLED
-WAITING_INPUT -> RUNNING | FAILED | CANCELLED
+WAITING_INPUT -> PLANNING | RUNNING | FAILED | CANCELLED
 CANCELLING -> CANCELLED
 ```
 
+- `PLANNING`：已持久化用户语义、包含 ordered dates/frozen Program payloads 的 requirement-plan ref 和 catalog operation，但 sealed request/date-plan/frozen-program refs 尚未形成；此阶段不创建 Program/day rows，也不运行模型。
+- `DEDUPLICATED`：另一 planning batch 已先 seal 相同 `request_payload_sha256`；当前 batch 只保存 `canonical_batch_id` 和 immutable dedup receipt，不创建 Program/day rows。查询/API 返回 canonical resource，同时保留本 batch 的幂等与审计事实。
 - `PARTIAL`：已存在成功 day，存在 `RETRYABLE_FAILED` 子项，或已存在 terminal failed Program/day 且 batch 仍有其他等待/可重试/成功项；它表示 batch 已形成异质或可恢复事实但整体未闭合，不能用单一成功或失败覆盖子状态。
 - `PARTIAL` 同时保存 `recoverable_program_count`。该值大于零时可 resume；等于零时是 finished partial result，设置 `finished_at`，仍可 refresh 已成功 day 的 outcomes，但不得伪装为 `FAILED` 或 `COMPLETED`。
-- `WAITING_INPUT`：尚无成功或 terminal failed day，且所有未完成项都在等待可恢复输入。
+- `WAITING_INPUT`：`waiting_stage=CATALOG` 时 catalog requirement 尚未满足且 sealed request 未形成；`waiting_stage=DAY_INPUT` 时尚无成功或 terminal failed day，且所有未完成项都在等待可恢复 day 输入。resume 根据 waiting stage 返回 `PLANNING` 或 `RUNNING`，不得混用 cursor。
 - `COMPLETED`：全部 Program 的 `materialized_day_count=trade_date_count`、状态均为 `COMPLETED`，且每个冻结荐股日均为 `COMPLETE` 或 `VALID_NO_CANDIDATE`；outcome 可以仍有 `MATURING`。
 - `FAILED`：尚无任何成功 day，所有未取消 Program 均已不可恢复失败，且不存在可继续执行的 Program/day；只要存在成功 day或仍有可恢复 Program，batch 必须保持 `PARTIAL`。
 - `PARTIAL -> FAILED` 只允许 `successful_day_count=0` 且所有未取消 Program 均转 terminal failure；`successful_day_count>0` 的 finished partial 永远不能被重写为 FAILED。
@@ -325,11 +339,11 @@ MATURING -> COMPLETE | CENSORED | TERMINAL | FAILED
 ### 7.5 Operation 状态
 
 ```text
-QUEUED -> RUNNING -> COMPLETED | RETRYABLE_FAILED | FAILED
-RETRYABLE_FAILED -> RUNNING
+QUEUED -> RUNNING -> COMPLETED | WAITING_INPUT | RETRYABLE_FAILED | FAILED
+WAITING_INPUT | RETRYABLE_FAILED -> RUNNING
 ```
 
-- create/resume/cancel/refresh-outcomes/build-dataset-bridge 均有独立 operation identity 和 attempt chain。
+- create、build-source-catalog、resume、cancel、refresh-outcomes、build-dataset-bridge 均有独立 operation identity 和 attempt chain。create 只持久化 planning batch；`BUILD_SOURCE_CATALOG` 负责 checkpoint、等待和 request seal。
 - lease 过期只允许新 attempt 以更高 fencing token 接管同一 operation，不创建第二个同 key operation。
 - terminal operation 的 result ref/hash 不可改写；exact retry 返回原 receipt。
 
@@ -403,16 +417,19 @@ StrategyPackageSelectionComputationResultV1
 - day execute、resume 和 outcome refresh 只读取 frozen projection/ref，不重新查询 package 当前状态；任务创建后 package 被归档或状态变化不能阻断既有 batch。
 - 不调用 `SelectionPackageHealthService.summarize`、asset validator、model retest 或 package admission API。
 - 推理过程中具体输入文件或数据库事实缺失时，作为当前日明确 runtime/data error 失败；不得改 package 状态或自动换包。
+- 当前原生多 Alpha 准入契约只允许 manifest `frozen_backtest_terminal_weights`，Phase 1R 直接使用该冻结权重且不读取回测目录。当前仓库不存在 package-owned rolling-IC DB contract，因此不得新增读取 QE 表或 runtime rows 的占位 provider；未来 rolling policy 必须先在 StrategyPackage promotion/manifest 层独立设计并正式准入。
 
 ### 8.3 Range-owned inference artifact
 
 新增 `HistoricalRangeSelectionArtifactRepository`，实现 range candidate producer 所需最小 artifact protocol：
 
-- score/candidate/stage payload 写 repo-external content-addressed store；
+- `candidate_input_hash` 在推理前覆盖 frozen program/package/runtime/code/selection semantics、T、calendar/universe、sealed catalog 和 query contract，不包含 candidate artifact 或前日 list；
+- candidate artifact payload v2 同时保存 package/runtime header、candidate input、positive universe、raw inference receipt、source read receipts、四阶段 trace/closure、candidate outcome/no-candidate reasons 和全部 INCLUDED/EXCLUDED facts；
+- score/candidate/stage payload 写 repo-external content-addressed store；零候选日不得只保存空 candidates/source refs；
 - DB 只保存 ref、semantic hash、file hash、schema version 和 range/day identity；
 - 不写 `strategy_pkg.selection_score_artifact`；
 - 相同 semantic payload exact rerun 返回同一 ref；碰撞或 readback 不一致显式失败；
-- 单/原生多 Alpha component lineage 全量保存。
+- 单/原生多 Alpha component lineage 全量保存；R3 发布 candidate 后再由 `candidate_input_hash + candidate ref/hash + previous list/day receipt + list semantics` 单向派生 `day_input_hash`，禁止循环 identity。
 
 ### 8.4 PIT 和 HMM
 
@@ -432,7 +449,8 @@ input_warmup_start <= T according to each leg contract
 - T+1 开盘、停牌、涨跌停和分钟路径只进入 entry/outcome/price-quality，不进入 T 日候选过滤。
 - 原生多 Alpha 父包各 leg 必须共享 T 日决策身份、calendar、universe 和数据来源 authority，但允许保留各自合法不同的 lookback/window、feature max date 和 input lineage hash；不得再次要求跨 leg 历史窗口完全一致。
 - HMM disabled 时记录 disabled policy hash。
-- HMM enabled 时按 T 日 cutoff 调用现有 HMM inference/snapshot contract 生成 range-owned evidence；不得复用任务创建日最新 snapshot。Phase 1R Windows worker 不执行 HMM 或其他模型训练/拟合；若缺失 artifact 必须由 WSL Conda producer 生成明确 ref 后恢复，使用已冻结参数进行状态推理不视为新训练任务。
+- HMM enabled 时只接受 frozen Program 中明确的 `model_snapshot_id + phase0a_hmm_metadata`，其中 snapshot/model/coefficient SHA、formal available-at、training information cutoff 和 input max dates 都不得晚于 T。只有 `model_config_id` 时禁止按 `trained_at` 或 latest 动态选择；当前 snapshot 表/通用 metrics 不构成该权威证据，缺失时 catalog planning 进入 `WAITING_INPUT`。Phase 1R Windows worker 不执行 HMM 或其他模型训练/拟合；若缺失 exact artifact，只能由已有 WSL Conda producer补齐相同 ref/SHA 后恢复，使用已冻结参数进行状态推理不视为新训练任务。
+- planning requirement 只冻结 base Program config hash；HMM requirements 按 decision day 建立，evidence补齐后以按 T 排序的 `resolved_hmm_binding_set_ref/hash` 写入 sealed frozen Program。day execution 只读取当日 exact binding，不再解析 config 或选择 snapshot；补齐输入也不能改写用户 runtime config。
 - 每日记录 input max dates、calendar、universe、source revision 和 HMM artifact hashes。
 - 每日实际 source revision 必须属于 batch 冻结 catalog；数据库内容已修订且旧 revision 不可读时，该日显式返回 source revision mismatch，不能读取 latest 内容继续旧 batch。
 
@@ -480,12 +498,15 @@ AdvisoryListVersionBuilder.build(
 ### 9.3 Hash chain
 
 ```text
-day_input_hash = hash(range_run + program + date + frozen config + candidate artifact + previous_list_hash)
+candidate_input_hash = hash(range_run + program + date + frozen config/code/selection semantics
+                            + calendar/universe + sealed catalog/query contract)
+day_input_hash = hash(candidate_input_hash + candidate artifact ref/hash
+                      + previous_list_hash/day_receipt_hash + list semantics)
 list_content_hash = hash(day decisions + items + episode snapshots)
 day_receipt_hash = hash(day_input_hash + list_content_hash + refs + status)
 ```
 
-后一日必须引用前一日 `list_content_hash` 和 `day_receipt_hash`。同一输入产生不同输出、或同一业务键收到不同 input hash，均为冲突。
+`candidate_input_hash` 不包含 candidate artifact，candidate artifact v2 保存该 hash；R3 在 artifact 发布/readback 后才派生 `day_input_hash`，因此不存在自引用。后一日必须引用前一日 `list_content_hash` 和 `day_receipt_hash`。同一输入产生不同输出、或同一业务键收到不同 input hash，均为冲突。
 
 ## 10. 市场价格、收益与结果成熟
 
@@ -529,17 +550,22 @@ batch_id PK
 request_id
 client_idempotency_key
 user_request_semantic_hash
-request_payload_sha256 UNIQUE
+request_payload_sha256 nullable
+deduplicated_request_payload_sha256 nullable
 supersedes_batch_id nullable FK
+canonical_batch_id nullable self FK
 start_trade_date / end_trade_date
 calendar_id / calendar_version / ordered_trade_dates_hash
-date_plan_ref/hash
-source_revision_catalog_hash
+date_plan_ref/hash nullable until seal
+requirement_plan_ref/hash
+catalog_generation / catalog_cursor_ordinal
+catalog_checkpoint_ref/hash nullable
+source_revision_catalog_hash/request_ref nullable
 selection_semantics_version/hash
 list_semantics_version/hash
 per_program_input_warmup_ranges_hash
 program_count / trade_date_count / planned_day_count
-status
+status / waiting_stage nullable
 row_version
 successful_day_count / terminal_failed_day_count
 completed_program_count / failed_program_count / waiting_program_count
@@ -549,8 +575,11 @@ created_at / started_at / finished_at / updated_at
 error_json
 request_payload_json
 UNIQUE(client_idempotency_key)
+UNIQUE(request_payload_sha256) WHERE request_payload_sha256 IS NOT NULL
 UNIQUE(supersedes_batch_id) WHERE supersedes_batch_id IS NOT NULL
 ```
+
+`PLANNING|WAITING_INPUT(waiting_stage=CATALOG)` 时 `request_payload_sha256/source_revision_catalog_hash/request_ref/deduplicated_request_payload_sha256` 必须同时为空；canonical seal 事务一次性填充 request refs且之后 immutable。`DEDUPLICATED` 必须保存 `canonical_batch_id + deduplicated_request_payload_sha256 + dedup receipt`，不能保存另一份 sealed refs或 Program runs；该 hash 必须等于 canonical batch 的 request hash。`QUEUED|RUNNING|PARTIAL|COMPLETED` 及 day-execution waiting 状态必须具有 sealed request。Program run rows 在 canonical seal 事务创建，planning batch 不使用伪 range run 表示未完成解析。
 
 ### 11.2 `app.advisory_historical_range_run`
 
@@ -617,25 +646,30 @@ started_at / finished_at
 UNIQUE(day_run_id, attempt_no)
 ```
 
-`app.advisory_historical_range_operation` 保存 create/resume/cancel/refresh-outcomes/build-dataset-bridge 的 durable claim、cursor 和幂等结果：
+`app.advisory_historical_range_operation` 保存 create/build-source-catalog/resume/cancel/refresh-outcomes/build-dataset-bridge 的 durable claim、cursor/checkpoint 和幂等结果：
 
 ```text
 operation_id PK
 batch_id FK
-operation_type = CREATE | RESUME | CANCEL | REFRESH_OUTCOMES | BUILD_DATASET_BRIDGE
+operation_type = CREATE | BUILD_SOURCE_CATALOG | RESUME | CANCEL | REFRESH_OUTCOMES | BUILD_DATASET_BRIDGE
 operation_idempotency_key
-request_payload_sha256
+user_request_semantic_hash
+request_payload_sha256 nullable
 expected_row_version nullable
-status = QUEUED | RUNNING | COMPLETED | RETRYABLE_FAILED | FAILED
+status = QUEUED | RUNNING | WAITING_INPUT | COMPLETED | RETRYABLE_FAILED | FAILED
 row_version
 worker_id / lease_token / lease_expires_at / fencing_token nullable
 stable_keyset_cursor_json nullable
+catalog_generation nullable
+checkpoint_ref/hash nullable
 result_row_version
 result_status
 result_ref/hash
 created_at / started_at / finished_at / updated_at
 UNIQUE(batch_id, operation_idempotency_key)
 ```
+
+`BUILD_SOURCE_CATALOG` 的 checkpoint 是 Phase 1R 链式增量 CAS artifact，记录 requirement plan hash、generation、DISCOVER/VERIFY phase、ordinal range、previous checkpoint ref/hash、本 chunk member/unresolved delta 和 cumulative chain hash/count。每个 operation attempt 保存自己的 checkpoint ref/hash，operation row 只保存 latest ref/hash/cursor/count，不把多年 catalog JSON 复制进 mutable row，也不在每个 checkpoint 重写全部 members。`WAITING_INPUT` attempt 必须具有 immutable attempt receipt 和 unresolved requirement reasons；resume 使用更高 fencing token 验证 hash chain 后继续同 generation/cursor。
 
 `app.advisory_historical_range_operation_attempt` 按 `(operation_id,attempt_no)` append-only 保存每次 claim/fencing、输入 cursor、结果 cursor、错误和 attempt receipt hash。同 operation key/同 payload 返回原 operation/terminal receipt；同 key/不同 payload 必须冲突。同一 batch/operation type 通过 partial unique index 最多一个 `RUNNING` operation，过期 lease 才可由新 fencing token 接管。不增加审批 event。状态变化通过业务表 row version、append-only day/operation attempt 和 terminal receipt 证明。
 
@@ -659,14 +693,20 @@ UNIQUE(batch_id, operation_idempotency_key)
 ### 11.7 数据库级不变量与索引
 
 - batch/run/day/operation 是仅允许合法状态迁移的 mutable orchestration rows；每次 UPDATE 必须 `row_version = row_version + 1`，DB trigger 拒绝状态回退、非法跳转和 terminal semantic result 改写。
+- planning batch trigger 要求 request/catalog refs/hash 同空同有，seal 只允许一次 null -> exact value；Program runs 只能在 sealed request 同一事务创建，不能挂接未封存 batch。
+- resolved request unique conflict 不作为无上下文 500；seal 在同一事务锁定 canonical row，把后提交 planning batch 转 `DEDUPLICATED` 并关闭 canonical FK/dedup receipt，禁止重复 runs。
+- catalog operation cursor/checkpoint/generation 只能按 DISCOVER/VERIFY 合法后继单调推进；WAITING_INPUT 必须引用 unresolved requirement receipt，不能用空 revision 通过。
+- catalog checkpoint ordinal/previous hash/cumulative hash 必须与 append-only operation attempts 构成无缺口单链；seal 流式重建，禁止二次方 full-catalog checkpoint。
 - day attempt、operation attempt、candidate、list version/item、episode snapshot、outcome 和 summary 使用 no-update/no-delete trigger；修订只能追加新 attempt/outcome/summary version。
 - 所有 FK 使用 `ON DELETE RESTRICT`。不得通过 cascade 删除已完成研究事实。
 - day chain trigger 验证 `previous_day_run_id` 属于同一 range、ordinal 正好为前一位、前日状态为成功终态，且 previous list/day receipt hash 与前日 persisted 值一致。
 - supersedes chain 必须保持同一 `user_request_semantic_hash`、单前驱/单后继且无 cycle；并发创建同一新 resolved hash 收敛到一条 revision chain。
+- `DEDUPLICATED.canonical_batch_id` 必须指向相同 user semantic + resolved request hash 的非 deduplicated batch；dedup 不是 source revision supersedes，不占用 supersedes 前驱/后继。
 - day materialization 必须逐 ordinal 匹配冻结 date-plan artifact；`materialized_day_count/day_plan_cursor_ordinal` 只能单调前进，不能跳号、回退或按当前日历补行。
 - list transaction trigger 验证 enter/hold/exit/watch/active 计数与 items 重算一致、symbol 不重复、WATCH 不占 active、EXIT 不进入下一日 active snapshot。
 - 关键索引：`batch(status,updated_at)`、`run(batch_id,status,resume_trade_date)`、`day(range_run_id,ordinal,status)`、可 claim day 的 `(status,lease_expires_at)`、`operation(batch_id,operation_type,status,lease_expires_at)`、`outcome(maturity_status,next_refresh_trade_date)`、`summary(range_run_id,summary_version DESC)`。
-- hash 字段必须是 64 位小写十六进制或明确 nullable；日期范围、ordinal、计数、horizon 和 row version 使用 CHECK 约束。合法空候选允许 candidate 行数为零，但必须存在 day candidate artifact/header 和 list version。
+- hash 字段必须是 64 位小写十六进制或明确 nullable；日期范围、ordinal、计数、horizon 和 row version 使用 CHECK 约束。合法空候选允许 candidate 行数为零，但必须存在保存完整 universe/raw/stage closure 的 day candidate artifact v2 和 list version。
+- `commit_successful_day` 必须加载 candidate artifact v2，比较 candidate input、source refs、stage closure、candidate outcome 和 DB candidate facts，再验证由 candidate ref 单向派生的 day input hash；candidate v1 或缺日级证据不得提交成功日。
 
 ## 12. External CAS 与 artifact closure
 
@@ -682,6 +722,8 @@ AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT=<absolute repo-external path>
 requests/<hash>.json
 date-plans/<hash>.json
 frozen-programs/<hash>.json
+source-requirement-plans/<hash>.json
+source-catalog-checkpoints/<hash>.json
 candidate-artifacts/<hash>.json
 day-receipts/<hash>.json
 range-receipts/<hash>.json
@@ -697,27 +739,31 @@ dataset-bridges/<hash>.json
 - DB ref 与 CAS file hash、semantic hash、schema version 全量校验。
 - 禁止目录扫描推断 latest；后序命令只消费前序 exact ref。
 - DB commit 前 artifact 必须已 durable；DB 只保存已 readback 的 ref。
+- pre-seal requirement-plan/checkpoint artifact 使用独立 planning envelope，以 `user_request_semantic_hash + requirement_plan_hash + catalog_generation` 关闭 identity，不伪造 `resolved_request_hash`；DATE_PLAN/FROZEN_PROGRAM/REQUEST 及所有 day/range artifacts 只在 seal 时发布并必须具有 sealed resolved request hash。
+- candidate artifact 必须使用 v2 payload并持久保存 candidate input、positive universe、raw/source receipts、stage trace/closure、candidate outcome/no-candidate reasons 和全部 candidate facts；v1 空 candidates payload 不满足正式证据。
 - day finish 前预生成 list/item/episode IDs，构造 canonical list payload 和 day receipt，先将 candidate/list/day receipt CAS artifacts 原子写入并完整 readback，再用一个数据库事务写 list/items/episode snapshots、artifact refs 和 day 成功终态。数据库事务失败只留下可识别 orphan CAS，不产生半个 canonical day。
 - range summary/outcome refresh 同样先生成 immutable outcome/summary artifacts，再以 operation receipt 事务追加 DB rows；不得先把 batch 标记完成再补 artifact。
-- artifact schema 必须包含 producer contract version、resolved request hash、range/day identity、semantic content hash、file SHA、source revision refs 和上游 refs；只验证文件存在不足以通过。
+- sealed artifact schema 必须包含 producer contract version、resolved request hash、range/day identity、semantic content hash、file SHA、source revision refs 和上游 refs；planning artifact 必须包含 planning identity/generation/cursor/checkpoint closure。只验证文件存在不足以通过。
 - orphan artifact 由后续 GC 设计按无 DB ref 和 retention policy 清理，不在失败路径立即删除。
 
 ## 13. 执行与恢复
 
 ### 13.1 有限任务 executor
 
-- `POST create` 在事务中持久化 batch/runs 后提交给有界 executor，立即返回 `202`。
-- create 只持久化 batch、Program runs、date-plan refs 和 CREATE operation；day rows 由 executor 默认每事务最多 500 行按 ordinal keyset cursor 物化，因此日期跨度不扩大 create transaction。
+- `POST create` 在短事务中持久化 `PLANNING` batch、requirement-plan ref、CREATE 和 BUILD_SOURCE_CATALOG operation，立即返回 `202`；HTTP 请求不扫描历史 partitions、不运行模型。
+- catalog executor 默认每次 claim 最多处理 32 个 requirements，发布 checkpoint 并推进稳定 ordinal cursor。missing input 转 `WAITING_INPUT`，补齐后 resume 同一 batch；DISCOVER/VERIFY 全部完成后 seal request并创建 Program runs、把唯一 canonical batch 转 `QUEUED`，相同 resolved hash 的并发后提交 batch 转 `DEDUPLICATED`。
+- sealed 后 day rows 由 executor 默认每事务最多 500 行按 ordinal keyset cursor 物化，因此日期跨度不扩大 create 或 seal transaction。
 - executor 只处理显式创建的有限任务，不按日期自动发现或生成任务，因此不是 daily scheduler。
 - 服务重启后不自动篡改状态；过期 lease 的 `RUNNING` attempt 可由用户 resume 或同一 API client 重试恢复。
 - resume 前比较冻结的 selection/list semantics version/hash 与当前 executor；相同 contract 可继续。语义 hash 不同则返回 `ADVISORY_HISTORICAL_RANGE_CODE_SEMANTICS_MISMATCH`，保留原 batch 并要求以当前代码创建新的 superseding batch，不允许在同一列表 hash chain 中混用两套语义。
-- resume 从每个 Program 首个非终态 day 开始，已完成日 full readback 后跳过。
-- cancel 在 batch row lock 内转 `CANCELLING`，取消尚未开始/等待的 day，并提升 fencing epoch。已持有旧 token 的 worker 在 day finish commit 前必须重验 batch state/fencing；若 cancel 先提交则旧 worker 不得提交 list，若 day 成功事务先提交则该日保留成功事实。两种竞态都不能形成半个 day。
+- resume 根据 `waiting_stage` 分流：CATALOG 从 catalog checkpoint 首个 unresolved requirement继续；DAY_INPUT 从每个 Program 首个非终态 day 开始，已完成日 full readback 后跳过。两类 cursor/attempt 不得互换。
+- cancel 在 planning 阶段直接取消 catalog operation并提升 fencing epoch；sealed execution 阶段在 batch row lock 内转 `CANCELLING`，取消尚未开始/等待的 day，并提升 fencing epoch。已持有旧 token 的 worker 在 checkpoint/seal/day finish commit 前必须重验 batch state/fencing；旧 worker不得在 cancel 后封存 request 或提交 list。
 - cancel 不为尚未物化的长尾日期批量插入占位 rows；每个 run 冻结 `cancelled_from_ordinal`，查询层依据 immutable date-plan 投影这些日期为 cancelled-not-materialized，并与真实 day rows 明确区分。
 
 ### 13.2 并发
 
 - batch 内不同 Program 可并行。
+- catalog planning 以 batch 为单位单 claim；同一 batch 同一 generation 只能有一个有效 catalog worker，chunk 大小只影响吞吐。
 - v1 每进程默认同时执行 2 个 Program、每 Program 最多预取 2 个日期的候选；配置调优只影响吞吐，不改变 batch 接受条件、日期集合、排序或输出 identity。
 - day-plan materialization 默认每个短事务 500 行；只控制单事务规模，不限制总日期数。
 - outcome refresh 默认每个短事务处理最多 500 个 candidate/episode outcome key，按稳定 keyset cursor 继续，不能用 offset 或 latest 扫描。
@@ -727,8 +773,9 @@ dataset-bridges/<hash>.json
 
 ### 13.3 事务
 
-- create batch：一个短事务。
-- create plan 在事务外形成 frozen projections/CAS refs；短事务内只锁定请求涉及的 Program/package identity rows，逐 hash 复核 expected version、manifest 和 source catalog revision 未变化后插入 batch/runs/CREATE operation。该复核是并发一致性检查，不执行 package health/asset/model 二次准入。
+- create batch：在事务外形成包含 ordered dates/frozen Program payloads 的 requirement-plan CAS ref；一个短事务内只锁定请求涉及的 Program/package identity rows，逐 hash 复核 expected version/manifest 后插入 PLANNING batch 与 CREATE/BUILD_SOURCE_CATALOG operation。该复核是并发一致性检查，不扫描 source partitions，不执行 package health/asset/model 二次准入。
+- catalog chunk：每个短 `REPEATABLE READ, READ ONLY` transaction 处理稳定 ordinal 分块；CAS checkpoint 先 durable，再以 operation fencing/row version 记录 ref/hash/cursor。缺失输入写 waiting attempt，不写空 revision。
+- request seal：VERIFY 全部完成后，短事务重验 batch fencing、requirement plan/checkpoint、date/code 和 create 时已冻结的 Program/package identity hashes。若 resolved hash 尚不存在，填充 sealed request/date/frozen-program/catalog refs/hash、创建 Program runs并转 QUEUED；若已存在，当前 batch 转 DEDUPLICATED并引用 canonical batch。seal 不重新查询 package status/health/current binding，resolved 字段只允许 null -> exact value 一次。
 - claim/finish day：各自短事务。
 - day-plan materialization：按 run/ordinal keyset cursor 的独立短事务，更新 run materialized count/cursor；不能用 offset、随机分页或当前日历重新展开。
 - candidate artifact 发布：CAS 先 durable，再在 day finish 事务记录 ref。
@@ -757,9 +804,9 @@ GET    /api/v1/advisory/historical-range-runs/{range_run_id}/summaries
 
 创建请求不包含 `candidates_by_date`、`market_by_date`、`research_program_id`、`alpha_mode`、package version/manifest/component 等派生 identity、任意 SQL、表名、URI、production selector 或 package validation 参数。
 
-- create 使用客户端自动生成的 `Idempotency-Key`；用户无需手工填写。相同 key/相同 resolved hash 返回原 batch，相同 key/不同 hash 返回 `409`。
+- create 使用客户端自动生成的 `Idempotency-Key`；用户无需手工填写。planning 阶段相同 key/相同 user semantic + requirement plan 返回原 batch/operation，sealed 后还必须匹配 resolved hash；相同 key/不同语义返回 `409`。响应立即返回 batch status、catalog operation id/progress、sealed request ref 和 `canonical_batch_id`（不适用时为 null），不等待 catalog 扫描；DEDUPLICATED 查询同时返回 canonical resource link。
 - resume、cancel、refresh-outcomes 和 build-dataset-bridge 请求包含 `operation_idempotency_key + expected_row_version`；exact retry 返回原 operation receipt，过期 row version 返回 `409` 并附当前状态。
-- resume 只接受 `WAITING_INPUT|PARTIAL` batch 且至少一个 Program 具有合法可恢复后继；cancel 只接受 `QUEUED|RUNNING|WAITING_INPUT|CANCELLING`，或 `recoverable_program_count > 0` 的 `PARTIAL`。finished PARTIAL 没有待停止工作，返回稳定不可执行 reason 并保持原状态。已满足目标状态的 exact retry 返回原 receipt，不伪造新 attempt。
+- resume 接受 `WAITING_INPUT(waiting_stage=CATALOG|DAY_INPUT)` 或具有合法可恢复后继的 `PARTIAL`；catalog waiting 不要求 Program run 已存在。cancel 接受 `PLANNING|QUEUED|RUNNING|WAITING_INPUT|CANCELLING`，或 `recoverable_program_count > 0` 的 `PARTIAL`。finished PARTIAL 没有待停止工作，返回稳定不可执行 reason 并保持原状态。已满足目标状态的 exact retry 返回原 receipt，不伪造新 attempt。
 - refresh-outcomes 不改变 batch 主状态；只要 batch 存在成功 day，即使 batch 为 `PARTIAL|COMPLETED|CANCELLED` 也可追加已成熟 outcome/summary。没有成功 day 时返回稳定不可执行 reason，而不是空成功。
 - build-dataset-bridge 只接受 `COMPLETED`、`CANCELLED` 或 `recoverable_program_count=0` 的 finished `PARTIAL`，且至少存在一个成功 day；冻结 exact successful day/outcome set。仍可 resume 的 batch 必须先闭合，不能边改列表链边构建同一 snapshot。
 - runs/days/outcomes/summaries 列表使用稳定 keyset cursor；默认 50、单页最多 500，仅限制响应页大小而不限制任务日期或 Program 数。响应返回 `next_cursor`，禁止 offset 和一次加载完整长区间。
@@ -923,6 +970,8 @@ advisory_historical_range.read_projection <- advisory_phase1.historical_range_br
 | 执行器再次调用 package health/asset validator | 已准入包被二次门禁阻断，历史验证与普通选股语义不一致 | 只读取 admitted package projection；validator/health service 调用在 contract test 中直接判失败 |
 | current refresh readiness 被带入 pure core | 历史日期被最新交易日状态阻断 | readiness 留在 current wrapper；range 只用 T/warmup historical provider/read receipt |
 | T 日计算读取 latest/current 行情、ST、HMM 或行业状态 | 未来数据泄漏，逐日结果不可复算 | 每个 day run 冻结 trade-date PIT identity、revision/hash 和 read receipt；缺失时显式失败，不向 current fallback |
+| config-only HMM 按 trained_at/latest 动态选 snapshot | 历史日使用了当时不可知模型或全部任务永久等待不明输入 | 只接受 frozen snapshot + Phase 0A metadata；缺失进入 catalog WAITING_INPUT，不猜测、不训练 |
+| multi-alpha rolling 权重通过 QE/runtime rows 临时补齐 | 回测数据污染荐股或占位 provider 被声明为完整支持 | 当前 admitted mode 只读 manifest frozen weights；无权威 package DB contract 时 rolling mode 显式 unsupported |
 | next-open/next-close 实际价格参与 T 日 action | 最后一日被阻断或产生未来函数 | `PIT_DECISION_THEN_MATURE`：T action/list 先提交，实际价格只追加 execution/outcome |
 | legacy `REPLAY` 与 Phase 1R lineage 混用 | 诊断记录冒充正式历史范围样本或训练输入 | 独立 origin、表、CAS root、selector 和 UI；禁止自动迁移，Phase 1 formal selector 明确拒绝 |
 | 每日候选变化导致 active list 无界增长 | 荐股名单持续膨胀，生命周期统计失真 | list transition engine 固定目标容量、替换预算、ENTER/HOLD/EXIT/WATCH 互斥和 active-count invariant |
@@ -930,10 +979,17 @@ advisory_historical_range.read_projection <- advisory_phase1.historical_range_br
 | 有限 executor 演变为常驻 scheduler | 产生未经设计的自动运行或最新交易日依赖 | 任务必须有冻结有限日期集合；无 cron/daily hook/latest-date polling，resume 只处理同一 batch 未完成日 |
 | Phase 1 retrospective selector 回退到 formal/research-ready | current-semantics 样本污染正式 OOS 训练集合 | `HISTORICAL_RANGE_RESEARCH` 只能进入独立 retrospective partition；selector contract 和 reconcile test 禁止 fallback |
 | 长区间直接在 API 请求内同步完成 | HTTP 超时、失败状态丢失、无法恢复 | create/claim/attempt/lease/fencing 状态机异步执行；API 仅创建、查询、取消和恢复有限任务 |
+| request hash 形成前同步全量构建 source catalog | create 仍超时且 missing input 无法进入状态机 | PLANNING batch + BUILD_SOURCE_CATALOG operation + chunk checkpoint + WAITING_INPUT/resume + seal once |
+| catalog 分块混入两代 source revision | 同一 request catalog 内部不一致 | DISCOVER/VERIFY 两遍；drift 追加失败 receipt并启动新 generation |
+| 每个 catalog checkpoint 重写此前全部 members | 多年范围 CAS 空间和写放大呈二次方增长 | 每 attempt 只保存 delta + previous/cumulative hash，seal 流式重建，存储线性增长 |
+| 两个 planning batch 同时 seal 相同 resolved hash | 唯一约束 500 或重复 Program runs | 后提交者转 DEDUPLICATED 并引用 canonical batch，不复制 sealed refs/runs |
 | create 一次插入全部 Program×日期 day rows | 长区间事务膨胀并与“无业务上限”冲突 | immutable date-plan + 500-row ordinal chunk materialization |
 | resume/cancel/refresh 只有最终日志、没有 durable operation claim | 并发重复执行或 cursor 丢失 | operation + append-only attempt + unique key + lease/fencing + stable cursor |
 | 结构性候选深度不足被标成等待数据 | batch 永久 WAITING_INPUT | 临时 source 缺失与 frozen manifest/top-k 不足分离；后者 terminal FAILED 并创建 superseding batch |
 | artifact 路径逃逸、内容被替换或 hash 不一致 | 读取错误证据或跨任务污染 | 显式 Phase 1R root、相对路径 containment、create-if-absent、SHA readback 和 immutable refs |
+| 零候选 artifact 只保存空 candidates/source refs | 无法证明正 universe、真实零 score 和 stage closure | candidate artifact v2 保存 raw receipt、stage trace/closure、universe 和 no-candidate reason |
+| candidate artifact 与 day input hash 互相引用 | 无法生成稳定 identity 或 exact rerun | 先闭合 candidate_input_hash，发布 artifact 后单向派生 day_input_hash |
+| 共享 InferenceEngine 默认策略被 historical 参数改变 | Selection、Paper 或模拟盘停止 ensure/信号持久化 | historical composition root 显式传参；current default save/ensure 与三类 consumer direct parity tests |
 | 多 Program 共享事务或状态 | 单 Program 失败回滚其他 Program，或列表串联 | batch 仅聚合；run/day 独立事务、独立前日 hash chain 和独立 terminal receipt |
 
 ## 19. Implementation Plan / 实施方案
@@ -944,6 +1000,7 @@ advisory_historical_range.read_projection <- advisory_phase1.historical_range_br
 |---|---|---|
 | `backend/services/advisory_historical_range/models.py` | request、resolved identity、state、receipt、reason code typed contracts | 不引用 Paper/模拟盘/QMT/QE |
 | `backend/services/advisory_historical_range/request_resolver.py` | Program/package/calendar/source/code identity 冻结 | 不执行 package 二次准入，不读取 latest/current 替代历史值 |
+| `backend/services/advisory_historical_range/catalog_planner.py` | requirement plan、chunk checkpoint、DISCOVER/VERIFY、WAITING/resume 和 request seal | 不在 HTTP 内全量扫描，不把缺失输入伪造成空 revision |
 | `backend/services/advisory_historical_range/repository.py` | batch/run/day/attempt/candidate/list/outcome/summary persistence | 不写普通 Selection/Advisory 表 |
 | `backend/services/advisory_historical_range/artifact_store.py` | 显式 root、CAS、containment、readback | 不扫描 latest，不写 repo 内 runtime artifact |
 | `backend/services/advisory_historical_range/candidate_producer.py` | 调用共享 selection computation 和历史 PIT providers | 不调用 `SelectionCenterService.run_packages` |
@@ -965,6 +1022,7 @@ advisory_historical_range.read_projection <- advisory_phase1.historical_range_br
 ```text
 backend/tests/advisory_historical_range/test_models.py
 backend/tests/advisory_historical_range/test_request_resolver.py
+backend/tests/advisory_historical_range/test_r2b_catalog_planner.py
 backend/tests/advisory_historical_range/test_state_machine.py
 backend/tests/advisory_historical_range/test_repository.py
 backend/tests/advisory_historical_range/test_candidate_producer.py
@@ -975,6 +1033,9 @@ backend/tests/advisory_historical_range/test_dev_db.py
 backend/tests/advisory_phase1/test_historical_range_bridge.py
 backend/tests/strategy_package/test_selection_computation.py
 backend/tests/simulation_runtime/test_selection_computation_parity.py
+backend/tests/selection_center/test_strategy_package_current_inference_parity.py
+backend/tests/simulation_runtime/test_strategy_package_current_inference_parity.py
+backend/tests/paper_trading_v2/test_strategy_package_current_inference_parity.py
 backend/tests/test_advisory_program_transition_parity.py
 frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 ```
@@ -983,8 +1044,8 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 #### R1：Contracts、DDL 与 repositories
 
-- 新 contracts、state/hash models、CAS。
-- additive migration 和 repositories。
+- 新 contracts、state/hash models、CAS，包括 planning/catalog checkpoint 和 candidate artifact v2。
+- additive migration 和 repositories；首次 DEV apply 前统一修正 package version、planning/seal 和 candidate v2 约束。
 - legacy tables read-only boundary tests。
 - 不接 Selection、不执行真实 range。
 
@@ -992,11 +1053,12 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 - 在中立 StrategyPackage 模块提取无持久化副作用的 `StrategyPackageSelectionComputation` 与 typed prepared-signal/provider/result contracts。
 - 将现有 Selection wrapper 的 current readiness、package health、artifact/DSE 和 trace persistence 保留在 wrapper；只把候选计算与聚合迁入公共核心，并完成逐字段 parity。
-- 实现 `HistoricalRangeAdmittedPackageResolver`、historical signal/PIT/HMM provider 和 range-owned artifact adapter；不得调用 package validator/health、普通 Selection repository 或默认 production constructor。
-- 完成单 Alpha、原生多 Alpha 各一个已完成历史交易日 candidate E2E，并证明两者只写 Phase 1R CAS/repository、不会写普通 Selection/Paper/模拟盘/QE 路径。
-- R2 不新增 migration、表或独立 DML 脚本；candidate 持久化只复用 R1 repository。若验证需要真实 schema-backed DML，只能在后续现有 DEV migration 已完成后执行，不能新建测试数据库替代 DEV。
+- 实现 `HistoricalRangeAdmittedPackageResolver`、durable catalog planner、historical signal/PIT/frozen-HMM provider 和 range-owned artifact adapter；不得调用 package validator/health、普通 Selection repository 或默认 production constructor。
+- 完成 catalog WAITING_INPUT/resume、单 Alpha、原生多 Alpha各一个已完成历史交易日 candidate E2E，并证明两者只写 Phase 1R planning rows/CAS、不会写普通 Selection/Paper/模拟盘/QE 路径。
+- R2 不新建平行表或独立手工 DML。R2-B 发布 candidate artifact v2 和 typed facts，不提前写 day success；R3 在 list transition 完成后复用 R1 `commit_successful_day`，校验 v2 candidate evidence并把 candidate/list/episode/day receipt 一次事务提交。不得用空 list、空 episode、candidate v1 或假成功态绕过该事务边界。
+- R1 尚未执行 migration 中的 `package_version BIGINT` 与真实 StrategyPackage 字符串版本冲突，R2-B 实施必须在首次 DEV apply 前把原 migration 修正为 `TEXT`；这属于尚未应用 schema 声明的纠正，不是对既有数据库做非 additive ALTER，不新增业务表或独立 DML。首次应用后仍只允许 additive migration。
 
-实施拆分状态：R2-A 只完成前两项，即 computation contracts/core 与 current Selection wrapper parity；R2-B 才实现 admitted package resolver、historical PIT/HMM signal provider、range-owned artifact adapter 和单/原生多 Alpha 历史 candidate E2E。R2-A 不得以“R2 完成”申报，R2-B 也不得重新引入普通 Selection repository、current readiness、package health 或资产二次验证。
+实施拆分状态：R2-A 只完成前两项，即 computation contracts/core 与 current Selection wrapper parity；R2-B 按子设计实现 admitted package resolver、可恢复 catalog planning/seal、historical PIT/frozen-HMM signal provider、candidate artifact v2 和单/原生多 Alpha 历史 candidate E2E。R2-B 同时必须关闭 Phase 1R 的 `trading.rdagent_signal` 写入和 ST PIT ensure/rebuild，并用 direct tests 证明 current InferenceEngine、Selection、Simulation、Paper 默认路径不变；R2-A 不得以“R2 完成”申报，R2-B 也不得重新引入普通 Selection repository、current readiness、package health、资产二次验证或不存在的 rolling metric provider。
 
 #### R3：列表状态机、executor 与恢复
 
@@ -1022,7 +1084,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 ### 20.1 L0
 
-- request/program/date/hash canonical round-trip。
+- planning request/requirement plan/checkpoint/sealed request canonical round-trip；sealed fields 只允许 null -> exact value 一次。
 - client 传入 research_program_id/alpha_mode/package version/manifest 等派生字段必须拒绝；resolver 只以 canonical config 和 admitted projection 生成。
 - program display name/review_schedule 变化不改变 range business hash；target/review/runtime/price/style/package 变化必须改变。
 - 状态机全部合法/非法 transition。
@@ -1034,11 +1096,13 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - outcome maturity 和 policy hash。
 - T 日 action 对 T+1 实际价格扰动保持不变；最后一日 next-open outcome 未成熟时 day/list 仍完成。
 - CAS containment/tamper/collision/readback。
+- candidate artifact v2 对正 universe、raw zero-score、stage closure 和 no-candidate reason 完整闭合；candidate_input_hash/day_input_hash 无循环。
 - prohibited import/field/role/approval/package-gate scan。
 
 ### 20.2 L1
 
 - repository idempotency、row version、lease/fencing。
+- catalog operation DISCOVER/VERIFY、32-item stable cursor、delta checkpoint chain/linear storage、checkpoint exact retry、generation drift、WAITING_INPUT/resume、seal once 和并发 same-hash DEDUPLICATED/canonical receipt。
 - date-plan 500-row chunk materialization、cursor 单调性、exact retry、跳号/当前日历漂移拒绝。
 - exact duplicate、payload conflict、attempt append-only。
 - resume/cancel/refresh operation 同 key 重试、异 payload 冲突、并发 claim 和 lease takeover。
@@ -1046,17 +1110,21 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - computation core 只允许显式只读 provider，不允许 repository/sink/DB constructor；current/range adapter 的 repository 与 sink 必须显式注入，Phase 1R 任一默认 production repository constructor 调用直接失败。
 - historical adapter 调用 current `DataRefreshAuditRepository` readiness 或 trade-enabled binding 直接失败；逐日 source truth 只能来自 historical provider/read receipt。
 - admitted projection 不调用 package health/validator。
-- existing Selection and current Advisory behavior parity。
+- existing Selection and current Advisory behavior parity；`InferenceEngine` 未传 historical policy 时仍执行 current PIT ensure、signal persistence 和当前 diagnostic/workspace 行为。
+- Selection Center、Simulation Runtime、Paper v2 StrategyPackage consumer 的 artifact、候选、错误 reason 和默认副作用逐字段正向 parity。
 - parity oracle 逐字段比较候选顺序/分数、exclusions、stage receipts、HMM/risk/tradability、valid-no-candidate 和错误 reason；只排除随机 ID、created_at 和 repository-specific refs，不允许用“数量相同”代替业务 parity。
 - R2 本地验证只运行 `advisory_historical_range`、共享 computation、现有 Selection wrapper 的直接 parity tests，以及由明确 import/consumer 边证明受影响的 Paper/模拟盘窄 contract；不得运行无依赖的全模块或全仓套件。
 
 ### 20.3 L2
 
 - R1 migration 的静态 schema/comment/constraint 契约验证；数据库 plan/apply/verify/exact-reapply 只在 L3 的现有 DEV 目标执行，历史 disposable PostgreSQL 结果仅保留为 R1 开发证据，不能替代当前 DEV-first release evidence。
+- 1,200 个交易日、多 Program/leg requirement plan 以 32-item catalog chunks 验证 HTTP create 不扫描、checkpoint cursor 单调、missing input 后同 batch resume 和 seal。
 - 1,200 个交易日计划以 repository/transaction contract fixture 验证 500/500/200 chunk、cursor/readback 和 create 不全量物化；不为该测试新建数据库。
 - 双 Program 一个失败、另一个完成。
 - 服务重启/lease expiry 后 resume。
 - valid no candidate、active symbol 不在新候选、exit observation depth。
+- HMM config-only 缺 frozen metadata 时 waiting，明确 snapshot/evidence 时正向通过；不得调用 latest resolver。
+- admitted multi-alpha frozen weights 正向通过；rolling/runtime-row/QE metric 分支显式 unsupported 且无 fallback。
 - 暂时性 depth 缺失进入 WAITING_INPUT，冻结 manifest 结构性 depth 不足进入 terminal FAILED。
 - outcome mature/immature/censor/terminal。
 - retrospective snapshot full partition reconcile。
@@ -1066,11 +1134,14 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 - DEV 使用 `.env` 显式连接信息；不得猜测数据库。
 - 在任何 Phase 1R schema-backed DML 或真实 range E2E 前，对现有 DEV 数据库执行 committed migration 的 plan/apply/verify/exact-reapply；不得为验证新建数据库，也不得把生产备份/导出/快照作为前置条件。
+- 真实 create 立即返回 PLANNING；故意缺失一个 catalog requirement 进入 WAITING_INPUT，补齐后同 batch resume/seal，batch id 不变。
 - 单 Alpha 3 至 5 日真实 PIT range，完整 list hash chain。
 - 原生多 Alpha 3 至 5 日相同验证。
 - 真实 2 至 3 周范围 create -> execute -> resume -> outcome -> summary。
 - 两个当前启用 Program 独立运行。
 - shared schema write audit：Selection/Paper/simulation/QE 写入为零。
+- current Selection/Simulation/Paper direct smoke 同时证明历史参数没有关闭其既有 signal persistence、PIT ensure 或普通 artifact 行为。
+- 真实 VALID_NO_CANDIDATE 日的 candidate artifact v2 readback 能在无 candidate rows 时独立证明 universe/raw/stage closure。
 - exact rerun 返回同 identities/hashes，无重复业务行。
 - DEV constraint bypass 验证非法 day chain、WATCH 占 active、重复 symbol、terminal semantic mutation 和跨 Program FK 均由数据库拒绝。
 
@@ -1099,14 +1170,14 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-923 | package 已准入后不执行二次 health/asset/model/factor gate |
 | F-924 | 显式已完成日期范围、权威交易日集合和逐 Program/leg warmup range 冻结 |
 | F-925 | 不依赖 latest 或 O4 所选前瞻日期 |
-| F-926 | batch/run/day/outcome/operation 状态机及正向后继完整 |
-| F-927 | batch/Program/day/operation 唯一键、幂等和 payload conflict 完整 |
+| F-926 | planning/batch/run/day/outcome/operation 状态机及正向后继完整 |
+| F-927 | planning/sealed request、batch/Program/day/operation 唯一键、幂等和 payload conflict 完整 |
 | F-928 | day/operation attempt lease/fencing 和重启恢复完整 |
 | F-929 | 一个 Program/日期失败不回滚其他项 |
 | F-930 | 禁止调用 `SelectionCenterService.run_packages` 写普通 run |
 | F-931 | shared selection computation 位于中立模块、无 repository/sink 副作用且普通 Selection parity 不变 |
-| F-932 | range-owned score/candidate artifact CAS 完整 |
-| F-933 | 日行情、ST、行业、股票池和 HMM 严格 PIT |
+| F-932 | range-owned candidate artifact v2 CAS 和 valid-empty 日级证据完整 |
+| F-933 | 日行情、ST、行业、股票池和 frozen HMM evidence 严格 PIT |
 | F-934 | T+1 实际价格只进入追加式 execution/outcome，不影响 T 候选、action、list hash 或最后一日完成 |
 | F-935 | Advisory list transition 纯逻辑复用且无第二套算法 |
 | F-936 | 首日空 seed 和前日 list hash chain 防止未来状态泄漏 |
@@ -1116,20 +1187,25 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-940 | candidate/episode/list/range 四层 outcome 和 maturity 完整 |
 | F-941 | Phase 1 outcome 时间轴、成本、benchmark 和企业行动复用 |
 | F-942 | rule_default 与模型能力状态不混淆 |
-| F-943 | 独立 additive DB schema、自然键、DB invariants、append-only facts 和短事务 |
+| F-943 | 独立 additive DB schema、planning checkpoint/seal、自然键、DB invariants、append-only facts 和短事务 |
 | F-944 | legacy replay 数据不自动迁移或冒充 Phase 1R |
 | F-945 | exact artifact refs、CAS readback 和无 latest 扫描 |
-| F-946 | 有限 executor、resume/cancel 不形成 scheduler 或审批 |
+| F-946 | catalog/day 有限 executor、resume/cancel 不形成同步扫描、scheduler 或审批 |
 | F-947 | 新 API 无手工候选/行情、派生 package identity、SQL、production selector 或 package gate 参数 |
 | F-948 | UI 提供完整历史验证体验且不编辑候选/结果 |
 | F-949 | Phase 1 新 lineage 与 formal OOS selector 永久隔离 |
 | F-950 | Phase 0B/bootstrap 可消费且不得发布 READY capability |
-| F-951 | Selection、当前 Advisory、模拟盘、Paper、QE/Qlib/QMT 零副作用 |
+| F-951 | Selection、当前 Advisory、模拟盘、Paper、QE/Qlib/QMT 零副作用且 current 默认行为 parity |
 | F-952 | stable reason code、后台诊断日志和无敏感信息泄漏 |
 | F-953 | 实施批次禁止 placeholder、mock-only 和同步简化版冒充完成 |
 | F-954 | 数据库操作使用现有 DEV 与显式 `.env` 先验证，不新建测试库替代 DEV；DDL 仅开发/发布执行且无逐次备份门禁 |
 | F-955 | 真实多日单/多 Alpha 正向 E2E、恢复和 exact rerun 可达 |
 | F-956 | 设计、代码、DDL、DEV、production 和 runtime 状态分开报告 |
+| F-988 | HTTP create 不扫描全范围，catalog planning 可分块 checkpoint、等待、恢复、seal once 和并发 dedup |
+| F-989 | candidate_input_hash 与 day_input_hash 单向闭合，无循环 identity |
+| F-990 | HMM 禁止 config-only latest/trained_at 猜测，多 Alpha 禁止不存在的 rolling metric provider |
+| F-991 | current InferenceEngine、Selection、Simulation 和 Paper 正向依赖测试属于 R2 必选验收 |
+| F-992 | requirement missing 不伪造空 revision，补齐后同 planning batch 可恢复 |
 
 ## 22. Design Acceptance Matrix
 
@@ -1176,13 +1252,18 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-954 | §2.2、§20.4、§23 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-955 | §20.2-20.5 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-956 | §23、§24 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-988 | §6.1、§7.1/7.5、§13 | `backend/tests/advisory_historical_range/test_r2b_catalog_planner.py` | design_ready | none |
+| F-989 | §8.3、§9.3 | `backend/tests/advisory_historical_range/test_r2b_models.py`; repository contract tests | design_ready | none |
+| F-990 | §8.2/8.4、R2-B 子设计 | `backend/tests/advisory_historical_range/test_r2b_historical_providers.py`; `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
+| F-991 | §8.1、§20.2-20.4 | `backend/tests/selection_center/test_strategy_package_current_inference_parity.py`; `backend/tests/simulation_runtime/test_strategy_package_current_inference_parity.py`; `backend/tests/paper_trading_v2/test_strategy_package_current_inference_parity.py` | design_ready | none |
+| F-992 | §6.1、§7.1、§13.1 | `backend/tests/advisory_historical_range/test_r2b_catalog_planner.py`; `docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
 
 ## 23. 发布、回滚与生产影响
 
 ### 23.1 发布顺序
 
 1. R1 foundation 已由 PR `#2481` 合入；该事实只代表代码合入，不代表 DEV/production schema 或 runtime ready。
-2. R2-R3 完成共享计算、候选 adapter、列表状态机和有限 executor；本地只运行变更模块及真实依赖模块的直接 tests，不执行未经授权的数据库写入。
+2. R2-R3 完成可恢复 catalog planning/seal、共享计算、candidate artifact v2、列表状态机和有限 executor；本地只运行变更模块及 Selection/Simulation/Paper 等真实依赖模块的直接 tests，不执行未经授权的数据库写入。
 3. 在首次 schema-backed DEV DML/E2E 前，使用现有 DEV 数据库和 `.env` 显式连接执行 committed migration plan/apply/verify/exact-reapply；不得新建测试数据库替代 DEV。
 4. DEV 执行真实 2 至 3 周单/多 Alpha range E2E；不得用 fixture 冒充。
 5. R4 dataset bridge 和 Phase 0B 前置验证。
@@ -1215,13 +1296,13 @@ production_runtime_activation = none
 ## 24. DESIGN-COMPLIANCE-001 审核清单
 
 - [x] `full_delivery_contract`：执行器、持久化、恢复、列表演进、结果、API 和 UI 均有完整验收映射。
-- [x] `no_silent_error`：pending/partial/failed/conflict/maturing 全部显式。
-- [x] `no_business_semantic_drift`：复用 shared computation 和 list engine，普通 Selection/Advisory parity 必验。
+- [x] `no_silent_error`：planning/waiting/partial/failed/conflict/maturing 全部显式，零候选由 candidate artifact v2 完整证明。
+- [x] `no_business_semantic_drift`：复用 shared computation 和 list engine，current InferenceEngine、Selection、Simulation、Paper 和普通 Advisory parity 必验。
 - [x] `no_unrequested_gate_or_approval`：无角色、审批、授权、备份或 package re-approval。
-- [x] `positive_path_satisfiable`：合法已准入包、完整历史 PIT 数据可从 create 贯通 summary。
+- [x] `positive_path_satisfiable`：合法已准入包、完整历史 PIT 数据和 frozen HMM evidence 可从异步 planning 自动 seal 并贯通 summary，无审批或最新日门禁。
 - [x] `multi_program_independence`：batch 聚合不覆盖 Program 状态。
 - [x] `research_isolation`：只写 Phase 1R/retrospective dataset，不写交易或共享运行表。
-- [x] `pit_truth`：T 日特征与未来 outcome 分离，HMM/行业/股票池按日解析。
+- [x] `pit_truth`：T 日特征与未来 outcome 分离，HMM 只用 frozen snapshot/evidence，行业/股票池按日解析。
 - [x] `decision_price_truth`：T+1 实际价格只追加 execution/outcome，不阻断或改写 T 日 action/list。
 - [x] `bounded_list_truth`：显式 action、替换预算、hash chain 和 active count。
 - [x] `state_reporting_truth`：设计、实现、DDL、DEV、production、runtime、outcome maturity 分开。
@@ -1230,7 +1311,7 @@ production_runtime_activation = none
 
 本文可标记 `design_ready` 的条件：
 
-1. F-918 至 F-956 共 39 项均有前后一致的设计与验证映射。
+1. F-918 至 F-956 及 F-988 至 F-992 共 44 项均有前后一致的设计与验证映射。
 2. 父蓝图 Phase 1R 的五项稳定验收要求已引用本文。
 3. Phase 0A.2 将 `replay-program-range` 从占位诊断入口改为由 Phase 1R 承接。
 4. Phase 1 明确接受 `HISTORICAL_RANGE_RESEARCH` retrospective partition，同时禁止 formal fallback。
@@ -1238,4 +1319,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1 已完成代码合入，下一步按 R2 开始共享计算提取与候选 adapter 开发。R2 开工前以本次修订后的中立模块所有权、无 repository/sink 核心、DEV-first 和最小真实依赖测试矩阵为准。任何实现 PR 在报告完成前必须逐项执行 F-918 至 F-956 的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
+R1 与 R2-A 已完成源码合入，下一步按 R2-B 子设计实施可恢复 catalog planning 与历史 candidate adapter。R2-B 以中立模块所有权、无 repository/sink 核心、requirement/checkpoint/sealed catalog、candidate artifact v2、只读 WSL inference、frozen HMM evidence、manifest frozen multi-alpha weights、无 package 二次验证和最小真实依赖测试矩阵为准。任何实现 PR 在报告完成前必须同时执行本文验收索引和 R2-B 子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
