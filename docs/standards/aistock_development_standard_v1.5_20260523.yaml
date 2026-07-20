@@ -93,21 +93,25 @@ rules:
 
   - rule_id: PROD-DDL-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-ddl-001
-    title: Production DB DDL must be applied and verified immediately after main merge when runtime schema changes exist
+    title: Database DDL and DML require existing-DEV validation before separately authorized production execution
     severity: P0
     category: production_schema
     enabled: true
     checker:
       type: manual_review
       required_evidence:
+        - dev_database_ddl_dml_validation
+        - no_new_test_database_created
+        - no_production_backup_export_or_snapshot_precondition
+        - explicit_production_target_authorization
         - production_db_target_preflight_without_secrets
         - committed_migration_files
-        - ddl_apply_before_after_schema_checks
+        - ddl_dml_apply_before_after_schema_checks
         - table_column_index_constraint_comment_verification
         - api_scheduler_log_smoke_after_apply
         - validation_history_record
     baseline_policy: block_release_until_verified
-    remediation: Apply committed production DDL immediately after main merge, or stop production activation and report production_ddl_pending.
+    remediation: Validate all DDL/DML in the existing DEV database first; do not create a new test database or require a production backup/export/snapshot. Execute production DDL/DML only for the explicitly authorized target, keep DEV validation, authorization, migration, and readback as separate states, and report production_ddl_gate=noop when no schema change exists.
 
   - rule_id: ERR-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-err-fallback-001

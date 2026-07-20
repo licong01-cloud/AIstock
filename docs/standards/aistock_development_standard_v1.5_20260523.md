@@ -139,7 +139,7 @@ Windows backend 通过 worker API、AIstock-owned artifact store、入库 payloa
 <a id="rule-prod-ddl-001"></a>
 ### 6.3 [PROD-DDL-001] Production DDL gate
 
-schema 变更以 migration/bootstrap 文件交付。合入后在用户授权的生产目标执行 preflight、DDL、前后 schema/comment 校验和 API/scheduler smoke；无 schema 变化时记为 `noop`。
+所有数据库 DDL 和 DML 必须先在现有 DEV 数据库完成验证；不得为验证新建测试数据库，也不得把生产库备份、导出或快照作为前置条件。生产 DDL/DML 只在用户明确授权具体生产目标后执行。DEV 验证、生产授权、迁移执行和回读校验分别记录，不相互替代；无 schema 变化时 `production_ddl_gate=noop`。schema 变更仍以 migration/bootstrap 文件交付，并在获授权的生产目标执行 preflight、DDL/DML、前后 schema/comment 校验和 API/scheduler smoke。
 
 <a id="rule-err-fallback-001"></a>
 ### 6.4 [ERR-FALLBACK-001] 错误可见性
