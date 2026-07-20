@@ -1,9 +1,9 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v1
 
 > 日期：2026-07-10
-> 修订日期：2026-07-19
+> 修订日期：2026-07-20
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成。本文于 2026-07-19 增补正式的“历史范围研究与新策略上线前验证”能力边界：它是用户显式启动、可恢复、逐交易日执行的 Advisory 业务功能，不是诊断脚本或自动 daily scheduler。Phase 1R F2 实施级详细设计已形成于 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，代码、DDL、DEV/production 执行和运行激活均未开始；Phase 0B 模型价值审计、模型训练和用户可见模型预测同样尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
+> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成。本文于 2026-07-19 增补正式的“历史范围研究与新策略上线前验证”能力边界：它是用户显式启动、可恢复、逐交易日执行的 Advisory 业务功能，不是诊断脚本或自动 daily scheduler。Phase 1R F2 实施级详细设计已形成于 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R1 contracts、状态/identity/hash、独立 CAS、additive migration 与 repositories 已由 PR `#2481` 合入，merge commit 为 `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`。R1 DEV/production DDL 均未执行、运行时未激活，R2-R5 仍未实现；下一实现批次固定为 R2 共享计算提取与候选 adapter。Phase 0B 模型价值审计、模型训练和用户可见模型预测同样尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -1111,8 +1111,9 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 - 新策略语义：包完成正常准入后即可创建范围任务，不重复验证 package 资产。历史日期早于 package/manifest/code vintage 时仍可运行 current-semantics research，但固定标记 `RETROSPECTIVE_RESEARCH_ONLY`，不得发布 package calibration 或用户可见 READY capability。
 - 模型衔接：范围结果可以立即进入 Phase 0B 和内部 research bootstrap；正式 OOS、概率/区间校准和 Program 模型启用仍由后续阶段独立验收。
 - 隔离：不写普通 Selection run、当前 Advisory list/episode、模拟盘、Paper、QE/Qlib/backtest 或交易表；不创建 scheduler、审批、角色、package re-approval 或运行时 DDL。
+- 共享计算所有权：R2 的公共候选计算契约位于中立的 StrategyPackage 计算模块，由现有 Selection wrapper 和 Phase 1R adapter 分别调用；Advisory 不 import `simulation_runtime`、Paper 或模拟盘模块，公共计算也不持有 repository、sink 或默认生产依赖。
 - 发布/回滚：范围任务是显式用户命令/API；关闭该能力只停止新任务和未开始日期，保留已完成研究事实，不影响现有单日 runner 和当前荐股基线。
-- 详细设计等级：F2。已形成 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，并同步修订 Phase 0A.2/Phase 1 对 `REPLAY` 与 observation source 的从属表述；代码尚未开始。
+- 详细设计等级：F2。已形成 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，并同步修订 Phase 0A.2/Phase 1 对 `REPLAY` 与 observation source 的从属表述。R1 代码已合入；DEV-first migration 验证、R2-R5、production DDL 和 runtime activation 分别保持 `pending`，不得互相冒充完成。
 
 ### Phase 0B：基线质量与可建模性审计
 
@@ -1215,7 +1216,7 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过 PIT、OOS、immutabl
 2. research policy、历史 dated binding、manual multi-Program runner、immutable Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
 3. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与原第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
 4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 3 项；模型表与部署表仍由 Phase 2 专项设计闭合。
-5. 历史范围研究执行器与新策略上线前验证 F2 设计：已形成 `advisory_phase1r_historical_range_research_f2_design_20260719.md`，覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离，并同步修订 Phase 0A.2/Phase 1 从属契约。
+5. 历史范围研究执行器与新策略上线前验证 F2 设计：已形成 `advisory_phase1r_historical_range_research_f2_design_20260719.md`，覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离，并同步修订 Phase 0A.2/Phase 1 从属契约。R1 foundation 已由 PR `#2481` 合入；下一批次为 R2，后续状态以该详细设计和逐批验收记录为准。
 6. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
 7. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
 8. HMM、行业黑名单和风格化行业优先级设计。
@@ -1358,12 +1359,13 @@ peak-before-stop path correctness
 1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、immutable evidence 与 manual historical runner 代码；不创建 scheduler。
 2. 对现有 single current manifest 和 native multi parent 执行只读 research preflight；手工选择已有历史 binding 可解析的 Program/date，不创建 successor binding 或正式 `T0`。
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
-4. 按 Phase 1R F2 设计发布历史范围研究功能；先以显式历史区间执行单/多 Alpha 独立逐日研究、恢复和收益成熟 E2E，不等待最新交易日，也不改变当前荐股 list。
-5. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并将 formal 与 retrospective source 分区构建为各自 SEALED snapshot；observer 不触发荐股，范围研究不改变 evidence level。
-6. 执行 Phase 0B、模型训练和制品提升；配置启用仅服务 Advisory 的模型预测 writer，无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。
-7. 再按 capability 发布 UI 影子展示。
-8. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
-9. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
+4. Phase 1R R1 foundation 代码已经合入但尚未数据库发布；R2-R3 继续完成共享计算、候选 adapter、列表状态机和有限 executor。任何 Phase 1R DDL/DML 或 schema-backed E2E 必须先使用现有 DEV 数据库和 `.env` 配置执行 plan/apply/verify/exact-reapply，不得新建测试数据库替代 DEV，也不得把历史 disposable 结果当作 DEV 证据。
+5. 按 Phase 1R F2 设计完成 R4-R5 后发布历史范围研究功能；使用显式历史区间执行单/多 Alpha 独立逐日研究、恢复和收益成熟 E2E，不等待最新交易日，也不改变当前荐股 list。production DDL 仍需 DEV 验证完成并获得用户对具体生产目标的明确授权。
+6. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并将 formal 与 retrospective source 分区构建为各自 SEALED snapshot；observer 不触发荐股，范围研究不改变 evidence level。
+7. 执行 Phase 0B、模型训练和制品提升；配置启用仅服务 Advisory 的模型预测 writer，无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。
+8. 再按 capability 发布 UI 影子展示。
+9. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
+10. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
 
 每一步都可独立停止。训练任务不得自动修改 Program 当前模型配置。
 

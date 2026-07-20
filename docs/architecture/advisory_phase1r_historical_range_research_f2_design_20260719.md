@@ -1,10 +1,11 @@
 # Advisory Phase 1R 历史范围研究与新策略上线前验证 F2 详细设计
 
 > 日期：2026-07-19
+> 修订日期：2026-07-20
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`design_ready`；代码、DDL、API、UI、DEV/production 数据操作和运行激活均未开始
+> 当前状态：`r1_code_merged_r2_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-R5、API、UI 和真实范围任务仍未实现
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -340,7 +341,7 @@ RETRYABLE_FAILED -> RUNNING
 `StrategyPackageSelectionService.run_selection` 中的确定性计算主体：
 
 ```text
-StrategyPackageSelectionComputation.compute(request, prepared_packages, providers)
+StrategyPackageSelectionComputation.compute(request, prepared_signals, read_only_providers)
   -> package candidates
   -> excluded candidates
   -> aggregate candidates
@@ -348,13 +349,49 @@ StrategyPackageSelectionComputation.compute(request, prepared_packages, provider
   -> valid-no-candidate evidence
 ```
 
-现有 `StrategyPackageSelectionService.run_selection` 保持包装器，继续执行现有配置准备、repositories 和 trace 逻辑；普通 Selection/Paper/模拟盘行为不得改变。Phase 1R 通过独立 adapter 调用同一 computation core。
+现有 `StrategyPackageSelectionService.run_selection` 保持包装器，继续执行现有配置准备、repositories 和 trace 持久化；普通 Selection/Paper/模拟盘行为不得改变。Phase 1R 通过独立 adapter 调用同一 computation core。公共核心的所有权固定在中立的 `backend/services/strategy_package/selection_computation.py`，不得放入 `simulation_runtime` 或 Advisory 命名空间；现有 wrapper 与 Phase 1R adapter 都只能单向依赖该核心。
 
-- computation core 的 package projection、market/PIT providers、HMM provider、score artifact repository、stage trace sink 和 result sink 全部是显式构造参数；core 不允许 `None -> production repository`、全局 singleton 或 import-time default。
-- current Selection wrapper 显式注入现有 `SimulationRuntimeRepository`、Selection artifact/DSE repository 和现有 trace sink；Phase 1R 显式注入 range-owned artifact/result sinks 与 no-op shared trace sink。
+- computation core 只接收已冻结 package/runtime profile、已解析的 package signal input，以及显式只读 HMM/risk/tradability provider；它返回候选、排除项、stage trace 和 valid-no-candidate 结果，不接收或调用 repository、artifact store、trace sink、result sink、DB connection 或默认 production constructor。
+- current Selection wrapper 继续拥有 `DataRefreshAuditRepository`、runtime binding、package health preparation、普通 Selection artifact/DSE 与 trace/result persistence；Phase 1R adapter 继续拥有 historical PIT/read receipt、range CAS 和 Phase 1R repository persistence。两者均在调用核心之前完成各自 I/O，并在核心返回之后写入各自命名空间。
 - current wrapper 的 `DataRefreshAuditRepository` readiness、trade-enabled runtime binding、current request normalization 和 package health preparation 保留在 wrapper 外层；Phase 1R 不调用这些 current/latest checks，而由 historical day provider 对冻结 T/warmup partitions 做 exact source/read receipt 校验。
-- 当前 `DailySelectionSignalService`/多 Alpha artifact generator 中同时包含计算和持久化的部分必须拆成 pure computation + repository adapter；只移动 `run_selection` 循环、但仍调用会默认写 `strategy_pkg.selection_score_artifact` 的 service，不满足本设计。
+- 当前 `DailySelectionSignalService`/多 Alpha artifact generator 中同时包含计算和持久化的部分必须拆成 signal preparation/provider adapter + repository adapter；只移动 `run_selection` 循环、但仍调用会默认写 `strategy_pkg.selection_score_artifact` 的 service，不满足本设计。
 - Phase 1R 模块禁止直接实例化默认 `StrategyPackageSelectionArtifactService`、`DailySelectionSignalService`、`SimulationRuntimeRepository` 或 Selection run repository。constructor contract、static import scan 和 repository spy 必须同时覆盖该边界。
+- current wrapper 与 Phase 1R adapter 必须对同一 prepared signal input 产生逐字段一致的候选顺序、分数、排除项、stage receipt 和 valid-no-candidate 结果；缺失 provider/read receipt、异常空结果或 artifact readback 错误必须保留原始结构化失败，不得转换为 `VALID_NO_CANDIDATE`、空列表成功或其他 fallback。
+
+#### 8.1.1 R2 typed computation contracts
+
+公共核心至少冻结以下 typed contracts；字段可以使用现有等价 DTO，但不得退化为无约束 `dict[str, Any]`：
+
+```text
+StrategyPackageSelectionComputationRequestV1
+  trade_date
+  selection_mode
+  ordered_package_ids
+  package_runtime_profiles + profile_hashes
+  package_top_k
+  optional current-wrapper aggregation weights
+
+PreparedPackageSignalV1
+  package_id + package_version + manifest_sha256
+  alpha_mode + ordered component lineage
+  alpha_raw_candidates
+  hmm_adjusted_candidates + hmm receipt/metadata
+  immutable score-artifact header/ref hashes
+  valid_no_candidate + explicit reason/evidence
+  input/source/universe identity hashes
+
+StrategyPackageSelectionComputationResultV1
+  package_results + excluded_results
+  aggregate_results
+  stage_trace_by_package
+  manifest_sha256_by_package
+  valid_no_candidate + no_candidate_reason
+```
+
+- 公共核心允许保留现有 `SelectionMode` 及多 package aggregation 计算，只为现有 Selection wrapper 的逐字段 parity 服务。Phase 1R adapter 始终传入一个冻结 package：它可以是单 Alpha 包，也可以是原生多 Alpha 父包；不得传入多个独立 package、页面权重或手工 fusion 配置。
+- `PreparedPackageSignalV1` 中的 artifact 仅为已完成 readback 的 immutable header/ref facts；公共核心不能根据 ref 读取或写入 artifact store。
+- operational evidence、DSE、Phase 1 trace、range candidate artifact 和 repository identity 均由 wrapper/adapter 在核心之外组装；不得进入公共结果的业务排序或 valid-no-candidate 判定。
+- provider 抛出的结构化 `DataUnavailable`、PIT/source mismatch、artifact invalid、runtime config invalid 和 unexpected error 保持原 reason/context；只有输入 receipt 明确证明 universe 合法且候选为零时才能返回 `VALID_NO_CANDIDATE`。
 
 ### 8.2 Admitted package projection
 
@@ -869,7 +906,8 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 允许的 import 方向固定为：
 
 ```text
-simulation_runtime.selection_computation  <- advisory_historical_range.candidate_producer
+strategy_package.selection_computation    <- simulation_runtime.selection
+strategy_package.selection_computation    <- advisory_historical_range.candidate_producer
 advisory_list_transition                  <- advisory_program + advisory_historical_range
 advisory_historical_range.read_projection <- advisory_phase1.historical_range_bridge
 ```
@@ -910,7 +948,7 @@ advisory_historical_range.read_projection <- advisory_phase1.historical_range_br
 | `backend/services/advisory_historical_range/candidate_producer.py` | 调用共享 selection computation 和历史 PIT providers | 不调用 `SelectionCenterService.run_packages` |
 | `backend/services/advisory_historical_range/service.py` | create/query/resume/cancel/outcome refresh orchestration | 不实现 scheduler 或同步全范围 HTTP 执行 |
 | `backend/services/advisory_historical_range/executor.py` | claim/lease/fencing、Program 并发、day 顺序、恢复 | 不跨 Program 共享事务或列表状态 |
-| `backend/services/simulation_runtime/selection_computation.py` | 从现有 selection wrapper 抽出的 broker-neutral 纯计算内核 | 不 import Advisory，不持久化 run/artifact |
+| `backend/services/strategy_package/selection_computation.py` | 从现有 selection wrapper 抽出的中立确定性计算内核和 typed provider/result contracts | 不 import Advisory/simulation/Paper，不持有 repository/sink，不持久化 run/artifact |
 | `backend/services/simulation_runtime/selection.py` | 保持现有 wrapper、package preparation、repository 和 consumer parity | 不改变普通 Selection/Paper/模拟盘业务结果 |
 | `backend/services/advisory_list_transition.py` | `_evaluate_review` 纯 transition 与 canonical payload builder | 不访问 DB/CAS，不产生普通或 range identity |
 | `backend/services/advisory_program.py` | 当前 review/replay wrapper 改用共享 transition，保持旧持久化 parity | 不把 Phase 1R 表或 origin 接入当前荐股流程 |
@@ -934,6 +972,7 @@ backend/tests/advisory_historical_range/test_service.py
 backend/tests/advisory_historical_range/test_api.py
 backend/tests/advisory_historical_range/test_dev_db.py
 backend/tests/advisory_phase1/test_historical_range_bridge.py
+backend/tests/strategy_package/test_selection_computation.py
 backend/tests/simulation_runtime/test_selection_computation_parity.py
 backend/tests/test_advisory_program_transition_parity.py
 frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
@@ -950,10 +989,11 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 #### R2：共享计算提取与候选 adapter
 
-- 提取 `StrategyPackageSelectionComputation`。
-- 现有 Selection wrapper parity。
-- admitted projection、range artifact repository、PIT/HMM providers。
-- 单/原生多 Alpha 一个历史日期 candidate E2E。
+- 在中立 StrategyPackage 模块提取无持久化副作用的 `StrategyPackageSelectionComputation` 与 typed prepared-signal/provider/result contracts。
+- 将现有 Selection wrapper 的 current readiness、package health、artifact/DSE 和 trace persistence 保留在 wrapper；只把候选计算与聚合迁入公共核心，并完成逐字段 parity。
+- 实现 `HistoricalRangeAdmittedPackageResolver`、historical signal/PIT/HMM provider 和 range-owned artifact adapter；不得调用 package validator/health、普通 Selection repository 或默认 production constructor。
+- 完成单 Alpha、原生多 Alpha 各一个已完成历史交易日 candidate E2E，并证明两者只写 Phase 1R CAS/repository、不会写普通 Selection/Paper/模拟盘/QE 路径。
+- R2 不新增 migration、表或独立 DML 脚本；candidate 持久化只复用 R1 repository。若验证需要真实 schema-backed DML，只能在后续现有 DEV migration 已完成后执行，不能新建测试数据库替代 DEV。
 
 #### R3：列表状态机、executor 与恢复
 
@@ -987,6 +1027,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - 单 Alpha/多 Alpha 各 leg warmup range 推导；warmup 数据不得生成范围外 day/list。
 - list transition parity、active count、replacement budget、confirmation days。
 - current review/replay wrapper 的 persisted lifecycle rows、summary 和 reason code 在抽取前后逐字段 parity；Phase 1R 新增 WATCH projection 不得进入旧 wrapper 持久化结果。
+- shared computation 对 repository、artifact store、trace/result sink、DB connection 和 import-time default 的依赖必须为零；current/range adapter 才负责各自 I/O。
 - outcome maturity 和 policy hash。
 - T 日 action 对 T+1 实际价格扰动保持不变；最后一日 next-open outcome 未成熟时 day/list 仍完成。
 - CAS containment/tamper/collision/readback。
@@ -999,18 +1040,17 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - exact duplicate、payload conflict、attempt append-only。
 - resume/cancel/refresh operation 同 key 重试、异 payload 冲突、并发 claim 和 lease takeover。
 - range candidate repository 不调用 shared Selection repository。
-- computation core 所有 provider/repository/sink 必须显式注入；Phase 1R 任一默认 production repository constructor 调用直接失败。
+- computation core 只允许显式只读 provider，不允许 repository/sink/DB constructor；current/range adapter 的 repository 与 sink 必须显式注入，Phase 1R 任一默认 production repository constructor 调用直接失败。
 - historical adapter 调用 current `DataRefreshAuditRepository` readiness 或 trade-enabled binding 直接失败；逐日 source truth 只能来自 historical provider/read receipt。
 - admitted projection 不调用 package health/validator。
 - existing Selection and current Advisory behavior parity。
 - parity oracle 逐字段比较候选顺序/分数、exclusions、stage receipts、HMM/risk/tradability、valid-no-candidate 和错误 reason；只排除随机 ID、created_at 和 repository-specific refs，不允许用“数量相同”代替业务 parity。
+- R2 本地验证只运行 `advisory_historical_range`、共享 computation、现有 Selection wrapper 的直接 parity tests，以及由明确 import/consumer 边证明受影响的 Paper/模拟盘窄 contract；不得运行无依赖的全模块或全仓套件。
 
 ### 20.3 L2
 
-- disposable PostgreSQL migration apply/exact reapply/catalog verification。
-- 1,200 个交易日计划以多事务物化并完成 cursor/readback，create transaction 不生成全部 day rows。
-- 单 Alpha 3 至 5 日真实 PIT range，完整 list hash chain。
-- 原生多 Alpha 3 至 5 日相同验证。
+- R1 migration 的静态 schema/comment/constraint 契约验证；数据库 plan/apply/verify/exact-reapply 只在 L3 的现有 DEV 目标执行，历史 disposable PostgreSQL 结果仅保留为 R1 开发证据，不能替代当前 DEV-first release evidence。
+- 1,200 个交易日计划以 repository/transaction contract fixture 验证 500/500/200 chunk、cursor/readback 和 create 不全量物化；不为该测试新建数据库。
 - 双 Program 一个失败、另一个完成。
 - 服务重启/lease expiry 后 resume。
 - valid no candidate、active symbol 不在新候选、exit observation depth。
@@ -1022,6 +1062,9 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 ### 20.4 L3
 
 - DEV 使用 `.env` 显式连接信息；不得猜测数据库。
+- 在任何 Phase 1R schema-backed DML 或真实 range E2E 前，对现有 DEV 数据库执行 committed migration 的 plan/apply/verify/exact-reapply；不得为验证新建数据库，也不得把生产备份/导出/快照作为前置条件。
+- 单 Alpha 3 至 5 日真实 PIT range，完整 list hash chain。
+- 原生多 Alpha 3 至 5 日相同验证。
 - 真实 2 至 3 周范围 create -> execute -> resume -> outcome -> summary。
 - 两个当前启用 Program 独立运行。
 - shared schema write audit：Selection/Paper/simulation/QE 写入为零。
@@ -1038,7 +1081,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 ### 20.6 Nightly/VC
 
 - 长区间、多 Program、跨市场阶段、性能和存储容量。
-- Selection/模拟盘/Paper 回归。
+- 仅委托与共享 computation 真实 consumer 边对应的 Selection wrapper、Paper/模拟盘选股适配窄回归；没有依赖边的套件不进入本阶段计划。
 - LLM 设计漂移检查：禁止简化版、静默 fallback、业务偏移和额外审批。
 
 ## 21. Design Acceptance Index
@@ -1058,7 +1101,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-928 | day/operation attempt lease/fencing 和重启恢复完整 |
 | F-929 | 一个 Program/日期失败不回滚其他项 |
 | F-930 | 禁止调用 `SelectionCenterService.run_packages` 写普通 run |
-| F-931 | shared selection computation 提取且普通 Selection parity 不变 |
+| F-931 | shared selection computation 位于中立模块、无 repository/sink 副作用且普通 Selection parity 不变 |
 | F-932 | range-owned score/candidate artifact CAS 完整 |
 | F-933 | 日行情、ST、行业、股票池和 HMM 严格 PIT |
 | F-934 | T+1 实际价格只进入追加式 execution/outcome，不影响 T 候选、action、list hash 或最后一日完成 |
@@ -1081,13 +1124,13 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-951 | Selection、当前 Advisory、模拟盘、Paper、QE/Qlib/QMT 零副作用 |
 | F-952 | stable reason code、后台诊断日志和无敏感信息泄漏 |
 | F-953 | 实施批次禁止 placeholder、mock-only 和同步简化版冒充完成 |
-| F-954 | DEV 使用显式 `.env`，DDL 仅开发/发布执行且无逐次备份门禁 |
+| F-954 | 数据库操作使用现有 DEV 与显式 `.env` 先验证，不新建测试库替代 DEV；DDL 仅开发/发布执行且无逐次备份门禁 |
 | F-955 | 真实多日单/多 Alpha 正向 E2E、恢复和 exact rerun 可达 |
 | F-956 | 设计、代码、DDL、DEV、production 和 runtime 状态分开报告 |
 
 ## 22. Design Acceptance Matrix
 
-本矩阵只表示实施级设计闭合，不表示代码已完成。
+本矩阵表示实施级设计闭合，不单独代表全部代码完成；当前逐批实现与发布状态以 R1 验收记录及后续 R2-R5 验收记录为准。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1135,13 +1178,14 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 
 ### 23.1 发布顺序
 
-1. R1-R3 代码和 migration 在 disposable PostgreSQL 完成。
-2. 用户确认代码合入后，在 DEV 使用 `.env` 显式连接执行 migration plan/apply/verify/exact reapply。
-3. DEV 执行真实 2 至 3 周单/多 Alpha range E2E；不得用 fixture 冒充。
-4. R4 dataset bridge 和 Phase 0B 前置验证。
-5. R5 API/UI E2E 完成后替换主页面 legacy replay 入口。
-6. production DDL 只有在 migration 已提交、DEV 已验证且用户明确授权执行时应用；不执行全库逐 DDL 备份门禁。
-7. 代码合入、production DDL、服务重启、功能可见和真实研究任务运行分别报告。
+1. R1 foundation 已由 PR `#2481` 合入；该事实只代表代码合入，不代表 DEV/production schema 或 runtime ready。
+2. R2-R3 完成共享计算、候选 adapter、列表状态机和有限 executor；本地只运行变更模块及真实依赖模块的直接 tests，不执行未经授权的数据库写入。
+3. 在首次 schema-backed DEV DML/E2E 前，使用现有 DEV 数据库和 `.env` 显式连接执行 committed migration plan/apply/verify/exact-reapply；不得新建测试数据库替代 DEV。
+4. DEV 执行真实 2 至 3 周单/多 Alpha range E2E；不得用 fixture 冒充。
+5. R4 dataset bridge 和 Phase 0B 前置验证。
+6. R5 API/UI E2E 完成后替换主页面 legacy replay 入口。
+7. production DDL 只有在 migration 已提交、DEV 已验证且用户明确授权具体生产目标时应用；不执行全库逐 DDL 备份门禁。
+8. 代码合入、DEV DDL/DML、production DDL/DML、服务重启、功能可见和真实研究任务运行分别报告。
 
 ### 23.2 回滚
 
@@ -1155,10 +1199,12 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 ### 23.3 Production gates
 
 ```text
-production_ddl_gate = pending_until_implementation_migration_and_user_authorization
+phase1r_r1_code_merge = merged_pr_2481_commit_6d400b40
+dev_ddl_gate = pending_existing_dev_plan_apply_verify_exact_reapply
+production_ddl_gate = pending_until_dev_verified_and_user_authorizes_exact_production_target
 production_frontend_dependency_gate = noop unless implementation adds a declared dependency
 production_backend_dependency_gate = noop unless implementation adds a declared dependency
-production_runtime_activation = none at design stage
+production_runtime_activation = none
 ```
 
 上述是发布状态，不是业务审批。运行时只校验输入、PIT、身份、幂等和 artifact 正确性。
@@ -1189,4 +1235,4 @@ production_runtime_activation = none at design stage
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-设计合入后，下一步按 R1 开始代码开发。任何实现 PR 在报告完成前必须逐项执行 F-918 至 F-956 的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
+R1 已完成代码合入，下一步按 R2 开始共享计算提取与候选 adapter 开发。R2 开工前以本次修订后的中立模块所有权、无 repository/sink 核心、DEV-first 和最小真实依赖测试矩阵为准。任何实现 PR 在报告完成前必须逐项执行 F-918 至 F-956 的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
