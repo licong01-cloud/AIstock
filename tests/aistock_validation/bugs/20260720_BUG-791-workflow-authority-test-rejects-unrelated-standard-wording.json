@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-791",
-  "closed_at": null,
+  "closed_at": "2026-07-20T07:46:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,8 +29,8 @@
   "expected": "The authority contract test must validate only the canonical DESIGN-COMPLIANCE-001 rule labels and workflow authority references, without imposing a document-wide vocabulary ban.",
   "first_seen_at": "2026-07-20T07:14:44.087549Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5154e4a13060251b26f3c71d4a834d7441237403",
+  "fixed_at": "2026-07-20T07:48:26.890917Z",
   "github_issue_number": 2510,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2510",
   "last_seen_at": "2026-07-20T07:14:44.087549Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2513",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "02696c284ee78f720c3989e5",
     "source_event_id": "FE-20260720-02696c284ee7"
   },
+  "validation_evidence": [
+    "PR #2513 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
