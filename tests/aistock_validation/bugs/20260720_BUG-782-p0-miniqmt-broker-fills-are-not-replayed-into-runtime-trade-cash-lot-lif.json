@@ -28,6 +28,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260720-81315443ec10",
       "timestamp": "2026-07-20T03:01:25.452666Z"
+    },
+    {
+      "action": "design_compliance_followup",
+      "actor": "codex",
+      "note": "Added same-second fill stable ordering, removed derived cumulative quantity from trade identity conflicts, and added restart recovery after child persistence precedes vn.py core persistence.",
+      "timestamp": "2026-07-20T06:34:54.0814602Z"
     }
   ],
   "evidence_uris": [

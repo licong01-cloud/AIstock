@@ -150,7 +150,7 @@ class FakeMiniQMTGateway:
                 accepted=False,
                 broker_order_id=None,
                 message="fake broker rejected child order",
-                raw={"gateway": "fake_miniqmt", "rejected": True},
+                raw={"gateway": "fake_miniqmt", "rejected": True, "broker_called": True},
             )
         broker_order_id = f"fake_qmt_{self._next_order_id:06d}"
         self._next_order_id += 1
@@ -169,7 +169,7 @@ class FakeMiniQMTGateway:
             accepted=True,
             broker_order_id=broker_order_id,
             message="fake broker accepted child order",
-            raw={"gateway": "fake_miniqmt", "order_type": side_code},
+            raw={"gateway": "fake_miniqmt", "order_type": side_code, "broker_called": True},
         )
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
@@ -238,7 +238,11 @@ class QmtClientMiniQMTGateway:
                 accepted=False,
                 broker_order_id=None,
                 message="qmt client does not expose place_order",
-                raw={"gateway": "qmt_client_miniqmt", "error_code": "QMT_PLACE_ORDER_UNAVAILABLE"},
+                raw={
+                    "gateway": "qmt_client_miniqmt",
+                    "error_code": "QMT_PLACE_ORDER_UNAVAILABLE",
+                    "broker_called": False,
+                },
             )
         order_type = 23 if order.side == OrderSide.BUY else 24
         strategy_name = _metadata_text(order, "strategy_name") or self.strategy_name or order.strategy_slot_id
@@ -258,7 +262,11 @@ class QmtClientMiniQMTGateway:
                 accepted=False,
                 broker_order_id=None,
                 message=f"{type(exc).__name__}: {exc}",
-                raw={"gateway": "qmt_client_miniqmt", "exception_type": type(exc).__name__},
+                raw={
+                    "gateway": "qmt_client_miniqmt",
+                    "exception_type": type(exc).__name__,
+                    "broker_called": True,
+                },
             )
         diagnostic = _maybe_call(self.qmt_client, "get_last_order_diagnostic") or {}
         try:
@@ -276,6 +284,7 @@ class QmtClientMiniQMTGateway:
                 "strategy_name": strategy_name,
                 "order_remark": order_remark,
                 "order_type": order_type,
+                "broker_called": True,
             },
         )
 

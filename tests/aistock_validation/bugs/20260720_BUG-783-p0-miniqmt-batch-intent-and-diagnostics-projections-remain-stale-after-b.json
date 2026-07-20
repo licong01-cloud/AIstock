@@ -3,11 +3,13 @@
   "allowed_write_scope": [
     "backend/services/miniqmt_execution_runtime/client.py",
     "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/ops.py",
     "backend/services/simulation_runtime/platform_observability.py",
     "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
     "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "backend/tests/qmt_strategy_ledger/test_repository.py",
     "backend/tests/simulation_runtime/test_ops_api.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
@@ -30,6 +32,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260720-b02afcf63c55",
       "timestamp": "2026-07-20T03:02:11.660981Z"
+    },
+    {
+      "action": "design_compliance_followup",
+      "actor": "codex",
+      "note": "Made broker_called an exact gateway fact across child, runtime event, batch result, order intent and diagnostics; order-intent status and projection metadata now update atomically.",
+      "timestamp": "2026-07-20T06:34:54.0814602Z"
     }
   ],
   "evidence_uris": [

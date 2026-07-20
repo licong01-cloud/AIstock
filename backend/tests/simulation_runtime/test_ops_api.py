@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import simulation_runtime
+from backend.services.simulation_runtime import ops as simulation_ops
 from backend.services.miniqmt_execution_runtime.models import (
     MiniQMTChildOrder,
     MiniQMTChildOrderStatus,
@@ -1468,6 +1469,59 @@ def test_platform_diagnostics_supports_exact_runtime_query_before_daily_run_exis
     assert miniqmt_backend["facts"]["runtime_id"] == "runtime_platform_diagnostics_only"
     assert miniqmt_backend["facts"]["quote_health_status"] == "DEGRADED"
     assert payload["runtime_projection_consistency"]["status"] == "NOT_APPLICABLE"
+
+
+def test_runtime_projection_does_not_treat_pre_broker_child_rejection_as_broker_call() -> None:
+    runtime_id = "runtime_projection_pre_broker_rejection"
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id=runtime_id,
+                account_group_id="ag_projection_pre_broker_rejection",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="c" * 64,
+            ).model_dump()
+        )
+    )
+    child = runtime_repository.upsert_child_order(
+        MiniQMTChildOrder(
+            child_order_id="child_projection_pre_broker_rejection",
+            runtime_id=runtime_id,
+            algo_instance_id="algo_projection_pre_broker_rejection",
+            parent_intent_id="parent_projection_pre_broker_rejection",
+            strategy_slot_id="slot_projection_pre_broker_rejection",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            status=MiniQMTChildOrderStatus.REJECTED,
+            metadata={"gateway_ack": {"broker_called": False, "error_code": "QMT_PLACE_ORDER_UNAVAILABLE"}},
+        )
+    )
+    runtime_repository.append_event(
+        MiniQMTExecutionEvent(
+            event_id="event_projection_pre_broker_rejection",
+            runtime_id=runtime_id,
+            sequence=1,
+            event_type=MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+            source="gateway",
+            payload={
+                "child_order_id": child.child_order_id,
+                "broker_order_id": None,
+                "accepted": False,
+                "broker_called": False,
+            },
+        )
+    )
+
+    result = simulation_ops._miniqmt_runtime_projection_consistency(
+        run=None,
+        runtime_repository=runtime_repository,
+        runtime_id=runtime_id,
+    )
+
+    assert result["actual"]["broker_called"] is False
 
 
 def test_platform_diagnostics_degrades_stale_miniqmt_projection_and_auto_clears(

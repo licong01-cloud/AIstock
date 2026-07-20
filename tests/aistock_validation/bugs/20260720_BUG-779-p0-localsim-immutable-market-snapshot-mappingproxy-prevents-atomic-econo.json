@@ -28,6 +28,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260720-9478962d3fbc",
       "timestamp": "2026-07-20T02:58:33.795662Z"
+    },
+    {
+      "action": "design_compliance_followup",
+      "actor": "codex",
+      "note": "Added strict JSON key-type and non-finite numeric rejection so immutable LocalSIM facts cannot silently collide or hash NaN/Infinity.",
+      "timestamp": "2026-07-20T06:34:54.0814602Z"
     }
   ],
   "evidence_uris": [

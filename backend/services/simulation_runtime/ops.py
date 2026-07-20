@@ -11,7 +11,9 @@ from typing import Any, Mapping
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
 from backend.services.miniqmt_execution_runtime.models import (
+    MiniQMTChildOrder,
     MiniQMTChildOrderStatus,
+    MiniQMTExecutionEvent,
     MiniQMTExecutionEventType,
 )
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
@@ -213,12 +215,17 @@ def _miniqmt_runtime_projection_consistency(
     actual_submitted = sum(child.status in submitted_statuses for child in children)
     actual_rejected = sum(child.status == MiniQMTChildOrderStatus.REJECTED for child in children)
     actual_trade_events = sum(event.event_type == MiniQMTExecutionEventType.TRADE_EVENT for event in events)
-    broker_event_types = {
-        MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
-        MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
-        MiniQMTExecutionEventType.TRADE_EVENT,
-    }
-    actual_broker_called = any(event.event_type in broker_event_types for event in events)
+    children_by_id = {child.child_order_id: child for child in children}
+    actual_broker_called = any(
+        _runtime_event_broker_called(event, children_by_id=children_by_id)
+        for event in events
+        if event.event_type
+        in {
+            MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+            MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+            MiniQMTExecutionEventType.TRADE_EVENT,
+        }
+    )
     actual = {
         "broker_called": actual_broker_called,
         "child_order_count": len(actual_child_ids),
@@ -394,6 +401,52 @@ def _miniqmt_runtime_projection_consistency(
         "execution_gate": False,
         "repair_attempted": False,
     }
+
+
+def _runtime_event_broker_called(
+    event: MiniQMTExecutionEvent,
+    *,
+    children_by_id: Mapping[str, MiniQMTChildOrder],
+) -> bool:
+    explicit = event.payload.get("broker_called")
+    if isinstance(explicit, bool):
+        return explicit
+    if explicit is not None:
+        raise RuntimeConfigInvalidError(
+            "MiniQMT runtime event broker_called fact must be boolean",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_PROJECTION_SCHEMA_INVALID",
+                "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+                "event_id": event.event_id,
+                "field": "event.payload.broker_called",
+                "value_type": type(explicit).__name__,
+            },
+        )
+    if event.event_type in {
+        MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+        MiniQMTExecutionEventType.TRADE_EVENT,
+    }:
+        return True
+    child_id = str(event.payload.get("child_order_id") or "").strip()
+    child = children_by_id.get(child_id)
+    gateway_ack = child.metadata.get("gateway_ack") if child is not None else None
+    if isinstance(gateway_ack, Mapping):
+        ack_value = gateway_ack.get("broker_called")
+        if isinstance(ack_value, bool):
+            return ack_value
+        if gateway_ack.get("error_code") == "QMT_PLACE_ORDER_UNAVAILABLE":
+            return False
+        if gateway_ack.get("gateway") == "qmt_client_miniqmt" and gateway_ack.get("exception_type"):
+            return True
+    raise RuntimeConfigInvalidError(
+        "MiniQMT rejected child event is missing exact broker_called truth",
+        context={
+            "reason_code": "MINIQMT_RUNTIME_BROKER_CALLED_FACT_MISSING",
+            "stage": "SIMULATION_PLATFORM_RUNTIME_PROJECTION",
+            "event_id": event.event_id,
+            "child_order_id": child_id or None,
+        },
+    )
 
 
 def _runtime_controller_health(registry: dict[str, Any], runtime_id: str) -> dict[str, Any] | None:

@@ -520,12 +520,19 @@ class MiniQMTExecutionRuntime:
             )
         self.oms.record_child_order(order)
         ack = self.gateway.submit_child_order(order)
+        broker_called = _gateway_ack_broker_called(ack)
+        gateway_ack = {**dict(ack.raw or {}), "broker_called": broker_called}
         submitted = order.model_copy(
             update={
                 "broker_order_id": ack.broker_order_id,
                 "status": MiniQMTChildOrderStatus.SUBMITTED if ack.accepted else MiniQMTChildOrderStatus.REJECTED,
                 "submitted_at": datetime.now(UTC) if ack.accepted else None,
-                "metadata": {**order.metadata, "gateway_ack": ack.raw, "gateway_message": ack.message},
+                "metadata": {
+                    **order.metadata,
+                    "gateway_ack": gateway_ack,
+                    "gateway_message": ack.message,
+                    "broker_called": broker_called,
+                },
             }
         )
         submitted = self.oms.record_child_order(submitted)
@@ -551,6 +558,7 @@ class MiniQMTExecutionRuntime:
                 "broker_order_id": submitted.broker_order_id,
                 "accepted": ack.accepted,
                 "message": ack.message,
+                "broker_called": broker_called,
                 **(
                     {
                         "parent_intent_id": submitted.parent_intent_id,
@@ -847,14 +855,21 @@ class MiniQMTExecutionRuntime:
             broker_order_id=broker_order_id,
             quantity=quantity,
             price=price,
-            cumulative_quantity=cumulative_quantity,
             trade_payload=trade_payload,
             prepared_trade=prepared_trade,
         )
-        if existing_trade_event is not None and (
-            child is None or _child_has_applied_trade_progress(child, cumulative_quantity=cumulative_quantity)
-        ):
-            return existing_trade_event
+        trade_id = _broker_trade_id(trade_payload)
+        if existing_trade_event is not None:
+            if child is None:
+                return existing_trade_event
+            if _child_has_applied_trade_progress(child, cumulative_quantity=cumulative_quantity):
+                instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
+                if (
+                    instance is None
+                    or not self._is_vnpy_instance(instance)
+                    or _vnpy_trade_application_recorded(instance, trade_id=trade_id)
+                ):
+                    return existing_trade_event
         anchor_payload: dict[str, Any] | None = None
         anchor_error: Exception | None = None
         if (
@@ -981,7 +996,11 @@ class MiniQMTExecutionRuntime:
                         )
                     )
                 )
-                self._persist_vnpy_core_state(instance, core)
+                try:
+                    self._persist_vnpy_core_state(instance, core, applied_trade_id=trade_id)
+                except Exception:
+                    self._vnpy_cores.pop(instance.algo_instance_id, None)
+                    raise
                 self._handle_vnpy_actions(instance, actions)
             if child.status in _TERMINAL_CHILD_ORDER_STATUSES:
                 self._terminalize_algo_if_all_children_terminal(
@@ -2477,16 +2496,23 @@ class MiniQMTExecutionRuntime:
         self,
         instance: MiniQMTExecutionAlgoInstance,
         core: VnpyAlgoTemplate,
+        *,
+        applied_trade_id: str | None = None,
     ) -> MiniQMTExecutionAlgoInstance:
         snapshot = core.get_data()
         status = MiniQMTAlgoInstanceStatus.COMPLETED if snapshot.status == "finished" else instance.status
+        metadata = dict(instance.metadata)
+        applied_trade_ids = _vnpy_applied_trade_ids(metadata)
+        if applied_trade_id is not None and applied_trade_id not in applied_trade_ids:
+            applied_trade_ids.append(applied_trade_id)
         updated = instance.model_copy(
             update={
                 "remaining_quantity": max(0, int(snapshot.left)),
                 "status": status,
                 "metadata": {
-                    **dict(instance.metadata),
+                    **metadata,
                     "vnpy_algo_state": core.audit_metadata(),
+                    **({"vnpy_applied_trade_ids": applied_trade_ids} if applied_trade_ids else {}),
                 },
             }
         )
@@ -3768,6 +3794,51 @@ def _position_price(position: dict[str, Any]) -> float:
     return 0.0
 
 
+def _gateway_ack_broker_called(ack: Any) -> bool:
+    raw = dict(getattr(ack, "raw", None) or {})
+    broker_called = raw.get("broker_called")
+    if isinstance(broker_called, bool):
+        return broker_called
+    if bool(getattr(ack, "accepted", False)) or bool(getattr(ack, "broker_order_id", None)):
+        return True
+    raise RuntimeError(
+        "MiniQMT gateway acknowledgement is missing exact broker_called truth; "
+        "reason_code=MINIQMT_GATEWAY_BROKER_CALLED_FACT_MISSING, "
+        f"accepted={getattr(ack, 'accepted', None)!r}, "
+        f"broker_order_id={getattr(ack, 'broker_order_id', None)!r}, raw={raw!r}"
+    )
+
+
+def _vnpy_applied_trade_ids(metadata: dict[str, Any]) -> list[str]:
+    raw = metadata.get("vnpy_applied_trade_ids")
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or any(not isinstance(item, str) or not item.strip() for item in raw):
+        raise RuntimeError(
+            "MiniQMT vn.py applied-trade checkpoint is malformed; "
+            "reason_code=MINIQMT_RUNTIME_VNPY_TRADE_CHECKPOINT_INVALID, "
+            f"value_type={type(raw).__name__}, value={raw!r}"
+        )
+    normalized = [item.strip() for item in raw]
+    if len(set(normalized)) != len(normalized):
+        raise RuntimeError(
+            "MiniQMT vn.py applied-trade checkpoint contains duplicate identities; "
+            "reason_code=MINIQMT_RUNTIME_VNPY_TRADE_CHECKPOINT_INVALID, "
+            f"trade_ids={normalized!r}"
+        )
+    return normalized
+
+
+def _vnpy_trade_application_recorded(
+    instance: MiniQMTExecutionAlgoInstance,
+    *,
+    trade_id: str | None,
+) -> bool:
+    if not trade_id:
+        return False
+    return trade_id in _vnpy_applied_trade_ids(dict(instance.metadata))
+
+
 def _broker_order_id(order: dict[str, Any]) -> str | None:
     for key in ("broker_order_id", "order_id", "qmt_order_id", "native_order_id"):
         value = _optional_text(order.get(key))
@@ -3810,105 +3881,91 @@ def _broker_trade_sort_key(
     trade: dict[str, Any],
     *,
     runtime_trade_date: date,
-) -> tuple[datetime, str]:
+) -> datetime:
     normalized_time = _broker_trade_time(trade, runtime_trade_date=runtime_trade_date)
-    return normalized_time or datetime.min.replace(tzinfo=UTC), _broker_trade_id(trade) or ""
+    return normalized_time or datetime.min.replace(tzinfo=UTC)
 
 
-def _broker_trade_date(
+def _broker_trade_temporal(
     trade: dict[str, Any],
     *,
     runtime_trade_date: date,
-) -> date | None:
-    explicit = trade.get("trade_date") or trade.get("traded_date")
-    if isinstance(explicit, datetime):
-        return explicit.astimezone(ZoneInfo("Asia/Shanghai")).date() if explicit.tzinfo else explicit.date()
-    if isinstance(explicit, date):
-        return explicit
-    if explicit not in (None, ""):
-        try:
-            return date.fromisoformat(str(explicit))
-        except ValueError as exc:
-            raise RuntimeError(
-                "MiniQMT broker recovery trade has an invalid explicit trade date; "
-                "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-                f"trade_id={_broker_trade_id(trade)!r}, trade_date={explicit!r}"
-            ) from exc
-    raw = next(
-        (
-            trade.get(key)
-            for key in ("traded_time_iso", "trade_time_iso", "traded_time", "trade_time")
-            if trade.get(key) not in (None, "")
-        ),
-        None,
-    )
-    if isinstance(raw, datetime):
-        return raw.astimezone(ZoneInfo("Asia/Shanghai")).date() if raw.tzinfo else raw.date()
-    text = str(raw or "").strip()
-    if not text:
-        return None
-    if text.isdigit():
-        try:
-            if len(text) == 10:
-                return datetime.fromtimestamp(int(text), tz=UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
-            if len(text) == 13:
-                return datetime.fromtimestamp(int(text) / 1000, tz=UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
-            if 14 <= len(text) <= 20:
-                return datetime.strptime(text[:14], "%Y%m%d%H%M%S").date()
-            if len(text) == 6:
-                datetime.strptime(text, "%H%M%S")
-                return runtime_trade_date
-        except (OverflowError, OSError, ValueError) as exc:
-            raise RuntimeError(
-                "MiniQMT broker recovery trade has an invalid numeric trade time; "
-                "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-                f"trade_id={_broker_trade_id(trade)!r}, trade_time={raw!r}"
-            ) from exc
+) -> tuple[date | None, datetime | None]:
+    trade_id = _broker_trade_id(trade)
+    raw_dates = {
+        key: trade.get(key)
+        for key in ("trade_date", "traded_date")
+        if trade.get(key) not in (None, "")
+    }
+    parsed_dates = {
+        key: _parse_broker_trade_date_alias(value, trade_id=trade_id, field=key)
+        for key, value in raw_dates.items()
+    }
+    unique_dates = set(parsed_dates.values())
+    if len(unique_dates) > 1:
         raise RuntimeError(
-            "MiniQMT broker recovery trade has an ambiguous numeric trade time; "
-            "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-            f"trade_id={_broker_trade_id(trade)!r}, trade_time={raw!r}"
+            "MiniQMT broker recovery trade date aliases conflict; "
+            "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_CONFLICT, "
+            f"trade_id={trade_id!r}, date_aliases={raw_dates!r}"
         )
-    if ":" in text and "T" not in text and "-" not in text:
-        try:
-            datetime.strptime(text, "%H:%M:%S")
-        except ValueError as exc:
-            raise RuntimeError(
-                "MiniQMT broker recovery trade has an invalid time-only value; "
-                "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-                f"trade_id={_broker_trade_id(trade)!r}, trade_time={raw!r}"
-            ) from exc
-        return runtime_trade_date
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError as exc:
+    explicit_date = next(iter(unique_dates), None)
+    base_date = explicit_date or runtime_trade_date
+    raw_times = {
+        key: trade.get(key)
+        for key in ("traded_time_iso", "trade_time_iso", "traded_time", "trade_time")
+        if trade.get(key) not in (None, "")
+    }
+    parsed_times = {
+        key: _parse_broker_trade_time_alias(value, base_date=base_date, trade_id=trade_id, field=key)
+        for key, value in raw_times.items()
+    }
+    unique_times = set(parsed_times.values())
+    if len(unique_times) > 1:
         raise RuntimeError(
-            "MiniQMT broker recovery trade has an invalid trade time; "
+            "MiniQMT broker recovery trade time aliases conflict; "
+            "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_CONFLICT, "
+            f"trade_id={trade_id!r}, time_aliases={raw_times!r}, "
+            f"normalized_utc={{{', '.join(f'{key!r}: {value.isoformat()!r}' for key, value in parsed_times.items())}}}"
+        )
+    broker_time = next(iter(unique_times), None)
+    time_date = broker_time.astimezone(ZoneInfo("Asia/Shanghai")).date() if broker_time is not None else None
+    if explicit_date is not None and time_date is not None and explicit_date != time_date:
+        raise RuntimeError(
+            "MiniQMT broker recovery trade date conflicts with its normalized trade time; "
+            "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_CONFLICT, "
+            f"trade_id={trade_id!r}, explicit_trade_date={explicit_date.isoformat()!r}, "
+            f"normalized_trade_date={time_date.isoformat()!r}, date_aliases={raw_dates!r}, "
+            f"time_aliases={raw_times!r}"
+        )
+    return explicit_date or time_date, broker_time
+
+
+def _parse_broker_trade_date_alias(value: Any, *, trade_id: str | None, field: str) -> date:
+    if isinstance(value, datetime):
+        return value.astimezone(ZoneInfo("Asia/Shanghai")).date() if value.tzinfo else value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT broker recovery trade has an invalid explicit trade date; "
             "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-            f"trade_id={_broker_trade_id(trade)!r}, trade_time={raw!r}"
+            f"trade_id={trade_id!r}, field={field!r}, value={value!r}"
         ) from exc
-    return parsed.astimezone(ZoneInfo("Asia/Shanghai")).date() if parsed.tzinfo else parsed.date()
 
 
-def _broker_trade_time(
-    trade: dict[str, Any],
+def _parse_broker_trade_time_alias(
+    value: Any,
     *,
-    runtime_trade_date: date,
-) -> datetime | None:
-    raw = next(
-        (
-            trade.get(key)
-            for key in ("traded_time_iso", "trade_time_iso", "traded_time", "trade_time")
-            if trade.get(key) not in (None, "")
-        ),
-        None,
-    )
-    if raw is None:
-        return None
-    if isinstance(raw, datetime):
-        localized = raw.replace(tzinfo=ZoneInfo("Asia/Shanghai")) if raw.tzinfo is None else raw
+    base_date: date,
+    trade_id: str | None,
+    field: str,
+) -> datetime:
+    if isinstance(value, datetime):
+        localized = value.replace(tzinfo=ZoneInfo("Asia/Shanghai")) if value.tzinfo is None else value
         return localized.astimezone(UTC)
-    text = str(raw).strip()
+    text = str(value).strip()
     try:
         if text.isdigit():
             if len(text) == 10:
@@ -3923,19 +3980,11 @@ def _broker_trade_time(
                 return parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(UTC)
             if len(text) == 6:
                 parsed_time = datetime.strptime(text, "%H%M%S").time()
-                return datetime.combine(
-                    runtime_trade_date,
-                    parsed_time,
-                    tzinfo=ZoneInfo("Asia/Shanghai"),
-                ).astimezone(UTC)
+                return datetime.combine(base_date, parsed_time, tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(UTC)
             raise ValueError("unsupported numeric timestamp length")
         if ":" in text and "T" not in text and "-" not in text:
             parsed_time = datetime.strptime(text, "%H:%M:%S").time()
-            return datetime.combine(
-                runtime_trade_date,
-                parsed_time,
-                tzinfo=ZoneInfo("Asia/Shanghai"),
-            ).astimezone(UTC)
+            return datetime.combine(base_date, parsed_time, tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(UTC)
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
@@ -3944,8 +3993,26 @@ def _broker_trade_time(
         raise RuntimeError(
             "MiniQMT broker recovery trade has an invalid trade time; "
             "reason_code=MINIQMT_RUNTIME_BROKER_TRADE_TIME_INVALID, "
-            f"trade_id={_broker_trade_id(trade)!r}, trade_time={raw!r}"
+            f"trade_id={trade_id!r}, field={field!r}, value={value!r}"
         ) from exc
+
+
+def _broker_trade_date(
+    trade: dict[str, Any],
+    *,
+    runtime_trade_date: date,
+) -> date | None:
+    broker_date, _broker_time = _broker_trade_temporal(trade, runtime_trade_date=runtime_trade_date)
+    return broker_date
+
+
+def _broker_trade_time(
+    trade: dict[str, Any],
+    *,
+    runtime_trade_date: date,
+) -> datetime | None:
+    _broker_date, broker_time = _broker_trade_temporal(trade, runtime_trade_date=runtime_trade_date)
+    return broker_time
 
 
 def _existing_runtime_trade_event(
@@ -3955,7 +4022,6 @@ def _existing_runtime_trade_event(
     broker_order_id: str,
     quantity: int,
     price: float,
-    cumulative_quantity: int,
     trade_payload: dict[str, Any],
     prepared_trade: Any | None,
 ) -> MiniQMTExecutionEvent | None:
@@ -3984,10 +4050,6 @@ def _existing_runtime_trade_event(
         "price": (
             Decimal(str(_required_trade_price(existing.payload.get("price")))),
             Decimal(str(price)),
-        ),
-        "cumulative_quantity": (
-            _required_trade_quantity(existing.payload.get("cumulative_quantity")),
-            int(cumulative_quantity),
         ),
         "canonical_trade_fact_sha256": (
             _optional_text(existing.payload.get("qmt_strategy_trade_fact_sha256")),

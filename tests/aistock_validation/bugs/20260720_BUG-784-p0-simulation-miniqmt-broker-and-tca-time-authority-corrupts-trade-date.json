@@ -29,6 +29,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260720-e8250554c19a",
       "timestamp": "2026-07-20T03:02:52.059750Z"
+    },
+    {
+      "action": "design_compliance_followup",
+      "actor": "codex",
+      "note": "Added exact broker date/time alias normalization and cross-field conflict rejection before any durable trade fact is written.",
+      "timestamp": "2026-07-20T06:34:54.0814602Z"
     }
   ],
   "evidence_uris": [

@@ -8021,21 +8021,69 @@ class SimulationLifecycleScheduler:
             raise exc
 
     @staticmethod
-    def _local_sim_json_value(value: Any) -> Any:
+    def _local_sim_json_value(value: Any, *, path: str = "$") -> Any:
         if isinstance(value, (datetime, date)):
             return value.isoformat()
         if isinstance(value, Decimal):
+            if not value.is_finite():
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM durable fact contains a non-finite Decimal",
+                    context={
+                        "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
+                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                        "path": path,
+                        "value": str(value),
+                    },
+                )
             return str(value)
         if isinstance(value, Enum):
-            return value.value
+            return SimulationLifecycleScheduler._local_sim_json_value(value.value, path=path)
         if isinstance(value, Mapping):
+            invalid_keys = [key for key in value if not isinstance(key, str)]
+            if invalid_keys:
+                invalid_key = invalid_keys[0]
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM durable fact JSON object keys must be strings",
+                    context={
+                        "reason_code": "LOCALSIM_FACT_JSON_KEY_INVALID",
+                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                        "path": path,
+                        "key_type": type(invalid_key).__name__,
+                        "key_repr": repr(invalid_key),
+                    },
+                )
             return {
-                str(key): SimulationLifecycleScheduler._local_sim_json_value(item)
-                for key, item in sorted(value.items(), key=lambda row: str(row[0]))
+                key: SimulationLifecycleScheduler._local_sim_json_value(item, path=f"{path}.{key}")
+                for key, item in sorted(value.items())
             }
         if isinstance(value, (list, tuple)):
-            return [SimulationLifecycleScheduler._local_sim_json_value(item) for item in value]
-        return value
+            return [
+                SimulationLifecycleScheduler._local_sim_json_value(item, path=f"{path}[{index}]")
+                for index, item in enumerate(value)
+            ]
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM durable fact contains a non-finite float",
+                    context={
+                        "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
+                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                        "path": path,
+                        "value": repr(value),
+                    },
+                )
+            return value
+        if value is None or isinstance(value, (str, int, bool)):
+            return value
+        raise RuntimeConfigInvalidError(
+            "LocalSIM durable fact contains a value that is not JSON serializable",
+            context={
+                "reason_code": "LOCALSIM_FACT_JSON_TYPE_INVALID",
+                "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                "path": path,
+                "value_type": type(value).__name__,
+            },
+        )
 
     @staticmethod
     def _local_sim_fact_payload(item: Any, *, fact_type: str) -> dict[str, Any]:

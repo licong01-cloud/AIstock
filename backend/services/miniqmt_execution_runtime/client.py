@@ -2423,7 +2423,12 @@ class _PreviewOnlyRuntimeGateway:
         return []
 
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:  # noqa: ARG002
-        return MiniQMTGatewayOrderAck(False, None, "preview gateway cannot submit child orders")
+        return MiniQMTGatewayOrderAck(
+            False,
+            None,
+            "preview gateway cannot submit child orders",
+            {"gateway": "preview_only_runtime_gateway", "broker_called": False},
+        )
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:  # noqa: ARG002
         return MiniQMTGatewayCancelAck(False, order.broker_order_id, "preview gateway cannot cancel child orders")
@@ -4771,6 +4776,7 @@ def _event_loop_upsert_order_intent(
     accepted: bool,
     source: str,
 ) -> Any | None:
+    broker_called = _event_loop_child_broker_called(child)
     getter = getattr(repository, "get_order_intent", None)
     creator = getattr(repository, "create_order_intent", None)
     setter = getattr(repository, "set_order_intent_submit_status", None)
@@ -4801,11 +4807,23 @@ def _event_loop_upsert_order_intent(
                     "parent_intent_id": child.parent_intent_id,
                     "existing_batch_id": getattr(existing, "batch_id", None),
                     "expected_batch_id": expected_batch_id,
-                    "broker_called": True,
+                    "broker_called": broker_called,
                     "qmt_order_id": child.broker_order_id,
                 },
             )
         if callable(setter):
+            existing_broker_called = existing.metadata.get("broker_called")
+            if existing_broker_called is not None and not isinstance(existing_broker_called, bool):
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop order intent has invalid broker_called history",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_ORDER_INTENT_PERSIST",
+                        "parent_intent_id": child.parent_intent_id,
+                        "value_type": type(existing_broker_called).__name__,
+                    },
+                )
+            projected_broker_called = bool(existing_broker_called is True or broker_called)
             effective_status = (
                 IntentSubmitStatus.ACCEPTED
                 if existing.submit_status == IntentSubmitStatus.ACCEPTED and status == IntentSubmitStatus.REJECTED
@@ -4816,6 +4834,13 @@ def _event_loop_upsert_order_intent(
                 effective_status,
                 submitted_at=child.submitted_at or datetime.now(UTC),
                 updated_at=datetime.now(UTC),
+                metadata_patch={
+                    "broker_called": projected_broker_called,
+                    "broker_call_pending": False,
+                    "qmt_order_id": child.broker_order_id or existing.metadata.get("qmt_order_id"),
+                    "runtime_child_order_id": child.child_order_id,
+                    "runtime_algo_instance_id": child.algo_instance_id,
+                },
             )
         return existing
     return creator(
@@ -4847,7 +4872,8 @@ def _event_loop_upsert_order_intent(
                 "runtime_algo_instance_id": child.algo_instance_id,
                 "runtime_parent_intent_id": child.parent_intent_id,
                 "event_loop_submit": True,
-                "broker_called": True,
+                "broker_called": broker_called,
+                "broker_call_pending": False,
                 "qmt_order_id": child.broker_order_id,
             },
             submitted_at=child.submitted_at or datetime.now(UTC),
@@ -4863,6 +4889,7 @@ def _event_loop_child_submit_result(
     repository: Any,
     source: str,
 ) -> ManagedOrderSubmitResult:
+    broker_called = _event_loop_child_broker_called(child)
     accepted = child.status != MiniQMTChildOrderStatus.REJECTED and bool(child.broker_order_id)
     if not accepted:
         error = OrderPreflightError(
@@ -4891,8 +4918,35 @@ def _event_loop_child_submit_result(
         qmt_order_id=child.broker_order_id,
         broker_message=str(child.metadata.get("gateway_message") or ("accepted" if accepted else "rejected")),
         preflight=preflight,
-        broker_called=True,
+        broker_called=broker_called,
     )
+
+
+def _event_loop_child_broker_called(child: MiniQMTChildOrder) -> bool:
+    gateway_ack = child.metadata.get("gateway_ack")
+    if not isinstance(gateway_ack, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop child is missing gateway acknowledgement facts",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_GATEWAY_ACK_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+            },
+        )
+    broker_called = gateway_ack.get("broker_called")
+    if not isinstance(broker_called, bool):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop gateway acknowledgement is missing exact broker_called truth",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+                "value_type": type(broker_called).__name__,
+            },
+        )
+    return broker_called
 
 
 def _timer_iterations(algo_code: str, config: dict[str, Any]) -> int:

@@ -12100,3 +12100,33 @@ def test_local_sim_fact_payload_normalizes_mappingproxy_before_json_serializatio
             "values": ["1.25"],
         },
     }
+
+
+def test_local_sim_fact_payload_rejects_non_string_key_collision_instead_of_overwriting() -> None:
+    fact = _ImmutableLocalSimFact(
+        fact_id="fact_mapping_key_collision",
+        payload=MappingProxyType({1: "integer-key", "1": "string-key"}),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_fact_payload(
+            fact,
+            fact_type="unit_mapping_key_collision",
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_FACT_JSON_KEY_INVALID"
+    assert exc_info.value.context["key_type"] == "int"
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), Decimal("NaN")])
+def test_local_sim_fact_payload_rejects_non_finite_numbers(invalid_value: object) -> None:
+    fact = _ImmutableLocalSimFact(
+        fact_id="fact_non_finite_number",
+        payload=MappingProxyType({"invalid_value": invalid_value}),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_fact_payload(
+            fact,
+            fact_type="unit_non_finite_number",
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_FACT_JSON_NUMBER_INVALID"
