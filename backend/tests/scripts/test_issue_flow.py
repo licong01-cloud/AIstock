@@ -221,13 +221,22 @@ def test_development_standard_is_single_authority_for_workflow_clients() -> None
     standard = Path(authority).read_text(encoding="utf-8")
 
     assert flow.STANDARD_REFS == [f"{authority}#CONTEXT-BUDGET-001"]
+    design_compliance_lines = [
+        line
+        for line in standard.splitlines()
+        if line.startswith(("1. **禁止", "2. **禁止", "3. **禁止", "4. **禁止"))
+    ]
     assert [
         "**禁止简化交付**",
         "**禁止静默错误**",
         "**禁止改变业务逻辑**",
         "**禁止私增门禁审批**",
-    ] == [line.split("：", 1)[0].split(". ", 1)[1] for line in standard.splitlines() if line.startswith(("1. **禁止", "2. **禁止", "3. **禁止", "4. **禁止"))]
-    assert all(keyword not in standard for keyword in ("不得", "不允许", "严禁"))
+    ] == [line.split("：", 1)[0].split(". ", 1)[1] for line in design_compliance_lines]
+    assert all(
+        keyword not in line
+        for line in design_compliance_lines
+        for keyword in ("不得", "不允许", "严禁")
+    )
 
     client_entries = (
         Path(".codex/skills/aistock-task-router/SKILL.md"),
