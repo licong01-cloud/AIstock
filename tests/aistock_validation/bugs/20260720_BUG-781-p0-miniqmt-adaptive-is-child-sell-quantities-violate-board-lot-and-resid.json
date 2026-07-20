@@ -13,6 +13,7 @@
     "backend/tests/qmt_strategy_ledger/test_order_service.py",
     "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "noxfile.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
