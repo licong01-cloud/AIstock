@@ -123,6 +123,9 @@ PROMPT_EVALUATION_FILES = {
     "configs/validation/llm_triage.yaml",
     "scripts/llm_provider_adapter.py",
 }
+DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
+    "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
+}
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {
     "frontend/package.json",
@@ -205,19 +208,27 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
 def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     plans = flow._plans_by_key()
     selection = flow.select_validation(paths)
-    sessions = _backend_sessions_from_selection(selection, plans)
+    selected_plan_keys = [str(item) for item in selection.get("required_plans") or []]
+    for path in paths:
+        for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
+            if plan_key not in selected_plan_keys:
+                selected_plan_keys.append(plan_key)
+    sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
     for path in paths:
         path_selection = flow.select_validation([path])
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
+        for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
+            if plan_key not in required_plans:
+                required_plans.append(plan_key)
         has_related_deferred_plan = any(
             plan_key not in {"l0", "guardrail_changed_files", "validation_module_registry_l0"}
             and bool((plans.get(plan_key) or {}).get("enabled", True))
             and bool((plans.get(plan_key) or {}).get("runner_enabled", True))
             for plan_key in required_plans
         )
-        if _backend_sessions_from_selection(path_selection, plans) or has_related_deferred_plan:
+        if _backend_sessions_from_selection({"required_plans": required_plans}, plans) or has_related_deferred_plan:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
@@ -226,7 +237,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         "mapped_files": mapped_files,
         "unmapped_code_files": unmapped_files,
         "impacted_modules": selection.get("impacted_modules") or [],
-        "required_plans": selection.get("required_plans") or [],
+        "required_plans": selected_plan_keys,
     }
 
 

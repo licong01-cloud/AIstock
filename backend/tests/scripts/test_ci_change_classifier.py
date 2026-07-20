@@ -220,6 +220,19 @@ def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> Non
     assert payload["unmapped_code_files"] == []
 
 
+def test_validation_ui_target_contract_test_selects_validation_center_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/test_validation_ui_target_catalog.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["validation_center_backend"]
+    assert payload["backend_plan_keys"] == ["l0", "validation_center_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
     source = Path("scripts/ci_change_classifier.py").read_text(encoding="utf-8")
     payload = classifier.classify_changed_files(
