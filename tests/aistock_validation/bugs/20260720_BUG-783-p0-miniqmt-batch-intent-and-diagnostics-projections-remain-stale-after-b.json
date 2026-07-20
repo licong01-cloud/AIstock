@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-783",
-  "closed_at": null,
+  "closed_at": "2026-07-20T08:48:46Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -47,8 +47,8 @@
   "expected": "Daily run, durable batch, intent, runtime child, broker order/trade and platform diagnostics are rebuilt from one exact ownership chain. After each side effect or recovery, counts/statuses and broker_called agree; impossible combinations fail loud and diagnostics never report healthy durability over stale batch facts.",
   "first_seen_at": "2026-07-20T03:02:11.660986Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b7367d6b33aa4a9d74ef5b02593b4a3db08ea3c",
+  "fixed_at": "2026-07-20T08:50:57.274824Z",
   "github_issue_number": 2492,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2492",
   "last_seen_at": "2026-07-20T03:02:11.660986Z",
@@ -56,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2497",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -78,6 +79,9 @@
     "fingerprint": "b02afcf63c553ee05fc5462b",
     "source_event_id": "FE-20260720-b02afcf63c55"
   },
+  "validation_evidence": [
+    "PR #2497 all required local plans and hosted CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

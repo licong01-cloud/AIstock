@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-779",
-  "closed_at": null,
+  "closed_at": "2026-07-20T08:48:46Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -43,8 +43,8 @@
   "expected": "Immutable cadence snapshots serialize through one canonical JSON boundary; economic facts, receipt, state and outbox commit atomically or expose a typed terminal/retryable failure with zero false submitted projection. Historical portfolio/run integrity diagnostics must expose unreconstructible or lifecycle-divergent state without rewriting data.",
   "first_seen_at": "2026-07-20T02:58:33.795665Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b7367d6b33aa4a9d74ef5b02593b4a3db08ea3c",
+  "fixed_at": "2026-07-20T08:49:28.102601Z",
   "github_issue_number": 2488,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2488",
   "last_seen_at": "2026-07-20T02:58:33.795665Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2497",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -74,6 +75,9 @@
     "fingerprint": "9478962d3fbc6fca8be8eef7",
     "source_event_id": "FE-20260720-9478962d3fbc"
   },
+  "validation_evidence": [
+    "PR #2497 all required local plans and hosted CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
