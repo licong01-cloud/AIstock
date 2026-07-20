@@ -32,6 +32,15 @@
 - remote artifact manifest：必须包含 SHA/size/row_count/schema/quality；
 - `pred.pkl`、`label.pkl`：仅 manifest 验证后读取。
 
+历史兼容仅允许一条 fail-closed 路径：当旧 QE workspace 缺少 recorder sidecar 和
+remote manifest 时，可 inspection-only 读取有界 `run.log`，但必须同时满足：
+
+- 日志包含唯一 `FINISHED` 的 `Latest recorder`，并由同一 identity 的 Qlib recorder-start
+  事件交叉确认；
+- complete catalog 中该 identity 同时拥有 `pred.pkl` 和 `label.pkl`；
+- repo 内不可变 legacy manifest 对 `run.log`、pred、label 固化 SHA256/size/row_count，运行时逐项复核；
+- 不按 mtime、目录顺序、文件大小或近似指标选择 recorder，不写回 QE workspace/Archive/Paper。
+
 禁止把配置 JSON/YAML/TOML 加入 artifact 白名单。
 
 该白名单只约束 Phase 0 自动下载、反序列化和归一化输入，不限制 Phase 1 对 QE 资产的

@@ -34,7 +34,7 @@
   ],
   "expected": "Historical completed QE loops resolve an immutable authoritative experiment_id/recorder_id through persisted QE metadata or an explicit compatibility manifest. Multiple recorder directories must never be selected by mtime, directory order, or silent fallback.",
   "first_seen_at": "2026-07-20T06:55:07.383320Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-789-hmm-evolution-cannot-resolve-historical-qe-recor-20260720",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2505,

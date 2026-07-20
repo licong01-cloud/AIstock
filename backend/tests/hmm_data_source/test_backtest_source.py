@@ -30,6 +30,12 @@ from backend.services.hmm_data_source import (
     DataSourceError,
     HorizonError,
 )
+from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
+    LegacyQEArtifactManifest,
+    LegacyQEArtifactReceipt,
+    LegacyQERecorderEvidence,
+    find_legacy_qe_artifact_manifest,
+)
 
 
 def qe_provenance(payload: bytes, *, artifact_name: str, row_count: int) -> dict:
@@ -46,6 +52,41 @@ def qe_provenance(payload: bytes, *, artifact_name: str, row_count: int) -> dict
         "remote_row_count": row_count,
         "remote_quality_status": "ok",
     }
+
+
+def legacy_manifest_fixture(log_payload: str) -> LegacyQEArtifactManifest:
+    recorder_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    prefix = f"mlruns/42/{recorder_id}/artifacts"
+    return LegacyQEArtifactManifest(
+        base_loop_ref="qe_test/Loop1",
+        logical_experiment_id="qe_test_L1",
+        recorder_experiment_id="42",
+        recorder_id=recorder_id,
+        recorder_evidence=LegacyQERecorderEvidence(
+            workspace_path="run.log",
+            sha256=hashlib.sha256(log_payload.encode("utf-8")).hexdigest(),
+            size_bytes=len(log_payload.encode("utf-8")),
+            terminal_status="FINISHED",
+        ),
+        artifacts=(
+            LegacyQEArtifactReceipt(
+                artifact_name="pred.pkl",
+                workspace_path=f"{prefix}/pred.pkl",
+                schema_version="legacy_qe_dataframe_pickle_v1",
+                sha256="1" * 64,
+                size_bytes=100,
+                row_count=10,
+            ),
+            LegacyQEArtifactReceipt(
+                artifact_name="label.pkl",
+                workspace_path=f"{prefix}/label.pkl",
+                schema_version="legacy_qe_dataframe_pickle_v1",
+                sha256="2" * 64,
+                size_bytes=80,
+                row_count=10,
+            ),
+        ),
+    )
 
 
 def build_prediction_store_service(
@@ -750,6 +791,188 @@ class TestBacktestDataSourceIsolation:
         )
 
     @pytest.mark.asyncio
+    async def test_legacy_terminal_log_resolves_only_the_receipted_recorder(self):
+        recorder_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        log_payload = (
+            f"Recorder {recorder_id} starts running under Experiment 42 ...\n"
+            f"Latest recorder: {{'class': 'Recorder', 'id': '{recorder_id}', "
+            "'experiment_id': '42', 'status': 'FINISHED'}\n"
+        )
+        manifest = legacy_manifest_fixture(log_payload)
+        client = MagicMock()
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                raise FileNotFoundError("sidecar missing")
+            if path == "run.log":
+                return log_payload
+            raise FileNotFoundError(path)
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
+        client.list_workspace_files = AsyncMock(
+            return_value={
+                "catalog_completeness": "complete",
+                "files": [
+                    {
+                        "relative_path": "run.log",
+                        "size_bytes": len(log_payload.encode("utf-8")),
+                        "access_mode": "inspection_only",
+                    },
+                    *[
+                        {"relative_path": item.workspace_path}
+                        for item in manifest.artifacts
+                    ],
+                ],
+            }
+        )
+
+        with patch(
+            "backend.services.hmm_data_source.backtest_source.find_legacy_qe_artifact_manifest",
+            return_value=manifest,
+        ):
+            path = await BacktestDataSource._resolve_workspace_artifact_path(
+                client,
+                task_id="qe_test",
+                loop_name="Loop1",
+                artifact_name="pred.pkl",
+            )
+
+        assert path == manifest.artifact("pred.pkl").workspace_path
+
+    @pytest.mark.asyncio
+    async def test_legacy_terminal_log_tamper_fails_closed(self):
+        recorder_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        original_log = (
+            f"Recorder {recorder_id} starts running under Experiment 42 ...\n"
+            f"Latest recorder: {{'class': 'Recorder', 'id': '{recorder_id}', "
+            "'experiment_id': '42', 'status': 'FINISHED'}\n"
+        )
+        manifest = legacy_manifest_fixture(original_log)
+        tampered_log = original_log.replace("FINISHED", "FAILED__")
+        client = MagicMock()
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path in {"qe_current_recorder.json", "qe_extracted_recorder.json"}:
+                raise FileNotFoundError("sidecar missing")
+            return tampered_log
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
+        client.list_workspace_files = AsyncMock(
+            return_value={
+                "catalog_completeness": "complete",
+                "files": [
+                    {
+                        "relative_path": "run.log",
+                        "size_bytes": len(original_log.encode("utf-8")),
+                        "access_mode": "inspection_only",
+                    },
+                    *[
+                        {"relative_path": item.workspace_path}
+                        for item in manifest.artifacts
+                    ],
+                ],
+            }
+        )
+
+        with (
+            patch(
+                "backend.services.hmm_data_source.backtest_source.find_legacy_qe_artifact_manifest",
+                return_value=manifest,
+            ),
+            pytest.raises(DataSourceError, match="immutable receipt"),
+        ):
+            await BacktestDataSource._resolve_workspace_artifact_path(
+                client,
+                task_id="qe_test",
+                loop_name="Loop1",
+                artifact_name="pred.pkl",
+            )
+
+    @pytest.mark.asyncio
+    async def test_legacy_manifest_supplies_exact_artifact_integrity(self):
+        manifest = legacy_manifest_fixture("receipted run log")
+        client = MagicMock()
+        client.get_workspace_file = AsyncMock(side_effect=FileNotFoundError("remote manifest missing"))
+        client.list_workspace_files = AsyncMock(
+            return_value={"catalog_completeness": "complete", "files": []}
+        )
+
+        with patch(
+            "backend.services.hmm_data_source.backtest_source.find_legacy_qe_artifact_manifest",
+            return_value=manifest,
+        ):
+            receipt, source = await BacktestDataSource._resolve_remote_artifact_manifest(
+                client,
+                task_id="qe_test",
+                loop_name="Loop1",
+                artifact_name="pred.pkl",
+                artifact_path=manifest.artifact("pred.pkl").workspace_path,
+            )
+
+        assert source == "legacy_qe_artifact_manifests.py"
+        assert receipt.sha256 == "1" * 64
+        assert receipt.size_bytes == 100
+        assert receipt.row_count == 10
+
+    @pytest.mark.asyncio
+    async def test_cataloged_invalid_remote_manifest_blocks_legacy_fallback(self):
+        manifest = legacy_manifest_fixture("receipted run log")
+        artifact_path = manifest.artifact("pred.pkl").workspace_path
+        remote_manifest_path = f"{artifact_path}.manifest.json"
+        client = MagicMock()
+        client.get_workspace_file = AsyncMock(return_value={"artifact_name": "pred.pkl"})
+        client.list_workspace_files = AsyncMock(
+            return_value={
+                "catalog_completeness": "complete",
+                "files": [{"relative_path": remote_manifest_path}],
+            }
+        )
+
+        with (
+            patch(
+                "backend.services.hmm_data_source.backtest_source.find_legacy_qe_artifact_manifest",
+                return_value=manifest,
+            ),
+            pytest.raises(DataSourceError, match="cataloged but could not be validated"),
+        ):
+            await BacktestDataSource._resolve_remote_artifact_manifest(
+                client,
+                task_id="qe_test",
+                loop_name="Loop1",
+                artifact_name="pred.pkl",
+                artifact_path=artifact_path,
+            )
+
+    @pytest.mark.asyncio
+    async def test_conflicting_recorder_sidecars_fail_closed(self):
+        client = MagicMock()
+
+        async def get_workspace_file(task_id, loop_name, path):
+            if path == "qe_current_recorder.json":
+                return {"experiment_id": "42", "recorder_id": "recorder-a"}
+            return {"selected_experiment_id": "42", "selected_recorder_id": "recorder-b"}
+
+        client.get_workspace_file = AsyncMock(side_effect=get_workspace_file)
+
+        with pytest.raises(DataSourceError, match="Conflicting QE recorder sidecars"):
+            await BacktestDataSource._resolve_workspace_artifact_path(
+                client,
+                task_id="qe_test",
+                loop_name="Loop1",
+                artifact_name="pred.pkl",
+            )
+
+    def test_repository_legacy_manifest_is_exact(self):
+        manifest = find_legacy_qe_artifact_manifest("qe_20260502_131502_9b54/Loop1")
+
+        assert manifest is not None
+        assert manifest.recorder_experiment_id == "308973027052385728"
+        assert manifest.recorder_id == "5c85da5785e9495b85c36d5b6f6e97b9"
+        assert manifest.artifact("pred.pkl").sha256 == (
+            "24ca37fc573f57b0c1759501af7b0b17e4cf02c8fbf97144e49c73696a694da6"
+        )
+
+    @pytest.mark.asyncio
     async def test_invalid_recorder_metadata_fails_before_download(self, tmp_path):
         """Recorder identity 不能包含路径穿越片段。"""
         client = MagicMock()
@@ -767,7 +990,7 @@ class TestBacktestDataSourceIsolation:
             qe_client=client,
         )
 
-        with pytest.raises(DataSourceError, match="recorder metadata unavailable"):
+        with pytest.raises(DataSourceError, match="Invalid QE recorder sidecar"):
             await source._download_artifact("pred.pkl")
         client.download_workspace_file_bytes.assert_not_called()
 
