@@ -53,7 +53,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-785",
-  "closed_at": null,
+  "closed_at": "2026-07-20T08:17:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -75,8 +75,8 @@
   "expected": "All coordinated QE sources preserve existing submit/retry behavior, automatically resume capacity waits, release slots only from authoritative terminal evidence, keep stale workers fenced, expose worker unavailability, and constrain all worker writes to the Loop workspace.",
   "first_seen_at": "2026-07-20T03:58:46.360549Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67a54a900b3aa4f71546f09a07fb290a50b665da",
+  "fixed_at": "2026-07-20T08:26:09.216008Z",
   "github_issue_number": 2496,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2496",
   "last_seen_at": "2026-07-20T03:58:46.360549Z",
@@ -84,8 +84,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2509",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -95,7 +96,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -104,6 +105,15 @@
     "fingerprint": "e7a6b779bad12cf0396fb3be",
     "source_event_id": "FE-20260720-e7a6b779bad1"
   },
+  "validation_evidence": [
+    "Post-rebase QE/P0-1B targeted tests -> passed (108 tests)",
+    "Expanded pre-rebase QE/P0-1B matrix -> passed (206 passed, 8 skipped)",
+    "changed-files L0, module registry, QE backend and workflow automation -> passed (0 P0/P1 blockers; workflow 310 passed)",
+    "F2 design validation -> passed (32/32, 0 warnings)",
+    "DEV migration and repository preflight -> passed on aistock_dev",
+    "PRODUCTION DDL and repository preflight -> passed on aistock; rows preserved 0 to 0",
+    "RD-Agent companion PR #5 -> merged; receipt/path suite passed (24 tests)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
