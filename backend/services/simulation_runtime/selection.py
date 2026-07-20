@@ -7,13 +7,10 @@ rebalance, execution-plan or broker-specific logic runs.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from math import isfinite
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
@@ -29,14 +26,10 @@ from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, SelectionMode
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.prospective_evidence import (
-    CandidateStageName,
     EvidenceCaptureMode,
     EvidenceCaptureReceipt,
     ProspectiveSelectionContext,
-    REASON_VALID_NO_CANDIDATE,
     SelectionStageTrace,
-    StageReceiptStatus,
-    build_stage_receipt,
     require_historical_research_data_source,
 )
 from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
@@ -44,6 +37,7 @@ from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     GENERATED_RUNTIME_PROFILE_VERSION_ID,
     RUNTIME_PROFILE_BINDING_KEY,
+    SelectionRuntimeProfile,
     attach_default_runtime_profile_binding,
     is_non_trading_runtime_config,
     mark_non_trading_preview_runtime_config,
@@ -63,13 +57,22 @@ from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
+from backend.services.strategy_package.selection_computation import (
+    PreparedPackageComponentLineageV1,
+    PreparedPackageSignalV1,
+    SelectionArtifactHeaderV1,
+    StrategyPackageSelectionComputation,
+    StrategyPackageSelectionComputationRequestV1,
+    StrategyPackageSelectionReadOnlyProvidersV1,
+    package_weights_from_runtime_config,
+    selection_runtime_profile_sha256,
+)
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
     selection_artifact_runtime_hash_for_manifest,
     selection_artifact_runtime_hash_v2_for_manifest,
 )
 from backend.services.trading_core.errors import (
-    ArtifactGenerationFailedError,
     DataUnavailableError,
     RuntimeConfigInvalidError,
     TradingCalendarUnavailableError,
@@ -238,6 +241,7 @@ class StrategyPackageSelectionService:
         repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         signal_service: DailySelectionSignalService | None = None,
         phase1_trace_capture_service: Phase1TraceCaptureService | Any | None = None,
+        selection_computation: StrategyPackageSelectionComputation | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.runtime = runtime or StrategyPackageRuntime()
@@ -260,6 +264,7 @@ class StrategyPackageSelectionService:
             selection_artifact_service=self.selection_artifact_service,
         )
         self.phase1_trace_capture_service = phase1_trace_capture_service or Phase1TraceCaptureService()
+        self.selection_computation = selection_computation or StrategyPackageSelectionComputation()
 
     def run_selection(
         self,
@@ -313,7 +318,7 @@ class StrategyPackageSelectionService:
             require_trade_enabled=not is_non_trading_runtime_config(config),
         )
         self._validate_request_shape(package_ids=package_ids, mode=mode)
-        weights = self._package_weights(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
+        weights = package_weights_from_runtime_config(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
         records_by_id, package_configs, package_health = self._prepare_package_runtime_configs(
             package_ids=package_ids,
             config=config,
@@ -327,17 +332,17 @@ class StrategyPackageSelectionService:
 
         global_profile = parse_selection_runtime_profile(config)
         self._require_data_ready(trade_date=trade_date, runtime_config=config)
-        package_results: dict[str, list[SelectionCandidate]] = {}
-        excluded_results: dict[str, list[SelectionExclusion]] = {}
-        manifest_sha: dict[str, str] = {}
-        stage_trace_by_package: dict[str, SelectionStageTrace] = {}
         artifact_by_package: dict[str, Any] = {}
-        candidate_outcome_by_package: dict[str, str] = {}
+        prepared_signals: dict[str, PreparedPackageSignalV1] = {}
+        package_profiles: dict[str, SelectionRuntimeProfile] = {}
+        package_profile_hashes: dict[str, str] = {}
+        package_top_k: dict[str, int] = {}
         for package_id in package_ids:
             record = records_by_id[package_id]
             manifest = record.current_manifest()
             package_config = package_configs[package_id]
             package_profile = parse_selection_runtime_profile(package_config)
+            top_k = self._top_k_for_package(manifest, package_profile, global_profile, package_config)
             signal_trace = self.signal_service.build_signal_snapshot_with_trace(
                 record=record,
                 trade_date=trade_date,
@@ -350,105 +355,87 @@ class StrategyPackageSelectionService:
             )
             snapshot = signal_trace.snapshot
             artifact_by_package[package_id] = signal_trace.score_artifact
-            alpha_raw_receipt = build_stage_receipt(
-                stage=CandidateStageName.ALPHA_RAW,
-                status=StageReceiptStatus.COMPLETE,
-                input_count=len(signal_trace.alpha_raw_candidates),
-                candidates=signal_trace.alpha_raw_candidates,
-                semantic_payload={
-                    "package_id": manifest.package_id,
-                    "manifest_sha256": snapshot.manifest_sha256,
-                    "artifact_id": getattr(signal_trace.score_artifact, "artifact_id", None),
-                    "artifact_sha256": getattr(signal_trace.score_artifact, "artifact_sha256", None),
-                    "artifact_payload_sha256": getattr(signal_trace.score_artifact, "artifact_payload_sha256", None),
-                    "artifact_contract_version": getattr(signal_trace.score_artifact, "artifact_contract_version", None),
-                },
+            artifact = signal_trace.score_artifact
+            artifact_metadata = getattr(artifact, "metadata", None)
+            artifact_input_context = (
+                artifact_metadata.get("artifact_input_context")
+                if isinstance(artifact_metadata, dict)
+                else None
             )
-            if snapshot.valid_no_candidate:
-                package_results[package_id] = []
-                excluded_results[package_id] = []
-                candidate_outcome_by_package[package_id] = "VALID_NO_CANDIDATE"
-                risk_result = self.risk_policy_service.apply_to_candidates_with_receipt(
-                    candidates=[],
-                    decisions={},
-                    trade_date=trade_date,
-                    top_k=self._top_k_for_package(manifest, package_profile, global_profile, package_config),
-                    package_id=manifest.package_id,
-                    manifest_sha256=snapshot.manifest_sha256,
-                    allow_empty=True,
-                    profile=package_profile.risk_policy,
-                )
-                selection_result = self.tradability_filter.select_top_k_with_receipt(
-                    candidates=[],
-                    top_k=self._top_k_for_package(manifest, package_profile, global_profile, package_config),
-                    trade_date=trade_date,
-                    package_id=manifest.package_id,
-                    manifest_sha256=snapshot.manifest_sha256,
-                )
-            else:
-                top_k = self._top_k_for_package(manifest, package_profile, global_profile, package_config)
-                risk_decisions = self.risk_policy_service.evaluate(
-                    symbols=[item.symbol for item in snapshot.candidates],
-                    trade_date=trade_date,
-                    profile=package_profile.risk_policy,
-                )
-                risk_result = self.risk_policy_service.apply_to_candidates_with_receipt(
-                    candidates=snapshot.candidates,
-                    decisions=risk_decisions,
-                    trade_date=trade_date,
-                    top_k=top_k,
-                    package_id=manifest.package_id,
-                    manifest_sha256=snapshot.manifest_sha256,
-                    profile=package_profile.risk_policy,
-                    allow_empty=True,
-                )
-                if not (package_profile.tradability.exclude_suspended or package_profile.industry_blacklist):
-                    selection_result = self.tradability_filter.select_top_k_with_receipt(
-                        candidates=risk_result.candidates,
-                        top_k=top_k,
-                        trade_date=trade_date,
-                        package_id=manifest.package_id,
-                        manifest_sha256=snapshot.manifest_sha256,
+            prepared_signals[package_id] = PreparedPackageSignalV1(
+                package_id=manifest.package_id,
+                package_version=record.package_version,
+                manifest_sha256=snapshot.manifest_sha256,
+                alpha_mode=manifest.alpha_mode,
+                component_lineage=tuple(
+                    PreparedPackageComponentLineageV1(
+                        component_id=component.alpha_id,
+                        component_weight=component.component_weight,
+                        factor_ids=tuple(component.factor_ids),
+                        score_normalization=component.score_normalization,
                     )
-                else:
-                    selection_result = self.tradability_filter.filter_candidates_with_receipt(
-                        candidates=risk_result.candidates,
-                        trade_date=trade_date,
-                        top_k=top_k,
-                        package_id=manifest.package_id,
-                        manifest_sha256=snapshot.manifest_sha256,
-                        enabled=package_profile.tradability.exclude_suspended,
-                        industry_blacklist=package_profile.industry_blacklist,
-                        allow_empty=True,
-                    )
-                package_results[package_id] = selection_result.candidates
-                excluded_results[package_id] = [*risk_result.exclusions, *selection_result.exclusions]
-                candidate_outcome_by_package[package_id] = (
-                    "CANDIDATES_PRESENT" if selection_result.candidates else "VALID_NO_CANDIDATE"
-                )
-            stage_trace_by_package[package_id] = SelectionStageTrace(
-                alpha_raw=alpha_raw_receipt,
-                hmm_adjusted=signal_trace.hmm_result.receipt,
-                risk_policy_adjusted=risk_result.receipt,
-                selection_effective=selection_result.receipt,
+                    for component in manifest.alpha_components
+                ),
+                alpha_raw_candidates=tuple(signal_trace.alpha_raw_candidates),
+                hmm_adjusted_candidates=tuple(snapshot.candidates),
+                hmm_receipt=signal_trace.hmm_result.receipt,
                 hmm_metadata=signal_trace.hmm_result.hmm_metadata,
-                risk_metadata=risk_result.risk_metadata,
-                universe_metadata=selection_result.universe_metadata,
+                artifact_header=SelectionArtifactHeaderV1(
+                    artifact_id=getattr(artifact, "artifact_id", None),
+                    artifact_sha256=getattr(artifact, "artifact_sha256", None),
+                    package_id=getattr(artifact, "package_id", ""),
+                    manifest_sha256=getattr(artifact, "manifest_sha256", ""),
+                    trade_date=getattr(artifact, "trade_date", None),
+                    data_source=getattr(artifact, "data_source", ""),
+                    runtime_config_hash=getattr(artifact, "runtime_config_hash", ""),
+                    artifact_payload_sha256=getattr(artifact, "artifact_payload_sha256", None),
+                    artifact_contract_version=getattr(artifact, "artifact_contract_version", None),
+                    artifact_input_context_hash=getattr(artifact, "artifact_input_context_hash", None),
+                    source_revision_set_hash=getattr(artifact, "source_revision_set_hash", None),
+                    asset_closure_hash=getattr(artifact, "asset_closure_hash", None),
+                    universe_identity_hash=(
+                        artifact_input_context.get("universe_input_hash")
+                        if isinstance(artifact_input_context, dict)
+                        else None
+                    ),
+                ),
+                input_context_hash=getattr(artifact, "artifact_input_context_hash", None),
+                source_revision_set_hash=getattr(artifact, "source_revision_set_hash", None),
+                universe_identity_hash=(
+                    artifact_input_context.get("universe_input_hash")
+                    if isinstance(artifact_input_context, dict)
+                    else None
+                ),
+                valid_no_candidate=snapshot.valid_no_candidate,
+                no_candidate_reason=snapshot.no_candidate_reason,
             )
-            manifest_sha[package_id] = snapshot.manifest_sha256
+            package_profiles[package_id] = package_profile
+            package_profile_hashes[package_id] = selection_runtime_profile_sha256(package_profile)
+            package_top_k[package_id] = top_k
 
-        aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
-        valid_no_candidate = False
-        no_candidate_reason = None
-        if not aggregate:
-            if all(candidate_outcome_by_package.get(package_id) == "VALID_NO_CANDIDATE" for package_id in package_ids):
-                valid_no_candidate = True
-                no_candidate_reason = REASON_VALID_NO_CANDIDATE
-            else:
-                raise ArtifactGenerationFailedError(
-                    "selection aggregation produced no candidates",
-                    context={"mode": mode.value, "package_ids": package_ids},
-                )
+        computation = self.selection_computation.compute(
+            request=StrategyPackageSelectionComputationRequestV1(
+                trade_date=trade_date,
+                data_source=data_source,
+                selection_mode=mode,
+                ordered_package_ids=tuple(package_ids),
+                package_runtime_profiles=package_profiles,
+                package_runtime_profile_hashes=package_profile_hashes,
+                package_top_k=package_top_k,
+                package_weights=weights,
+            ),
+            prepared_signals=prepared_signals,
+            providers=StrategyPackageSelectionReadOnlyProvidersV1(
+                risk_policy=self.risk_policy_service,
+                tradability=self.tradability_filter,
+            ),
+        )
+        package_results = {package_id: list(rows) for package_id, rows in computation.package_results.items()}
+        excluded_results = {package_id: list(rows) for package_id, rows in computation.excluded_results.items()}
+        aggregate = list(computation.aggregate_results)
+        manifest_sha = dict(computation.manifest_sha256_by_package)
+        stage_trace_by_package = dict(computation.stage_trace_by_package)
+        candidate_outcome_by_package = dict(computation.candidate_outcome_by_package)
 
         evidence_by_package, capture_receipt = self._build_operational_evidence_by_package(
             package_ids=package_ids,
@@ -483,8 +470,8 @@ class StrategyPackageSelectionService:
             excluded_results=excluded_results,
             manifest_sha256_by_package=manifest_sha,
             evidence_by_package=evidence_by_package,
-            valid_no_candidate=valid_no_candidate,
-            no_candidate_reason=no_candidate_reason,
+            valid_no_candidate=computation.valid_no_candidate,
+            no_candidate_reason=computation.no_candidate_reason,
             stage_trace_by_package=stage_trace_by_package,
             evidence_capture_receipt=capture_receipt,
             phase1_trace_capture_receipt=phase1_trace_receipt,
@@ -1445,163 +1432,3 @@ class StrategyPackageSelectionService:
             "evidence_reason_codes": list(capture_receipt.reason_codes),
         }
         return config
-
-    def _aggregate(
-        self,
-        *,
-        mode: SelectionMode,
-        package_results: dict[str, list[SelectionCandidate]],
-        package_weights: dict[str, float] | None = None,
-    ) -> list[SelectionCandidate]:
-        if mode == SelectionMode.SINGLE_PACKAGE:
-            return next(iter(package_results.values()))
-        if mode == SelectionMode.WEIGHTED_FUSION:
-            if package_weights is None:
-                raise RuntimeConfigInvalidError("weighted package fusion requires package_weights")
-            return self._weighted_rank_fusion(package_results=package_results, package_weights=package_weights)
-        symbol_sets = [set(candidate.symbol for candidate in rows) for rows in package_results.values()]
-        symbols = set.union(*symbol_sets) if mode == SelectionMode.UNION else set.intersection(*symbol_sets)
-        rows_by_symbol: dict[str, list[tuple[str, SelectionCandidate]]] = {}
-        for package_id, rows in package_results.items():
-            for row in rows:
-                if row.symbol in symbols:
-                    rows_by_symbol.setdefault(row.symbol, []).append((package_id, row))
-        aggregate: list[SelectionCandidate] = []
-        for symbol, rows in rows_by_symbol.items():
-            rows.sort(key=lambda item: item[1].rank)
-            best = rows[0][1]
-            source_package_ids = [package_id for package_id, _ in rows]
-            aggregate.append(
-                SelectionCandidate(
-                    symbol=symbol,
-                    score=sum(row.score for _, row in rows) / len(rows),
-                    rank=best.rank,
-                    target_weight=best.target_weight,
-                    target_quantity=best.target_quantity,
-                    reference_price=best.reference_price,
-                    component_scores={
-                        "source_package_ids": source_package_ids,
-                        "package_ranks": {package_id: row.rank for package_id, row in rows},
-                    },
-                    reason=f"{mode.value}_aggregate",
-                )
-            )
-        aggregate.sort(key=lambda item: (-item.score, item.rank, item.symbol))
-        return [item.model_copy(update={"rank": idx}) for idx, item in enumerate(aggregate, start=1)]
-
-    @staticmethod
-    def _package_weights(config: dict[str, Any], package_ids: list[str]) -> dict[str, float]:
-        raw = config.get("package_weights")
-        if not isinstance(raw, dict):
-            raise RuntimeConfigInvalidError(
-                "weighted package fusion requires runtime_config.package_weights",
-                context={"package_ids": package_ids},
-            )
-        expected = set(package_ids)
-        actual = {str(key) for key in raw}
-        if actual != expected:
-            raise RuntimeConfigInvalidError(
-                "runtime_config.package_weights must match package_ids exactly",
-                context={"package_ids": package_ids, "weight_keys": sorted(actual)},
-            )
-        weights: dict[str, float] = {}
-        for package_id in package_ids:
-            try:
-                value = float(raw[package_id])
-            except (TypeError, ValueError) as exc:
-                raise RuntimeConfigInvalidError(
-                    "package weights must be numeric",
-                    context={"package_id": package_id, "weight": raw[package_id]},
-                ) from exc
-            if not isfinite(value) or value <= 0:
-                raise RuntimeConfigInvalidError(
-                    "package weights must be positive finite numbers",
-                    context={"package_id": package_id, "weight": raw[package_id]},
-                )
-            weights[package_id] = value
-        return weights
-
-    @staticmethod
-    def _weighted_rank_fusion(
-        *,
-        package_results: dict[str, list[SelectionCandidate]],
-        package_weights: dict[str, float],
-    ) -> list[SelectionCandidate]:
-        total_weight = sum(package_weights.values())
-        normalized_weights = {package_id: weight / total_weight for package_id, weight in package_weights.items()}
-        package_ids = list(package_results)
-        fusion_policy_sha256 = _canonical_sha256(
-            {
-                "method": "weighted_rank_fusion",
-                "package_weights": package_weights,
-                "normalized_package_weights": normalized_weights,
-                "candidate_top_k": None,
-                "missing_rank_policy": "not_selected_zero_score",
-            }
-        )
-        rows_by_symbol: dict[str, list[tuple[str, SelectionCandidate, float]]] = {}
-        for package_id, rows in package_results.items():
-            candidate_count = len(rows)
-            if candidate_count <= 0:
-                continue
-            denominator = max(candidate_count - 1, 1)
-            for row in rows:
-                normalized_rank_score = 1.0 - ((row.rank - 1) / denominator)
-                rows_by_symbol.setdefault(row.symbol, []).append((package_id, row, normalized_rank_score))
-
-        aggregate: list[SelectionCandidate] = []
-        for symbol, rows in rows_by_symbol.items():
-            rows.sort(key=lambda item: item[1].rank)
-            best = rows[0][1]
-            source_package_ids = [package_id for package_id, _, _ in rows]
-            package_scores = {package_id: row.score for package_id, row, _ in rows}
-            package_ranks = {package_id: row.rank for package_id, row, _ in rows}
-            rank_scores = {package_id: 0.0 for package_id in package_ids}
-            rank_scores.update({package_id: rank_score for package_id, _, rank_score in rows})
-            package_presence = {
-                package_id: ("selected_topK" if package_id in package_ranks else "not_selected_in_full_evidence")
-                for package_id in package_ids
-            }
-            support_count = len(source_package_ids)
-            rank_values = list(package_ranks.values())
-            rank_dispersion = max(rank_values) - min(rank_values) if len(rank_values) > 1 else 0
-            fusion_score = sum(normalized_weights[package_id] * rank_scores.get(package_id, 0.0) for package_id in package_ids)
-            aggregate.append(
-                SelectionCandidate(
-                    symbol=symbol,
-                    score=fusion_score,
-                    rank=best.rank,
-                    target_weight=best.target_weight,
-                    target_quantity=best.target_quantity,
-                    reference_price=best.reference_price,
-                    component_scores={
-                        "fusion_method": "weighted_rank_fusion",
-                        "source_package_ids": source_package_ids,
-                        "package_ranks": package_ranks,
-                        "package_raw_scores": package_scores,
-                        "package_rank_scores": rank_scores,
-                        "package_presence": package_presence,
-                        "package_weights": package_weights,
-                        "normalized_package_weights": normalized_weights,
-                        "support_count": support_count,
-                        "rank_dispersion": rank_dispersion,
-                        "fusion_policy_sha256": fusion_policy_sha256,
-                        "fusion_score": fusion_score,
-                    },
-                    reason="weighted_fusion_aggregate",
-                )
-            )
-        aggregate.sort(
-            key=lambda item: (
-                -item.score,
-                -int(item.component_scores.get("support_count") or 0),
-                item.rank,
-                item.symbol,
-            )
-        )
-        return [item.model_copy(update={"rank": idx}) for idx, item in enumerate(aggregate, start=1)]
-
-
-def _canonical_sha256(payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()

@@ -29,6 +29,7 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.selection_computation import StrategyPackageSelectionComputation
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
     SelectionScoreArtifact,
@@ -154,6 +155,8 @@ def _selection_service(
     package_repo,
     runtime,
     repository: InMemorySimulationRuntimeRepository,
+    *,
+    selection_computation=None,
 ) -> StrategyPackageSelectionService:
     return StrategyPackageSelectionService(
         package_repository=package_repo,
@@ -162,7 +165,18 @@ def _selection_service(
         refresh_audit=NoopRefreshAudit(),
         calendar_provider=FakeCalendar(),
         repository=repository,
+        selection_computation=selection_computation,
     )
+
+
+class RecordingSelectionComputation:
+    def __init__(self) -> None:
+        self.delegate = StrategyPackageSelectionComputation()
+        self.calls = []
+
+    def compute(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.delegate.compute(**kwargs)
 
 
 def test_strategy_package_selection_service_persists_release_backed_evidence() -> None:
@@ -195,6 +209,38 @@ def test_strategy_package_selection_service_persists_release_backed_evidence() -
     assert runtime_repo.get_daily_selection_evidence(evidence.evidence_id).artifact_hash == evidence.artifact_hash
     assert result.runtime_config["daily_selection_evidence"]["evidence_ids_by_package"][manifest.package_id] == evidence.evidence_id
     assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_strategy_package_selection_service_delegates_candidate_computation_without_losing_evidence() -> None:
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    package_repo, _artifact_repo, manifest, runtime = _package_with_artifact(rows)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    recording_computation = RecordingSelectionComputation()
+
+    result = _selection_service(
+        package_repo,
+        runtime,
+        runtime_repo,
+        selection_computation=recording_computation,
+    ).run_selection(
+        package_ids=[manifest.package_id],
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=_runtime_config(top_k=2),
+        created_by="unit_test",
+    )
+
+    assert len(recording_computation.calls) == 1
+    call = recording_computation.calls[0]
+    assert call["request"].ordered_package_ids == (manifest.package_id,)
+    assert call["prepared_signals"][manifest.package_id].manifest_sha256 == manifest.manifest_sha256
+    assert call["prepared_signals"][manifest.package_id].artifact_header.artifact_id
+    assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
+    assert result.evidence_by_package[manifest.package_id].candidate_count == 2
 
 
 def test_strategy_package_selection_service_uses_release_selection_artifact_config() -> None:

@@ -5,7 +5,7 @@
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_code_merged_r2_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-R5、API、UI 和真实范围任务仍未实现
+> 当前状态：`r1_code_merged_r2a_source_delivery_accepted`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入，具体 PR/merge 状态由 GitHub 和 aftercare 回执记录；R2-B 的历史 candidate adapter、R3-R5、API、UI 和真实范围任务仍未实现
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -351,12 +351,12 @@ StrategyPackageSelectionComputation.compute(request, prepared_signals, read_only
 
 现有 `StrategyPackageSelectionService.run_selection` 保持包装器，继续执行现有配置准备、repositories 和 trace 持久化；普通 Selection/Paper/模拟盘行为不得改变。Phase 1R 通过独立 adapter 调用同一 computation core。公共核心的所有权固定在中立的 `backend/services/strategy_package/selection_computation.py`，不得放入 `simulation_runtime` 或 Advisory 命名空间；现有 wrapper 与 Phase 1R adapter 都只能单向依赖该核心。
 
-- computation core 只接收已冻结 package/runtime profile、已解析的 package signal input，以及显式只读 HMM/risk/tradability provider；它返回候选、排除项、stage trace 和 valid-no-candidate 结果，不接收或调用 repository、artifact store、trace sink、result sink、DB connection 或默认 production constructor。
+- computation core 只接收已冻结 package/runtime profile、由显式只读 signal-preparation/HMM provider 一次性生成的 prepared package signal，以及显式只读 risk/tradability provider；核心不得重复执行 HMM，而必须逐字段校验 prepared HMM candidates、receipt、metadata 与 runtime profile。它返回候选、排除项、stage trace 和 valid-no-candidate 结果，不接收或调用 repository、artifact store、trace sink、result sink、DB connection 或默认 production constructor。
 - current Selection wrapper 继续拥有 `DataRefreshAuditRepository`、runtime binding、package health preparation、普通 Selection artifact/DSE 与 trace/result persistence；Phase 1R adapter 继续拥有 historical PIT/read receipt、range CAS 和 Phase 1R repository persistence。两者均在调用核心之前完成各自 I/O，并在核心返回之后写入各自命名空间。
 - current wrapper 的 `DataRefreshAuditRepository` readiness、trade-enabled runtime binding、current request normalization 和 package health preparation 保留在 wrapper 外层；Phase 1R 不调用这些 current/latest checks，而由 historical day provider 对冻结 T/warmup partitions 做 exact source/read receipt 校验。
 - 当前 `DailySelectionSignalService`/多 Alpha artifact generator 中同时包含计算和持久化的部分必须拆成 signal preparation/provider adapter + repository adapter；只移动 `run_selection` 循环、但仍调用会默认写 `strategy_pkg.selection_score_artifact` 的 service，不满足本设计。
 - Phase 1R 模块禁止直接实例化默认 `StrategyPackageSelectionArtifactService`、`DailySelectionSignalService`、`SimulationRuntimeRepository` 或 Selection run repository。constructor contract、static import scan 和 repository spy 必须同时覆盖该边界。
-- current wrapper 与 Phase 1R adapter 必须对同一 prepared signal input 产生逐字段一致的候选顺序、分数、排除项、stage receipt 和 valid-no-candidate 结果；缺失 provider/read receipt、异常空结果或 artifact readback 错误必须保留原始结构化失败，不得转换为 `VALID_NO_CANDIDATE`、空列表成功或其他 fallback。
+- current wrapper 与 Phase 1R adapter 必须对同一 prepared signal input 产生逐字段一致的候选顺序、分数、排除项、stage receipt 和 valid-no-candidate 结果；原始 source read receipts 由各自 adapter 保留，core 强制校验其 `input/source/universe` hash closure、artifact package/manifest/date/source identity、HMM receipt 和 profile hash。缺失 provider/read receipt closure、异常空结果或 artifact readback 错误必须保留原始结构化失败，不得转换为 `VALID_NO_CANDIDATE`、空列表成功或其他 fallback。
 
 #### 8.1.1 R2 typed computation contracts
 
@@ -365,6 +365,7 @@ StrategyPackageSelectionComputation.compute(request, prepared_signals, read_only
 ```text
 StrategyPackageSelectionComputationRequestV1
   trade_date
+  data_source
   selection_mode
   ordered_package_ids
   package_runtime_profiles + profile_hashes
@@ -376,7 +377,7 @@ PreparedPackageSignalV1
   alpha_mode + ordered component lineage
   alpha_raw_candidates
   hmm_adjusted_candidates + hmm receipt/metadata
-  immutable score-artifact header/ref hashes
+  immutable score-artifact package/manifest/trade_date/data_source/runtime header + ref hashes
   valid_no_candidate + explicit reason/evidence
   input/source/universe identity hashes
 
@@ -994,6 +995,8 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - 实现 `HistoricalRangeAdmittedPackageResolver`、historical signal/PIT/HMM provider 和 range-owned artifact adapter；不得调用 package validator/health、普通 Selection repository 或默认 production constructor。
 - 完成单 Alpha、原生多 Alpha 各一个已完成历史交易日 candidate E2E，并证明两者只写 Phase 1R CAS/repository、不会写普通 Selection/Paper/模拟盘/QE 路径。
 - R2 不新增 migration、表或独立 DML 脚本；candidate 持久化只复用 R1 repository。若验证需要真实 schema-backed DML，只能在后续现有 DEV migration 已完成后执行，不能新建测试数据库替代 DEV。
+
+实施拆分状态：R2-A 只完成前两项，即 computation contracts/core 与 current Selection wrapper parity；R2-B 才实现 admitted package resolver、historical PIT/HMM signal provider、range-owned artifact adapter 和单/原生多 Alpha 历史 candidate E2E。R2-A 不得以“R2 完成”申报，R2-B 也不得重新引入普通 Selection repository、current readiness、package health 或资产二次验证。
 
 #### R3：列表状态机、executor 与恢复
 
