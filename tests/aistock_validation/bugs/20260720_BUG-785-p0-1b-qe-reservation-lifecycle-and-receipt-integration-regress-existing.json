@@ -46,6 +46,7 @@
     "backend/tests/unified_engine/test_qe_backtest_recorder_isolation_hotfix.py",
     "backend/tests/unified_engine/test_qe_workspace_submission_receipt.py",
     "docs/architecture/multi_alpha_p0_1b_durable_execution_orchestrator_f2_design_20260719.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260720_BUG-785-p0-1b-qe-reservation-lifecycle-and-receipt-integration-regress-existing.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
