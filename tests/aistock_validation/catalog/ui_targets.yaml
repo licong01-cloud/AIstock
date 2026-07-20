@@ -205,6 +205,24 @@ targets:
   - Review prediction artifact pointers and manifests
   - Validate prediction store health and coverage visibility
   coverage_status: planned
+- route_id: hmm.evolution
+  href: /hmm-evolution
+  label: HMM Evolution Lab
+  nav_group: HMM 研究工作台
+  primary_module: hmm.evolution
+  impact_modules:
+  - hmm
+  - qe.archive
+  risk_level: high
+  required_test_plans:
+  - l0
+  - hmm_evolution_backend
+  recommended_test_plans: []
+  business_operations:
+  - Open HMM Evolution Lab
+  - Review candidate registry and evaluation batch state
+  - Inspect read-only QE experiment evidence and evaluation results
+  coverage_status: partial
 - route_id: market_regime.timeline
   href: /market-regime
   label: Market Regime
