@@ -775,12 +775,14 @@ def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
         "compileall",
         "backend/services/miniqmt_execution_runtime",
         "backend/services/qmt_strategy_ledger/order_service.py",
+        "backend/services/qmt_strategy_ledger/repository.py",
         external=True,
     )
     _run_pytest(
         session,
         "backend/tests/miniqmt_execution_runtime",
         "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+        "backend/tests/qmt_strategy_ledger/test_repository.py",
         "-q",
         "-p",
         "no:cacheprovider",

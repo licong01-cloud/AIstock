@@ -185,7 +185,9 @@ def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_se
         [
             "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
             "backend/services/qmt_strategy_ledger/order_service.py",
+            "backend/services/qmt_strategy_ledger/repository.py",
             "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+            "backend/tests/qmt_strategy_ledger/test_repository.py",
         ],
         repo_root=tmp_path,
     )
