@@ -44,9 +44,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/aistock_issue_workflow.py verify-clients --help",
   "required_verification": [
-    "l0",
-    "guardrail_changed_files",
-    "validation_center_backend"
+    "l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

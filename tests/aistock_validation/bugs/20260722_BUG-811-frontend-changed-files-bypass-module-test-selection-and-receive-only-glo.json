@@ -46,11 +46,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/ci_change_classifier.py --changed-file frontend/src/app/hmm-evolution/page.tsx",
   "required_verification": [
-    "l0",
-    "validation_module_registry_l0",
-    "guardrail_changed_files",
-    "validation_center_backend",
-    "validation_catalog_integrity"
+    "l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

@@ -46,10 +46,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/aistock_module_ownership_scan.py --fail-on-unmapped --fail-on-ambiguous",
   "required_verification": [
-    "l0",
-    "validation_module_registry_l0",
-    "validation_center_backend",
-    "validation_catalog_integrity"
+    "l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

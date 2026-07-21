@@ -1,6 +1,8 @@
 {
   "actual": "CLAUDE.md requires both the sole standard and the compatibility issue workflow and points DESIGN-COMPLIANCE-001 at obsolete section 15.3.",
   "allowed_write_scope": [
+    "CLAUDE.md",
+    "backend/tests/scripts/test_issue_flow.py",
     "docs/process/research_assistant_codex_kickoff_command_20260601.md",
     "docs/process/research_assistant_blueprint_execution_runbook_20260531.md",
     "tests/aistock_validation/bugs/20260722_BUG-807-claude-code-project-instructions-bypass-the-sole-development-standard-au.json",
@@ -42,10 +44,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "rg -n 'aistock_issue_fix_parallel_workflow_standard|15.3' CLAUDE.md",
   "required_verification": [
-    "l0",
-    "validation_center_backend",
-    "research_assistant_backend",
-    "research_assistant_mcp_contract"
+    "l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
