@@ -9,7 +9,10 @@ import pytest
 
 from backend.services.hmm_evolution.candidate_artifact import CandidateArtifactResolver
 from backend.services.hmm_evolution.errors import ArtifactHashMismatchError, InvalidSpecError
-from backend.services.hmm_evolution.input_adapter import HMMEvaluationInputAdapter
+from backend.services.hmm_evolution.input_adapter import (
+    HMMEvaluationInputAdapter,
+    _verify_artifact_receipts,
+)
 from backend.services.hmm_evolution.market_repository import MarketReturnRead, MarketWatermark
 from backend.services.hmm_evolution.models import (
     CandidateLifecycle,
@@ -527,3 +530,47 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
                 candidate=candidate,
             )
         )
+
+
+def test_replay_allows_acquisition_fallback_policy_to_change_for_same_artifacts() -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    frozen_artifacts = []
+    current_source_info = {}
+    for name, sha in (("pred.pkl", "b" * 64), ("label.pkl", "c" * 64)):
+        row_count = len(predictions if name == "pred.pkl" else labels)
+        frozen_artifacts.append(
+            {
+                "artifact_name": name,
+                "source": "qe_workspace_cache",
+                "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+                "sha256": sha,
+                "size_bytes": 100,
+                "row_count": row_count,
+                "selected_row_count": row_count,
+                "zero_copy": False,
+                "fallback": True,
+            }
+        )
+        current_source_info[name] = {
+            "source": "qe_workspace_cache",
+            "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+            "sha256": sha,
+            "size_bytes": 100,
+            "row_count": row_count,
+            "zero_copy": False,
+            "fallback": False,
+        }
+
+    _verify_artifact_receipts(
+        {"artifacts": frozen_artifacts},
+        current_source_info,
+        predictions,
+        labels,
+    )
