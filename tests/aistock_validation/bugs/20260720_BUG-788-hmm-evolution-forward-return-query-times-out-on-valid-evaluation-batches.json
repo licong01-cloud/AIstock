@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-788",
-  "closed_at": null,
+  "closed_at": "2026-07-21T04:06:17Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "Valid bounded HMM evaluation windows complete read-only forward-return acquisition within the existing statement timeout, preserve exact trading-day horizon and missing-evidence semantics, and never fall back silently.",
   "first_seen_at": "2026-07-20T06:53:09.233679Z",
   "fix_branch": "bug/BUG-788-hmm-evolution-forward-return-query-times-out-on-20260720",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "52f6bdf042eb97ebd06d8c92aa4916622ac63558",
+  "fixed_at": "2026-07-21T04:07:57.423725Z",
   "github_issue_number": 2504,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2504",
   "last_seen_at": "2026-07-20T06:53:09.233679Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2512",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "03b7a9fce397c75aade63c0a",
     "source_event_id": "FE-20260720-03b7a9fce397"
   },
+  "validation_evidence": [
+    "rtk gh pr checks 2512 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
