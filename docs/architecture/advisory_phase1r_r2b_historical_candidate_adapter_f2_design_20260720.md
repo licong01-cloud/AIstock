@@ -455,14 +455,16 @@ HistoricalRangeCandidateArtifactPayloadV2
   candidates[]
 ```
 
-`candidate_input_hash` 在模型运行前计算，只覆盖 range/program/T、frozen package/runtime/code/selection semantics、calendar/universe identity、sealed catalog 和 query contract；它不包含 candidate artifact ref/hash、list 或前日 list hash。R3 在 candidate artifact 已发布后再计算：
+`candidate_input_hash` 在模型运行前计算，只覆盖 range/program/T、frozen package/runtime/code/selection semantics、calendar/universe identity、sealed catalog 和 query contract；它不包含 candidate artifact ref/hash、decision marks、list 或前日 list hash。R3 按其正式审核后契约，在 candidate artifact 与独立的 batch/day `DECISION_MARK_SET` 均发布/readback 后计算：
 
 ```text
-day_input_hash = hash(candidate_input_hash + candidate_artifact_ref/hash
-                      + previous_list_hash/day_receipt_hash + list_semantics_hash)
+day_input_hash_v3 = hash(candidate_input_hash + candidate_artifact_ref/hash
+                         + decision_mark_set_ref/hash + mark_policy_hash
+                         + previous_list_hash/day_receipt_exact_ref/hash
+                         + canonical_list_semantics_version/hash)
 ```
 
-因此不存在“candidate artifact 包含 day_input_hash，而 day_input_hash 又包含 candidate artifact”的循环 identity。
+`DECISION_MARK_SET` 的 source requirements 属于 R3：它们按 batch/day 覆盖不受 positive PIT universe过滤的 T 日行情、adj factor 和市场状态，并与各 Alpha leg 的 warmup `market_history` revision 分离。R3 必须把现有 Program/day catalog 宽选择改为版本化 source-role consumer selector：candidate artifact 只闭合 `CANDIDATE_SOURCE_ROLES_V2`，mark artifact 只闭合 `DECISION_MARK_SOURCE_ROLES_V1`，两组互斥且穷尽全部 day-execution members；未知 role 显式失败。R2-B 不提前生成 mark artifact，也不把 mark refs伪装成 candidate 输入或把任意 Alpha leg ref当作 mark source。因此不存在 candidate/mark artifact 包含 `day_input_hash v3`、而该 hash 又包含下游 artifact 的循环 identity。
 
 外层 envelope 使用：
 
@@ -683,7 +685,7 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | 两个 planning batch 并发 seal 相同 resolved hash | 唯一 canonical batch；后提交者 DEDUPLICATED 并引用 canonical，不创建重复 runs |
 | R2-B 为了持久化伪造 list/day success | candidate-only CAS boundary，R3 才调用 `commit_successful_day` |
 | candidate v1 在零候选日丢失 stage/universe/raw 证据 | candidate artifact v2 保存日级 header、receipts、stage trace 和 no-candidate closure |
-| candidate/day input hash 互相包含 | candidate_input_hash 在推理前闭合；R3 发布 candidate 后单向派生 day_input_hash |
+| candidate/mark/day input hash 互相包含 | candidate_input_hash 在推理前闭合；R3 发布 candidate 与独立 mark set 后单向派生 day_input_hash v3 |
 | inference 触发 PIT build 或信号写入 | explicit read-only universe policy、`persist_signals=false`、PG read-only session、spy tests |
 | inference 写仓库 debug 或共享 runtime cache | explicit diagnostic sink 和 task-scoped external workspace；repo/shared root spy test |
 | current Selection refactor改变 artifact 或排序 | single/multi artifact + computation 逐字段 parity |
@@ -704,7 +706,7 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-957 | R2-B 交付可恢复 catalog planning 和历史 candidate adapter，不冒充 R3-R5 或完整 Phase 1R |
 | F-958 | HistoricalRange package version 与 StrategyPackage 字符串版本完全一致 |
 | F-959 | create 先持久化 requirement plan，catalog 完成后才 seal request CAS/hash |
-| F-960 | actual day source refs 必须精确属于冻结 catalog |
+| F-960 | actual day source refs 必须精确属于冻结 catalog；R3 新增 mark roles 后 candidate/mark consumer subsets互斥且穷尽 |
 | F-961 | resolver 支持一个单 Alpha 包或一个原生多 Alpha 父包 |
 | F-962 | resolver 不调用 package validator、health、preflight、asset eligibility 或 re-admission |
 | F-963 | neutral raw-signal builder 不持久化，current repository adapter 保持逐字段 parity |
@@ -728,7 +730,7 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-981 | 无角色、审批、授权、备份或 package 二次验证设计 |
 | F-982 | 设计、源码、DDL、DEV E2E、production 和 runtime activation 分开报告 |
 | F-983 | catalog operation 分块、checkpoint、DISCOVER/VERIFY、WAITING_INPUT/resume、seal once 和并发 dedup 完整 |
-| F-984 | candidate_input_hash 与 day_input_hash 单向派生，无循环 identity |
+| F-984 | candidate_input_hash、R3 decision-mark-set 与 day_input_hash v3 单向派生，无循环 identity |
 | F-985 | current InferenceEngine、Selection、Simulation 和 Paper 默认行为有直接正向 parity 验收 |
 | F-986 | 当前原生多 Alpha 完整支持 manifest frozen weights，不设计不存在的 rolling metric provider |
 | F-987 | 合法完整输入无需审批或最新交易日门禁即可从 planning 自动进入 candidate 正向路径 |
