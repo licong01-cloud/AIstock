@@ -331,3 +331,20 @@ def test_historical_composition_identifies_injected_wsl_backend(tmp_path) -> Non
     provider, backend = preparation._raw_artifact_preparer._resolve_live_provider({})
     assert provider is wsl
     assert backend == "wsl"
+
+
+def test_historical_composition_binds_only_its_explicit_runtime_root(tmp_path) -> None:  # noqa: ANN001
+    runtime_root = tmp_path / "phase1r-runtime"
+    preparation = build_historical_strategy_package_signal_preparation(
+        package_reader=object(),
+        package_asset_store=object(),
+        runtime_root=runtime_root,
+        repository_root=tmp_path,
+        hmm_snapshot_provider=None,
+    )
+
+    provider, backend = preparation._raw_artifact_preparer._resolve_live_provider({})
+
+    assert isinstance(provider, WslStrategyPackageInferenceProvider)
+    assert provider.safe_artifact_roots == (runtime_root.resolve(),)
+    assert backend == "wsl"

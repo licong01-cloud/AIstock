@@ -27,7 +27,8 @@
     }
   ],
   "evidence_uris": [
-    "runtime root F:/Dev/AIstock_artifacts/advisory_phase1r_dev_validation_20260721/bug799-v2/runtime; WSL policy rejected translated /mnt/f path"
+    "runtime root F:/Dev/AIstock_artifacts/advisory_phase1r_dev_validation_20260721/bug799-v2/runtime; WSL policy rejected translated /mnt/f path",
+    "Provider/composition regressions 9 passed; default provider exported no new safe root; historical composition exported only its explicit task runtime root"
   ],
   "expected": "The historical composition passes only its explicit task runtime root to the WSL safe-artifact-root environment so the existing workspace policy accepts that materialized local cache while continuing to reject worker paths and all unrelated roots.",
   "first_seen_at": "2026-07-21T08:31:14.369163Z",
