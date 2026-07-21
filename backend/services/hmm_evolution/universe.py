@@ -661,7 +661,7 @@ class QEExecutionUniverseResolver:
                 "interval_count": len(pool_snapshot.intervals),
             },
             "st_pit": {
-                "artifact_path": SOURCE_RISK_POLICY_ARTIFACT,
+                "artifact_name": SOURCE_RISK_POLICY_ARTIFACT,
                 "artifact_sha256": risk_snapshot.artifact_sha256,
                 "binding_mode": risk_snapshot.binding_mode,
                 "dataset_contract_id": risk_snapshot.dataset_contract_id,
@@ -687,7 +687,7 @@ class QEExecutionUniverseResolver:
                 "artifact_source": {
                     "task_id": compatibility.artifact_source_task_id,
                     "loop_name": compatibility.artifact_source_loop_name,
-                    "path": compatibility.workspace_path,
+                    "artifact_name": compatibility.workspace_path,
                 },
                 "artifact_sha256": compatibility.sha256,
                 "artifact_size_bytes": compatibility.size_bytes,

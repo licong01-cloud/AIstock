@@ -130,6 +130,22 @@ class _UniverseResolver:
                 "universe_hash": "e" * 64,
                 "symbol_count": int(predictions["symbol"].nunique()),
                 "eligible_pair_count": len(predictions),
+                "st_pit": {
+                    "artifact_name": "qe_event_risk_policy.json",
+                    "artifact_sha256": "f" * 64,
+                    "binding_mode": "legacy_allowlisted_compatibility_artifact_v1",
+                    "compatibility_receipt": {
+                        "source_loop_config_sha256": "a" * 64,
+                        "source_loop_stock_pool_sha256": "b" * 64,
+                        "artifact_source": {
+                            "task_id": "qe_20260705_004409_4437",
+                            "loop_name": "Loop10",
+                            "artifact_name": "qe_event_risk_policy.json",
+                        },
+                        "artifact_sha256": "f" * 64,
+                        "artifact_size_bytes": 1781296,
+                    },
+                },
             },
         )
 
@@ -212,6 +228,16 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     assert [item["selected_row_count"] for item in plan.source_manifest["artifacts"]] == [2, 2]
     assert plan.source_manifest["market_forward_return"]["price_row_count"] == 4
     assert len(plan.source_manifest["market_forward_return"]["market_return_content_hash"]) == 64
+    assert plan.source_manifest["universe"]["st_pit"]["artifact_name"] == (
+        "qe_event_risk_policy.json"
+    )
+    assert plan.source_manifest["universe"]["st_pit"]["compatibility_receipt"][
+        "artifact_source"
+    ] == {
+        "task_id": "qe_20260705_004409_4437",
+        "loop_name": "Loop10",
+        "artifact_name": "qe_event_risk_policy.json",
+    }
     assert prepared.market_returns is not None
     assert len(prepared.market_returns) == 2
     assert preferences == ["prediction_store_first"]
