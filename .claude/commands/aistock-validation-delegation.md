@@ -1,5 +1,7 @@
 # aistock-validation-delegation
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the delegated-validation procedure.
+
 Use this command when a Claude Code task needs broad AIstock validation without spending the interactive window on large test suites or logs.
 
 ## Boundary

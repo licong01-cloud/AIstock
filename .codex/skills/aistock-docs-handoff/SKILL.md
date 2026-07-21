@@ -5,6 +5,8 @@ description: "Handle AIstock documentation, README, handoff, and temporary Codex
 
 # AIstock Docs Handoff
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the docs procedure.
+
 Use this lane for documentation and handoff work. Keep the path classification, validation, and completion steps lightweight.
 
 ## Classify paths first

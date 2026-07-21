@@ -24,8 +24,8 @@
    —— 重点：§2 防缩水三闸门、§4 执行环、§3 验证计划接入时机、§5 A/B/C 模板。
 3. docs/process/research_assistant_phase0_1_execution_pack_20260531.md
    —— 该 Phase 的任务卡(A)/验证计划草案(B)/closure_requirements(C)；若是 Phase 2+，按 Runbook §5 模板先生成本 Phase 的 A/B/C。
-4. docs/standards/aistock_development_standard_v1.5_20260523.md（P0/P1 红线 + §15.3 DESIGN-COMPLIANCE-001）
-5. docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md（worktree/batch/close-sync）
+4. docs/standards/aistock_development_standard_v1.5_20260523.md（唯一开发规范，含 §5.2 DESIGN-COMPLIANCE-001）
+5. `.codex/skills/aistock-task-router/SKILL.md` 选择当前任务 lane；BUG 生命周期由 `scripts/aistock_issue_workflow.py` 执行
 
 【第二步：环境与边界（不可违反）】
 - 从 origin/main 开独立 worktree，分支 codex/<phase-slug>-<yyyymmdd>（Codex 用 codex/ 前缀）。一个 Phase 一个 batch_id。

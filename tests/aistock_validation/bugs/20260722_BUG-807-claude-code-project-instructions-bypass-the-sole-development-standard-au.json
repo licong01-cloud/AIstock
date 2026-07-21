@@ -2,9 +2,20 @@
   "actual": "CLAUDE.md requires both the sole standard and the compatibility issue workflow and points DESIGN-COMPLIANCE-001 at obsolete section 15.3.",
   "allowed_write_scope": [
     "CLAUDE.md",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-feature-workflow.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-validation-delegation.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
     "backend/tests/scripts/test_issue_flow.py",
     "docs/process/research_assistant_codex_kickoff_command_20260601.md",
     "docs/process/research_assistant_blueprint_execution_runbook_20260531.md",
+    "scripts/issue_flow.py",
     "tests/aistock_validation/bugs/20260722_BUG-807-claude-code-project-instructions-bypass-the-sole-development-standard-au.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -61,18 +72,9 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center",
-        "research_assistant",
-        "research_assistant_mcp_contract"
-      ],
-      "plans": [
-        "validation_center_backend",
-        "research_assistant_backend",
-        "research_assistant_mcp_contract"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -125,18 +127,9 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center",
-          "research_assistant",
-          "research_assistant_mcp_contract"
-        ],
-        "plans": [
-          "validation_center_backend",
-          "research_assistant_backend",
-          "research_assistant_mcp_contract"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {

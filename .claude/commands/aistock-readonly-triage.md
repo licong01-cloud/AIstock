@@ -1,5 +1,7 @@
 # aistock-readonly-triage
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the read-only procedure.
+
 Use this command for read-only AIstock triage and status checks.
 
 ## Hard read-only boundary

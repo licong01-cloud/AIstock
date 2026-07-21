@@ -475,6 +475,110 @@ def l0(session: nox.Session) -> None:
     )
 
 
+def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
+    """Run one module-owned Playwright target without starting production services."""
+
+    _ensure_frontend_node_modules(session)
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            target,
+            env=_env(
+                {
+                    "BACKEND_PORT": "8012",
+                    "FRONTEND_PORT": "3012",
+                    "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def frontend_type_lint(session: nox.Session) -> None:
+    """Run the direct shared-frontend compile and lint contract."""
+
+    _ensure_frontend_node_modules(session)
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
+        session.run("npm", "run", "lint", external=True)
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def hmm_evolution_ui(session: nox.Session) -> None:
+    """Run only the HMM Evolution mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/hmm-evolution")
+
+
+@nox.session(venv_backend="none")
+def watchlist_ui(session: nox.Session) -> None:
+    """Run only the Watchlist mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/watchlist")
+
+
+@nox.session(venv_backend="none")
+def strategy_package_governance_ui(session: nox.Session) -> None:
+    """Run only the Strategy Package governance mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/strategy-package-governance")
+
+
+@nox.session(venv_backend="none")
+def watchlist_backend(session: nox.Session) -> None:
+    """Run Watchlist service, router, and data-contract regressions."""
+
+    _run_pytest(
+        session,
+        "backend/tests/watchlist",
+        "backend/tests/test_watchlist_category_entry_tracking.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qlib_data_backend(session: nox.Session) -> None:
+    """Run Qlib exporter and PIT-universe regressions only."""
+
+    _run_pytest(
+        session,
+        "backend/tests/qlib_exporter",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qmt_client_contract(session: nox.Session) -> None:
+    """Run the direct QMT client diagnostics and timeout contracts."""
+
+    _run_pytest(
+        session,
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_build_qmt_order_diagnostic_marks_stale_cancelable_and_bad_status_msg",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_default_is_independent_from_query_timeout",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_diagnostic_includes_retry_identity",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
 @nox.session(venv_backend="none")
 def guardrail_changed_files(session: nox.Session) -> None:
     """Run P0/P1 development-standard guardrails on staged or changed files."""
@@ -2303,6 +2407,7 @@ def validation_module_registry_l0(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_ui_target_catalog.py",
         "-q",
         "-p",
         "no:cacheprovider",

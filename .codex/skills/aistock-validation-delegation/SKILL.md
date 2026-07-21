@@ -5,6 +5,8 @@ description: "Delegate complex AIstock validation to Validation Center/CI/nightl
 
 # AIstock Validation Delegation
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the delegated-validation procedure.
+
 Use this skill when local Codex validation would become broad, repetitive, or log-heavy.
 
 ## Boundary

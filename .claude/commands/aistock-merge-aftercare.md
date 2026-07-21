@@ -1,5 +1,7 @@
 # aistock-merge-aftercare
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the aftercare procedure.
+
 Use this command for AIstock PR merge and post-merge aftercare.
 
 ## Pre-merge

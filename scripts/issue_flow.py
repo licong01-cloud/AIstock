@@ -75,6 +75,7 @@ DOCS_LITE_PREFIXES = (
     "docs/design/",
     "docs/handoff/",
     "docs/operations/",
+    "docs/process/",
 )
 DOCS_LITE_ROOT_FILES = {"README.md"}
 DOCS_STRICT_PREFIXES = ("docs/standards/", ".codex/", ".claude/")
@@ -383,12 +384,10 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         for item in ownership.get("matched_rules") or []
         if item.get("primary_module")
     )
-    if module and module not in impacted:
-        impacted.insert(0, module)
-    if module and module not in primary_modules:
-        primary_modules.insert(0, module)
-    if not impacted and module:
-        impacted = [module]
+    if not primary_modules and module:
+        primary_modules = [module]
+        if module not in impacted:
+            impacted.insert(0, module)
     if not primary_modules and impacted:
         primary_modules = [impacted[0]]
 

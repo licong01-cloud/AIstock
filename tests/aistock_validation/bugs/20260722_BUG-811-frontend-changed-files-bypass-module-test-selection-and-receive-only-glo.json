@@ -7,6 +7,8 @@
     "tests/aistock_validation/catalog/module_registry.yaml",
     "tests/aistock_validation/catalog/test_plans.yaml",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/services/validation/plan_catalog.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260722_BUG-811-frontend-changed-files-bypass-module-test-selection-and-receive-only-glo.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -63,16 +65,9 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center",
-        "validation_catalog_integrity"
-      ],
-      "plans": [
-        "validation_center_backend",
-        "validation_catalog_integrity"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -127,16 +122,9 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center",
-          "validation_catalog_integrity"
-        ],
-        "plans": [
-          "validation_center_backend",
-          "validation_catalog_integrity"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {

@@ -32,11 +32,13 @@ jobs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
       frontend_required: ${{ steps.classify.outputs.frontend_required }}
+      frontend_test_targets: ${{ steps.classify.outputs.frontend_test_targets }}
       go_required: ${{ steps.classify.outputs.go_required }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
       workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
       docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
       static_gate_required: ${{ steps.classify.outputs.static_gate_required }}
+      catalog_validation_required: ${{ steps.classify.outputs.catalog_validation_required }}
       prompt_evaluation_required: ${{ steps.classify.outputs.prompt_evaluation_required }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
@@ -159,11 +161,11 @@ jobs:
           python -m nox -s l0 -- "${changed_files[@]}"
 
       - name: nox -s validation_module_registry_l0
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true' && needs.classify-changes.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_module_registry_l0
 
       - name: nox -s validation_catalog_integrity
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true' && needs.classify-changes.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
       - name: Upload guardrail evidence
@@ -324,6 +326,15 @@ jobs:
 
       - name: Lint frontend surface
         run: npm run lint
+
+      - name: Run owning frontend module tests
+        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
+        env:
+          FRONTEND_TEST_TARGETS: ${{ needs.classify-changes.outputs.frontend_test_targets }}
+        run: |
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' > module_test_targets.txt
+          mapfile -t module_test_targets < module_test_targets.txt
+          npm run test:e2e -- "${module_test_targets[@]}"
 
   tdx-go-tests:
     name: TDX Go tests

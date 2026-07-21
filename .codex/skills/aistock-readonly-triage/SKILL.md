@@ -5,6 +5,8 @@ description: "Run read-only AIstock triage and status checks. Use for read-only 
 
 # AIstock Readonly Triage
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the read-only procedure.
+
 Use this lane when the user asks for analysis only or when mutation is not yet authorized.
 
 ## Hard read-only boundary

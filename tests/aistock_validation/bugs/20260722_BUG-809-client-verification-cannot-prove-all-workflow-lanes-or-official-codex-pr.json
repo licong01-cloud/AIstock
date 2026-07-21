@@ -2,9 +2,7 @@
   "actual": "verify-clients ignores router, feature, docs, merge, triage, and delegation entries and cannot target the official isolated Codex CODEX_HOME.",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
-    "scripts/code_intelligence_adapter.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "backend/tests/scripts/test_code_intelligence_adapter.py",
     "tests/aistock_validation/bugs/20260722_BUG-809-client-verification-cannot-prove-all-workflow-lanes-or-official-codex-pr.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -61,14 +59,9 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -122,14 +115,9 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {

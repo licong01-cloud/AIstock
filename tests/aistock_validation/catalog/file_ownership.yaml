@@ -399,6 +399,8 @@ rules:
       - backend/services/strategy_package/**
       - backend/routers/strategy_package*.py
       - backend/tests/strategy_package/**
+      - frontend/src/app/strategy-package-governance/**
+      - frontend/tests/strategy-package-governance/**
       - docs/contracts/strategy_package*.md
     primary_module: strategy_package
     impact_modules: [paper_v2, selection_center, qe.single_experiment]
@@ -467,6 +469,8 @@ rules:
       - backend/services/hmm_evolution/**
       - backend/db/init_hmm_evolution_schema.py
       - backend/tests/hmm_evolution/**
+      - frontend/src/app/hmm-evolution/**
+      - frontend/tests/hmm-evolution/**
     primary_module: hmm.evolution
     impact_modules: [hmm, qe.core]
     layer: research_data_pipeline
@@ -532,19 +536,27 @@ rules:
     layer: config
     risk_level: high
     ownership_reason: Runtime context config controls assistant dialogue, compaction, and ReAct grounding limits.
-  - rule_id: research_assistant_phase0_docs
+  - rule_id: research_assistant_architecture
     priority: 95
     include:
       - docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md
+    primary_module: research_assistant
+    impact_modules: [docs.architecture]
+    layer: docs
+    risk_level: high
+    ownership_reason: The Research Assistant architecture blueprint defines product implementation boundaries.
+  - rule_id: research_assistant_process_docs
+    priority: 95
+    include:
       - docs/process/research_assistant_baseline_verification_20260531.md
       - docs/process/research_assistant_blueprint_execution_runbook_20260531.md
       - docs/process/research_assistant_phase0_1_execution_pack_20260531.md
       - docs/process/research_assistant_codex_kickoff_command_20260601.md
-    primary_module: research_assistant
-    impact_modules: [docs.architecture, docs.standards, validation.module_quality]
+    primary_module: docs.standards
+    impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs
-    risk_level: high
-    ownership_reason: Research Assistant Phase 0 baseline and blueprint process docs define the implementation boundary and closure gates.
+    risk_level: medium
+    ownership_reason: Legacy Research Assistant process documents now route developers to the current workflow authority.
   - rule_id: research_assistant_tests
     priority: 95
     include:
@@ -847,11 +859,20 @@ rules:
     include:
       - AGENTS.md
       - AGENTS.override.md
+      - CLAUDE.md
       - docs/codex_project_memory.md
       - .codex/skills/aistock-task-router/**
+      - .codex/skills/aistock-docs-handoff/**
+      - .codex/skills/aistock-merge-aftercare/**
+      - .codex/skills/aistock-readonly-triage/**
+      - .codex/skills/aistock-validation-delegation/**
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/aistock-task-router.md
+      - .claude/commands/aistock-docs-handoff.md
+      - .claude/commands/aistock-merge-aftercare.md
+      - .claude/commands/aistock-readonly-triage.md
+      - .claude/commands/aistock-validation-delegation.md
       - .claude/commands/fix-aistock-issue.md
       - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards

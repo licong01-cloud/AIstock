@@ -72,6 +72,12 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_strategy_package_governance_ui": "strategy_package_governance_ui",
     "nox_market_regime_ui": "market_regime_ui",
     "nox_rl_execution_ui": "rl_execution_ui",
+    "nox_frontend_type_lint": "frontend_type_lint",
+    "nox_hmm_evolution_ui": "hmm_evolution_ui",
+    "nox_watchlist_backend": "watchlist_backend",
+    "nox_watchlist_ui": "watchlist_ui",
+    "nox_qlib_data_backend": "qlib_data_backend",
+    "nox_qmt_client_contract": "qmt_client_contract",
 }
 ALLOWED_BACKEND_PORTS = {8011, 8012}
 ALLOWED_FRONTEND_PORTS = {3011, 3012}

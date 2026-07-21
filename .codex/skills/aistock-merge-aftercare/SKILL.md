@@ -5,6 +5,8 @@ description: "Complete AIstock PR merge and post-merge aftercare. Use when the u
 
 # AIstock Merge Aftercare
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the aftercare procedure.
+
 Use this lane after implementation is ready and the user authorized merge or asks for post-merge cleanup.
 
 ## Pre-merge

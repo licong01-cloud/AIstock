@@ -237,12 +237,24 @@ def test_development_standard_is_single_authority_for_workflow_clients() -> None
         for line in design_compliance_lines
         for keyword in ("不得", "不允许", "严禁")
     )
+    assert standard.count("**禁止") == 4
+    assert all(keyword not in standard for keyword in ("不得", "不允许", "严禁"))
 
     client_entries = (
         Path(".codex/skills/aistock-task-router/SKILL.md"),
         Path(".codex/skills/fix-aistock-issue/SKILL.md"),
+        Path(".codex/skills/verify-aistock-feature/SKILL.md"),
+        Path(".codex/skills/aistock-docs-handoff/SKILL.md"),
+        Path(".codex/skills/aistock-merge-aftercare/SKILL.md"),
+        Path(".codex/skills/aistock-readonly-triage/SKILL.md"),
+        Path(".codex/skills/aistock-validation-delegation/SKILL.md"),
         Path(".claude/commands/aistock-task-router.md"),
         Path(".claude/commands/fix-aistock-issue.md"),
+        Path(".claude/commands/aistock-feature-workflow.md"),
+        Path(".claude/commands/aistock-docs-handoff.md"),
+        Path(".claude/commands/aistock-merge-aftercare.md"),
+        Path(".claude/commands/aistock-readonly-triage.md"),
+        Path(".claude/commands/aistock-validation-delegation.md"),
     )
     for entry in client_entries:
         assert authority in entry.read_text(encoding="utf-8")
@@ -383,6 +395,32 @@ def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys:
     assert payload["docs_fast_validation"] == "git_diff_check_and_version_note_only"
     assert payload["docs_controlled_required"] is False
     assert payload["required_plans"] == []
+
+
+def test_validation_select_uses_module_hint_only_when_ownership_is_unmapped() -> None:
+    payload = flow.select_validation(
+        ["scripts/aistock_issue_workflow.py"],
+        module="validation",
+    )
+
+    assert payload["primary_modules"] == ["validation.guardrails"]
+    assert "guardrail_changed_files" in payload["required_plans"]
+    assert "validation_center_backend" not in payload["required_plans"]
+
+
+def test_process_docs_do_not_select_research_assistant_product_tests() -> None:
+    payload = flow.select_validation(
+        [
+            "scripts/ci_change_classifier.py",
+            "docs/process/research_assistant_blueprint_execution_runbook_20260531.md",
+        ],
+        module="validation",
+    )
+
+    assert "docs.standards" in payload["primary_modules"]
+    assert "research_assistant_backend" not in payload["required_plans"]
+    assert "research_assistant_mcp_contract" not in payload["required_plans"]
+    assert "validation_center_backend" not in payload["required_plans"]
 
 
 def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: pytest.CaptureFixture[str]) -> None:

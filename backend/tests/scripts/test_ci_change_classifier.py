@@ -227,17 +227,44 @@ def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_se
     assert payload["unmapped_code_files"] == []
 
 
-def test_unmapped_backend_code_blocks_instead_of_running_unrelated_matrix(tmp_path: Path) -> None:
+def test_qmt_client_selects_its_direct_contract_instead_of_unrelated_matrix(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/infra/qmt_client.py"],
         repo_root=tmp_path,
     )
 
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qmt_client_contract"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["frontend/src/app/hmm-evolution/page.tsx"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["frontend_required"] is True
+    assert payload["frontend_test_targets"] == ["tests/hmm-evolution"]
+    assert payload["backend_sessions"] == ["hmm_evolution_backend"]
+    assert payload["catalog_impacted_modules"][0] == "hmm.evolution"
+    assert payload["unmapped_code_files"] == []
+
+
+def test_unmapped_frontend_code_blocks_instead_of_receiving_type_lint_only(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["frontend/src/app/unowned-feature/page.tsx"],
+        repo_root=tmp_path,
+    )
+
     assert payload["classification"] == "unmapped_code_blocked"
     assert payload["workflow_gate"] == "blocked"
-    assert payload["backend_required"] is False
-    assert payload["backend_sessions"] == []
-    assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
+    assert payload["frontend_required"] is True
+    assert payload["frontend_test_targets"] == []
+    assert payload["unmapped_code_files"] == ["frontend/src/app/unowned-feature/page.tsx"]
 
 
 def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp_path: Path) -> None:
@@ -267,16 +294,17 @@ def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> Non
     assert payload["unmapped_code_files"] == []
 
 
-def test_validation_ui_target_contract_test_selects_validation_center_backend(tmp_path: Path) -> None:
+def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/test_validation_ui_target_catalog.py"],
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "targeted_ci_required"
-    assert payload["backend_required"] is True
-    assert payload["backend_sessions"] == ["validation_center_backend"]
-    assert payload["backend_plan_keys"] == ["l0", "validation_center_backend"]
+    assert payload["classification"] == "catalog_validation_only"
+    assert payload["catalog_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["backend_plan_keys"] == []
     assert payload["unmapped_code_files"] == []
 
 
@@ -293,15 +321,16 @@ def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_
     assert payload["backend_sessions"] == ["simulation_core_l2"]
 
 
-def test_frontend_and_go_changes_use_language_gates_without_backend_matrix(tmp_path: Path) -> None:
+def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Path) -> None:
     frontend = classifier.classify_changed_files(
         ["frontend/src/app/watchlist/page.tsx"],
         repo_root=tmp_path,
     )
-    assert frontend["classification"] == "frontend_ci_required"
+    assert frontend["classification"] == "targeted_ci_required"
     assert frontend["frontend_required"] is True
-    assert frontend["backend_required"] is False
-    assert frontend["backend_sessions"] == []
+    assert frontend["frontend_test_targets"] == ["tests/watchlist"]
+    assert frontend["backend_required"] is True
+    assert frontend["backend_sessions"] == ["watchlist_backend"]
     assert frontend["obsolete_surface_removal"] is False
 
     go = classifier.classify_changed_files(
@@ -670,6 +699,12 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["frontend_required"].endswith(
         "steps.classify.outputs.frontend_required }}"
     )
+    assert jobs["classify-changes"]["outputs"]["frontend_test_targets"].endswith(
+        "steps.classify.outputs.frontend_test_targets }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["catalog_validation_required"].endswith(
+        "steps.classify.outputs.catalog_validation_required }}"
+    )
     assert jobs["classify-changes"]["outputs"]["go_required"].endswith("steps.classify.outputs.go_required }}")
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
     assert (
@@ -683,6 +718,8 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
     assert "npm exec tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
+    assert "FRONTEND_TEST_TARGETS" in frontend_runs
+    assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
     assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
     go_runs = "\n".join(str(step.get("run", "")) for step in jobs["tdx-go-tests"]["steps"])
     assert "go test ./..." in go_runs
@@ -760,6 +797,26 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
         step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
     )
     assert "git diff --name-only --diff-filter=ACMRT" in changed_files_step["run"]
+
+    catalog_steps = [
+        step
+        for step in nox_steps
+        if step.get("name") in {"nox -s validation_module_registry_l0", "nox -s validation_catalog_integrity"}
+    ]
+    assert len(catalog_steps) == 2
+    assert all("catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
+
+
+def test_catalog_change_uses_catalog_gate_without_workflow_suite(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["tests/aistock_validation/catalog/module_registry.yaml"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["catalog_validation_required"] is True
+    assert payload["workflow_validation_required"] is False
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
 
 
 def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
@@ -949,7 +1006,7 @@ def test_cli_blocks_unmapped_code_and_writes_diagnostics(tmp_path: Path, capsys)
                 "--repo-root",
                 str(tmp_path),
                 "--changed-file",
-                "backend/infra/qmt_client.py",
+                "backend/agents/stock_analysis.py",
                 "--output-json",
                 str(out),
                 "--github-output",
@@ -961,13 +1018,13 @@ def test_cli_blocks_unmapped_code_and_writes_diagnostics(tmp_path: Path, capsys)
 
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["workflow_gate"] == "blocked"
-    assert payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
+    assert payload["unmapped_code_files"] == ["backend/agents/stock_analysis.py"]
     github_payload = github_out.read_text(encoding="utf-8")
     assert "classification=unmapped_code_blocked" in github_payload
-    assert 'unmapped_code_files=["backend/infra/qmt_client.py"]' in github_payload
+    assert 'unmapped_code_files=["backend/agents/stock_analysis.py"]' in github_payload
     stdout_payload = json.loads(capsys.readouterr().out)
     assert stdout_payload["workflow_gate"] == "blocked"
-    assert stdout_payload["unmapped_code_files"] == ["backend/infra/qmt_client.py"]
+    assert stdout_payload["unmapped_code_files"] == ["backend/agents/stock_analysis.py"]
 
 
 def test_workflow_instruction_skill_changes_use_focused_fast_lane(tmp_path: Path) -> None:

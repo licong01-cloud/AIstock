@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -41,6 +42,8 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_text = standard_path.read_text(encoding="utf-8")
 
     assert catalog["source_version"] == "1.5"
+    assert catalog["rule_sync_policy"]["catalog_role"] == "machine_enforcement_metadata_only"
+    assert catalog["source_sha256"] == hashlib.sha256(standard_path.read_bytes()).hexdigest()
     assert standard_path.name == "aistock_development_standard_v1.5_20260523.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):

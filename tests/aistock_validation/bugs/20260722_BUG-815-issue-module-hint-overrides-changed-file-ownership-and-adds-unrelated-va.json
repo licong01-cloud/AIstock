@@ -1,40 +1,38 @@
 {
-  "actual": "PROD-DDL-001 adds extra prohibited wording and the YAML contains independently maintained policy prose for 21 rules and manual controls.",
+  "actual": "A validation workflow script change registered with module=validation selects validation_center_backend in addition to the workflow module contract.",
   "allowed_write_scope": [
-    "docs/standards/aistock_development_standard_v1.5_20260523.md",
-    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
-    "backend/tests/test_aistock_guardrail_scan.py",
+    "scripts/issue_flow.py",
     "backend/tests/scripts/test_issue_flow.py",
-    "tests/aistock_validation/bugs/20260722_BUG-808-development-standard-keeps-extra-prohibitions-and-a-manually-duplicated.json",
+    "tests/aistock_validation/bugs/20260722_BUG-815-issue-module-hint-overrides-changed-file-ownership-and-adds-unrelated-va.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-808",
+  "bug_id": "BUG-815",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-21T18:04:10.737672Z",
-  "description": "PROD-DDL-001 adds extra prohibited wording and the YAML contains independently maintained policy prose for 21 rules and manual controls.",
+  "created_at": "2026-07-21T20:03:11.872953Z",
+  "description": "A validation workflow script change registered with module=validation selects validation_center_backend in addition to the workflow module contract.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260722-bac52c084046",
-      "timestamp": "2026-07-21T18:04:10.737648Z"
+      "note": "Promoted from IC-20260722-098212188af7",
+      "timestamp": "2026-07-21T20:03:11.872949Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Only the four approved design-compliance items are expressed as prohibitions; all other workflow rules use positive execution guidance, and the machine catalog cannot become an independent policy source.",
-  "first_seen_at": "2026-07-21T18:04:10.737672Z",
+  "expected": "Changed-file ownership determines primary module validation; the issue module hint is used only when no changed file has a mapped owner.",
+  "first_seen_at": "2026-07-21T20:03:11.872953Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 2572,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2572",
-  "last_seen_at": "2026-07-21T18:04:10.737672Z",
+  "github_issue_number": 2584,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2584",
+  "last_seen_at": "2026-07-21T20:03:11.872953Z",
   "module": "validation",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -42,9 +40,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "rg -n '不得|do not|manual_review_controls|remediation:' docs/standards/aistock_development_standard_v1.5_20260523.md docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+  "reproduce_command": "python scripts/issue_flow.py validation-select --module validation --changed-file scripts/aistock_issue_workflow.py",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -53,13 +52,13 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "Development standard keeps extra prohibitions and a manually duplicated machine authority",
+  "title": "Issue module hint overrides changed-file ownership and adds unrelated validation",
   "trigger_condition": {
-    "fingerprint": "bac52c0840462642ffb3d98b",
-    "source_event_id": "FE-20260722-bac52c084046"
+    "fingerprint": "098212188af769b51ee27b3b",
+    "source_event_id": "FE-20260722-098212188af7"
   },
   "verification_budget": {
-    "budget": "deep",
+    "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [],
       "plans": [],
@@ -93,10 +92,11 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "45-60%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -114,7 +114,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "deep",
+      "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [],
         "plans": [],
@@ -148,10 +148,11 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "45-60%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
   }
 }

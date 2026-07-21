@@ -3,9 +3,12 @@
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/services/validation/plan_catalog.py",
     "backend/services/validation/catalog_integrity.py",
     "backend/tests/test_validation_catalog_integrity.py",
     "backend/tests/test_validation_module_ownership.py",
+    "backend/tests/test_validation_ui_target_catalog.py",
     "noxfile.py",
     "tests/aistock_validation/bugs/20260722_BUG-810-validation-catalog-reports-healthy-while-active-module-files-and-test-pl.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -63,16 +66,9 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center",
-        "validation_catalog_integrity"
-      ],
-      "plans": [
-        "validation_center_backend",
-        "validation_catalog_integrity"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -126,16 +122,9 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center",
-          "validation_catalog_integrity"
-        ],
-        "plans": [
-          "validation_center_backend",
-          "validation_catalog_integrity"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
