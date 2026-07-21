@@ -568,10 +568,17 @@ def guardrail_changed_files(session: nox.Session) -> None:
     mode_flag = session.posargs[0] if session.posargs else "--staged-only"
     if mode_flag not in {"--staged-only", "--changed-only"}:
         session.error("First optional argument must be --staged-only or --changed-only.")
+    scan_args = [mode_flag]
+    if mode_flag == "--changed-only":
+        try:
+            scan_args = _l0_scan_paths([])
+        except RuntimeError as exc:
+            session.error(str(exc))
+            return
     session.run(
         "python",
         "scripts/aistock_guardrail_scan.py",
-        mode_flag,
+        *scan_args,
         "--baseline-json",
         _guardrail_baseline_json(session),
         "--fail-new-only",
@@ -586,7 +593,7 @@ def guardrail_changed_files(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        mode_flag,
+        *scan_args,
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *_validation_artifact_args(

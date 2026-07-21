@@ -73,6 +73,32 @@ def test_validation_registry_l0_keeps_business_dependencies_out(monkeypatch: pyt
     assert "backend/tests/test_validation_ui_target_catalog.py" not in pytest_args
 
 
+def test_changed_file_guardrail_uses_committed_branch_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[tuple[object, ...]] = []
+
+    class DummySession:
+        posargs = ["--changed-only"]
+
+        def run(self, *args: object, **_kwargs: object) -> None:
+            commands.append(args)
+
+        def error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    monkeypatch.setattr(
+        noxfile,
+        "_l0_scan_paths",
+        lambda _posargs: ["scripts/issue_flow.py", "backend/tests/scripts/test_issue_flow.py"],
+    )
+    noxfile.guardrail_changed_files(DummySession())  # type: ignore[arg-type]
+
+    assert len(commands) == 2
+    for command in commands:
+        assert "--changed-only" not in command
+        assert "scripts/issue_flow.py" in command
+        assert "backend/tests/scripts/test_issue_flow.py" in command
+
+
 def test_env_prefers_self_hosted_source_dotenv_without_copying(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_nox_env_loader(monkeypatch)
     source = tmp_path / "source"
