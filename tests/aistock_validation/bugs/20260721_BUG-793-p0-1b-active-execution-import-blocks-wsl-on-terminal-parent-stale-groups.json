@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-793",
-  "closed_at": null,
+  "closed_at": "2026-07-21T04:18:37Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "Only executions whose authoritative parent/source remains nonterminal participate in active-capacity import. Terminal-parent historical groups remain visible as historical inconsistency but must not consume capacity or force queue-only; genuinely active incomplete identities remain explicit unresolved diagnostics.",
   "first_seen_at": "2026-07-21T03:51:30.530861Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "50e556bc371e8339e9933e48e58ec355136955a7",
+  "fixed_at": "2026-07-21T04:19:18.632795Z",
   "github_issue_number": 2523,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2523",
   "last_seen_at": "2026-07-21T03:51:30.530861Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2526",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -60,6 +61,11 @@
     "fingerprint": "81a8a7bfbf8cedb8bcbe1bfa",
     "source_event_id": "FE-20260721-81a8a7bfbf8c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/multi_alpha/test_active_execution_import.py -q -> 6 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
