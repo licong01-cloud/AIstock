@@ -127,7 +127,7 @@ async function installMocks(
       execution_disposition: "execute",
     }],
   }));
-  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/commands\?`), route => respond(route, {
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/commands\\?`), route => respond(route, {
     commands: [],
   }));
   await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/(?:pause|resume|cancel|stop|reconcile)$`), async route => {
