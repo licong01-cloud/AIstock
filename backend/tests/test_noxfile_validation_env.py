@@ -56,6 +56,23 @@ def test_l0_skill_validation_stays_within_changed_path_scope() -> None:
     assert noxfile._path_scope_includes(paths, ".codex/skills/fix-aistock-issue") is False
 
 
+def test_validation_registry_l0_keeps_business_dependencies_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest_args: list[str] = []
+
+    class DummySession:
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    def capture_pytest(_session: object, *args: str) -> None:
+        pytest_args.extend(args)
+
+    monkeypatch.setattr(noxfile, "_run_pytest", capture_pytest)
+    noxfile.validation_module_registry_l0(DummySession())  # type: ignore[arg-type]
+
+    assert "backend/tests/test_validation_module_ownership.py" in pytest_args
+    assert "backend/tests/test_validation_ui_target_catalog.py" not in pytest_args
+
+
 def test_env_prefers_self_hosted_source_dotenv_without_copying(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_nox_env_loader(monkeypatch)
     source = tmp_path / "source"

@@ -2390,7 +2390,6 @@ def validation_module_registry_l0(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/test_validation_module_ownership.py",
-        "backend/tests/test_validation_ui_target_catalog.py",
         "-q",
         "-p",
         "no:cacheprovider",
