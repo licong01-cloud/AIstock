@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pytest
 
+from backend.execution_algos.base_algo import BaseExecutionAlgo
+from backend.execution_algos.v24_plan_algo import V24PlanAlgo
+from backend.execution_algos.v25_1_small_cap_algo import V25_1SmallCapAlgo
+from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo
 from backend.services.trading_core.errors import DataUnavailableError, ExecutionAlgoError, UnsupportedFeatureError
 from backend.services.trading_core.execution_algo_adapter import ExecutionAlgoAdapter
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
@@ -133,6 +138,100 @@ def test_twap_final_child_can_close_exact_subminimum_sell_residual() -> None:
 
     assert final_order.status == OrderStatus.FILLED
     assert [fill.quantity for fill in fills] == [50]
+
+
+def test_v24_v25_sell_residual_is_only_emitted_for_exact_remaining_parent() -> None:
+    class FakeV24Executor:
+        WARMUP = 0
+        _current_plan = (1.0,)
+
+        @staticmethod
+        def decide(**_kwargs):
+            return 1 / 6, 0.0
+
+    v24 = object.__new__(V24PlanAlgo)
+    BaseExecutionAlgo.__init__(v24, config={})
+    v24._executor = FakeV24Executor()
+    v24._initialized = True
+    v24_context = {
+        "stock_id": "000001.SZ",
+        "prev_close": 10.0,
+        "limit_up": 11.0,
+        "limit_down": 9.0,
+        "full_day_close": np.asarray([10.1] * 31),
+        "full_day_volume": np.asarray([10_000] * 31),
+        "full_day_high": np.asarray([10.2] * 31),
+        "full_day_low": np.asarray([9.8] * 31),
+    }
+    bar = {"close": 10.1}
+
+    v24_nonfinal = v24.init_order("000001.SZ", "SELL", 300)
+    assert v24.compute_step(v24_nonfinal, bar, v24_context) is None
+    assert v24_nonfinal.executed_quantity == 0
+
+    v24_final = v24.init_order("000001.SZ", "SELL", 50)
+    v24_final.step = 30
+    v24_result = v24.compute_step(v24_final, bar, v24_context)
+    assert v24_result is not None
+    assert v24_result.quantity == 50
+    assert v24_final.is_complete is True
+
+    plan = np.zeros(240, dtype=float)
+    plan[:6] = 1 / 6
+
+    def make_v25() -> V25TwoStageAlgo:
+        algo = object.__new__(V25TwoStageAlgo)
+        BaseExecutionAlgo.__init__(algo, config={})
+        algo._plan = None
+        algo._plan_key = None
+        algo._plan_metadata = {}
+        algo._last_no_fill_reason = None
+        algo._last_no_fill_context = {}
+        algo._generate_plan = lambda **_kwargs: plan.copy()
+        return algo
+
+    v25_context = {
+        "stock_id": "000001.SZ",
+        "price_basis": "raw",
+        "limit_price_basis": "raw",
+        "prev_close_basis": "raw",
+        "prev_close": 10.0,
+        "limit_up": 11.0,
+        "limit_down": 9.0,
+        "full_day_open": [10.0],
+        "full_day_close": [10.1],
+        "full_day_volume": [10_000],
+        "full_day_high": [10.2],
+        "full_day_low": [9.8],
+        "day_features": [0.1] * 10,
+        "observed_only": True,
+        "v25_realtime_streaming": True,
+    }
+    v25_bar = {
+        "open": 10.0,
+        "high": 10.2,
+        "low": 9.8,
+        "close": 10.1,
+        "volume": 10_000,
+        "limit_up": 11.0,
+        "limit_down": 9.0,
+    }
+
+    v25 = make_v25()
+    v25_nonfinal = v25.init_order("000001.SZ", "SELL", 300)
+    assert v25.compute_step(v25_nonfinal, v25_bar, v25_context) is None
+    assert v25_nonfinal.executed_quantity == 0
+
+    v25_final_algo = make_v25()
+    v25_final = v25_final_algo.init_order("000001.SZ", "SELL", 50)
+    v25_final.step = 239
+    v25_result = v25_final_algo.compute_step(v25_final, v25_bar, v25_context)
+    assert v25_result is not None
+    assert v25_result.quantity == 50
+    assert v25_final.is_complete is True
+
+    assert V25_1SmallCapAlgo._legalize_step_qty(50, 300, "000001.SZ", "SELL") == 0
+    assert V25_1SmallCapAlgo._legalize_step_qty(50, 50, "000001.SZ", "SELL") == 50
 
 
 def test_minute_execution_preserves_valid_star_board_lot_quantity() -> None:
