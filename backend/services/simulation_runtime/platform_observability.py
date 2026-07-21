@@ -11,6 +11,7 @@ import json
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from backend.services.qmt_strategy_ledger.models import OrderBatchStatus
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
@@ -56,6 +57,7 @@ ALERT_LIMIT = 100
 SCHEDULER_TICK_LAG_MULTIPLIER = 2
 LOCAL_SIM_CAUSAL_BAR_LAG_ALERT_SECONDS = 120
 LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS = 120
+LOCAL_SIM_MARKET_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 BLOCKING_RUN_STATUSES = frozenset(
     {
@@ -87,6 +89,16 @@ ACTIVE_MARKET_PHASES = frozenset(
         "POST_CLOSE_RECONCILIATION",
     }
 )
+LOCAL_SIM_BAR_PROGRESS_MARKET_PHASES = frozenset({"OPEN_AM", "OPEN_PM"})
+LOCAL_SIM_ACTIVE_RUNTIME_STATUSES = frozenset(
+    {
+        "WAITING_FOR_CAUSAL_BAR",
+        "WAITING_FOR_MARKET_DATA",
+        "WAITING_FOR_MARKET_STATE",
+        "WAITING_FOR_CAPITAL",
+        "ACTIVE",
+    }
+)
 SCHEDULER_WINDOW_MARKET_PHASE = {
     "pre_open": "PRE_OPEN",
     "selection": "PRE_OPEN",
@@ -101,8 +113,12 @@ SCHEDULER_WINDOW_MARKET_PHASE = {
 LOCAL_SIM_PERSISTENCE_STATUSES = frozenset(
     {
         "PROJECTION_PENDING",
+        "INTRADAY_WAITING_FOR_CAUSAL_BAR",
+        "INTRADAY_PERSISTED",
         "PERSISTED",
         "PERSISTED_WITH_CAPACITY_RESIDUAL",
+        "PERSISTED_WITH_RESIDUAL",
+        "PERSISTED_WITH_TERMINAL_FAILURE",
     }
 )
 LOCAL_SIM_OUTBOX_STATUSES = frozenset({"PENDING", "PROJECTION_RETRYABLE", "PROJECTED"})
@@ -433,7 +449,7 @@ class SimulationPlatformObservability:
                 durability_layers=durability_layers,
                 consistency=runtime_projection_consistency,
             )
-        business_layers = [self._business_layer(run) for run in exact_runs]
+        business_layers = [self._business_layer(run, observed_at=now) for run in exact_runs]
         backend_layers = self._backend_layers(
             runs=exact_runs,
             quote_diagnostics=quote_diagnostics,
@@ -1269,7 +1285,11 @@ class SimulationPlatformObservability:
         }
 
     @staticmethod
-    def _business_layer(run: SimulationDailyRun) -> dict[str, Any]:
+    def _business_layer(
+        run: SimulationDailyRun,
+        *,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
         payload = run.run_payload_json
         submitted = _optional_nonnegative_int(payload, "submitted_intents", field_prefix="run_payload_json")
         failed = _optional_nonnegative_int(payload, "failed_intents", field_prefix="run_payload_json")
@@ -1338,12 +1358,18 @@ class SimulationPlatformObservability:
             parsed_states = []
             state_statuses = Counter()
         residual_count = state_statuses.get("EXPIRED_WITH_RESIDUAL", 0)
-        active_algo_count = sum(state_statuses.get(status, 0) for status in ("WAITING_FOR_CAUSAL_BAR", "ACTIVE"))
+        active_algo_count = sum(
+            state_statuses.get(status, 0)
+            for status in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES
+        )
         partial_count = sum(state.filled_quantity > 0 and state.remaining_quantity > 0 for state in parsed_states)
         bar_lag_candidates = [
-            max(0.0, (state.causality_cursor - state.last_processed_bar_time).total_seconds())
+            SimulationPlatformObservability._local_sim_bar_lag_seconds(
+                observed_at=observed_at,
+                reference_time=state.last_processed_bar_time or state.causality_cursor,
+            )
             for state in parsed_states
-            if state.last_processed_bar_time is not None
+            if state.runtime_status.value in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES
         ]
         max_bar_lag_seconds = max(bar_lag_candidates) if bar_lag_candidates else None
         reconciliation = _optional_mapping(payload, "reconcile_after_submit", field_prefix="run_payload_json")
@@ -1409,6 +1435,44 @@ class SimulationPlatformObservability:
             },
             "execution_gate": False,
         }
+
+    @staticmethod
+    def _local_sim_bar_lag_seconds(
+        *,
+        observed_at: datetime,
+        reference_time: datetime,
+    ) -> float:
+        """Return wall-clock age of the latest causal progress evidence.
+
+        TDX minute timestamps are local-market naive datetimes, while the
+        diagnostics clock is timezone-aware UTC.  Aware state timestamps keep
+        their own timezone; naive state timestamps are interpreted as
+        Asia/Shanghai.  The previous cursor-minus-bar calculation measured the
+        order admission gap, so a healthy 09:31 bar after a 09:30:55 cursor
+        collapsed to zero forever and could never reveal a stalled event loop.
+        """
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise _invalid(
+                "observed_at must be timezone-aware",
+                field="observed_at",
+                value=observed_at,
+            )
+        if reference_time.tzinfo is None or reference_time.utcoffset() is None:
+            comparable_observed = observed_at.astimezone(LOCAL_SIM_MARKET_TIMEZONE).replace(tzinfo=None)
+        else:
+            comparable_observed = observed_at.astimezone(reference_time.tzinfo)
+        lag_seconds = (comparable_observed - reference_time).total_seconds()
+        if lag_seconds < 0:
+            raise RuntimeConfigInvalidError(
+                "LocalSIM causal progress timestamp is later than the diagnostics observation clock",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_BAR_TIME_IN_FUTURE",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "observed_at": observed_at.isoformat(),
+                    "reference_time": reference_time.isoformat(),
+                },
+            )
+        return lag_seconds
 
     @staticmethod
     def _backend_layers(
@@ -1627,7 +1691,7 @@ class SimulationPlatformObservability:
                 and isinstance(bar_lag, (int, float))
                 and not isinstance(bar_lag, bool)
                 and bar_lag > LOCAL_SIM_CAUSAL_BAR_LAG_ALERT_SECONDS
-                and market_phase in ACTIVE_MARKET_PHASES
+                and market_phase in LOCAL_SIM_BAR_PROGRESS_MARKET_PHASES
             ):
                 alerts.append(
                     _alert(

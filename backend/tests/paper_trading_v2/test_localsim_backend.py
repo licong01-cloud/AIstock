@@ -433,6 +433,47 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     assert first_state.remaining_quantity > 0
     assert first_state.last_processed_bar_time == first_as_of
 
+    wrong_policy_backend, _, _ = _build_backend(
+        initial_cash=10_000_000,
+        initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(),
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price_drift",
+            "policy_sha256": "sha_close_price_drift",
+            "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}},
+        },
+    )
+    wrong_policy_backend.configure_execution_runtime(
+        run_id="run_stream_restart",
+        binding_id="binding_stream_restart",
+    )
+    wrong_policy_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
+    with pytest.raises(BrokerSubmitError) as policy_exc:
+        wrong_policy_backend.restore_execution_state(order=first_order, state=first_state)
+    assert policy_exc.value.context["reason_code"] == "LOCALSIM_RESTORE_EXECUTION_POLICY_CONFLICT"
+
+    wrong_order_backend, _, _ = _build_backend(
+        initial_cash=10_000_000,
+        initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(),
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy=streaming_policy,
+    )
+    wrong_order_backend.configure_execution_runtime(
+        run_id="run_stream_restart",
+        binding_id="binding_stream_restart",
+    )
+    wrong_order_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
+    with pytest.raises(BrokerSubmitError) as order_state_exc:
+        wrong_order_backend.restore_execution_state(
+            order=first_order.model_copy(update={"symbol": "000002.SZ"}),
+            state=first_state,
+        )
+    assert order_state_exc.value.context["reason_code"] == "LOCALSIM_RESTORE_ORDER_STATE_CONFLICT"
+
     conflicting_bars = list(historical.minute_bars)
     conflicting_bars[1] = conflicting_bars[1].model_copy(update={"close": conflicting_bars[1].close + 0.5})
     conflict_backend, _, _ = _build_backend(
@@ -1312,6 +1353,18 @@ def test_localsim_fails_fast_without_execution_policy_snapshot() -> None:
             data_source=MinuteDataSource.DB_HISTORICAL,
             manifest=manifest,
             market_data_provider=FakeMarketDataProvider(),
+        )
+
+
+def test_localsim_explicit_empty_execution_policy_does_not_fall_back_to_manifest() -> None:
+    with pytest.raises(RuntimeConfigInvalidError, match="non-empty object"):
+        LocalSimBackend(
+            portfolio_id="paper_local_empty_explicit_policy",
+            initial_cash=100_000,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            manifest=make_paper_enabled_manifest(),
+            market_data_provider=FakeMarketDataProvider(),
+            execution_policy={},
         )
 
 

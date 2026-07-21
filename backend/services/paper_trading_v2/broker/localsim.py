@@ -264,6 +264,45 @@ class LocalSimBackend(BrokerBackend):
                         "order_intent_id": order.intent_id,
                     },
                 )
+            order_side = getattr(order.side, "value", order.side)
+            state_side = getattr(state.side, "value", state.side)
+            order_status = getattr(order.status, "value", order.status)
+            if (
+                order.portfolio_id != state.portfolio_id
+                or order.symbol != state.symbol
+                or order_side != state_side
+                or order.quantity != state.total_quantity
+                or order.filled_quantity != state.filled_quantity
+                or order.remaining_quantity != state.remaining_quantity
+                or order_status != state.order_status
+            ):
+                raise BrokerSubmitError(
+                    "LocalSim restored order facts do not close over the durable state",
+                    context={
+                        "reason_code": "LOCALSIM_RESTORE_ORDER_STATE_CONFLICT",
+                        "state_id": state.state_id,
+                        "order_id": order.order_id,
+                        "state_symbol": state.symbol,
+                        "order_symbol": order.symbol,
+                        "state_total_quantity": state.total_quantity,
+                        "order_quantity": order.quantity,
+                        "state_filled_quantity": state.filled_quantity,
+                        "order_filled_quantity": order.filled_quantity,
+                    },
+                )
+            runtime_algo_code = str(self._execution_policy.get("algo_code") or "").strip().upper()
+            state_algo_code = str(state.algo_code or "").strip().upper()
+            if not runtime_algo_code or state_algo_code != runtime_algo_code:
+                raise BrokerSubmitError(
+                    "LocalSim restored state execution policy does not match the frozen runtime policy",
+                    context={
+                        "reason_code": "LOCALSIM_RESTORE_EXECUTION_POLICY_CONFLICT",
+                        "state_id": state.state_id,
+                        "order_id": order.order_id,
+                        "state_algo_code": state_algo_code or None,
+                        "runtime_algo_code": runtime_algo_code or None,
+                    },
+                )
             if state.intent_id in self._intent_index:
                 raise BrokerSubmitError(
                     "LocalSim durable state was restored more than once",
@@ -1948,7 +1987,7 @@ class LocalSimBackend(BrokerBackend):
         manifest: StrategyPackageManifest,
         execution_policy: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        if execution_policy:
+        if execution_policy is not None:
             payload = dict(execution_policy)
             policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
             return normalize_execution_policy_json(dict(policy_json))
