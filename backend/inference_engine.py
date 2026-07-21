@@ -47,6 +47,18 @@ def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _load_admitted_strategy_package_pickle(path: Path) -> Any:
+    """Load an asset whose integrity was established during package admission.
+
+    Runtime inference must not add a second package-admission or asset-size gate.
+    Both model and processor callers resolve paths from the admitted package
+    manifest before reaching this loader.
+    """
+
+    with path.open("rb") as stream:
+        return pickle.Unpickler(stream).load()
+
+
 def _fetch_inference_fundamental_data(
     *,
     universe: list[str],
@@ -127,7 +139,7 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
     if kept_rows <= 0:
         raise ValueError(
             "strict StrategyPackage inference found no fully-scored instruments; "
-            "refusing to fill missing features with defaults",
+            "refusing to impute missing features",
             LAST_STRICT_FEATURE_FILTER,
         )
     logger.warning(
@@ -246,8 +258,7 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     if model_dir not in sys.path:
         sys.path.insert(0, model_dir)
 
-    with open(model_file, "rb") as f:
-        model = pickle.load(f)
+    model = _load_admitted_strategy_package_pickle(model_file)
 
     # PyTorch 设备处理
     try:
@@ -295,12 +306,13 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     elif hasattr(model, "dnn_model") and model.dnn_model is not None:
         inner_model = model.dnn_model
         model_kind = "pytorch"
-        try:
-            first_layer = next(model.dnn_model.parameters(), None)
-            if first_layer is not None:
-                num_features_expected = first_layer.shape[-1]
-        except Exception:
-            pass
+        first_layer = next(model.dnn_model.parameters(), None)
+        if first_layer is None or len(first_layer.shape) < 1:
+            raise ValueError(
+                "PyTorch StrategyPackage model has no parameter dimension from which "
+                "the required feature count can be established"
+            )
+        num_features_expected = int(first_layer.shape[-1])
         logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
     elif hasattr(model, "predict") and callable(model.predict):
         model_kind = "qlib_generic"
@@ -475,8 +487,7 @@ def _apply_saved_qe_infer_processors(
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
 
-    with open(processor_path, "rb") as f:
-        dataset = pickle.load(f)
+    dataset = _load_admitted_strategy_package_pickle(processor_path)
     handler = getattr(dataset, "handler", None)
     processors = list(getattr(handler, "infer_processors", []) or [])
     if not processors:
@@ -714,13 +725,18 @@ class InferenceEngine:
                 f"数据最新日期={latest_date.date()}"
             )
 
-    def _get_default_universe_excluding_st(self, trade_date: datetime | None = None) -> list[str]:
+    def _get_default_universe_excluding_st(
+        self,
+        trade_date: datetime | None = None,
+        *,
+        ensure: bool = True,
+    ) -> list[str]:
         """Use the platform ST PIT universe for live/latest-data inference."""
         effective_date = (trade_date or datetime.now()).date()
         try:
             from .services.stock_universe_pit_service import StockUniversePitService
 
-            universe = StockUniversePitService().get_eligible_codes(trade_date=effective_date, ensure=True)
+            universe = StockUniversePitService().get_eligible_codes(trade_date=effective_date, ensure=ensure)
             stock_count = len(universe)
             logger.info(
                 "stock universe resolved from platform ST PIT: "
@@ -1285,6 +1301,12 @@ class InferenceEngine:
         cutoff_date: Optional[datetime] = None,
         experiment_id: Optional[str] = None,
         workspace_path: Optional[str] = None,
+        persist_signals: bool = True,
+        universe_ensure: bool = True,
+        receipt_admissibility: str = "PROSPECTIVE_FIRST_OBSERVED",
+        allow_external_market_fallback: bool = True,
+        use_selection_data_cache: bool = True,
+        diagnostic_output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         try:
             return self._run_inference_impl(
@@ -1296,6 +1318,12 @@ class InferenceEngine:
                 cutoff_date=cutoff_date,
                 experiment_id=experiment_id,
                 workspace_path=workspace_path,
+                persist_signals=persist_signals,
+                universe_ensure=universe_ensure,
+                receipt_admissibility=receipt_admissibility,
+                allow_external_market_fallback=allow_external_market_fallback,
+                use_selection_data_cache=use_selection_data_cache,
+                diagnostic_output_path=diagnostic_output_path,
             )
         except Exception as e:
             import traceback
@@ -1314,6 +1342,12 @@ class InferenceEngine:
         cutoff_date: Optional[datetime] = None,
         experiment_id: Optional[str] = None,
         workspace_path: Optional[str] = None,
+        persist_signals: bool = True,
+        universe_ensure: bool = True,
+        receipt_admissibility: str = "PROSPECTIVE_FIRST_OBSERVED",
+        allow_external_market_fallback: bool = True,
+        use_selection_data_cache: bool = True,
+        diagnostic_output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """执行完整的推理流程
         
@@ -1322,6 +1356,11 @@ class InferenceEngine:
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         self.last_inference_receipt = None
+        diagnostic_path = Path(
+            diagnostic_output_path or "f:/Dev/AIstock/debug_tools/qe_diagnosis.txt"
+        )
+        if receipt_admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "RETROSPECTIVE_DB_CONTENT_HASH"}:
+            raise ValueError(f"unsupported inference receipt admissibility: {receipt_admissibility}")
         observed_at = datetime.now(timezone.utc)
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
@@ -1417,7 +1456,7 @@ class InferenceEngine:
         model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
-        universe = self._get_default_universe_excluding_st(actual_date)
+        universe = self._get_default_universe_excluding_st(actual_date, ensure=universe_ensure)
 
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
@@ -1434,8 +1473,8 @@ class InferenceEngine:
         )
 
         # 4.2 尝试从缓存获取数据
-        cache = get_selection_data_cache()
-        cached_data = cache.get(actual_date.date(), universe)
+        cache = get_selection_data_cache() if use_selection_data_cache else None
+        cached_data = cache.get(actual_date.date(), universe) if cache is not None else None
 
         if cached_data is not None:
             df_history, df_fund_raw = cached_data
@@ -1461,6 +1500,8 @@ class InferenceEngine:
                 fields=["open", "high", "low", "close", "volume", "amount", "factor"],
                 freq="1d",
                 adj="front",
+                allow_xtquant_fallback=allow_external_market_fallback,
+                allow_tushare_adj_fallback=allow_external_market_fallback,
             )
             if df_history.empty:
                 raise ValueError("获取历史数据为空")
@@ -1473,14 +1514,15 @@ class InferenceEngine:
             )
 
             # 存入缓存
-            cache.put(actual_date.date(), universe, df_history, df_fund_raw)
+            if cache is not None:
+                cache.put(actual_date.date(), universe, df_history, df_fund_raw)
             logger.info(f"✓ 数据已缓存: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
         
         # 🔍 诊断：检查df_history初始列数
         logger.info(f"🔍 df_history初始列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
         
         # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+        with diagnostic_path.open("a", encoding="utf-8") as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"时间: {datetime.now()}\n")
             f.write(f"df_history初始列数: {len(df_history.columns)}\n")
@@ -1567,7 +1609,7 @@ class InferenceEngine:
                 logger.info(f"🔍 df_fund列数: {len(df_fund.columns)}, 前20列: {list(df_fund.columns)[:20]}")
                 
                 # 写入诊断文件
-                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+                with diagnostic_path.open("a", encoding="utf-8") as f:
                     f.write(f"df_fund列数: {len(df_fund.columns)}\n")
                     f.write(f"df_fund前30列: {list(df_fund.columns)[:30]}\n")
             else:
@@ -1843,7 +1885,7 @@ class InferenceEngine:
         logger.info(f"最终特征列: {list(df_factors_combined.columns)}")
 
         # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+        with diagnostic_path.open("a", encoding="utf-8") as f:
             f.write(f"df_factors_combined列数: {len(df_factors_combined.columns)}\n")
             f.write(f"df_factors_combined列名: {list(df_factors_combined.columns)}\n")
             f.write(f"factor_order长度: {len(factor_order)}\n")
@@ -1891,7 +1933,7 @@ class InferenceEngine:
             raise ValueError(f"推理日期 {actual_date} 无有效因子数据")
         
         # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+        with diagnostic_path.open("a", encoding="utf-8") as f:
             f.write(f"df_today列数（索引过滤后）: {len(df_today.columns)}\n")
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
@@ -1934,12 +1976,12 @@ class InferenceEngine:
                     "query_template_id": "StockUniversePitService.get_eligible_codes",
                     "query_template_version": "v1",
                     "parameter_hash": _inference_receipt_sha256(
-                        {"trade_date": actual_date.date().isoformat(), "ensure": True}
+                        {"trade_date": actual_date.date().isoformat(), "ensure": universe_ensure}
                     ),
                     "row_count": int(len(universe)),
                     "content_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
                     "first_observed_at": observed_at.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": receipt_admissibility,
                 },
                 {
                     "source_role": "market_history",
@@ -1958,7 +2000,7 @@ class InferenceEngine:
                     "row_count": int(len(df_history)),
                     "content_hash": _frame_receipt_sha256(df_history),
                     "first_observed_at": observed_at.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": receipt_admissibility,
                 },
                 {
                     "source_role": "fundamental_moneyflow",
@@ -1976,7 +2018,7 @@ class InferenceEngine:
                     "row_count": int(len(df_fund_raw)),
                     "content_hash": _frame_receipt_sha256(df_fund_raw),
                     "first_observed_at": observed_at.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": receipt_admissibility,
                 },
                 {
                     "source_role": "trading_calendar",
@@ -1994,7 +2036,7 @@ class InferenceEngine:
                     "row_count": 2,
                     "content_hash": calendar_hash,
                     "first_observed_at": observed_at.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": receipt_admissibility,
                 },
             ],
             "input_context": {
@@ -2017,7 +2059,8 @@ class InferenceEngine:
         }
 
         # 保存信号到数据库（使用提取的模块级函数）
-        save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
+        if persist_signals:
+            save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
 
         return df_scores
 

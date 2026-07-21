@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from threading import RLock
@@ -16,7 +17,10 @@ from .errors import (
 )
 from .input_adapter import BatchExecutionInputs, EvaluationExecutionInputs
 from .models import LeaseConfig
-from .repository import HMMEvolutionRepository
+from .repository import HMMEvolutionRepository, TERMINAL_BATCH_STATUSES
+
+
+logger = logging.getLogger(__name__)
 
 
 class EvaluationExecutor(Protocol):
@@ -326,20 +330,29 @@ class HMMEvolutionWorker:
                 )
             )
         except HMMEvolutionError as exc:
-            self._fail_claimed_preparation(
+            terminalized = self._fail_claimed_preparation(
                 batch_id=str(batch["batch_id"]),
                 error_code=exc.error_code,
                 reason_code=exc.reason_code,
                 error_context={"message": exc.message, **dict(exc.context)},
             )
+            if not terminalized:
+                raise
         except Exception as exc:
-            self._fail_claimed_preparation(
+            terminalized = self._fail_claimed_preparation(
                 batch_id=str(batch["batch_id"]),
                 error_code="HMM_EVOLUTION_ERROR",
                 reason_code="hmm_evolution_unexpected_preparation_failure",
                 error_context={"exception_chain": sanitized_exception_chain(exc)},
             )
-            raise
+            if not terminalized:
+                raise
+            logger.exception(
+                "HMM evolution batch preparation failed unexpectedly and was terminalized "
+                "batch_id=%s owner_id=%s",
+                batch["batch_id"],
+                self._owner_id,
+            )
 
     def _fail_claimed_preparation(
         self,
@@ -348,11 +361,11 @@ class HMMEvolutionWorker:
         error_code: str,
         reason_code: str,
         error_context: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         latest = self._repository.get_batch(batch_id)
         if str(latest.get("status")) != "preparing":
-            return
-        self._repository.fail_batch_preparation(
+            return str(latest.get("status")) in TERMINAL_BATCH_STATUSES
+        failed = self._repository.fail_batch_preparation(
             batch_id=batch_id,
             owner_id=self._owner_id,
             fencing_token=int(latest["fencing_token"]),
@@ -361,3 +374,4 @@ class HMMEvolutionWorker:
             reason_code=reason_code,
             error_context=error_context,
         )
+        return str(failed.get("status")) in TERMINAL_BATCH_STATUSES

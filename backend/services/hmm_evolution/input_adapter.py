@@ -628,8 +628,12 @@ def _verify_artifact_receipts(
             "row_count": int(current.get("row_count") or -1),
             "selected_row_count": len(frame),
             "zero_copy": bool(current.get("zero_copy", False)),
-            "fallback": bool(current.get("fallback", False)),
         }
+        # ``fallback`` records the acquisition policy used for this read, not
+        # artifact identity. Enqueue may use prediction_store_first while the
+        # immutable replay uses prediction_store_only against the same pinned
+        # workspace cache. Keep the frozen value as evidence, but do not treat
+        # that policy transition as content drift.
         mismatches = {
             key: {"expected": expected.get(key), "actual": value}
             for key, value in comparisons.items()

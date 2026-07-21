@@ -163,3 +163,53 @@ def test_source_manifest_rejects_incomplete_artifact_receipt() -> None:
                 "universe_hash": "d" * 64,
             },
         )
+
+
+def test_source_manifest_rejects_filesystem_path_keys_in_universe_receipts() -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 0.1)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    coefficients = CandidateCoefficients.from_payload(
+        {
+            "daily_coefficients": {trade_date.isoformat(): {"S": 1.0}},
+            "stock_sector_map": {"A": "S"},
+        }
+    )
+    plan = resolve_batch_common_dates(
+        predictions=predictions,
+        labels=labels,
+        candidates={"candidate": coefficients},
+        window_start=trade_date,
+        window_end=trade_date,
+    )
+    info = {
+        name: {
+            "source": "prediction_store",
+            "uri": f"cas://qe/{name}",
+            "sha256": sha,
+            "size_bytes": 10,
+            "row_count": 1,
+        }
+        for name, sha in (("pred.pkl", "b" * 64), ("label.pkl", "c" * 64))
+    }
+
+    with pytest.raises(ValueError, match="cannot contain filesystem paths"):
+        build_source_manifest(
+            base_loop_ref="qe_task/Loop8",
+            predictions=predictions,
+            labels=labels,
+            artifact_source_info=info,
+            candidate=_candidate(),
+            date_plan=plan,
+            label_horizon_days=10,
+            market_forward_return={"mode": "disabled"},
+            universe_evidence={
+                "type": "source_loop_stock_pool_st_pit",
+                "compatibility_receipt": {"artifact_source": {"path": "risk.json"}},
+            },
+        )

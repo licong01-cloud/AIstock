@@ -34,7 +34,8 @@ class TWAPAlgo(BaseExecutionAlgo):
             return None
 
         # 最后一步：强制执行全部剩余
-        if state.step >= self.split_count - 1:
+        is_final_step = state.step >= self.split_count - 1
+        if is_final_step:
             step_qty = remaining
         else:
             # 期望累计执行量
@@ -42,7 +43,10 @@ class TWAPAlgo(BaseExecutionAlgo):
             step_qty = expected_executed - state.executed_quantity
 
         step_qty = self._round_lot(
-            int(step_qty), symbol=state.symbol, side=state.side
+            int(step_qty),
+            symbol=state.symbol,
+            side=state.side,
+            allow_sell_residual=is_final_step,
         )
         step_qty = min(step_qty, remaining)
 

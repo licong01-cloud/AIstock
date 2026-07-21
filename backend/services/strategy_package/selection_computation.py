@@ -22,7 +22,11 @@ from backend.services.selection_center.prospective_evidence import (
     canonical_candidate_rows,
     canonical_evidence_json_sha256,
 )
-from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile, SelectionRuntimeProfile
+from backend.services.selection_center.runtime_profile import (
+    RuntimeRiskPolicyProfile,
+    SelectionRuntimeProfile,
+    parse_selection_runtime_profile,
+)
 from backend.services.strategy_package.models import AlphaMode
 from backend.services.trading_core.errors import ArtifactGenerationFailedError, RuntimeConfigInvalidError
 
@@ -31,6 +35,12 @@ if TYPE_CHECKING:
 
 
 _SELECTION_SCORE_ARTIFACT_CONTRACT_V2 = "selection_score_artifact_v2"
+
+
+def parse_selection_runtime_profile_for_computation(runtime_config: dict[str, Any] | None) -> SelectionRuntimeProfile:
+    """Expose the already-shared normalized profile boundary to neutral consumers."""
+
+    return parse_selection_runtime_profile(runtime_config)
 
 
 @dataclass(frozen=True)
@@ -264,6 +274,7 @@ class StrategyPackageSelectionComputationRequestV1:
     package_runtime_profile_hashes: Mapping[str, str]
     package_top_k: Mapping[str, int]
     package_weights: Mapping[str, float] | None = None
+    exhaustive_selection_evidence: bool = False
 
     def __post_init__(self) -> None:
         if not str(self.data_source or "").strip():
@@ -469,6 +480,7 @@ class StrategyPackageSelectionComputation:
                     trade_date=request.trade_date,
                     package_id=package_id,
                     manifest_sha256=prepared.manifest_sha256,
+                    exhaustive_evidence=request.exhaustive_selection_evidence,
                 )
                 candidate_outcome_by_package[package_id] = "VALID_NO_CANDIDATE"
             else:
@@ -494,6 +506,7 @@ class StrategyPackageSelectionComputation:
                         trade_date=request.trade_date,
                         package_id=package_id,
                         manifest_sha256=prepared.manifest_sha256,
+                        exhaustive_evidence=request.exhaustive_selection_evidence,
                     )
                 else:
                     selection_result = providers.tradability.filter_candidates_with_receipt(
@@ -505,6 +518,7 @@ class StrategyPackageSelectionComputation:
                         enabled=profile.tradability.exclude_suspended,
                         industry_blacklist=profile.industry_blacklist,
                         allow_empty=True,
+                        exhaustive_evidence=request.exhaustive_selection_evidence,
                     )
                 candidate_outcome_by_package[package_id] = (
                     "CANDIDATES_PRESENT" if selection_result.candidates else "VALID_NO_CANDIDATE"

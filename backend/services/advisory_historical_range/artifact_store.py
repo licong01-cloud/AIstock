@@ -23,6 +23,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeContractError,
+    HistoricalRangePlanningArtifactEnvelopeV1,
     HistoricalRangeSourceRevisionRefV1,
 )
 
@@ -32,6 +33,9 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _logger = logging.getLogger(__name__)
 
 _NAMESPACE_BY_KIND: dict[HistoricalRangeArtifactKind, str] = {
+    HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN: "source-requirement-plans",
+    HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT: "source-catalog-checkpoints",
+    HistoricalRangeArtifactKind.HMM_BINDING_SET: "hmm-binding-sets",
     HistoricalRangeArtifactKind.REQUEST: "requests",
     HistoricalRangeArtifactKind.DATE_PLAN: "date-plans",
     HistoricalRangeArtifactKind.FROZEN_PROGRAM: "frozen-programs",
@@ -42,6 +46,8 @@ _NAMESPACE_BY_KIND: dict[HistoricalRangeArtifactKind, str] = {
     HistoricalRangeArtifactKind.SUMMARY: "summaries",
     HistoricalRangeArtifactKind.DATASET_BRIDGE: "dataset-bridges",
 }
+
+HistoricalRangeStoredEnvelope = HistoricalRangeArtifactEnvelopeV1 | HistoricalRangePlanningArtifactEnvelopeV1
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,15 @@ class HistoricalRangeArtifactStore:
         return self._root_identity_hash
 
     def publish(self, envelope: HistoricalRangeArtifactEnvelopeV1) -> StoredHistoricalRangeArtifact:
+        return self._publish(envelope)
+
+    def publish_planning(
+        self,
+        envelope: HistoricalRangePlanningArtifactEnvelopeV1,
+    ) -> StoredHistoricalRangeArtifact:
+        return self._publish(envelope)
+
+    def _publish(self, envelope: HistoricalRangeStoredEnvelope) -> StoredHistoricalRangeArtifact:
         identity = str(envelope.semantic_content_hash)
         content = (canonical_json_text(envelope.model_dump(mode="json")) + "\n").encode("utf-8")
         destination = self._destination(envelope.artifact_kind, identity)
@@ -179,7 +194,53 @@ class HistoricalRangeArtifactStore:
             )
         )
 
+    def publish_planning_payload(
+        self,
+        *,
+        artifact_kind: HistoricalRangeArtifactKind,
+        planning_identity_hash: str,
+        batch_id: str,
+        catalog_generation: int,
+        producer_contract_version: str,
+        payload_schema_version: str,
+        payload: dict[str, Any],
+    ) -> StoredHistoricalRangeArtifact:
+        return self.publish_planning(
+            HistoricalRangePlanningArtifactEnvelopeV1(
+                artifact_kind=artifact_kind,
+                planning_identity_hash=planning_identity_hash,
+                batch_id=batch_id,
+                catalog_generation=catalog_generation,
+                producer_contract_version=producer_contract_version,
+                payload_schema_version=payload_schema_version,
+                payload=payload,
+            )
+        )
+
     def load(self, ref: HistoricalRangeArtifactRefV1) -> HistoricalRangeArtifactEnvelopeV1:
+        envelope = self._load(ref, planning=False)
+        if not isinstance(envelope, HistoricalRangeArtifactEnvelopeV1):
+            raise HistoricalRangeContractError(
+                REASON_ARTIFACT_TAMPERED,
+                "planning artifact was loaded through the sealed artifact API",
+            )
+        return envelope
+
+    def load_planning(self, ref: HistoricalRangeArtifactRefV1) -> HistoricalRangePlanningArtifactEnvelopeV1:
+        envelope = self._load(ref, planning=True)
+        if not isinstance(envelope, HistoricalRangePlanningArtifactEnvelopeV1):
+            raise HistoricalRangeContractError(
+                REASON_ARTIFACT_TAMPERED,
+                "sealed artifact was loaded through the planning artifact API",
+            )
+        return envelope
+
+    def _load(
+        self,
+        ref: HistoricalRangeArtifactRefV1,
+        *,
+        planning: bool,
+    ) -> HistoricalRangeStoredEnvelope:
         destination = self._destination(ref.artifact_kind, ref.semantic_content_hash)
         if ref.relative_path != destination.relative_to(self._root).as_posix():
             raise HistoricalRangeContractError(
@@ -199,6 +260,7 @@ class HistoricalRangeArtifactStore:
             raw=raw,
             expected_kind=ref.artifact_kind,
             expected_identity=ref.semantic_content_hash,
+            expected_planning=planning,
         )
         if (
             envelope.producer_contract_version != ref.producer_contract_version
@@ -215,7 +277,7 @@ class HistoricalRangeArtifactStore:
     def _existing(
         self,
         *,
-        envelope: HistoricalRangeArtifactEnvelopeV1,
+        envelope: HistoricalRangeStoredEnvelope,
         destination: Path,
         expected: bytes,
     ) -> StoredHistoricalRangeArtifact:
@@ -238,7 +300,7 @@ class HistoricalRangeArtifactStore:
 
     def _stored(
         self,
-        envelope: HistoricalRangeArtifactEnvelopeV1,
+        envelope: HistoricalRangeStoredEnvelope,
         path: Path,
         raw: bytes,
         *,
@@ -281,10 +343,18 @@ class HistoricalRangeArtifactStore:
         raw: bytes,
         expected_kind: HistoricalRangeArtifactKind,
         expected_identity: str,
-    ) -> HistoricalRangeArtifactEnvelopeV1:
+        expected_planning: bool | None = None,
+    ) -> HistoricalRangeStoredEnvelope:
         try:
             document = json.loads(raw.decode("utf-8"))
-            envelope = HistoricalRangeArtifactEnvelopeV1.model_validate(document)
+            planning = document.get("schema_version") == "advisory_historical_range_planning_artifact_envelope_v1"
+            if expected_planning is not None and planning is not expected_planning:
+                raise ValueError("artifact envelope kind differs from the requested API")
+            envelope = (
+                HistoricalRangePlanningArtifactEnvelopeV1.model_validate(document)
+                if planning
+                else HistoricalRangeArtifactEnvelopeV1.model_validate(document)
+            )
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise HistoricalRangeContractError(
                 REASON_ARTIFACT_TAMPERED,

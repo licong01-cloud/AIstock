@@ -44,8 +44,12 @@ class POVAlgo(BaseExecutionAlgo):
         step_qty = int(market_volume * self.target_participation)
         max_qty = int(market_volume * self.max_participation)
         step_qty = min(step_qty, max_qty)
+        closes_remaining = step_qty >= remaining
         step_qty = self._round_lot(
-            step_qty, symbol=state.symbol, side=state.side
+            step_qty,
+            symbol=state.symbol,
+            side=state.side,
+            allow_sell_residual=closes_remaining,
         )
         step_qty = min(step_qty, remaining)
 

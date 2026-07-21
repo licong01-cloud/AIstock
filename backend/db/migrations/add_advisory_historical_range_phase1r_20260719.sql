@@ -24,6 +24,9 @@ DECLARE
     namespace TEXT;
 BEGIN
     namespace := CASE expected_kind
+        WHEN 'SOURCE_REQUIREMENT_PLAN' THEN 'source-requirement-plans'
+        WHEN 'SOURCE_CATALOG_CHECKPOINT' THEN 'source-catalog-checkpoints'
+        WHEN 'HMM_BINDING_SET' THEN 'hmm-binding-sets'
         WHEN 'REQUEST' THEN 'requests'
         WHEN 'DATE_PLAN' THEN 'date-plans'
         WHEN 'FROZEN_PROGRAM' THEN 'frozen-programs'
@@ -55,16 +58,34 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_batch (
     request_id TEXT NOT NULL,
     client_idempotency_key TEXT NOT NULL UNIQUE,
     user_request_semantic_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(user_request_semantic_hash)),
-    request_payload_sha256 TEXT NOT NULL UNIQUE CHECK (app.advisory_historical_range_is_sha256(request_payload_sha256)),
+    planning_identity_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(planning_identity_hash)),
+    requirement_plan_ref JSONB NOT NULL,
+    requirement_plan_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(requirement_plan_hash)),
+    requirement_plan_artifact_hash TEXT NOT NULL CHECK (
+        app.advisory_historical_range_is_sha256(requirement_plan_artifact_hash)
+    ),
+    request_payload_sha256 TEXT CHECK (request_payload_sha256 IS NULL OR app.advisory_historical_range_is_sha256(request_payload_sha256)),
+    request_artifact_ref JSONB,
+    request_artifact_hash TEXT CHECK (request_artifact_hash IS NULL OR app.advisory_historical_range_is_sha256(request_artifact_hash)),
     supersedes_batch_id TEXT REFERENCES app.advisory_historical_range_batch(batch_id) ON DELETE RESTRICT,
+    canonical_batch_id TEXT REFERENCES app.advisory_historical_range_batch(batch_id) ON DELETE RESTRICT,
+    deduplicated_request_payload_sha256 TEXT CHECK (
+        deduplicated_request_payload_sha256 IS NULL
+        OR app.advisory_historical_range_is_sha256(deduplicated_request_payload_sha256)
+    ),
+    dedup_receipt_ref JSONB,
+    dedup_receipt_hash TEXT CHECK (dedup_receipt_hash IS NULL OR app.advisory_historical_range_is_sha256(dedup_receipt_hash)),
     start_trade_date DATE NOT NULL,
     end_trade_date DATE NOT NULL,
     calendar_id TEXT NOT NULL,
     calendar_version TEXT NOT NULL,
     ordered_trade_dates_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(ordered_trade_dates_hash)),
-    date_plan_ref JSONB NOT NULL,
-    date_plan_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(date_plan_hash)),
-    source_revision_catalog_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(source_revision_catalog_hash)),
+    date_plan_ref JSONB,
+    date_plan_hash TEXT CHECK (date_plan_hash IS NULL OR app.advisory_historical_range_is_sha256(date_plan_hash)),
+    source_revision_catalog_ref JSONB,
+    source_revision_catalog_hash TEXT CHECK (
+        source_revision_catalog_hash IS NULL OR app.advisory_historical_range_is_sha256(source_revision_catalog_hash)
+    ),
     selection_semantics_version TEXT NOT NULL,
     selection_semantics_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(selection_semantics_hash)),
     list_semantics_version TEXT NOT NULL,
@@ -73,7 +94,18 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_batch (
     program_count INTEGER NOT NULL CHECK (program_count >= 1),
     trade_date_count INTEGER NOT NULL CHECK (trade_date_count >= 1),
     planned_day_count BIGINT NOT NULL CHECK (planned_day_count >= 1),
-    status TEXT NOT NULL CHECK (status IN ('QUEUED', 'RUNNING', 'PARTIAL', 'WAITING_INPUT', 'COMPLETED', 'FAILED', 'CANCELLING', 'CANCELLED')),
+    status TEXT NOT NULL CHECK (status IN ('PLANNING', 'QUEUED', 'RUNNING', 'PARTIAL', 'WAITING_INPUT', 'COMPLETED', 'FAILED', 'CANCELLING', 'CANCELLED', 'DEDUPLICATED')),
+    waiting_stage TEXT CHECK (waiting_stage IS NULL OR waiting_stage IN ('CATALOG', 'DAY_INPUT')),
+    catalog_generation INTEGER NOT NULL DEFAULT 1 CHECK (catalog_generation >= 1),
+    catalog_phase TEXT NOT NULL DEFAULT 'DISCOVER' CHECK (catalog_phase IN ('DISCOVER', 'VERIFY')),
+    catalog_cursor_ordinal INTEGER NOT NULL DEFAULT 1 CHECK (catalog_cursor_ordinal >= 1),
+    catalog_resolved_count BIGINT NOT NULL DEFAULT 0 CHECK (catalog_resolved_count >= 0),
+    catalog_unresolved_count BIGINT NOT NULL DEFAULT 0 CHECK (catalog_unresolved_count >= 0),
+    catalog_member_chain_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(catalog_member_chain_hash)),
+    latest_catalog_checkpoint_ref JSONB,
+    latest_catalog_checkpoint_hash TEXT CHECK (
+        latest_catalog_checkpoint_hash IS NULL OR app.advisory_historical_range_is_sha256(latest_catalog_checkpoint_hash)
+    ),
     row_version BIGINT NOT NULL DEFAULT 1 CHECK (row_version >= 1),
     successful_day_count BIGINT NOT NULL DEFAULT 0 CHECK (successful_day_count >= 0),
     terminal_failed_day_count BIGINT NOT NULL DEFAULT 0 CHECK (terminal_failed_day_count >= 0),
@@ -90,6 +122,7 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_batch (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     error_json JSONB,
     request_payload_json JSONB NOT NULL,
+    sealed_at TIMESTAMPTZ,
     CHECK (start_trade_date <= end_trade_date),
     CHECK (planned_day_count = program_count::BIGINT * trade_date_count::BIGINT),
     CHECK (successful_day_count + terminal_failed_day_count <= planned_day_count),
@@ -99,15 +132,73 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_batch (
     CHECK (retryable_program_count <= program_count),
     CHECK (partial_program_count <= program_count),
     CHECK (recoverable_program_count <= program_count),
-    CHECK (app.advisory_historical_range_artifact_ref_is_valid(date_plan_ref, 'DATE_PLAN', date_plan_hash)),
+    CHECK (app.advisory_historical_range_artifact_ref_is_valid(
+        requirement_plan_ref, 'SOURCE_REQUIREMENT_PLAN', requirement_plan_artifact_hash
+    )),
+    CHECK ((request_artifact_ref IS NULL) = (request_artifact_hash IS NULL)),
+    CHECK ((date_plan_ref IS NULL) = (date_plan_hash IS NULL)),
+    CHECK ((source_revision_catalog_ref IS NULL) = (source_revision_catalog_hash IS NULL)),
+    CHECK ((latest_catalog_checkpoint_ref IS NULL) = (latest_catalog_checkpoint_hash IS NULL)),
+    CHECK ((dedup_receipt_ref IS NULL) = (dedup_receipt_hash IS NULL)),
+    CHECK (
+        request_artifact_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(request_artifact_ref, 'REQUEST', request_artifact_hash)
+    ),
+    CHECK (
+        date_plan_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(date_plan_ref, 'DATE_PLAN', date_plan_hash)
+    ),
+    CHECK (
+        source_revision_catalog_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(
+            source_revision_catalog_ref, 'REQUEST', NULL
+        )
+    ),
+    CHECK (
+        latest_catalog_checkpoint_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(
+            latest_catalog_checkpoint_ref, 'SOURCE_CATALOG_CHECKPOINT', latest_catalog_checkpoint_hash
+        )
+    ),
+    CHECK (
+        dedup_receipt_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(dedup_receipt_ref, 'RANGE_RECEIPT', dedup_receipt_hash)
+    ),
+    CHECK (
+        (sealed_at IS NULL AND request_payload_sha256 IS NULL AND request_artifact_ref IS NULL
+         AND date_plan_ref IS NULL AND source_revision_catalog_ref IS NULL)
+        OR
+        (sealed_at IS NOT NULL AND request_payload_sha256 IS NOT NULL AND request_artifact_ref IS NOT NULL
+         AND date_plan_ref IS NOT NULL AND source_revision_catalog_ref IS NOT NULL)
+    ),
+    CHECK (
+        (status = 'DEDUPLICATED' AND canonical_batch_id IS NOT NULL
+         AND deduplicated_request_payload_sha256 IS NOT NULL AND dedup_receipt_ref IS NOT NULL
+         AND sealed_at IS NULL)
+        OR
+        (status <> 'DEDUPLICATED' AND canonical_batch_id IS NULL
+         AND deduplicated_request_payload_sha256 IS NULL AND dedup_receipt_ref IS NULL)
+    ),
+    CHECK (
+        (status = 'WAITING_INPUT' AND waiting_stage IS NOT NULL)
+        OR (status <> 'WAITING_INPUT' AND waiting_stage IS NULL)
+    ),
+    CHECK (
+        waiting_stage <> 'CATALOG'
+        OR (sealed_at IS NULL AND status = 'WAITING_INPUT')
+    ),
     CHECK (
         (finished_at IS NOT NULL) = (
-            status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+            status IN ('COMPLETED', 'FAILED', 'CANCELLED', 'DEDUPLICATED')
             OR (status = 'PARTIAL' AND recoverable_program_count = 0)
         )
     ),
     CHECK (finished_at IS NULL OR started_at IS NOT NULL)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_advisory_historical_range_batch_request_payload
+    ON app.advisory_historical_range_batch(request_payload_sha256)
+    WHERE request_payload_sha256 IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_advisory_historical_range_batch_supersedes
     ON app.advisory_historical_range_batch(supersedes_batch_id)
@@ -117,11 +208,26 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_request_key (
     client_idempotency_key TEXT PRIMARY KEY,
     batch_id TEXT NOT NULL REFERENCES app.advisory_historical_range_batch(batch_id) ON DELETE RESTRICT,
     request_id TEXT NOT NULL,
-    request_payload_sha256 TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(request_payload_sha256)),
-    request_artifact_ref JSONB NOT NULL,
-    request_artifact_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(request_artifact_hash)),
+    user_request_semantic_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(user_request_semantic_hash)),
+    planning_identity_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(planning_identity_hash)),
+    requirement_plan_ref JSONB NOT NULL,
+    requirement_plan_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(requirement_plan_hash)),
+    requirement_plan_artifact_hash TEXT NOT NULL CHECK (
+        app.advisory_historical_range_is_sha256(requirement_plan_artifact_hash)
+    ),
+    request_payload_sha256 TEXT CHECK (request_payload_sha256 IS NULL OR app.advisory_historical_range_is_sha256(request_payload_sha256)),
+    request_artifact_ref JSONB,
+    request_artifact_hash TEXT CHECK (request_artifact_hash IS NULL OR app.advisory_historical_range_is_sha256(request_artifact_hash)),
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CHECK (app.advisory_historical_range_artifact_ref_is_valid(request_artifact_ref, 'REQUEST', request_artifact_hash))
+    CHECK (app.advisory_historical_range_artifact_ref_is_valid(
+        requirement_plan_ref, 'SOURCE_REQUIREMENT_PLAN', requirement_plan_artifact_hash
+    )),
+    CHECK ((request_payload_sha256 IS NULL) = (request_artifact_ref IS NULL)),
+    CHECK ((request_artifact_ref IS NULL) = (request_artifact_hash IS NULL)),
+    CHECK (
+        request_artifact_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(request_artifact_ref, 'REQUEST', request_artifact_hash)
+    )
 );
 
 CREATE TABLE IF NOT EXISTS app.advisory_historical_range_run (
@@ -132,7 +238,7 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_run (
     source_program_version BIGINT CHECK (source_program_version IS NULL OR source_program_version >= 1),
     source_binding_version_id TEXT,
     package_id TEXT NOT NULL,
-    package_version BIGINT NOT NULL CHECK (package_version >= 1),
+    package_version TEXT NOT NULL CHECK (length(btrim(package_version)) BETWEEN 1 AND 80),
     manifest_sha256 TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(manifest_sha256)),
     alpha_mode TEXT NOT NULL CHECK (alpha_mode IN ('single_alpha', 'multi_alpha')),
     program_config_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(program_config_hash)),
@@ -222,8 +328,11 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_day_run (
     CHECK ((status = 'RUNNING' AND lease_expires_at IS NOT NULL AND current_fencing_token IS NOT NULL AND attempt_no >= 1) OR status <> 'RUNNING'),
     CHECK (
         candidate_artifact_ref IS NULL
-        OR app.advisory_historical_range_artifact_ref_is_valid(
-            candidate_artifact_ref, 'CANDIDATE_ARTIFACT', candidate_artifact_hash
+        OR (
+            app.advisory_historical_range_artifact_ref_is_valid(
+                candidate_artifact_ref, 'CANDIDATE_ARTIFACT', candidate_artifact_hash
+            )
+            AND candidate_artifact_ref->>'payload_schema_version' = 'advisory_historical_range_candidate_artifact_payload_v2'
         )
     ),
     CHECK (
@@ -264,8 +373,11 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_day_attempt (
     CHECK ((attempt_receipt_ref IS NULL) = (attempt_receipt_hash IS NULL)),
     CHECK (
         candidate_artifact_ref IS NULL
-        OR app.advisory_historical_range_artifact_ref_is_valid(
-            candidate_artifact_ref, 'CANDIDATE_ARTIFACT', candidate_artifact_hash
+        OR (
+            app.advisory_historical_range_artifact_ref_is_valid(
+                candidate_artifact_ref, 'CANDIDATE_ARTIFACT', candidate_artifact_hash
+            )
+            AND candidate_artifact_ref->>'payload_schema_version' = 'advisory_historical_range_candidate_artifact_payload_v2'
         )
     ),
     CHECK (
@@ -278,11 +390,16 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_day_attempt (
 CREATE TABLE IF NOT EXISTS app.advisory_historical_range_operation (
     operation_id TEXT PRIMARY KEY,
     batch_id TEXT NOT NULL REFERENCES app.advisory_historical_range_batch(batch_id) ON DELETE RESTRICT,
-    operation_type TEXT NOT NULL CHECK (operation_type IN ('CREATE', 'RESUME', 'CANCEL', 'REFRESH_OUTCOMES', 'BUILD_DATASET_BRIDGE')),
+    operation_type TEXT NOT NULL CHECK (operation_type IN ('CREATE', 'BUILD_SOURCE_CATALOG', 'RESUME', 'CANCEL', 'REFRESH_OUTCOMES', 'BUILD_DATASET_BRIDGE')),
     operation_idempotency_key TEXT NOT NULL,
-    request_payload_sha256 TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(request_payload_sha256)),
+    request_payload_sha256 TEXT CHECK (
+        request_payload_sha256 IS NULL OR app.advisory_historical_range_is_sha256(request_payload_sha256)
+    ),
+    planning_identity_hash TEXT CHECK (
+        planning_identity_hash IS NULL OR app.advisory_historical_range_is_sha256(planning_identity_hash)
+    ),
     expected_row_version BIGINT CHECK (expected_row_version IS NULL OR expected_row_version >= 1),
-    status TEXT NOT NULL CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED')),
+    status TEXT NOT NULL CHECK (status IN ('QUEUED', 'RUNNING', 'WAITING_INPUT', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED')),
     row_version BIGINT NOT NULL DEFAULT 1 CHECK (row_version >= 1),
     attempt_no INTEGER NOT NULL DEFAULT 0 CHECK (attempt_no >= 0),
     worker_id TEXT,
@@ -290,6 +407,17 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_operation (
     lease_expires_at TIMESTAMPTZ,
     fencing_token BIGINT CHECK (fencing_token IS NULL OR fencing_token >= 1),
     stable_keyset_cursor_json JSONB,
+    catalog_generation INTEGER CHECK (catalog_generation IS NULL OR catalog_generation >= 1),
+    catalog_phase TEXT CHECK (catalog_phase IS NULL OR catalog_phase IN ('DISCOVER', 'VERIFY')),
+    latest_checkpoint_ref JSONB,
+    latest_checkpoint_hash TEXT CHECK (
+        latest_checkpoint_hash IS NULL OR app.advisory_historical_range_is_sha256(latest_checkpoint_hash)
+    ),
+    cumulative_resolved_count BIGINT CHECK (cumulative_resolved_count IS NULL OR cumulative_resolved_count >= 0),
+    cumulative_unresolved_count BIGINT CHECK (cumulative_unresolved_count IS NULL OR cumulative_unresolved_count >= 0),
+    cumulative_member_chain_hash TEXT CHECK (
+        cumulative_member_chain_hash IS NULL OR app.advisory_historical_range_is_sha256(cumulative_member_chain_hash)
+    ),
     result_row_version BIGINT CHECK (result_row_version IS NULL OR result_row_version >= 1),
     result_status TEXT,
     result_ref JSONB,
@@ -301,11 +429,33 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_operation (
     error_json JSONB,
     UNIQUE(batch_id, operation_idempotency_key),
     CHECK (
+        (operation_type IN ('CREATE', 'BUILD_SOURCE_CATALOG') AND planning_identity_hash IS NOT NULL AND request_payload_sha256 IS NULL)
+        OR
+        (operation_type NOT IN ('CREATE', 'BUILD_SOURCE_CATALOG') AND request_payload_sha256 IS NOT NULL)
+    ),
+    CHECK ((latest_checkpoint_ref IS NULL) = (latest_checkpoint_hash IS NULL)),
+    CHECK (
+        latest_checkpoint_ref IS NULL
+        OR app.advisory_historical_range_artifact_ref_is_valid(
+            latest_checkpoint_ref, 'SOURCE_CATALOG_CHECKPOINT', latest_checkpoint_hash
+        )
+    ),
+    CHECK (
+        (operation_type = 'BUILD_SOURCE_CATALOG' AND catalog_generation IS NOT NULL AND catalog_phase IS NOT NULL
+         AND cumulative_resolved_count IS NOT NULL AND cumulative_unresolved_count IS NOT NULL
+         AND cumulative_member_chain_hash IS NOT NULL)
+        OR
+        (operation_type <> 'BUILD_SOURCE_CATALOG' AND catalog_generation IS NULL AND catalog_phase IS NULL
+         AND latest_checkpoint_ref IS NULL AND cumulative_resolved_count IS NULL
+         AND cumulative_unresolved_count IS NULL AND cumulative_member_chain_hash IS NULL)
+    ),
+    CHECK (
         (status = 'RUNNING' AND worker_id IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND fencing_token IS NOT NULL AND attempt_no >= 1)
         OR status <> 'RUNNING'
     ),
     CHECK ((result_ref IS NULL) = (result_hash IS NULL)),
-    CHECK ((status IN ('COMPLETED', 'FAILED')) = (result_ref IS NOT NULL AND finished_at IS NOT NULL)),
+    CHECK ((status IN ('WAITING_INPUT', 'COMPLETED', 'FAILED')) = (result_ref IS NOT NULL)),
+    CHECK ((status IN ('COMPLETED', 'FAILED')) = (finished_at IS NOT NULL)),
     CHECK (result_ref IS NULL OR app.advisory_historical_range_artifact_ref_is_valid(result_ref, result_ref->>'artifact_kind', result_hash)),
     CHECK (finished_at IS NULL OR started_at IS NOT NULL)
 );
@@ -321,7 +471,7 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_operation_attempt (
     worker_id TEXT NOT NULL,
     lease_token TEXT NOT NULL,
     fencing_token BIGINT NOT NULL CHECK (fencing_token >= 1),
-    status TEXT NOT NULL CHECK (status IN ('RUNNING', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED')),
+    status TEXT NOT NULL CHECK (status IN ('RUNNING', 'WAITING_INPUT', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED')),
     input_cursor_json JSONB,
     result_cursor_json JSONB,
     input_hash TEXT NOT NULL CHECK (app.advisory_historical_range_is_sha256(input_hash)),
@@ -337,8 +487,16 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_operation_attempt (
     CHECK ((attempt_receipt_ref IS NULL) = (attempt_receipt_hash IS NULL)),
     CHECK (
         attempt_receipt_ref IS NULL
-        OR app.advisory_historical_range_artifact_ref_is_valid(
-            attempt_receipt_ref, 'RANGE_RECEIPT', attempt_receipt_hash
+        OR (
+            app.advisory_historical_range_artifact_ref_is_valid(
+                attempt_receipt_ref, 'RANGE_RECEIPT', attempt_receipt_hash
+            )
+            OR app.advisory_historical_range_artifact_ref_is_valid(
+                attempt_receipt_ref, 'SOURCE_REQUIREMENT_PLAN', attempt_receipt_hash
+            )
+            OR app.advisory_historical_range_artifact_ref_is_valid(
+                attempt_receipt_ref, 'SOURCE_CATALOG_CHECKPOINT', attempt_receipt_hash
+            )
         )
     ),
     CHECK ((status = 'RUNNING' AND finished_at IS NULL) OR (status <> 'RUNNING' AND finished_at IS NOT NULL AND attempt_receipt_ref IS NOT NULL))
@@ -366,7 +524,10 @@ CREATE TABLE IF NOT EXISTS app.advisory_historical_range_candidate (
     candidate_content_hash TEXT NOT NULL UNIQUE CHECK (app.advisory_historical_range_is_sha256(candidate_content_hash)),
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     UNIQUE(day_run_id, symbol),
-    CHECK (app.advisory_historical_range_artifact_ref_is_valid(artifact_ref, 'CANDIDATE_ARTIFACT', artifact_hash)),
+    CHECK (
+        app.advisory_historical_range_artifact_ref_is_valid(artifact_ref, 'CANDIDATE_ARTIFACT', artifact_hash)
+        AND artifact_ref->>'payload_schema_version' = 'advisory_historical_range_candidate_artifact_payload_v2'
+    ),
     CHECK (
         membership_status = 'EXCLUDED'
         OR (selection_effective_rank IS NOT NULL AND selection_effective_score IS NOT NULL)
@@ -580,7 +741,7 @@ DECLARE
     actual_recoverable_program_count INTEGER;
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF NEW.status <> 'QUEUED' OR NEW.row_version <> 1 THEN
+        IF NEW.status <> 'PLANNING' OR NEW.row_version <> 1 OR NEW.sealed_at IS NOT NULL THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_INITIAL_STATE_INVALID';
         END IF;
         RETURN NEW;
@@ -589,16 +750,15 @@ BEGIN
        OR NEW.request_id <> OLD.request_id
        OR NEW.client_idempotency_key <> OLD.client_idempotency_key
        OR NEW.user_request_semantic_hash <> OLD.user_request_semantic_hash
-       OR NEW.request_payload_sha256 <> OLD.request_payload_sha256
-       OR NEW.supersedes_batch_id IS DISTINCT FROM OLD.supersedes_batch_id
+       OR NEW.planning_identity_hash <> OLD.planning_identity_hash
+       OR NEW.requirement_plan_ref <> OLD.requirement_plan_ref
+       OR NEW.requirement_plan_hash <> OLD.requirement_plan_hash
+       OR NEW.requirement_plan_artifact_hash <> OLD.requirement_plan_artifact_hash
        OR NEW.start_trade_date <> OLD.start_trade_date
        OR NEW.end_trade_date <> OLD.end_trade_date
        OR NEW.calendar_id <> OLD.calendar_id
        OR NEW.calendar_version <> OLD.calendar_version
        OR NEW.ordered_trade_dates_hash <> OLD.ordered_trade_dates_hash
-       OR NEW.date_plan_ref <> OLD.date_plan_ref
-       OR NEW.date_plan_hash <> OLD.date_plan_hash
-       OR NEW.source_revision_catalog_hash <> OLD.source_revision_catalog_hash
        OR NEW.selection_semantics_version <> OLD.selection_semantics_version
        OR NEW.selection_semantics_hash <> OLD.selection_semantics_hash
        OR NEW.list_semantics_version <> OLD.list_semantics_version
@@ -607,11 +767,18 @@ BEGIN
        OR NEW.program_count <> OLD.program_count
        OR NEW.trade_date_count <> OLD.trade_date_count
        OR NEW.planned_day_count <> OLD.planned_day_count
-       OR NEW.artifact_root_identity_hash <> OLD.artifact_root_identity_hash
-       OR NEW.request_payload_json <> OLD.request_payload_json THEN
+       OR NEW.artifact_root_identity_hash <> OLD.artifact_root_identity_hash THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_IDENTITY_IMMUTABLE';
     END IF;
-    IF OLD.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN
+    IF OLD.supersedes_batch_id IS NOT NULL
+       AND NEW.supersedes_batch_id IS DISTINCT FROM OLD.supersedes_batch_id THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_SUPERSEDES_IMMUTABLE';
+    END IF;
+    IF OLD.supersedes_batch_id IS NULL AND NEW.supersedes_batch_id IS NOT NULL
+       AND NOT (OLD.status = 'PLANNING' AND NEW.status = 'QUEUED') THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_SUPERSEDES_ASSIGNMENT_INVALID';
+    END IF;
+    IF OLD.status IN ('COMPLETED', 'FAILED', 'CANCELLED', 'DEDUPLICATED') THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TERMINAL_IMMUTABLE';
     END IF;
     IF OLD.status = 'PARTIAL' AND OLD.recoverable_program_count = 0 AND OLD.finished_at IS NOT NULL THEN
@@ -620,18 +787,98 @@ BEGIN
     IF NEW.row_version <> OLD.row_version + 1 THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_ROW_VERSION_INVALID';
     END IF;
+    IF OLD.sealed_at IS NOT NULL AND (
+        NEW.request_payload_sha256 IS DISTINCT FROM OLD.request_payload_sha256
+        OR NEW.request_artifact_ref IS DISTINCT FROM OLD.request_artifact_ref
+        OR NEW.request_artifact_hash IS DISTINCT FROM OLD.request_artifact_hash
+        OR NEW.date_plan_ref IS DISTINCT FROM OLD.date_plan_ref
+        OR NEW.date_plan_hash IS DISTINCT FROM OLD.date_plan_hash
+        OR NEW.source_revision_catalog_ref IS DISTINCT FROM OLD.source_revision_catalog_ref
+        OR NEW.source_revision_catalog_hash IS DISTINCT FROM OLD.source_revision_catalog_hash
+        OR NEW.sealed_at IS DISTINCT FROM OLD.sealed_at
+        OR NEW.request_payload_json IS DISTINCT FROM OLD.request_payload_json
+    ) THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_SEALED_IDENTITY_IMMUTABLE';
+    END IF;
+    IF OLD.canonical_batch_id IS NOT NULL AND (
+        NEW.canonical_batch_id IS DISTINCT FROM OLD.canonical_batch_id
+        OR NEW.deduplicated_request_payload_sha256 IS DISTINCT FROM OLD.deduplicated_request_payload_sha256
+        OR NEW.dedup_receipt_ref IS DISTINCT FROM OLD.dedup_receipt_ref
+        OR NEW.dedup_receipt_hash IS DISTINCT FROM OLD.dedup_receipt_hash
+    ) THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_DEDUP_IDENTITY_IMMUTABLE';
+    END IF;
+    IF NEW.catalog_generation < OLD.catalog_generation THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_CATALOG_GENERATION_INVALID';
+    END IF;
+    IF NEW.catalog_generation = OLD.catalog_generation THEN
+        IF NEW.catalog_phase IS DISTINCT FROM OLD.catalog_phase THEN
+            IF OLD.catalog_phase <> 'DISCOVER'
+               OR NEW.catalog_phase <> 'VERIFY'
+               OR NEW.catalog_cursor_ordinal <> 1
+               OR NEW.catalog_resolved_count <> 0
+               OR NEW.catalog_unresolved_count <> 0
+               OR NEW.catalog_member_chain_hash <> '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945' THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_CATALOG_PHASE_INVALID';
+            END IF;
+        ELSE
+            IF NEW.catalog_cursor_ordinal < OLD.catalog_cursor_ordinal
+               OR NEW.catalog_resolved_count < OLD.catalog_resolved_count THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_CATALOG_CURSOR_INVALID';
+            END IF;
+            IF OLD.latest_catalog_checkpoint_ref IS NOT NULL
+               AND NEW.latest_catalog_checkpoint_ref IS DISTINCT FROM OLD.latest_catalog_checkpoint_ref
+               AND NEW.catalog_cursor_ordinal = OLD.catalog_cursor_ordinal
+               AND NOT (NEW.status = 'WAITING_INPUT' AND NEW.catalog_unresolved_count > 0) THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_CATALOG_CHECKPOINT_INVALID';
+            END IF;
+        END IF;
+    ELSIF NEW.catalog_generation <> OLD.catalog_generation + 1
+          OR NEW.catalog_phase <> 'DISCOVER'
+          OR NEW.catalog_cursor_ordinal <> 1
+          OR NEW.catalog_resolved_count <> 0
+          OR NEW.latest_catalog_checkpoint_ref IS NOT NULL THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_CATALOG_RESTART_INVALID';
+    END IF;
     IF NEW.status <> OLD.status THEN
-        IF OLD.status = 'QUEUED' AND NEW.status NOT IN ('RUNNING', 'CANCELLED') THEN
+        IF OLD.status = 'PLANNING' AND NEW.status NOT IN ('QUEUED', 'WAITING_INPUT', 'DEDUPLICATED', 'FAILED', 'CANCELLED') THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
+        ELSIF OLD.status = 'QUEUED' AND NEW.status NOT IN ('RUNNING', 'CANCELLED') THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
         ELSIF OLD.status = 'RUNNING' AND NEW.status NOT IN ('PARTIAL', 'WAITING_INPUT', 'COMPLETED', 'FAILED', 'CANCELLING') THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
         ELSIF OLD.status = 'PARTIAL' AND NEW.status NOT IN ('RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
-        ELSIF OLD.status = 'WAITING_INPUT' AND NEW.status NOT IN ('RUNNING', 'FAILED', 'CANCELLED') THEN
+        ELSIF OLD.status = 'WAITING_INPUT' AND NEW.status NOT IN ('PLANNING', 'RUNNING', 'FAILED', 'CANCELLED') THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
         ELSIF OLD.status = 'CANCELLING' AND NEW.status <> 'CANCELLED' THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_TRANSITION_INVALID';
         END IF;
+    END IF;
+    IF NEW.status = 'QUEUED' AND (OLD.status <> 'PLANNING' OR NEW.sealed_at IS NULL) THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_SEAL_INVALID';
+    END IF;
+    IF NEW.status = 'DEDUPLICATED' AND OLD.status <> 'PLANNING' THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_DEDUP_INVALID';
+    END IF;
+    IF NEW.sealed_at IS NULL AND NEW.status IN ('PLANNING', 'WAITING_INPUT', 'FAILED', 'CANCELLED') THEN
+        NEW.successful_day_count := 0;
+        NEW.terminal_failed_day_count := 0;
+        NEW.completed_program_count := 0;
+        NEW.failed_program_count := 0;
+        NEW.waiting_program_count := 0;
+        NEW.retryable_program_count := 0;
+        NEW.partial_program_count := 0;
+        NEW.recoverable_program_count := 0;
+        IF NEW.status IN ('FAILED', 'CANCELLED') AND NEW.finished_at IS NULL THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_FINISHED_AT_REQUIRED';
+        END IF;
+        NEW.updated_at := clock_timestamp();
+        RETURN NEW;
+    END IF;
+    IF NEW.status = 'DEDUPLICATED' THEN
+        NEW.updated_at := clock_timestamp();
+        RETURN NEW;
     END IF;
     SELECT
         COUNT(*) FILTER (WHERE day.status IN ('COMPLETE', 'VALID_NO_CANDIDATE')),
@@ -679,7 +926,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_COMPLETE_AGGREGATE_INVALID';
     END IF;
-    IF NEW.status IN ('COMPLETED', 'FAILED', 'CANCELLED') AND NEW.finished_at IS NULL THEN
+    IF NEW.status IN ('COMPLETED', 'FAILED', 'CANCELLED', 'DEDUPLICATED') AND NEW.finished_at IS NULL THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_BATCH_FINISHED_AT_REQUIRED';
     END IF;
     IF NEW.status = 'PARTIAL' AND NEW.recoverable_program_count = 0 AND NEW.finished_at IS NULL THEN
@@ -729,19 +976,47 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_verify_advisory_historical_range_supersedes_chain ON app.advisory_historical_range_batch;
 CREATE TRIGGER trg_verify_advisory_historical_range_supersedes_chain
-    BEFORE INSERT ON app.advisory_historical_range_batch
+    BEFORE INSERT OR UPDATE OF supersedes_batch_id ON app.advisory_historical_range_batch
     FOR EACH ROW EXECUTE FUNCTION app.verify_advisory_historical_range_supersedes_chain();
 
 CREATE OR REPLACE FUNCTION app.verify_advisory_historical_range_request_key()
 RETURNS TRIGGER AS $$
 DECLARE
-    batch_payload_hash TEXT;
+    batch_row app.advisory_historical_range_batch%ROWTYPE;
 BEGIN
-    SELECT request_payload_sha256 INTO batch_payload_hash
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.client_idempotency_key <> OLD.client_idempotency_key
+           OR NEW.batch_id <> OLD.batch_id
+           OR NEW.request_id <> OLD.request_id
+           OR NEW.user_request_semantic_hash <> OLD.user_request_semantic_hash
+           OR NEW.planning_identity_hash <> OLD.planning_identity_hash
+           OR NEW.requirement_plan_ref <> OLD.requirement_plan_ref
+           OR NEW.requirement_plan_hash <> OLD.requirement_plan_hash
+           OR NEW.requirement_plan_artifact_hash <> OLD.requirement_plan_artifact_hash THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_REQUEST_KEY_IDENTITY_IMMUTABLE';
+        END IF;
+        IF OLD.request_payload_sha256 IS NOT NULL AND (
+            NEW.request_payload_sha256 IS DISTINCT FROM OLD.request_payload_sha256
+            OR NEW.request_artifact_ref IS DISTINCT FROM OLD.request_artifact_ref
+            OR NEW.request_artifact_hash IS DISTINCT FROM OLD.request_artifact_hash
+        ) THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_REQUEST_KEY_SEALED_IMMUTABLE';
+        END IF;
+    END IF;
+    SELECT * INTO batch_row
       FROM app.advisory_historical_range_batch
      WHERE batch_id = NEW.batch_id
      FOR KEY SHARE;
-    IF NOT FOUND OR batch_payload_hash <> NEW.request_payload_sha256 THEN
+    IF NOT FOUND
+       OR batch_row.request_id <> NEW.request_id
+       OR batch_row.user_request_semantic_hash <> NEW.user_request_semantic_hash
+       OR batch_row.planning_identity_hash <> NEW.planning_identity_hash
+       OR batch_row.requirement_plan_ref <> NEW.requirement_plan_ref
+       OR batch_row.requirement_plan_hash <> NEW.requirement_plan_hash
+       OR batch_row.requirement_plan_artifact_hash <> NEW.requirement_plan_artifact_hash
+       OR batch_row.request_payload_sha256 IS DISTINCT FROM NEW.request_payload_sha256
+       OR batch_row.request_artifact_ref IS DISTINCT FROM NEW.request_artifact_ref
+       OR batch_row.request_artifact_hash IS DISTINCT FROM NEW.request_artifact_hash THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_REQUEST_KEY_PAYLOAD_INVALID';
     END IF;
     RETURN NEW;
@@ -750,7 +1025,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_verify_advisory_historical_range_request_key ON app.advisory_historical_range_request_key;
 CREATE TRIGGER trg_verify_advisory_historical_range_request_key
-    BEFORE INSERT ON app.advisory_historical_range_request_key
+    BEFORE INSERT OR UPDATE ON app.advisory_historical_range_request_key
     FOR EACH ROW EXECUTE FUNCTION app.verify_advisory_historical_range_request_key();
 
 CREATE OR REPLACE FUNCTION app.verify_advisory_historical_range_run_transition()
@@ -1113,7 +1388,8 @@ BEGIN
        OR NEW.batch_id <> OLD.batch_id
        OR NEW.operation_type <> OLD.operation_type
        OR NEW.operation_idempotency_key <> OLD.operation_idempotency_key
-       OR NEW.request_payload_sha256 <> OLD.request_payload_sha256
+       OR NEW.request_payload_sha256 IS DISTINCT FROM OLD.request_payload_sha256
+       OR NEW.planning_identity_hash IS DISTINCT FROM OLD.planning_identity_hash
        OR NEW.expected_row_version IS DISTINCT FROM OLD.expected_row_version THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_IDENTITY_IMMUTABLE';
     END IF;
@@ -1139,14 +1415,27 @@ BEGIN
                 RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_HEARTBEAT_INVALID';
             END IF;
         ELSIF NEW.attempt_no = OLD.attempt_no + 1 THEN
-            IF OLD.lease_expires_at IS NULL
-               OR OLD.lease_expires_at > clock_timestamp()
-               OR NEW.fencing_token IS NULL
+            IF NEW.fencing_token IS NULL
                OR OLD.fencing_token IS NULL
                OR NEW.fencing_token <= OLD.fencing_token THEN
-                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TAKEOVER_INVALID';
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_FENCING_INVALID';
             END IF;
-            IF NOT EXISTS (
+            IF EXISTS (
+                SELECT 1
+                FROM app.advisory_historical_range_operation_attempt AS attempt
+                WHERE attempt.operation_id = OLD.operation_id
+                  AND attempt.attempt_no = OLD.attempt_no
+                  AND attempt.fencing_token = OLD.fencing_token
+                  AND attempt.worker_id = OLD.worker_id
+                  AND attempt.lease_token = OLD.lease_token
+                  AND attempt.status = 'COMPLETED'
+                  AND attempt.attempt_receipt_ref IS NOT NULL
+            ) THEN
+                IF NEW.latest_checkpoint_ref IS NULL
+                   OR NEW.latest_checkpoint_ref IS NOT DISTINCT FROM OLD.latest_checkpoint_ref THEN
+                    RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_ROLLOVER_CHECKPOINT_REQUIRED';
+                END IF;
+            ELSIF NOT EXISTS (
                 SELECT 1
                 FROM app.advisory_historical_range_operation_attempt AS attempt
                 WHERE attempt.operation_id = OLD.operation_id
@@ -1156,6 +1445,9 @@ BEGIN
                   AND attempt.lease_token = OLD.lease_token
                   AND attempt.status = 'RETRYABLE_FAILED'
                   AND attempt.attempt_receipt_ref IS NOT NULL
+            ) OR (
+                NEW.catalog_generation = OLD.catalog_generation
+                AND (OLD.lease_expires_at IS NULL OR OLD.lease_expires_at > clock_timestamp())
             ) THEN
                 RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TAKEOVER_RECEIPT_REQUIRED';
             END IF;
@@ -1163,7 +1455,7 @@ BEGIN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_ATTEMPT_INVALID';
         END IF;
     END IF;
-    IF OLD.result_ref IS NOT NULL AND (
+    IF OLD.status IN ('COMPLETED', 'FAILED') AND OLD.result_ref IS NOT NULL AND (
         NEW.result_ref IS DISTINCT FROM OLD.result_ref
         OR NEW.result_hash IS DISTINCT FROM OLD.result_hash
         OR NEW.result_row_version IS DISTINCT FROM OLD.result_row_version
@@ -1171,10 +1463,44 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_RESULT_IMMUTABLE';
     END IF;
+    IF NEW.catalog_generation IS DISTINCT FROM OLD.catalog_generation THEN
+        IF OLD.catalog_generation IS NULL
+           OR NEW.catalog_generation <> OLD.catalog_generation + 1
+           OR NEW.catalog_phase <> 'DISCOVER'
+           OR NEW.stable_keyset_cursor_json IS NOT NULL
+           OR NEW.latest_checkpoint_ref IS NOT NULL
+           OR NEW.cumulative_resolved_count <> 0
+           OR NEW.cumulative_unresolved_count <> 0 THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_CATALOG_RESTART_INVALID';
+        END IF;
+    ELSIF NEW.operation_type = 'BUILD_SOURCE_CATALOG' THEN
+        IF NEW.catalog_phase IS DISTINCT FROM OLD.catalog_phase THEN
+            IF OLD.catalog_phase <> 'DISCOVER'
+               OR NEW.catalog_phase <> 'VERIFY'
+               OR NEW.stable_keyset_cursor_json <> '{"next_requirement_ordinal": 1}'::jsonb
+               OR NEW.cumulative_resolved_count <> 0
+               OR NEW.cumulative_unresolved_count <> 0
+               OR NEW.cumulative_member_chain_hash <> '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945' THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_CATALOG_PHASE_INVALID';
+            END IF;
+        ELSE
+            IF COALESCE(NEW.cumulative_resolved_count, 0) < COALESCE(OLD.cumulative_resolved_count, 0) THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_CATALOG_PROGRESS_INVALID';
+            END IF;
+            IF OLD.latest_checkpoint_ref IS NOT NULL
+               AND NEW.latest_checkpoint_ref IS DISTINCT FROM OLD.latest_checkpoint_ref
+               AND NEW.stable_keyset_cursor_json IS NOT DISTINCT FROM OLD.stable_keyset_cursor_json
+               AND NOT (NEW.status = 'WAITING_INPUT' AND NEW.cumulative_unresolved_count > 0) THEN
+                RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_CHECKPOINT_INVALID';
+            END IF;
+        END IF;
+    END IF;
     IF NEW.status <> OLD.status THEN
         IF OLD.status = 'QUEUED' AND NEW.status <> 'RUNNING' THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TRANSITION_INVALID';
-        ELSIF OLD.status = 'RUNNING' AND NEW.status NOT IN ('COMPLETED', 'RETRYABLE_FAILED', 'FAILED') THEN
+        ELSIF OLD.status = 'RUNNING' AND NEW.status NOT IN ('WAITING_INPUT', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED') THEN
+            RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TRANSITION_INVALID';
+        ELSIF OLD.status = 'WAITING_INPUT' AND NEW.status <> 'RUNNING' THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TRANSITION_INVALID';
         ELSIF OLD.status = 'RETRYABLE_FAILED' AND NEW.status <> 'RUNNING' THEN
             RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TRANSITION_INVALID';
@@ -1189,10 +1515,13 @@ BEGIN
         NEW.lease_token := NULL;
         NEW.lease_expires_at := NULL;
     END IF;
-    IF NEW.status IN ('COMPLETED', 'FAILED') AND (NEW.result_ref IS NULL OR NEW.result_hash IS NULL OR NEW.finished_at IS NULL) THEN
+    IF NEW.status IN ('WAITING_INPUT', 'COMPLETED', 'FAILED') AND (NEW.result_ref IS NULL OR NEW.result_hash IS NULL) THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_TERMINAL_RECEIPT_REQUIRED';
     END IF;
-    IF NEW.status NOT IN ('COMPLETED', 'FAILED') AND NEW.result_ref IS NOT NULL THEN
+    IF NEW.status IN ('COMPLETED', 'FAILED') AND NEW.finished_at IS NULL THEN
+        RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_FINISHED_AT_REQUIRED';
+    END IF;
+    IF NEW.status NOT IN ('WAITING_INPUT', 'COMPLETED', 'FAILED') AND NEW.result_ref IS NOT NULL THEN
         RAISE EXCEPTION 'ADVISORY_HISTORICAL_RANGE_OPERATION_RESULT_PREMATURE';
     END IF;
     NEW.updated_at := clock_timestamp();
@@ -1507,7 +1836,7 @@ BEGIN
     SELECT * INTO operation
       FROM app.advisory_historical_range_operation
      WHERE operation_id = target_operation_id;
-    IF NOT FOUND OR operation.status NOT IN ('COMPLETED', 'RETRYABLE_FAILED', 'FAILED') THEN
+    IF NOT FOUND OR operation.status NOT IN ('WAITING_INPUT', 'COMPLETED', 'RETRYABLE_FAILED', 'FAILED') THEN
         RETURN NULL;
     END IF;
     SELECT COUNT(*) INTO matching_attempt_count
@@ -1689,7 +2018,6 @@ DECLARE
     relation_name TEXT;
 BEGIN
     FOREACH relation_name IN ARRAY ARRAY[
-        'advisory_historical_range_request_key',
         'advisory_historical_range_day_attempt',
         'advisory_historical_range_operation_attempt',
         'advisory_historical_range_candidate',
@@ -1722,6 +2050,7 @@ DECLARE
 BEGIN
     FOREACH relation_name IN ARRAY ARRAY[
         'advisory_historical_range_batch',
+        'advisory_historical_range_request_key',
         'advisory_historical_range_run',
         'advisory_historical_range_day_run',
         'advisory_historical_range_operation'

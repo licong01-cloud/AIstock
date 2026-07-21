@@ -96,6 +96,10 @@ class StPitRiskDecisionProvider:
 
     source_name = "market.stock_universe_pit_spans"
 
+    def __init__(self, conn_factory: Any | None = None, *, require_ready_state: bool = True) -> None:
+        self._conn_factory = conn_factory or get_conn
+        self._require_ready_state = bool(require_ready_state)
+
     def evaluate(
         self,
         *,
@@ -108,10 +112,10 @@ class StPitRiskDecisionProvider:
         if not normalized:
             return {}
         universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
-        if profile.strict_data_ready:
+        if profile.strict_data_ready and self._require_ready_state:
             self._require_ready_pit_state(universe_key=universe_key, trade_date=trade_date)
         try:
-            with get_conn() as conn:
+            with self._conn_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
@@ -186,7 +190,7 @@ class StPitRiskDecisionProvider:
         """Paper/Selection are consumers; data management owns PIT rebuilds."""
 
         try:
-            with get_conn() as conn:
+            with self._conn_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """

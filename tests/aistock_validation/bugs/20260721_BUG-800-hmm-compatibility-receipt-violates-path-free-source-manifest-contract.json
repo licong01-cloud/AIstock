@@ -1,0 +1,177 @@
+{
+  "actual": "build_source_manifest raises ValueError source manifest cannot contain filesystem paths before any candidate evaluation is created.",
+  "allowed_write_scope": [
+    "backend/services/hmm_evolution/universe.py",
+    "backend/services/hmm_evolution/source_manifest.py",
+    "backend/tests/hmm_evolution/test_universe.py",
+    "backend/tests/hmm_evolution/test_source_manifest.py",
+    "backend/tests/hmm_evolution/test_input_adapter.py",
+    "tests/aistock_validation/bugs/20260721_BUG-800-hmm-compatibility-receipt-violates-path-free-source-manifest-contract.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-800",
+  "closed_at": "2026-07-21T08:23:08Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-21T08:13:57.864646Z",
+  "description": "build_source_manifest raises ValueError source manifest cannot contain filesystem paths before any candidate evaluation is created.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260721-76ee0f2d7fb0",
+      "timestamp": "2026-07-21T08:13:57.864638Z"
+    }
+  ],
+  "evidence_uris": [
+    "batch=hmmb_3c650ef9b7464c90a88b6b6976c84c68 reason_code=hmm_evolution_unexpected_preparation_failure",
+    "backend/services/hmm_evolution/universe.py:664 artifact_path; universe.py:690 path; source_manifest.py:119 path key guard"
+  ],
+  "expected": "The approved legacy compatibility receipt records immutable artifact identity and provenance without filesystem-path field names or absolute paths, and build_source_manifest accepts the receipt while preserving fail-closed integrity checks.",
+  "first_seen_at": "2026-07-21T08:13:57.864646Z",
+  "fix_branch": null,
+  "fix_commit": "4243c9647401497c3afa1e658d3ce17501767b91",
+  "fixed_at": "2026-07-21T08:23:46.210876Z",
+  "github_issue_number": 2543,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2543",
+  "last_seen_at": "2026-07-21T08:13:57.864646Z",
+  "module": "hmm.evolution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2546",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/hmm-evolution/batches/hmmb_f91bf5b884914f9a8f57cab88619c08d/retry-failed then inspect batch preparation",
+  "required_verification": [
+    "l0",
+    "hmm_evolution_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.evolution"
+  ],
+  "title": "HMM compatibility receipt violates path-free source manifest contract",
+  "trigger_condition": {
+    "fingerprint": "76ee0f2d7fb0aba0304b659d",
+    "source_event_id": "FE-20260721-76ee0f2d7fb0"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution/test_universe.py backend/tests/hmm_evolution/test_source_manifest.py backend/tests/hmm_evolution/test_input_adapter.py -q -> 22 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s hmm_evolution_backend -> 190 passed, 2 deselected"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.evolution",
+        "hmm_evolution"
+      ],
+      "plans": [
+        "hmm_evolution_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.evolution",
+          "hmm_evolution"
+        ],
+        "plans": [
+          "hmm_evolution_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
