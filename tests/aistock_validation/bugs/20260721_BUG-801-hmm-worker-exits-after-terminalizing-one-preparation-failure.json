@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-801",
-  "closed_at": null,
+  "closed_at": "2026-07-21T08:37:43Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,8 +34,8 @@
   "expected": "After an unexpected preparation error is successfully persisted as a structured terminal batch failure, the worker service continues polling subsequent work; failures to persist terminal state and startup, lease, fencing or other uncontained faults still fail loudly.",
   "first_seen_at": "2026-07-21T08:15:21.679622Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "11c1a2b10e681bdc4fe23617a146a504cd56546d",
+  "fixed_at": "2026-07-21T08:38:20.467213Z",
   "github_issue_number": 2544,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2544",
   "last_seen_at": "2026-07-21T08:15:21.679622Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2551",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.evolution"
   ],
@@ -64,6 +65,12 @@
     "fingerprint": "8c782b36fdd25e1952f0d4f7",
     "source_event_id": "FE-20260721-8c782b36fdd2"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_worker_service.py -q -> 11 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s hmm_evolution_backend -> 192 passed, 2 deselected"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
