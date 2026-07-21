@@ -16,12 +16,18 @@ from backend.services.multi_alpha.durable_execution_adapter import (
     DurableSubmissionIntent,
     QEWorkspacePredBacktestAdapter,
 )
+from backend.services.multi_alpha.durable_cancellation import (
+    DurableCancellationDeliveryWorker,
+)
+from backend.services.multi_alpha.durable_control import DurableMultiAlphaControlService
 from backend.services.multi_alpha.durable_models import (
     DurableRunSpec,
     OwnershipToken,
+    artifact_manifest_hash_for,
     make_attempt_id,
 )
 from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
+from backend.services.multi_alpha.durable_recovery import DurableRecoveryWorker
 from backend.services.multi_alpha.durable_repository import (
     TERMINAL_CHILD_STATUSES,
     MultiAlphaDurableRepository,
@@ -48,7 +54,9 @@ ACTIVE_REMOTE_STATUSES = frozenset(
 )
 REMOTE_FAILURE_STATUSES = frozenset({"failed", "error"})
 REMOTE_CANCELLED_STATUSES = frozenset({"cancelled", "canceled", "interrupted"})
-TERMINAL_RUN_STATUSES = frozenset({"succeeded", "partial_failed", "failed", "cancelled"})
+TERMINAL_RUN_STATUSES = frozenset(
+    {"succeeded", "partial_failed", "partial_recovered", "failed", "cancelled"},
+)
 RETRYABLE_RESULT_COLLECTION_REASON_CODES = frozenset(
     {
         "multi_alpha_child_result_not_visible",
@@ -146,6 +154,10 @@ class DurableOrchestratorCycleResult:
     reconciled_attempts: int
     finalized_runs: int
     archive_events: int
+    applied_control_commands: int = 0
+    executed_recovery_commands: int = 0
+    delivered_cancellations: int = 0
+    paused_runs: int = 0
 
     @property
     def work_count(self) -> int:
@@ -155,6 +167,10 @@ class DurableOrchestratorCycleResult:
             + self.reconciled_attempts
             + self.finalized_runs
             + self.archive_events
+            + self.applied_control_commands
+            + self.executed_recovery_commands
+            + self.delivered_cancellations
+            + self.paused_runs
         )
 
 
@@ -186,11 +202,12 @@ class DurableBusinessResultAssembler:
                 reason_code="multi_alpha_selected_attempt_required",
                 context={"child_id": child.get("child_id")},
             )
-        artifacts, metrics = self._load_child_metrics(
+        business_input = self._load_child_metrics(
             run_id=str(run["id"]),
             child=child,
             attempt_id=selected_attempt_id,
         )
+        metrics = business_input.metrics
         child_kind = str(child["child_kind"])
         if child_kind == "baseline":
             self._repository.transition_child_with_event(
@@ -216,7 +233,7 @@ class DurableBusinessResultAssembler:
                     "message": "requested baseline child did not produce a successful result",
                     "context": {"baseline_leg_id": run.get("baseline_leg_id")},
                 }
-                metadata = self._adapter.load_materialization_metadata(artifacts)
+                metadata = business_input.materialization_metadata
                 self._repository.finalize_scheme_child_without_result(
                     str(child["child_id"]),
                     expected_statuses=("reconciling",),
@@ -230,7 +247,7 @@ class DurableBusinessResultAssembler:
                     selected_attempt_id=selected_attempt_id,
                 )
                 return True
-            metadata = self._adapter.load_materialization_metadata(artifacts)
+            metadata = business_input.materialization_metadata
             result = {
                 "weighting_scheme": child["weighting_scheme"],
                 "weights_json": _mapping(metadata.get("weights")),
@@ -297,11 +314,12 @@ class DurableBusinessResultAssembler:
                     reason_code="multi_alpha_selected_attempt_required",
                     context={"child_id": full_scheme.get("child_id")},
                 )
-            _full_artifacts, full_metrics = self._load_child_metrics(
+            full_business_input = self._load_child_metrics(
                 run_id=str(run["id"]),
                 child=full_scheme,
                 attempt_id=full_attempt_id,
             )
+            full_metrics = full_business_input.metrics
             self._repository.finalize_loo_child_result(
                 str(child["child_id"]),
                 selected_attempt_id=selected_attempt_id,
@@ -360,12 +378,12 @@ class DurableBusinessResultAssembler:
                 reason_code="multi_alpha_selected_attempt_required",
                 context={"child_id": baseline.get("child_id")},
             )
-        _artifacts, metrics = self._load_child_metrics(
+        business_input = self._load_child_metrics(
             run_id=str(run["id"]),
             child=baseline,
             attempt_id=selected_attempt_id,
         )
-        return metrics
+        return business_input.metrics
 
     def _load_child_metrics(
         self,
@@ -373,7 +391,7 @@ class DurableBusinessResultAssembler:
         run_id: str,
         child: Mapping[str, Any],
         attempt_id: str,
-    ) -> tuple[DurablePublishedArtifacts, Mapping[str, Any]]:
+    ) -> DurableBusinessInput:
         attempt = self._repository.get_attempt(attempt_id)
         if attempt is None or str(attempt.get("status") or "") != "succeeded":
             raise DurableOrchestratorError(
@@ -385,16 +403,49 @@ class DurableBusinessResultAssembler:
                     "attempt_status": attempt.get("status") if attempt else None,
                 },
             )
+        execution_kind = str(attempt.get("execution_kind") or "remote_execution")
+        if execution_kind in {"reference_result", "derived_result"}:
+            result_manifest = _mapping(attempt.get("result_manifest_json"))
+            expected_result_hash = artifact_manifest_hash_for(result_manifest)
+            if str(attempt.get("result_manifest_hash") or "") != expected_result_hash:
+                raise DurableOrchestratorError(
+                    "reference/derived selected attempt result manifest hash is invalid",
+                    reason_code="multi_alpha_reference_result_manifest_mismatch",
+                    context={"attempt_id": attempt_id},
+                )
+            metrics = result_manifest.get("metrics")
+            metadata = result_manifest.get("materialization_metadata")
+            if not isinstance(metrics, Mapping) or not isinstance(metadata, Mapping):
+                raise DurableOrchestratorError(
+                    "reference/derived selected attempt lacks frozen metrics or materialization metadata",
+                    reason_code="multi_alpha_reference_result_payload_missing",
+                    context={"attempt_id": attempt_id, "execution_kind": execution_kind},
+                )
+            return DurableBusinessInput(
+                metrics=dict(metrics),
+                materialization_metadata=dict(metadata),
+            )
         artifacts = self._adapter.load_published_artifacts(
             run_id=run_id,
             child_id=str(child["child_id"]),
             attempt_id=attempt_id,
         )
-        return artifacts, self._adapter.load_collected_metrics(artifacts)
+        return DurableBusinessInput(
+            metrics=self._adapter.load_collected_metrics(artifacts),
+            materialization_metadata=self._adapter.load_materialization_metadata(artifacts),
+        )
 
 
 _WAITING = object()
 _UNAVAILABLE = object()
+
+
+@dataclass(frozen=True)
+class DurableBusinessInput:
+    """Metrics and frozen materialization metadata for one selected attempt."""
+
+    metrics: Mapping[str, Any]
+    materialization_metadata: Mapping[str, Any]
 
 
 class DurableMultiAlphaOrchestrator:
@@ -408,6 +459,9 @@ class DurableMultiAlphaOrchestrator:
         adapter: QEWorkspacePredBacktestAdapter | None = None,
         archive_capture: QEArchiveEventCapture | None = None,
         active_import_service: QEActiveExecutionImportService | None = None,
+        control_service: DurableMultiAlphaControlService | None = None,
+        cancellation_delivery_worker: DurableCancellationDeliveryWorker | None = None,
+        recovery_worker: DurableRecoveryWorker | None = None,
         config: DurableOrchestratorConfig | None = None,
         owner_id: str | None = None,
     ) -> None:
@@ -422,27 +476,47 @@ class DurableMultiAlphaOrchestrator:
         )
         self._archive_capture = archive_capture or QEArchiveEventCapture()
         self._active_import_service = active_import_service or QEActiveExecutionImportService()
+        self._control_service = control_service or DurableMultiAlphaControlService(
+            self._repository,
+        )
+        self._cancellation_delivery_worker = (
+            cancellation_delivery_worker
+            or DurableCancellationDeliveryWorker(repository=self._repository)
+        )
+        self._recovery_worker = recovery_worker or DurableRecoveryWorker(
+            repository=self._repository,
+            adapter=self._adapter,
+        )
         self._config = config or DurableOrchestratorConfig.from_env()
         self._owner_id = owner_id or (
             f"macb-worker:{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
         )
         self._activation_import_completed = False
+        self._p0_2_schema_ready = False
         self._last_claimed_run_id: str | None = None
         self._last_claimed_attempt_id: str | None = None
+        self._last_claimed_command_id: str | None = None
+        self._last_claimed_delivery_id: str | None = None
 
     @property
     def owner_id(self) -> str:
         return self._owner_id
 
     async def initialize(self) -> Mapping[str, Any]:
-        health = await asyncio.to_thread(
+        baseline_health = await asyncio.to_thread(
             self._repository.preflight_schema,
             raise_on_error=True,
         )
+        p0_2_health = await asyncio.to_thread(
+            self._repository.preflight_p0_2_schema,
+            raise_on_error=False,
+        )
+        self._p0_2_schema_ready = bool(p0_2_health.ready)
         imported = await self._active_import_service.import_current_active_sources_verified()
         self._activation_import_completed = True
         result = {
-            "schema_health": health.as_dict(),
+            "schema_health": baseline_health.as_dict(),
+            "p0_2_schema_health": p0_2_health.as_dict(),
             "active_execution_import": {
                 "discovered_count": imported.discovered_count,
                 "imported_count": imported.imported_count,
@@ -466,9 +540,26 @@ class DurableMultiAlphaOrchestrator:
     async def run_cycle(self) -> DurableOrchestratorCycleResult:
         if not self._activation_import_completed:
             await self.initialize()
+        if self._p0_2_schema_ready:
+            control = await self._run_control_pass()
+            recoveries = await self._run_recovery_pass()
+            cancellations = await self._run_cancel_delivery_pass()
+        else:
+            # P0-2 is additive.  Before its separately deployed DDL exists the
+            # already-live P0-1B planner/dispatcher/reconciler must continue to
+            # run; only the P0-2 command consumers remain unavailable.
+            control = 0
+            recoveries = 0
+            cancellations = 0
         planned = await self._run_bounded_pass(self.planner_pass_once)
         dispatched = await self._run_attempt_pass(self.dispatch_pass_once)
-        reconciled = await self._run_attempt_pass(self.reconcile_pass_once)
+        cancel_reconciled = (
+            await self._run_attempt_pass(self.cancel_reconcile_pass_once)
+            if self._p0_2_schema_ready
+            else 0
+        )
+        reconciled = cancel_reconciled + await self._run_attempt_pass(self.reconcile_pass_once)
+        paused = await self._run_pause_drain_pass() if self._p0_2_schema_ready else 0
         finalized = await self._run_finalizer_pass()
         archived = await self.archive_pass()
         return DurableOrchestratorCycleResult(
@@ -477,6 +568,10 @@ class DurableMultiAlphaOrchestrator:
             reconciled_attempts=reconciled,
             finalized_runs=finalized,
             archive_events=archived,
+            applied_control_commands=control,
+            executed_recovery_commands=recoveries,
+            delivered_cancellations=cancellations,
+            paused_runs=paused,
         )
 
     async def run_forever(self, stop_event: asyncio.Event) -> None:
@@ -573,6 +668,13 @@ class DurableMultiAlphaOrchestrator:
             )
             node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
             for planned_child in plan.children:
+                if not await self._planner_parent_allows_progress(run_id=run_id):
+                    await self._yield_run_if_owned(
+                        run_id=run_id,
+                        token=token,
+                        phase="planner_stopped_by_control",
+                    )
+                    return True
                 child = self._repository.get_child(str(planned_child["child_id"]))
                 if child is None:
                     raise DurableOrchestratorError(
@@ -592,10 +694,10 @@ class DurableMultiAlphaOrchestrator:
                     )
                 attempt_id = make_attempt_id(str(child["child_id"]), 1)
                 try:
-                    (materialization, artifacts), token = await self._run_sync_with_run_heartbeat(
+                    materialization, token = await self._run_sync_with_run_heartbeat(
                         run_id=run_id,
                         token=token,
-                        operation=lambda: self._materialize_and_publish(
+                        operation=lambda: self._adapter.materialize_child_input(
                             run_id=run_id,
                             child_id=str(child["child_id"]),
                             attempt_id=attempt_id,
@@ -617,6 +719,44 @@ class DurableMultiAlphaOrchestrator:
                         error=_exception_payload(exc),
                     )
                     continue
+                if not await self._planner_parent_allows_progress(run_id=run_id):
+                    await self._defer_materialization_for_control(
+                        child_id=str(child["child_id"]),
+                        run_id=run_id,
+                        phase="materialization_completed_after_control",
+                    )
+                    await self._yield_run_if_owned(
+                        run_id=run_id,
+                        token=token,
+                        phase="planner_stopped_by_control",
+                    )
+                    return True
+                try:
+                    artifacts, token = await self._run_sync_with_run_heartbeat(
+                        run_id=run_id,
+                        token=token,
+                        operation=lambda: self._adapter.publish_artifacts(materialization),
+                    )
+                except Exception as exc:
+                    await asyncio.to_thread(
+                        self._terminalize_unexecutable_child,
+                        child=child,
+                        next_status="failed",
+                        error=_exception_payload(exc),
+                    )
+                    continue
+                if not await self._planner_parent_allows_progress(run_id=run_id):
+                    await self._defer_materialization_for_control(
+                        child_id=str(child["child_id"]),
+                        run_id=run_id,
+                        phase="artifact_published_after_control",
+                    )
+                    await self._yield_run_if_owned(
+                        run_id=run_id,
+                        token=token,
+                        phase="planner_stopped_by_control",
+                    )
+                    return True
                 await asyncio.to_thread(
                     self._planner.ensure_initial_attempt,
                     child_id=str(child["child_id"]),
@@ -764,6 +904,56 @@ class DurableMultiAlphaOrchestrator:
             )
             return True
 
+    async def cancel_reconcile_pass_once(
+        self,
+        *,
+        excluded_attempt_ids: Sequence[str] = (),
+    ) -> bool:
+        attempt = await asyncio.to_thread(
+            self._repository.claim_next_attempt,
+            owner_id=self._owner_id,
+            lease_seconds=self._config.lease_seconds,
+            claim_kind="cancel",
+            excluded_attempt_ids=excluded_attempt_ids,
+        )
+        if attempt is None:
+            return False
+        attempt_id = str(attempt["attempt_id"])
+        self._last_claimed_attempt_id = attempt_id
+        token = _ownership_token(attempt)
+        try:
+            child = _required(
+                "child",
+                attempt["child_id"],
+                self._repository.get_child(str(attempt["child_id"])),
+            )
+            run = _required(
+                "run",
+                attempt["run_id"],
+                self._repository.get_run(str(attempt["run_id"])),
+            )
+            await self._reconcile_cancelled_attempt_claimed(
+                attempt=attempt,
+                token=token,
+                child=child,
+                run=run,
+            )
+            return True
+        except Exception as exc:
+            logger.exception(
+                "durable cancellation reconciliation failed for attempt_id=%s: %s",
+                attempt_id,
+                _exception_payload(exc),
+            )
+            await self._keep_cancel_attempt_reconciling(
+                attempt_id=attempt_id,
+                token=token,
+                child=child if "child" in locals() else {"child_id": attempt.get("child_id"), "run_id": attempt.get("run_id")},
+                phase="cancel_reconciliation_error",
+                evidence={"error": _exception_payload(exc)},
+            )
+            return True
+
     async def reconcile_pass_once(
         self,
         *,
@@ -792,6 +982,14 @@ class DurableMultiAlphaOrchestrator:
                 attempt["run_id"],
                 self._repository.get_run(str(attempt["run_id"])),
             )
+            if str(run.get("status") or "") in {"cancel_requested", "cancelling"}:
+                await self._reconcile_cancelled_attempt_claimed(
+                    attempt=attempt,
+                    token=token,
+                    child=child,
+                    run=run,
+                )
+                return True
             node_id = str(attempt.get("node_id") or "").strip()
             if not node_id:
                 raise DurableOrchestratorError(
@@ -962,10 +1160,14 @@ class DurableMultiAlphaOrchestrator:
                 self._repository.finalize_run_with_business_readback,
                 run_id,
                 token=token,
-                expected_statuses=("running",),
+                expected_statuses=(str(run["status"]),),
                 next_status=next_status,
                 expected_child_count=len(children),
-                expected_scheme_result_count=len(scheme_children),
+                expected_scheme_result_count=sum(
+                    1
+                    for child in scheme_children
+                    if str(child.get("status") or "") != "not_recovered"
+                ),
                 expected_loo_result_count=sum(
                     1 for child in loo_children if child["status"] == "succeeded"
                 ),
@@ -1273,11 +1475,19 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id=attempt_id,
                 token=token,
                 attempt_status="cancelled",
-                child_status="failed",
+                child_status=(
+                    "cancelled"
+                    if bool(remote_payload.get("cancellation_reconciliation"))
+                    else "failed"
+                ),
                 phase="remote_cancelled",
                 error={
                     "reason_code": "qe_workspace_remote_cancelled",
-                    "message": "QE Workspace cancelled a child without a P0-2 user control request",
+                    "message": (
+                        "QE Workspace confirmed the durable P0-2 cancellation request"
+                        if bool(remote_payload.get("cancellation_reconciliation"))
+                        else "QE Workspace cancelled a child without a P0-2 user control request"
+                    ),
                     "context": {"remote_status": normalized, "remote": dict(remote_payload)},
                 },
             )
@@ -1292,6 +1502,191 @@ class DurableMultiAlphaOrchestrator:
                 reason_code="qe_workspace_remote_status_unmapped",
                 context={"remote_status": normalized, "remote": dict(remote_payload)},
             ),
+        )
+
+    async def _reconcile_cancelled_attempt_claimed(
+        self,
+        *,
+        attempt: Mapping[str, Any],
+        token: OwnershipToken,
+        child: Mapping[str, Any],
+        run: Mapping[str, Any],
+    ) -> None:
+        """Reconcile cancellation without ever re-submitting a lost reservation."""
+
+        attempt_id = str(attempt["attempt_id"])
+        node_id = str(attempt.get("node_id") or "").strip()
+        if not node_id:
+            await self._keep_cancel_attempt_reconciling(
+                attempt_id=attempt_id,
+                token=token,
+                child=child,
+                phase="cancel_identity_incomplete",
+                evidence={
+                    "reason_code": "cancel_remote_identity_incomplete",
+                    "attempt_id": attempt_id,
+                },
+            )
+            return
+        intent = self._adapter.prepare_submission_intent(
+            run=run,
+            child=child,
+            attempt=attempt,
+            node_id=node_id,
+        )
+        try:
+            inspection = await self._adapter.inspect_remote(intent=intent)
+        except Exception as exc:
+            await self._keep_cancel_attempt_reconciling(
+                attempt_id=attempt_id,
+                token=token,
+                child=child,
+                phase="cancel_remote_status_unknown",
+                evidence={"error": _exception_payload(exc)},
+            )
+            return
+        remote_status = str(inspection.status.get("status") or "").strip().lower()
+        remote_payload = {
+            **dict(inspection.status),
+            "submission_receipt": _receipt_evidence(inspection.receipt),
+            "cancellation_reconciliation": True,
+        }
+        if remote_status == "not_reserved":
+            await self._terminalize_attempt_and_child(
+                attempt_id=attempt_id,
+                token=token,
+                attempt_status="cancelled",
+                child_status="cancelled",
+                phase="cancel_remote_not_reserved",
+                error={
+                    "reason_code": "cancel_remote_not_reserved",
+                    "message": "cancellation observed no durable QE submission reservation",
+                    "context": {"remote_status": remote_status, "remote": remote_payload},
+                },
+            )
+            return
+        if remote_status in ACTIVE_REMOTE_STATUSES | {"reserved_not_started"}:
+            await self._keep_cancel_attempt_reconciling(
+                attempt_id=attempt_id,
+                token=token,
+                child=child,
+                phase="cancel_waiting_remote_terminal",
+                evidence={"remote_status": remote_status, "remote": remote_payload},
+            )
+            return
+        if remote_status == "completed":
+            try:
+                artifacts = self._adapter.load_published_artifacts(
+                    run_id=str(run["id"]),
+                    child_id=str(child["child_id"]),
+                    attempt_id=attempt_id,
+                )
+            except Exception as exc:
+                await self._keep_cancel_attempt_reconciling(
+                    attempt_id=attempt_id,
+                    token=token,
+                    child=child,
+                    phase="cancel_completion_artifacts_unavailable",
+                    evidence={"error": _exception_payload(exc), "remote": remote_payload},
+                )
+                return
+            await self._apply_remote_status(
+                run=run,
+                child=child,
+                attempt_id=attempt_id,
+                token=token,
+                intent=intent,
+                artifacts=artifacts,
+                remote_status=remote_status,
+                remote_payload=remote_payload,
+            )
+            return
+        if remote_status in REMOTE_FAILURE_STATUSES:
+            await self._terminalize_attempt_and_child(
+                attempt_id=attempt_id,
+                token=token,
+                attempt_status="failed",
+                child_status="failed",
+                phase="cancel_remote_failed_before_cancellation",
+                error={
+                    "reason_code": "qe_workspace_remote_failed",
+                    "message": "QE Workspace reported failure while cancellation was reconciling",
+                    "context": {"remote_status": remote_status, "remote": remote_payload},
+                },
+            )
+            return
+        if remote_status in REMOTE_CANCELLED_STATUSES:
+            await self._terminalize_attempt_and_child(
+                attempt_id=attempt_id,
+                token=token,
+                attempt_status="cancelled",
+                child_status="cancelled",
+                phase="cancel_remote_confirmed",
+                error={
+                    "reason_code": "qe_workspace_remote_cancelled",
+                    "message": "QE Workspace confirmed cancellation for the durable control request",
+                    "context": {"remote_status": remote_status, "remote": remote_payload},
+                },
+            )
+            return
+        await self._keep_cancel_attempt_reconciling(
+            attempt_id=attempt_id,
+            token=token,
+            child=child,
+            phase="cancel_remote_status_unmapped",
+            evidence={"remote_status": remote_status, "remote": remote_payload},
+        )
+
+    async def _keep_cancel_attempt_reconciling(
+        self,
+        *,
+        attempt_id: str,
+        token: OwnershipToken,
+        child: Mapping[str, Any],
+        phase: str,
+        evidence: Mapping[str, Any],
+    ) -> None:
+        current = _required("attempt", attempt_id, self._repository.get_attempt(attempt_id))
+        token = self._owned_attempt_token_from_row(
+            attempt_id=attempt_id,
+            current=current,
+            lineage=token,
+        )
+        if current["status"] in {"submitting", "running"}:
+            current = await asyncio.to_thread(
+                self._repository.transition_attempt_with_event,
+                attempt_id,
+                token=token,
+                expected_statuses=(str(current["status"]),),
+                next_status="reconciling",
+                phase=phase,
+                remote_status=str(evidence.get("remote_status") or phase),
+                reason_code="cancel_reconciliation_pending",
+                event_payload={"cancellation": dict(evidence)},
+            )
+            token = _ownership_token(current)
+        else:
+            current = await asyncio.to_thread(
+                self._repository.heartbeat_attempt,
+                attempt_id,
+                token=token,
+                lease_seconds=self._config.lease_seconds,
+            )
+            token = _ownership_token(current)
+        await self._append_item_event(
+            run_id=str(child.get("run_id") or ""),
+            child_id=str(child.get("child_id") or "") or None,
+            attempt_id=attempt_id,
+            event_type="control",
+            phase=phase,
+            reason_code="cancel_reconciliation_pending",
+            payload={"cancellation": dict(evidence)},
+        )
+        await asyncio.to_thread(
+            self._repository.yield_attempt_ownership,
+            attempt_id,
+            token=token,
+            phase=phase,
         )
 
     async def _record_execution_deadline_evidence(
@@ -1576,6 +1971,15 @@ class DurableMultiAlphaOrchestrator:
                 next_status="reconciling",
                 phase="remote_reconciling",
             )
+        elif child["status"] == "cancel_requested":
+            await asyncio.to_thread(
+                self._repository.transition_child_with_event,
+                child_id,
+                expected_statuses=("cancel_requested",),
+                next_status="reconciling",
+                phase="completion_raced_with_cancel",
+                reason_code="completion_raced_with_cancel",
+            )
 
     def _terminalize_unexecutable_child(
         self,
@@ -1615,6 +2019,42 @@ class DurableMultiAlphaOrchestrator:
             attempt_id=attempt_id,
         )
         return materialization, self._adapter.publish_artifacts(materialization)
+
+    async def _planner_parent_allows_progress(self, *, run_id: str) -> bool:
+        run = self._repository.get_run(run_id)
+        return run is not None and str(run.get("status") or "") in {"preparing", "running"}
+
+    async def _defer_materialization_for_control(
+        self,
+        *,
+        child_id: str,
+        run_id: str,
+        phase: str,
+    ) -> None:
+        """Keep control arrival distinct from a materialization technical failure."""
+
+        run = self._repository.get_run(run_id)
+        child = self._repository.get_child(child_id)
+        if run is None or child is None or str(child.get("status") or "") != "materializing":
+            return
+        run_status = str(run.get("status") or "")
+        if run_status in {"pause_requested", "paused"}:
+            next_status = "pending"
+            reason_code = "materialization_deferred_by_pause"
+        elif run_status in {"cancel_requested", "cancelling", "cancelled"}:
+            next_status = "cancelled"
+            reason_code = "materialization_cancelled_by_control"
+        else:
+            return
+        await asyncio.to_thread(
+            self._repository.transition_child_with_event,
+            child_id,
+            expected_statuses=("materializing",),
+            next_status=next_status,
+            phase=phase,
+            reason_code=reason_code,
+            event_payload={"run_status": run_status, "control_deferred": True},
+        )
 
     async def _run_sync_with_run_heartbeat(
         self,
@@ -1830,6 +2270,109 @@ class DurableMultiAlphaOrchestrator:
                 excluded.append(latest)
         return completed
 
+    async def _run_control_pass(self) -> int:
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            command = await asyncio.to_thread(
+                self._control_service.apply_one_local_command,
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+                excluded_command_ids=tuple(excluded),
+            )
+            if command is None:
+                break
+            completed += 1
+            command_id = str(command.get("command_id") or "").strip()
+            self._last_claimed_command_id = command_id or None
+            if command_id:
+                excluded.append(command_id)
+        return completed
+
+    async def _run_pause_drain_pass(self) -> int:
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            run = await asyncio.to_thread(
+                self._repository.claim_next_pause_drain_run,
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+                excluded_run_ids=tuple(excluded),
+            )
+            if run is None:
+                break
+            run_id = str(run["id"])
+            self._last_claimed_run_id = run_id
+            token = _ownership_token(run)
+            try:
+                paused = await asyncio.to_thread(
+                    self._repository.transition_run_with_event,
+                    run_id,
+                    token=token,
+                    expected_statuses=("pause_requested",),
+                    next_status="paused",
+                    phase="pause_drained",
+                    progress={"control": "pause", "drain": "complete"},
+                    reason_code="pause_drained",
+                )
+                await asyncio.to_thread(
+                    self._repository.yield_run_ownership,
+                    run_id,
+                    token=_ownership_token(paused),
+                    phase="paused_waiting_resume",
+                )
+            except Exception as exc:
+                logger.exception(
+                    "durable pause drain failed for run_id=%s: %s",
+                    run_id,
+                    _exception_payload(exc),
+                )
+                await self._yield_run_if_owned(
+                    run_id=run_id,
+                    token=token,
+                    phase="pause_drain_error",
+                )
+            completed += 1
+            excluded.append(run_id)
+        return completed
+
+    async def _run_recovery_pass(self) -> int:
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            claimed = await asyncio.to_thread(
+                self._recovery_worker.execute_once,
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+                excluded_command_ids=tuple(excluded),
+            )
+            if not claimed:
+                break
+            completed += 1
+            command_id = self._recovery_worker.last_claimed_command_id
+            self._last_claimed_command_id = command_id
+            if command_id:
+                excluded.append(command_id)
+        return completed
+
+    async def _run_cancel_delivery_pass(self) -> int:
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            claimed = await self._cancellation_delivery_worker.deliver_once(
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+                excluded_delivery_ids=tuple(excluded),
+            )
+            if not claimed:
+                break
+            completed += 1
+            delivery_id = self._cancellation_delivery_worker.last_claimed_delivery_id
+            self._last_claimed_delivery_id = delivery_id
+            if delivery_id:
+                excluded.append(delivery_id)
+        return completed
+
     async def _run_attempt_pass(self, pass_once: Any) -> int:
         completed = 0
         excluded: list[str] = []
@@ -1899,6 +2442,24 @@ def _run_spec_from_row(run: Mapping[str, Any]) -> DurableRunSpec:
         baseline_leg_id=(str(run["baseline_leg_id"]) if run.get("baseline_leg_id") else None),
         retry_of_run_id=(str(run["retry_of_run_id"]) if run.get("retry_of_run_id") else None),
         node_parallelism=_mapping(run.get("node_parallelism_json")),
+        recovery_kind=(str(run["recovery_kind"]) if run.get("recovery_kind") else None),
+        recovery_scope=_mapping(run.get("recovery_scope_json")),
+        recovery_scope_hash=(str(run["recovery_scope_hash"]) if run.get("recovery_scope_hash") else None),
+        execution_identity=(
+            _mapping(run.get("execution_identity_json"))
+            if run.get("execution_identity_json") is not None
+            else None
+        ),
+        execution_identity_hash=(
+            str(run["execution_identity_hash"])
+            if run.get("execution_identity_hash")
+            else None
+        ),
+        execution_identity_evidence=(
+            _mapping(run.get("execution_identity_evidence_json"))
+            if run.get("execution_identity_evidence_json") is not None
+            else None
+        ),
     )
 
 
@@ -1907,6 +2468,7 @@ def _parent_status(
     children: Sequence[Mapping[str, Any]],
     run: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]]:
+    run_status = str(run.get("status") or "")
     failures = {
         str(child["child_key"]): str(child["status"])
         for child in children
@@ -1918,6 +2480,70 @@ def _parent_status(
     )
     schemes = [child for child in children if child["child_kind"] == "scheme"]
     successful_scheme_count = sum(1 for child in schemes if child["status"] == "succeeded")
+    if run_status in {"cancel_requested", "cancelling"}:
+        if children and all(str(child["status"]) == "succeeded" for child in children):
+            return "succeeded", {
+                "reason_code": "cancel_raced_with_completion",
+                "logical_status": "succeeded",
+                "failed_child_tasks": {},
+                "successful_scheme_count": successful_scheme_count,
+                "successful_child_count": len(children),
+                "cancelled_scope": [],
+                "preserved_results": True,
+            }
+        cancelled_scope = [
+            {
+                "child_id": str(child["child_id"]),
+                "child_key": str(child["child_key"]),
+                "status": str(child["status"]),
+            }
+            for child in children
+            if str(child["status"]) != "succeeded"
+        ]
+        return "cancelled", {
+            "reason_code": "operator_cancelled",
+            "logical_status": "cancelled",
+            "failed_child_tasks": failures,
+            "successful_scheme_count": successful_scheme_count,
+            "successful_child_count": sum(
+                1 for child in children if str(child["status"]) == "succeeded"
+            ),
+            "cancelled_scope": cancelled_scope,
+            "preserved_results": any(
+                str(child["status"]) == "succeeded" for child in children
+            ),
+        }
+    preserved_unavailable = [
+        {
+            "child_id": str(child["child_id"]),
+            "child_key": str(child["child_key"]),
+            "status": str(child["status"]),
+        }
+        for child in children
+        if str(child.get("status") or "") == "not_recovered"
+    ]
+    recovered_scope_children = [
+        child for child in children if str(child.get("status") or "") != "not_recovered"
+    ]
+    recovered_scope_succeeded = bool(recovered_scope_children) and all(
+        str(child.get("status") or "") == "succeeded"
+        for child in recovered_scope_children
+    )
+    if (
+        str(run.get("recovery_kind") or "") == "child_targeted"
+        and preserved_unavailable
+        and recovered_scope_succeeded
+    ):
+        return "partial_recovered", {
+            "reason_code": "recovery_scope_completed_with_preserved_unavailable",
+            "logical_status": "partial_recovered",
+            "failed_child_tasks": failures,
+            "successful_scheme_count": successful_scheme_count,
+            "successful_child_count": sum(
+                1 for child in children if str(child.get("status") or "") == "succeeded"
+            ),
+            "preserved_unavailable": preserved_unavailable,
+        }
     if run.get("baseline_leg_id") and (baseline is None or baseline["status"] != "succeeded"):
         status = "failed"
         reason_code = "multi_alpha_baseline_failed"
@@ -1969,6 +2595,7 @@ def _receipt_evidence(receipt: Any) -> dict[str, Any]:
         "running_at",
         "finished_at",
         "pid",
+        "process_identity",
     )
     return {field: getattr(receipt, field, None) for field in fields}
 

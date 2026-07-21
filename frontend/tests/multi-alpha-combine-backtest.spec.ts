@@ -11,7 +11,11 @@ function respond(route: Route, data: unknown) {
   });
 }
 
-async function installMocks(page: Page, submittedBodies: Array<Record<string, unknown>>) {
+async function installMocks(
+  page: Page,
+  submittedBodies: Array<Record<string, unknown>>,
+  durableBodies: Array<{ path: string; body: Record<string, unknown>; idempotencyKey: string | null }> = [],
+) {
   const task = {
     task_id: taskKey,
     task_name: "R12P 场景回测",
@@ -103,6 +107,64 @@ async function installMocks(page: Page, submittedBodies: Array<Record<string, un
     submittedBodies.push(await route.request().postDataJSON());
     await respond(route, { run_id: "macb_scenario_10m_top20", status: "running" });
   });
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/control-capabilities$`), route => respond(route, {
+    run_id: sourceRunId,
+    run_status: "failed",
+    run_terminal: true,
+    actions: { pause: { state: "available" }, recovery: { state: "available" } },
+    evidence: {
+      execution_identity_hash: "a".repeat(64),
+      execution_identity_evidence: { complete: false, missing: ["dataset_manifest"], acquisition_suggestions: ["publish manifest"] },
+    },
+  }));
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/children$`), route => respond(route, {
+    children: [{
+      child_id: "macbc_failed_scheme",
+      child_key: "scheme:equal",
+      child_kind: "scheme",
+      status: "failed",
+      selected_attempt_id: "macba_failed_scheme_1",
+      execution_disposition: "execute",
+    }],
+  }));
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/commands\\?`), route => respond(route, {
+    commands: [],
+  }));
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/(?:pause|resume|cancel|stop|reconcile)$`), async route => {
+    durableBodies.push({
+      path: new URL(route.request().url()).pathname,
+      body: await route.request().postDataJSON(),
+      idempotencyKey: route.request().headers()["idempotency-key"] || null,
+    });
+    await respond(route, { command: { command_id: "macmd_pause", action: "pause", status: "accepted" } });
+  });
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/children/macbc_failed_scheme/recovery/preview$`), async route => {
+    durableBodies.push({
+      path: new URL(route.request().url()).pathname,
+      body: await route.request().postDataJSON(),
+      idempotencyKey: route.request().headers()["idempotency-key"] || null,
+    });
+    await respond(route, {
+      topology: "successor_recovery_run",
+      source_run_id: sourceRunId,
+      target_child_id: "macbc_failed_scheme",
+      retry_mode: "backtest_only",
+      command_id: "macmd_preview",
+      scope_hash: "b".repeat(64),
+      successor_run_id: "macb_recovery_target",
+      state_allowed: true,
+      evidence: { complete: false, missing: ["prediction"], acquisition_suggestions: ["restore artifact"] },
+      dependency_plan: [{ child_id: "macbc_failed_scheme", disposition: "execute" }],
+    });
+  });
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/children/macbc_failed_scheme/recovery$`), async route => {
+    durableBodies.push({
+      path: new URL(route.request().url()).pathname,
+      body: await route.request().postDataJSON(),
+      idempotencyKey: route.request().headers()["idempotency-key"] || null,
+    });
+    await respond(route, { command: { command_id: "macmd_recovery", action: "child_retry", status: "accepted" } });
+  });
 }
 
 test("combine run launches explicit capital and holding scenario from frozen predictions", async ({ page }) => {
@@ -147,3 +209,33 @@ function retryDraftRoster() {
     { leg_id: "gat_h40", seed_run_ids: ["qe_gat_h40_loop1"] },
   ];
 }
+
+test("durable controls preserve explicit evidence and submit no approval payload", async ({ page }) => {
+  const submittedBodies: Array<Record<string, unknown>> = [];
+  const durableBodies: Array<{ path: string; body: Record<string, unknown>; idempotencyKey: string | null }> = [];
+  await installMocks(page, submittedBodies, durableBodies);
+
+  await page.goto(`/quantevolver/multi-alpha/combine-backtest/${taskKey}?tab=runtime`);
+  await expect(page.getByText("Durable QE 控制与 Child Recovery")).toBeVisible();
+  await expect(page.getByText("dataset_manifest", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: "pause", exact: true }).click();
+  await page.getByRole("button", { name: "预览恢复闭包", exact: true }).click();
+  await expect(page.getByText("scope_hash=", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "执行已预览恢复", exact: true }).click();
+
+  expect(durableBodies).toHaveLength(3);
+  expect(durableBodies[0]).toMatchObject({ path: `/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/pause`, body: { request: {} } });
+  expect(durableBodies[1].body).toEqual({ retry_mode: "backtest_only" });
+  expect(durableBodies[2].body).toEqual({
+    retry_mode: "backtest_only",
+    scope_hash: "b".repeat(64),
+    preview_command_id: "macmd_preview",
+  });
+  expect(durableBodies[2].idempotencyKey).toBe(durableBodies[1].idempotencyKey);
+  for (const request of durableBodies) {
+    expect(request.idempotencyKey).toBeTruthy();
+    expect(JSON.stringify(request.body)).not.toContain("approval");
+    expect(JSON.stringify(request.body)).not.toContain("confirm");
+  }
+});

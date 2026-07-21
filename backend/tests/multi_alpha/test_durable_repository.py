@@ -202,6 +202,48 @@ def test_claim_uses_skip_locked_and_writes_event_in_same_transaction() -> None:
     assert not provider.cursor.steps
 
 
+def test_source_delete_is_blocked_only_during_published_recovery_copy_window() -> None:
+    class ReadyP0_2Health:
+        ready = True
+
+    provider = ScriptedProvider(
+        [
+            Step(
+                contains="staging_manifest_json IS NOT NULL",
+                one={
+                    "command_id": "macmd_copy",
+                    "status": "reconciling",
+                    "staging_manifest_hash": "a" * 64,
+                },
+            )
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+    repository.preflight_p0_2_schema = lambda **_kwargs: ReadyP0_2Health()  # type: ignore[method-assign]
+
+    with pytest.raises(MultiAlphaDurableRepositoryError) as caught:
+        repository.assert_recovery_source_delete_allowed("macb_test")
+
+    assert caught.value.reason_code == "recovery_source_copy_in_progress"
+    assert caught.value.context["command_id"] == "macmd_copy"
+
+
+def test_source_delete_remains_available_when_p0_2_schema_is_not_deployed() -> None:
+    class MissingP0_2Health:
+        ready = False
+
+    repository = MultiAlphaDurableRepository(connection_provider=lambda: (_ for _ in ()).throw(AssertionError("no DB query")))
+    repository.preflight_p0_2_schema = lambda **_kwargs: MissingP0_2Health()  # type: ignore[method-assign]
+
+    result = repository.assert_recovery_source_delete_allowed("macb_test")
+
+    assert result == {
+        "allowed": True,
+        "p0_2_schema_ready": False,
+        "reason_code": "multi_alpha_p0_2_schema_unavailable",
+    }
+
+
 def test_event_failure_rolls_back_the_state_transition() -> None:
     current = _claimed_run()
     updated = {**current, "status": "preparing", "phase": "prepare", "row_version": 3}
@@ -391,6 +433,84 @@ def test_same_run_identity_with_different_request_hash_fails_loudly() -> None:
 
     assert caught.value.reason_code == "multi_alpha_identity_payload_conflict"
     assert provider.rollbacks == 1
+
+
+def test_p0_1b_insert_shapes_remain_available_before_additive_p0_2_ddl() -> None:
+    request_payload = _run_request()
+    run_spec = DurableRunSpec(
+        run_id="macb_test",
+        task_id="mact_test",
+        request_hash=request_hash_for(request_payload),
+        roster_hash="roster",
+        roster=[{"leg_id": "L1"}],
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
+    run_provider = ScriptedProvider(
+        [
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_run", one={"id": "macb_test"}),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 1}),
+        ]
+    )
+    run_repository = MultiAlphaDurableRepository(connection_provider=run_provider)
+    run_repository.create_run(run_spec)
+    run_sql = run_provider.cursor.executions[0][0]
+    assert "execution_identity_json" not in run_sql
+    assert "recovery_scope_json" not in run_sql
+
+    child_id = make_child_id("macb_test", "scheme:equal")
+    child_manifest = {"schema_version": "child", "run_id": "macb_test"}
+    child_spec = DurableChildSpec(
+        child_id=child_id,
+        run_id="macb_test",
+        child_key="scheme:equal",
+        child_kind="scheme",
+        weighting_scheme="equal",
+        ordinal=0,
+        input_manifest=child_manifest,
+        input_manifest_hash=artifact_manifest_hash_for(child_manifest),
+    )
+    child_provider = ScriptedProvider(
+        [
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_child", one={"child_id": child_id}),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 2}),
+        ]
+    )
+    child_repository = MultiAlphaDurableRepository(connection_provider=child_provider)
+    child_repository.create_child(child_spec)
+    child_sql = child_provider.cursor.executions[0][0]
+    assert "source_child_id" not in child_sql
+    assert "execution_disposition" not in child_sql
+
+    attempt_spec = DurableAttemptSpec(
+        attempt_id=make_attempt_id(child_id, 1),
+        child_id=child_id,
+        attempt_no=1,
+        retry_mode="initial",
+        node_id="wsl2-5080",
+        status="queued",
+        phase="queued",
+    )
+    attempt_provider = ScriptedProvider(
+        [
+            Step(contains="SELECT child_id, run_id", one={"child_id": child_id, "run_id": "macb_test"}),
+            Step(contains="SELECT attempt_id", one=None),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                one={"attempt_id": attempt_spec.attempt_id},
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 3}),
+        ]
+    )
+    attempt_repository = MultiAlphaDurableRepository(connection_provider=attempt_provider)
+    attempt_repository.create_attempt(attempt_spec)
+    attempt_sql = attempt_provider.cursor.executions[2][0]
+    assert "source_attempt_id" not in attempt_sql
+    assert "execution_kind" not in attempt_sql
+    assert "result_manifest_hash" not in attempt_sql
 
 
 def test_same_request_hash_with_mutated_persisted_payload_fails_loudly() -> None:
@@ -614,3 +734,84 @@ def test_repository_source_contains_no_silent_fallback() -> None:
     assert "multi_alpha_identity_payload_conflict" in source
     assert "multi_alpha_stale_fencing_token" in source
     assert "multi_alpha_event_persistence_failed" in source
+
+
+def test_early_pause_cancel_and_resume_sql_cover_zero_child_runs() -> None:
+    source = (REPO_ROOT / "backend/services/multi_alpha/durable_repository.py").read_text(
+        encoding="utf-8"
+    )
+
+    pause_start = source.index("def claim_next_pause_drain_run")
+    pause_end = source.index("def append_archive_delivery_event", pause_start)
+    pause_source = source[pause_start:pause_end]
+    assert "NOT EXISTS (" in pause_source
+    assert "multi_alpha_combine_backtest_child AS child" in pause_source
+    assert "child.status = 'materializing'" in pause_source
+
+    finalizer_start = source.index("def claim_next_finalizable_run")
+    finalizer_end = source.index("def list_runs_pending_archive", finalizer_start)
+    finalizer_source = source[finalizer_start:finalizer_end]
+    assert "run.status IN ('cancel_requested', 'cancelling')" in finalizer_source
+    assert "OR EXISTS (" in finalizer_source
+
+    apply_start = source.index("def apply_control_command_intent")
+    apply_end = source.index("def reconcile_control_command", apply_start)
+    apply_source = source[apply_start:apply_end]
+    assert "NOT EXISTS (" in apply_source
+    assert 'next_status="preparing" if needs_planning else "running"' in apply_source
+
+    cancel_start = source.index("def _persist_cancel_intent_for_attempts_in_transaction")
+    cancel_source = source[cancel_start:]
+    assert "if target_attempt_ids is None:" in cancel_source
+    assert "status <> ALL(%s)" in cancel_source
+    assert "affected_child_ids.update" in cancel_source
+
+
+def test_zero_child_pause_and_cancel_are_claimable_for_terminalization() -> None:
+    pause_provider = ScriptedProvider(
+        [
+            Step(
+                contains="FOR UPDATE SKIP LOCKED",
+                one={**_claimed_run(), "status": "pause_requested"},
+            ),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 1},
+            ),
+        ]
+    )
+    pause_repository = MultiAlphaDurableRepository(connection_provider=pause_provider)
+
+    pause_claim = pause_repository.claim_next_pause_drain_run(
+        owner_id="worker_1",
+        lease_seconds=30,
+    )
+
+    assert pause_claim is not None
+    assert pause_claim["status"] == "pause_requested"
+    pause_sql = pause_provider.cursor.executions[0][0]
+    assert "NOT EXISTS ( SELECT 1 FROM strategy_pkg.multi_alpha_combine_backtest_child" in pause_sql
+
+    cancel_provider = ScriptedProvider(
+        [
+            Step(
+                contains="FOR UPDATE SKIP LOCKED",
+                one={**_claimed_run(), "status": "cancel_requested"},
+            ),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 2},
+            ),
+        ]
+    )
+    cancel_repository = MultiAlphaDurableRepository(connection_provider=cancel_provider)
+
+    cancel_claim = cancel_repository.claim_next_finalizable_run(
+        owner_id="worker_1",
+        lease_seconds=30,
+    )
+
+    assert cancel_claim is not None
+    assert cancel_claim["status"] == "cancel_requested"
+    cancel_sql = cancel_provider.cursor.executions[0][0]
+    assert "run.status IN ('cancel_requested', 'cancelling') OR EXISTS" in cancel_sql

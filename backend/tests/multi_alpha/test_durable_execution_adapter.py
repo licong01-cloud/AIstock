@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pandas as pd
@@ -25,6 +27,10 @@ from backend.services.multi_alpha.durable_models import (
     make_child_id,
     make_remote_task_id,
     submission_intent_hash_for,
+)
+from backend.services.multi_alpha.durable_identity import (
+    build_execution_identity,
+    legacy_execution_identity_evidence,
 )
 from backend.services.multi_alpha.remote_dispatch import ComputeNodeInfo
 from backend.services.quantevolver.qe_active_execution_capacity import (
@@ -192,6 +198,14 @@ class _ArtifactClient:
         }
 
 
+class _PredictionModelStore:
+    def __init__(self, paths: Mapping[str, Path]) -> None:
+        self.paths = dict(paths)
+
+    def prediction_path(self, *, run_id: str) -> Path:
+        return self.paths[run_id]
+
+
 class _WorkspaceClient:
     def __init__(self, node_id: str, nodes: list[str]) -> None:
         self.node_id = node_id
@@ -315,6 +329,134 @@ def _adapter(tmp_path: Path):
     return adapter, repository, coordinator, artifact_client, used_nodes
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _rematerialize_fixture(tmp_path: Path):
+    request = _request(tmp_path)
+    repository = _Repository(request)
+    source_paths: dict[str, Path] = {}
+    predictions = {"a1": _prediction(0.0), "b1": _prediction(0.5)}
+    for run_id, frame in predictions.items():
+        path = tmp_path / f"{run_id}.pkl"
+        frame.to_pickle(path)
+        source_paths[run_id] = path
+    model_store = _PredictionModelStore(source_paths)
+    materializer_identity = {
+        "aistock_commit": "123456abcdef",
+        "planner_version": "multi_alpha_child_plan_v1",
+        "combiner_file_sha256": "4" * 64,
+        "panel_builder_file_sha256": "5" * 64,
+        "materializer_file_set_sha256": "6" * 64,
+    }
+    execution_identity = build_execution_identity(
+        dataset={
+            "deployment_snapshot_id": "qe-dataset-20260720",
+            "dataset_manifest_sha256": "a" * 64,
+            "cutoff_trade_date": "2026-06-30",
+            "qlib_calendar_sha256": "b" * 64,
+            "qlib_instruments_sha256": "c" * 64,
+            "st_pit_snapshot_id": "st-pit-20260630",
+            "st_pit_manifest_sha256": "d" * 64,
+            "resolved_node_id": "wsl2-5080",
+            "resolved_data_root_uri": "/home/lc999/data/factor_data",
+        },
+        prediction_sources=[
+            {
+                "leg_id": "leg_a",
+                "seed_run_id": "a1",
+                "artifact_uri": source_paths["a1"].as_uri(),
+                "artifact_sha256": _sha256(source_paths["a1"]),
+            },
+            {
+                "leg_id": "leg_b",
+                "seed_run_id": "b1",
+                "artifact_uri": source_paths["b1"].as_uri(),
+                "artifact_sha256": _sha256(source_paths["b1"]),
+            },
+        ],
+        runtime={
+            "qlib_runtime_template_sha256": "e" * 64,
+            "conda_environment_lock_sha256": "f" * 64,
+            "execution_environment_snapshot_id": "rdagent-gpu-20260720",
+            "execution_environment_manifest_sha256": "0" * 64,
+            "executor_code_commit": "abcdef012345",
+            "executor_file_set_sha256": "1" * 64,
+            "backtest_config_sha256": "2" * 64,
+        },
+        materializer=materializer_identity,
+        business_formula={
+            "formula_version": "durable_business_result_v1",
+            "assembler_file_sha256": "3" * 64,
+            "delta_formula_sha256": "7" * 64,
+        },
+    )
+    source_input_manifest = {
+        **dict(repository.child["input_manifest_json"]),
+        "execution_identity": execution_identity.payload,
+        "execution_identity_hash": execution_identity.identity_hash,
+        "execution_identity_evidence": legacy_execution_identity_evidence(
+            execution_identity.payload
+        ),
+    }
+    repository.child["input_manifest_json"] = source_input_manifest
+    repository.child["input_manifest_hash"] = artifact_manifest_hash_for(source_input_manifest)
+    adapter = QEWorkspacePredBacktestAdapter(
+        repository=repository,  # type: ignore[arg-type]
+        prediction_loader=lambda run_id: predictions[run_id],
+        label_loader=_label,
+        model_store=model_store,  # type: ignore[arg-type]
+        workspace_root=tmp_path / "recovery-workspaces",
+        recovery_materializer_identity_resolver=(
+            lambda **_kwargs: materializer_identity
+        ),
+    )
+    successor_run_id = "macb_recovery_test"
+    successor_child_id = make_child_id(successor_run_id, "scheme:equal")
+    successor_attempt_id = make_attempt_id(successor_child_id, 1)
+    successor_input_manifest = {
+        **source_input_manifest,
+        "run_id": successor_run_id,
+        "child_id": successor_child_id,
+    }
+    successor_run_spec = SimpleNamespace(
+        run_id=successor_run_id,
+        backtest_config=repository.run["backtest_config_json"],
+    )
+    successor_child_spec = SimpleNamespace(
+        run_id=successor_run_id,
+        child_id=successor_child_id,
+        child_key="scheme:equal",
+        child_kind="scheme",
+        weighting_scheme="equal",
+        dropped_leg_id=None,
+        input_manifest=successor_input_manifest,
+        input_manifest_hash=artifact_manifest_hash_for(successor_input_manifest),
+    )
+    successor_attempt_spec = SimpleNamespace(
+        attempt_id=successor_attempt_id,
+        child_id=successor_child_id,
+        attempt_no=1,
+        retry_mode="rematerialize_and_backtest",
+        source_attempt_id=ATTEMPT_ID,
+    )
+    lineage = {
+        "source_input_manifest": source_input_manifest,
+        "source_input_manifest_hash": repository.child["input_manifest_hash"],
+        "recovery_materializer_identity": materializer_identity,
+    }
+    return (
+        adapter,
+        repository,
+        source_paths,
+        successor_run_spec,
+        successor_child_spec,
+        successor_attempt_spec,
+        lineage,
+    )
+
+
 def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp_path: Path) -> None:
     adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
 
@@ -333,6 +475,68 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert published.artifact_manifest["schema_version"] == "multi_alpha_child_artifact_manifest_v1"
     assert replay.artifact_manifest == published.artifact_manifest
     assert not list(published.workspace.parent.glob("*.tmp"))
+
+
+def test_builtin_rematerialize_recomputes_from_verified_frozen_prediction_sources(
+    tmp_path: Path,
+) -> None:
+    (
+        adapter,
+        repository,
+        _source_paths,
+        successor_run_spec,
+        successor_child_spec,
+        successor_attempt_spec,
+        lineage,
+    ) = _rematerialize_fixture(tmp_path)
+
+    published = adapter.stage_rematerialized_recovery_artifacts(
+        source_run=repository.run,
+        source_child=repository.child,
+        source_attempt_id=ATTEMPT_ID,
+        successor_run_spec=successor_run_spec,
+        successor_child_spec=successor_child_spec,
+        successor_attempt_spec=successor_attempt_spec,
+        source_lineage=lineage,
+    )
+
+    assert published.prediction_path.is_file()
+    assert published.artifact_manifest["recovery_source"] == {
+        "source_run_id": RUN_ID,
+        "source_child_id": CHILD_ID,
+        "source_attempt_id": ATTEMPT_ID,
+    }
+    assert published.artifact_manifest["recovery_materializer_identity_hash"] == (
+        artifact_manifest_hash_for(lineage["recovery_materializer_identity"])
+    )
+    recovered = pd.read_pickle(published.prediction_path)
+    assert not recovered.empty
+
+
+def test_builtin_rematerialize_rejects_changed_prediction_source_bytes(tmp_path: Path) -> None:
+    (
+        adapter,
+        repository,
+        source_paths,
+        successor_run_spec,
+        successor_child_spec,
+        successor_attempt_spec,
+        lineage,
+    ) = _rematerialize_fixture(tmp_path)
+    source_paths["a1"].write_bytes(b"mutated-after-preview")
+
+    with pytest.raises(DurableExecutionAdapterError) as caught:
+        adapter.stage_rematerialized_recovery_artifacts(
+            source_run=repository.run,
+            source_child=repository.child,
+            source_attempt_id=ATTEMPT_ID,
+            successor_run_spec=successor_run_spec,
+            successor_child_spec=successor_child_spec,
+            successor_attempt_spec=successor_attempt_spec,
+            source_lineage=lineage,
+        )
+
+    assert caught.value.reason_code == "backtest_prediction_hash_mismatch"
 
 
 def test_materialization_precedes_initial_attempt_persistence(tmp_path: Path) -> None:
@@ -370,6 +574,43 @@ def test_existing_artifact_byte_mismatch_is_loud(tmp_path: Path) -> None:
         adapter.publish_artifacts(materialized)
 
     assert caught.value.reason_code == "multi_alpha_artifact_hash_mismatch"
+
+
+def test_published_manifest_rejects_path_escape_before_reading_external_file(
+    tmp_path: Path,
+) -> None:
+    adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    workspace = tmp_path / "manifest-scope"
+    workspace.mkdir()
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"external")
+    manifest = {
+        "schema_version": "multi_alpha_child_artifact_manifest_v1",
+        "run_id": RUN_ID,
+        "child_id": CHILD_ID,
+        "attempt_id": ATTEMPT_ID,
+        "input_manifest_hash": repository.child["input_manifest_hash"],
+        "prediction_file": "combined_prediction.pkl",
+        "files": {
+            "../outside.bin": {
+                "sha256": _sha256(outside),
+                "size": outside.stat().st_size,
+            }
+        },
+        "execution_identity": None,
+        "execution_identity_hash": None,
+        "execution_identity_evidence": None,
+    }
+    manifest["manifest_hash"] = artifact_manifest_hash_for(manifest)
+
+    with pytest.raises(DurableExecutionAdapterError) as caught:
+        adapter._verify_published_manifest(
+            manifest,
+            workspace=workspace,
+            expected_input_manifest_hash=repository.child["input_manifest_hash"],
+        )
+
+    assert caught.value.reason_code == "multi_alpha_artifact_manifest_invalid"
 
 
 def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp_path: Path) -> None:

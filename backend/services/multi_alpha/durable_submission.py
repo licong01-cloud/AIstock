@@ -25,6 +25,10 @@ from backend.services.multi_alpha.durable_models import (
     make_implicit_task_id,
     request_hash_for,
 )
+from backend.services.multi_alpha.durable_identity import (
+    DurableExecutionIdentityResolver,
+    ExecutionIdentityResolution,
+)
 from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
     MultiAlphaDurableRepositoryError,
@@ -39,7 +43,9 @@ from backend.services.quantevolver.qe_execution_reservation import (
 )
 
 
-TERMINAL_DURABLE_RUN_STATUSES = frozenset({"succeeded", "partial_failed", "failed", "cancelled"})
+TERMINAL_DURABLE_RUN_STATUSES = frozenset(
+    {"succeeded", "partial_failed", "partial_recovered", "failed", "cancelled"}
+)
 RuntimePreflight = Callable[..., None]
 ExecutionSchemaPreflight = Callable[[], None]
 OrchestratorReadinessPreflight = Callable[[], Mapping[str, Any]]
@@ -78,6 +84,7 @@ class DurableCombineSubmissionService:
         sleep: Sleeper = time.sleep,
         source_kind: str = "api",
         created_by: str = "multi_alpha_durable_submission",
+        execution_identity_resolver: DurableExecutionIdentityResolver | None = None,
     ) -> None:
         self._repository = repository or MultiAlphaDurableRepository()
         self._runtime_preflight = runtime_preflight
@@ -90,6 +97,7 @@ class DurableCombineSubmissionService:
         self._sleep = sleep
         self._source_kind = source_kind
         self._created_by = created_by
+        self._execution_identity_resolver = execution_identity_resolver or DurableExecutionIdentityResolver()
 
     def submit(
         self,
@@ -107,6 +115,13 @@ class DurableCombineSubmissionService:
             node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
             self._runtime_preflight(backtest_config=request.backtest_config, node_id=node_id)
             self._repository.preflight_schema(raise_on_error=True)
+            # P0-2 is an additive control/recovery capability.  Its DDL must
+            # not turn the already-deployed P0-1B submission path into a new
+            # research admission gate while deployment is staged.  Capture the
+            # exact readiness fact and preserve it in the response; only code
+            # that actually uses P0-2 command/recovery tables requires the
+            # stronger preflight.
+            p0_2_schema_health = self._repository.preflight_p0_2_schema(raise_on_error=False)
             self._execution_schema_preflight()
             self._orchestrator_readiness_preflight()
             roster_hash = roster_hash_for(request.roster)
@@ -128,12 +143,20 @@ class DurableCombineSubmissionService:
                 prefix="macb_",
                 field_name="retry_of_run_id",
             )
+            execution_identity = self._resolve_execution_identity(
+                request=request,
+                node_id=node_id,
+                p0_2_schema_ready=p0_2_schema_health.ready,
+                p0_2_schema_health=p0_2_schema_health.as_dict(),
+            )
             run_spec = self._build_run_spec(
                 task_id=str(task["task_id"]),
                 request=request,
                 roster_hash=roster_hash,
                 roster=roster,
                 retry_of_run_id=retry_of_run_id,
+                execution_identity=execution_identity,
+                persist_execution_identity=p0_2_schema_health.ready,
             )
             run = self._repository.create_run(run_spec)
         except DurableCombineSubmissionError:
@@ -157,7 +180,12 @@ class DurableCombineSubmissionService:
         except DurableContractError as exc:
             raise _contract_error(exc) from exc
 
-        response = _submission_payload(run, task_id=str(task["task_id"]))
+        response = _submission_payload(
+            run,
+            task_id=str(task["task_id"]),
+            execution_identity_evidence=execution_identity.evidence,
+            execution_identity_persisted=p0_2_schema_health.ready,
+        )
         if request.run_async:
             return response
         if wait_timeout_seconds is None:
@@ -171,6 +199,8 @@ class DurableCombineSubmissionService:
             run_id=run_spec.run_id,
             task_id=str(task["task_id"]),
             timeout_seconds=wait_timeout_seconds,
+            execution_identity_evidence=execution_identity.evidence,
+            execution_identity_persisted=p0_2_schema_health.ready,
         )
 
     def _resolve_task(
@@ -238,6 +268,8 @@ class DurableCombineSubmissionService:
         roster_hash: str,
         roster: list[dict[str, Any]],
         retry_of_run_id: str | None,
+        execution_identity: ExecutionIdentityResolution,
+        persist_execution_identity: bool,
     ) -> DurableRunSpec:
         node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
         node_parallelism = validate_node_parallelism(
@@ -256,6 +288,17 @@ class DurableCombineSubmissionService:
             baseline_leg_id=request.baseline_leg_id,
             retry_of_run_id=retry_of_run_id,
             node_parallelism=node_parallelism,
+            execution_identity=(
+                execution_identity.identity.payload
+                if persist_execution_identity and execution_identity.identity is not None
+                else None
+            ),
+            execution_identity_hash=(
+                execution_identity.identity.identity_hash
+                if persist_execution_identity and execution_identity.identity is not None
+                else None
+            ),
+            execution_identity_evidence=(execution_identity.evidence if persist_execution_identity else None),
         )
         timestamp = self._clock()
         base_run_id = make_run_id(
@@ -279,7 +322,70 @@ class DurableCombineSubmissionService:
             baseline_leg_id=request.baseline_leg_id,
             retry_of_run_id=retry_of_run_id,
             node_parallelism=node_parallelism,
+            execution_identity=(
+                execution_identity.identity.payload
+                if persist_execution_identity and execution_identity.identity is not None
+                else None
+            ),
+            execution_identity_hash=(
+                execution_identity.identity.identity_hash
+                if persist_execution_identity and execution_identity.identity is not None
+                else None
+            ),
+            execution_identity_evidence=(execution_identity.evidence if persist_execution_identity else None),
         )
+
+    def _resolve_execution_identity(
+        self,
+        *,
+        request: CombineBacktestRequest,
+        node_id: str,
+        p0_2_schema_ready: bool,
+        p0_2_schema_health: Mapping[str, Any],
+    ) -> ExecutionIdentityResolution:
+        if not p0_2_schema_ready:
+            # This does not reject, downgrade, or reinterpret the QE run.  It
+            # explicitly tells the caller why P0-2-only immutable identity
+            # fields cannot be persisted until the separately authorized DDL
+            # is applied, while the P0-1B submission remains byte-for-byte
+            # compatible with the deployed schema.
+            return ExecutionIdentityResolution(
+                identity=None,
+                evidence={
+                    "schema_version": "multi_alpha_execution_identity_evidence_v1",
+                    "complete": False,
+                    "reason_code": "multi_alpha_p0_2_schema_unavailable",
+                    "missing": ["p0_2_execution_identity_persistence_schema"],
+                    "acquisition_suggestions": [
+                        "apply the separately authorized P0-2 additive migration in DEV before using durable recovery identity capture",
+                        "continue the ordinary QE run; record this infrastructure limitation rather than treating it as a research rejection",
+                    ],
+                    "observations": {"p0_2_schema_health": dict(p0_2_schema_health)},
+                },
+            )
+        try:
+            return self._execution_identity_resolver.resolve(request=request, node_id=node_id)
+        except Exception as exc:
+            # Identity capture must never disappear behind a fallback or become
+            # a research-direction admission gate.  Preserve the exact error in
+            # the newly durable run so recovery/UI/MCP can surface it later.
+            return ExecutionIdentityResolution(
+                identity=None,
+                evidence={
+                    "schema_version": "multi_alpha_execution_identity_evidence_v1",
+                    "complete": False,
+                    "reason_code": "multi_alpha_execution_identity_capture_failed",
+                    "missing": ["execution_identity_capture"],
+                    "acquisition_suggestions": [
+                        "inspect the recorded identity-capture error and restore the immutable dataset/runtime/prediction evidence",
+                        "continue QE research analysis with the explicit identity limitation rather than treating it as a research rejection",
+                    ],
+                    "observations": {
+                        "node_id": node_id,
+                        "error": {"type": type(exc).__name__, "message": str(exc)},
+                    },
+                },
+            )
 
     def _wait_for_terminal(
         self,
@@ -287,6 +393,8 @@ class DurableCombineSubmissionService:
         run_id: str,
         task_id: str,
         timeout_seconds: int,
+        execution_identity_evidence: Mapping[str, Any],
+        execution_identity_persisted: bool,
     ) -> dict[str, Any]:
         deadline = self._monotonic() + timeout_seconds
         while True:
@@ -298,7 +406,12 @@ class DurableCombineSubmissionService:
                     http_status_code=500,
                     context={"run_id": run_id},
                 )
-            response = _submission_payload(run, task_id=task_id)
+            response = _submission_payload(
+                run,
+                task_id=task_id,
+                execution_identity_evidence=execution_identity_evidence,
+                execution_identity_persisted=execution_identity_persisted,
+            )
             if response["status"] in TERMINAL_DURABLE_RUN_STATUSES:
                 response["wait_timed_out"] = False
                 return response
@@ -308,10 +421,16 @@ class DurableCombineSubmissionService:
             self._sleep(min(0.25, max(0.0, deadline - self._monotonic())))
 
 
-def _submission_payload(run: Mapping[str, Any], *, task_id: str) -> dict[str, Any]:
+def _submission_payload(
+    run: Mapping[str, Any],
+    *,
+    task_id: str,
+    execution_identity_evidence: Mapping[str, Any] | None = None,
+    execution_identity_persisted: bool | None = None,
+) -> dict[str, Any]:
     reason = run.get("reason") if isinstance(run.get("reason"), Mapping) else {}
     progress = run.get("progress_json") if isinstance(run.get("progress_json"), Mapping) else reason.get("progress")
-    return {
+    response = {
         "task_id": task_id,
         "run_id": str(run["id"]),
         "status": str(run.get("status") or "queued"),
@@ -319,6 +438,11 @@ def _submission_payload(run: Mapping[str, Any], *, task_id: str) -> dict[str, An
         "progress": dict(progress) if isinstance(progress, Mapping) else {},
         "durable": True,
     }
+    if execution_identity_evidence is not None:
+        response["execution_identity_evidence"] = dict(execution_identity_evidence)
+    if execution_identity_persisted is not None:
+        response["execution_identity_persisted"] = bool(execution_identity_persisted)
+    return response
 
 
 def _preflight_execution_schema() -> None:
@@ -376,6 +500,9 @@ def _repository_error(exc: MultiAlphaDurableRepositoryError) -> DurableCombineSu
     if exc.reason_code == "multi_alpha_schema_unavailable":
         status_code = 503
         reason_code = "multi_alpha_durable_schema_unavailable"
+    elif exc.reason_code == "multi_alpha_p0_2_schema_unavailable":
+        status_code = 503
+        reason_code = "multi_alpha_durable_p0_2_schema_unavailable"
     elif "identity" in exc.reason_code or "conflict" in exc.reason_code:
         status_code = 409
         reason_code = exc.reason_code

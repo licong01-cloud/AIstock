@@ -201,3 +201,76 @@ def test_parent_status_uses_baseline_and_successful_scheme_business_semantics() 
     )
     assert status == "failed"
     assert reason["reason_code"] == "multi_alpha_baseline_failed"
+
+
+def test_partial_recovered_requires_every_child_in_recovery_scope_to_succeed() -> None:
+    children = [
+        {
+            "child_id": "macbc_target",
+            "child_key": "scheme:equal",
+            "child_kind": "scheme",
+            "status": "failed",
+        },
+        {
+            "child_id": "macbc_preserved",
+            "child_key": "scheme:risk_parity",
+            "child_kind": "scheme",
+            "status": "not_recovered",
+        },
+    ]
+
+    status, reason = _parent_status(
+        children=children,
+        run={"recovery_kind": "child_targeted", "baseline_leg_id": None},
+    )
+
+    assert status == "failed"
+    assert reason["reason_code"] == "multi_alpha_no_successful_scheme"
+    assert reason["failed_child_tasks"] == {
+        "scheme:equal": "failed",
+        "scheme:risk_parity": "not_recovered",
+    }
+
+
+def test_partial_recovered_preserves_unavailable_siblings_after_successful_recovery() -> None:
+    children = [
+        {
+            "child_id": "macbc_target",
+            "child_key": "scheme:equal",
+            "child_kind": "scheme",
+            "status": "succeeded",
+        },
+        {
+            "child_id": "macbc_preserved",
+            "child_key": "scheme:risk_parity",
+            "child_kind": "scheme",
+            "status": "not_recovered",
+        },
+    ]
+
+    status, reason = _parent_status(
+        children=children,
+        run={"recovery_kind": "child_targeted", "baseline_leg_id": None},
+    )
+
+    assert status == "partial_recovered"
+    assert reason["reason_code"] == "recovery_scope_completed_with_preserved_unavailable"
+    assert reason["preserved_unavailable"] == [
+        {
+            "child_id": "macbc_preserved",
+            "child_key": "scheme:risk_parity",
+            "status": "not_recovered",
+        }
+    ]
+
+
+def test_zero_child_cancel_is_cancelled_not_vacuous_success() -> None:
+    status, reason = _parent_status(
+        children=[],
+        run={"status": "cancel_requested", "baseline_leg_id": None},
+    )
+
+    assert status == "cancelled"
+    assert reason["reason_code"] == "operator_cancelled"
+    assert reason["successful_child_count"] == 0
+    assert reason["preserved_results"] is False

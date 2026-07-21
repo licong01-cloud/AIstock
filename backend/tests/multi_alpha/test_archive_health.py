@@ -74,6 +74,7 @@ def _orchestrator(repository: _Repository, capture: _Capture) -> DurableMultiAlp
         adapter=_Noop(),  # type: ignore[arg-type]
         archive_capture=capture,  # type: ignore[arg-type]
         active_import_service=_Noop(),  # type: ignore[arg-type]
+        recovery_worker=_Noop(),  # type: ignore[arg-type]
         config=DurableOrchestratorConfig(
             poll_seconds=0.2,
             lease_seconds=60,

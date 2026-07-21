@@ -72,6 +72,9 @@ class QEWorkspaceSubmissionPayload:
     wsl_command: str
     model_source: Mapping[str, Any] | None = None
     callback_url: str | None = None
+    execution_identity_hash: str | None = None
+    execution_environment_snapshot_id: str | None = None
+    execution_environment_manifest_sha256: str | None = None
 
     @property
     def loop_id(self) -> str:
@@ -1097,6 +1100,9 @@ class QEWorkspaceSubmissionCoordinator:
                 model_source=dict(payload.model_source) if payload.model_source else None,
                 callback_url=payload.callback_url,
                 submission_intent_hash=source.submission_intent_hash,
+                execution_identity_hash=payload.execution_identity_hash,
+                execution_environment_snapshot_id=payload.execution_environment_snapshot_id,
+                execution_environment_manifest_sha256=payload.execution_environment_manifest_sha256,
             )
         except QEWorkspaceSubmissionRejected as exc:
             if exc.status_code < 500:
@@ -1432,6 +1438,18 @@ class QEWorkspaceSubmissionCoordinator:
                 "QE Workspace loop index must be positive",
                 reason_code="qe_workspace_submission_identity_invalid",
             )
+        binding = (
+            payload.execution_identity_hash,
+            payload.execution_environment_snapshot_id,
+            payload.execution_environment_manifest_sha256,
+        )
+        if any(value is not None for value in binding) and any(
+            value is None or not str(value).strip() for value in binding
+        ):
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE execution identity binding must be all present or all absent",
+                reason_code="qe_workspace_execution_identity_invalid",
+            )
 
     @classmethod
     def _validate_receipt_identity(
@@ -1460,6 +1478,17 @@ class QEWorkspaceSubmissionCoordinator:
                     "actual_request_digest": receipt.request_digest,
                 },
             )
+        if (
+            receipt.execution_identity_hash != payload.execution_identity_hash
+            or receipt.execution_environment_snapshot_id
+            != payload.execution_environment_snapshot_id
+            or receipt.execution_environment_manifest_sha256
+            != payload.execution_environment_manifest_sha256
+        ):
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE Workspace receipt execution environment binding does not match the submitted durable identity",
+                reason_code="qe_workspace_execution_identity_mismatch",
+            )
 
     @classmethod
     def _validate_inspection_identity(
@@ -1487,6 +1516,17 @@ class QEWorkspaceSubmissionCoordinator:
                     "expected_request_digest": expected_digest,
                     "actual_request_digest": inspection.request_digest,
                 },
+            )
+        if (
+            inspection.execution_identity_hash != payload.execution_identity_hash
+            or inspection.execution_environment_snapshot_id
+            != payload.execution_environment_snapshot_id
+            or inspection.execution_environment_manifest_sha256
+            != payload.execution_environment_manifest_sha256
+        ):
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE Workspace inspected receipt execution environment binding does not match the submitted durable identity",
+                reason_code="qe_workspace_execution_identity_mismatch",
             )
 
 
@@ -1683,6 +1723,11 @@ def canonical_qe_workspace_request_digest(payload: QEWorkspaceSubmissionPayload)
             "experiment_files_sha256": file_hashes,
             "wsl_command": payload.wsl_command or "",
             "model_source": dict(payload.model_source or {}),
+            "execution_binding": {
+                "execution_identity_hash": payload.execution_identity_hash,
+                "execution_environment_snapshot_id": payload.execution_environment_snapshot_id,
+                "execution_environment_manifest_sha256": payload.execution_environment_manifest_sha256,
+            },
         }
     )
     encoded = json.dumps(

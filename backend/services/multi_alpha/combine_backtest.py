@@ -45,7 +45,17 @@ DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "ris
 RANK_FUSION_WEIGHTING_SCHEMES = ("rank_fusion_rrf", "rank_fusion_borda")
 SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES
 LOGICAL_PARTIAL_FAILED_STATUS = "partial_failed"
-TERMINAL_STATUSES = {"succeeded", "failed", LOGICAL_PARTIAL_FAILED_STATUS}
+# A P0-2 successor can finish with preserved unavailable children, and a
+# controlled durable run can finish cancelled.  They are terminal business
+# facts just like the legacy succeeded/failed states: archive/read/retry/delete
+# must not pretend they are still active or omit their preserved evidence.
+TERMINAL_STATUSES = {
+    "succeeded",
+    "failed",
+    LOGICAL_PARTIAL_FAILED_STATUS,
+    "partial_recovered",
+    "cancelled",
+}
 PREDICTION_STORE_UPLOAD_URL_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_URL"
 PREDICTION_STORE_UPLOAD_TIMEOUT_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_TIMEOUT_SEC"
 DEFAULT_UPLOAD_TIMEOUT_SEC = 120.0
@@ -1552,6 +1562,22 @@ class MultiAlphaCombineBacktestService:
                 reason_code="combine_backtest_delete_not_terminal",
                 context={"run_id": run_id, "status": status},
             )
+        if not self._legacy_execution_mode_for_tests:
+            from backend.services.multi_alpha.durable_repository import (
+                MultiAlphaDurableRepository,
+                MultiAlphaDurableRepositoryError,
+            )
+
+            try:
+                MultiAlphaDurableRepository().assert_recovery_source_delete_allowed(run_id)
+            except MultiAlphaDurableRepositoryError as exc:
+                if exc.reason_code == "recovery_source_copy_in_progress":
+                    raise MultiAlphaCombineBacktestError(
+                        "terminal source deletion is temporarily blocked while its frozen recovery artifacts publish",
+                        reason_code="recovery_source_copy_in_progress",
+                        context=dict(exc.context),
+                    ) from exc
+                raise
         workspace = self._safe_run_workspace(run_id)
         quarantine: Path | None = None
         if cleanup_workspace and workspace.exists():
@@ -1705,6 +1731,25 @@ class MultiAlphaCombineBacktestService:
             "archive_delivery_event": dict(durable_event) if durable_event else None,
             "archive_outbox": dict(outbox) if outbox else None,
         }
+
+    def get_archive_snapshot(self, run_id: str) -> dict[str, Any]:
+        """Return immutable Archive detail without depending on source rows.
+
+        A terminal source run can be deliberately deleted after Archive
+        delivery.  Reading its archived evidence must still work and must not
+        be redirected to mutable durable tables or a recreated experiment.
+        """
+
+        from backend.services.qe_archive.repository import QEArchiveRepository
+
+        snapshot = QEArchiveRepository().fetch_archived_multi_alpha_combine_run(run_id)
+        if snapshot is None:
+            raise MultiAlphaCombineBacktestError(
+                "archived multi-alpha combine run was not found",
+                reason_code="combine_backtest_archive_snapshot_not_found",
+                context={"run_id": run_id},
+            )
+        return snapshot
 
     def archive_run(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
         bundle = self.get_run(run_id)

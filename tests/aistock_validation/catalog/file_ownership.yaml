@@ -178,6 +178,17 @@ rules:
     layer: mcp_gateway
     risk_level: high
     ownership_reason: Unified MCP gateway code, profiles, manifests, and contract tests control agent-facing access to AIstock tools.
+  - rule_id: qe_archive_mcp_contract
+    priority: 100
+    include:
+      - backend/mcp/modules/qe_archive.py
+      - backend/mcp/tool_manifest.py
+      - backend/tests/mcp/test_qe_archive_module.py
+    primary_module: qe.data_completeness
+    impact_modules: [qe.archive, platform.mcp_gateway]
+    layer: mcp_gateway
+    risk_level: high
+    ownership_reason: QE Archive MCP control and manifest changes require both QE data-contract and archive validation instead of the generic MCP l0-only route.
   - rule_id: validation_backend_tests
     priority: 95
     include:
@@ -225,6 +236,16 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: QE multi-alpha services combine experiment legs, execute portfolio backtests, persist scheme and LOO evidence, and expose the operator UI contract.
+  - rule_id: qe_multi_alpha_p0_2_migrations
+    priority: 100
+    include:
+      - backend/migrations/multi_alpha_p0_2_control_recovery_*.sql
+      - backend/migrations/qe_archive_multi_alpha_p0_2_recovery_*.sql
+    primary_module: qe.auto_evolution
+    impact_modules: [qe.archive, platform.db]
+    layer: database
+    risk_level: high
+    ownership_reason: Multi-Alpha P0-2 control and Archive recovery migrations jointly change durable orchestration and archive readback contracts.
   - rule_id: qe_services
     priority: 80
     include:
