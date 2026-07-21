@@ -3233,6 +3233,7 @@ def test_verify_clients_workflow_only_checks_every_lane(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
     codex_home = isolated_workflow_root / "verified_codex_home"
     claude_home = isolated_workflow_root / "verified_claude_home"
     workflow.build_client_install_plan(
