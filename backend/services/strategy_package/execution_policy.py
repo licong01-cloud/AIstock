@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -35,6 +35,9 @@ ALLOWED_POLICY_JSON_KEYS = {
     "unfilled_handler_params",
     "price_guard",
     "exit_guard",
+    "schedule_window",
+    "quote_contract",
+    "quote_evidence",
 }
 
 PRICE_GUARD_POLICY_KEYS = {
@@ -82,6 +85,7 @@ ALGO_CONFIG_GUARD_FORBIDDEN_KEYS = {
     "t1_handling",
 }
 
+
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
     encoded = json.dumps(
         policy_json,
@@ -125,6 +129,124 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
     return normalized
 
 
+FROZEN_EXECUTION_POLICY_ID_FIELDS = (
+    "policy_version_id",
+    "validated_execution_policy_id",
+    "policy_id",
+)
+
+
+def validate_frozen_execution_policy_snapshot(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    expected_policy_id: str | None = None,
+    expected_policy_sha256: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate one explicit immutable execution-policy snapshot.
+
+    The accepted ID spellings are distinct persisted schema variants. Exactly
+    one must be present; aliases cannot be combined and no unknown field is
+    ignored. The hash always covers the normalized policy JSON.
+    """
+
+    error_context = dict(context or {})
+    if not isinstance(snapshot, Mapping) or not snapshot:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot must be an explicit non-empty object",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_MISSING",
+            },
+        )
+    payload = dict(snapshot)
+    present_id_fields = [field for field in FROZEN_EXECUTION_POLICY_ID_FIELDS if str(payload.get(field) or "").strip()]
+    if len(present_id_fields) != 1:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot requires exactly one policy identity field",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "present_policy_id_fields": present_id_fields,
+                "allowed_policy_id_fields": list(FROZEN_EXECUTION_POLICY_ID_FIELDS),
+            },
+        )
+    id_field = present_id_fields[0]
+    expected_fields = {id_field, "policy_sha256", "policy_json"}
+    if set(payload) != expected_fields:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot fields are not exact",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "missing_fields": sorted(expected_fields - set(payload)),
+                "unknown_fields": sorted(set(payload) - expected_fields),
+            },
+        )
+    policy_id = str(payload[id_field]).strip()
+    policy_sha256 = str(payload["policy_sha256"] or "").strip().lower()
+    if not policy_id or not policy_sha256:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot identity is incomplete",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_IDENTITY_INCOMPLETE",
+                "policy_id": policy_id or None,
+                "policy_sha256": policy_sha256 or None,
+            },
+        )
+    raw_policy_json = payload["policy_json"]
+    if not isinstance(raw_policy_json, dict) or not raw_policy_json:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot requires a non-empty policy_json",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "policy_id": policy_id,
+            },
+        )
+    normalized = normalize_execution_policy_json(dict(raw_policy_json))
+    computed_sha256 = compute_execution_policy_sha256(normalized)
+    if policy_sha256 != computed_sha256:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot hash does not match normalized policy_json",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_HASH_CONFLICT",
+                "policy_id": policy_id,
+                "stored_policy_sha256": policy_sha256,
+                "computed_policy_sha256": computed_sha256,
+            },
+        )
+    expected_id = str(expected_policy_id or "").strip()
+    expected_sha = str(expected_policy_sha256 or "").strip().lower()
+    if expected_id and policy_id != expected_id:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot ID conflicts with the runtime release",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT",
+                "expected_policy_id": expected_id,
+                "snapshot_policy_id": policy_id,
+            },
+        )
+    if expected_sha and policy_sha256 != expected_sha:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot hash conflicts with the runtime release",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT",
+                "expected_policy_sha256": expected_sha,
+                "snapshot_policy_sha256": policy_sha256,
+            },
+        )
+    return {
+        id_field: policy_id,
+        "policy_sha256": policy_sha256,
+        "policy_json": normalized,
+    }
+
+
 def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowed_keys: set[str]) -> None:
     if key not in normalized:
         return
@@ -132,7 +254,12 @@ def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowe
     if not isinstance(value, dict):
         raise RuntimeConfigInvalidError(
             f"execution policy {key} must be an object",
-            context={"field": key, "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR" if key == "price_guard" else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR"},
+            context={
+                "field": key,
+                "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR"
+                if key == "price_guard"
+                else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR",
+            },
         )
     unknown = sorted(set(value).difference(allowed_keys))
     if unknown:

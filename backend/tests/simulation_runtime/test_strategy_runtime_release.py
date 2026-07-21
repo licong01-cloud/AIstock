@@ -11,6 +11,10 @@ from backend.services.simulation_runtime import (
 )
 from backend.services.simulation_runtime.models import StrategyRuntimeRelease
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 
@@ -59,11 +63,18 @@ def test_strategy_runtime_release_can_persist_full_execution_policy_snapshot() -
         "algo_config": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
     }
 
-    release = service.create_release(**_release_kwargs(execution_policy_json=policy_json))
+    normalized_policy = normalize_execution_policy_json(policy_json)
+    policy_sha256 = compute_execution_policy_sha256(normalized_policy)
+    release = service.create_release(
+        **_release_kwargs(
+            execution_policy_json=policy_json,
+            execution_policy_sha256=policy_sha256,
+        )
+    )
 
     assert release.release_config_json["execution_policy"]["policy_json"] == policy_json
     assert release.release_config_json["execution_policy"]["policy_version_id"] == "exec_policy_unit"
-    assert release.release_config_json["execution_policy"]["policy_sha256"] == "exec_policy_hash_unit"
+    assert release.release_config_json["execution_policy"]["policy_sha256"] == policy_sha256
 
 
 def test_strategy_runtime_release_requires_all_policy_versions() -> None:
@@ -194,7 +205,17 @@ def test_simulation_binding_admission_rejects_retired_package_without_revalidati
     assert repository.bindings == {}
 
 
-def test_simulation_binding_admission_accepts_active_package_lifecycle_only() -> None:
+@pytest.mark.parametrize(
+    "package_id",
+    [
+        "pkg_single_alpha_model_code_required",
+        "pkg_single_alpha_model_code_optional",
+        "pkg_multi_alpha_parent",
+    ],
+)
+def test_simulation_binding_admission_accepts_active_package_types_without_content_revalidation(
+    package_id: str,
+) -> None:
     repository = InMemorySimulationRuntimeRepository()
     package_reader = SimpleNamespace(
         get=lambda package_id: SimpleNamespace(
@@ -206,7 +227,14 @@ def test_simulation_binding_admission_accepts_active_package_lifecycle_only() ->
         repository=repository,
         package_lifecycle_reader=package_reader,
     )
-    release = service.create_release(**_release_kwargs())
+    policy_json = normalize_execution_policy_json({"algo_code": "CLOSE_PRICE", "algo_config": {}})
+    release = service.create_release(
+        **_release_kwargs(
+            package_id=package_id,
+            execution_policy_json=policy_json,
+            execution_policy_sha256=compute_execution_policy_sha256(policy_json),
+        )
+    )
 
     binding = service.create_binding(
         strategy_id="strategy_active",
@@ -215,5 +243,5 @@ def test_simulation_binding_admission_accepts_active_package_lifecycle_only() ->
         capital_allocation=100_000,
     )
 
-    assert binding.package_id == release.package_id
+    assert binding.package_id == package_id
     assert repository.get_simulation_release_binding(binding.binding_id) == binding

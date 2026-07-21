@@ -32,6 +32,10 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteExecutionMarketInput,
     PaperV2MinuteMarketDataProvider,
 )
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.trading_core.models import (
     MinuteBar,
     OrderIntent,
@@ -98,6 +102,18 @@ class _FakeMarketDataProvider(PaperV2MinuteMarketDataProvider):
 
 def main() -> int:
     manifest = make_paper_enabled_manifest()
+    minute_policy = manifest.minute_execution_policy
+    if minute_policy is None:
+        raise RuntimeError(
+            "Paper v2 LocalSim demo requires an explicit execution policy; "
+            "reason_code=LOCALSIM_DEMO_EXECUTION_POLICY_MISSING"
+        )
+    policy_json = normalize_execution_policy_json(minute_policy.model_dump(mode="json"))
+    execution_policy = {
+        "validated_execution_policy_id": "paper_v2_daemon_demo_explicit_policy",
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
     portfolio_id = f"paper_demo_{uuid4().hex[:8]}"
 
     # Determine where to put the event-log DB. Default: worktree-local var/.
@@ -115,6 +131,7 @@ def main() -> int:
         data_source=MinuteDataSource.DB_HISTORICAL,
         manifest=manifest,
         market_data_provider=_FakeMarketDataProvider(),
+        execution_policy=execution_policy,
     )
     gateway = SimGateway.from_local_sim(backend)
     gateway.connect()
