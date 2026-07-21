@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-800",
-  "closed_at": null,
+  "closed_at": "2026-07-21T08:23:08Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,8 +34,8 @@
   "expected": "The approved legacy compatibility receipt records immutable artifact identity and provenance without filesystem-path field names or absolute paths, and build_source_manifest accepts the receipt while preserving fail-closed integrity checks.",
   "first_seen_at": "2026-07-21T08:13:57.864646Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4243c9647401497c3afa1e658d3ce17501767b91",
+  "fixed_at": "2026-07-21T08:23:46.210876Z",
   "github_issue_number": 2543,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2543",
   "last_seen_at": "2026-07-21T08:13:57.864646Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2546",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.evolution"
   ],
@@ -63,6 +64,12 @@
     "fingerprint": "76ee0f2d7fb0aba0304b659d",
     "source_event_id": "FE-20260721-76ee0f2d7fb0"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution/test_universe.py backend/tests/hmm_evolution/test_source_manifest.py backend/tests/hmm_evolution/test_input_adapter.py -q -> 22 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s hmm_evolution_backend -> 190 passed, 2 deselected"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
