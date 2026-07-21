@@ -598,3 +598,274 @@ class LeaseConfig(BaseModel):
         if self.lease_seconds < self.heartbeat_seconds * 3:
             raise ValueError("lease_seconds must be at least three times heartbeat_seconds")
         return self
+
+
+class ExecutionPurpose(str, Enum):
+    """Durable isolation between normal evaluations and acceptance benchmarks."""
+
+    EVALUATION = "evaluation"
+    BENCHMARK = "benchmark"
+
+
+class CacheArtifactState(str, Enum):
+    """Per-artifact cache evidence observed by the executing stage."""
+
+    COLD_MISS = "cold_miss"
+    WARM_HIT = "warm_hit"
+    ZERO_COPY_BYPASS = "zero_copy_bypass"
+    FALLBACK_DOWNLOAD = "fallback_download"
+    UNKNOWN = "unknown"
+
+
+class CacheState(str, Enum):
+    """Top-level cache verdict derived from per-artifact evidence."""
+
+    COLD = "cold"
+    WARM = "warm"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"
+
+
+class ReceiptLevel(str, Enum):
+    BATCH = "batch"
+    EVALUATION = "evaluation"
+
+
+class ReceiptStatus(str, Enum):
+    PARTIAL = "partial"
+    FINAL = "final"
+
+
+class WorkerRuntimeState(str, Enum):
+    RUNNING = "running"
+    STOPPED = "stopped"
+
+
+PERFORMANCE_RECEIPT_SCHEMA_VERSION = "hmm_performance_receipt_v1"
+
+BENCHMARK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,127}$")
+
+STAGE_API_RECEIPT_PERSIST = "api_receipt_persist"
+STAGE_PREPARATION_QUEUE_WAIT = "preparation_queue_wait"
+STAGE_QE_SOURCE_LOAD = "qe_source_load"
+STAGE_UNIVERSE_RESOLVE = "universe_resolve"
+STAGE_MARKET_FREEZE = "market_freeze"
+STAGE_EVALUATION_QUEUE_WAIT = "evaluation_queue_wait"
+STAGE_COMPUTE = "compute"
+STAGE_RESULT_PERSIST = "result_persist"
+
+KNOWN_STAGE_NAMES = frozenset(
+    {
+        STAGE_API_RECEIPT_PERSIST,
+        STAGE_PREPARATION_QUEUE_WAIT,
+        STAGE_QE_SOURCE_LOAD,
+        STAGE_UNIVERSE_RESOLVE,
+        STAGE_MARKET_FREEZE,
+        STAGE_EVALUATION_QUEUE_WAIT,
+        STAGE_COMPUTE,
+        STAGE_RESULT_PERSIST,
+    }
+)
+
+
+def validate_benchmark_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not BENCHMARK_ID_RE.fullmatch(text):
+        raise InvalidSpecError(
+            "benchmark_id must be 3-128 chars of letters, digits, _, -, . and start with alphanumeric",
+            context={"benchmark_id": value},
+        )
+    return text
+
+
+def normalize_execution_purpose(
+    execution_purpose: str | ExecutionPurpose | None,
+    benchmark_id: str | None,
+) -> tuple[ExecutionPurpose, str | None]:
+    """Fail closed on inconsistent purpose/benchmark pairs before any write."""
+
+    purpose = (
+        execution_purpose
+        if isinstance(execution_purpose, ExecutionPurpose)
+        else ExecutionPurpose(str(execution_purpose or "evaluation").strip().lower())
+    )
+    if purpose is ExecutionPurpose.BENCHMARK:
+        if benchmark_id is None or not str(benchmark_id).strip():
+            raise InvalidSpecError("benchmark executions require benchmark_id")
+        return purpose, validate_benchmark_id(str(benchmark_id))
+    if benchmark_id is not None and str(benchmark_id).strip():
+        raise InvalidSpecError("benchmark_id is only valid for benchmark executions")
+    return purpose, None
+
+
+def derive_cache_state(evidence: tuple["CacheArtifactEvidence", ...]) -> CacheState:
+    """Derive the top-level cache verdict; zero-copy alone never claims warm."""
+
+    if not evidence:
+        return CacheState.UNKNOWN
+    states = {entry.state for entry in evidence}
+    if CacheArtifactState.UNKNOWN in states:
+        return CacheState.UNKNOWN
+    meaningful = states - {CacheArtifactState.ZERO_COPY_BYPASS}
+    if not meaningful:
+        # Prediction Store zero-copy bypasses the application cache entirely;
+        # OS page cache warmth is not measurable here and must stay unknown.
+        return CacheState.UNKNOWN
+    cold_states = {CacheArtifactState.COLD_MISS, CacheArtifactState.FALLBACK_DOWNLOAD}
+    if meaningful <= cold_states:
+        return CacheState.COLD
+    if meaningful == {CacheArtifactState.WARM_HIT}:
+        return CacheState.WARM
+    return CacheState.MIXED
+
+
+class StageTiming(BaseModel):
+    """One measured stage; durations are always observed, never fabricated."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _order(self) -> "StageTiming":
+        if self.completed_at < self.started_at:
+            raise ValueError("stage completed_at cannot precede started_at")
+        return self
+
+
+class CacheArtifactEvidence(BaseModel):
+    """Observed cache behaviour for one input artifact of one execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    state: CacheArtifactState
+    source: str
+    zero_copy: bool
+    detail: str | None = None
+
+    @field_validator("artifact", "source")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("cache evidence artifact and source must be non-empty")
+        return text
+
+
+class PerformanceReceipt(BaseModel):
+    """Durable staged receipt written only by real execution stages."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    receipt_id: str
+    receipt_level: ReceiptLevel
+    batch_id: str
+    eval_id: str | None = None
+    execution_purpose: ExecutionPurpose
+    benchmark_id: str | None = None
+    schema_version: str
+    receipt_status: ReceiptStatus
+    cache_state: CacheState = CacheState.UNKNOWN
+    cache_evidence: tuple[CacheArtifactEvidence, ...] = ()
+    stage_timings: dict[str, StageTiming] = Field(default_factory=dict)
+    runtime_identity: dict[str, Any] = Field(default_factory=dict)
+    hardware_identity: dict[str, Any] = Field(default_factory=dict)
+    input_identity: dict[str, Any] | None = None
+    peak_rss_bytes: int | None = Field(default=None, gt=0)
+    request_to_terminal_ms: int | None = Field(default=None, ge=0)
+    result_hash: str | None = None
+    created_at: datetime
+    finalized_at: datetime | None = None
+    updated_at: datetime
+    row_version: int = Field(ge=1)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _schema_version(cls, value: str) -> str:
+        if value != PERFORMANCE_RECEIPT_SCHEMA_VERSION:
+            raise ValueError(
+                f"performance receipt schema_version must be {PERFORMANCE_RECEIPT_SCHEMA_VERSION!r}"
+            )
+        return value
+
+    @field_validator("result_hash")
+    @classmethod
+    def _result_hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        lowered = value.lower()
+        if not SHA256_RE.fullmatch(lowered):
+            raise ValueError("result_hash must be 64 lowercase hex characters")
+        return lowered
+
+    @field_validator("stage_timings", mode="after")
+    @classmethod
+    def _known_stages(cls, value: dict[str, StageTiming]) -> dict[str, StageTiming]:
+        unknown = sorted(set(value) - KNOWN_STAGE_NAMES)
+        if unknown:
+            raise ValueError(f"unknown receipt stage names: {unknown}")
+        return value
+
+    @field_validator("benchmark_id")
+    @classmethod
+    def _benchmark_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_benchmark_id(value)
+
+    @model_validator(mode="after")
+    def _consistency(self) -> "PerformanceReceipt":
+        if (self.receipt_level is ReceiptLevel.EVALUATION) != (self.eval_id is not None):
+            raise ValueError("evaluation-level receipts require eval_id; batch-level forbid it")
+        if (self.execution_purpose is ExecutionPurpose.BENCHMARK) != (
+            self.benchmark_id is not None
+        ):
+            raise ValueError("benchmark receipts require benchmark_id; evaluation receipts forbid it")
+        if self.receipt_status is ReceiptStatus.FINAL and self.finalized_at is None:
+            raise ValueError("final receipts require finalized_at")
+        expected_cache = derive_cache_state(self.cache_evidence)
+        if self.cache_evidence and self.cache_state is not expected_cache:
+            raise ValueError(
+                "cache_state must be derived from cache_evidence: "
+                f"expected={expected_cache.value}, actual={self.cache_state.value}"
+            )
+        return self
+
+
+class WorkerRuntimeStatus(BaseModel):
+    """Durable per-worker liveness evidence; freshness is derived by readers."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: str
+    host: str
+    pid: int = Field(gt=0)
+    started_at: datetime
+    last_poll_at: datetime | None = None
+    last_claimed_batch_id: str | None = None
+    last_terminal_batch_id: str | None = None
+    consecutive_failure_count: int = Field(default=0, ge=0)
+    runtime_status: WorkerRuntimeState = WorkerRuntimeState.RUNNING
+    shutdown_at: datetime | None = None
+    exit_code: int | None = Field(default=None, ge=0)
+    updated_at: datetime
+    row_version: int = Field(ge=1)
+
+    @field_validator("owner_id", "host")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("worker identity fields must be non-empty")
+        return text
+
+    @model_validator(mode="after")
+    def _consistency(self) -> "WorkerRuntimeStatus":
+        if self.runtime_status is WorkerRuntimeState.STOPPED and self.shutdown_at is None:
+            raise ValueError("stopped workers require shutdown_at")
+        if self.runtime_status is WorkerRuntimeState.RUNNING and self.shutdown_at is not None:
+            raise ValueError("running workers must not carry shutdown_at")
+        return self

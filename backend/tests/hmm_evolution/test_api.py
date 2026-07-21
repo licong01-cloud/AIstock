@@ -42,9 +42,31 @@ class _Service:
                 "batch_id": "hmmb_test",
                 "status": "preparation_queued",
                 "candidate_count": len(kwargs["candidate_ids"]),
+                "request_hash": "b" * 64,
+                "execution_purpose": "evaluation",
+                "benchmark_id": None,
             },
             True,
         )
+
+
+class _ReceiptRepository:
+    """Minimal receipt surface used by the router's API-stage persistence."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.merged: list[dict[str, Any]] = []
+
+    def create_performance_receipt(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+        self.created.append(kwargs)
+        return ({"receipt_id": "hmpr_test", "row_version": 1}, True)
+
+    def merge_performance_receipt_progress(self, **kwargs: Any) -> dict[str, Any]:
+        self.merged.append(kwargs)
+        return {"receipt_id": kwargs["receipt_id"], "row_version": kwargs["expected_row_version"] + 1}
+
+    def get_performance_receipt(self, **_kwargs: Any) -> None:
+        return None
 
 
 class _FailingService(_Service):
@@ -93,7 +115,8 @@ class _AssetReader:
 def _client(service: Any) -> TestClient:
     app = FastAPI()
     app.include_router(hmm_evolution.router, prefix="/api/v1")
-    app.dependency_overrides[hmm_evolution.get_runtime] = lambda: SimpleNamespace(service=service)
+    runtime = SimpleNamespace(service=service, repository=_ReceiptRepository())
+    app.dependency_overrides[hmm_evolution.get_runtime] = lambda: runtime
     return TestClient(app)
 
 

@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - direct script invocation support.
     from backend.db.pg_pool import get_conn
 
 SCHEMA_NAME = "hmm_evolution"
-SCHEMA_VERSION = "hmm_evolution_v2"
+SCHEMA_VERSION = "hmm_evolution_v3"
 SCHEMA_COMMENT = "Isolated HMM evolution research state; never trading control state."
 
 EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
@@ -94,6 +94,8 @@ EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
         "completed_at",
         "created_at",
         "updated_at",
+        "execution_purpose",
+        "benchmark_id",
     ),
     "batch_test_run": (
         "batch_id",
@@ -128,6 +130,8 @@ EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
         "completed_at",
         "updated_at",
         "request_payload",
+        "execution_purpose",
+        "benchmark_id",
     ),
     "batch_test_item": (
         "batch_id",
@@ -146,6 +150,44 @@ EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
         "created_at",
         "updated_at",
         "completed_at",
+    ),
+    "performance_receipt": (
+        "receipt_id",
+        "receipt_level",
+        "batch_id",
+        "eval_id",
+        "execution_purpose",
+        "benchmark_id",
+        "schema_version",
+        "receipt_status",
+        "cache_state",
+        "cache_evidence",
+        "stage_timings",
+        "runtime_identity",
+        "hardware_identity",
+        "input_identity",
+        "peak_rss_bytes",
+        "request_to_terminal_ms",
+        "result_hash",
+        "created_at",
+        "finalized_at",
+        "updated_at",
+        "row_version",
+    ),
+    "worker_runtime_status": (
+        "owner_id",
+        "host",
+        "pid",
+        "started_at",
+        "last_poll_at",
+        "last_claimed_batch_id",
+        "last_terminal_batch_id",
+        "consecutive_failure_count",
+        "runtime_status",
+        "shutdown_at",
+        "exit_code",
+        "updated_at",
+        "row_version",
     ),
 }
 
@@ -175,6 +217,8 @@ EXPECTED_CONSTRAINTS: Mapping[str, tuple[str, ...]] = {
         "offline_evaluation_counts_ck",
         "offline_evaluation_ratios_ck",
         "offline_evaluation_evidence_quality_ck",
+        "offline_evaluation_execution_purpose_ck",
+        "offline_evaluation_benchmark_consistency_ck",
     ),
     "batch_test_run": (
         "batch_test_run_pkey",
@@ -187,6 +231,8 @@ EXPECTED_CONSTRAINTS: Mapping[str, tuple[str, ...]] = {
         "batch_test_run_fencing_ck",
         "batch_test_run_row_version_ck",
         "batch_test_run_counts_ck",
+        "batch_test_run_execution_purpose_ck",
+        "batch_test_run_benchmark_consistency_ck",
     ),
     "batch_test_item": (
         "batch_test_item_pkey",
@@ -198,6 +244,29 @@ EXPECTED_CONSTRAINTS: Mapping[str, tuple[str, ...]] = {
         "batch_test_item_status_ck",
         "batch_test_item_confidence_ck",
         "batch_test_item_rank_ck",
+    ),
+    "performance_receipt": (
+        "performance_receipt_pkey",
+        "performance_receipt_batch_fk",
+        "performance_receipt_evaluation_fk",
+        "performance_receipt_level_ck",
+        "performance_receipt_level_consistency_ck",
+        "performance_receipt_execution_purpose_ck",
+        "performance_receipt_benchmark_consistency_ck",
+        "performance_receipt_status_ck",
+        "performance_receipt_cache_state_ck",
+        "performance_receipt_result_hash_ck",
+        "performance_receipt_rss_ck",
+        "performance_receipt_duration_ck",
+        "performance_receipt_row_version_ck",
+    ),
+    "worker_runtime_status": (
+        "worker_runtime_status_pkey",
+        "worker_runtime_status_pid_ck",
+        "worker_runtime_status_failure_count_ck",
+        "worker_runtime_status_status_ck",
+        "worker_runtime_status_exit_code_ck",
+        "worker_runtime_status_row_version_ck",
     ),
 }
 
@@ -232,7 +301,7 @@ _COLUMN_TYPE_GROUPS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
         "text": (
             "eval_id", "candidate_id", "base_loop_ref", "evaluator_version", "universe_id",
             "status", "owner_id", "evidence_quality", "error_code", "reason_code",
-            "error_message",
+            "error_message", "execution_purpose", "benchmark_id",
         ),
         "char64": (
             "logical_evaluation_key", "source_manifest_hash", "candidate_manifest_hash",
@@ -262,7 +331,7 @@ _COLUMN_TYPE_GROUPS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
         "text": (
             "batch_id", "idempotency_key", "retry_of_batch_id", "status", "owner_id",
             "cancel_requested_by", "recommendation_version", "error_code", "reason_code",
-            "created_by",
+            "created_by", "execution_purpose", "benchmark_id",
         ),
         "char64": ("request_hash", "recommendation_spec_hash"),
         "integer": (
@@ -286,6 +355,28 @@ _COLUMN_TYPE_GROUPS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
         "jsonb": ("recommendation_components", "error_context"),
         "timestamptz": ("created_at", "updated_at", "completed_at"),
     },
+    "performance_receipt": {
+        "text": (
+            "receipt_id", "receipt_level", "batch_id", "eval_id", "execution_purpose",
+            "benchmark_id", "schema_version", "receipt_status", "cache_state",
+        ),
+        "char64": ("result_hash",),
+        "jsonb": (
+            "cache_evidence", "stage_timings", "runtime_identity", "hardware_identity",
+            "input_identity",
+        ),
+        "bigint": ("peak_rss_bytes", "request_to_terminal_ms", "row_version"),
+        "timestamptz": ("created_at", "finalized_at", "updated_at"),
+    },
+    "worker_runtime_status": {
+        "text": (
+            "owner_id", "host", "last_claimed_batch_id", "last_terminal_batch_id",
+            "runtime_status",
+        ),
+        "integer": ("pid", "consecutive_failure_count", "exit_code"),
+        "bigint": ("row_version",),
+        "timestamptz": ("started_at", "last_poll_at", "shutdown_at", "updated_at"),
+    },
 }
 
 _NULLABLE_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -299,14 +390,14 @@ _NULLABLE_COLUMNS: Mapping[str, frozenset[str]] = {
             "primary_coverage_ratio", "net_label_return", "net_db_10d",
             "positive_net_label_day_ratio", "evidence_quality", "metrics_json", "result_hash",
             "error_code", "reason_code", "error_message", "error_context", "started_at",
-            "completed_at",
+            "completed_at", "benchmark_id",
         }
     ),
     "batch_test_run": frozenset(
         {
             "idempotency_key", "retry_of_batch_id", "owner_id", "lease_expires_at",
             "heartbeat_at", "cancel_requested_at", "cancel_requested_by", "error_code",
-            "reason_code", "error_context", "started_at", "completed_at",
+            "reason_code", "error_context", "started_at", "completed_at", "benchmark_id",
         }
     ),
     "batch_test_item": frozenset(
@@ -314,6 +405,18 @@ _NULLABLE_COLUMNS: Mapping[str, frozenset[str]] = {
             "recommendation_score", "evidence_confidence", "recommendation_rank",
             "recommendation_components", "error_code", "reason_code", "error_context",
             "completed_at",
+        }
+    ),
+    "performance_receipt": frozenset(
+        {
+            "eval_id", "benchmark_id", "input_identity", "peak_rss_bytes",
+            "request_to_terminal_ms", "result_hash", "finalized_at",
+        }
+    ),
+    "worker_runtime_status": frozenset(
+        {
+            "last_poll_at", "last_claimed_batch_id", "last_terminal_batch_id",
+            "shutdown_at", "exit_code",
         }
     ),
 }
@@ -333,6 +436,7 @@ _COLUMN_DEFAULTS: Mapping[str, Mapping[str, str]] = {
         "db_comparable_day_count": "0", "replacement_count": "0",
         "warnings_json": "'[]'::jsonb", "queued_at": "clock_timestamp()",
         "created_at": "clock_timestamp()", "updated_at": "clock_timestamp()",
+        "execution_purpose": "'evaluation'::text",
     },
     "batch_test_run": {
         "retry_generation": "1", "status": "'preparation_queued'::text",
@@ -341,10 +445,28 @@ _COLUMN_DEFAULTS: Mapping[str, Mapping[str, str]] = {
         "succeeded_count": "0", "failed_count": "0", "cancelled_count": "0",
         "timed_out_count": "0", "created_at": "clock_timestamp()",
         "updated_at": "clock_timestamp()",
+        "execution_purpose": "'evaluation'::text",
     },
     "batch_test_item": {
         "item_status": "'pending'::text", "is_top3": "false",
         "created_at": "clock_timestamp()", "updated_at": "clock_timestamp()",
+    },
+    "performance_receipt": {
+        "receipt_status": "'partial'::text",
+        "cache_state": "'unknown'::text",
+        "cache_evidence": "'[]'::jsonb",
+        "stage_timings": "'{}'::jsonb",
+        "runtime_identity": "'{}'::jsonb",
+        "hardware_identity": "'{}'::jsonb",
+        "row_version": "1",
+        "created_at": "clock_timestamp()",
+        "updated_at": "clock_timestamp()",
+    },
+    "worker_runtime_status": {
+        "consecutive_failure_count": "0",
+        "runtime_status": "'running'::text",
+        "row_version": "1",
+        "updated_at": "clock_timestamp()",
     },
 }
 
@@ -405,6 +527,8 @@ EXPECTED_CONSTRAINT_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
         "offline_evaluation_counts_ck": "CHECK (trading_days_count >= 0 AND changed_day_count >= 0 AND label_comparable_day_count >= 0 AND db_comparable_day_count >= 0 AND replacement_count >= 0)",
         "offline_evaluation_ratios_ck": "CHECK ((primary_coverage_ratio IS NULL OR primary_coverage_ratio BETWEEN 0 AND 1) AND (positive_net_label_day_ratio IS NULL OR positive_net_label_day_ratio BETWEEN 0 AND 1))",
         "offline_evaluation_evidence_quality_ck": "CHECK (evidence_quality IS NULL OR evidence_quality IN ('complete', 'degraded', 'insufficient'))",
+        "offline_evaluation_execution_purpose_ck": "CHECK (execution_purpose IN ('evaluation', 'benchmark'))",
+        "offline_evaluation_benchmark_consistency_ck": "CHECK ((execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL))",
     },
     "batch_test_run": {
         "batch_test_run_pkey": "PRIMARY KEY (batch_id)",
@@ -417,6 +541,8 @@ EXPECTED_CONSTRAINT_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
         "batch_test_run_fencing_ck": "CHECK (fencing_token >= 0)",
         "batch_test_run_row_version_ck": "CHECK (row_version >= 1)",
         "batch_test_run_counts_ck": "CHECK (candidate_count BETWEEN 1 AND 50 AND queued_count >= 0 AND running_count >= 0 AND succeeded_count >= 0 AND failed_count >= 0 AND cancelled_count >= 0 AND timed_out_count >= 0)",
+        "batch_test_run_execution_purpose_ck": "CHECK (execution_purpose IN ('evaluation', 'benchmark'))",
+        "batch_test_run_benchmark_consistency_ck": "CHECK ((execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL))",
     },
     "batch_test_item": {
         "batch_test_item_pkey": "PRIMARY KEY (batch_id, candidate_id)",
@@ -428,6 +554,29 @@ EXPECTED_CONSTRAINT_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
         "batch_test_item_status_ck": "CHECK (item_status IN ('pending', 'waiting_shared', 'reused', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out'))",
         "batch_test_item_confidence_ck": "CHECK (evidence_confidence IS NULL OR evidence_confidence BETWEEN 0 AND 1)",
         "batch_test_item_rank_ck": "CHECK (recommendation_rank IS NULL OR recommendation_rank >= 1)",
+    },
+    "performance_receipt": {
+        "performance_receipt_pkey": "PRIMARY KEY (receipt_id)",
+        "performance_receipt_batch_fk": "FOREIGN KEY (batch_id) REFERENCES hmm_evolution.batch_test_run(batch_id)",
+        "performance_receipt_evaluation_fk": "FOREIGN KEY (eval_id) REFERENCES hmm_evolution.offline_evaluation(eval_id)",
+        "performance_receipt_level_ck": "CHECK (receipt_level IN ('batch', 'evaluation'))",
+        "performance_receipt_level_consistency_ck": "CHECK ((receipt_level = 'evaluation') = (eval_id IS NOT NULL))",
+        "performance_receipt_execution_purpose_ck": "CHECK (execution_purpose IN ('evaluation', 'benchmark'))",
+        "performance_receipt_benchmark_consistency_ck": "CHECK ((execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL))",
+        "performance_receipt_status_ck": "CHECK (receipt_status IN ('partial', 'final'))",
+        "performance_receipt_cache_state_ck": "CHECK (cache_state IN ('cold', 'warm', 'mixed', 'unknown'))",
+        "performance_receipt_result_hash_ck": "CHECK (result_hash IS NULL OR result_hash ~ '^[0-9a-f]{64}$')",
+        "performance_receipt_rss_ck": "CHECK (peak_rss_bytes IS NULL OR peak_rss_bytes > 0)",
+        "performance_receipt_duration_ck": "CHECK (request_to_terminal_ms IS NULL OR request_to_terminal_ms >= 0)",
+        "performance_receipt_row_version_ck": "CHECK (row_version >= 1)",
+    },
+    "worker_runtime_status": {
+        "worker_runtime_status_pkey": "PRIMARY KEY (owner_id)",
+        "worker_runtime_status_pid_ck": "CHECK (pid > 0)",
+        "worker_runtime_status_failure_count_ck": "CHECK (consecutive_failure_count >= 0)",
+        "worker_runtime_status_status_ck": "CHECK (runtime_status IN ('running', 'stopped'))",
+        "worker_runtime_status_exit_code_ck": "CHECK (exit_code IS NULL OR exit_code >= 0)",
+        "worker_runtime_status_row_version_ck": "CHECK (row_version >= 1)",
     },
 }
 
@@ -448,6 +597,11 @@ EXPECTED_INDEX_DEFINITIONS: Mapping[str, Mapping[str, str]] = {
     "batch_test_item": {
         "batch_test_item_eval_idx": "CREATE INDEX batch_test_item_eval_idx ON hmm_evolution.batch_test_item USING btree (eval_id, item_status)",
     },
+    "performance_receipt": {
+        "performance_receipt_batch_uq": "CREATE UNIQUE INDEX performance_receipt_batch_uq ON hmm_evolution.performance_receipt USING btree (batch_id) WHERE (receipt_level = 'batch')",
+        "performance_receipt_evaluation_uq": "CREATE UNIQUE INDEX performance_receipt_evaluation_uq ON hmm_evolution.performance_receipt USING btree (eval_id) WHERE (receipt_level = 'evaluation')",
+    },
+    "worker_runtime_status": {},
 }
 
 TABLE_DDL: list[str] = [
@@ -542,6 +696,8 @@ TABLE_DDL: list[str] = [
         completed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        execution_purpose TEXT NOT NULL DEFAULT 'evaluation',
+        benchmark_id TEXT,
         CONSTRAINT offline_evaluation_candidate_fk FOREIGN KEY (candidate_id)
             REFERENCES hmm_evolution.candidate(candidate_id),
         CONSTRAINT offline_evaluation_logical_generation_key
@@ -576,6 +732,12 @@ TABLE_DDL: list[str] = [
         ),
         CONSTRAINT offline_evaluation_evidence_quality_ck CHECK (
             evidence_quality IS NULL OR evidence_quality IN ('complete', 'degraded', 'insufficient')
+        ),
+        CONSTRAINT offline_evaluation_execution_purpose_ck CHECK (
+            execution_purpose IN ('evaluation', 'benchmark')
+        ),
+        CONSTRAINT offline_evaluation_benchmark_consistency_ck CHECK (
+            (execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL)
         )
     )
     """,
@@ -613,6 +775,8 @@ TABLE_DDL: list[str] = [
         completed_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
         request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        execution_purpose TEXT NOT NULL DEFAULT 'evaluation',
+        benchmark_id TEXT,
         CONSTRAINT batch_test_run_retry_fk FOREIGN KEY (retry_of_batch_id)
             REFERENCES hmm_evolution.batch_test_run(batch_id),
         CONSTRAINT batch_test_run_hashes_ck CHECK (
@@ -633,6 +797,12 @@ TABLE_DDL: list[str] = [
             candidate_count BETWEEN 1 AND 50
             AND queued_count >= 0 AND running_count >= 0 AND succeeded_count >= 0
             AND failed_count >= 0 AND cancelled_count >= 0 AND timed_out_count >= 0
+        ),
+        CONSTRAINT batch_test_run_execution_purpose_ck CHECK (
+            execution_purpose IN ('evaluation', 'benchmark')
+        ),
+        CONSTRAINT batch_test_run_benchmark_consistency_ck CHECK (
+            (execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL)
         )
     )
     """,
@@ -707,8 +877,167 @@ TABLE_DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS batch_test_run_created_idx ON hmm_evolution.batch_test_run (created_at DESC)",
     "CREATE INDEX IF NOT EXISTS batch_test_item_eval_idx ON hmm_evolution.batch_test_item (eval_id, item_status)",
     """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    ADD COLUMN IF NOT EXISTS execution_purpose TEXT NOT NULL DEFAULT 'evaluation'
+    """,
+    """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    ADD COLUMN IF NOT EXISTS benchmark_id TEXT
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD COLUMN IF NOT EXISTS execution_purpose TEXT NOT NULL DEFAULT 'evaluation'
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD COLUMN IF NOT EXISTS benchmark_id TEXT
+    """,
+    """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    DROP CONSTRAINT IF EXISTS offline_evaluation_execution_purpose_ck
+    """,
+    """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    ADD CONSTRAINT offline_evaluation_execution_purpose_ck CHECK (
+        execution_purpose IN ('evaluation', 'benchmark')
+    )
+    """,
+    """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    DROP CONSTRAINT IF EXISTS offline_evaluation_benchmark_consistency_ck
+    """,
+    """
+    ALTER TABLE hmm_evolution.offline_evaluation
+    ADD CONSTRAINT offline_evaluation_benchmark_consistency_ck CHECK (
+        (execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL)
+    )
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    DROP CONSTRAINT IF EXISTS batch_test_run_execution_purpose_ck
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD CONSTRAINT batch_test_run_execution_purpose_ck CHECK (
+        execution_purpose IN ('evaluation', 'benchmark')
+    )
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    DROP CONSTRAINT IF EXISTS batch_test_run_benchmark_consistency_ck
+    """,
+    """
+    ALTER TABLE hmm_evolution.batch_test_run
+    ADD CONSTRAINT batch_test_run_benchmark_consistency_ck CHECK (
+        (execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hmm_evolution.performance_receipt (
+        receipt_id TEXT CONSTRAINT performance_receipt_pkey PRIMARY KEY,
+        receipt_level TEXT NOT NULL,
+        batch_id TEXT NOT NULL,
+        eval_id TEXT,
+        execution_purpose TEXT NOT NULL,
+        benchmark_id TEXT,
+        schema_version TEXT NOT NULL,
+        receipt_status TEXT NOT NULL DEFAULT 'partial',
+        cache_state TEXT NOT NULL DEFAULT 'unknown',
+        cache_evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+        stage_timings JSONB NOT NULL DEFAULT '{}'::jsonb,
+        runtime_identity JSONB NOT NULL DEFAULT '{}'::jsonb,
+        hardware_identity JSONB NOT NULL DEFAULT '{}'::jsonb,
+        input_identity JSONB,
+        peak_rss_bytes BIGINT,
+        request_to_terminal_ms BIGINT,
+        result_hash CHAR(64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        finalized_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        row_version BIGINT NOT NULL DEFAULT 1,
+        CONSTRAINT performance_receipt_batch_fk FOREIGN KEY (batch_id)
+            REFERENCES hmm_evolution.batch_test_run(batch_id),
+        CONSTRAINT performance_receipt_evaluation_fk FOREIGN KEY (eval_id)
+            REFERENCES hmm_evolution.offline_evaluation(eval_id),
+        CONSTRAINT performance_receipt_level_ck CHECK (
+            receipt_level IN ('batch', 'evaluation')
+        ),
+        CONSTRAINT performance_receipt_level_consistency_ck CHECK (
+            (receipt_level = 'evaluation') = (eval_id IS NOT NULL)
+        ),
+        CONSTRAINT performance_receipt_execution_purpose_ck CHECK (
+            execution_purpose IN ('evaluation', 'benchmark')
+        ),
+        CONSTRAINT performance_receipt_benchmark_consistency_ck CHECK (
+            (execution_purpose = 'benchmark') = (benchmark_id IS NOT NULL)
+        ),
+        CONSTRAINT performance_receipt_status_ck CHECK (
+            receipt_status IN ('partial', 'final')
+        ),
+        CONSTRAINT performance_receipt_cache_state_ck CHECK (
+            cache_state IN ('cold', 'warm', 'mixed', 'unknown')
+        ),
+        CONSTRAINT performance_receipt_result_hash_ck CHECK (
+            result_hash IS NULL OR result_hash ~ '^[0-9a-f]{64}$'
+        ),
+        CONSTRAINT performance_receipt_rss_ck CHECK (
+            peak_rss_bytes IS NULL OR peak_rss_bytes > 0
+        ),
+        CONSTRAINT performance_receipt_duration_ck CHECK (
+            request_to_terminal_ms IS NULL OR request_to_terminal_ms >= 0
+        ),
+        CONSTRAINT performance_receipt_row_version_ck CHECK (row_version >= 1)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hmm_evolution.worker_runtime_status (
+        owner_id TEXT CONSTRAINT worker_runtime_status_pkey PRIMARY KEY,
+        host TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        last_poll_at TIMESTAMPTZ,
+        last_claimed_batch_id TEXT,
+        last_terminal_batch_id TEXT,
+        consecutive_failure_count INTEGER NOT NULL DEFAULT 0,
+        runtime_status TEXT NOT NULL DEFAULT 'running',
+        shutdown_at TIMESTAMPTZ,
+        exit_code INTEGER,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        row_version BIGINT NOT NULL DEFAULT 1,
+        CONSTRAINT worker_runtime_status_pid_ck CHECK (pid > 0),
+        CONSTRAINT worker_runtime_status_failure_count_ck CHECK (
+            consecutive_failure_count >= 0
+        ),
+        CONSTRAINT worker_runtime_status_status_ck CHECK (
+            runtime_status IN ('running', 'stopped')
+        ),
+        CONSTRAINT worker_runtime_status_exit_code_ck CHECK (
+            exit_code IS NULL OR exit_code >= 0
+        ),
+        CONSTRAINT worker_runtime_status_row_version_ck CHECK (row_version >= 1)
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS performance_receipt_batch_uq
+    ON hmm_evolution.performance_receipt (batch_id)
+    WHERE receipt_level = 'batch'
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS performance_receipt_evaluation_uq
+    ON hmm_evolution.performance_receipt (eval_id)
+    WHERE receipt_level = 'evaluation'
+    """,
+    """
     INSERT INTO hmm_evolution.schema_version(version, description)
     VALUES ('hmm_evolution_v2', 'HMM evolution durable asynchronous input preparation')
+    ON CONFLICT (version) DO NOTHING
+    """,
+    """
+    INSERT INTO hmm_evolution.schema_version(version, description)
+    VALUES (
+        'hmm_evolution_v3',
+        'HMM evolution benchmark purpose isolation, performance receipts and worker runtime status'
+    )
     ON CONFLICT (version) DO NOTHING
     """,
 ]
@@ -719,6 +1048,8 @@ TABLE_COMMENTS: Mapping[str, str] = {
     "offline_evaluation": "Durable and replayable HMM offline evaluation state and evidence.",
     "batch_test_run": "Durable batch orchestration, cancellation and recommendation cohort state.",
     "batch_test_item": "Per-candidate batch membership, shared evaluation and recommendation evidence.",
+    "performance_receipt": "Staged timing, cache evidence and runtime identity receipts for evaluation and benchmark executions.",
+    "worker_runtime_status": "Durable per-worker runtime liveness and shutdown evidence for supervision.",
 }
 
 COLUMN_COMMENTS: Mapping[str, Mapping[str, str]] = {

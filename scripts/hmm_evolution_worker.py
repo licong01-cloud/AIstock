@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.services.hmm_evolution.errors import HMMEvolutionError, InvalidSpecError  # noqa: E402
+from backend.services.hmm_evolution.repository import HMMEvolutionRepository  # noqa: E402
 from backend.services.hmm_evolution.runtime import (  # noqa: E402
     build_runtime,
     require_worker_runtime,
@@ -94,9 +95,18 @@ def main(argv: list[str] | None = None) -> int:
             env_path,
         )
     owner_id = str(args.owner_id or _default_owner_id(service=args.serve)).strip()
+    status_row_version: int | None = None
+    runtime_repository = None
     try:
         mode = require_worker_runtime()
         runtime = build_runtime()
+        runtime_repository = runtime.repository
+        status_row = runtime_repository.upsert_worker_started(
+            owner_id=owner_id,
+            host=socket.gethostname(),
+            pid=os.getpid(),
+        )
+        status_row_version = int(status_row["row_version"])
         worker = HMMEvolutionWorker(
             runtime.repository,
             owner_id=owner_id,
@@ -104,6 +114,21 @@ def main(argv: list[str] | None = None) -> int:
             executor=runtime.executor,
             submission_preparer=runtime.service,
         )
+
+        def report_cycle(_claimed: bool) -> None:
+            nonlocal status_row_version
+            if status_row_version is None:
+                return
+            claimed_batch, terminal_batch, terminal_failed = worker.pop_cycle_status()
+            row = runtime_repository.record_worker_poll(
+                owner_id=owner_id,
+                expected_row_version=status_row_version,
+                claimed_batch_id=claimed_batch,
+                terminal_batch_id=terminal_batch,
+                terminal_failed=terminal_failed,
+            )
+            status_row_version = int(row["row_version"])
+
         if args.serve:
             stop_event = Event()
             _install_shutdown_handlers(stop_event)
@@ -113,18 +138,20 @@ def main(argv: list[str] | None = None) -> int:
                     poll_seconds=_resolve_poll_seconds(args.poll_seconds),
                 ),
             )
-            result = service.run(stop_event)
+            result = service.run(stop_event, on_cycle=report_cycle)
             logger.info(
                 "HMM evolution worker service exit owner_id=%s cycles=%s processed_slices=%s",
                 owner_id,
                 result.cycles,
                 result.processed_slices,
             )
+            _mark_worker_stopped(runtime_repository, owner_id, status_row_version, 0)
             return 0
         processed = 0
         limit = 1 if args.once else args.max_jobs
         while processed < limit:
             claimed = worker.run_once()
+            report_cycle(claimed)
             if not claimed:
                 break
             processed += 1
@@ -134,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             processed,
             limit,
         )
+        _mark_worker_stopped(runtime_repository, owner_id, status_row_version, 0)
         return 0
     except HMMEvolutionError as exc:
         logger.error(
@@ -141,10 +169,43 @@ def main(argv: list[str] | None = None) -> int:
             exc.reason_code,
             exc.message,
         )
+        _mark_worker_stopped(runtime_repository, owner_id, status_row_version, 2)
         return 2
     except Exception:
         logger.exception("HMM evolution worker failed unexpectedly owner_id=%s", owner_id)
+        _mark_worker_stopped(runtime_repository, owner_id, status_row_version, 1)
         return 1
+
+
+def _mark_worker_stopped(
+    repository: "HMMEvolutionRepository | None",
+    owner_id: str,
+    expected_row_version: int | None,
+    exit_code: int,
+) -> None:
+    """Best-effort graceful-stop record; a crash simply leaves stale rows."""
+
+    if repository is None or expected_row_version is None:
+        return
+    try:
+        if exit_code != 0:
+            row = repository.record_worker_poll(
+                owner_id=owner_id,
+                expected_row_version=expected_row_version,
+                terminal_failed=True,
+            )
+            expected_row_version = int(row["row_version"])
+        repository.mark_worker_stopped(
+            owner_id=owner_id,
+            expected_row_version=expected_row_version,
+            exit_code=exit_code,
+        )
+    except Exception:
+        logger.exception(
+            "failed to record worker stop owner_id=%s exit_code=%s",
+            owner_id,
+            exit_code,
+        )
 
 
 def _resolve_poll_seconds(argument: float | None) -> float:

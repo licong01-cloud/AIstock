@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -63,8 +64,17 @@ class HMMEvolutionWorkerService:
         self._worker = worker
         self._config = config or WorkerServiceConfig()
 
-    def run(self, stop_signal: StopSignal) -> WorkerServiceResult:
-        """Run until ``stop_signal`` is set, propagating every worker failure."""
+    def run(
+        self,
+        stop_signal: StopSignal,
+        on_cycle: Callable[[bool], None] | None = None,
+    ) -> WorkerServiceResult:
+        """Run until ``stop_signal`` is set, propagating every worker failure.
+
+        ``on_cycle`` is invoked after every completed cycle with the cycle's
+        claimed flag; it is the durable worker-status heartbeat seam.  A cycle
+        that raises simply never reports, which supervision reads as staleness.
+        """
 
         self._worker.assert_runnable()
         cycles = 0
@@ -76,6 +86,8 @@ class HMMEvolutionWorkerService:
         while not stop_signal.is_set():
             claimed = self._worker.run_once()
             cycles += 1
+            if on_cycle is not None:
+                on_cycle(claimed)
             if claimed:
                 processed_slices += 1
                 continue
