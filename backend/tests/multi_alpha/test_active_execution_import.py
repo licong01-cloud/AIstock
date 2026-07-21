@@ -32,6 +32,38 @@ class _ReservationRepository:
         return row
 
 
+class _CandidateCursor:
+    def __init__(self, result_batches: list[list[Mapping[str, Any]]]) -> None:
+        self._result_batches = iter(result_batches)
+        self._rows: list[Mapping[str, Any]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        return None
+
+    def execute(self, _query: str, _params: Any) -> None:
+        self._rows = next(self._result_batches)
+
+    def fetchall(self) -> list[Mapping[str, Any]]:
+        return self._rows
+
+
+class _CandidateConnection:
+    def __init__(self, result_batches: list[list[Mapping[str, Any]]]) -> None:
+        self._cursor = _CandidateCursor(result_batches)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        return None
+
+    def cursor(self, **_kwargs: Any) -> _CandidateCursor:
+        return self._cursor
+
+
 class _WorkspaceClient:
     def __init__(self, node_id: str, states: Mapping[str, str]) -> None:
         self.node_id = node_id
@@ -88,6 +120,22 @@ class _ImportService(QEActiveExecutionImportService):
         return list(self.nodes)
 
 
+class _DatabaseImportService(QEActiveExecutionImportService):
+    def __init__(
+        self,
+        *,
+        repository: _ReservationRepository,
+        connection: _CandidateConnection,
+    ) -> None:
+        super().__init__(
+            reservation_repository=repository,  # type: ignore[arg-type]
+            connection_provider=lambda: connection,
+        )
+
+    def _list_compute_node_ids(self) -> list[str]:
+        return ["wsl2-5080"]
+
+
 def _candidate(node_id: str | None = None) -> dict[str, Any]:
     return {
         "source_kind": "qe_experiment",
@@ -97,6 +145,78 @@ def _candidate(node_id: str | None = None) -> dict[str, Any]:
         "qe_loop_id": "Loop1",
         "source_status": "running",
     }
+
+
+def _group_candidate(*, source_id: str, parent_status: str | None) -> dict[str, Any]:
+    return {
+        "source_kind": "qe_multi_alpha_group",
+        "source_execution_id": source_id,
+        "node_id": "wsl2-5080",
+        "qe_task_id": "qe_task_1",
+        "qe_loop_id": None,
+        "source_status": "running",
+        "parent_status": parent_status,
+    }
+
+
+def test_discovery_excludes_terminal_parent_groups_but_keeps_nonterminal_rows(
+    caplog: Any,
+) -> None:
+    terminal_rows = [
+        _group_candidate(source_id=f"terminal:{status}", parent_status=status)
+        for status in sorted(QEActiveExecutionImportService.TERMINAL_PARENT_STATUSES)
+    ]
+    pending = _group_candidate(source_id="pending:sector", parent_status="pending")
+    unknown = _group_candidate(source_id="unknown:sector", parent_status=None)
+    connection = _CandidateConnection([[], [], [*terminal_rows, pending, unknown]])
+    service = QEActiveExecutionImportService(
+        reservation_repository=_ReservationRepository(),  # type: ignore[arg-type]
+        connection_provider=lambda: connection,
+    )
+
+    with caplog.at_level("WARNING"):
+        candidates = service._discover_candidates()  # noqa: SLF001 - direct regression point
+
+    assert [row["source_execution_id"] for row in candidates] == [
+        "pending:sector",
+        "unknown:sector",
+    ]
+    assert "Skipped 9 stale active QE multi-alpha group rows" in caplog.text
+
+
+def test_terminal_parent_stale_group_does_not_force_node_queue_only() -> None:
+    repository = _ReservationRepository()
+    connection = _CandidateConnection(
+        [[], [], [_group_candidate(source_id="failed:sector", parent_status="failed")]]
+    )
+    service = _DatabaseImportService(repository=repository, connection=connection)
+
+    try:
+        result = asyncio.run(service.import_current_active_sources_verified())
+        assert result.discovered_count == 0
+        assert result.unresolved == ()
+        assert result.queue_only_nodes == {}
+        assert repository.imported == []
+    finally:
+        set_qe_capacity_queue_only_nodes({})
+
+
+def test_nonterminal_parent_with_incomplete_identity_remains_queue_only() -> None:
+    repository = _ReservationRepository()
+    connection = _CandidateConnection(
+        [[], [], [_group_candidate(source_id="pending:sector", parent_status="pending")]]
+    )
+    service = _DatabaseImportService(repository=repository, connection=connection)
+
+    try:
+        result = asyncio.run(service.import_current_active_sources_verified())
+        assert result.discovered_count == 1
+        assert len(result.unresolved) == 1
+        assert result.unresolved[0]["reason_code"] == "qe_capacity_identity_unresolved"
+        assert set(result.queue_only_nodes) == {"wsl2-5080"}
+        assert repository.imported == []
+    finally:
+        set_qe_capacity_queue_only_nodes({})
 
 
 def test_missing_node_is_resolved_by_exactly_one_active_workspace() -> None:

@@ -207,6 +207,19 @@ class QEActiveExecutionImportService:
     """One-time activation import for QE executions already active before P0-1B."""
 
     ACTIVE_SOURCE_STATUSES = ("running", "processing", "submitting", "reconciling")
+    TERMINAL_PARENT_STATUSES = frozenset(
+        {
+            "completed",
+            "failed",
+            "interrupted",
+            "timeout",
+            "cancelled",
+            "canceled",
+            "stopped",
+            "success",
+            "succeeded",
+        }
+    )
 
     def __init__(
         self,
@@ -537,7 +550,8 @@ class QEActiveExecutionImportService:
                            NULLIF(g.assigned_node_id, '') AS node_id,
                            e.qe_task_id,
                            g.qe_loop_id,
-                           g.status AS source_status
+                           g.status AS source_status,
+                           e.status AS parent_status
                     FROM qe_multi_alpha_groups AS g
                     JOIN qe_experiments AS e
                       ON e.experiment_id = g.parent_experiment_id
@@ -545,7 +559,24 @@ class QEActiveExecutionImportService:
                     """,
                     (list(self.ACTIVE_SOURCE_STATUSES),),
                 )
-                candidates.extend(dict(row) for row in cur.fetchall())
+                group_rows = [dict(row) for row in cur.fetchall()]
+                terminal_parent_rows: list[Mapping[str, Any]] = []
+                for row in group_rows:
+                    parent_status = str(row.get("parent_status") or "").strip().lower()
+                    if parent_status in self.TERMINAL_PARENT_STATUSES:
+                        terminal_parent_rows.append(row)
+                    else:
+                        candidates.append(row)
+                if terminal_parent_rows:
+                    logger.warning(
+                        "Skipped %d stale active QE multi-alpha group rows because their "
+                        "parent experiments are terminal: %s",
+                        len(terminal_parent_rows),
+                        sorted(
+                            str(row.get("source_execution_id") or "")
+                            for row in terminal_parent_rows
+                        ),
+                    )
         return candidates
 
     @staticmethod
