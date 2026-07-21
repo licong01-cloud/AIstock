@@ -13,11 +13,13 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactRefV1,
     HistoricalRangeDatePlanV1,
     HistoricalRangeFrozenProgramV1,
+    HistoricalRangeProgramDayWindowV1,
     HistoricalRangeProgramWarmupComponentV1,
     HistoricalRangeProgramWarmupRangeV1,
     HistoricalRangeResearchBatchRequestV1,
     ResearchProgramSpecV1,
     ResolvedHistoricalRangeRequestV1,
+    derive_prefixed_id,
 )
 
 
@@ -28,6 +30,9 @@ def digest(value: Any) -> str:
 def artifact_ref(kind: HistoricalRangeArtifactKind, seed: str) -> HistoricalRangeArtifactRefV1:
     semantic_hash = digest(f"semantic:{seed}")
     namespace = {
+        HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN: "source-requirement-plans",
+        HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT: "source-catalog-checkpoints",
+        HistoricalRangeArtifactKind.HMM_BINDING_SET: "hmm-binding-sets",
         HistoricalRangeArtifactKind.REQUEST: "requests",
         HistoricalRangeArtifactKind.DATE_PLAN: "date-plans",
         HistoricalRangeArtifactKind.FROZEN_PROGRAM: "frozen-programs",
@@ -87,7 +92,7 @@ def frozen_program(
     )
     projection = HistoricalRangeAdmittedPackageProjectionV1(
         package_id=package_id,
-        package_version=8,
+        package_version="8.0.0-test",
         manifest_sha256=digest("manifest"),
         alpha_mode=alpha_mode,
         components=tuple(
@@ -95,6 +100,8 @@ def frozen_program(
                 component_id=component_id,
                 weight=weight,
                 factor_order=(f"factor_{component_id}_a", f"factor_{component_id}_b"),
+                required_window=61,
+                buffer_trading_days=5,
                 runtime_input_identity_hash=digest(f"runtime-input:{component_id}"),
                 lookback_contract_hash=digest(f"lookback:{component_id}"),
             )
@@ -102,18 +109,24 @@ def frozen_program(
         ),
     )
     source = isinstance(spec, ExistingProgramSpecV1)
+    program_config = spec.semantic_payload()
+    runtime_config = {"runtime_profile": {"selection": {"top_k": 5}, "hmm": {"enabled": False}}}
+    review_policy = {"policy": "test_review_v1"}
     return HistoricalRangeFrozenProgramV1(
         research_program_id=spec.research_program_id,
         source_program_id=spec.program_id if source else None,
         source_program_version=spec.expected_program_version if source else None,
         source_binding_version_id=spec.expected_binding_version_id if source else None,
         package_id=projection.package_id,
-        package_version=8,
+        package_version="8.0.0-test",
         manifest_sha256=digest("manifest"),
         alpha_mode=alpha_mode,
-        program_config_hash=digest(spec.semantic_payload()),
-        runtime_config_hash=digest("runtime"),
-        review_policy_hash=digest("review"),
+        program_config=program_config,
+        program_config_hash=digest(program_config),
+        runtime_config=runtime_config,
+        runtime_config_hash=digest(runtime_config),
+        review_policy=review_policy,
+        review_policy_hash=digest(review_policy),
         code_release_id="release_20260719",
         code_release_hash=digest("release"),
         selection_semantics_version="selection_v1",
@@ -152,6 +165,18 @@ def date_plan(
                         else dates[0] - timedelta(days=30),
                         range_start_trade_date=dates[0],
                         lookback_contract_hash=digest(f"lookback:{component_id}"),
+                        day_windows=tuple(
+                            HistoricalRangeProgramDayWindowV1(
+                                decision_trade_date=trade_date,
+                                window_start_trade_date=(
+                                    dates[0] - timedelta(days=120)
+                                    if component_id == "leg_b"
+                                    else dates[0] - timedelta(days=30)
+                                )
+                                + timedelta(days=ordinal),
+                            )
+                            for ordinal, trade_date in enumerate(dates)
+                        ),
                     )
                     for component_id in component_ids
                 ),
@@ -183,6 +208,14 @@ def resolved_request(
     )
     frozen = tuple(frozen_program(spec) for spec in request.program_specs)
     return ResolvedHistoricalRangeRequestV1(
+        batch_id=derive_prefixed_id(
+            "ahrb",
+            {
+                "request_id": request.request_id,
+                "client_idempotency_key": request.client_idempotency_key,
+                "user_request_semantic_hash": request.user_request_semantic_hash,
+            },
+        ),
         request=request,
         frozen_programs=frozen,
         date_plan=plan,

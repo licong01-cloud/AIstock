@@ -25,7 +25,15 @@ RESOLVED_REQUEST_SCHEMA_VERSION = "advisory_historical_range_resolved_request_v1
 FROZEN_PROGRAM_SCHEMA_VERSION = "advisory_historical_range_frozen_program_v1"
 DATE_PLAN_SCHEMA_VERSION = "advisory_historical_range_date_plan_v1"
 ARTIFACT_ENVELOPE_SCHEMA_VERSION = "advisory_historical_range_artifact_envelope_v1"
+PLANNING_ARTIFACT_ENVELOPE_SCHEMA_VERSION = "advisory_historical_range_planning_artifact_envelope_v1"
 ARTIFACT_REF_SCHEMA_VERSION = "advisory_historical_range_artifact_ref_v1"
+SOURCE_REQUIREMENT_SCHEMA_VERSION = "advisory_historical_range_source_requirement_v1"
+SOURCE_REQUIREMENT_PLAN_SCHEMA_VERSION = "advisory_historical_range_source_requirement_plan_v1"
+SOURCE_REVISION_MEMBER_SCHEMA_VERSION = "advisory_historical_range_source_revision_member_v1"
+SOURCE_REVISION_CATALOG_SCHEMA_VERSION = "advisory_historical_range_source_revision_catalog_v1"
+SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION = "advisory_historical_range_source_catalog_checkpoint_v1"
+HMM_BINDING_SET_SCHEMA_VERSION = "advisory_historical_range_hmm_binding_set_v1"
+CANDIDATE_ARTIFACT_PAYLOAD_SCHEMA_VERSION = "advisory_historical_range_candidate_artifact_payload_v2"
 
 HISTORICAL_RANGE_DATA_SOURCE = "DB_HISTORICAL"
 HISTORICAL_RANGE_ORIGIN = "HISTORICAL_RANGE_RESEARCH"
@@ -45,6 +53,7 @@ REASON_ARTIFACT_ROOT_INVALID = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT_INVALID"
 REASON_ARTIFACT_NOT_FOUND = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_NOT_FOUND"
 REASON_ARTIFACT_COLLISION = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_COLLISION"
 REASON_ARTIFACT_TAMPERED = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_TAMPERED"
+REASON_SOURCE_REVISION_MISMATCH = "ADVISORY_HR_SOURCE_REVISION_MISMATCH"
 
 
 class HistoricalRangeContractError(RuntimeError):
@@ -86,6 +95,76 @@ def _aware_utc(value: datetime, *, field_name: str) -> datetime:
     return value.astimezone(UTC)
 
 
+def _hmm_evidence_date(value: Any, *, field_name: str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    try:
+        return date.fromisoformat(normalized[:10])
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must contain an ISO date") from exc
+
+
+def normalize_hmm_binding_metadata(metadata: dict[str, Any], *, decision_trade_date: date) -> dict[str, Any]:
+    normalized = dict(metadata)
+    required = (
+        "model_snapshot_id",
+        "signal_preset",
+        "model_artifact_sha256",
+        "coefficient_sha256",
+        "snapshot_trained_at",
+        "available_at",
+        "training_information_cutoff",
+        "as_of_trade_date",
+        "effective_trade_date",
+        "generation_mode",
+        "input_data_max_dates",
+    )
+    missing = [key for key in required if normalized.get(key) is None or normalized.get(key) == ""]
+    if missing:
+        raise ValueError(f"HMM binding evidence is incomplete: {missing}")
+    for key in ("model_snapshot_id", "signal_preset"):
+        normalized[key] = _nonblank(str(normalized[key]), field_name=key)
+    for key in ("model_artifact_sha256", "coefficient_sha256"):
+        normalized[key] = require_sha256(str(normalized[key]), field_name=key)
+    if str(normalized["generation_mode"]).strip() != "EXACT_SNAPSHOT":
+        raise ValueError("HMM binding generation_mode must be EXACT_SNAPSHOT")
+    normalized["generation_mode"] = "EXACT_SNAPSHOT"
+    for key in ("as_of_trade_date", "effective_trade_date"):
+        if _hmm_evidence_date(normalized[key], field_name=key) != decision_trade_date:
+            raise ValueError(f"HMM binding {key} must equal decision_trade_date")
+        normalized[key] = decision_trade_date.isoformat()
+    input_dates = normalized["input_data_max_dates"]
+    if not isinstance(input_dates, dict) or not input_dates:
+        raise ValueError("HMM binding input_data_max_dates must be a non-empty mapping")
+    cutoff_dates = [
+        _hmm_evidence_date(normalized["snapshot_trained_at"], field_name="snapshot_trained_at"),
+        _hmm_evidence_date(normalized["available_at"], field_name="available_at"),
+        _hmm_evidence_date(
+            normalized["training_information_cutoff"],
+            field_name="training_information_cutoff",
+        ),
+        *(
+            _hmm_evidence_date(value, field_name=f"input_data_max_dates.{key}")
+            for key, value in input_dates.items()
+        ),
+    ]
+    if any(value > decision_trade_date for value in cutoff_dates):
+        raise ValueError("HMM binding contains evidence after decision_trade_date")
+    input_hash = canonical_json_sha256(input_dates)
+    supplied_input_hash = normalized.get("input_data_max_dates_hash")
+    if supplied_input_hash is not None and require_sha256(
+        str(supplied_input_hash), field_name="input_data_max_dates_hash"
+    ) != input_hash:
+        raise ValueError("HMM binding input_data_max_dates_hash differs from its evidence")
+    normalized["input_data_max_dates_hash"] = input_hash
+    return normalized
+
+
 def derive_prefixed_id(prefix: str, payload: Any, *, digest_chars: int = 32) -> str:
     if digest_chars < 12 or digest_chars > 64:
         raise ValueError("digest_chars must be between 12 and 64")
@@ -103,6 +182,7 @@ class HistoricalRangeAlphaMode(str, Enum):
 
 
 class HistoricalRangeBatchStatus(str, Enum):
+    PLANNING = "PLANNING"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     PARTIAL = "PARTIAL"
@@ -111,6 +191,7 @@ class HistoricalRangeBatchStatus(str, Enum):
     FAILED = "FAILED"
     CANCELLING = "CANCELLING"
     CANCELLED = "CANCELLED"
+    DEDUPLICATED = "DEDUPLICATED"
 
 
 class HistoricalRangeProgramStatus(str, Enum):
@@ -148,6 +229,7 @@ class HistoricalRangeOutcomeStatus(str, Enum):
 class HistoricalRangeOperationStatus(str, Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    WAITING_INPUT = "WAITING_INPUT"
     COMPLETED = "COMPLETED"
     RETRYABLE_FAILED = "RETRYABLE_FAILED"
     FAILED = "FAILED"
@@ -155,6 +237,7 @@ class HistoricalRangeOperationStatus(str, Enum):
 
 class HistoricalRangeOperationType(str, Enum):
     CREATE = "CREATE"
+    BUILD_SOURCE_CATALOG = "BUILD_SOURCE_CATALOG"
     RESUME = "RESUME"
     CANCEL = "CANCEL"
     REFRESH_OUTCOMES = "REFRESH_OUTCOMES"
@@ -181,6 +264,9 @@ class HistoricalRangeOutcomeProjection(str, Enum):
 
 
 class HistoricalRangeArtifactKind(str, Enum):
+    SOURCE_REQUIREMENT_PLAN = "SOURCE_REQUIREMENT_PLAN"
+    SOURCE_CATALOG_CHECKPOINT = "SOURCE_CATALOG_CHECKPOINT"
+    HMM_BINDING_SET = "HMM_BINDING_SET"
     REQUEST = "REQUEST"
     DATE_PLAN = "DATE_PLAN"
     FROZEN_PROGRAM = "FROZEN_PROGRAM"
@@ -190,6 +276,22 @@ class HistoricalRangeArtifactKind(str, Enum):
     OUTCOME = "OUTCOME"
     SUMMARY = "SUMMARY"
     DATASET_BRIDGE = "DATASET_BRIDGE"
+
+
+class HistoricalRangeRequirementPurpose(str, Enum):
+    REQUEST_SEAL = "REQUEST_SEAL"
+    DAY_EXECUTION = "DAY_EXECUTION"
+
+
+class HistoricalRangeRevisionAdmissibility(str, Enum):
+    FORMAL_EVENT = "FORMAL_EVENT"
+    RETROSPECTIVE_DB_CONTENT_HASH = "RETROSPECTIVE_DB_CONTENT_HASH"
+    FROZEN_ARTIFACT = "FROZEN_ARTIFACT"
+
+
+class HistoricalRangeCatalogPhase(str, Enum):
+    DISCOVER = "DISCOVER"
+    VERIFY = "VERIFY"
 
 
 class HistoricalRangeSourceRevisionRefV1(_StrictContract):
@@ -342,6 +444,9 @@ class HistoricalRangeAdmittedComponentV1(_StrictContract):
     component_id: str = Field(min_length=1, max_length=160)
     weight: Decimal = Field(gt=0, le=1)
     factor_order: tuple[str, ...] = Field(min_length=1)
+    required_window: int = Field(ge=1)
+    buffer_trading_days: int = Field(ge=0)
+    window_resolution: Literal["trading_calendar"] = "trading_calendar"
     runtime_input_identity_hash: str = Field(min_length=64, max_length=64)
     lookback_contract_hash: str = Field(min_length=64, max_length=64)
 
@@ -366,15 +471,15 @@ class HistoricalRangeAdmittedComponentV1(_StrictContract):
 
 class HistoricalRangeAdmittedPackageProjectionV1(_StrictContract):
     package_id: str = Field(min_length=1, max_length=160)
-    package_version: int = Field(ge=1)
+    package_version: str = Field(min_length=1, max_length=80)
     manifest_sha256: str = Field(min_length=64, max_length=64)
     alpha_mode: HistoricalRangeAlphaMode
     components: tuple[HistoricalRangeAdmittedComponentV1, ...] = Field(min_length=1)
 
-    @field_validator("package_id")
+    @field_validator("package_id", "package_version")
     @classmethod
-    def _package_id(cls, value: str) -> str:
-        return _nonblank(value, field_name="package_id")
+    def _required_text(cls, value: str, info: Any) -> str:
+        return _nonblank(value, field_name=info.field_name)
 
     @field_validator("manifest_sha256")
     @classmethod
@@ -396,11 +501,23 @@ class HistoricalRangeAdmittedPackageProjectionV1(_StrictContract):
         return self
 
 
+class HistoricalRangeProgramDayWindowV1(_StrictContract):
+    decision_trade_date: date
+    window_start_trade_date: date
+
+    @model_validator(mode="after")
+    def _window_order(self) -> "HistoricalRangeProgramDayWindowV1":
+        if self.window_start_trade_date > self.decision_trade_date:
+            raise ValueError("window_start_trade_date cannot follow decision_trade_date")
+        return self
+
+
 class HistoricalRangeProgramWarmupComponentV1(_StrictContract):
     component_id: str = Field(min_length=1, max_length=160)
     warmup_start_trade_date: date
     range_start_trade_date: date
     lookback_contract_hash: str = Field(min_length=64, max_length=64)
+    day_windows: tuple[HistoricalRangeProgramDayWindowV1, ...] = Field(min_length=1)
 
     @field_validator("component_id")
     @classmethod
@@ -416,6 +533,14 @@ class HistoricalRangeProgramWarmupComponentV1(_StrictContract):
     def _range(self) -> "HistoricalRangeProgramWarmupComponentV1":
         if self.warmup_start_trade_date > self.range_start_trade_date:
             raise ValueError("warmup_start_trade_date cannot follow range_start_trade_date")
+        ordered = tuple(sorted(self.day_windows, key=lambda item: item.decision_trade_date))
+        if len({item.decision_trade_date for item in ordered}) != len(ordered):
+            raise ValueError("day_windows must have unique decision_trade_date values")
+        if ordered[0].decision_trade_date != self.range_start_trade_date:
+            raise ValueError("day_windows must begin on range_start_trade_date")
+        if ordered[0].window_start_trade_date != self.warmup_start_trade_date:
+            raise ValueError("warmup_start_trade_date must equal the first exact day window")
+        object.__setattr__(self, "day_windows", ordered)
         return self
 
 
@@ -437,6 +562,75 @@ class HistoricalRangeProgramWarmupRangeV1(_StrictContract):
         return self
 
 
+class HistoricalRangeHMMBindingV1(_StrictContract):
+    decision_trade_date: date
+    phase0a_hmm_metadata: dict[str, Any]
+    source_revision_ref: HistoricalRangeSourceRevisionRefV1
+    binding_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("binding_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        return require_sha256(value, field_name="binding_hash") if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_binding(self) -> "HistoricalRangeHMMBindingV1":
+        metadata = normalize_hmm_binding_metadata(
+            self.phase0a_hmm_metadata,
+            decision_trade_date=self.decision_trade_date,
+        )
+        object.__setattr__(self, "phase0a_hmm_metadata", metadata)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"binding_hash"}))
+        if self.binding_hash is not None and self.binding_hash != digest:
+            raise ValueError("binding_hash does not match HMM binding semantics")
+        object.__setattr__(self, "binding_hash", digest)
+        return self
+
+
+class HistoricalRangeHMMBindingSetV1(_StrictContract):
+    schema_version: Literal[HMM_BINDING_SET_SCHEMA_VERSION] = HMM_BINDING_SET_SCHEMA_VERSION
+    research_program_id: str = Field(min_length=1, max_length=160)
+    package_id: str = Field(min_length=1, max_length=160)
+    base_runtime_config_hash: str = Field(min_length=64, max_length=64)
+    bindings: tuple[HistoricalRangeHMMBindingV1, ...] = Field(min_length=1)
+    binding_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("research_program_id", "package_id")
+    @classmethod
+    def _text(cls, value: str, info: Any) -> str:
+        return _nonblank(value, field_name=info.field_name)
+
+    @field_validator("base_runtime_config_hash", "binding_set_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_binding_set(self) -> "HistoricalRangeHMMBindingSetV1":
+        ordered = tuple(sorted(self.bindings, key=lambda item: item.decision_trade_date))
+        if len({item.decision_trade_date for item in ordered}) != len(ordered):
+            raise ValueError("HMM binding set must contain one binding per decision day")
+        object.__setattr__(self, "bindings", ordered)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"binding_set_hash"}))
+        if self.binding_set_hash is not None and self.binding_set_hash != digest:
+            raise ValueError("binding_set_hash does not match HMM binding set semantics")
+        object.__setattr__(self, "binding_set_hash", digest)
+        return self
+
+    def binding_for_day(self, decision_trade_date: date) -> HistoricalRangeHMMBindingV1:
+        matching = [item for item in self.bindings if item.decision_trade_date == decision_trade_date]
+        if len(matching) != 1:
+            raise HistoricalRangeContractError(
+                "ADVISORY_HR_HMM_FROZEN_EVIDENCE_UNAVAILABLE",
+                "sealed HMM binding set does not contain the requested decision day",
+                context={
+                    "research_program_id": self.research_program_id,
+                    "decision_trade_date": decision_trade_date.isoformat(),
+                },
+            )
+        return matching[0]
+
+
 class HistoricalRangeFrozenProgramV1(_StrictContract):
     schema_version: Literal[FROZEN_PROGRAM_SCHEMA_VERSION] = FROZEN_PROGRAM_SCHEMA_VERSION
     research_program_id: str = Field(min_length=1, max_length=160)
@@ -444,11 +638,14 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
     source_program_version: int | None = Field(default=None, ge=1)
     source_binding_version_id: str | None = Field(default=None, min_length=1, max_length=160)
     package_id: str = Field(min_length=1, max_length=160)
-    package_version: int = Field(ge=1)
+    package_version: str = Field(min_length=1, max_length=80)
     manifest_sha256: str = Field(min_length=64, max_length=64)
     alpha_mode: HistoricalRangeAlphaMode
+    program_config: dict[str, Any]
     program_config_hash: str = Field(min_length=64, max_length=64)
+    runtime_config: dict[str, Any]
     runtime_config_hash: str = Field(min_length=64, max_length=64)
+    review_policy: dict[str, Any]
     review_policy_hash: str = Field(min_length=64, max_length=64)
     style_profile_ref: str | None = Field(default=None, min_length=1, max_length=500)
     style_profile_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -462,7 +659,14 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
     input_warmup_contract_hash: str = Field(min_length=64, max_length=64)
     admitted_package_projection_hash: str = Field(min_length=64, max_length=64)
     admitted_package_projection: HistoricalRangeAdmittedPackageProjectionV1
+    resolved_hmm_binding_set_ref: HistoricalRangeArtifactRefV1 | None = None
+    resolved_hmm_binding_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
     frozen_program_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("research_program_id", "package_id", "package_version", "code_release_id")
+    @classmethod
+    def _required_text(cls, value: str, info: Any) -> str:
+        return _nonblank(value, field_name=info.field_name)
 
     @field_validator(
         "manifest_sha256",
@@ -476,6 +680,7 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
         "target_package_asset_root_hash",
         "input_warmup_contract_hash",
         "admitted_package_projection_hash",
+        "resolved_hmm_binding_set_hash",
         "frozen_program_hash",
     )
     @classmethod
@@ -498,6 +703,13 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
             raise ValueError("research-only Program identity must start with hrp_")
         if (self.style_profile_ref is None) != (self.style_profile_hash is None):
             raise ValueError("style profile ref/hash must be supplied together")
+        if (self.resolved_hmm_binding_set_ref is None) != (self.resolved_hmm_binding_set_hash is None):
+            raise ValueError("resolved HMM binding set ref/hash must be supplied together")
+        if (
+            self.resolved_hmm_binding_set_ref is not None
+            and self.resolved_hmm_binding_set_ref.artifact_kind is not HistoricalRangeArtifactKind.HMM_BINDING_SET
+        ):
+            raise ValueError("resolved_hmm_binding_set_ref must reference HMM_BINDING_SET")
         projection = self.admitted_package_projection
         if (
             projection.package_id != self.package_id
@@ -509,6 +721,14 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
         projection_hash = canonical_json_sha256(projection.model_dump(mode="json"))
         if projection_hash != self.admitted_package_projection_hash:
             raise ValueError("admitted_package_projection_hash does not match the frozen projection")
+        config_hashes = {
+            "program_config_hash": canonical_json_sha256(self.program_config),
+            "runtime_config_hash": canonical_json_sha256(self.runtime_config),
+            "review_policy_hash": canonical_json_sha256(self.review_policy),
+        }
+        for field_name, expected_hash in config_hashes.items():
+            if getattr(self, field_name) != expected_hash:
+                raise ValueError(f"{field_name} does not match its frozen configuration")
         digest = canonical_json_sha256(self.semantic_payload())
         if self.frozen_program_hash is not None and self.frozen_program_hash != digest:
             raise ValueError("frozen_program_hash does not match frozen Program semantics")
@@ -517,6 +737,13 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
 
     def semantic_payload(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude={"frozen_program_hash"})
+
+    def without_resolved_hmm_binding(self) -> "HistoricalRangeFrozenProgramV1":
+        payload = self.model_dump(mode="json")
+        payload["resolved_hmm_binding_set_ref"] = None
+        payload["resolved_hmm_binding_set_hash"] = None
+        payload["frozen_program_hash"] = None
+        return HistoricalRangeFrozenProgramV1.model_validate(payload)
 
 
 class HistoricalRangeDatePlanV1(_StrictContract):
@@ -552,6 +779,12 @@ class HistoricalRangeDatePlanV1(_StrictContract):
                 raise ValueError("warmup range key differs from research_program_id")
             if any(item.range_start_trade_date != self.start_trade_date for item in warmup.components):
                 raise ValueError("warmup range_start_trade_date must equal the frozen range start")
+            expected_dates = set(ordered)
+            if any(
+                {window.decision_trade_date for window in component.day_windows} != expected_dates
+                for component in warmup.components
+            ):
+                raise ValueError("every warmup component must close an exact window for every planned trade date")
         warmup_hash = canonical_json_sha256(
             {key: value.model_dump(mode="json") for key, value in sorted(self.per_program_input_warmup_ranges.items())}
         )
@@ -574,8 +807,289 @@ class HistoricalRangeDatePlanV1(_StrictContract):
         return self.model_dump(mode="json", exclude={"date_plan_hash"})
 
 
+class HistoricalRangeSourceRequirementV1(_StrictContract):
+    schema_version: Literal[SOURCE_REQUIREMENT_SCHEMA_VERSION] = SOURCE_REQUIREMENT_SCHEMA_VERSION
+    requirement_id: str = Field(min_length=1, max_length=200)
+    source_role: str = Field(min_length=1, max_length=120)
+    dataset_id: str = Field(min_length=1, max_length=240)
+    query_template_id: str = Field(min_length=1, max_length=240)
+    query_template_version: str = Field(min_length=1, max_length=80)
+    query_template_hash: str = Field(min_length=64, max_length=64)
+    parameter_template: dict[str, Any]
+    parameter_template_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    partition_ref_template: str = Field(min_length=1, max_length=500)
+    depends_on_requirement_ids: tuple[str, ...] = ()
+    package_id: str | None = Field(default=None, min_length=1, max_length=160)
+    component_id: str | None = Field(default=None, min_length=1, max_length=160)
+    decision_trade_date: date | None = None
+    required_for: HistoricalRangeRequirementPurpose
+    missing_reason_code: str = Field(min_length=1, max_length=160)
+    requirement_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "requirement_id",
+        "source_role",
+        "dataset_id",
+        "query_template_id",
+        "query_template_version",
+        "partition_ref_template",
+        "package_id",
+        "component_id",
+        "missing_reason_code",
+    )
+    @classmethod
+    def _text(cls, value: str | None, info: Any) -> str | None:
+        return _nonblank(value, field_name=info.field_name) if value is not None else None
+
+    @field_validator("query_template_hash", "parameter_template_hash", "requirement_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_requirement(self) -> "HistoricalRangeSourceRequirementV1":
+        dependencies = tuple(
+            sorted(_nonblank(item, field_name="depends_on_requirement_id") for item in self.depends_on_requirement_ids)
+        )
+        if len(dependencies) != len(set(dependencies)):
+            raise ValueError("depends_on_requirement_ids must be duplicate-free")
+        if self.requirement_id in dependencies:
+            raise ValueError("source requirement cannot depend on itself")
+        object.__setattr__(self, "depends_on_requirement_ids", dependencies)
+        parameter_hash = canonical_json_sha256(self.parameter_template)
+        if self.parameter_template_hash is not None and self.parameter_template_hash != parameter_hash:
+            raise ValueError("parameter_template_hash does not match parameter_template")
+        object.__setattr__(self, "parameter_template_hash", parameter_hash)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"requirement_hash"}))
+        if self.requirement_hash is not None and self.requirement_hash != digest:
+            raise ValueError("requirement_hash does not match source requirement semantics")
+        object.__setattr__(self, "requirement_hash", digest)
+        return self
+
+
+class HistoricalRangeSourceRequirementPlanV1(_StrictContract):
+    schema_version: Literal[SOURCE_REQUIREMENT_PLAN_SCHEMA_VERSION] = SOURCE_REQUIREMENT_PLAN_SCHEMA_VERSION
+    request: HistoricalRangeResearchBatchRequestV1
+    date_plan: HistoricalRangeDatePlanV1
+    frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...] = Field(min_length=1)
+    query_contract_hash: str = Field(min_length=64, max_length=64)
+    calendar_identity_hash: str = Field(min_length=64, max_length=64)
+    code_release_hash: str = Field(min_length=64, max_length=64)
+    requirements: tuple[HistoricalRangeSourceRequirementV1, ...] = Field(min_length=1)
+    requirement_plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("query_contract_hash", "calendar_identity_hash", "code_release_hash", "requirement_plan_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_plan(self) -> "HistoricalRangeSourceRequirementPlanV1":
+        frozen_programs = tuple(sorted(self.frozen_programs, key=lambda item: item.research_program_id))
+        if len(frozen_programs) != len(self.request.program_specs):
+            raise ValueError("requirement plan frozen Program count differs from request")
+        requested_ids = {item.research_program_id for item in self.request.program_specs}
+        if {item.research_program_id for item in frozen_programs} != requested_ids:
+            raise ValueError("requirement plan frozen Program identities differ from request")
+        if set(self.date_plan.per_program_input_warmup_ranges) != requested_ids:
+            raise ValueError("requirement plan date plan does not cover every Program")
+        if (
+            self.request.start_trade_date != self.date_plan.start_trade_date
+            or self.request.end_trade_date != self.date_plan.end_trade_date
+        ):
+            raise ValueError("requirement plan date range differs from request")
+        if any(item.code_release_hash != self.code_release_hash for item in frozen_programs):
+            raise ValueError("requirement plan Programs do not share the frozen code release")
+        selection_identities = {
+            (item.selection_semantics_version, item.selection_semantics_hash) for item in frozen_programs
+        }
+        list_identities = {(item.list_semantics_version, item.list_semantics_hash) for item in frozen_programs}
+        if len(selection_identities) != 1 or len(list_identities) != 1:
+            raise ValueError("requirement plan Programs must share selection/list semantics")
+        ordered_requirements = _topological_requirement_order(self.requirements)
+        object.__setattr__(self, "frozen_programs", frozen_programs)
+        object.__setattr__(self, "requirements", ordered_requirements)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"requirement_plan_hash"}))
+        if self.requirement_plan_hash is not None and self.requirement_plan_hash != digest:
+            raise ValueError("requirement_plan_hash does not match requirement plan semantics")
+        object.__setattr__(self, "requirement_plan_hash", digest)
+        return self
+
+    @property
+    def batch_id(self) -> str:
+        return derive_prefixed_id(
+            "ahrb",
+            {
+                "request_id": self.request.request_id,
+                "client_idempotency_key": self.request.client_idempotency_key,
+                "user_request_semantic_hash": self.request.user_request_semantic_hash,
+                "requirement_plan_hash": self.requirement_plan_hash,
+            },
+        )
+
+    @property
+    def planning_identity_hash(self) -> str:
+        return canonical_json_sha256(
+            {
+                "batch_id": self.batch_id,
+                "requirement_plan_hash": self.requirement_plan_hash,
+            }
+        )
+
+
+class HistoricalRangeSourceRevisionMemberV1(_StrictContract):
+    schema_version: Literal[SOURCE_REVISION_MEMBER_SCHEMA_VERSION] = SOURCE_REVISION_MEMBER_SCHEMA_VERSION
+    revision_id: str | None = Field(default=None, min_length=1, max_length=240)
+    requirement_id: str = Field(min_length=1, max_length=200)
+    source_role: str = Field(min_length=1, max_length=120)
+    dataset_id: str = Field(min_length=1, max_length=240)
+    partition_ref: str = Field(min_length=1, max_length=500)
+    package_id: str | None = Field(default=None, min_length=1, max_length=160)
+    component_id: str | None = Field(default=None, min_length=1, max_length=160)
+    decision_trade_date: date | None = None
+    query_template_id: str = Field(min_length=1, max_length=240)
+    query_template_version: str = Field(min_length=1, max_length=80)
+    query_template_hash: str = Field(min_length=64, max_length=64)
+    bound_parameters: dict[str, Any] | None = None
+    parameter_hash: str = Field(min_length=64, max_length=64)
+    schema_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    row_count: int = Field(ge=0)
+    content_hash: str = Field(min_length=64, max_length=64)
+    availability_event_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    admissibility: HistoricalRangeRevisionAdmissibility
+    research_only: Literal[True] = True
+    observed_at: datetime
+    revision_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "revision_id",
+        "requirement_id",
+        "source_role",
+        "dataset_id",
+        "partition_ref",
+        "package_id",
+        "component_id",
+        "query_template_id",
+        "query_template_version",
+    )
+    @classmethod
+    def _text(cls, value: str | None, info: Any) -> str | None:
+        return _nonblank(value, field_name=info.field_name) if value is not None else None
+
+    @field_validator(
+        "query_template_hash",
+        "parameter_hash",
+        "schema_fingerprint",
+        "content_hash",
+        "availability_event_hash",
+        "revision_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @field_validator("observed_at")
+    @classmethod
+    def _observed_at(cls, value: datetime) -> datetime:
+        return _aware_utc(value, field_name="observed_at")
+
+    @model_validator(mode="after")
+    def _close_member(self) -> "HistoricalRangeSourceRevisionMemberV1":
+        if self.bound_parameters is not None and canonical_json_sha256(self.bound_parameters) != self.parameter_hash:
+            raise ValueError("parameter_hash does not close bound_parameters")
+        if (
+            self.admissibility is HistoricalRangeRevisionAdmissibility.FORMAL_EVENT
+            and self.availability_event_hash is None
+        ):
+            raise ValueError("FORMAL_EVENT source revisions require availability_event_hash")
+        if (
+            self.admissibility is HistoricalRangeRevisionAdmissibility.RETROSPECTIVE_DB_CONTENT_HASH
+            and self.availability_event_hash is not None
+        ):
+            raise ValueError("retrospective source revisions cannot claim a formal availability event")
+        identity_payload = {
+            "requirement_id": self.requirement_id,
+            "source_role": self.source_role,
+            "dataset_id": self.dataset_id,
+            "partition_ref": self.partition_ref,
+            "package_id": self.package_id,
+            "component_id": self.component_id,
+            "decision_trade_date": self.decision_trade_date,
+            "query_template_id": self.query_template_id,
+            "query_template_version": self.query_template_version,
+            "parameter_hash": self.parameter_hash,
+        }
+        revision_id = derive_prefixed_id("ahrsr", identity_payload, digest_chars=48)
+        if self.revision_id is not None and self.revision_id != revision_id:
+            raise ValueError("revision_id does not match bound source identity")
+        object.__setattr__(self, "revision_id", revision_id)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"observed_at", "revision_hash"}))
+        if self.revision_hash is not None and self.revision_hash != digest:
+            raise ValueError("revision_hash does not match source revision semantics")
+        object.__setattr__(self, "revision_hash", digest)
+        return self
+
+
+class HistoricalRangeSourceRevisionCatalogV1(_StrictContract):
+    schema_version: Literal[SOURCE_REVISION_CATALOG_SCHEMA_VERSION] = SOURCE_REVISION_CATALOG_SCHEMA_VERSION
+    requirement_plan_hash: str = Field(min_length=64, max_length=64)
+    catalog_generation: int = Field(ge=1)
+    query_contract_hash: str = Field(min_length=64, max_length=64)
+    calendar_identity_hash: str = Field(min_length=64, max_length=64)
+    members: tuple[HistoricalRangeSourceRevisionMemberV1, ...] = Field(min_length=1)
+    catalog_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("requirement_plan_hash", "query_contract_hash", "calendar_identity_hash", "catalog_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_catalog(self) -> "HistoricalRangeSourceRevisionCatalogV1":
+        members = tuple(sorted(self.members, key=lambda item: str(item.revision_id)))
+        revision_ids = tuple(str(item.revision_id) for item in members)
+        requirement_ids = tuple(item.requirement_id for item in members)
+        if len(revision_ids) != len(set(revision_ids)):
+            raise ValueError("catalog revision_id values must be unique")
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("catalog must resolve each requirement exactly once")
+        object.__setattr__(self, "members", members)
+        digest = canonical_json_sha256(self.semantic_payload())
+        if self.catalog_hash is not None and self.catalog_hash != digest:
+            raise ValueError("catalog_hash does not match source revision catalog")
+        object.__setattr__(self, "catalog_hash", digest)
+        return self
+
+    def semantic_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "requirement_plan_hash": self.requirement_plan_hash,
+            "catalog_generation": self.catalog_generation,
+            "query_contract_hash": self.query_contract_hash,
+            "calendar_identity_hash": self.calendar_identity_hash,
+            "members": [
+                {
+                    "requirement_id": member.requirement_id,
+                    "revision_id": member.revision_id,
+                    "revision_hash": member.revision_hash,
+                }
+                for member in self.members
+            ],
+        }
+
+    def source_revision_refs(self) -> tuple[HistoricalRangeSourceRevisionRefV1, ...]:
+        return tuple(
+            HistoricalRangeSourceRevisionRefV1(
+                revision_id=str(member.revision_id),
+                revision_hash=str(member.revision_hash),
+            )
+            for member in self.members
+        )
+
+
 class ResolvedHistoricalRangeRequestV1(_StrictContract):
     schema_version: Literal[RESOLVED_REQUEST_SCHEMA_VERSION] = RESOLVED_REQUEST_SCHEMA_VERSION
+    batch_id: str = Field(default="ahrb_artifact", min_length=1, max_length=160, exclude=True)
     request: HistoricalRangeResearchBatchRequestV1
     frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...] = Field(min_length=1)
     date_plan: HistoricalRangeDatePlanV1
@@ -600,6 +1114,8 @@ class ResolvedHistoricalRangeRequestV1(_StrictContract):
 
     @model_validator(mode="after")
     def _close_resolved_request(self) -> "ResolvedHistoricalRangeRequestV1":
+        if self.batch_id != "ahrb_artifact" and not self.batch_id.startswith("ahrb_"):
+            raise ValueError("batch_id must be a stable historical-range planning identity")
         ordered = tuple(sorted(self.frozen_programs, key=lambda item: item.research_program_id))
         if len(ordered) != len(self.request.program_specs):
             raise ValueError("resolved Program count differs from requested Program count")
@@ -674,18 +1190,135 @@ class ResolvedHistoricalRangeRequestV1(_StrictContract):
             ],
         }
 
-    @property
-    def batch_id(self) -> str:
-        return f"ahrb_{self.request_payload_sha256[:32]}"
-
     def range_run_id(self, research_program_id: str) -> str:
         return derive_prefixed_id(
             "ahrr",
             {
-                "batch_id": self.batch_id,
+                "resolved_request_hash": self.request_payload_sha256,
                 "research_program_id": _nonblank(research_program_id, field_name="research_program_id"),
             },
         )
+
+
+class HistoricalRangeResolvedRequestSnapshotV1(_StrictContract):
+    schema_version: Literal["advisory_historical_range_resolved_request_snapshot_v1"] = (
+        "advisory_historical_range_resolved_request_snapshot_v1"
+    )
+    user_request_semantic_hash: str = Field(min_length=64, max_length=64)
+    frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...] = Field(min_length=1)
+    date_plan: HistoricalRangeDatePlanV1
+    source_revision_catalog_hash: str = Field(min_length=64, max_length=64)
+    selection_semantics_version: str = Field(min_length=1, max_length=160)
+    selection_semantics_hash: str = Field(min_length=64, max_length=64)
+    list_semantics_version: str = Field(min_length=1, max_length=160)
+    list_semantics_hash: str = Field(min_length=64, max_length=64)
+    resolved_program_set_hash: str = Field(min_length=64, max_length=64)
+    request_payload_sha256: str = Field(min_length=64, max_length=64)
+
+    @field_validator(
+        "user_request_semantic_hash",
+        "source_revision_catalog_hash",
+        "selection_semantics_hash",
+        "list_semantics_hash",
+        "resolved_program_set_hash",
+        "request_payload_sha256",
+    )
+    @classmethod
+    def _hashes(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _close_snapshot(self) -> "HistoricalRangeResolvedRequestSnapshotV1":
+        programs = tuple(sorted(self.frozen_programs, key=lambda item: item.research_program_id))
+        program_ids = {item.research_program_id for item in programs}
+        if len(program_ids) != len(programs):
+            raise ValueError("resolved request snapshot Program identities must be unique")
+        if set(self.date_plan.per_program_input_warmup_ranges) != program_ids:
+            raise ValueError("resolved request snapshot date plan does not cover every Program")
+        for program in programs:
+            if (
+                program.selection_semantics_version != self.selection_semantics_version
+                or program.selection_semantics_hash != self.selection_semantics_hash
+                or program.list_semantics_version != self.list_semantics_version
+                or program.list_semantics_hash != self.list_semantics_hash
+            ):
+                raise ValueError("resolved request snapshot Program semantics differ")
+        object.__setattr__(self, "frozen_programs", programs)
+        expected_program_set_hash = canonical_json_sha256(
+            [
+                {
+                    "research_program_id": item.research_program_id,
+                    "frozen_program_hash": item.frozen_program_hash,
+                }
+                for item in programs
+            ]
+        )
+        if self.resolved_program_set_hash != expected_program_set_hash:
+            raise ValueError("resolved request snapshot Program set hash differs")
+        if self.request_payload_sha256 != canonical_json_sha256(self.semantic_payload()):
+            raise ValueError("resolved request snapshot hash differs from resolved semantics")
+        return self
+
+    def semantic_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": RESOLVED_REQUEST_SCHEMA_VERSION,
+            "user_request_semantic_hash": self.user_request_semantic_hash,
+            "date_plan_hash": self.date_plan.date_plan_hash,
+            "ordered_trade_dates_hash": self.date_plan.ordered_trade_dates_hash,
+            "source_revision_catalog_hash": self.source_revision_catalog_hash,
+            "selection_semantics_version": self.selection_semantics_version,
+            "selection_semantics_hash": self.selection_semantics_hash,
+            "list_semantics_version": self.list_semantics_version,
+            "list_semantics_hash": self.list_semantics_hash,
+            "resolved_program_set_hash": self.resolved_program_set_hash,
+            "per_program_input_warmup_ranges_hash": self.date_plan.per_program_input_warmup_ranges_hash,
+            "frozen_programs": [
+                {
+                    "research_program_id": item.research_program_id,
+                    "frozen_program_hash": item.frozen_program_hash,
+                }
+                for item in self.frozen_programs
+            ],
+        }
+
+    @classmethod
+    def from_resolved(
+        cls,
+        resolved: ResolvedHistoricalRangeRequestV1,
+    ) -> "HistoricalRangeResolvedRequestSnapshotV1":
+        return cls(
+            user_request_semantic_hash=str(resolved.request.user_request_semantic_hash),
+            frozen_programs=resolved.frozen_programs,
+            date_plan=resolved.date_plan,
+            source_revision_catalog_hash=resolved.source_revision_catalog_hash,
+            selection_semantics_version=resolved.selection_semantics_version,
+            selection_semantics_hash=resolved.selection_semantics_hash,
+            list_semantics_version=resolved.list_semantics_version,
+            list_semantics_hash=resolved.list_semantics_hash,
+            resolved_program_set_hash=str(resolved.resolved_program_set_hash),
+            request_payload_sha256=str(resolved.request_payload_sha256),
+        )
+
+
+class HistoricalRangeResolvedRequestArtifactPayloadV1(_StrictContract):
+    schema_version: Literal["advisory_historical_range_resolved_request_artifact_payload_v1"] = (
+        "advisory_historical_range_resolved_request_artifact_payload_v1"
+    )
+    resolved_request: HistoricalRangeResolvedRequestSnapshotV1
+    source_revision_catalog: HistoricalRangeSourceRevisionCatalogV1
+
+    @field_validator("resolved_request", mode="before")
+    @classmethod
+    def _snapshot(cls, value: Any) -> Any:
+        if isinstance(value, ResolvedHistoricalRangeRequestV1):
+            return HistoricalRangeResolvedRequestSnapshotV1.from_resolved(value)
+        return value
+
+    @model_validator(mode="after")
+    def _closure(self) -> "HistoricalRangeResolvedRequestArtifactPayloadV1":
+        if self.source_revision_catalog.catalog_hash != self.resolved_request.source_revision_catalog_hash:
+            raise ValueError("source revision catalog hash differs from resolved request")
+        return self
 
 
 class HistoricalRangeArtifactRefV1(_StrictContract):
@@ -712,6 +1345,143 @@ class HistoricalRangeArtifactRefV1(_StrictContract):
         return normalized
 
 
+class HistoricalRangeUnresolvedRequirementV1(_StrictContract):
+    ordinal: int = Field(ge=1)
+    requirement_id: str = Field(min_length=1, max_length=200)
+    reason_code: str = Field(min_length=1, max_length=160)
+    blocked_by_requirement_ids: tuple[str, ...] = ()
+    context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("requirement_id", "reason_code")
+    @classmethod
+    def _text(cls, value: str, info: Any) -> str:
+        return _nonblank(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _dependencies(self) -> "HistoricalRangeUnresolvedRequirementV1":
+        dependencies = tuple(
+            sorted(_nonblank(item, field_name="blocked_by_requirement_id") for item in self.blocked_by_requirement_ids)
+        )
+        if len(dependencies) != len(set(dependencies)):
+            raise ValueError("blocked_by_requirement_ids must be duplicate-free")
+        object.__setattr__(self, "blocked_by_requirement_ids", dependencies)
+        return self
+
+
+class HistoricalRangeCatalogMemberDeltaV1(_StrictContract):
+    ordinal: int = Field(ge=1)
+    member: HistoricalRangeSourceRevisionMemberV1
+
+
+class HistoricalRangeSourceCatalogCheckpointV1(_StrictContract):
+    schema_version: Literal[SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION] = SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION
+    requirement_plan_hash: str = Field(min_length=64, max_length=64)
+    catalog_generation: int = Field(ge=1)
+    phase: HistoricalRangeCatalogPhase
+    ordinal_start: int = Field(ge=1)
+    ordinal_end: int = Field(ge=1)
+    next_requirement_ordinal: int = Field(ge=1)
+    previous_checkpoint_ref: HistoricalRangeArtifactRefV1 | None = None
+    previous_checkpoint_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    member_delta: tuple[HistoricalRangeCatalogMemberDeltaV1, ...] = ()
+    unresolved_requirement_delta: tuple[HistoricalRangeUnresolvedRequirementV1, ...] = ()
+    cumulative_resolved_count: int = Field(ge=0)
+    cumulative_member_chain_hash: str = Field(min_length=64, max_length=64)
+    checkpoint_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "requirement_plan_hash", "previous_checkpoint_hash", "cumulative_member_chain_hash", "checkpoint_hash"
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_checkpoint(self) -> "HistoricalRangeSourceCatalogCheckpointV1":
+        if self.ordinal_end < self.ordinal_start:
+            raise ValueError("checkpoint ordinal_end cannot precede ordinal_start")
+        if (self.previous_checkpoint_ref is None) != (self.previous_checkpoint_hash is None):
+            raise ValueError("previous checkpoint ref/hash must be supplied together")
+        if self.previous_checkpoint_ref is not None:
+            if self.previous_checkpoint_ref.artifact_kind is not HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT:
+                raise ValueError("previous_checkpoint_ref must reference SOURCE_CATALOG_CHECKPOINT")
+            if self.previous_checkpoint_ref.semantic_content_hash != self.previous_checkpoint_hash:
+                raise ValueError("previous checkpoint ref/hash identity differs")
+        members = tuple(sorted(self.member_delta, key=lambda item: item.ordinal))
+        unresolved = tuple(sorted(self.unresolved_requirement_delta, key=lambda item: item.ordinal))
+        member_requirement_ids = {item.member.requirement_id for item in members}
+        unresolved_requirement_ids = {item.requirement_id for item in unresolved}
+        if len(member_requirement_ids) != len(members):
+            raise ValueError("checkpoint member_delta contains duplicate requirements")
+        if len(unresolved_requirement_ids) != len(unresolved):
+            raise ValueError("checkpoint unresolved delta contains duplicate requirements")
+        if member_requirement_ids & unresolved_requirement_ids:
+            raise ValueError("checkpoint requirement cannot be both resolved and unresolved")
+        ordinals = [item.ordinal for item in members] + [item.ordinal for item in unresolved]
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError("checkpoint delta ordinals must be unique")
+        if any(ordinal < self.ordinal_start or ordinal > self.ordinal_end for ordinal in ordinals):
+            raise ValueError("checkpoint delta ordinal is outside its declared range")
+        if len(members) + len(unresolved) != self.ordinal_end - self.ordinal_start + 1:
+            raise ValueError("checkpoint delta count must exactly cover its ordinal range")
+        expected_next = min((item.ordinal for item in unresolved), default=self.ordinal_end + 1)
+        if self.next_requirement_ordinal != expected_next:
+            raise ValueError("next_requirement_ordinal must stop at the first unresolved requirement")
+        object.__setattr__(self, "member_delta", members)
+        object.__setattr__(self, "unresolved_requirement_delta", unresolved)
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"checkpoint_hash"}))
+        if self.checkpoint_hash is not None and self.checkpoint_hash != digest:
+            raise ValueError("checkpoint_hash does not match checkpoint delta")
+        object.__setattr__(self, "checkpoint_hash", digest)
+        return self
+
+
+class HistoricalRangePlanningArtifactEnvelopeV1(_StrictContract):
+    schema_version: Literal[PLANNING_ARTIFACT_ENVELOPE_SCHEMA_VERSION] = PLANNING_ARTIFACT_ENVELOPE_SCHEMA_VERSION
+    artifact_kind: Literal[
+        HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+        HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        HistoricalRangeArtifactKind.HMM_BINDING_SET,
+    ]
+    planning_identity_hash: str = Field(min_length=64, max_length=64)
+    batch_id: str = Field(min_length=1, max_length=160)
+    catalog_generation: int = Field(ge=1)
+    producer_contract_version: str = Field(min_length=1, max_length=160)
+    payload_schema_version: str = Field(min_length=1, max_length=160)
+    payload: dict[str, Any]
+    payload_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    semantic_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("planning_identity_hash", "payload_sha256", "semantic_content_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_envelope(self) -> "HistoricalRangePlanningArtifactEnvelopeV1":
+        if not self.batch_id.startswith("ahrb_"):
+            raise ValueError("planning artifact batch_id must use the historical-range identity")
+        expected_schema = {
+            HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN: SOURCE_REQUIREMENT_PLAN_SCHEMA_VERSION,
+            HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT: SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION,
+            HistoricalRangeArtifactKind.HMM_BINDING_SET: HMM_BINDING_SET_SCHEMA_VERSION,
+        }[self.artifact_kind]
+        if self.payload_schema_version != expected_schema:
+            raise ValueError("planning artifact payload schema does not match artifact kind")
+        payload_hash = canonical_json_sha256(self.payload)
+        if self.payload_sha256 is not None and self.payload_sha256 != payload_hash:
+            raise ValueError("payload_sha256 does not match planning payload")
+        object.__setattr__(self, "payload_sha256", payload_hash)
+        digest = canonical_json_sha256(self.semantic_payload())
+        if self.semantic_content_hash is not None and self.semantic_content_hash != digest:
+            raise ValueError("semantic_content_hash does not match planning artifact envelope")
+        object.__setattr__(self, "semantic_content_hash", digest)
+        return self
+
+    def semantic_payload(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude={"semantic_content_hash"})
+
+
 class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
     schema_version: Literal[ARTIFACT_ENVELOPE_SCHEMA_VERSION] = ARTIFACT_ENVELOPE_SCHEMA_VERSION
     artifact_kind: HistoricalRangeArtifactKind
@@ -733,6 +1503,12 @@ class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
 
     @model_validator(mode="after")
     def _close_envelope(self) -> "HistoricalRangeArtifactEnvelopeV1":
+        if self.artifact_kind in {
+            HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+            HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+            HistoricalRangeArtifactKind.HMM_BINDING_SET,
+        }:
+            raise ValueError("planning artifacts require HistoricalRangePlanningArtifactEnvelopeV1")
         source_refs = tuple(sorted(self.source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash)))
         source_identities = tuple((item.revision_id, item.revision_hash) for item in source_refs)
         if len(source_identities) != len(set(source_identities)) or len(source_refs) != len(
@@ -775,6 +1551,11 @@ class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
             raise ValueError("day artifact requires range_run_id and day_run_id")
         if self.artifact_kind is HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT and not source_refs:
             raise ValueError("candidate artifacts require explicit source revision lineage")
+        if (
+            self.artifact_kind is HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT
+            and self.payload_schema_version != CANDIDATE_ARTIFACT_PAYLOAD_SCHEMA_VERSION
+        ):
+            raise ValueError("candidate artifacts require the v2 evidence payload")
         payload_hash = canonical_json_sha256(self.payload)
         if self.payload_sha256 is not None and self.payload_sha256 != payload_hash:
             raise ValueError("payload_sha256 does not match payload")
@@ -894,13 +1675,43 @@ class HistoricalRangeOperationRequestV1(_StrictContract):
     batch_id: str = Field(min_length=1, max_length=160)
     operation_type: HistoricalRangeOperationType
     operation_idempotency_key: str = Field(min_length=1, max_length=200)
-    request_payload_sha256: str = Field(min_length=64, max_length=64)
+    request_payload_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    planning_identity_hash: str | None = Field(default=None, min_length=64, max_length=64)
     expected_row_version: int | None = Field(default=None, ge=1)
 
-    @field_validator("request_payload_sha256")
+    @field_validator("request_payload_sha256", "planning_identity_hash")
     @classmethod
-    def _hash(cls, value: str) -> str:
-        return require_sha256(value, field_name="request_payload_sha256")
+    def _hash(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeOperationRequestV1":
+        planning_types = {
+            HistoricalRangeOperationType.CREATE,
+            HistoricalRangeOperationType.BUILD_SOURCE_CATALOG,
+        }
+        if self.operation_type in planning_types:
+            if self.planning_identity_hash is None or self.request_payload_sha256 is not None:
+                raise ValueError("planning operations require planning_identity_hash and forbid sealed request hash")
+        elif self.request_payload_sha256 is None:
+            raise ValueError("sealed operations require request_payload_sha256")
+        return self
+
+
+class HistoricalRangePlanningArtifactBindingsV1(_StrictContract):
+    requirement_plan_ref: HistoricalRangeArtifactRefV1
+    artifact_root_identity_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("artifact_root_identity_hash")
+    @classmethod
+    def _root_hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="artifact_root_identity_hash")
+
+    @model_validator(mode="after")
+    def _kind(self) -> "HistoricalRangePlanningArtifactBindingsV1":
+        if self.requirement_plan_ref.artifact_kind is not HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN:
+            raise ValueError("requirement_plan_ref must reference SOURCE_REQUIREMENT_PLAN")
+        return self
 
 
 class HistoricalRangeOperationAttemptV1(_StrictContract):
@@ -910,7 +1721,7 @@ class HistoricalRangeOperationAttemptV1(_StrictContract):
     worker_id: str = Field(min_length=1, max_length=160)
     lease_token: str = Field(min_length=1, max_length=200)
     fencing_token: int = Field(ge=1)
-    status: Literal["RUNNING", "COMPLETED", "RETRYABLE_FAILED", "FAILED"]
+    status: Literal["RUNNING", "WAITING_INPUT", "COMPLETED", "RETRYABLE_FAILED", "FAILED"]
     input_cursor_json: dict[str, Any] | None = None
     result_cursor_json: dict[str, Any] | None = None
     input_hash: str = Field(min_length=64, max_length=64)
@@ -933,11 +1744,14 @@ class HistoricalRangeOperationAttemptV1(_StrictContract):
 
     @model_validator(mode="after")
     def _receipt_pair(self) -> "HistoricalRangeOperationAttemptV1":
-        if (
-            self.attempt_receipt_ref is not None
-            and self.attempt_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.RANGE_RECEIPT
-        ):
-            raise ValueError("operation attempt receipt must reference RANGE_RECEIPT")
+        if self.attempt_receipt_ref is not None and self.attempt_receipt_ref.artifact_kind not in {
+            HistoricalRangeArtifactKind.RANGE_RECEIPT,
+            HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+            HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        }:
+            raise ValueError(
+                "operation attempt receipt must reference RANGE_RECEIPT, SOURCE_REQUIREMENT_PLAN, or SOURCE_CATALOG_CHECKPOINT"
+            )
         if self.status != "RUNNING" and self.attempt_receipt_ref is None:
             raise ValueError("non-running operation attempts require an immutable receipt")
         if (self.status == "RUNNING") != (self.finished_at is None):
@@ -980,6 +1794,12 @@ class HistoricalRangeCandidateFactV1(_StrictContract):
 
     @model_validator(mode="after")
     def _lineage_hash(self) -> "HistoricalRangeCandidateFactV1":
+        expected_candidate_id = derive_prefixed_id(
+            "ahc",
+            {"day_run_id": self.day_run_id, "symbol": self.symbol},
+        )
+        if self.candidate_id != expected_candidate_id:
+            raise ValueError("candidate_id does not match day/symbol identity")
         if canonical_json_sha256(self.component_lineage_json) != self.component_lineage_hash:
             raise ValueError("component_lineage_hash does not match component_lineage_json")
         if self.membership_status == "INCLUDED" and (
@@ -990,6 +1810,211 @@ class HistoricalRangeCandidateFactV1(_StrictContract):
         if self.candidate_content_hash is not None and self.candidate_content_hash != digest:
             raise ValueError("candidate_content_hash does not match candidate facts")
         object.__setattr__(self, "candidate_content_hash", digest)
+        return self
+
+
+class HistoricalRangeCandidateArtifactPayloadV2(_StrictContract):
+    schema_version: Literal[CANDIDATE_ARTIFACT_PAYLOAD_SCHEMA_VERSION] = CANDIDATE_ARTIFACT_PAYLOAD_SCHEMA_VERSION
+    range_run_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    candidate_input_hash: str = Field(min_length=64, max_length=64)
+    package_id: str = Field(min_length=1, max_length=160)
+    package_version: str = Field(min_length=1, max_length=80)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: HistoricalRangeAlphaMode
+    runtime_profile_hash: str = Field(min_length=64, max_length=64)
+    selection_semantics_hash: str = Field(min_length=64, max_length=64)
+    code_release_hash: str = Field(min_length=64, max_length=64)
+    calendar_identity_hash: str = Field(min_length=64, max_length=64)
+    universe_identity_hash: str = Field(min_length=64, max_length=64)
+    universe_count: int = Field(ge=1)
+    raw_signal_identity_hash: str = Field(min_length=64, max_length=64)
+    raw_signal_semantic_header: dict[str, Any]
+    raw_inference_receipt: dict[str, Any]
+    source_read_receipt_hashes: tuple[str, ...] = Field(min_length=1)
+    stage_trace: dict[str, Any]
+    stage_closure_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    candidate_outcome: Literal["CANDIDATES_AVAILABLE", "VALID_NO_CANDIDATE"]
+    no_candidate_reason_codes: tuple[str, ...] = ()
+    source_revision_refs: tuple[HistoricalRangeSourceRevisionRefV1, ...] = Field(min_length=1)
+    candidates: tuple[HistoricalRangeCandidateFactV1, ...] = ()
+
+    @field_validator("range_run_id", "day_run_id", "research_program_id", "package_id", "package_version")
+    @classmethod
+    def _text(cls, value: str, info: Any) -> str:
+        return _nonblank(value, field_name=info.field_name)
+
+    @field_validator(
+        "candidate_input_hash",
+        "manifest_sha256",
+        "runtime_profile_hash",
+        "selection_semantics_hash",
+        "code_release_hash",
+        "calendar_identity_hash",
+        "universe_identity_hash",
+        "raw_signal_identity_hash",
+        "stage_closure_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_payload(self) -> "HistoricalRangeCandidateArtifactPayloadV2":
+        if not self.raw_signal_semantic_header:
+            raise ValueError("candidate artifact requires raw_signal_semantic_header")
+        if not self.raw_inference_receipt:
+            raise ValueError("candidate artifact requires raw_inference_receipt")
+        expected_header = {
+            "runtime_profile_hash": self.runtime_profile_hash,
+            "selection_semantics_hash": self.selection_semantics_hash,
+            "code_release_hash": self.code_release_hash,
+            "calendar_identity_hash": self.calendar_identity_hash,
+            "universe_identity_hash": self.universe_identity_hash,
+        }
+        header_mismatches = {
+            key: {"expected": value, "actual": self.raw_signal_semantic_header.get(key)}
+            for key, value in expected_header.items()
+            if self.raw_signal_semantic_header.get(key) != value
+        }
+        if header_mismatches:
+            raise ValueError(f"raw signal semantic header differs from candidate identity: {header_mismatches}")
+        if canonical_json_sha256(self.raw_signal_semantic_header) != self.raw_signal_identity_hash:
+            raise ValueError("raw_signal_identity_hash does not close raw_signal_semantic_header")
+        raw_status = self.raw_inference_receipt.get("status")
+        raw_score_count = self.raw_inference_receipt.get("score_count")
+        if raw_status != "COMPLETE" or not isinstance(raw_score_count, int) or isinstance(raw_score_count, bool):
+            raise ValueError("candidate artifact requires a complete raw inference score receipt")
+        if raw_score_count < 0:
+            raise ValueError("raw inference score_count cannot be negative")
+        if not self.stage_trace:
+            raise ValueError("candidate artifact requires a complete stage_trace")
+        required_stages = {
+            "alpha_raw",
+            "hmm_adjusted",
+            "risk_policy_adjusted",
+            "selection_effective",
+        }
+        missing_stages = sorted(required_stages - set(self.stage_trace))
+        if missing_stages:
+            raise ValueError(f"candidate artifact stage_trace is incomplete: {missing_stages}")
+        for stage_name in required_stages:
+            receipt = self.stage_trace[stage_name]
+            if not isinstance(receipt, dict) or receipt.get("stage") != stage_name:
+                raise ValueError(f"candidate artifact {stage_name} receipt identity is invalid")
+            for count_field in ("input_count", "output_count", "excluded_count"):
+                count = receipt.get(count_field)
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise ValueError(f"candidate artifact {stage_name}.{count_field} is invalid")
+            status = receipt.get("status")
+            if status == "COMPLETE" and receipt["input_count"] != receipt["output_count"] + receipt["excluded_count"]:
+                raise ValueError(f"candidate artifact {stage_name} counts do not close")
+            if status == "NOT_APPLICABLE" and (receipt["output_count"] or receipt["excluded_count"]):
+                raise ValueError(f"candidate artifact {stage_name} not-applicable receipt has output")
+            if status not in {"COMPLETE", "NOT_APPLICABLE"}:
+                raise ValueError(f"candidate artifact {stage_name} is not successful")
+        ordered_stages = ("alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")
+        if self.stage_trace["alpha_raw"]["input_count"] != raw_score_count:
+            raise ValueError("alpha_raw input_count differs from the raw inference score_count")
+        for previous, current in zip(ordered_stages, ordered_stages[1:]):
+            previous_receipt = self.stage_trace[previous]
+            effective_output_count = (
+                previous_receipt["input_count"]
+                if previous_receipt["status"] == "NOT_APPLICABLE"
+                else previous_receipt["output_count"]
+            )
+            if effective_output_count != self.stage_trace[current]["input_count"]:
+                raise ValueError(f"candidate stage count chain breaks between {previous} and {current}")
+        receipt_hashes = tuple(
+            sorted(
+                require_sha256(item, field_name="source_read_receipt_hash") for item in self.source_read_receipt_hashes
+            )
+        )
+        if len(receipt_hashes) != len(set(receipt_hashes)):
+            raise ValueError("source_read_receipt_hashes must be duplicate-free")
+        source_refs = tuple(sorted(self.source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash)))
+        if len(source_refs) != len({item.revision_id for item in source_refs}):
+            raise ValueError("source_revision_refs must have unique revision_id values")
+        candidates = tuple(sorted(self.candidates, key=lambda item: (item.symbol, item.candidate_id)))
+        if len(candidates) != len({item.symbol for item in candidates}):
+            raise ValueError("candidate artifact symbols must be unique")
+        if any(item.day_run_id != self.day_run_id for item in candidates):
+            raise ValueError("candidate artifact contains facts for another day")
+        if any(item.advisory_model_rank is not None or item.advisory_model_score is not None for item in candidates):
+            raise ValueError("R2-B candidate artifact cannot invent advisory model scores")
+        included_count = sum(item.membership_status == "INCLUDED" for item in candidates)
+        if len(candidates) != raw_score_count:
+            raise ValueError("candidate facts do not cover every raw inference score")
+        if self.stage_trace["selection_effective"]["output_count"] != included_count:
+            raise ValueError("selection_effective output_count differs from included candidate facts")
+        reasons = tuple(
+            sorted(_nonblank(item, field_name="no_candidate_reason_code") for item in self.no_candidate_reason_codes)
+        )
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("no_candidate_reason_codes must be duplicate-free")
+        if self.candidate_outcome == "CANDIDATES_AVAILABLE":
+            if included_count == 0 or reasons:
+                raise ValueError("CANDIDATES_AVAILABLE requires included facts and no empty-result reasons")
+        elif included_count != 0 or not reasons:
+            raise ValueError("VALID_NO_CANDIDATE requires zero included facts and explicit reasons")
+        elif raw_score_count > 0 and any(item.membership_status != "EXCLUDED" for item in candidates):
+            raise ValueError("filtered VALID_NO_CANDIDATE requires every raw candidate to be excluded")
+        stage_hash = canonical_json_sha256(self.stage_trace)
+        if self.stage_closure_hash is not None and self.stage_closure_hash != stage_hash:
+            raise ValueError("stage_closure_hash does not match stage_trace")
+        object.__setattr__(self, "source_read_receipt_hashes", receipt_hashes)
+        object.__setattr__(self, "source_revision_refs", source_refs)
+        object.__setattr__(self, "candidates", candidates)
+        object.__setattr__(self, "no_candidate_reason_codes", reasons)
+        object.__setattr__(self, "stage_closure_hash", stage_hash)
+        return self
+
+
+class HistoricalRangeCandidateProductionResultV1(_StrictContract):
+    schema_version: Literal["advisory_historical_range_candidate_production_result_v1"] = (
+        "advisory_historical_range_candidate_production_result_v1"
+    )
+    research_program_id: str = Field(min_length=1, max_length=160)
+    range_run_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    candidate_input_hash: str = Field(min_length=64, max_length=64)
+    candidate_outcome: Literal["CANDIDATES_AVAILABLE", "VALID_NO_CANDIDATE"]
+    no_candidate_reason_codes: tuple[str, ...] = ()
+    candidates: tuple[HistoricalRangeCandidateFactV1, ...] = ()
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1
+    stage_trace: dict[str, Any]
+    source_revision_refs: tuple[HistoricalRangeSourceRevisionRefV1, ...] = Field(min_length=1)
+    raw_signal_identity_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("candidate_input_hash", "raw_signal_identity_hash")
+    @classmethod
+    def _result_hashes(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _close_result(self) -> "HistoricalRangeCandidateProductionResultV1":
+        if self.candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+            raise ValueError("candidate production result requires a CANDIDATE_ARTIFACT ref")
+        candidates = tuple(sorted(self.candidates, key=lambda item: (item.symbol, item.candidate_id)))
+        if len(candidates) != len({item.symbol for item in candidates}):
+            raise ValueError("candidate production result symbols must be unique")
+        refs = tuple(sorted(self.source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash)))
+        if len(refs) != len({item.revision_id for item in refs}):
+            raise ValueError("candidate production result source refs must be unique")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.no_candidate_reason_codes))
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("candidate production result reasons must be unique")
+        included_count = sum(item.membership_status == "INCLUDED" for item in candidates)
+        if self.candidate_outcome == "CANDIDATES_AVAILABLE" and (included_count == 0 or reasons):
+            raise ValueError("CANDIDATES_AVAILABLE result requires included facts and no empty reasons")
+        if self.candidate_outcome == "VALID_NO_CANDIDATE" and (included_count != 0 or not reasons):
+            raise ValueError("VALID_NO_CANDIDATE result requires reasons and no included facts")
+        object.__setattr__(self, "candidates", candidates)
+        object.__setattr__(self, "source_revision_refs", refs)
+        object.__setattr__(self, "no_candidate_reason_codes", reasons)
         return self
 
 
@@ -1243,24 +2268,163 @@ def build_candidate_artifact_payload(
     *,
     range_run_id: str,
     day_run_id: str,
+    research_program_id: str,
+    decision_trade_date: date,
+    candidate_input_hash: str,
+    package_id: str,
+    package_version: str,
+    manifest_sha256: str,
+    alpha_mode: HistoricalRangeAlphaMode,
+    runtime_profile_hash: str,
+    selection_semantics_hash: str,
+    code_release_hash: str,
+    calendar_identity_hash: str,
+    universe_identity_hash: str,
+    universe_count: int,
+    raw_signal_identity_hash: str,
+    raw_signal_semantic_header: dict[str, Any],
+    raw_inference_receipt: dict[str, Any],
+    source_read_receipt_hashes: Sequence[str],
+    stage_trace: dict[str, Any],
+    candidate_outcome: Literal["CANDIDATES_AVAILABLE", "VALID_NO_CANDIDATE"],
+    no_candidate_reason_codes: Sequence[str],
     candidates: Sequence[HistoricalRangeCandidateFactV1],
     source_revision_refs: Sequence[HistoricalRangeSourceRevisionRefV1],
 ) -> dict[str, Any]:
-    if not source_revision_refs:
-        raise ValueError("candidate artifact payload requires source_revision_refs")
-    return {
-        "schema_version": "advisory_historical_range_candidate_artifact_payload_v1",
-        "range_run_id": _nonblank(range_run_id, field_name="range_run_id"),
-        "day_run_id": _nonblank(day_run_id, field_name="day_run_id"),
-        "source_revision_refs": [
-            item.model_dump(mode="json")
-            for item in sorted(source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash))
-        ],
-        "candidates": sorted(
-            (item.model_dump(mode="json") for item in candidates),
-            key=lambda item: (item["symbol"], item["candidate_id"]),
-        ),
-    }
+    return HistoricalRangeCandidateArtifactPayloadV2(
+        range_run_id=range_run_id,
+        day_run_id=day_run_id,
+        research_program_id=research_program_id,
+        decision_trade_date=decision_trade_date,
+        candidate_input_hash=candidate_input_hash,
+        package_id=package_id,
+        package_version=package_version,
+        manifest_sha256=manifest_sha256,
+        alpha_mode=alpha_mode,
+        runtime_profile_hash=runtime_profile_hash,
+        selection_semantics_hash=selection_semantics_hash,
+        code_release_hash=code_release_hash,
+        calendar_identity_hash=calendar_identity_hash,
+        universe_identity_hash=universe_identity_hash,
+        universe_count=universe_count,
+        raw_signal_identity_hash=raw_signal_identity_hash,
+        raw_signal_semantic_header=raw_signal_semantic_header,
+        raw_inference_receipt=raw_inference_receipt,
+        source_read_receipt_hashes=tuple(source_read_receipt_hashes),
+        stage_trace=stage_trace,
+        candidate_outcome=candidate_outcome,
+        no_candidate_reason_codes=tuple(no_candidate_reason_codes),
+        source_revision_refs=tuple(source_revision_refs),
+        candidates=tuple(candidates),
+    ).model_dump(mode="json")
+
+
+def build_candidate_input_hash(
+    *,
+    range_run_id: str,
+    research_program_id: str,
+    decision_trade_date: date,
+    frozen_program_hash: str,
+    runtime_profile_hash: str,
+    code_release_hash: str,
+    selection_semantics_hash: str,
+    calendar_identity_hash: str,
+    universe_identity_hash: str,
+    source_revision_catalog_hash: str,
+    query_contract_hash: str,
+) -> str:
+    return canonical_json_sha256(
+        {
+            "schema_version": "advisory_historical_range_candidate_input_v1",
+            "range_run_id": _nonblank(range_run_id, field_name="range_run_id"),
+            "research_program_id": _nonblank(research_program_id, field_name="research_program_id"),
+            "decision_trade_date": decision_trade_date,
+            "frozen_program_hash": require_sha256(frozen_program_hash, field_name="frozen_program_hash"),
+            "runtime_profile_hash": require_sha256(runtime_profile_hash, field_name="runtime_profile_hash"),
+            "code_release_hash": require_sha256(code_release_hash, field_name="code_release_hash"),
+            "selection_semantics_hash": require_sha256(selection_semantics_hash, field_name="selection_semantics_hash"),
+            "calendar_identity_hash": require_sha256(calendar_identity_hash, field_name="calendar_identity_hash"),
+            "universe_identity_hash": require_sha256(universe_identity_hash, field_name="universe_identity_hash"),
+            "source_revision_catalog_hash": require_sha256(
+                source_revision_catalog_hash, field_name="source_revision_catalog_hash"
+            ),
+            "query_contract_hash": require_sha256(query_contract_hash, field_name="query_contract_hash"),
+        }
+    )
+
+
+def build_day_input_hash(
+    *,
+    candidate_input_hash: str,
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1,
+    previous_list_hash: str | None,
+    previous_day_receipt_hash: str | None,
+    list_semantics_hash: str,
+) -> str:
+    if candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+        raise ValueError("candidate_artifact_ref must reference CANDIDATE_ARTIFACT")
+    if (previous_list_hash is None) != (previous_day_receipt_hash is None):
+        raise ValueError("previous list/day receipt hashes must be supplied together")
+    return canonical_json_sha256(
+        {
+            "schema_version": "advisory_historical_range_day_input_v2",
+            "candidate_input_hash": require_sha256(candidate_input_hash, field_name="candidate_input_hash"),
+            "candidate_artifact_ref": candidate_artifact_ref.model_dump(mode="json"),
+            "previous_list_hash": (
+                require_sha256(previous_list_hash, field_name="previous_list_hash")
+                if previous_list_hash is not None
+                else None
+            ),
+            "previous_day_receipt_hash": (
+                require_sha256(previous_day_receipt_hash, field_name="previous_day_receipt_hash")
+                if previous_day_receipt_hash is not None
+                else None
+            ),
+            "list_semantics_hash": require_sha256(list_semantics_hash, field_name="list_semantics_hash"),
+        }
+    )
+
+
+def build_catalog_member_chain_hash(
+    *,
+    members: Sequence[HistoricalRangeSourceRevisionMemberV1],
+    ordered_requirement_ids: Sequence[str],
+) -> str:
+    by_requirement = {item.requirement_id: item for item in members}
+    ordered_ids = tuple(_nonblank(item, field_name="requirement_id") for item in ordered_requirement_ids)
+    if len(ordered_ids) != len(set(ordered_ids)):
+        raise ValueError("ordered_requirement_ids must be duplicate-free")
+    if set(by_requirement) != set(ordered_ids) or len(by_requirement) != len(members):
+        raise ValueError("catalog members must resolve every ordered requirement exactly once")
+    chain_hash = canonical_json_sha256([])
+    for ordinal, requirement_id in enumerate(ordered_ids, start=1):
+        member = by_requirement[requirement_id]
+        chain_hash = append_catalog_member_chain_hash(
+            previous_chain_hash=chain_hash,
+            ordinal=ordinal,
+            member=member,
+        )
+    return chain_hash
+
+
+def append_catalog_member_chain_hash(
+    *,
+    previous_chain_hash: str,
+    ordinal: int,
+    member: HistoricalRangeSourceRevisionMemberV1,
+) -> str:
+    if ordinal < 1:
+        raise ValueError("catalog member ordinal must be positive")
+    return canonical_json_sha256(
+        {
+            "schema_version": "advisory_historical_range_catalog_member_chain_v1",
+            "previous_chain_hash": require_sha256(previous_chain_hash, field_name="previous_chain_hash"),
+            "ordinal": ordinal,
+            "requirement_id": member.requirement_id,
+            "revision_id": member.revision_id,
+            "revision_hash": member.revision_hash,
+        }
+    )
 
 
 def build_day_receipt_payload(
@@ -1300,7 +2464,46 @@ def build_day_receipt_payload(
     }
 
 
+def _topological_requirement_order(
+    requirements: Sequence[HistoricalRangeSourceRequirementV1],
+) -> tuple[HistoricalRangeSourceRequirementV1, ...]:
+    by_id = {item.requirement_id: item for item in requirements}
+    if len(by_id) != len(requirements):
+        raise ValueError("source requirement ids must be unique")
+    missing_dependencies = sorted(
+        {
+            dependency
+            for item in requirements
+            for dependency in item.depends_on_requirement_ids
+            if dependency not in by_id
+        }
+    )
+    if missing_dependencies:
+        raise ValueError(f"source requirement dependencies do not exist: {missing_dependencies}")
+    remaining = {item_id: set(item.depends_on_requirement_ids) for item_id, item in by_id.items()}
+    ordered: list[HistoricalRangeSourceRequirementV1] = []
+    while remaining:
+        ready = sorted(item_id for item_id, dependencies in remaining.items() if not dependencies)
+        if not ready:
+            raise ValueError("source requirement dependency graph contains a cycle")
+        for item_id in ready:
+            ordered.append(by_id[item_id])
+            remaining.pop(item_id)
+        for dependencies in remaining.values():
+            dependencies.difference_update(ready)
+    return tuple(ordered)
+
+
 BATCH_TRANSITIONS: dict[HistoricalRangeBatchStatus, frozenset[HistoricalRangeBatchStatus]] = {
+    HistoricalRangeBatchStatus.PLANNING: frozenset(
+        {
+            HistoricalRangeBatchStatus.QUEUED,
+            HistoricalRangeBatchStatus.WAITING_INPUT,
+            HistoricalRangeBatchStatus.DEDUPLICATED,
+            HistoricalRangeBatchStatus.FAILED,
+            HistoricalRangeBatchStatus.CANCELLED,
+        }
+    ),
     HistoricalRangeBatchStatus.QUEUED: frozenset(
         {HistoricalRangeBatchStatus.RUNNING, HistoricalRangeBatchStatus.CANCELLED}
     ),
@@ -1322,12 +2525,18 @@ BATCH_TRANSITIONS: dict[HistoricalRangeBatchStatus, frozenset[HistoricalRangeBat
         }
     ),
     HistoricalRangeBatchStatus.WAITING_INPUT: frozenset(
-        {HistoricalRangeBatchStatus.RUNNING, HistoricalRangeBatchStatus.FAILED, HistoricalRangeBatchStatus.CANCELLED}
+        {
+            HistoricalRangeBatchStatus.PLANNING,
+            HistoricalRangeBatchStatus.RUNNING,
+            HistoricalRangeBatchStatus.FAILED,
+            HistoricalRangeBatchStatus.CANCELLED,
+        }
     ),
     HistoricalRangeBatchStatus.CANCELLING: frozenset({HistoricalRangeBatchStatus.CANCELLED}),
     HistoricalRangeBatchStatus.COMPLETED: frozenset(),
     HistoricalRangeBatchStatus.FAILED: frozenset(),
     HistoricalRangeBatchStatus.CANCELLED: frozenset(),
+    HistoricalRangeBatchStatus.DEDUPLICATED: frozenset(),
 }
 
 PROGRAM_TRANSITIONS: dict[HistoricalRangeProgramStatus, frozenset[HistoricalRangeProgramStatus]] = {
@@ -1416,11 +2625,13 @@ OPERATION_TRANSITIONS: dict[HistoricalRangeOperationStatus, frozenset[Historical
     HistoricalRangeOperationStatus.RUNNING: frozenset(
         {
             HistoricalRangeOperationStatus.COMPLETED,
+            HistoricalRangeOperationStatus.WAITING_INPUT,
             HistoricalRangeOperationStatus.RETRYABLE_FAILED,
             HistoricalRangeOperationStatus.FAILED,
         }
     ),
     HistoricalRangeOperationStatus.RETRYABLE_FAILED: frozenset({HistoricalRangeOperationStatus.RUNNING}),
+    HistoricalRangeOperationStatus.WAITING_INPUT: frozenset({HistoricalRangeOperationStatus.RUNNING}),
     HistoricalRangeOperationStatus.COMPLETED: frozenset(),
     HistoricalRangeOperationStatus.FAILED: frozenset(),
 }
@@ -1451,8 +2662,10 @@ def require_batch_transition(
     recoverable_program_count: int,
 ) -> None:
     require_state_transition(current, target, BATCH_TRANSITIONS, entity="batch")
-    if target is HistoricalRangeBatchStatus.FAILED and (
-        successful_day_count != 0 or failed_program_count != program_count or recoverable_program_count != 0
+    if (
+        target is HistoricalRangeBatchStatus.FAILED
+        and current is not HistoricalRangeBatchStatus.PLANNING
+        and (successful_day_count != 0 or failed_program_count != program_count or recoverable_program_count != 0)
     ):
         raise HistoricalRangeContractError(
             REASON_STATE_TRANSITION_INVALID,
@@ -1517,3 +2730,6 @@ def derive_outcome_logical_id(
             "label_policy_hash": require_sha256(label_policy_hash, field_name="label_policy_hash"),
         },
     )
+
+
+HistoricalRangeFrozenProgramV1.model_rebuild()

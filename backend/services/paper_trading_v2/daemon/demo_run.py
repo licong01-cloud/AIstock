@@ -108,9 +108,7 @@ def main() -> int:
             "Paper v2 LocalSim demo requires an explicit execution policy; "
             "reason_code=LOCALSIM_DEMO_EXECUTION_POLICY_MISSING"
         )
-    policy_json = normalize_execution_policy_json(
-        minute_policy.model_dump(mode="json")
-    )
+    policy_json = normalize_execution_policy_json(minute_policy.model_dump(mode="json"))
     execution_policy = {
         "validated_execution_policy_id": "paper_v2_daemon_demo_explicit_policy",
         "policy_sha256": compute_execution_policy_sha256(policy_json),

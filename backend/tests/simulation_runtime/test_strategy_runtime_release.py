@@ -227,9 +227,7 @@ def test_simulation_binding_admission_accepts_active_package_types_without_conte
         repository=repository,
         package_lifecycle_reader=package_reader,
     )
-    policy_json = normalize_execution_policy_json(
-        {"algo_code": "CLOSE_PRICE", "algo_config": {}}
-    )
+    policy_json = normalize_execution_policy_json({"algo_code": "CLOSE_PRICE", "algo_config": {}})
     release = service.create_release(
         **_release_kwargs(
             package_id=package_id,

@@ -182,9 +182,7 @@ def _build_backend(
     if execution_policy is None:
         minute_policy = manifest.minute_execution_policy
         assert minute_policy is not None
-        execution_policy = _test_execution_policy_snapshot(
-            minute_policy.model_dump(mode="json")
-        )
+        execution_policy = _test_execution_policy_snapshot(minute_policy.model_dump(mode="json"))
     else:
         raw_policy_json = execution_policy.get("policy_json")
         assert isinstance(raw_policy_json, dict)
@@ -255,8 +253,7 @@ def _ledger_fill(
         side=side,
         quantity=quantity,
         price=price,
-        trade_time=trade_time
-        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        trade_time=trade_time or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
         reason="unit ledger fill",
     )
 
@@ -278,8 +275,7 @@ def _unchecked_ledger_fill(
         side=side,
         quantity=quantity,
         price=price,
-        trade_time=trade_time
-        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        trade_time=trade_time or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
         bar_time=None,
         reason="unchecked unit ledger fill",
         metadata={},
@@ -430,9 +426,12 @@ def test_localsim_realtime_submission_persists_waiting_state_before_first_causal
             plan_id="plan_waiting_unit",
             target_trade_date=TRADE_DATE,
             intents=(intent,),
-            plan_payload_json={"local_sim_execution_causality": {
-                "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": as_of.isoformat()
-            }},
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "schema_version": "local_sim_execution_causality_v1",
+                    "eligible_bar_after": as_of.isoformat(),
+                }
+            },
         ),
         as_of_time=as_of,
     )
@@ -457,17 +456,23 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     }
     first_as_of = cursor + timedelta(minutes=2)
     first, _, _ = _build_backend(
-        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME,
-        provider=provider, execution_policy=streaming_policy,
+        initial_cash=10_000_000,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy=streaming_policy,
     )
     first.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
     intent = _buy_intent(first, quantity=10_000)
     plan = SimpleNamespace(
-        plan_id="plan_stream_restart", target_trade_date=TRADE_DATE,
+        plan_id="plan_stream_restart",
+        target_trade_date=TRADE_DATE,
         intents=(intent,),
-        plan_payload_json={"local_sim_execution_causality": {
-            "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": cursor.isoformat()
-        }},
+        plan_payload_json={
+            "local_sim_execution_causality": {
+                "schema_version": "local_sim_execution_causality_v1",
+                "eligible_bar_after": cursor.isoformat(),
+            }
+        },
     )
     first.bind_execution_plan(plan=plan, as_of_time=first_as_of)
     first_handle = first.submit_order_intent(intent)
@@ -523,11 +528,14 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     conflicting_bars = list(historical.minute_bars)
     conflicting_bars[1] = conflicting_bars[1].model_copy(update={"close": conflicting_bars[1].close + 0.5})
     conflict_backend, _, _ = _build_backend(
-        initial_cash=10_000_000, initial_available_cash=float(first.query_account().cash),
-        initial_positions=first.query_positions(), data_source=MinuteDataSource.TDX_REALTIME,
+        initial_cash=10_000_000,
+        initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(),
+        data_source=MinuteDataSource.TDX_REALTIME,
         provider=ObservedMarketDataProvider(
             inputs_by_symbol={"000001.SZ": replace(historical, minute_bars=conflicting_bars)}
-        ), execution_policy=streaming_policy,
+        ),
+        execution_policy=streaming_policy,
     )
     conflict_backend.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
     conflict_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
@@ -543,9 +551,12 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
 
     second_as_of = cursor + timedelta(minutes=4)
     second, _, _ = _build_backend(
-        initial_cash=10_000_000, initial_available_cash=float(first.query_account().cash),
-        initial_positions=first.query_positions(), data_source=MinuteDataSource.TDX_REALTIME,
-        provider=provider, execution_policy=streaming_policy,
+        initial_cash=10_000_000,
+        initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(),
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy=streaming_policy,
     )
     second.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
     second.bind_execution_plan(plan=plan, as_of_time=second_as_of)
@@ -592,7 +603,9 @@ def test_realtime_market_snapshot_is_loaded_once_per_symbol_and_reused_for_marks
         plan_payload_json={
             "local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1",
-                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30).isoformat(),
+                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time())
+                .replace(hour=9, minute=30)
+                .isoformat(),
             }
         },
     )
@@ -829,7 +842,9 @@ def test_one_symbol_market_data_failure_does_not_rollback_healthy_intent() -> No
         plan_payload_json={
             "local_sim_execution_causality": {
                 "schema_version": "local_sim_execution_causality_v1",
-                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30).isoformat(),
+                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time())
+                .replace(hour=9, minute=30)
+                .isoformat(),
             }
         },
     )
@@ -873,9 +888,7 @@ def test_dependent_buy_partially_executes_then_resumes_after_sell_cash_release()
             for index, bar in enumerate(raw_sell_input.minute_bars)
         ],
     )
-    provider = ObservedMarketDataProvider(
-        inputs_by_symbol={"000001.SZ": buy_input, "000002.SZ": sell_input}
-    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": buy_input, "000002.SZ": sell_input})
     position = PositionLot(
         portfolio_id="paper_local_p1",
         symbol="000002.SZ",
@@ -942,8 +955,7 @@ def test_dependent_buy_partially_executes_then_resumes_after_sell_cash_release()
 
     handles = backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=4))
     final_states = {
-        state.symbol: state
-        for state in backend.export_execution_snapshot(handles=handles)["execution_states"]
+        state.symbol: state for state in backend.export_execution_snapshot(handles=handles)["execution_states"]
     }
     assert final_states["000002.SZ"].runtime_status.value == "FILLED"
     assert final_states["000001.SZ"].runtime_status.value == "FILLED"
@@ -951,9 +963,7 @@ def test_dependent_buy_partially_executes_then_resumes_after_sell_cash_release()
 
 
 def test_realtime_buy_with_no_released_cash_persists_waiting_order_evidence() -> None:
-    provider = ObservedMarketDataProvider(
-        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=2)}
-    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=2)})
     backend, _, _ = _build_backend(
         initial_cash=100_000,
         initial_available_cash=0,
@@ -1010,7 +1020,9 @@ def test_localsim_close_terminalizes_remaining_schedule_with_explicit_residual()
     )
     as_of = closing_bar.bar_time + timedelta(minutes=1)
     backend, _, _ = _build_backend(
-        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME, provider=provider,
+        initial_cash=10_000_000,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
         execution_policy={
             "validated_execution_policy_id": "exec_policy_twap_close_residual",
             "policy_sha256": "sha_twap_close_residual",
@@ -1021,12 +1033,17 @@ def test_localsim_close_terminalizes_remaining_schedule_with_explicit_residual()
     intent = _buy_intent(backend, quantity=10_000)
     backend.bind_execution_plan(
         plan=SimpleNamespace(
-            plan_id="plan_close_residual", target_trade_date=TRADE_DATE, intents=(intent,),
-            plan_payload_json={"local_sim_execution_causality": {
-                "schema_version": "local_sim_execution_causality_v1",
-                "eligible_bar_after": closing_bar.bar_time.replace(hour=14, minute=59).isoformat(),
-            }},
-        ), as_of_time=as_of,
+            plan_id="plan_close_residual",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "schema_version": "local_sim_execution_causality_v1",
+                    "eligible_bar_after": closing_bar.bar_time.replace(hour=14, minute=59).isoformat(),
+                }
+            },
+        ),
+        as_of_time=as_of,
     )
     handle = backend.submit_order_intent(intent)
     state = backend.export_execution_snapshot(handles=[handle])["execution_states"][0]
@@ -1037,12 +1054,12 @@ def test_localsim_close_terminalizes_remaining_schedule_with_explicit_residual()
 
 
 def test_localsim_post_close_fails_loud_when_closing_bar_is_missing() -> None:
-    provider = ObservedMarketDataProvider(
-        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=2)}
-    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=2)})
     as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=15, minute=1)
     backend, _, _ = _build_backend(
-        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME, provider=provider,
+        initial_cash=10_000_000,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
         execution_policy={
             "validated_execution_policy_id": "exec_policy_twap_missing_close",
             "policy_sha256": "sha_twap_missing_close",
@@ -1053,14 +1070,19 @@ def test_localsim_post_close_fails_loud_when_closing_bar_is_missing() -> None:
     intent = _buy_intent(backend, quantity=10_000)
     backend.bind_execution_plan(
         plan=SimpleNamespace(
-            plan_id="plan_missing_close", target_trade_date=TRADE_DATE, intents=(intent,),
-            plan_payload_json={"local_sim_execution_causality": {
-                "schema_version": "local_sim_execution_causality_v1",
-                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time()).replace(
-                    hour=9, minute=30
-                ).isoformat(),
-            }},
-        ), as_of_time=as_of,
+            plan_id="plan_missing_close",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "schema_version": "local_sim_execution_causality_v1",
+                    "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time())
+                    .replace(hour=9, minute=30)
+                    .isoformat(),
+                }
+            },
+        ),
+        as_of_time=as_of,
     )
     with pytest.raises(BrokerConnectivityError) as exc_info:
         backend.submit_order_intent(intent)
@@ -1166,9 +1188,7 @@ def test_localsim_realtime_buy_priority_preserves_plan_order_with_limited_cash()
         plan_id="plan_priority",
         target_trade_date=TRADE_DATE,
         intents=(first_buy, second_buy),
-        plan_payload_json={
-            "local_sim_execution_causality": {"eligible_bar_after": cursor.isoformat()}
-        },
+        plan_payload_json={"local_sim_execution_causality": {"eligible_bar_after": cursor.isoformat()}},
     )
     backend.bind_execution_plan(plan=plan, as_of_time=cursor)
     backend.submit_order_intent(first_buy)
@@ -1183,9 +1203,7 @@ def test_localsim_realtime_buy_priority_preserves_plan_order_with_limited_cash()
 
 
 def test_localsim_reused_realtime_mark_has_explicit_failure_evidence_and_new_hash() -> None:
-    provider = ObservedMarketDataProvider(
-        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=3)}
-    )
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=3)})
     backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
     first_as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=32)
     first = backend.load_authoritative_position_marks(
@@ -1297,9 +1315,7 @@ def test_localsim_init_accepts_tdx_and_db() -> None:
     manifest = make_paper_enabled_manifest()
     minute_policy = manifest.minute_execution_policy
     assert minute_policy is not None
-    execution_policy = _test_execution_policy_snapshot(
-        minute_policy.model_dump(mode="json")
-    )
+    execution_policy = _test_execution_policy_snapshot(minute_policy.model_dump(mode="json"))
     for source in (MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL):
         LocalSimBackend(
             portfolio_id=f"p_{source.value.lower()}",
@@ -1333,6 +1349,48 @@ def test_submit_order_intent_returns_terminal_status_synchronously() -> None:
     assert status.avg_fill_price is not None
     assert status.rejection_reason is None
     backend.unsubscribe_fill_callback(sub)
+
+
+def test_localsim_twap_sell_does_not_submit_subminimum_intermediate_children() -> None:
+    position = PositionLot(
+        portfolio_id="paper_local_sell_slices",
+        symbol="000001.SZ",
+        quantity=300,
+        available_quantity=300,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    provider = FakeMarketDataProvider(inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=6)})
+    backend, _, _ = _build_backend(
+        portfolio_id="paper_local_sell_slices",
+        initial_cash=100_000.0,
+        provider=provider,
+        initial_positions={"000001.SZ": position},
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_sell_slices",
+            "policy_sha256": "sha_twap_sell_slices",
+            "policy_json": {
+                "algo_code": "TWAP",
+                "algo_config": {"split_count": 6, "allow_partial_fill": False},
+            },
+        },
+    )
+    intent = OrderIntent(
+        package_id=backend.package_id,
+        portfolio_id=backend.portfolio_id,
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        quantity=300,
+        order_type=OrderType.MARKET,
+        target_trade_date=TRADE_DATE,
+    )
+
+    handle = backend.submit_order_intent(intent)
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+
+    assert backend.query_status(handle).state == "filled"
+    assert [fill.quantity for fill in snapshot["fills"]] == [100, 100, 100]
+    assert "000001.SZ" not in backend.query_positions()
 
 
 def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
@@ -1434,9 +1492,7 @@ def test_localsim_policy_authority_rejects_hash_or_identity_alias_conflicts() ->
             market_data_provider=FakeMarketDataProvider(),
             execution_policy=snapshot,
         )
-    assert alias_exc.value.context["reason_code"] == (
-        "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID"
-    )
+    assert alias_exc.value.context["reason_code"] == ("LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID")
 
     hash_conflict = _test_execution_policy_snapshot(policy_json)
     hash_conflict["policy_sha256"] = "0" * 64
@@ -1627,9 +1683,7 @@ def test_subscribe_returns_handle_and_unsubscribe_releases() -> None:
 
 def test_unsubscribe_unknown_handle_is_silent_noop() -> None:
     backend, _, _ = _build_backend()
-    backend.unsubscribe_fill_callback(
-        SubscriptionHandle(subscription_id="lsub_unknown", backend_id="local_sim")
-    )
+    backend.unsubscribe_fill_callback(SubscriptionHandle(subscription_id="lsub_unknown", backend_id="local_sim"))
 
 
 # ---------------------------------------------------------------------------
@@ -1709,12 +1763,8 @@ def test_inmemoryledger_money_fields_are_decimal_quantized_without_float_drift()
         fee_model=FeeModel(open_cost=0.0, close_cost=0.0, min_cost=0.0),
     )
 
-    ledger.apply_fill(
-        _ledger_fill(order_id="ord_dec_1", fill_id="fill_dec_1", quantity=100, price=0.1)
-    )
-    ledger.apply_fill(
-        _ledger_fill(order_id="ord_dec_2", fill_id="fill_dec_2", quantity=100, price=0.2)
-    )
+    ledger.apply_fill(_ledger_fill(order_id="ord_dec_1", fill_id="fill_dec_1", quantity=100, price=0.1))
+    ledger.apply_fill(_ledger_fill(order_id="ord_dec_2", fill_id="fill_dec_2", quantity=100, price=0.2))
 
     assert ledger.cash_decimal == Decimal("9999970.00")
     assert ledger.cash_entries[0].notional == Decimal("10.00")
@@ -1731,20 +1781,14 @@ def test_inmemoryledger_min_commission_is_charged_incrementally_per_order() -> N
         fee_model=FeeModel(open_cost=0.001, close_cost=0.001, min_cost=5.0),
     )
 
-    ledger.apply_fill(
-        _ledger_fill(order_id="ord_split", fill_id="fill_split_1", quantity=100, price=10.0)
-    )
-    ledger.apply_fill(
-        _ledger_fill(order_id="ord_split", fill_id="fill_split_2", quantity=100, price=60.0)
-    )
+    ledger.apply_fill(_ledger_fill(order_id="ord_split", fill_id="fill_split_1", quantity=100, price=10.0))
+    ledger.apply_fill(_ledger_fill(order_id="ord_split", fill_id="fill_split_2", quantity=100, price=60.0))
 
     assert [entry.fee for entry in ledger.cash_entries] == [
         Decimal("5.00"),
         Decimal("2.00"),
     ]
-    assert sum((entry.fee for entry in ledger.cash_entries), Decimal("0.00")) == Decimal(
-        "7.00"
-    )
+    assert sum((entry.fee for entry in ledger.cash_entries), Decimal("0.00")) == Decimal("7.00")
     assert ledger.cash_decimal == Decimal("92993.00")
 
 

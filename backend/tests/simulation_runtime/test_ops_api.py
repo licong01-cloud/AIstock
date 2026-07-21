@@ -1994,6 +1994,69 @@ def test_platform_diagnostics_projects_localsim_outbox_backlog_terminal_failure_
     assert not any(alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE" for alert in recovered["alerts"]["items"])
 
 
+def test_platform_diagnostics_distinguishes_active_and_stale_localsim_valuation_pending(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED_VALUATION_PENDING",
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": "INTRADAY_VALUATION_PENDING",
+                "order_count": 1,
+                "fill_count": 1,
+                "order_event_count": 2,
+                "cash_ledger_count": 1,
+                "position_count": 2,
+                "nav": None,
+                "valuation_status": "WAITING_FOR_AUTHORITATIVE_MARKS",
+                "missing_mark_symbols": ["000003.SZ"],
+            },
+            "local_sim_projection_outbox_v1": {
+                "status": "PENDING",
+                "attempt_count": 0,
+                "readback_attempt_count": 0,
+                "generation": 1,
+            },
+        },
+    )
+    pending_run = repo.get_simulation_daily_run(run_id)
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=pending_run.updated_at),  # type: ignore[arg-type]
+    )
+
+    active = service.platform_diagnostics(
+        run_id=run_id,
+        generated_at=pending_run.updated_at + timedelta(seconds=60),
+    )
+    active_durability = active["layers"]["durability"][0]
+    assert active_durability["status"] == "IN_PROGRESS"
+    assert active_durability["reason_code"] == "LOCAL_SIM_VALUATION_PENDING"
+    assert active_durability["facts"]["valuation_pending"] is True
+    assert active_durability["facts"]["missing_mark_symbols"] == ["000003.SZ"]
+    assert not any(
+        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
+        for alert in active["alerts"]["items"]
+    )
+
+    stale = service.platform_diagnostics(
+        run_id=run_id,
+        generated_at=pending_run.updated_at + timedelta(seconds=121),
+    )
+    stale_durability = stale["layers"]["durability"][0]
+    assert stale_durability["status"] == "DEGRADED"
+    assert stale_durability["reason_code"] == "LOCAL_SIM_VALUATION_PENDING_STALE"
+    assert any(
+        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
+        and alert["reason_code"] == "LOCAL_SIM_VALUATION_PENDING_STALE"
+        for alert in stale["alerts"]["items"]
+    )
+
+
 def test_platform_diagnostics_projects_valid_miniqmt_pending_batch_and_rejects_counter_conflict(
     repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
 ) -> None:

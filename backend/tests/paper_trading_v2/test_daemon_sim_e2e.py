@@ -71,9 +71,7 @@ _TRADE_DATE = date(2024, 1, 2)
 def _explicit_daemon_execution_policy(manifest) -> dict:
     minute_policy = manifest.minute_execution_policy
     assert minute_policy is not None
-    policy_json = normalize_execution_policy_json(
-        minute_policy.model_dump(mode="json")
-    )
+    policy_json = normalize_execution_policy_json(minute_policy.model_dump(mode="json"))
     return {
         "validated_execution_policy_id": "paper_v2_daemon_e2e_explicit_policy",
         "policy_sha256": compute_execution_policy_sha256(policy_json),
@@ -359,10 +357,10 @@ def test_e2e_data_unavailable_raises_connectivity(tmp_path: Path) -> None:
 
 def test_simgateway_lifecycle_invariants(tmp_path: Path) -> None:
     """Scenario 5: SimGateway state machine.
-       - INIT->send_order rejected
-       - connect twice rejected
-       - close idempotent + reused gateway rejects connect
-       - close twice OK"""
+    - INIT->send_order rejected
+    - connect twice rejected
+    - close idempotent + reused gateway rejects connect
+    - close twice OK"""
     manifest = make_paper_enabled_manifest()
     portfolio_id = f"paper_test_{uuid4().hex[:8]}"
     backend = LocalSimBackend(
@@ -376,9 +374,7 @@ def test_simgateway_lifecycle_invariants(tmp_path: Path) -> None:
     gateway = SimGateway.from_local_sim(backend)
     assert gateway.state == SimGatewayConnectionState.INIT
 
-    intent = _make_intent(
-        portfolio_id=portfolio_id, package_id=manifest.package_id
-    )
+    intent = _make_intent(portfolio_id=portfolio_id, package_id=manifest.package_id)
     with pytest.raises(SimGatewayConnectError):
         gateway.send_order(intent)
 
@@ -417,11 +413,7 @@ def test_e2e_subscribe_fill_fanout_via_event_log(tmp_path: Path) -> None:
     assert len(result.handles) == 2
 
     records = event_log.read_all()
-    submitted = {
-        r.handle_id: r.intent_id
-        for r in records
-        if r.event_type == DaemonEventType.ORDER_SUBMITTED
-    }
+    submitted = {r.handle_id: r.intent_id for r in records if r.event_type == DaemonEventType.ORDER_SUBMITTED}
     fills = [r for r in records if r.event_type == DaemonEventType.FILL_RECEIVED]
     assert all(f.handle_id in submitted for f in fills)
     # Each intent gets at least one fill record.
@@ -435,18 +427,15 @@ def test_e2e_subscribe_fill_fanout_via_event_log(tmp_path: Path) -> None:
 def test_event_log_count_helpers(tmp_path: Path) -> None:
     """Bonus #7: ``DaemonEventLog.count`` returns total + per-type counts."""
     _, gateway, runner, event_log, portfolio_id = _wire(tmp_path=tmp_path)
-    intent = _make_intent(
-        portfolio_id=portfolio_id, package_id=runner._manifest.package_id
-    )
+    intent = _make_intent(portfolio_id=portfolio_id, package_id=runner._manifest.package_id)
     runner.run_intents([intent])
     gateway.close()
 
     total = event_log.count()
-    assert total == event_log.count(DaemonEventType.RUN_STARTED) \
-        + event_log.count(DaemonEventType.INTENT_CREATED) \
-        + event_log.count(DaemonEventType.FILL_RECEIVED) \
-        + event_log.count(DaemonEventType.ORDER_SUBMITTED) \
-        + event_log.count(DaemonEventType.POSITION_UPDATED) \
-        + event_log.count(DaemonEventType.RUN_COMPLETED)
+    assert total == event_log.count(DaemonEventType.RUN_STARTED) + event_log.count(
+        DaemonEventType.INTENT_CREATED
+    ) + event_log.count(DaemonEventType.FILL_RECEIVED) + event_log.count(
+        DaemonEventType.ORDER_SUBMITTED
+    ) + event_log.count(DaemonEventType.POSITION_UPDATED) + event_log.count(DaemonEventType.RUN_COMPLETED)
     assert event_log.count(DaemonEventType.RUN_STARTED) == 1
     assert event_log.count(DaemonEventType.RUN_COMPLETED) == 1

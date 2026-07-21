@@ -9,7 +9,10 @@ import pytest
 
 from backend.services.hmm_evolution.candidate_artifact import CandidateArtifactResolver
 from backend.services.hmm_evolution.errors import ArtifactHashMismatchError, InvalidSpecError
-from backend.services.hmm_evolution.input_adapter import HMMEvaluationInputAdapter
+from backend.services.hmm_evolution.input_adapter import (
+    HMMEvaluationInputAdapter,
+    _verify_artifact_receipts,
+)
 from backend.services.hmm_evolution.market_repository import MarketReturnRead, MarketWatermark
 from backend.services.hmm_evolution.models import (
     CandidateLifecycle,
@@ -130,6 +133,22 @@ class _UniverseResolver:
                 "universe_hash": "e" * 64,
                 "symbol_count": int(predictions["symbol"].nunique()),
                 "eligible_pair_count": len(predictions),
+                "st_pit": {
+                    "artifact_name": "qe_event_risk_policy.json",
+                    "artifact_sha256": "f" * 64,
+                    "binding_mode": "legacy_allowlisted_compatibility_artifact_v1",
+                    "compatibility_receipt": {
+                        "source_loop_config_sha256": "a" * 64,
+                        "source_loop_stock_pool_sha256": "b" * 64,
+                        "artifact_source": {
+                            "task_id": "qe_20260705_004409_4437",
+                            "loop_name": "Loop10",
+                            "artifact_name": "qe_event_risk_policy.json",
+                        },
+                        "artifact_sha256": "f" * 64,
+                        "artifact_size_bytes": 1781296,
+                    },
+                },
             },
         )
 
@@ -212,6 +231,16 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     assert [item["selected_row_count"] for item in plan.source_manifest["artifacts"]] == [2, 2]
     assert plan.source_manifest["market_forward_return"]["price_row_count"] == 4
     assert len(plan.source_manifest["market_forward_return"]["market_return_content_hash"]) == 64
+    assert plan.source_manifest["universe"]["st_pit"]["artifact_name"] == (
+        "qe_event_risk_policy.json"
+    )
+    assert plan.source_manifest["universe"]["st_pit"]["compatibility_receipt"][
+        "artifact_source"
+    ] == {
+        "task_id": "qe_20260705_004409_4437",
+        "loop_name": "Loop10",
+        "artifact_name": "qe_event_risk_policy.json",
+    }
     assert prepared.market_returns is not None
     assert len(prepared.market_returns) == 2
     assert preferences == ["prediction_store_first"]
@@ -501,3 +530,47 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
                 candidate=candidate,
             )
         )
+
+
+def test_replay_allows_acquisition_fallback_policy_to_change_for_same_artifacts() -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    frozen_artifacts = []
+    current_source_info = {}
+    for name, sha in (("pred.pkl", "b" * 64), ("label.pkl", "c" * 64)):
+        row_count = len(predictions if name == "pred.pkl" else labels)
+        frozen_artifacts.append(
+            {
+                "artifact_name": name,
+                "source": "qe_workspace_cache",
+                "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+                "sha256": sha,
+                "size_bytes": 100,
+                "row_count": row_count,
+                "selected_row_count": row_count,
+                "zero_copy": False,
+                "fallback": True,
+            }
+        )
+        current_source_info[name] = {
+            "source": "qe_workspace_cache",
+            "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+            "sha256": sha,
+            "size_bytes": 100,
+            "row_count": row_count,
+            "zero_copy": False,
+            "fallback": False,
+        }
+
+    _verify_artifact_receipts(
+        {"artifacts": frozen_artifacts},
+        current_source_info,
+        predictions,
+        labels,
+    )

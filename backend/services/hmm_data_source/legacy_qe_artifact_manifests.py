@@ -4,10 +4,58 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyQESTPITCompatibilityReceipt:
+    """Pinned cross-loop ST-PIT evidence for one approved pre-ST-PIT QE loop."""
+
+    artifact_source_task_id: str
+    artifact_source_loop_name: str
+    workspace_path: str
+    sha256: str
+    size_bytes: int
+    source_config_sha256: str
+    stock_pool_sha256: str
+    universe_key: str
+    rule_version: str
+    scope: str
+    source_fingerprint_sha256: str
+    start_date: date
+    end_date: date
+    span_count: int
+    binding_mode: str = "legacy_allowlisted_compatibility_artifact_v1"
+
+    def __post_init__(self) -> None:
+        if (
+            not _SAFE_ID_RE.fullmatch(self.artifact_source_task_id)
+            or not re.fullmatch(r"Loop[1-9][0-9]*", self.artifact_source_loop_name)
+            or self.workspace_path != "qe_event_risk_policy.json"
+        ):
+            raise ValueError("legacy QE ST-PIT compatibility source identity is invalid")
+        required_hashes = (
+            self.sha256,
+            self.source_config_sha256,
+            self.stock_pool_sha256,
+            self.source_fingerprint_sha256,
+        )
+        if any(not _SHA256_RE.fullmatch(value) for value in required_hashes):
+            raise ValueError("legacy QE ST-PIT compatibility integrity metadata is invalid")
+        if (
+            self.size_bytes < 1
+            or self.span_count < 1
+            or self.end_date < self.start_date
+            or not self.universe_key
+            or not self.rule_version
+            or not self.scope
+            or self.binding_mode != "legacy_allowlisted_compatibility_artifact_v1"
+        ):
+            raise ValueError("legacy QE ST-PIT compatibility receipt is not usable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +104,7 @@ class LegacyQEArtifactManifest:
     recorder_id: str
     recorder_evidence: LegacyQERecorderEvidence
     artifacts: tuple[LegacyQEArtifactReceipt, ...]
+    st_pit_compatibility: LegacyQESTPITCompatibilityReceipt | None = None
 
     def __post_init__(self) -> None:
         if self.base_loop_ref.count("/") != 1 or not self.logical_experiment_id:
@@ -115,6 +164,28 @@ LEGACY_QE_ARTIFACT_MANIFESTS: tuple[LegacyQEArtifactManifest, ...] = (
                 size_bytes=16434799,
                 row_count=2045269,
             ),
+        ),
+        st_pit_compatibility=LegacyQESTPITCompatibilityReceipt(
+            artifact_source_task_id="qe_20260705_004409_4437",
+            artifact_source_loop_name="Loop10",
+            workspace_path="qe_event_risk_policy.json",
+            sha256="8f1a09a0e6e9fba0e5f9e0eb62ad2af02a91ea1059cbdec0257f287c556d4942",
+            size_bytes=1781296,
+            source_config_sha256=(
+                "555094358aebc0696bb9abe937156dc14bf2db5e42956c8e6afe68afbb408f7e"
+            ),
+            stock_pool_sha256=(
+                "3b4ad5e17e49166df13840f453619a87cafaa70dda129daafee8adf0fca4e1b5"
+            ),
+            universe_key="shsz_st_pit_active_v1",
+            rule_version="st_pub_next_trade_restore_active_l_v1",
+            scope="st_only_active",
+            source_fingerprint_sha256=(
+                "e55489faf00217d0b932fe3ebaa95cdae8cf0d17e6424dbccd4afd80ab24774f"
+            ),
+            start_date=date(2024, 7, 1),
+            end_date=date(2026, 4, 27),
+            span_count=5161,
         ),
     ),
 )

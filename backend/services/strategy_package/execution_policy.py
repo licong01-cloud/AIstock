@@ -85,6 +85,7 @@ ALGO_CONFIG_GUARD_FORBIDDEN_KEYS = {
     "t1_handling",
 }
 
+
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
     encoded = json.dumps(
         policy_json,
@@ -159,11 +160,7 @@ def validate_frozen_execution_policy_snapshot(
             },
         )
     payload = dict(snapshot)
-    present_id_fields = [
-        field
-        for field in FROZEN_EXECUTION_POLICY_ID_FIELDS
-        if str(payload.get(field) or "").strip()
-    ]
+    present_id_fields = [field for field in FROZEN_EXECUTION_POLICY_ID_FIELDS if str(payload.get(field) or "").strip()]
     if len(present_id_fields) != 1:
         raise RuntimeConfigInvalidError(
             "LocalSim execution policy snapshot requires exactly one policy identity field",
@@ -257,7 +254,12 @@ def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowe
     if not isinstance(value, dict):
         raise RuntimeConfigInvalidError(
             f"execution policy {key} must be an object",
-            context={"field": key, "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR" if key == "price_guard" else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR"},
+            context={
+                "field": key,
+                "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR"
+                if key == "price_guard"
+                else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR",
+            },
         )
     unknown = sorted(set(value).difference(allowed_keys))
     if unknown:

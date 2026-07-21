@@ -176,9 +176,7 @@ class LocalSimBackend(BrokerBackend):
             self._ledger.cash = float(initial_available_cash)
         for symbol, lot in dict(initial_positions or {}).items():
             if lot.portfolio_id != portfolio_id:
-                raise ValueError(
-                    "initial_positions lot portfolio_id must match LocalSim portfolio_id"
-                )
+                raise ValueError("initial_positions lot portfolio_id must match LocalSim portfolio_id")
             self._ledger.positions[str(symbol)] = lot
         self._records: dict[str, _OrderRecord] = {}  # keyed by handle_id
         self._intent_index: dict[str, str] = {}  # intent_id -> handle_id
@@ -404,8 +402,7 @@ class LocalSimBackend(BrokerBackend):
                     except BrokerConnectivityError as exc:
                         error_context = dict(getattr(exc, "context", None) or {})
                         reason_code = str(
-                            error_context.get("reason_code")
-                            or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
+                            error_context.get("reason_code") or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
                         )
                         if self._market_data_failure_is_terminal(exc):
                             rejected_order, rejected_event = self._oms.reject_order(
@@ -432,7 +429,8 @@ class LocalSimBackend(BrokerBackend):
                         continue
                     cursor = state.last_processed_bar_time or state.causality_cursor
                     new_bars = [
-                        bar for bar in market_input.minute_bars
+                        bar
+                        for bar in market_input.minute_bars
                         if self._naive_for_compare(bar.bar_time) > self._naive_for_compare(cursor)
                     ]
                     if new_bars:
@@ -480,9 +478,7 @@ class LocalSimBackend(BrokerBackend):
                                     else None
                                 ),
                                 waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS"
-                                    if capital_wait is not None
-                                    else None
+                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
                                 ),
                                 waiting_context=capital_wait,
                             )
@@ -556,8 +552,7 @@ class LocalSimBackend(BrokerBackend):
         self._scheduler_as_of_time = as_of_time
         self._eligible_bar_after = cursor
         symbols = {
-            str(getattr(intent, "symbol", "") or "").strip()
-            for intent in tuple(getattr(plan, "intents", ()) or ())
+            str(getattr(intent, "symbol", "") or "").strip() for intent in tuple(getattr(plan, "intents", ()) or ())
         }
         symbols.update(self._ledger.positions)
         self._prepare_realtime_market_snapshot(
@@ -641,9 +636,7 @@ class LocalSimBackend(BrokerBackend):
                     )
                     cursor_cmp = self._naive_for_compare(self._eligible_bar_after)
                     causal_bars = [
-                        bar
-                        for bar in market_input.minute_bars
-                        if self._naive_for_compare(bar.bar_time) > cursor_cmp
+                        bar for bar in market_input.minute_bars if self._naive_for_compare(bar.bar_time) > cursor_cmp
                     ]
                     market_input = replace(
                         market_input,
@@ -689,8 +682,7 @@ class LocalSimBackend(BrokerBackend):
                     if market_data_error is not None:
                         error_context = dict(getattr(market_data_error, "context", None) or {})
                         reason_code = str(
-                            error_context.get("reason_code")
-                            or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
+                            error_context.get("reason_code") or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
                         )
                         if self._market_data_failure_is_terminal(market_data_error):
                             final_order, terminal_event = self._oms.reject_order(order, reason_code)
@@ -745,9 +737,7 @@ class LocalSimBackend(BrokerBackend):
                                     else None
                                 ),
                                 waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS"
-                                    if capital_wait is not None
-                                    else None
+                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
                                 ),
                                 waiting_context=capital_wait,
                             )
@@ -989,9 +979,7 @@ class LocalSimBackend(BrokerBackend):
                 )
             return record.status
 
-    def subscribe_fill_callback(
-        self, cb: Callable[[FillEvent], None]
-    ) -> SubscriptionHandle:
+    def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._ensure_alive()
         sub_id = f"lsub_{uuid4().hex}"
         with self._lock:
@@ -1011,10 +999,7 @@ class LocalSimBackend(BrokerBackend):
             # ledger.account_snapshot(prices=...) with explicit prices for the
             # full mtm view. query_account() is a backend-level summary.
             position_cost = sum(
-                (
-                    Decimal(repr(lot.avg_cost)) * lot.quantity
-                    for lot in self._ledger.positions.values()
-                ),
+                (Decimal(repr(lot.avg_cost)) * lot.quantity for lot in self._ledger.positions.values()),
                 Decimal(0),
             )
             nav = cash + position_cost
@@ -1070,10 +1055,7 @@ class LocalSimBackend(BrokerBackend):
                         "as_of_time": self._market_snapshot.as_of_time.isoformat(),
                         "source": self._market_snapshot.source.value,
                         "symbols": sorted(self._market_snapshot.market_inputs),
-                        "errors": {
-                            symbol: dict(error)
-                            for symbol, error in self._market_snapshot.errors.items()
-                        },
+                        "errors": {symbol: dict(error) for symbol, error in self._market_snapshot.errors.items()},
                     }
                 ),
             }
@@ -1178,10 +1160,7 @@ class LocalSimBackend(BrokerBackend):
                             },
                         )
                     error_context = dict(getattr(exc, "context", None) or {})
-                    source_reason = str(
-                        error_context.get("reason_code")
-                        or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"
-                    )
+                    source_reason = str(error_context.get("reason_code") or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE")
                     records[symbol] = previous.model_copy(
                         update={
                             "reuse_reason_code": "LOCALSIM_REALTIME_MARK_REUSED_AFTER_TRANSIENT_SOURCE_FAILURE",
@@ -1224,11 +1203,7 @@ class LocalSimBackend(BrokerBackend):
                     },
                 )
             cutoff = self._naive_for_compare(as_of_time)
-            observed = [
-                bar
-                for bar in market_input.minute_bars
-                if self._naive_for_compare(bar.bar_time) <= cutoff
-            ]
+            observed = [bar for bar in market_input.minute_bars if self._naive_for_compare(bar.bar_time) <= cutoff]
             if not observed:
                 raise DataUnavailableError(
                     "LocalSim position mark source has no observed minute close at the snapshot time",
@@ -1273,9 +1248,7 @@ class LocalSimBackend(BrokerBackend):
         return BrokerBindCapacity(
             backend_id=self.backend_id,
             max_concurrent_packages=1,
-            rejection_reason_if_exceeded=(
-                "LocalSim is per-portfolio; create a new instance per portfolio"
-            ),
+            rejection_reason_if_exceeded=("LocalSim is per-portfolio; create a new instance per portfolio"),
         )
 
     # ----- Lifecycle -----
@@ -1305,11 +1278,7 @@ class LocalSimBackend(BrokerBackend):
     ) -> LocalSimMarketSnapshotV1:
         normalized = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
         current = self._market_snapshot
-        if (
-            current is not None
-            and current.trade_date == trade_date
-            and current.as_of_time == as_of_time
-        ):
+        if current is not None and current.trade_date == trade_date and current.as_of_time == as_of_time:
             current_symbols = set(current.market_inputs).union(current.errors)
             requested_symbols = set(normalized)
             if requested_symbols.issubset(current_symbols):
@@ -1434,7 +1403,8 @@ class LocalSimBackend(BrokerBackend):
                     "LocalSim realtime minute stream contains a duplicate bar time",
                     context={
                         "reason_code": (
-                            "LOCALSIM_MINUTE_BAR_PAYLOAD_CONFLICT" if existing != identity
+                            "LOCALSIM_MINUTE_BAR_PAYLOAD_CONFLICT"
+                            if existing != identity
                             else "LOCALSIM_MINUTE_BAR_DUPLICATE"
                         ),
                         "symbol": symbol,
@@ -1456,9 +1426,7 @@ class LocalSimBackend(BrokerBackend):
             seen[bar.bar_time] = identity
             previous_time = bar.bar_time
 
-    def _validate_replayed_cursor_bar(
-        self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any]
-    ) -> None:
+    def _validate_replayed_cursor_bar(self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any]) -> None:
         if state.last_processed_bar_time is None or state.last_applied_bar_identity is None:
             return
         matching = [bar for bar in observed_bars if bar.bar_time == state.last_processed_bar_time]
@@ -1488,12 +1456,19 @@ class LocalSimBackend(BrokerBackend):
 
     def _bar_identity(self, bar: Any) -> str:
         return canonical_json_sha256(
-            {"schema_version": "localsim_minute_bar_identity_v1", "source": self._data_source.value,
-             "bar": bar.model_dump(mode="json")}
+            {
+                "schema_version": "localsim_minute_bar_identity_v1",
+                "source": self._data_source.value,
+                "bar": bar.model_dump(mode="json"),
+            }
         )
 
     def _incremental_market_context(
-        self, market_context: Mapping[str, Any], *, observed_until: datetime, causal_bar_count: int,
+        self,
+        market_context: Mapping[str, Any],
+        *,
+        observed_until: datetime,
+        causal_bar_count: int,
     ) -> dict[str, Any]:
         capability = require_execution_algo_supports_mode(
             self._execution_policy, mode="LIVE_ONLY", package_id=self._package_id
@@ -1517,8 +1492,14 @@ class LocalSimBackend(BrokerBackend):
             )
         algo_code = str(self._execution_policy["algo_code"]).strip().upper()
         algo_instance_digest = canonical_json_sha256(
-            ["localsim_algo_instance_v1", self._runtime_binding_id, intent.target_trade_date.isoformat(),
-             self._bound_plan_id, intent.intent_id, algo_code]
+            [
+                "localsim_algo_instance_v1",
+                self._runtime_binding_id,
+                intent.target_trade_date.isoformat(),
+                self._bound_plan_id,
+                intent.intent_id,
+                algo_code,
+            ]
         )
         return LocalSimExecutionStateV1(
             run_id=str(self._runtime_run_id),
@@ -1537,19 +1518,28 @@ class LocalSimBackend(BrokerBackend):
             algo_code=algo_code,
             order_status=order.status.value,
             runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_CAUSAL_BAR,
-            algo_state={"total_quantity": order.quantity, "executed_quantity": 0, "step": 0,
-                        "is_complete": False, "causality_mode": "strict_no_backfill"},
+            algo_state={
+                "total_quantity": order.quantity,
+                "executed_quantity": 0,
+                "step": 0,
+                "is_complete": False,
+                "causality_mode": "strict_no_backfill",
+            },
             schedule_version=f"{algo_code}:persisted_plan_v1",
             causality_cursor=self._eligible_bar_after,
             idempotency_key=canonical_json_sha256(
-                ["localsim_state_transition_v1", self._bound_plan_id, intent.intent_id, 0,
-                 "WAITING_FOR_CAUSAL_BAR"]
+                ["localsim_state_transition_v1", self._bound_plan_id, intent.intent_id, 0, "WAITING_FOR_CAUSAL_BAR"]
             ),
         )
 
     def _next_execution_state(
-        self, *, previous: LocalSimExecutionStateV1, engine_state: Any, order: Order,
-        bars: list[Any], fill_count: int,
+        self,
+        *,
+        previous: LocalSimExecutionStateV1,
+        engine_state: Any,
+        order: Order,
+        bars: list[Any],
+        fill_count: int,
         runtime_status_override: LocalSimExecutionRuntimeStatus | None = None,
         waiting_reason_code: str | None = None,
         waiting_context: dict[str, Any] | None = None,
@@ -1563,8 +1553,11 @@ class LocalSimBackend(BrokerBackend):
         if isinstance(raw_step, bool) or not isinstance(raw_step, int) or raw_step < 0:
             raise ExecutionAlgoError(
                 "LocalSim execution state contains an invalid next slice index",
-                context={"reason_code": "LOCALSIM_NEXT_SLICE_INDEX_INVALID", "state_id": previous.state_id,
-                         "raw_step": raw_step},
+                context={
+                    "reason_code": "LOCALSIM_NEXT_SLICE_INDEX_INVALID",
+                    "state_id": previous.state_id,
+                    "raw_step": raw_step,
+                },
             )
         sequence = previous.sequence + 1
         payload = previous.model_dump(mode="python")
@@ -1846,8 +1839,13 @@ class LocalSimBackend(BrokerBackend):
         return accepted_units * increment
 
     def _expire_residual_after_complete_close(
-        self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any],
-        market_context: Mapping[str, Any], as_of_time: datetime, increment_sequence: bool,
+        self,
+        *,
+        state: LocalSimExecutionStateV1,
+        observed_bars: Iterable[Any],
+        market_context: Mapping[str, Any],
+        as_of_time: datetime,
+        increment_sequence: bool,
     ) -> LocalSimExecutionStateV1:
         if state.is_terminal or as_of_time.time() < time(15, 0):
             return state
@@ -1882,9 +1880,7 @@ class LocalSimBackend(BrokerBackend):
                     else "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY"
                 ),
                 "residual_classification": (
-                    "SUSPENDED_AT_CLOSE"
-                    if suspended_without_close
-                    else "SCHEDULE_RESIDUAL_AT_CLOSE"
+                    "SUSPENDED_AT_CLOSE" if suspended_without_close else "SCHEDULE_RESIDUAL_AT_CLOSE"
                 ),
                 "waiting_reason_code": None,
                 "waiting_context": None,
@@ -1903,7 +1899,12 @@ class LocalSimBackend(BrokerBackend):
         return "AM" if bar_time.time() <= time(11, 30) else "PM"
 
     def _apply_incremental_effects(
-        self, *, record: _OrderRecord, final_order: Order, fills: list[Fill], events: list[OrderEvent],
+        self,
+        *,
+        record: _OrderRecord,
+        final_order: Order,
+        fills: list[Fill],
+        events: list[OrderEvent],
     ) -> None:
         ledger_snapshot = self._snapshot_ledger_state()
         try:
@@ -2011,11 +2012,7 @@ class LocalSimBackend(BrokerBackend):
             handle_id=handle_id,
             state=state,
             filled_quantity=order.filled_quantity,
-            avg_fill_price=(
-                Decimal(repr(order.avg_fill_price))
-                if order.avg_fill_price is not None
-                else None
-            ),
+            avg_fill_price=(Decimal(repr(order.avg_fill_price)) if order.avg_fill_price is not None else None),
             last_event_at=order.updated_at,
             rejection_reason=None,
         )

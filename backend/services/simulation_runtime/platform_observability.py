@@ -114,6 +114,7 @@ LOCAL_SIM_PERSISTENCE_STATUSES = frozenset(
     {
         "PROJECTION_PENDING",
         "INTRADAY_WAITING_FOR_CAUSAL_BAR",
+        "INTRADAY_VALUATION_PENDING",
         "INTRADAY_PERSISTED",
         "PERSISTED",
         "PERSISTED_WITH_CAPACITY_RESIDUAL",
@@ -1075,6 +1076,19 @@ class SimulationPlatformObservability:
                     or "LOCAL_SIM_PROJECTION_TERMINAL_FAILURE"
                 )
             elif (
+                persistence_status == "INTRADAY_VALUATION_PENDING"
+                and outbox_status in {"PENDING", "PROJECTION_RETRYABLE"}
+                and outbox_age_seconds > LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS
+            ):
+                status = "DEGRADED"
+                reason_code = "LOCAL_SIM_VALUATION_PENDING_STALE"
+            elif (
+                persistence_status == "INTRADAY_VALUATION_PENDING"
+                and outbox_status in {"PENDING", "PROJECTION_RETRYABLE"}
+            ):
+                status = "IN_PROGRESS"
+                reason_code = "LOCAL_SIM_VALUATION_PENDING"
+            elif (
                 readback_failure is not None
                 or outbox_status == "PROJECTION_RETRYABLE"
                 or (outbox_status == "PENDING" and outbox_age_seconds > LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS)
@@ -1112,6 +1126,13 @@ class SimulationPlatformObservability:
                     "outbox_backlog_alert_seconds": LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS,
                     "terminal_failure_present": terminal_failure is not None or readback_terminal is not None,
                     "readback_failure_present": readback_failure is not None,
+                    "valuation_pending": persistence_status
+                    == "INTRADAY_VALUATION_PENDING",
+                    "missing_mark_symbols": list(
+                        persistence.get("missing_mark_symbols") or []
+                    )
+                    if isinstance(persistence, Mapping)
+                    else [],
                     "projected_submitted_intents": projected_submitted,
                     "durable_facts_reconstructible": not (
                         run.status in BLOCKING_RUN_STATUSES

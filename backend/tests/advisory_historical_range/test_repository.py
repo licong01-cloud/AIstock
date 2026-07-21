@@ -11,10 +11,13 @@ from backend.services.advisory_historical_range.artifact_store import Historical
 from backend.services.advisory_historical_range.models import (
     REASON_DAY_PLAN_CONFLICT,
     REASON_IDEMPOTENCY_CONFLICT,
-    HistoricalRangeArtifactBindingsV1,
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeContractError,
+    HistoricalRangePlanningArtifactBindingsV1,
+    HistoricalRangeRequirementPurpose,
+    HistoricalRangeSourceRequirementPlanV1,
+    HistoricalRangeSourceRequirementV1,
 )
 from backend.services.advisory_historical_range.repository import (
     PostgresHistoricalRangeRepository,
@@ -92,6 +95,7 @@ class _CreateDatabase:
         self.aliases: dict[str, dict[str, Any]] = {}
         self.runs: dict[str, dict[str, Any]] = {}
         self.operations: dict[str, dict[str, Any]] = {}
+        self.operation_attempts: dict[tuple[str, int], dict[str, Any]] = {}
 
     def connection(self) -> "_CreateConnection":
         return _CreateConnection(self)
@@ -136,19 +140,6 @@ class _CreateCursor:
             alias = self.database.aliases.get(str(params[0]))
             self._one = dict(self.database.batches[alias["batch_id"]]) if alias is not None else None
             return
-        if sql.startswith("SELECT * FROM app.advisory_historical_range_batch WHERE request_payload_sha256"):
-            self._one = next(
-                (
-                    dict(batch)
-                    for batch in self.database.batches.values()
-                    if batch["request_payload_sha256"] == params[0]
-                ),
-                None,
-            )
-            return
-        if sql.startswith("SELECT previous.batch_id"):
-            self._one = None
-            return
         if sql.startswith("INSERT INTO app.advisory_historical_range_batch"):
             values = list(params)
             batch = {
@@ -156,25 +147,25 @@ class _CreateCursor:
                 "request_id": values[1],
                 "client_idempotency_key": values[2],
                 "user_request_semantic_hash": values[3],
-                "request_payload_sha256": values[4],
-                "supersedes_batch_id": values[5],
-                "start_trade_date": values[6],
-                "end_trade_date": values[7],
-                "calendar_id": values[8],
-                "calendar_version": values[9],
-                "ordered_trade_dates_hash": values[10],
-                "date_plan_ref": values[11].adapted,
-                "date_plan_hash": values[12],
-                "source_revision_catalog_hash": values[13],
-                "selection_semantics_version": values[14],
-                "selection_semantics_hash": values[15],
-                "list_semantics_version": values[16],
-                "list_semantics_hash": values[17],
-                "per_program_input_warmup_ranges_hash": values[18],
-                "program_count": values[19],
-                "trade_date_count": values[20],
-                "planned_day_count": values[21],
+                "planning_identity_hash": values[4],
+                "requirement_plan_ref": values[5].adapted,
+                "requirement_plan_hash": values[6],
+                "requirement_plan_artifact_hash": values[7],
+                "start_trade_date": values[8],
+                "end_trade_date": values[9],
+                "calendar_id": values[10],
+                "calendar_version": values[11],
+                "ordered_trade_dates_hash": values[12],
+                "selection_semantics_version": values[13],
+                "selection_semantics_hash": values[14],
+                "list_semantics_version": values[15],
+                "list_semantics_hash": values[16],
+                "per_program_input_warmup_ranges_hash": values[17],
+                "program_count": values[18],
+                "trade_date_count": values[19],
+                "planned_day_count": values[20],
                 "artifact_root_identity_hash": values[22],
+                "status": "PLANNING",
                 "row_version": 1,
             }
             self.database.batches[str(batch["batch_id"])] = batch
@@ -188,85 +179,91 @@ class _CreateCursor:
                     "client_idempotency_key": key,
                     "batch_id": params[1],
                     "request_id": params[2],
-                    "request_payload_sha256": params[3],
-                    "request_artifact_ref": params[4].adapted,
-                    "request_artifact_hash": params[5],
+                    "user_request_semantic_hash": params[3],
+                    "planning_identity_hash": params[4],
+                    "requirement_plan_ref": params[5].adapted,
+                    "requirement_plan_hash": params[6],
+                    "requirement_plan_artifact_hash": params[7],
                 }
                 self.rowcount = 1
             return
-        if sql.startswith("SELECT batch_id, request_payload_sha256, request_artifact_ref, request_artifact_hash"):
-            alias = self.database.aliases.get(str(params[0]))
-            self._one = dict(alias) if alias is not None else None
-            return
-        if sql.startswith("INSERT INTO app.advisory_historical_range_run"):
-            self.database.runs[str(params[0])] = {
-                "range_run_id": params[0],
-                "batch_id": params[1],
-                "research_program_id": params[2],
-            }
-            self.rowcount = 1
-            return
-        if sql.startswith("SELECT COUNT(*) FILTER (WHERE day.status IN ('COMPLETE', 'VALID_NO_CANDIDATE'))"):
-            self._one = {
-                "successful_day_count": 0,
-                "terminal_failed_day_count": 0,
-                "completed_program_count": 0,
-                "failed_program_count": 0,
-                "waiting_program_count": 0,
-                "retryable_program_count": 0,
-                "partial_program_count": 0,
-                "recoverable_program_count": len(self.database.runs),
-            }
-            return
-        if sql.startswith("UPDATE app.advisory_historical_range_batch SET successful_day_count"):
-            batch = self.database.batches[str(params[8])]
-            keys = (
-                "successful_day_count",
-                "terminal_failed_day_count",
-                "completed_program_count",
-                "failed_program_count",
-                "waiting_program_count",
-                "retryable_program_count",
-                "partial_program_count",
-                "recoverable_program_count",
-            )
-            changed = any(batch.get(key, 0) != params[index] for index, key in enumerate(keys))
-            if changed:
-                for index, key in enumerate(keys):
-                    batch[key] = params[index]
-                batch["row_version"] += 1
-                self.rowcount = 1
-            return
-        if sql.startswith("INSERT INTO app.advisory_historical_range_operation"):
+        if sql.startswith("INSERT INTO app.advisory_historical_range_operation ("):
             self.database.operations[str(params[0])] = {
                 "operation_id": params[0],
                 "batch_id": params[1],
                 "operation_type": params[2],
                 "operation_idempotency_key": params[3],
                 "request_payload_sha256": params[4],
-                "expected_row_version": params[5],
+                "planning_identity_hash": params[5],
+                "expected_row_version": params[6],
             }
             self.rowcount = 1
             return
-        if sql.startswith("SELECT range_run_id FROM app.advisory_historical_range_run"):
-            self._all = sorted(
-                (
-                    {"range_run_id": run["range_run_id"], "research_program_id": run["research_program_id"]}
-                    for run in self.database.runs.values()
-                    if run["batch_id"] == params[0]
-                ),
-                key=lambda row: row["research_program_id"],
+        if sql.startswith("UPDATE app.advisory_historical_range_operation SET status = 'RUNNING'"):
+            operation = self.database.operations[str(params[4])]
+            operation.update(
+                {
+                    "status": "RUNNING",
+                    "row_version": 2,
+                    "attempt_no": 1,
+                    "worker_id": params[0],
+                    "lease_token": params[1],
+                    "lease_expires_at": params[2],
+                    "fencing_token": 1,
+                    "started_at": params[3],
+                }
             )
+            self._one = dict(operation)
+            self.rowcount = 1
             return
-        if sql.startswith("SELECT operation_id FROM app.advisory_historical_range_operation"):
-            self._one = next(
-                (
-                    {"operation_id": operation["operation_id"]}
-                    for operation in self.database.operations.values()
-                    if operation["batch_id"] == params[0] and operation["operation_type"] == "CREATE"
-                ),
-                None,
+        if sql.startswith("INSERT INTO app.advisory_historical_range_operation_attempt"):
+            row = {
+                "attempt_id": params[0],
+                "operation_id": params[1],
+                "attempt_no": params[2],
+                "worker_id": params[3],
+                "lease_token": params[4],
+                "fencing_token": params[5],
+                "status": params[6],
+                "input_cursor_json": params[7].adapted if params[7] is not None else None,
+                "result_cursor_json": params[8].adapted if params[8] is not None else None,
+                "input_hash": params[9],
+                "result_hash": params[10],
+                "attempt_receipt_ref": params[11].adapted if params[11] is not None else None,
+                "attempt_receipt_hash": params[12],
+                "reason_codes_json": params[13].adapted,
+                "error_json": params[14].adapted if params[14] is not None else None,
+                "started_at": params[15],
+                "finished_at": params[16],
+            }
+            self.database.operation_attempts[(str(params[1]), int(params[2]))] = row
+            self.rowcount = 1
+            return
+        if sql.startswith("SELECT attempt_id, operation_id, attempt_no"):
+            row = self.database.operation_attempts.get((str(params[0]), int(params[1])))
+            self._one = dict(row) if row is not None else None
+            return
+        if sql.startswith("UPDATE app.advisory_historical_range_operation SET status = 'COMPLETED'"):
+            operation = self.database.operations[str(params[3])]
+            operation.update(
+                {
+                    "status": "COMPLETED",
+                    "row_version": 3,
+                    "result_status": "PLANNING_CREATED",
+                    "result_ref": params[0].adapted,
+                    "result_hash": params[1],
+                    "finished_at": params[2],
+                }
             )
+            self._one = {"operation_id": operation["operation_id"]}
+            self.rowcount = 1
+            return
+        if sql.startswith("SELECT operation_id, operation_type FROM app.advisory_historical_range_operation"):
+            self._all = [
+                {"operation_id": operation["operation_id"], "operation_type": operation["operation_type"]}
+                for operation in self.database.operations.values()
+                if operation["batch_id"] == params[0]
+            ]
             return
         raise AssertionError(f"unexpected SQL in create repository test: {sql}")
 
@@ -277,43 +274,49 @@ class _CreateCursor:
         return self._all
 
 
-def _artifact_bindings(
-    resolved: Any,
+def _planning_request(
+    *, specs: tuple[Any, ...] | None = None, client_key: str = "planning-key"
+) -> HistoricalRangeSourceRequirementPlanV1:
+    resolved = resolved_request(specs=specs, client_key=client_key)
+    return HistoricalRangeSourceRequirementPlanV1(
+        request=resolved.request,
+        date_plan=resolved.date_plan,
+        frozen_programs=resolved.frozen_programs,
+        query_contract_hash=digest("historical-query-contract"),
+        calendar_identity_hash=digest("calendar-identity"),
+        code_release_hash=resolved.frozen_programs[0].code_release_hash,
+        requirements=(
+            HistoricalRangeSourceRequirementV1(
+                requirement_id="universe",
+                source_role="pit_universe",
+                dataset_id="market.stock_universe_pit",
+                query_template_id="StockUniversePitService.get_eligible_codes",
+                query_template_version="v1",
+                query_template_hash=digest("universe-query"),
+                parameter_template={"trade_date": "${decision_trade_date}"},
+                partition_ref_template="shsz_st_pit_active_v1/${decision_trade_date}",
+                required_for=HistoricalRangeRequirementPurpose.REQUEST_SEAL,
+                missing_reason_code="ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
+            ),
+        ),
+    )
+
+
+def _planning_bindings(
+    plan: HistoricalRangeSourceRequirementPlanV1,
     store: HistoricalRangeArtifactStore,
-) -> HistoricalRangeArtifactBindingsV1:
-    request_payload = resolved.model_dump(mode="json")
-    date_payload = resolved.date_plan.model_dump(mode="json")
-    request = store.publish_payload(
-        artifact_kind=HistoricalRangeArtifactKind.REQUEST,
-        producer_contract_version="phase1r_r1",
-        payload_schema_version=str(request_payload["schema_version"]),
-        resolved_request_hash=resolved.request_payload_sha256,
-        payload=request_payload,
+) -> HistoricalRangePlanningArtifactBindingsV1:
+    artifact = store.publish_planning_payload(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+        planning_identity_hash=plan.planning_identity_hash,
+        batch_id=plan.batch_id,
+        catalog_generation=1,
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version=plan.schema_version,
+        payload=plan.model_dump(mode="json"),
     )
-    date_plan_artifact = store.publish_payload(
-        artifact_kind=HistoricalRangeArtifactKind.DATE_PLAN,
-        producer_contract_version="phase1r_r1",
-        payload_schema_version=str(date_payload["schema_version"]),
-        resolved_request_hash=resolved.request_payload_sha256,
-        payload=date_payload,
-        upstream_refs=(request.ref,),
-    )
-    frozen_refs = {
-        program.research_program_id: store.publish_payload(
-            artifact_kind=HistoricalRangeArtifactKind.FROZEN_PROGRAM,
-            producer_contract_version="phase1r_r1",
-            payload_schema_version=program.schema_version,
-            resolved_request_hash=resolved.request_payload_sha256,
-            range_run_id=resolved.range_run_id(program.research_program_id),
-            payload=program.model_dump(mode="json"),
-            upstream_refs=(request.ref, date_plan_artifact.ref),
-        ).ref
-        for program in resolved.frozen_programs
-    }
-    return HistoricalRangeArtifactBindingsV1(
-        request_ref=request.ref,
-        date_plan_ref=date_plan_artifact.ref,
-        frozen_program_refs=frozen_refs,
+    return HistoricalRangePlanningArtifactBindingsV1(
+        requirement_plan_ref=artifact.ref,
         artifact_root_identity_hash=store.root_identity_hash,
     )
 
@@ -341,65 +344,52 @@ def test_repository_requires_explicit_connection_factory(tmp_path: Path) -> None
         PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=None)  # type: ignore[arg-type]
 
 
-def test_create_batch_converges_multiple_program_request_and_binds_every_retry_key(tmp_path: Path) -> None:
+def test_create_planning_batch_is_exact_retry_and_creates_no_program_runs(tmp_path: Path) -> None:
     specs = (
         research_spec(name="short rebound", package_id="pkg_short"),
         research_spec(name="long trend", package_id="pkg_long"),
     )
-    first_request = resolved_request(specs=specs, client_key="create-key-1")
-    same_semantics = resolved_request(
-        specs=specs,
-        client_key="create-key-2",
-        request_id="request-2",
-    )
+    plan = _planning_request(specs=specs, client_key="create-key-1")
     database = _CreateDatabase()
     store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r")
     repository = PostgresHistoricalRangeRepository(conn_factory=database.connection, artifact_store=store)
 
-    first = repository.create_batch(
-        resolved=first_request,
-        artifacts=_artifact_bindings(first_request, store),
-    )
-    second = repository.create_batch(
-        resolved=same_semantics,
-        artifacts=_artifact_bindings(same_semantics, store),
-    )
+    bindings = _planning_bindings(plan, store)
+    first = repository.create_planning_batch(plan=plan, artifacts=bindings)
+    second = repository.create_planning_batch(plan=plan, artifacts=bindings)
 
     assert first.idempotent is False
     assert second.idempotent is True
     assert first.batch_id == second.batch_id
-    assert len(first.range_run_ids) == 2
-    assert set(database.aliases) == {"create-key-1", "create-key-2"}
-    assert {run["batch_id"] for run in database.runs.values()} == {first.batch_id}
+    assert first.create_operation_id == second.create_operation_id
+    assert first.catalog_operation_id == second.catalog_operation_id
+    assert database.runs == {}
+    assert database.batches[first.batch_id]["status"] == "PLANNING"
 
 
-def test_bound_idempotency_key_rejects_different_resolved_semantics(tmp_path: Path) -> None:
-    initial = resolved_request(client_key="fixed-key")
-    changed = resolved_request(
-        specs=(research_spec(target_count=9),),
-        client_key="fixed-key",
-        request_id="changed-request",
-    )
+def test_bound_idempotency_key_rejects_different_planning_semantics(tmp_path: Path) -> None:
+    initial = _planning_request(client_key="fixed-key")
+    changed = _planning_request(specs=(research_spec(target_count=9),), client_key="fixed-key")
     database = _CreateDatabase()
     store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r")
     repository = PostgresHistoricalRangeRepository(conn_factory=database.connection, artifact_store=store)
-    repository.create_batch(resolved=initial, artifacts=_artifact_bindings(initial, store))
+    repository.create_planning_batch(plan=initial, artifacts=_planning_bindings(initial, store))
 
     with pytest.raises(HistoricalRangeContractError) as exc_info:
-        repository.create_batch(resolved=changed, artifacts=_artifact_bindings(changed, store))
+        repository.create_planning_batch(plan=changed, artifacts=_planning_bindings(changed, store))
     assert exc_info.value.reason_code == REASON_IDEMPOTENCY_CONFLICT
 
 
-def test_create_batch_rejects_missing_exact_artifact_before_database_write(tmp_path: Path) -> None:
-    resolved = resolved_request(client_key="missing-artifact")
+def test_create_planning_batch_rejects_missing_exact_artifact_before_database_write(tmp_path: Path) -> None:
+    plan = _planning_request(client_key="missing-artifact")
     database = _CreateDatabase()
     store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r")
-    artifacts = _artifact_bindings(resolved, store)
-    (store.root / artifacts.request_ref.relative_path).unlink()
+    artifacts = _planning_bindings(plan, store)
+    (store.root / artifacts.requirement_plan_ref.relative_path).unlink()
     repository = PostgresHistoricalRangeRepository(conn_factory=database.connection, artifact_store=store)
 
     with pytest.raises(HistoricalRangeContractError):
-        repository.create_batch(resolved=resolved, artifacts=artifacts)
+        repository.create_planning_batch(plan=plan, artifacts=artifacts)
     assert database.batches == {}
 
 

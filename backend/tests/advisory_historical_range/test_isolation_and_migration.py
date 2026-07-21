@@ -86,12 +86,20 @@ def test_migration_has_runtime_invariants_without_approval_events() -> None:
         "advisory_historical_range_day_canonical_input_premature",
         "advisory_historical_range_day_parent_state_invalid",
         "advisory_historical_range_day_takeover_invalid",
-        "advisory_historical_range_operation_takeover_invalid",
+        "advisory_historical_range_operation_rollover_checkpoint_required",
+        "advisory_historical_range_operation_takeover_receipt_required",
         "advisory_historical_range_batch_child_aggregate_invalid",
         "advisory_historical_range_run_child_aggregate_invalid",
         "advisory_historical_range_day_attempt_closure_invalid",
         "advisory_historical_range_operation_attempt_closure_invalid",
         "advisory_historical_range_list_candidate_projection_invalid",
+        "package_version text not null",
+        "'planning'",
+        "'deduplicated'",
+        "'build_source_catalog'",
+        "source_requirement_plan",
+        "source_catalog_checkpoint",
+        "advisory_historical_range_candidate_artifact_payload_v2",
         "where status = 'running'",
         "deferrable initially deferred",
     )
@@ -101,3 +109,12 @@ def test_migration_has_runtime_invariants_without_approval_events() -> None:
     assert "authorization_event" not in sql
     assert "package_health" not in sql
     assert "asset_validator" not in sql
+    assert "backup_required" not in sql
+    assert "manual_approval" not in sql
+    assert "when 'source_requirement_plan' then 'source-requirement-plans'" in sql
+    assert "when 'source_catalog_checkpoint' then 'source-catalog-checkpoints'" in sql
+    assert "when 'hmm_binding_set' then 'hmm-binding-sets'" in sql
+    assert "advisory_historical_range_operation_rollover_checkpoint_required" in sql
+    assert "attempt.status = 'completed'" in sql
+    assert "requirement_plan_artifact_hash text not null" in sql
+    assert "requirement_plan_ref, 'source_requirement_plan', requirement_plan_artifact_hash" in sql

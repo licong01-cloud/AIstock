@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from datetime import date
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -15,7 +16,11 @@ from backend.services.hmm_evolution.universe import (
     QELoopUniverseRepository,
     SourceLoopRiskPolicySnapshot,
     SourceLoopUniverseContract,
+    _canonical_json_sha256,
     _parse_source_risk_policy_snapshot,
+)
+from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
+    LegacyQESTPITCompatibilityReceipt,
 )
 from backend.services.hmm_evolution import universe as universe_module
 from backend.services.quantevolver.qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
@@ -42,6 +47,30 @@ class _LoopRepository:
                 "st_universe_key": LEGACY_QE_ST_PIT_UNIVERSE_KEY,
                 "visible_time_mode": "next_trading_session",
             },
+        )
+
+
+class _CompatibilityLoopRepository:
+    def __init__(self, receipt: LegacyQESTPITCompatibilityReceipt) -> None:
+        self.receipt = receipt
+
+    def load(self, base_loop_ref: str) -> SourceLoopUniverseContract:
+        assert base_loop_ref == "qe_task/Loop8"
+        return SourceLoopUniverseContract(
+            task_id="qe_task",
+            loop_name="Loop8",
+            stock_pool="filtered_pool_fixture",
+            risk_policy={
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+                "policy_version": "stock_event_risk_policy_v1",
+                "strict_data_ready": True,
+                "st_universe_key": LEGACY_QE_ST_PIT_UNIVERSE_KEY,
+                "visible_time_mode": "next_trading_session",
+            },
+            risk_policy_origin=self.receipt.binding_mode,
+            st_pit_compatibility=self.receipt,
         )
 
 
@@ -105,17 +134,21 @@ def _pool() -> StockPoolSnapshot:
 def _risk_snapshot(
     *,
     universe_key: str = LEGACY_QE_ST_PIT_UNIVERSE_KEY,
+    artifact_sha256: str = "b" * 64,
+    artifact_size_bytes: int = 123,
+    artifact_source_task_id: str = "qe_task",
+    artifact_source_loop_name: str = "Loop8",
 ) -> SourceLoopRiskPolicySnapshot:
     return SourceLoopRiskPolicySnapshot(
         snapshot=StockPoolSnapshot(
             filename="qe_event_risk_policy.json",
             instrument_name=universe_key,
-            sha256="b" * 64,
+            sha256=artifact_sha256,
             intervals=(
                 StockPoolInterval("600000.SH", date(2025, 1, 2), date(2025, 1, 3)),
             ),
         ),
-        artifact_sha256="b" * 64,
+        artifact_sha256=artifact_sha256,
         dataset_contract_id=None,
         universe_key=universe_key,
         binding_mode="legacy_frozen_runtime_artifact_v1",
@@ -124,6 +157,33 @@ def _risk_snapshot(
         source_fingerprint_sha256="f" * 64,
         start_date=date(2025, 1, 1),
         end_date=date(2025, 12, 31),
+        artifact_size_bytes=artifact_size_bytes,
+        artifact_source_task_id=artifact_source_task_id,
+        artifact_source_loop_name=artifact_source_loop_name,
+    )
+
+
+def _compatibility_receipt(
+    *,
+    source_config_sha256: str = "c" * 64,
+    stock_pool_sha256: str = "a" * 64,
+    artifact_sha256: str = "b" * 64,
+) -> LegacyQESTPITCompatibilityReceipt:
+    return LegacyQESTPITCompatibilityReceipt(
+        artifact_source_task_id="qe_compatibility_task",
+        artifact_source_loop_name="Loop10",
+        workspace_path="qe_event_risk_policy.json",
+        sha256=artifact_sha256,
+        size_bytes=123,
+        source_config_sha256=source_config_sha256,
+        stock_pool_sha256=stock_pool_sha256,
+        universe_key=LEGACY_QE_ST_PIT_UNIVERSE_KEY,
+        rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+        scope="st_only_active",
+        source_fingerprint_sha256="f" * 64,
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 12, 31),
+        span_count=1,
     )
 
 
@@ -213,6 +273,62 @@ def test_loop_repository_reads_stock_pool_and_strict_st_pit_from_persisted_confi
     assert contract.stock_pool == "filtered_pool_fixture"
     assert contract.risk_policy["strict_data_ready"] is True
     assert contract.risk_policy["st_universe_key"] == LEGACY_QE_ST_PIT_UNIVERSE_KEY
+
+
+def test_loop_repository_uses_only_allowlisted_legacy_st_pit_compatibility(
+    monkeypatch,
+) -> None:
+    config = {
+        "stock_pool": "filtered_pool_fixture",
+        "model_params": {"stock_pool": "filtered_pool_fixture"},
+    }
+    receipt = _compatibility_receipt(
+        source_config_sha256=_canonical_json_sha256(config),
+    )
+    monkeypatch.setattr(universe_module, "get_conn", _conn_factory({"config_json": config}))
+    monkeypatch.setattr(
+        universe_module,
+        "find_legacy_qe_artifact_manifest",
+        lambda base_loop_ref: (
+            SimpleNamespace(st_pit_compatibility=receipt)
+            if base_loop_ref == "qe_legacy/Loop1"
+            else None
+        ),
+    )
+
+    contract = QELoopUniverseRepository().load("qe_legacy/Loop1")
+
+    assert contract.stock_pool == "filtered_pool_fixture"
+    assert contract.risk_policy_origin == receipt.binding_mode
+    assert contract.st_pit_compatibility == receipt
+    assert contract.risk_policy["st_universe_key"] == LEGACY_QE_ST_PIT_UNIVERSE_KEY
+
+
+def test_loop_repository_rejects_unlisted_loop_without_persisted_st_pit(monkeypatch) -> None:
+    config = {"stock_pool": "filtered_pool_fixture"}
+    monkeypatch.setattr(universe_module, "get_conn", _conn_factory({"config_json": config}))
+    monkeypatch.setattr(
+        universe_module,
+        "find_legacy_qe_artifact_manifest",
+        lambda _base_loop_ref: None,
+    )
+
+    with pytest.raises(InvalidSpecError, match="does not declare an ST-PIT risk policy"):
+        QELoopUniverseRepository().load("qe_unlisted/Loop1")
+
+
+def test_loop_repository_rejects_legacy_source_config_drift(monkeypatch) -> None:
+    config = {"stock_pool": "filtered_pool_fixture"}
+    receipt = _compatibility_receipt(source_config_sha256="d" * 64)
+    monkeypatch.setattr(universe_module, "get_conn", _conn_factory({"config_json": config}))
+    monkeypatch.setattr(
+        universe_module,
+        "find_legacy_qe_artifact_manifest",
+        lambda _base_loop_ref: SimpleNamespace(st_pit_compatibility=receipt),
+    )
+
+    with pytest.raises(InvalidSpecError, match="source config differs"):
+        QELoopUniverseRepository().load("qe_legacy/Loop1")
 
 
 def test_loop_repository_rejects_missing_persisted_universe_key(monkeypatch) -> None:
@@ -324,6 +440,80 @@ def test_resolver_intersects_source_pool_with_exact_runtime_st_pit_artifact() ->
     assert resolved.evidence["st_pit"]["artifact_sha256"] == "b" * 64
     assert resolved.evidence["st_pit"]["binding_mode"] == "legacy_frozen_runtime_artifact_v1"
     assert len(str(resolved.evidence["universe_hash"])) == 64
+
+
+def test_resolver_uses_allowlisted_cross_loop_st_pit_with_truthful_provenance() -> None:
+    predictions, labels = _frames()
+    receipt = _compatibility_receipt()
+
+    def load_risk(task_id: str, loop_name: str) -> SourceLoopRiskPolicySnapshot:
+        assert task_id == receipt.artifact_source_task_id
+        assert loop_name == receipt.artifact_source_loop_name
+        return _risk_snapshot(
+            artifact_source_task_id=task_id,
+            artifact_source_loop_name=loop_name,
+        )
+
+    resolver = QEExecutionUniverseResolver(
+        loop_repository=_CompatibilityLoopRepository(receipt),
+        stock_pool_loader=lambda _stock_pool: _pool(),
+        risk_policy_loader=load_risk,
+    )
+
+    resolved = resolver.resolve(
+        evaluation_spec=_spec(),
+        predictions=predictions,
+        labels=labels,
+    )
+
+    st_pit = resolved.evidence["st_pit"]
+    assert st_pit["artifact_name"] == "qe_event_risk_policy.json"
+    assert st_pit["binding_mode"] == receipt.binding_mode
+    assert st_pit["coverage_semantics"] == "allowlisted_cross_loop_immutable_artifact_v1"
+    assert st_pit["compatibility_receipt"]["artifact_source"] == {
+        "task_id": receipt.artifact_source_task_id,
+        "loop_name": receipt.artifact_source_loop_name,
+        "artifact_name": "qe_event_risk_policy.json",
+    }
+    assert st_pit["compatibility_receipt"]["artifact_sha256"] == receipt.sha256
+
+
+def test_resolver_rejects_allowlisted_cross_loop_st_pit_content_drift() -> None:
+    predictions, labels = _frames()
+    receipt = _compatibility_receipt()
+    resolver = QEExecutionUniverseResolver(
+        loop_repository=_CompatibilityLoopRepository(receipt),
+        stock_pool_loader=lambda _stock_pool: _pool(),
+        risk_policy_loader=lambda task_id, loop_name: _risk_snapshot(
+            artifact_sha256="e" * 64,
+            artifact_source_task_id=task_id,
+            artifact_source_loop_name=loop_name,
+        ),
+    )
+
+    with pytest.raises(InvalidSpecError, match="differs from its allowlisted receipt"):
+        resolver.resolve(
+            evaluation_spec=_spec(),
+            predictions=predictions,
+            labels=labels,
+        )
+
+
+def test_resolver_rejects_allowlisted_legacy_stock_pool_drift() -> None:
+    predictions, labels = _frames()
+    receipt = _compatibility_receipt(stock_pool_sha256="d" * 64)
+    resolver = QEExecutionUniverseResolver(
+        loop_repository=_CompatibilityLoopRepository(receipt),
+        stock_pool_loader=lambda _stock_pool: _pool(),
+        risk_policy_loader=lambda _task_id, _loop_name: _risk_snapshot(),
+    )
+
+    with pytest.raises(InvalidSpecError, match="stock_pool differs"):
+        resolver.resolve(
+            evaluation_spec=_spec(),
+            predictions=predictions,
+            labels=labels,
+        )
 
 
 def test_resolver_rejects_persisted_policy_runtime_artifact_identity_drift() -> None:
