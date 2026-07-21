@@ -10,6 +10,7 @@
 这些测试是阻塞性的 - 任何一项失败都应该停止验收。
 """
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from backend.services.hmm_data_source import (
 )
 from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
     LEGACY_QE_ARTIFACT_MANIFESTS,
+    LegacyQESTPITCompatibilityReceipt,
 )
 
 
@@ -98,8 +100,36 @@ class TestIsolationConstraints:
                 item.workspace_path.endswith(f"/artifacts/{item.artifact_name}")
                 for item in entry.artifacts
             )
+            if entry.st_pit_compatibility is not None:
+                assert entry.st_pit_compatibility.workspace_path == "qe_event_risk_policy.json"
+                assert entry.st_pit_compatibility.binding_mode == (
+                    "legacy_allowlisted_compatibility_artifact_v1"
+                )
+                assert entry.st_pit_compatibility.sha256
+                assert entry.st_pit_compatibility.source_config_sha256
+                assert entry.st_pit_compatibility.stock_pool_sha256
 
         assert "run.log" not in BacktestDataSource.ALLOWED_ARTIFACTS
+        assert "qe_event_risk_policy.json" not in BacktestDataSource.ALLOWED_ARTIFACTS
+
+    def test_legacy_st_pit_receipt_rejects_arbitrary_workspace_path(self):
+        with pytest.raises(ValueError, match="source identity is invalid"):
+            LegacyQESTPITCompatibilityReceipt(
+                artifact_source_task_id="qe_task",
+                artifact_source_loop_name="Loop1",
+                workspace_path="config.json",
+                sha256="a" * 64,
+                size_bytes=1,
+                source_config_sha256="b" * 64,
+                stock_pool_sha256="c" * 64,
+                universe_key="shsz_st_pit_active_v1",
+                rule_version="st_pub_next_trade_restore_active_l_v1",
+                scope="st_only_active",
+                source_fingerprint_sha256="d" * 64,
+                start_date=date(2024, 7, 1),
+                end_date=date(2026, 4, 27),
+                span_count=1,
+            )
 
     def test_cache_directory_isolation(self, tmp_path):
         """验证缓存目录完全隔离"""

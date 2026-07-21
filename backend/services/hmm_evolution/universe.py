@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Mapping, Protocol
 
@@ -15,6 +15,10 @@ import pandas as pd
 from psycopg2.extras import RealDictCursor
 
 from backend.db.pg_pool import get_conn
+from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
+    LegacyQESTPITCompatibilityReceipt,
+    find_legacy_qe_artifact_manifest,
+)
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.stock_pool_sync import (
     StockPoolInterval,
@@ -45,6 +49,8 @@ class SourceLoopUniverseContract:
     loop_name: str
     stock_pool: str
     risk_policy: Mapping[str, Any]
+    risk_policy_origin: str = "persisted_source_loop"
+    st_pit_compatibility: LegacyQESTPITCompatibilityReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,9 @@ class SourceLoopRiskPolicySnapshot:
     source_fingerprint_sha256: str
     start_date: date
     end_date: date
+    artifact_size_bytes: int
+    artifact_source_task_id: str
+    artifact_source_loop_name: str
 
 
 class SourceLoopUniverseRepository(Protocol):
@@ -132,11 +141,40 @@ class QELoopUniverseRepository:
             for section in config_sections
             if isinstance(section.get("risk_policy"), Mapping)
         ]
+        compatibility: LegacyQESTPITCompatibilityReceipt | None = None
+        risk_policy_origin = "persisted_source_loop"
         if not risk_candidates:
-            raise InvalidSpecError(
-                "source QE loop does not declare an ST-PIT risk policy",
-                context={"base_loop_ref": base_loop_ref},
+            legacy_manifest = find_legacy_qe_artifact_manifest(base_loop_ref)
+            compatibility = (
+                legacy_manifest.st_pit_compatibility if legacy_manifest is not None else None
             )
+            if compatibility is None:
+                raise InvalidSpecError(
+                    "source QE loop does not declare an ST-PIT risk policy",
+                    context={"base_loop_ref": base_loop_ref},
+                )
+            actual_config_sha256 = _canonical_json_sha256(config)
+            if actual_config_sha256 != compatibility.source_config_sha256:
+                raise InvalidSpecError(
+                    "legacy QE source config differs from its allowlisted ST-PIT compatibility receipt",
+                    context={
+                        "base_loop_ref": base_loop_ref,
+                        "expected_sha256": compatibility.source_config_sha256,
+                        "actual_sha256": actual_config_sha256,
+                    },
+                )
+            risk_policy_origin = compatibility.binding_mode
+            risk_candidates = [
+                {
+                    "enabled": True,
+                    "providers": ["st_pit"],
+                    "hard_actions": ["block_buy", "force_exit"],
+                    "policy_version": RISK_POLICY_CONTRACT,
+                    "strict_data_ready": True,
+                    "st_universe_key": compatibility.universe_key,
+                    "visible_time_mode": RISK_POLICY_VISIBLE_TIME_MODE,
+                }
+            ]
         if any(candidate != risk_candidates[0] for candidate in risk_candidates[1:]):
             raise InvalidSpecError(
                 "source QE loop contains conflicting risk policy declarations",
@@ -163,6 +201,8 @@ class QELoopUniverseRepository:
             loop_name=loop_name,
             stock_pool=stock_pool,
             risk_policy=risk_policy,
+            risk_policy_origin=risk_policy_origin,
+            st_pit_compatibility=compatibility,
         )
 
 
@@ -371,7 +411,64 @@ def _parse_source_risk_policy_snapshot(
         source_fingerprint_sha256=fingerprint,
         start_date=start_date,
         end_date=end_date,
+        artifact_size_bytes=len(raw),
+        artifact_source_task_id=task_id,
+        artifact_source_loop_name=loop_name,
     )
+
+
+def _canonical_json_sha256(value: Mapping[str, Any]) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _verify_legacy_st_pit_compatibility_receipt(
+    *,
+    base_loop_ref: str,
+    receipt: LegacyQESTPITCompatibilityReceipt,
+    runtime_snapshot: SourceLoopRiskPolicySnapshot,
+) -> None:
+    actual = {
+        "artifact_source_task_id": runtime_snapshot.artifact_source_task_id,
+        "artifact_source_loop_name": runtime_snapshot.artifact_source_loop_name,
+        "sha256": runtime_snapshot.artifact_sha256,
+        "size_bytes": runtime_snapshot.artifact_size_bytes,
+        "universe_key": runtime_snapshot.universe_key,
+        "rule_version": runtime_snapshot.rule_version,
+        "scope": runtime_snapshot.scope,
+        "source_fingerprint_sha256": runtime_snapshot.source_fingerprint_sha256,
+        "start_date": runtime_snapshot.start_date,
+        "end_date": runtime_snapshot.end_date,
+        "span_count": len(runtime_snapshot.snapshot.intervals),
+    }
+    expected = {
+        "artifact_source_task_id": receipt.artifact_source_task_id,
+        "artifact_source_loop_name": receipt.artifact_source_loop_name,
+        "sha256": receipt.sha256,
+        "size_bytes": receipt.size_bytes,
+        "universe_key": receipt.universe_key,
+        "rule_version": receipt.rule_version,
+        "scope": receipt.scope,
+        "source_fingerprint_sha256": receipt.source_fingerprint_sha256,
+        "start_date": receipt.start_date,
+        "end_date": receipt.end_date,
+        "span_count": receipt.span_count,
+    }
+    mismatches = {
+        key: {"expected": expected[key], "actual": actual[key]}
+        for key in expected
+        if expected[key] != actual[key]
+    }
+    if mismatches:
+        raise InvalidSpecError(
+            "legacy QE ST-PIT compatibility artifact differs from its allowlisted receipt",
+            context={"base_loop_ref": base_loop_ref, "mismatches": mismatches},
+        )
 
 
 def _verify_persisted_policy_matches_runtime_artifact(
@@ -442,8 +539,25 @@ class QEExecutionUniverseResolver:
                 "source QE stock_pool cannot be read and verified",
                 context={"stock_pool": contract.stock_pool, "error_type": type(exc).__name__},
             ) from exc
+        compatibility = contract.st_pit_compatibility
+        if compatibility is not None and pool_snapshot.sha256 != compatibility.stock_pool_sha256:
+            raise InvalidSpecError(
+                "legacy QE stock_pool differs from its allowlisted ST-PIT compatibility receipt",
+                context={
+                    "base_loop_ref": evaluation_spec.base_loop_ref,
+                    "stock_pool": contract.stock_pool,
+                    "expected_sha256": compatibility.stock_pool_sha256,
+                    "actual_sha256": pool_snapshot.sha256,
+                },
+            )
+        artifact_task_id = (
+            compatibility.artifact_source_task_id if compatibility is not None else contract.task_id
+        )
+        artifact_loop_name = (
+            compatibility.artifact_source_loop_name if compatibility is not None else contract.loop_name
+        )
         try:
-            risk_snapshot = self._risk_policy_loader(contract.task_id, contract.loop_name)
+            risk_snapshot = self._risk_policy_loader(artifact_task_id, artifact_loop_name)
         except InvalidSpecError:
             raise
         except Exception as exc:
@@ -455,6 +569,16 @@ class QEExecutionUniverseResolver:
                     "error_type": type(exc).__name__,
                 },
             ) from exc
+        if compatibility is not None:
+            _verify_legacy_st_pit_compatibility_receipt(
+                base_loop_ref=evaluation_spec.base_loop_ref,
+                receipt=compatibility,
+                runtime_snapshot=risk_snapshot,
+            )
+            risk_snapshot = replace(
+                risk_snapshot,
+                binding_mode=compatibility.binding_mode,
+            )
         _verify_persisted_policy_matches_runtime_artifact(
             base_loop_ref=evaluation_spec.base_loop_ref,
             persisted_policy=contract.risk_policy,
@@ -549,9 +673,25 @@ class QEExecutionUniverseResolver:
                 "artifact_end_date": risk_snapshot.end_date.isoformat(),
                 "span_count": len(risk_snapshot.snapshot.intervals),
                 "index_policy": "source_loop_runtime_active_spans_v1",
-                "coverage_semantics": "exact_source_loop_runtime_artifact_v1",
+                "coverage_semantics": (
+                    "allowlisted_cross_loop_immutable_artifact_v1"
+                    if compatibility is not None
+                    else "exact_source_loop_runtime_artifact_v1"
+                ),
             },
         }
+        if compatibility is not None:
+            evidence["st_pit"]["compatibility_receipt"] = {
+                "source_loop_config_sha256": compatibility.source_config_sha256,
+                "source_loop_stock_pool_sha256": compatibility.stock_pool_sha256,
+                "artifact_source": {
+                    "task_id": compatibility.artifact_source_task_id,
+                    "loop_name": compatibility.artifact_source_loop_name,
+                    "path": compatibility.workspace_path,
+                },
+                "artifact_sha256": compatibility.sha256,
+                "artifact_size_bytes": compatibility.size_bytes,
+            }
         return ResolvedEvaluationUniverse(
             predictions=filtered_predictions,
             labels=filtered_labels,
