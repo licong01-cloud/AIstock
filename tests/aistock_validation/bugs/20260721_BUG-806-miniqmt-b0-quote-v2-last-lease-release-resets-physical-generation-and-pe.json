@@ -11,6 +11,7 @@
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "noxfile.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260721_BUG-806-miniqmt-b0-quote-v2-last-lease-release-resets-physical-generation-and-pe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -31,6 +32,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260721-cbc8364aa956",
       "timestamp": "2026-07-21T15:51:13.384925Z"
+    },
+    {
+      "action": "expand_fix_scope_after_review",
+      "actor": "codex",
+      "note": "Added noxfile.py so the canonical MiniQMT L2 plan directly compiles the subscriber and runs its lease lifecycle tests; no runtime, database, configuration, or broker scope was added.",
+      "timestamp": "2026-07-21T17:50:12.5600184Z"
     }
   ],
   "evidence_uris": [

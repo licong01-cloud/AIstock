@@ -933,8 +933,17 @@ class RealtimeQuoteSubscriber:
                             ),
                         )
                     )
-        for state, delivery in deliveries:
-            self._safe_phase_one_quote_callback(state, delivery)
+            # Immutable capture and generation fencing form one subscriber-side
+            # critical section.  A failed preparing feed must not become fenced
+            # between the feed/lease check above and the consumer capture ACK;
+            # otherwise a late candidate callback can be accepted into the
+            # worker after its generation has already been retired.  Consumer
+            # callbacks only capture into the bounded ingress worker/mailbox and
+            # do not perform broker or database work, so serializing this small
+            # section preserves the existing delivery contract without widening
+            # the physical-subscription lifecycle.
+            for state, delivery in deliveries:
+                self._safe_phase_one_quote_callback(state, delivery)
 
     def _discard_preparing_phase_one_feed(self, feed: _PhaseOnePhysicalFeed) -> None:
         with self._lock:

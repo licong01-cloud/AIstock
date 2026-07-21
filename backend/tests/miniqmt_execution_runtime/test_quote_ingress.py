@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import threading
 import time
 from datetime import UTC, date, datetime, time as local_time
 from decimal import Decimal
@@ -631,6 +632,110 @@ def test_supervisor_reacquires_after_last_release_without_reusing_fenced_generat
     assert health["writer"]["fenced_generation"] == morning.generation
     assert health["writer"]["active_failure"] is None
     assert health["writer"]["ordering_rejected_count"] == 0
+    supervisor.shutdown()
+
+
+def test_failed_candidate_fence_serializes_inflight_callback_and_leaves_no_pending_generation(
+    fake_xtdata: _FakeXtData,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bootstrap_started = threading.Event()
+    allow_bootstrap_failure = threading.Event()
+    callback_started = threading.Event()
+    allow_callback_capture = threading.Event()
+    discard_started = threading.Event()
+    discard_completed = threading.Event()
+    failed_candidate = False
+
+    def bootstrap(symbols: list[str]) -> Mapping[str, Mapping[str, object]]:
+        if not failed_candidate:
+            return {symbol: _payload(10.0) for symbol in symbols}
+        bootstrap_started.set()
+        assert allow_bootstrap_failure.wait(timeout=5)
+        return {"000001.SZ": _payload(10.0)}
+
+    context_store = QuoteEvaluationContextStore()
+    context_store.publish(_projection_context())
+    subscriber = RealtimeQuoteSubscriber()
+    supervisor = QuoteIngressSupervisor(
+        subscriber=subscriber,
+        config=_config(),
+        data_session_key="SIM:failed-candidate-callback-race",
+        owner="simulation-scheduler",
+        bootstrap_fetcher=bootstrap,
+        context_store=context_store,
+    )
+    active = supervisor.acquire_consumer(consumer_id="active", symbols=["000001.SZ"])
+    worker = supervisor._worker
+    original_capture = worker.capture_delivery
+    callback_observed_after_fence: list[bool] = []
+
+    def blocking_capture(
+        delivery: PhaseOneQuoteDelivery,
+        *,
+        source_session_id: str,
+        clock_domain_id: str,
+    ) -> bool:
+        if (
+            delivery.generation == active.generation + 1
+            and delivery.source_method is QuoteSourceMethod.WHOLE_QUOTE_CALLBACK
+        ):
+            callback_started.set()
+            assert allow_callback_capture.wait(timeout=5)
+            callback_observed_after_fence.append(discard_completed.is_set())
+        return original_capture(
+            delivery,
+            source_session_id=source_session_id,
+            clock_domain_id=clock_domain_id,
+        )
+
+    worker.capture_delivery = blocking_capture  # type: ignore[method-assign]
+    original_discard = subscriber._discard_preparing_phase_one_feed
+
+    def signaling_discard(feed) -> None:  # type: ignore[no-untyped-def]
+        discard_started.set()
+        original_discard(feed)
+        discard_completed.set()
+
+    subscriber._discard_preparing_phase_one_feed = signaling_discard  # type: ignore[method-assign]
+    failed_candidate = True
+    errors: list[BaseException] = []
+
+    def acquire_candidate() -> None:
+        try:
+            supervisor.acquire_consumer(consumer_id="candidate", symbols=["000002.SZ"])
+        except BaseException as exc:  # noqa: BLE001 - thread transports the exact typed failure to the assertion
+            errors.append(exc)
+
+    acquire_thread = threading.Thread(target=acquire_candidate)
+    acquire_thread.start()
+    assert bootstrap_started.wait(timeout=5)
+    failed_sequence = fake_xtdata.subscribe_calls[-1]
+    callback_thread = threading.Thread(
+        target=lambda: fake_xtdata.callbacks[failed_sequence]({"000001.SZ": {**_payload(10.1), "time": "13000000"}})
+    )
+    callback_thread.start()
+    assert callback_started.wait(timeout=5)
+    allow_bootstrap_failure.set()
+    assert discard_started.wait(timeout=5)
+    allow_callback_capture.set()
+    callback_thread.join(timeout=5)
+    acquire_thread.join(timeout=5)
+
+    assert not callback_thread.is_alive()
+    assert not acquire_thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], QuoteContractError)
+    assert errors[0].reason_code == QuoteContractReasonCode.BOOTSTRAP_INCOMPLETE
+    assert discard_completed.is_set()
+    assert callback_observed_after_fence == [False]
+    assert active.generation + 1 not in worker._pending_by_generation
+    assert worker.health()["active_generation"] == active.generation
+
+    capture_count = len(callback_observed_after_fence)
+    fake_xtdata.callbacks[failed_sequence]({"000001.SZ": {**_payload(10.2), "time": "13000100"}})
+    assert len(callback_observed_after_fence) == capture_count
+    assert any("STALE_GENERATION" in record.message for record in caplog.records)
     supervisor.shutdown()
 
 

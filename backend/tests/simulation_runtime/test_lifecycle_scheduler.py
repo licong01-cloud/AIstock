@@ -16,7 +16,6 @@ import psycopg2
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-import backend.infra.realtime_quote_subscriber as subscriber_module
 import backend.services.simulation_runtime.bridges as simulation_bridges
 import backend.services.miniqmt_execution_runtime.client as miniqmt_runtime_client
 
@@ -178,9 +177,6 @@ from backend.services.miniqmt_execution_runtime.quote_normalizer import (
     capture_raw_quote_frame,
     normalize_raw_quote_frame,
 )
-from backend.services.miniqmt_execution_runtime.quote_ingress import QuoteIngressSupervisor
-from backend.infra.realtime_quote_subscriber import RealtimeQuoteSubscriber
-from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _FakeXtData, _projection_context
 
 
 TRADE_DATE = date(2026, 5, 21)
@@ -7418,87 +7414,6 @@ def test_schedule_windows_segment_non_continuous_trading_phases(
 
     assert active["window_id"] == window_id
     assert active["action"] == action
-
-
-def test_scheduler_quote_window_release_at_lunch_reacquires_for_afternoon_without_broker(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_xtdata = _FakeXtData()
-    monkeypatch.setattr(subscriber_module, "_load_xtdata", lambda: fake_xtdata)
-    context_store = QuoteEvaluationContextStore()
-    context_store.publish(_projection_context())
-
-    def full_depth_payload() -> dict[str, object]:
-        return {
-            "time": "09300000",
-            "lastPrice": 10.0,
-            "preClose": 9.8,
-            "bidPrice": [9.99, 9.98, None, None, None],
-            "askPrice": [10.01, 10.02, None, None, None],
-            "bidVol": [100, 100, 0, 0, 0],
-            "askVol": [100, 100, 0, 0, 0],
-            "volume": 1000,
-            "amount": 10000,
-        }
-
-    supervisor = QuoteIngressSupervisor(
-        subscriber=RealtimeQuoteSubscriber(),
-        config=QuoteIngressRuntimeConfig(
-            enabled=True,
-            owner_mode="simulation_scheduler",
-            max_symbols=4,
-            drain_budget=4,
-            heartbeat_timeout_ms=100,
-            restart_backoff_ms=1,
-            restart_max_backoff_ms=8,
-            loud_interval_seconds=1,
-            evidence_outbox_max_events=8,
-            evidence_flush_batch_size=4,
-            restart_max_attempts=2,
-        ),
-        data_session_key="SIM:B0_QUOTE_V2:scheduler-window-test",
-        owner="simulation-scheduler",
-        bootstrap_fetcher=lambda symbols: {symbol: full_depth_payload() for symbol in symbols},
-        context_store=context_store,
-    )
-    morning_window = next(
-        window
-        for window in compute_schedule_windows(
-            trade_date=TRADE_DATE,
-            as_of_time=datetime(2026, 5, 21, 10, 0),
-        )
-        if window["state"] == "ACTIVE"
-    )
-    assert morning_window["window_id"] == "execution"
-    morning = supervisor.acquire_consumer(consumer_id="b0qv2:window-runtime", symbols=["000001.SZ"])
-
-    lunch_window = next(
-        window
-        for window in compute_schedule_windows(
-            trade_date=TRADE_DATE,
-            as_of_time=datetime(2026, 5, 21, 12, 0),
-        )
-        if window["state"] == "ACTIVE"
-    )
-    assert lunch_window["window_id"] == "lunch_recess"
-    assert supervisor.release_consumer(consumer_id="b0qv2:window-runtime") is True
-    assert supervisor.health()["subscription"]["status"] == "INACTIVE"
-
-    afternoon_window = next(
-        window
-        for window in compute_schedule_windows(
-            trade_date=TRADE_DATE,
-            as_of_time=datetime(2026, 5, 21, 13, 1),
-        )
-        if window["state"] == "ACTIVE"
-    )
-    assert afternoon_window["window_id"] == "execution_afternoon"
-    afternoon = supervisor.acquire_consumer(consumer_id="b0qv2:window-runtime", symbols=["000001.SZ"])
-
-    assert afternoon.generation > morning.generation
-    assert supervisor.health()["writer"]["ordering_rejected_count"] == 0
-    assert len(fake_xtdata.subscribe_calls) == 2
-    supervisor.shutdown()
 
 
 def test_localsim_realtime_quote_is_required_only_inside_continuous_submit_windows() -> None:
