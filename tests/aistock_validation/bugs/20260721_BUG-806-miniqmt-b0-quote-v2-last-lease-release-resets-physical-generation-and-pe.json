@@ -9,6 +9,8 @@
     "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
     "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_restart.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260721_BUG-806-miniqmt-b0-quote-v2-last-lease-release-resets-physical-generation-and-pe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

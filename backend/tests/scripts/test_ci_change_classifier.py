@@ -117,6 +117,17 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert miniqmt_test_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
 
+    miniqmt_quote_ingress_payload = classifier.classify_changed_files(
+        [
+            "backend/infra/realtime_quote_subscriber.py",
+            "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert miniqmt_quote_ingress_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
+    assert miniqmt_quote_ingress_payload["unmapped_code_files"] == []
+
     qe_payload = classifier.classify_changed_files(
         ["backend/services/quantevolver/qe_evolution_service.py"],
         repo_root=tmp_path,
