@@ -31,11 +31,16 @@ from backend.services.multi_alpha.combine_backtest import (
     write_qlib_prediction,
 )
 from backend.services.multi_alpha.durable_models import (
+    DurableContractError,
     OwnershipToken,
     artifact_manifest_hash_for,
     make_attempt_id,
     make_remote_task_id,
     submission_intent_hash_for,
+)
+from backend.services.multi_alpha.durable_identity import (
+    DurableExecutionIdentityResolver,
+    validate_execution_identity,
 )
 from backend.services.multi_alpha.durable_repository import MultiAlphaDurableRepository
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError
@@ -113,6 +118,9 @@ class DurableSubmissionIntent:
     qe_task_id: str
     qe_loop_id: str
     submission_intent_hash: str
+    execution_identity_hash: str | None = None
+    execution_environment_snapshot_id: str | None = None
+    execution_environment_manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,8 @@ class QEWorkspacePredBacktestAdapter:
         node_resolver: Any = get_compute_node_info,
         artifact_client_factory: Any | None = None,
         submission_coordinator: QEWorkspaceSubmissionCoordinator | None = None,
+        recovery_materializer: Any | None = None,
+        recovery_materializer_identity_resolver: Any | None = None,
     ) -> None:
         self._repository = repository or MultiAlphaDurableRepository()
         self._model_store = model_store or ModelStoreService()
@@ -163,6 +173,47 @@ class QEWorkspacePredBacktestAdapter:
         self._artifact_client_factory = artifact_client_factory
         self._submission_coordinator = (
             submission_coordinator or QEWorkspaceSubmissionCoordinator()
+        )
+        self._execution_identity_resolver = DurableExecutionIdentityResolver(
+            model_store=self._model_store,
+        )
+        if recovery_materializer is not None and recovery_materializer_identity_resolver is None:
+            raise ValueError(
+                "custom recovery_materializer requires an exact identity resolver",
+            )
+        self._recovery_materializer = (
+            recovery_materializer or self._materialize_frozen_recovery
+        )
+        self._recovery_materializer_identity_resolver = (
+            recovery_materializer_identity_resolver
+            or self._resolve_builtin_recovery_materializer_identity
+        )
+
+    def recovery_materializer_identity_for_run(
+        self,
+        source_run: Mapping[str, Any],
+    ) -> dict[str, str]:
+        request = self._request_from_run(source_run)
+        identity = self._recovery_materializer_identity_resolver(
+            source_run=dict(source_run),
+            request=request,
+        )
+        if not isinstance(identity, Mapping) or not identity:
+            raise DurableExecutionAdapterError(
+                "QE recovery materializer identity resolver returned no identity",
+                reason_code="rematerialize_recovery_code_identity_missing",
+            )
+        return {str(key): str(value) for key, value in identity.items()}
+
+    def _resolve_builtin_recovery_materializer_identity(
+        self,
+        *,
+        source_run: Mapping[str, Any],
+        request: CombineBacktestRequest,
+    ) -> dict[str, str]:
+        del source_run
+        return self._execution_identity_resolver.resolve_materializer_identity(
+            request=request,
         )
 
     def materialize_child_input(
@@ -325,11 +376,47 @@ class QEWorkspacePredBacktestAdapter:
             )
         return payload
 
+    def load_recovery_source_result_payload(
+        self,
+        *,
+        source_run_id: str,
+        source_child_id: str,
+        source_attempt_id: str,
+    ) -> dict[str, Any]:
+        """Return verified source data needed by explicit reference/derived rows."""
+
+        source_attempt = self._required_row(
+            "attempt",
+            source_attempt_id,
+            self._repository.get_attempt(source_attempt_id),
+        )
+        if str(source_attempt.get("status") or "") != "succeeded":
+            raise DurableExecutionAdapterError(
+                "recovery reference source attempt is not succeeded",
+                reason_code="results_only_artifact_missing",
+                context={"source_attempt_id": source_attempt_id, "status": source_attempt.get("status")},
+            )
+        artifacts = self.load_published_artifacts(
+            run_id=source_run_id,
+            child_id=source_child_id,
+            attempt_id=source_attempt_id,
+        )
+        return {
+            "metrics": dict(self.load_collected_metrics(artifacts)),
+            "materialization_metadata": dict(self.load_materialization_metadata(artifacts)),
+            "artifact_manifest": dict(artifacts.artifact_manifest),
+            "result_manifest": dict(source_attempt.get("result_manifest_json") or {}),
+        }
+
     def publish_artifacts(
         self,
         materialization: DurableChildMaterialization,
     ) -> DurablePublishedArtifacts:
         workspace = materialization.workspace
+        input_manifest = json_mapping(
+            materialization.child.get("input_manifest_json"),
+            field_name="input_manifest_json",
+        )
         manifest_path = workspace / "artifact_manifest.json"
         existing = self._read_json_if_exists(manifest_path)
         if existing is not None:
@@ -391,6 +478,9 @@ class QEWorkspacePredBacktestAdapter:
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
                 "prediction_file": "combined_prediction.pkl",
                 "files": files,
+                "execution_identity": input_manifest.get("execution_identity"),
+                "execution_identity_hash": input_manifest.get("execution_identity_hash"),
+                "execution_identity_evidence": input_manifest.get("execution_identity_evidence"),
             }
             manifest["manifest_hash"] = artifact_manifest_hash_for(manifest)
             self._atomic_write_json(manifest_path, manifest)
@@ -411,6 +501,452 @@ class QEWorkspacePredBacktestAdapter:
             if staging.exists():
                 shutil.rmtree(staging)
 
+    def stage_backtest_only_recovery_artifacts(
+        self,
+        *,
+        source_run_id: str,
+        source_child_id: str,
+        source_attempt_id: str,
+        successor_run_id: str,
+        successor_child_id: str,
+        successor_attempt_id: str,
+        successor_input_manifest_hash: str,
+        source_lineage_hash: str,
+    ) -> DurablePublishedArtifacts:
+        """Copy verified frozen prediction/runtime artifacts into successor storage.
+
+        This path is deliberately not a hard-link or path-alias optimization: the
+        successor must survive a permitted source workspace deletion.  Files are
+        copied from the verified source manifest through a private staging tree,
+        checked byte-for-byte, and only then become visible at the preallocated
+        successor workspace identity.  No database row is created by this method.
+        """
+
+        source = self.load_published_artifacts(
+            run_id=source_run_id,
+            child_id=source_child_id,
+            attempt_id=source_attempt_id,
+        )
+        workspace = self._attempt_workspace(
+            successor_run_id,
+            successor_child_id,
+            successor_attempt_id,
+        )
+        existing = self._read_json_if_exists(workspace / "artifact_manifest.json")
+        if existing is not None:
+            self._verify_published_manifest(
+                existing,
+                workspace=workspace,
+                expected_input_manifest_hash=successor_input_manifest_hash,
+            )
+            if existing.get("recovery_source_lineage_hash") != source_lineage_hash:
+                raise DurableExecutionAdapterError(
+                    "successor artifact workspace belongs to a different recovery lineage",
+                    reason_code="recovery_artifact_publish_conflict",
+                    context={"workspace": str(workspace)},
+                )
+            return DurablePublishedArtifacts(
+                workspace=workspace,
+                prediction_path=workspace / "combined_prediction.pkl",
+                artifact_manifest_path=workspace / "artifact_manifest.json",
+                artifact_manifest=existing,
+            )
+
+        source_files = source.artifact_manifest.get("files")
+        if not isinstance(source_files, Mapping):
+            raise DurableExecutionAdapterError(
+                "source artifact manifest has no verified file inventory",
+                reason_code="backtest_prediction_missing",
+                context={"source_attempt_id": source_attempt_id},
+            )
+        workspace.parent.mkdir(parents=True, exist_ok=True)
+        staging = workspace.parent / f".{workspace.name}.recovery.{uuid.uuid4().hex}.tmp"
+        if staging.exists():
+            raise DurableExecutionAdapterError(
+                "recovery artifact staging path collision",
+                reason_code="recovery_artifact_publish_conflict",
+                context={"staging": str(staging)},
+            )
+        staging.mkdir(parents=False)
+        try:
+            source_root = source.workspace.resolve()
+            for raw_relative, metadata in sorted(source_files.items()):
+                if not isinstance(metadata, Mapping):
+                    raise DurableExecutionAdapterError(
+                        "source artifact manifest file metadata is invalid",
+                        reason_code="backtest_prediction_missing",
+                        context={"source_attempt_id": source_attempt_id, "relative_path": raw_relative},
+                    )
+                relative = Path(str(raw_relative))
+                if (
+                    not relative.parts
+                    or relative.is_absolute()
+                    or any(part in {"", ".", ".."} for part in relative.parts)
+                ):
+                    raise DurableExecutionAdapterError(
+                        "source artifact manifest contains an unsafe relative path",
+                        reason_code="recovery_artifact_publish_conflict",
+                        context={"relative_path": str(raw_relative)},
+                    )
+                source_path = (source_root / relative).resolve()
+                try:
+                    source_path.relative_to(source_root)
+                except ValueError as exc:
+                    raise DurableExecutionAdapterError(
+                        "source artifact path escapes its verified workspace",
+                        reason_code="recovery_artifact_publish_conflict",
+                        context={"relative_path": str(raw_relative)},
+                    ) from exc
+                if source_path.is_symlink() or not source_path.is_file():
+                    raise DurableExecutionAdapterError(
+                        "source artifact must be a regular non-symlink file",
+                        reason_code="recovery_artifact_publish_conflict",
+                        context={"path": str(source_path)},
+                    )
+                digest, size = self._sha256_file(source_path)
+                if digest != metadata.get("sha256") or size != int(metadata.get("size") or -1):
+                    raise DurableExecutionAdapterError(
+                        "source artifact bytes do not match its frozen manifest",
+                        reason_code="backtest_prediction_hash_mismatch",
+                        context={"path": str(source_path)},
+                    )
+                self._atomic_copy_file(source_path, staging / relative)
+            files = self._publish_staging_tree(staging=staging, workspace=workspace)
+            manifest = {
+                "schema_version": ARTIFACT_MANIFEST_SCHEMA,
+                "run_id": successor_run_id,
+                "child_id": successor_child_id,
+                "attempt_id": successor_attempt_id,
+                "input_manifest_hash": successor_input_manifest_hash,
+                "prediction_file": "combined_prediction.pkl",
+                "files": files,
+                "recovery_source": {
+                    "source_run_id": source_run_id,
+                    "source_child_id": source_child_id,
+                    "source_attempt_id": source_attempt_id,
+                },
+                "recovery_source_lineage_hash": source_lineage_hash,
+            }
+            manifest["manifest_hash"] = artifact_manifest_hash_for(manifest)
+            self._atomic_write_json(workspace / "artifact_manifest.json", manifest)
+            self._verify_published_manifest(
+                manifest,
+                workspace=workspace,
+                expected_input_manifest_hash=successor_input_manifest_hash,
+            )
+            return DurablePublishedArtifacts(
+                workspace=workspace,
+                prediction_path=workspace / "combined_prediction.pkl",
+                artifact_manifest_path=workspace / "artifact_manifest.json",
+                artifact_manifest=manifest,
+            )
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    def stage_rematerialized_recovery_artifacts(
+        self,
+        *,
+        source_run: Mapping[str, Any],
+        source_child: Mapping[str, Any],
+        source_attempt_id: str,
+        successor_run_spec: Any,
+        successor_child_spec: Any,
+        successor_attempt_spec: Any,
+        source_lineage: Mapping[str, Any],
+    ) -> DurablePublishedArtifacts:
+        """Materialize through the registered frozen-input provider.
+
+        This is not a convenience alias for ``materialize_child_input``.  That
+        method is intentionally allowed to use the ordinary initial-run path;
+        using it here would silently substitute the currently deployed
+        materializer, request defaults, or mutable inputs for a historical
+        recovery.  The production default is the built-in verified provider;
+        a custom provider is accepted only together with its identity resolver.
+        Both receive the persisted source manifests verbatim.
+        """
+
+        source_input = source_lineage.get("source_input_manifest")
+        source_input_hash = str(source_lineage.get("source_input_manifest_hash") or "")
+        persisted_source_input = source_child.get("input_manifest_json")
+        persisted_source_hash = str(source_child.get("input_manifest_hash") or "")
+        materializer_identity = source_lineage.get("recovery_materializer_identity")
+        if not isinstance(source_input, Mapping) or not source_input_hash:
+            raise DurableExecutionAdapterError(
+                "rematerialized recovery is missing the frozen source input manifest",
+                reason_code="rematerialize_source_identity_missing",
+                context={"source_child_id": source_child.get("child_id")},
+            )
+        if (
+            not isinstance(persisted_source_input, Mapping)
+            or artifact_manifest_hash_for(dict(source_input)) != source_input_hash
+            or source_input_hash != persisted_source_hash
+            or dict(source_input) != dict(persisted_source_input)
+        ):
+            raise DurableExecutionAdapterError(
+                "rematerialized recovery source input differs from its persisted immutable manifest",
+                reason_code="source_lineage_mismatch",
+                context={"source_child_id": source_child.get("child_id")},
+            )
+        if not isinstance(materializer_identity, Mapping) or not materializer_identity:
+            raise DurableExecutionAdapterError(
+                "rematerialized recovery is missing the frozen materializer identity",
+                reason_code="rematerialize_recovery_code_identity_missing",
+                context={"source_child_id": source_child.get("child_id")},
+            )
+        successor_workspace = self._attempt_workspace(
+            str(successor_run_spec.run_id),
+            str(successor_child_spec.child_id),
+            str(successor_attempt_spec.attempt_id),
+        )
+        existing = self._read_json_if_exists(successor_workspace / "artifact_manifest.json")
+        expected_lineage_hash = artifact_manifest_hash_for(dict(source_lineage))
+        if existing is not None:
+            self._verify_published_manifest(
+                existing,
+                workspace=successor_workspace,
+                expected_input_manifest_hash=str(successor_child_spec.input_manifest_hash),
+            )
+            if (
+                existing.get("recovery_source_lineage_hash") != expected_lineage_hash
+                or existing.get("recovery_materializer_identity_hash")
+                != artifact_manifest_hash_for(dict(materializer_identity))
+            ):
+                raise DurableExecutionAdapterError(
+                    "rematerialized successor workspace belongs to a different frozen recovery identity",
+                    reason_code="recovery_artifact_publish_conflict",
+                    context={"workspace": str(successor_workspace)},
+                )
+            return DurablePublishedArtifacts(
+                workspace=successor_workspace,
+                prediction_path=successor_workspace / "combined_prediction.pkl",
+                artifact_manifest_path=successor_workspace / "artifact_manifest.json",
+                artifact_manifest=existing,
+            )
+
+        materialization = self._recovery_materializer(
+            source_run=dict(source_run),
+            source_child=dict(source_child),
+            source_attempt_id=source_attempt_id,
+            source_input_manifest=dict(source_input),
+            source_input_manifest_hash=source_input_hash,
+            recovery_materializer_identity=dict(materializer_identity),
+            successor_run_spec=successor_run_spec,
+            successor_child_spec=successor_child_spec,
+            successor_attempt_spec=successor_attempt_spec,
+            successor_workspace=successor_workspace,
+        )
+        if not isinstance(materialization, DurableChildMaterialization):
+            raise DurableExecutionAdapterError(
+                "frozen-input recovery materializer returned an invalid materialization object",
+                reason_code="recovery_materializer_unavailable",
+                context={"returned_type": type(materialization).__name__},
+            )
+        expected_identity = {
+            "run_id": str(successor_run_spec.run_id),
+            "child_id": str(successor_child_spec.child_id),
+            "attempt_id": str(successor_attempt_spec.attempt_id),
+            "input_manifest_hash": str(successor_child_spec.input_manifest_hash),
+        }
+        actual_identity = {
+            "run_id": materialization.run.get("id"),
+            "child_id": materialization.child.get("child_id"),
+            "attempt_id": materialization.attempt.get("attempt_id"),
+            "input_manifest_hash": materialization.child.get("input_manifest_hash"),
+        }
+        if actual_identity != expected_identity or materialization.workspace != successor_workspace:
+            raise DurableExecutionAdapterError(
+                "frozen-input recovery materializer returned a mismatched successor identity",
+                reason_code="source_lineage_mismatch",
+                context={"expected": expected_identity, "actual": actual_identity},
+            )
+        published = self.publish_artifacts(materialization)
+        manifest = dict(published.artifact_manifest)
+        manifest.update(
+            {
+                "recovery_source": {
+                    "source_run_id": source_run.get("id"),
+                    "source_child_id": source_child.get("child_id"),
+                    "source_attempt_id": source_attempt_id,
+                },
+                "recovery_source_lineage_hash": expected_lineage_hash,
+                "recovery_materializer_identity_hash": artifact_manifest_hash_for(
+                    dict(materializer_identity)
+                ),
+            }
+        )
+        manifest.pop("manifest_hash", None)
+        manifest["manifest_hash"] = artifact_manifest_hash_for(manifest)
+        self._atomic_write_json(published.artifact_manifest_path, manifest)
+        self._verify_published_manifest(
+            manifest,
+            workspace=successor_workspace,
+            expected_input_manifest_hash=str(successor_child_spec.input_manifest_hash),
+        )
+        return DurablePublishedArtifacts(
+            workspace=successor_workspace,
+            prediction_path=successor_workspace / "combined_prediction.pkl",
+            artifact_manifest_path=published.artifact_manifest_path,
+            artifact_manifest=manifest,
+        )
+
+    def _materialize_frozen_recovery(
+        self,
+        *,
+        source_run: Mapping[str, Any],
+        source_child: Mapping[str, Any],
+        source_attempt_id: str,
+        source_input_manifest: Mapping[str, Any],
+        source_input_manifest_hash: str,
+        recovery_materializer_identity: Mapping[str, Any],
+        successor_run_spec: Any,
+        successor_child_spec: Any,
+        successor_attempt_spec: Any,
+        successor_workspace: Path,
+    ) -> DurableChildMaterialization:
+        """Recompute one prediction from frozen request and verified source bytes."""
+
+        del source_child, source_attempt_id, source_input_manifest_hash
+        request = self._request_from_run(source_run)
+        current_identity = self.recovery_materializer_identity_for_run(source_run)
+        if dict(recovery_materializer_identity) != current_identity:
+            raise DurableExecutionAdapterError(
+                "recovery materializer code identity changed after preview",
+                reason_code="rematerialize_recovery_code_identity_changed",
+                context={
+                    "preview_identity": dict(recovery_materializer_identity),
+                    "current_identity": current_identity,
+                },
+            )
+        self._verify_frozen_prediction_sources(
+            request=request,
+            source_input_manifest=source_input_manifest,
+        )
+        run_row = {
+            "id": str(successor_run_spec.run_id),
+            "backtest_config_json": dict(successor_run_spec.backtest_config),
+        }
+        child_row = {
+            "child_id": str(successor_child_spec.child_id),
+            "run_id": str(successor_child_spec.run_id),
+            "child_key": str(successor_child_spec.child_key),
+            "child_kind": str(successor_child_spec.child_kind),
+            "weighting_scheme": successor_child_spec.weighting_scheme,
+            "dropped_leg_id": successor_child_spec.dropped_leg_id,
+            "input_manifest_json": dict(successor_child_spec.input_manifest),
+            "input_manifest_hash": str(successor_child_spec.input_manifest_hash),
+        }
+        attempt_row = {
+            "attempt_id": str(successor_attempt_spec.attempt_id),
+            "child_id": str(successor_attempt_spec.child_id),
+            "attempt_no": int(successor_attempt_spec.attempt_no),
+            "retry_mode": str(successor_attempt_spec.retry_mode),
+            "source_attempt_id": successor_attempt_spec.source_attempt_id,
+        }
+        prediction_frame, weights, per_window_weights = self._materialize_prediction(
+            child=child_row,
+            request=request,
+        )
+        return DurableChildMaterialization(
+            run=run_row,
+            child=child_row,
+            attempt=attempt_row,
+            request=request,
+            prediction_frame=prediction_frame,
+            weights=weights,
+            per_window_weights=per_window_weights,
+            workspace=successor_workspace,
+        )
+
+    def _verify_frozen_prediction_sources(
+        self,
+        *,
+        request: CombineBacktestRequest,
+        source_input_manifest: Mapping[str, Any],
+    ) -> None:
+        execution_identity = source_input_manifest.get("execution_identity")
+        if not isinstance(execution_identity, Mapping):
+            raise DurableExecutionAdapterError(
+                "frozen source input has no complete execution identity",
+                reason_code="rematerialize_source_identity_missing",
+            )
+        execution_identity_hash = source_input_manifest.get("execution_identity_hash")
+        if not isinstance(execution_identity_hash, str) or not execution_identity_hash:
+            raise DurableExecutionAdapterError(
+                "frozen source input has no execution identity hash",
+                reason_code="rematerialize_source_identity_missing",
+            )
+        try:
+            validate_execution_identity(
+                payload=execution_identity,
+                identity_hash=execution_identity_hash,
+            )
+        except DurableContractError as exc:
+            raise DurableExecutionAdapterError(
+                "frozen source execution identity is invalid",
+                reason_code="source_lineage_mismatch",
+                context={
+                    "source_reason_code": exc.reason_code,
+                    "source_context": dict(exc.context),
+                },
+            ) from exc
+        raw_sources = execution_identity.get("prediction_sources")
+        if not isinstance(raw_sources, list):
+            raise DurableExecutionAdapterError(
+                "frozen execution identity has no prediction source list",
+                reason_code="rematerialize_source_identity_missing",
+            )
+        expected = {
+            (str(leg.leg_id), str(seed_run_id))
+            for leg in request.roster
+            for seed_run_id in leg.seed_run_ids
+        }
+        observed: set[tuple[str, str]] = set()
+        for raw in raw_sources:
+            if not isinstance(raw, Mapping):
+                raise DurableExecutionAdapterError(
+                    "frozen prediction source identity is not an object",
+                    reason_code="rematerialize_source_identity_missing",
+                )
+            leg_id = str(raw.get("leg_id") or "")
+            seed_run_id = str(raw.get("seed_run_id") or "")
+            expected_hash = str(raw.get("artifact_sha256") or "")
+            observed.add((leg_id, seed_run_id))
+            try:
+                path = self._model_store.prediction_path(run_id=seed_run_id)
+                actual_hash, _size = self._sha256_file(path)
+            except Exception as exc:
+                raise DurableExecutionAdapterError(
+                    "frozen prediction source is unavailable for rematerialization",
+                    reason_code="backtest_prediction_missing",
+                    context={
+                        "leg_id": leg_id,
+                        "seed_run_id": seed_run_id,
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                ) from exc
+            if actual_hash != expected_hash:
+                raise DurableExecutionAdapterError(
+                    "frozen prediction source bytes changed before rematerialization",
+                    reason_code="backtest_prediction_hash_mismatch",
+                    context={
+                        "leg_id": leg_id,
+                        "seed_run_id": seed_run_id,
+                        "expected": expected_hash,
+                        "actual": actual_hash,
+                    },
+                )
+        if observed != expected:
+            raise DurableExecutionAdapterError(
+                "frozen prediction source roster differs from the persisted request",
+                reason_code="source_lineage_mismatch",
+                context={
+                    "expected": sorted(expected),
+                    "observed": sorted(observed),
+                },
+            )
+
     def prepare_submission_intent(
         self,
         *,
@@ -419,6 +955,7 @@ class QEWorkspacePredBacktestAdapter:
         attempt: Mapping[str, Any],
         node_id: str,
     ) -> DurableSubmissionIntent:
+        execution_binding = self._execution_binding_for_submission(run=run, child=child)
         attempt_no = int(attempt.get("attempt_no") or 0)
         qe_task_id = make_remote_task_id(
             str(run["id"]),
@@ -431,6 +968,7 @@ class QEWorkspacePredBacktestAdapter:
             attempt_no=attempt_no,
             retry_mode=str(attempt["retry_mode"]),
             retry_of_attempt_id=attempt.get("retry_of_attempt_id"),
+            execution_identity_hash=execution_binding["execution_identity_hash"],
             node_id=node_id,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
@@ -467,7 +1005,73 @@ class QEWorkspacePredBacktestAdapter:
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             submission_intent_hash=submission_hash,
+            execution_identity_hash=execution_binding["execution_identity_hash"],
+            execution_environment_snapshot_id=execution_binding[
+                "execution_environment_snapshot_id"
+            ],
+            execution_environment_manifest_sha256=execution_binding[
+                "execution_environment_manifest_sha256"
+            ],
         )
+
+    @staticmethod
+    def _execution_binding_for_submission(
+        *,
+        run: Mapping[str, Any],
+        child: Mapping[str, Any],
+    ) -> dict[str, str | None]:
+        input_manifest = json_mapping(
+            child.get("input_manifest_json"),
+            field_name="input_manifest_json",
+        )
+        raw_identity = input_manifest.get("execution_identity")
+        raw_hash = input_manifest.get("execution_identity_hash")
+        if raw_identity is None and raw_hash is None:
+            # The run holds explicit incomplete evidence.  It remains a valid QE
+            # research execution, but does not claim an exact remote identity.
+            return {
+                "execution_identity_hash": None,
+                "execution_environment_snapshot_id": None,
+                "execution_environment_manifest_sha256": None,
+            }
+        if not isinstance(raw_identity, Mapping) or not isinstance(raw_hash, str):
+            raise DurableExecutionAdapterError(
+                "child execution identity is partially persisted",
+                reason_code="multi_alpha_execution_identity_invalid",
+                context={"child_id": child.get("child_id")},
+            )
+        identity = validate_execution_identity(
+            payload=raw_identity,
+            identity_hash=raw_hash,
+        )
+        run_identity = run.get("execution_identity_json")
+        run_hash = run.get("execution_identity_hash")
+        if not isinstance(run_identity, Mapping) or run_hash != identity.identity_hash or dict(run_identity) != dict(identity.payload):
+            raise DurableExecutionAdapterError(
+                "run and child execution identity do not match",
+                reason_code="multi_alpha_execution_identity_hash_mismatch",
+                context={"run_id": run.get("id"), "child_id": child.get("child_id")},
+            )
+        runtime = identity.payload.get("runtime")
+        if not isinstance(runtime, Mapping):
+            raise DurableExecutionAdapterError(
+                "execution identity runtime section is absent",
+                reason_code="multi_alpha_execution_identity_invalid",
+                context={"child_id": child.get("child_id")},
+            )
+        snapshot_id = runtime.get("execution_environment_snapshot_id")
+        manifest_hash = runtime.get("execution_environment_manifest_sha256")
+        if not isinstance(snapshot_id, str) or not snapshot_id or not isinstance(manifest_hash, str) or not manifest_hash:
+            raise DurableExecutionAdapterError(
+                "execution identity has no owning-node environment binding",
+                reason_code="multi_alpha_execution_identity_incomplete",
+                context={"child_id": child.get("child_id")},
+            )
+        return {
+            "execution_identity_hash": identity.identity_hash,
+            "execution_environment_snapshot_id": snapshot_id,
+            "execution_environment_manifest_sha256": manifest_hash,
+        }
 
     async def submit(
         self,
@@ -494,6 +1098,47 @@ class QEWorkspacePredBacktestAdapter:
             raise DurableExecutionAdapterError(
                 "submission intent does not belong to the persisted durable hierarchy",
                 reason_code="multi_alpha_submission_intent_scope_mismatch",
+            )
+        artifact_binding = {
+            "execution_identity_hash": artifacts.artifact_manifest.get("execution_identity_hash"),
+            "execution_environment_snapshot_id": None,
+            "execution_environment_manifest_sha256": None,
+        }
+        if intent.execution_identity_hash is not None:
+            artifact_identity = artifacts.artifact_manifest.get("execution_identity")
+            if not isinstance(artifact_identity, Mapping):
+                raise DurableExecutionAdapterError(
+                    "published artifact manifest lost the durable execution identity",
+                    reason_code="multi_alpha_execution_identity_hash_mismatch",
+                    context={"attempt_id": intent.attempt_id},
+                )
+            validated_artifact_identity = validate_execution_identity(
+                payload=artifact_identity,
+                identity_hash=str(artifact_binding["execution_identity_hash"] or ""),
+            )
+            runtime = validated_artifact_identity.payload.get("runtime")
+            if not isinstance(runtime, Mapping):
+                raise DurableExecutionAdapterError(
+                    "published artifact execution identity has no runtime section",
+                    reason_code="multi_alpha_execution_identity_invalid",
+                    context={"attempt_id": intent.attempt_id},
+                )
+            artifact_binding["execution_environment_snapshot_id"] = runtime.get(
+                "execution_environment_snapshot_id"
+            )
+            artifact_binding["execution_environment_manifest_sha256"] = runtime.get(
+                "execution_environment_manifest_sha256"
+            )
+        expected_binding = {
+            "execution_identity_hash": intent.execution_identity_hash,
+            "execution_environment_snapshot_id": intent.execution_environment_snapshot_id,
+            "execution_environment_manifest_sha256": intent.execution_environment_manifest_sha256,
+        }
+        if artifact_binding != expected_binding:
+            raise DurableExecutionAdapterError(
+                "published artifact execution identity differs from the frozen remote submission intent",
+                reason_code="multi_alpha_execution_identity_hash_mismatch",
+                context={"attempt_id": intent.attempt_id, "expected": expected_binding, "actual": artifact_binding},
             )
         request = self._request_from_run(run)
         node = self._node_resolver(intent.node_id)
@@ -585,6 +1230,9 @@ class QEWorkspacePredBacktestAdapter:
             },
             experiment_files=experiment_files,
             wsl_command=wsl_command,
+            execution_identity_hash=intent.execution_identity_hash,
+            execution_environment_snapshot_id=intent.execution_environment_snapshot_id,
+            execution_environment_manifest_sha256=intent.execution_environment_manifest_sha256,
         )
         client = self._workspace_client_factory(intent.node_id)
         async with client:
@@ -967,6 +1615,42 @@ class QEWorkspacePredBacktestAdapter:
                 "durable artifact manifest belongs to different frozen inputs",
                 reason_code="multi_alpha_artifact_manifest_conflict",
             )
+        identity = manifest.get("execution_identity")
+        identity_hash = manifest.get("execution_identity_hash")
+        identity_evidence = manifest.get("execution_identity_evidence")
+        if identity is None:
+            if identity_hash is not None:
+                raise DurableExecutionAdapterError(
+                    "artifact manifest has an execution identity hash without identity content",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
+            if identity_evidence is not None and (
+                not isinstance(identity_evidence, Mapping)
+                or identity_evidence.get("complete") is not False
+            ):
+                raise DurableExecutionAdapterError(
+                    "artifact manifest incomplete execution identity evidence is invalid",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
+        else:
+            if not isinstance(identity, Mapping) or not isinstance(identity_hash, str):
+                raise DurableExecutionAdapterError(
+                    "artifact manifest execution identity is partially persisted",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
+            try:
+                validate_execution_identity(payload=identity, identity_hash=identity_hash)
+            except Exception as exc:
+                raise DurableExecutionAdapterError(
+                    "artifact manifest execution identity hash is invalid",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"error_type": type(exc).__name__, "message": str(exc)},
+                ) from exc
+            if not isinstance(identity_evidence, Mapping) or identity_evidence.get("complete") is not True:
+                raise DurableExecutionAdapterError(
+                    "artifact manifest complete execution identity evidence is invalid",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
         without_hash = dict(manifest)
         actual_manifest_hash = without_hash.pop("manifest_hash", None)
         expected_manifest_hash = artifact_manifest_hash_for(without_hash)
@@ -987,7 +1671,40 @@ class QEWorkspacePredBacktestAdapter:
                     "durable artifact file metadata is invalid",
                     reason_code="multi_alpha_artifact_manifest_invalid",
                 )
-            path = workspace / str(relative_name)
+            relative = Path(str(relative_name))
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or any(part in {"", ".", ".."} for part in relative.parts)
+            ):
+                raise DurableExecutionAdapterError(
+                    "durable artifact manifest contains an unsafe relative path",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"relative_path": str(relative_name)},
+                )
+            root = workspace.resolve()
+            candidate = root / relative
+            if candidate.is_symlink():
+                raise DurableExecutionAdapterError(
+                    "durable artifact must not be a symlink",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"path": str(candidate)},
+                )
+            path = candidate.resolve()
+            try:
+                path.relative_to(root)
+            except ValueError as exc:
+                raise DurableExecutionAdapterError(
+                    "durable artifact path escapes its workspace",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"relative_path": str(relative_name)},
+                ) from exc
+            if not path.is_file():
+                raise DurableExecutionAdapterError(
+                    "durable artifact must be a regular non-symlink file",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"path": str(path)},
+                )
             digest, size = self._sha256_file(path)
             if digest != metadata.get("sha256") or size != int(metadata.get("size") or -1):
                 raise DurableExecutionAdapterError(

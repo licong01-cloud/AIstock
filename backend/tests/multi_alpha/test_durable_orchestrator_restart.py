@@ -20,6 +20,36 @@ from backend.services.multi_alpha.durable_orchestrator import (
 )
 
 
+class _SchemaHealth:
+    def __init__(self, *, ready: bool, reason_code: str | None = None) -> None:
+        self.ready = ready
+        self.reason_code = reason_code
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"ready": self.ready, "reason_code": self.reason_code}
+
+
+class _PreP0_2Repository:
+    def preflight_schema(self, *, raise_on_error: bool = False) -> _SchemaHealth:
+        assert raise_on_error is True
+        return _SchemaHealth(ready=True)
+
+    def preflight_p0_2_schema(self, *, raise_on_error: bool = False) -> _SchemaHealth:
+        assert raise_on_error is False
+        return _SchemaHealth(ready=False, reason_code="multi_alpha_p0_2_schema_unavailable")
+
+
+class _ActiveImport:
+    async def import_current_active_sources_verified(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            discovered_count=0,
+            imported_count=0,
+            deduplicated_count=0,
+            unresolved=(),
+            queue_only_nodes={},
+        )
+
+
 class _Repository:
     def __init__(self) -> None:
         self.attempt = {
@@ -241,6 +271,7 @@ def _orchestrator(repository: _Repository, adapter: _Adapter) -> DurableMultiAlp
         adapter=adapter,  # type: ignore[arg-type]
         archive_capture=_Noop(),  # type: ignore[arg-type]
         active_import_service=_Noop(),  # type: ignore[arg-type]
+        recovery_worker=_Noop(),  # type: ignore[arg-type]
         config=DurableOrchestratorConfig(
             poll_seconds=0.2,
             lease_seconds=60,
@@ -533,3 +564,62 @@ def test_worker_retries_transient_initialization_instead_of_exiting(tmp_path: Pa
     asyncio.run(orchestrator.run_forever(stop_event))
 
     assert initialize_calls == 2
+
+
+def test_pre_p0_2_schema_keeps_p0_1b_orchestrator_cycle_available() -> None:
+    orchestrator = DurableMultiAlphaOrchestrator(
+        repository=_PreP0_2Repository(),  # type: ignore[arg-type]
+        planner=SimpleNamespace(),  # type: ignore[arg-type]
+        adapter=SimpleNamespace(),  # type: ignore[arg-type]
+        archive_capture=SimpleNamespace(),  # type: ignore[arg-type]
+        active_import_service=_ActiveImport(),  # type: ignore[arg-type]
+        control_service=SimpleNamespace(),  # type: ignore[arg-type]
+        cancellation_delivery_worker=SimpleNamespace(),  # type: ignore[arg-type]
+        recovery_worker=SimpleNamespace(),  # type: ignore[arg-type]
+        owner_id="pre-p0-2-test",
+    )
+
+    health = asyncio.run(orchestrator.initialize())
+    assert health["schema_health"]["ready"] is True
+    assert health["p0_2_schema_health"] == {
+        "ready": False,
+        "reason_code": "multi_alpha_p0_2_schema_unavailable",
+    }
+
+    async def forbidden_p0_2_pass() -> int:
+        raise AssertionError("P0-2 worker pass must not run before its additive schema exists")
+
+    async def bounded_pass(_operation: Any) -> int:
+        return 1
+
+    async def attempt_pass(_operation: Any) -> int:
+        return 1
+
+    async def finalizer_pass() -> int:
+        return 1
+
+    async def archive_pass() -> int:
+        return 1
+
+    orchestrator._run_control_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
+    orchestrator._run_recovery_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
+    orchestrator._run_cancel_delivery_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
+    orchestrator._run_pause_drain_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
+    orchestrator._run_bounded_pass = bounded_pass  # type: ignore[method-assign]
+    orchestrator._run_attempt_pass = attempt_pass  # type: ignore[method-assign]
+    orchestrator._run_finalizer_pass = finalizer_pass  # type: ignore[method-assign]
+    orchestrator.archive_pass = archive_pass  # type: ignore[method-assign]
+
+    result = asyncio.run(orchestrator.run_cycle())
+
+    assert result == DurableOrchestratorCycleResult(
+        planned_runs=1,
+        dispatched_attempts=1,
+        reconciled_attempts=1,
+        finalized_runs=1,
+        archive_events=1,
+        applied_control_commands=0,
+        executed_recovery_commands=0,
+        delivered_cancellations=0,
+        paused_runs=0,
+    )

@@ -3,8 +3,8 @@
 - 文档类型：F2 跨模块架构与实现级详细设计
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / QE UI
 - 日期：2026-07-18
-- 状态：`P0_1B_MERGED_PRODUCTION_VERIFIED_P0_2_DESIGN_READY_CODE_PENDING`
-- 审计修订：P0-1A 与 P0-1B 均已完成源码合入；QE Workspace receipt 配套、共享 reservation、task/run identity 分离、Archive、timeout 和持久化 orchestrator 已实现，reservation DDL 已在生产应用并验证。P0-2 从属详细设计已补齐 command/delivery fencing、typed kill receipt、原子 successor、reference/derived result、代码身份闭包和 UI/API/MCP 恢复合同；不新增设计合入或编码审批门
+- 状态：`P0_1B_MERGED_PRODUCTION_VERIFIED_P0_2_SOURCE_IMPLEMENTED_VERIFIED_MERGE_DDL_RUNTIME_PENDING`
+- 审计修订：P0-1A 与 P0-1B 均已完成源码合入；QE Workspace receipt 配套、共享 reservation、task/run identity 分离、Archive、timeout 和持久化 orchestrator 已实现，reservation DDL 已在生产应用并验证。P0-2 从属详细设计 PR #2535 已合入；AIstock command/delivery/recovery/Archive/API/MCP/UI 与 RD-Agent typed kill/runtime identity 源码已在隔离 worktree 完整实现并完成源码级验证，当前等待实现 PR、P0-2 DDL、部署、服务重启和真实 QE canary；不新增设计合入、编码审批或研究门禁
 - 用户授权本次设计范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性；不代表用户已逐项批准本文全部实现细节或未来偏差
 - 唯一运行边界：QE-only；不得影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行语义或其他非 QE 模块
 - 设计约束：遵循 `DESIGN-COMPLIANCE-001` 四项约束，基于现有架构增量开发，不另建“多 Alpha v2”
@@ -1069,7 +1069,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 ### 25.1 Rollout 顺序
 
 1. P0-1A/P0-1B 源码、submission receipt、reservation DDL、部署和启动 smoke 已完成，继续保持其生产事实与 P0-2 变更分开记录。
-2. 合入 P0-2 详细设计后，分别实现 AIstock command/delivery/recovery/Archive/API/MCP/UI 与 RD-Agent typed kill receipt；两仓库 PR/commit 和部署状态独立追踪。
+2. P0-2 详细设计 PR #2535 已合入；AIstock command/delivery/recovery/Archive/API/MCP/UI 与 RD-Agent typed kill/runtime identity 已实现并通过源码级验证，下一步分别完成两仓库实现 PR；两仓库 commit、PR、合入和部署状态独立追踪。
 3. 在隔离 DEV PostgreSQL 与非生产 WSL/远端 Workspace 完成 migration、multi-instance、kill/completed、successor crash-window、reference-result 和 UI/MCP 验证；失败证据用于修复，不淘汰研究方向。
 4. 源码合入后，仅在用户明确授权时应用 P0-2 生产 DDL、部署 RD-Agent/AIstock 代码或重启服务；不在 DDL 前额外导出数据库。
 5. 激活后运行 isolated API、worker status、legacy list/detail、cancel/reconcile、child retry/results-only 和重启恢复 smoke；现有实验/single-Alpha stop、Selection/Paper/StrategyPackage/LocalSIM 保持零变化。
@@ -1086,9 +1086,9 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 | 项目 | 当前状态 |
 |---|---|
-| design | `P0_1B_MERGED_PRODUCTION_VERIFIED_P0_2_DESIGN_READY_CODE_PENDING`；P0-2 从属设计：`docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`；无设计合入/编码审批状态 |
-| source code | P0-1A PR #2464 已合入；P0-1B AIstock PR #2509 / merge commit `67a54a90` 已合入，RD-Agent receipt companion PR #5 已合入；BUG-786 transport 与 BUG-793 capacity 后续修复也已合入 |
-| migration | P0-1A durable migration 与 P0-1B reservation migration 均已对生产应用并通过 SQL/application preflight；P0-2 当前只有设计，不含 migration 文件或生产变更 |
+| design | `P0_1B_MERGED_PRODUCTION_VERIFIED_P0_2_SOURCE_IMPLEMENTED_VERIFIED_MERGE_DDL_RUNTIME_PENDING`；P0-2 从属设计 PR #2535 / merge commit `935704cf` 已合入；无设计合入/编码审批状态 |
+| source code | P0-1A PR #2464、P0-1B AIstock PR #2509 / merge commit `67a54a90`、RD-Agent receipt companion PR #5、BUG-786 transport 与 BUG-793 capacity 均已合入；P0-2 AIstock 与 RD-Agent 实现已在隔离 worktree 提交并通过源码级验证，等待实现 PR/合入 |
+| migration | P0-1A durable migration 与 P0-1B reservation migration 均已对生产应用并通过 SQL/application preflight；P0-2 Multi-Alpha control/recovery 与 QE Archive v2 additive migration 文件已实现，DEV/production 均未应用 |
 | P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等且不扫描 first-class run、技术失败/不可计算分类准确、8 worker 单一 claim、event 失败整事务回滚、lease 过期 owner 在重新 claim 前被拒绝且新 owner claim 后 stale fencing 被拒绝、schema 类型/约束/索引/注释缺失均 fail-loud |
 | BUG-767 | PR #2464 / close-sync PR #2467 已合入，GitHub issue #2459 已关闭；BUG JSON 的 `production_ddl_gate` 仍需后续元数据 close-sync，不影响已验证的生产 schema 事实 |
 | production DB | 已创建 durable schema；历史回填 12 task、41/41 run、138 child（59 scheme、79 LOO），attempt/event 均为 0，保护摘要 `733d48413364658972bbef1be625b205e1eb191c5df8e9e0f2465d3bea4bffa4` 不变，readback 无 mismatch/orphan |
@@ -1096,7 +1096,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | QE experiments | 本设计不创建、停止、恢复或修改实验 |
 | non-QE impact | `NONE_REQUIRED` |
 | research gates/approvals | `NONE_ADDED` |
-| production_ddl_gate | `applied_and_verified`（历史 P0-1A/P0-1B）；本次 P0-2 文档 PR 为 `noop` |
+| production_ddl_gate | `applied_and_verified`（历史 P0-1A/P0-1B）；P0-2 实现为 `pending` |
 | P0-1B reservation DDL | `applied_and_verified`；BUG-785 记录包含 DEV/production preflight、并发、receipt 和 runtime 验证证据 |
 | production_historical_backfill | `applied_and_verified`；没有伪造 attempt/event，没有修改历史指标、状态、reason、created_at 或 Archive 业务结果 |
 | production_frontend_dependency_gate | `noop` |

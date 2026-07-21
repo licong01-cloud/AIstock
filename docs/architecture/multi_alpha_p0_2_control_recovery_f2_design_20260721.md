@@ -4,11 +4,18 @@
 - 父级权威：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / PostgreSQL durable orchestration / QE UI / QE MCP
 - 日期：2026-07-21
-- 状态：`DESIGN_READY_CODE_PENDING`
-- 当前事实：P0-1B 源码与 QE Workspace receipt 配套已合入，reservation DDL 已在生产应用并验证；P0-2 尚未编码
+- 状态：`SOURCE_IMPLEMENTED_VERIFIED_DDL_RUNTIME_NOT_APPLIED`
+- 当前事实：P0-1B 源码与 QE Workspace receipt 配套已合入，reservation DDL 已在生产应用并验证；P0-2 源码已在隔离 worktree 完整实现并完成源码级验证，P0-2 DDL、服务重启、真实 QE canary 和生产激活均未执行
 - 唯一运行边界：QE-only；不得读写或调用 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行链或其他非 QE 模块
 - 科研约束：本设计不增加研究门禁、人工审批、准入、晋级、PASS/KILL/GO/STOP 或指标淘汰逻辑；缺失数据和制品只形成可见证据与获取建议，不淘汰研究方向
 - 运行约束：本设计和后续实现不得自行启动、停止或重启 AIstock 后端；生产 DDL、依赖安装和运行激活均是独立授权事项
+
+## 0. Source Implementation Record / 源码实施记录（2026-07-21）
+
+- 已实现：P0-2 command/cancel-delivery ledger、lease/fencing/CAS、pause/resume/cancel/reconcile/stop alias、精确 attempt cancel、terminal child successor recovery、三种 retry mode 的严格分流、RD-Agent typed kill receipt、实际环境与数据集身份回传、Archive v2 recovery readback、HTTP/MCP/UI 控制闭环。
+- 兼容性修复：P0-2 DDL 尚未部署时，既有 P0-1B durable submission 保持原始 SQL/child manifest 形态继续运行；返回明确 `multi_alpha_p0_2_schema_unavailable` 基础设施证据，不把该事实解释为研究方向淘汰或隐藏性 fallback。P0-2 control/recovery entrypoint 自身仍会显式报告其所需 schema 未就绪。
+- 已验证：AIstock 核心与 MCP 定向矩阵 `236 passed, 9 skipped`，附加 Archive/Feature-workflow/Strategy-package/Results-only 回归矩阵 `56 passed, 1 deselected`，RD-Agent typed receipt/identity tests `34 passed`；AIstock changed-file Ruff、RD-Agent 新增模块与 submission receipt 全量 Ruff、`qe_evolution_api.py` 新增行 Ruff 审计、两个仓库 Python compile、MCP manifest validation、F2 workflow validation、验收矩阵引用检查和变更前端文件 TypeScript compiler API 检查均通过。RD-Agent 既有 `qe_evolution_api.py` 全文件仍含与本功能无关的历史 Ruff 债务，本交付不将新增行审计表述成旧文件全量清零。`9 skipped` 为未配置显式测试 DSN 的可选 PostgreSQL 集成测试；新增的 zero-child PostgreSQL 生命周期用例已实现但未执行，没有创建测试库、没有执行 DDL、没有导出数据库。新增 Playwright 控制闭环用例已被现有 Playwright 配置成功发现（2 条场景），但本轮未启动前后端服务、未执行浏览器 E2E，因此不将源码发现表述为 Playwright 运行通过。
+- 未执行且不在本次授权范围：DEV/生产 DDL、服务重启/部署、真实 WSL/远端 QE canary、真实 Archive v2 回填。它们是运行/基础设施状态，不改变源码交付或研究方向。
 
 ---
 
@@ -892,44 +899,44 @@ RD-Agent owning-service contract 另行验证：现有三组两参数 `kill_loop
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
-当前只完成详细设计；`DESIGN_READY` 不表示代码、DDL、测试、部署或运行已经实施，也不形成需要人工确认才能继续研究或开发的产品状态。
+本矩阵的 `VERIFIED_SOURCE` 表示实现、源码级测试和静态验证已完成；它不表示 DDL、部署、服务重启、真实 QE canary 或生产激活已经执行，也不形成任何研究准入、审批或淘汰状态。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-207 | §5、§7、§10～§13；父蓝图 run control | `backend/tests/multi_alpha/test_durable_control.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | none |
-| F-208 | §6、§8、§9；父蓝图 child recovery | `backend/tests/multi_alpha/test_durable_retry.py` | DESIGN_READY | none |
-| F-401 | §1～§4 | `backend/tests/multi_alpha/test_durable_contract.py` | DESIGN_READY | none |
-| F-402 | §1、§2.3、§20.4 | `backend/tests/multi_alpha/test_durable_contract.py`；`frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | DESIGN_READY | none |
-| F-403 | §5、§6.1 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_repository_postgres.py` | DESIGN_READY | none |
-| F-404 | §7.1、§10 | `backend/tests/multi_alpha/test_durable_control.py` | DESIGN_READY | none |
-| F-405 | §7.1、§10 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | DESIGN_READY | none |
-| F-406 | §7.2、§10 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | DESIGN_READY | none |
-| F-407 | §7.2、§11 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/unified_engine/test_qe_stop_task.py` | DESIGN_READY | none |
-| F-408 | §6、§8 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_archive_health.py` | DESIGN_READY | none |
-| F-409 | §6.4、§8.1 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_repository.py` | DESIGN_READY | none |
-| F-410 | §8.2、§8.3 | `backend/tests/multi_alpha/test_durable_retry.py` | DESIGN_READY | none |
-| F-411 | §9.1 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/unified_engine/test_qe_results_only_retry.py` | DESIGN_READY | none |
-| F-412 | §9.2 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_execution_adapter.py` | DESIGN_READY | none |
-| F-413 | §9.3 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_execution_adapter.py` | DESIGN_READY | none |
-| F-414 | §9.4、§20.2、§20.4 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_contract.py` | DESIGN_READY | none |
-| F-415 | §10、§16.6 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py`；`backend/tests/multi_alpha/test_durable_capacity.py` | DESIGN_READY | none |
-| F-416 | §10、§16.6 | `backend/tests/multi_alpha/test_active_execution_import.py`；`backend/tests/multi_alpha/test_durable_contract.py` | DESIGN_READY | none |
-| F-417 | §11～§13 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/test_aistock_qe_mcp_servers.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | none |
-| F-418 | §13、§14 | `frontend/tests/quantevolver/multi-alpha-control.spec.ts`；`frontend/tests/multi-alpha-combine-backtest.spec.ts` | DESIGN_READY | none |
-| F-419 | §16 | `backend/tests/multi_alpha/test_durable_repository_postgres.py`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | none |
-| F-420 | §2.3、§15、§21 | `backend/tests/scripts/test_aistock_feature_workflow.py` | DESIGN_READY | none |
-| F-421 | §5、§6.1～§6.2、§10 | `backend/tests/multi_alpha/test_durable_control.py`；PostgreSQL multi-worker/process-generation delivery tests | DESIGN_READY | none |
-| F-422 | §4、§6.7、§7.2、§10、§16.3、§16.7 | `F:/Dev/RD-Agent-main/test/app/test_qe_evolution_kill_receipt.py`；pre-start/Popen/legacy-writer race tests；`backend/tests/multi_alpha/test_durable_control.py::test_cancel_completed_race_preserves_result` | DESIGN_READY | none |
-| F-423 | §6.1、§6.6、§8.2、§16.4 | `backend/tests/multi_alpha/test_durable_retry.py::test_successor_files_publish_before_database_visibility`；`::test_successor_path_containment_rejects_escape` | DESIGN_READY | none |
-| F-424 | §6.4～§6.6、§8、§16.3 | `backend/tests/multi_alpha/test_durable_retry.py::test_reference_and_derived_attempt_preserve_baseline_read_model_and_archive` | DESIGN_READY | none |
-| F-425 | §6.4、§8.3、§9、§16.1～§16.3 | `backend/tests/multi_alpha/test_durable_retry.py::test_code_identity_change_expands_dependency_closure_without_mixed_results` | DESIGN_READY | none |
-| F-426 | §7.1、§10、§16.2～§16.4 | `backend/tests/multi_alpha/test_durable_control.py::test_pause_before_submission_linearization_prevents_post`；`::test_pause_after_linearization_treats_attempt_as_inflight` | DESIGN_READY | none |
-| F-427 | §5.2、§11、§13、§16.5 | `frontend/tests/quantevolver/multi-alpha-control.spec.ts`；`backend/tests/multi_alpha/test_durable_control.py::test_command_terminal_outcomes_and_run_rediscovery` | DESIGN_READY | none |
-| F-428 | §1、§2.3、§11～§14、§16.6 | `backend/tests/multi_alpha/test_durable_contract.py`；`backend/tests/test_aistock_qe_mcp_servers.py`；`backend/tests/unified_engine/test_qe_stop_task.py` | DESIGN_READY | none |
-| F-429 | §6.6、§14～§16 | `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`；Archive migration/preflight/guarded-rollback/readback tests | DESIGN_READY | none |
-| F-430 | §6.3～§6.6、§8、§16.2～§16.4 | `backend/tests/multi_alpha/test_durable_retry.py::test_targeted_recovery_preserves_unselected_failed_siblings`；`::test_partial_recovered_can_spawn_next_successor` | DESIGN_READY | none |
+| F-207 | §5、§7、§10～§13；父蓝图 run control | `backend/tests/multi_alpha/test_durable_control.py`；`frontend/tests/multi-alpha-combine-backtest.spec.ts` | VERIFIED_SOURCE | none |
+| F-208 | §6、§8、§9；父蓝图 child recovery | `backend/tests/multi_alpha/test_durable_retry.py` | VERIFIED_SOURCE | none |
+| F-401 | §1～§4 | `backend/tests/multi_alpha/test_durable_contract.py` | VERIFIED_SOURCE | none |
+| F-402 | §1、§2.3、§20.4 | `backend/tests/multi_alpha/test_durable_contract.py`；`frontend/tests/multi-alpha-combine-backtest.spec.ts` | VERIFIED_SOURCE | none |
+| F-403 | §5、§6.1 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_repository_postgres.py` | VERIFIED_SOURCE | none |
+| F-404 | §7.1、§10 | `backend/tests/multi_alpha/test_durable_control.py` | VERIFIED_SOURCE | none |
+| F-405 | §7.1、§10 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | VERIFIED_SOURCE | none |
+| F-406 | §7.2、§10 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | VERIFIED_SOURCE | none |
+| F-407 | §7.2、§11 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/unified_engine/test_qe_stop_task.py` | VERIFIED_SOURCE | none |
+| F-408 | §6、§8 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_archive_health.py` | VERIFIED_SOURCE | none |
+| F-409 | §6.4、§8.1 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_repository.py` | VERIFIED_SOURCE | none |
+| F-410 | §8.2、§8.3 | `backend/tests/multi_alpha/test_durable_retry.py` | VERIFIED_SOURCE | none |
+| F-411 | §9.1 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/unified_engine/test_qe_results_only_retry.py` | VERIFIED_SOURCE | none |
+| F-412 | §9.2 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_execution_adapter.py` | VERIFIED_SOURCE | none |
+| F-413 | §9.3 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_execution_adapter.py` | VERIFIED_SOURCE | none |
+| F-414 | §9.4、§20.2、§20.4 | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/multi_alpha/test_durable_contract.py` | VERIFIED_SOURCE | none |
+| F-415 | §10、§16.6 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py`；`backend/tests/multi_alpha/test_durable_capacity.py` | VERIFIED_SOURCE | none |
+| F-416 | §10、§16.6 | `backend/tests/multi_alpha/test_active_execution_import.py`；`backend/tests/multi_alpha/test_durable_contract.py` | VERIFIED_SOURCE | none |
+| F-417 | §11～§13 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/mcp/test_qe_archive_module.py`；`frontend/tests/multi-alpha-combine-backtest.spec.ts` | VERIFIED_SOURCE | none |
+| F-418 | §13、§14 | `frontend/tests/multi-alpha-combine-backtest.spec.ts` | VERIFIED_SOURCE | none |
+| F-419 | §16 | `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py`；`frontend/tests/multi-alpha-combine-backtest.spec.ts`；PostgreSQL 用例已实现，本 worktree 未配置测试 DSN、未执行 DDL | VERIFIED_SOURCE | none |
+| F-420 | §2.3、§15、§21 | `backend/tests/scripts/test_aistock_feature_workflow.py` | VERIFIED_SOURCE | none |
+| F-421 | §5、§6.1～§6.2、§10 | `backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_repository_postgres.py` | VERIFIED_SOURCE | none |
+| F-422 | §4、§6.7、§7.2、§10、§16.3、§16.7 | `F:/Dev/RD-Agent_worktrees/qe-typed-kill-receipt-p0-2-20260721/test/app/test_qe_evolution_submission_receipt.py::test_typed_kill_completed_result_wins_after_signal_reservation`；`::test_typed_kill_uses_exact_process_incarnation_and_is_idempotent`；`backend/tests/multi_alpha/test_durable_cancellation.py` | VERIFIED_SOURCE | none |
+| F-423 | §6.1、§6.6、§8.2、§16.4 | `backend/tests/multi_alpha/test_durable_retry.py::test_successor_files_publish_before_database_visibility`；`backend/tests/multi_alpha/test_durable_execution_adapter.py::test_published_manifest_rejects_path_escape_before_reading_external_file` | VERIFIED_SOURCE | none |
+| F-424 | §6.4～§6.6、§8、§16.3 | `backend/tests/multi_alpha/test_durable_retry.py::test_results_only_successor_references_verified_results_and_never_creates_remote_attempt`；`backend/tests/qe_archive/test_multi_alpha_recovery_archive.py::test_archive_v2_preserves_partial_recovery_children_attempts_and_identity` | VERIFIED_SOURCE | none |
+| F-425 | §6.4、§8.3、§9、§16.1～§16.3 | `backend/tests/multi_alpha/test_durable_control.py::test_code_identity_change_expands_dependency_closure_without_mixed_results` | VERIFIED_SOURCE | none |
+| F-426 | §7.1、§10、§16.2～§16.4 | `backend/tests/multi_alpha/test_durable_repository.py::test_early_pause_cancel_and_resume_sql_cover_zero_child_runs`；`::test_zero_child_pause_and_cancel_are_claimable_for_terminalization`；`backend/tests/multi_alpha/test_durable_repository_postgres.py::test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres`；`backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_stale_worker_cannot_terminalize_successor_attempt_or_child`；PostgreSQL 用例需显式测试 DSN 才会执行，本轮未执行 | VERIFIED_SOURCE | none |
+| F-427 | §5.2、§11、§13、§16.5 | `frontend/tests/multi-alpha-combine-backtest.spec.ts`；`backend/tests/multi_alpha/test_durable_retry.py::test_recovery_preview_replay_keeps_command_and_successor_identity_stable`；`backend/tests/multi_alpha/test_durable_router.py::test_recovery_execute_rejects_command_identity_different_from_preview` | VERIFIED_SOURCE | none |
+| F-428 | §1、§2.3、§11～§14、§16.6 | `backend/tests/multi_alpha/test_durable_contract.py`；`backend/tests/mcp/test_qe_archive_module.py::test_durable_recovery_mcp_reuses_preview_idempotency_without_global_client_change`；`backend/tests/unified_engine/test_qe_stop_task.py` | VERIFIED_SOURCE | none |
+| F-429 | §6.6、§14～§16 | `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py` | VERIFIED_SOURCE | none |
+| F-430 | §6.3～§6.6、§8、§16.2～§16.4 | `backend/tests/multi_alpha/test_durable_retry.py::test_terminal_targeted_recovery_freezes_dependency_closure_and_preserves_siblings`；`backend/tests/multi_alpha/test_durable_parent_finalization.py::test_partial_recovered_requires_every_child_in_recovery_scope_to_succeed`；`::test_partial_recovered_preserves_unavailable_siblings_after_successful_recovery` | VERIFIED_SOURCE | none |
 
-`DESIGN_READY` 仅表示设计合同完整，不表示代码、DDL、测试或运行已经实现。文档和 PR 不新增 `AWAITING_USER_CONFIRMATION/APPROVED_BY_USER` 等确认状态；用户明确授权仍只用于生产 DDL、依赖安装、服务启停或其他真实外部副作用。
+`VERIFIED_SOURCE` 仅表示本 worktree 的代码与测试证据；DDL、依赖安装、服务启停和真实外部副作用仍保持独立授权。文档、API、MCP 和 UI 不新增 `AWAITING_USER_CONFIRMATION/APPROVED_BY_USER` 等研究审批状态。
 
 ## 19. Risks / 风险与对策
 
@@ -992,11 +999,20 @@ RD-Agent owning-service contract 另行验证：现有三组两参数 `kill_loop
 - 不新增 user approval、promotion、PASS/KILL/GO/STOP 状态；
 - 不新增设计合入或进入编码的人工确认状态；生产 DDL、依赖、服务启停等外部副作用仍遵守既有独立授权边界。
 
+### 20.5 2026-07-21 源码实施复核
+
+- **完整性**：已实施控制命令账本、执行身份与证据、仅子级重试、typed kill receipt、Archive v2 读回、API/MCP/UI 闭环与 RD-Agent owning-service 合约；没有以单一 API、内存状态或假回执替代这些边界。
+- **显式错误语义**：P0-2 schema、远端身份、数据集清单、制品或恢复输入不可用时均返回结构化 evidence 和可操作建议；不会静默回退、伪造成功、改变 retry mode 或把技术证据缺口写成研究结果。
+- **兼容性**：P0-1B 提交在 P0-2 additive DDL 尚未应用时保持原有 SQL 形状和可用性，并附带 `multi_alpha_p0_2_schema_unavailable` 基础设施证据；P0-2 控制/恢复入口则明确说明其自身 schema 前置条件。该区分不是研究审批或方向淘汰。
+- **边界**：未修改 Alpha 公式、标签、回测、LOO、baseline、训练、指标计算或研究方向；未新增 PASS/KILL/GO/STOP、人工审批、数据缺失淘汰规则或自动降级。
+- **验证收据**：源码级目标测试、静态检查、TypeScript、MCP manifest 和 F2 validator 的结果记录在第 0 节；真实 DEV DDL、服务重启、运行态 canary 与生产激活均未执行，须由相应独立授权后再验证。
+
 ## 21. Rollout / Rollback / Production Gates / 发布回滚与生产门禁
 
-### 21.1 本设计 PR
+### 21.1 本设计与源码工作分离
 
-- 仅文档；`production_ddl_gate=noop`；
+- 原始设计 PR 仅包含文档；本实施 worktree 已包含按本设计完成的 P0-2 源码与测试更新；两者都不执行生产副作用。
+- `production_ddl_gate=noop`；
 - `production_backend_dependency_gate=noop`；
 - `production_frontend_dependency_gate=noop`；
 - 不改数据库、不改 runtime、不重启服务、不启动实验。
@@ -1014,8 +1030,10 @@ RD-Agent owning-service contract 另行验证：现有三组两参数 `kill_loop
 - P0-1B source：merged；
 - P0-1B reservation DDL：production applied and verified；
 - P0-1B runtime：此前已完成启动 smoke；实时进程状态不是本设计的持久权威，操作前必须现场核查。本次修订于 2026-07-21 14:27 只读观察到 `0.0.0.0:8001` 正在监听，但未启停服务；
-- P0-2 design：ready；
-- P0-2 code/DDL/runtime：not started。
+- P0-2 design：`SOURCE_IMPLEMENTED_VERIFIED_DDL_RUNTIME_NOT_APPLIED`；
+- P0-2 source：本 worktree 已实施并完成源码级验证；尚未提交、合入或同步 main；
+- P0-2 DEV/production DDL：未执行；
+- P0-2 runtime/restart/actual QE canary：未执行。
 
 ## 22. 退出条件与下一步
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Header, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.multi_alpha import (
     MultiAlphaCombineBacktestError,
@@ -22,6 +22,12 @@ from backend.services.multi_alpha.combine_ui_adapter import (
     error_payload as combine_ui_error_payload,
 )
 from backend.services.multi_alpha.durable_submission import DurableCombineSubmissionError
+from backend.services.multi_alpha.durable_control import (
+    DurableControlError,
+    DurableMultiAlphaControlService,
+)
+from backend.services.multi_alpha.durable_recovery import DurableRecoveryService
+from backend.services.multi_alpha.durable_repository import MultiAlphaDurableRepositoryError
 
 
 router = APIRouter(prefix="/multi-alpha", tags=["multi-alpha"])
@@ -77,11 +83,116 @@ class CombineBacktestArchiveRequest(BaseModel):
     dry_run: bool = True
 
 
+class DurableControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    request: dict[str, Any] = Field(default_factory=dict)
+    child_id: str | None = None
+    attempt_id: str | None = None
+    scope: dict[str, Any] | None = None
+
+
+class DurableStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request: dict[str, Any] = Field(default_factory=dict)
+
+
+class DurableAttemptCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request: dict[str, Any] = Field(default_factory=dict)
+
+
+class DurableRecoveryPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retry_mode: str
+
+
+class DurableRecoveryExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retry_mode: str
+    scope_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_command_id: str = Field(pattern=r"^macmd_[0-9a-f]{64}$")
+
+
 def _parse_run_ids(values: list[str]) -> list[str]:
     result: list[str] = []
     for value in values:
         result.extend(part.strip() for part in str(value or "").split(",") if part.strip())
     return result
+
+
+def _durable_control_http_error(exc: Exception) -> HTTPException:
+    reason_code = str(getattr(exc, "reason_code", "multi_alpha_durable_control_failed"))
+    context = dict(getattr(exc, "context", {}) or {})
+    if reason_code in {"multi_alpha_entity_not_found", "multi_alpha_recovery_target_not_found"}:
+        status_code = 404
+    elif reason_code in {
+        "control_idempotency_conflict",
+        "multi_alpha_active_command_conflict",
+        "control_cancel_in_progress",
+        "multi_alpha_state_transition_conflict",
+        "recovery_scope_stale",
+        "multi_alpha_selected_attempt_conflict",
+    }:
+        status_code = 409
+    elif reason_code in {"multi_alpha_p0_2_schema_unavailable", "multi_alpha_schema_unavailable"}:
+        status_code = 503
+    elif reason_code == "multi_alpha_durable_control_failed":
+        status_code = 500
+    else:
+        status_code = 400
+    return HTTPException(
+        status_code=status_code,
+        detail={"reason_code": reason_code, "message": str(exc), "context": context},
+    )
+
+
+def _durable_command_response(result: Any) -> dict[str, Any]:
+    return {
+        "status": "success",
+        "data": {
+            "command": dict(result.command),
+            "idempotent_identity_confirmed": result.idempotent_identity_confirmed,
+            "capabilities": dict(result.capabilities),
+        },
+    }
+
+
+def _require_run_scoped_child(
+    service: DurableMultiAlphaControlService,
+    *,
+    run_id: str,
+    child_id: str,
+) -> dict[str, Any]:
+    child = service.repository.get_child(child_id)
+    if child is None or str(child.get("run_id") or "") != run_id:
+        raise DurableControlError(
+            "durable child does not belong to this run",
+            reason_code="multi_alpha_entity_not_found",
+            context={"run_id": run_id, "child_id": child_id},
+        )
+    return child
+
+
+def _require_run_scoped_attempt(
+    service: DurableMultiAlphaControlService,
+    *,
+    run_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    attempt = service.repository.get_attempt(attempt_id)
+    if attempt is None or str(attempt.get("run_id") or "") != run_id:
+        raise DurableControlError(
+            "durable attempt does not belong to this run",
+            reason_code="multi_alpha_entity_not_found",
+            context={"run_id": run_id, "attempt_id": attempt_id},
+        )
+    return attempt
 
 
 @router.get("/orthogonality", summary="Compute read-only orthogonality diagnostics for finalized alpha legs")
@@ -137,6 +248,396 @@ def get_multi_alpha_combine_backtest(run_id: str) -> dict:
     return {"status": "success", "data": data}
 
 
+@router.get(
+    "/combine-backtest/runs/{run_id}/control-capabilities",
+    summary="Read durable QE multi-alpha control state and evidence without hiding recovery directions",
+)
+def get_multi_alpha_durable_control_capabilities(
+    run_id: str,
+    child_id: str | None = None,
+    attempt_id: str | None = None,
+) -> dict:
+    try:
+        data = DurableMultiAlphaControlService().capabilities(
+            run_id=run_id,
+            child_id=child_id,
+            attempt_id=attempt_id,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/children",
+    summary="List durable QE multi-alpha children with their exact selected-attempt state",
+)
+def list_multi_alpha_durable_children(run_id: str) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        service.capabilities(run_id=run_id)
+        children = service.repository.list_children(run_id)
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": {"children": children, "count": len(children)}}
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/children/{child_id}",
+    summary="Read one durable QE multi-alpha child and all append-only attempts",
+)
+def get_multi_alpha_durable_child(run_id: str, child_id: str) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        child = _require_run_scoped_child(service, run_id=run_id, child_id=child_id)
+        attempts = service.repository.list_attempts(child_id)
+        capabilities = service.capabilities(run_id=run_id, child_id=child_id)
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {
+        "status": "success",
+        "data": {"child": child, "attempts": attempts, "capabilities": capabilities},
+    }
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/children/{child_id}/attempts",
+    summary="List append-only attempts for one durable child",
+)
+def list_multi_alpha_durable_child_attempts(run_id: str, child_id: str) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        _require_run_scoped_child(service, run_id=run_id, child_id=child_id)
+        attempts = service.repository.list_attempts(child_id)
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": {"attempts": attempts, "count": len(attempts)}}
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/pause",
+    summary="Persist cooperative durable pause; in-flight QE attempts continue to reconcile",
+)
+def pause_multi_alpha_durable_run(
+    run_id: str,
+    request: DurableStopRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        result = DurableMultiAlphaControlService().submit(
+            run_id=run_id,
+            action="pause",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return _durable_command_response(result)
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/resume",
+    summary="Persist durable resume for a previously drained QE multi-alpha run",
+)
+def resume_multi_alpha_durable_run(
+    run_id: str,
+    request: DurableStopRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        result = DurableMultiAlphaControlService().submit(
+            run_id=run_id,
+            action="resume",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return _durable_command_response(result)
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/cancel",
+    summary="Persist durable run cancellation; typed QE termination reconciles asynchronously",
+)
+def cancel_multi_alpha_durable_run(
+    run_id: str,
+    request: DurableStopRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        result = DurableMultiAlphaControlService().submit(
+            run_id=run_id,
+            action="cancel",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return _durable_command_response(result)
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/reconcile",
+    summary="Persist a durable QE multi-alpha observation/reconciliation command",
+)
+def reconcile_multi_alpha_durable_run(
+    run_id: str,
+    request: DurableStopRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        result = DurableMultiAlphaControlService().submit(
+            run_id=run_id,
+            action="reconcile",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return _durable_command_response(result)
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/children/{child_id}/recovery/preview",
+    summary="Preview frozen child recovery closure and evidence without submitting remote QE work",
+)
+def preview_multi_alpha_durable_child_recovery(
+    run_id: str,
+    child_id: str,
+    request: DurableRecoveryPreviewRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        _require_run_scoped_child(service, run_id=run_id, child_id=child_id)
+        if not str(idempotency_key or "").strip():
+            raise DurableControlError(
+                "Idempotency-Key is required for a recovery preview",
+                reason_code="multi_alpha_idempotency_key_required",
+            )
+        preview = DurableRecoveryService(service.repository).preview(
+            source_run_id=run_id,
+            target_child_id=child_id,
+            retry_mode=request.retry_mode,
+            idempotency_key=str(idempotency_key),
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    except Exception as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": preview.as_dict()}
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/children/{child_id}/recovery",
+    summary="Persist a frozen child-targeted QE recovery command; execution remains asynchronous",
+)
+def execute_multi_alpha_durable_child_recovery(
+    run_id: str,
+    child_id: str,
+    request: DurableRecoveryExecuteRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        _require_run_scoped_child(service, run_id=run_id, child_id=child_id)
+        if not str(idempotency_key or "").strip():
+            raise DurableControlError(
+                "Idempotency-Key is required for durable control",
+                reason_code="multi_alpha_idempotency_key_required",
+            )
+        preview = DurableRecoveryService(service.repository).preview(
+            source_run_id=run_id,
+            target_child_id=child_id,
+            retry_mode=request.retry_mode,
+            idempotency_key=str(idempotency_key),
+        )
+        if request.preview_command_id != preview.command_id:
+            raise DurableControlError(
+                "submitted recovery preview belongs to a different idempotent command",
+                reason_code="recovery_scope_stale",
+                context={
+                    "submitted_preview_command_id": request.preview_command_id,
+                    "current_command_id": preview.command_id,
+                },
+            )
+        if request.scope_hash != preview.scope_hash:
+            raise DurableControlError(
+                "submitted recovery scope no longer matches the current frozen source facts",
+                reason_code="recovery_scope_stale",
+                context={
+                    "submitted_scope_hash": request.scope_hash,
+                    "current_scope_hash": preview.scope_hash,
+                    "evidence": dict(preview.evidence),
+                },
+            )
+        result = service.submit(
+            run_id=run_id,
+            action="child_retry",
+            idempotency_key=str(idempotency_key),
+            requested_by="multi_alpha_http_api",
+            request={
+                "retry_mode": request.retry_mode,
+                "preview_scope_hash": preview.scope_hash,
+            },
+            child_id=child_id,
+            scope=preview.scope,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    except Exception as exc:
+        raise _durable_control_http_error(exc) from exc
+    payload = _durable_command_response(result)
+    payload["data"]["recovery_preview"] = preview.as_dict()
+    return payload
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/commands",
+    summary="List durable QE multi-alpha control/recovery commands by stable cursor",
+)
+def list_multi_alpha_durable_commands(
+    run_id: str,
+    after_command_seq: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    try:
+        commands = DurableMultiAlphaControlService().repository.list_commands(
+            run_id,
+            after_command_seq=after_command_seq,
+            limit=limit,
+        )
+    except MultiAlphaDurableRepositoryError as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": {"commands": commands, "count": len(commands)}}
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/commands/{command_id}",
+    summary="Read one durable QE multi-alpha control or recovery command",
+)
+def get_multi_alpha_durable_command(run_id: str, command_id: str) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        command = service.repository.get_command(command_id)
+        if command is None or str(command.get("run_id") or "") != run_id:
+            raise DurableControlError(
+                "durable command does not belong to this run",
+                reason_code="multi_alpha_entity_not_found",
+                context={"run_id": run_id, "command_id": command_id},
+            )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {"status": "success", "data": {"command": command}}
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/control",
+    summary="Persist a durable QE multi-alpha control/recovery command; remote reconciliation is asynchronous",
+)
+def submit_multi_alpha_durable_control(
+    run_id: str,
+    request: DurableControlRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        action = str(request.action or "").strip().lower()
+        if action == "child_retry":
+            raise DurableControlError(
+                "child_retry requires the dedicated preview-bound recovery endpoint",
+                reason_code="multi_alpha_invalid_control_command",
+                context={
+                    "required_endpoint": (
+                        f"/combine-backtest/runs/{run_id}/children/"
+                        "{child_id}/recovery"
+                    ),
+                },
+            )
+        else:
+            result = service.submit(
+                run_id=run_id,
+                action=request.action,
+                idempotency_key=str(idempotency_key or ""),
+                requested_by="multi_alpha_http_api",
+                request=request.request,
+                child_id=request.child_id,
+                attempt_id=request.attempt_id,
+                scope=request.scope,
+            )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return _durable_command_response(result)
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/stop",
+    summary="Compatibility alias for durable QE multi-alpha cancel; never pause or delete",
+)
+def stop_multi_alpha_durable_run(
+    run_id: str,
+    request: DurableStopRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        result = DurableMultiAlphaControlService().submit(
+            run_id=run_id,
+            action="stop",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {
+        "status": "success",
+        "data": {
+            "command": dict(result.command),
+            "idempotent_identity_confirmed": result.idempotent_identity_confirmed,
+            "capabilities": dict(result.capabilities),
+        },
+    }
+
+
+@router.post(
+    "/combine-backtest/runs/{run_id}/attempts/{attempt_id}/cancel",
+    summary="Persist exact-attempt cancellation; never broadcast to other QE loops",
+)
+def cancel_multi_alpha_durable_attempt(
+    run_id: str,
+    attempt_id: str,
+    request: DurableAttemptCancelRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    try:
+        service = DurableMultiAlphaControlService()
+        attempt = _require_run_scoped_attempt(service, run_id=run_id, attempt_id=attempt_id)
+        result = service.submit(
+            run_id=run_id,
+            action="attempt_cancel",
+            idempotency_key=str(idempotency_key or ""),
+            requested_by="multi_alpha_http_api",
+            request=request.request,
+            child_id=str(attempt["child_id"]),
+            attempt_id=attempt_id,
+        )
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return {
+        "status": "success",
+        "data": {
+            "command": dict(result.command),
+            "idempotent_identity_confirmed": result.idempotent_identity_confirmed,
+            "capabilities": dict(result.capabilities),
+        },
+    }
+
+
 @router.get("/combine-backtest/runs/{run_id}/retry-draft", summary="Build an auditable retry payload for a combine-backtest run")
 def get_multi_alpha_combine_backtest_retry_draft(run_id: str) -> dict:
     try:
@@ -170,7 +671,12 @@ def delete_multi_alpha_combine_backtest(run_id: str, cleanup_workspace: bool = T
     try:
         data = MultiAlphaCombineBacktestService().delete_run(run_id, cleanup_workspace=cleanup_workspace)
     except MultiAlphaCombineBacktestError as exc:
-        status_code = 404 if exc.reason_code in {"run_not_found", "combine_backtest_delete_missing"} else 400
+        if exc.reason_code in {"run_not_found", "combine_backtest_delete_missing"}:
+            status_code = 404
+        elif exc.reason_code == "recovery_source_copy_in_progress":
+            status_code = 409
+        else:
+            status_code = 400
         raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
     return {"status": "success", "data": data}
 
@@ -194,6 +700,19 @@ def get_multi_alpha_combine_backtest_archive_status(run_id: str) -> dict:
         data = MultiAlphaCombineBacktestService().get_archive_status(run_id)
     except MultiAlphaCombineBacktestError as exc:
         status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/archive-detail",
+    summary="Read immutable QE Archive detail for one combine-backtest run",
+)
+def get_multi_alpha_combine_backtest_archive_detail(run_id: str) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().get_archive_snapshot(run_id)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "combine_backtest_archive_snapshot_not_found" else 400
         raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
     return {"status": "success", "data": data}
 

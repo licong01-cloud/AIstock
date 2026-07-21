@@ -92,7 +92,7 @@ class DeterministicChildPlanner:
             }
             for row in roster
         ]
-        common_manifest = {
+        common_manifest: dict[str, Any] = {
             "schema_version": "multi_alpha_child_input_manifest_v1",
             "planner_version": PLANNER_VERSION,
             "run_id": run_spec.run_id,
@@ -105,6 +105,29 @@ class DeterministicChildPlanner:
             "backtest_config_hash": artifact_manifest_hash_for(dict(run_spec.backtest_config)),
             "prediction_source_refs": prediction_source_refs,
         }
+        # Preserve the P0-1B child-manifest byte shape when the additive P0-2
+        # persistence schema is not deployed.  Once P0-2 is available, even
+        # an incomplete identity is an explicit persisted evidence payload.
+        if (
+            run_spec.execution_identity is not None
+            or run_spec.execution_identity_hash is not None
+            or run_spec.execution_identity_evidence is not None
+        ):
+            common_manifest.update(
+                {
+                    "execution_identity": (
+                        dict(run_spec.execution_identity)
+                        if run_spec.execution_identity is not None
+                        else None
+                    ),
+                    "execution_identity_hash": run_spec.execution_identity_hash,
+                    "execution_identity_evidence": (
+                        dict(run_spec.execution_identity_evidence)
+                        if run_spec.execution_identity_evidence is not None
+                        else None
+                    ),
+                }
+            )
         specs: list[DurableChildSpec] = []
         ordinal = 0
 

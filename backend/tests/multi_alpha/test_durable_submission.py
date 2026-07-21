@@ -10,7 +10,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import multi_alpha as multi_alpha_router
-from backend.services.multi_alpha.combine_backtest import MultiAlphaCombineBacktestService
+from backend.services.multi_alpha.combine_backtest import (
+    MultiAlphaCombineBacktestError,
+    MultiAlphaCombineBacktestService,
+)
 from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
     MultiAlphaDurableRepositoryError,
@@ -19,6 +22,7 @@ from backend.services.multi_alpha.durable_submission import (
     DurableCombineSubmissionError,
     DurableCombineSubmissionService,
 )
+from backend.services.multi_alpha.durable_identity import ExecutionIdentityResolution
 from backend.services.multi_alpha.durable_runtime_health import (
     DurableOrchestratorUnavailableError,
 )
@@ -26,6 +30,15 @@ from backend.services.multi_alpha.durable_runtime_health import (
 
 FIXED_NOW = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class FakeP0_2SchemaHealth:
+    def __init__(self, *, ready: bool, **detail: Any) -> None:
+        self.ready = ready
+        self._detail = {"ready": ready, **detail}
+
+    def as_dict(self) -> dict[str, Any]:
+        return deepcopy(self._detail)
 
 
 def _payload(*, topk: int = 25, initial_cash: int = 10_000_000) -> dict[str, Any]:
@@ -65,6 +78,9 @@ class FakeDurableRepository:
     def preflight_schema(self, *, raise_on_error: bool = False) -> Any:
         self.preflight_calls += 1
         return {"ready": True, "raise_on_error": raise_on_error}
+
+    def preflight_p0_2_schema(self, *, raise_on_error: bool = False) -> Any:
+        return FakeP0_2SchemaHealth(ready=True, raise_on_error=raise_on_error, p0_2=True)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         row = self.tasks.get(task_id)
@@ -125,6 +141,20 @@ class FakeDurableRepository:
             "baseline_leg_id": spec.baseline_leg_id,
             "retry_of_run_id": spec.retry_of_run_id,
             "node_parallelism_json": dict(spec.node_parallelism or {}),
+            "recovery_kind": spec.recovery_kind,
+            "recovery_scope_json": dict(spec.recovery_scope or {}),
+            "recovery_scope_hash": spec.recovery_scope_hash,
+            "execution_identity_json": (
+                deepcopy(dict(spec.execution_identity))
+                if spec.execution_identity is not None
+                else None
+            ),
+            "execution_identity_hash": spec.execution_identity_hash,
+            "execution_identity_evidence_json": (
+                deepcopy(dict(spec.execution_identity_evidence))
+                if spec.execution_identity_evidence is not None
+                else None
+            ),
             "status": "queued",
             "phase": "submitted",
             "progress_json": {},
@@ -158,6 +188,21 @@ class FakeTime:
             self.on_sleep()
 
 
+class IncompleteExecutionIdentityResolver:
+    def resolve(self, **_kwargs: Any) -> ExecutionIdentityResolution:
+        return ExecutionIdentityResolution(
+            identity=None,
+            evidence={
+                "schema_version": "multi_alpha_execution_identity_evidence_v1",
+                "complete": False,
+                "reason_code": "test_identity_evidence_incomplete",
+                "missing": ["test_only"],
+                "acquisition_suggestions": ["test-only evidence"],
+                "observations": {},
+            },
+        )
+
+
 def _service(
     repository: FakeDurableRepository,
     *,
@@ -173,6 +218,7 @@ def _service(
         clock=lambda: FIXED_NOW,
         monotonic=time_source.monotonic,
         sleep=time_source.sleep,
+        execution_identity_resolver=IncompleteExecutionIdentityResolver(),
     )
 
 
@@ -188,6 +234,7 @@ def test_submission_refuses_to_queue_when_process_worker_is_not_ready() -> None:
             )
         ),
         clock=lambda: FIXED_NOW,
+        execution_identity_resolver=IncompleteExecutionIdentityResolver(),
     )
 
     with pytest.raises(DurableCombineSubmissionError) as caught:
@@ -318,6 +365,26 @@ def test_schema_unavailable_is_explicit_and_has_no_legacy_fallback() -> None:
     assert caught.value.reason_code == "multi_alpha_durable_schema_unavailable"
 
 
+def test_p0_2_schema_unavailable_keeps_p0_1b_submission_working_with_explicit_evidence() -> None:
+    class P0_2UnavailableRepository(FakeDurableRepository):
+        def preflight_p0_2_schema(self, *, raise_on_error: bool = False) -> Any:
+            assert raise_on_error is False
+            return FakeP0_2SchemaHealth(
+                ready=False,
+                missing_tables=["multi_alpha_combine_backtest_command"],
+            )
+
+    repository = P0_2UnavailableRepository()
+    result = _service(repository).submit(_payload())
+    stored = repository.runs[result["run_id"]]
+
+    assert result["status"] == "queued"
+    assert result["execution_identity_persisted"] is False
+    assert result["execution_identity_evidence"]["reason_code"] == "multi_alpha_p0_2_schema_unavailable"
+    assert stored["execution_identity_json"] is None
+    assert stored["execution_identity_evidence_json"] is None
+
+
 def test_execution_reservation_schema_unavailable_returns_503_before_run_write() -> None:
     from backend.services.quantevolver.qe_execution_reservation import (
         QEExecutionReservationError,
@@ -438,3 +505,36 @@ def test_submit_api_preserves_structured_durable_error_status(monkeypatch: pytes
 
     assert response.status_code == 503
     assert response.json()["detail"]["reason_code"] == "multi_alpha_durable_schema_unavailable"
+
+
+def test_archive_detail_api_reads_immutable_archive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ArchiveDetailService:
+        def get_archive_snapshot(self, run_id: str) -> dict[str, Any]:
+            if run_id == "missing":
+                raise MultiAlphaCombineBacktestError(
+                    "archived run was not found",
+                    reason_code="combine_backtest_archive_snapshot_not_found",
+                )
+            return {
+                "run": {"run_id": run_id, "archive_schema_version": "multi_alpha_combine_completed_v2"},
+                "recovery_readback_evidence": {
+                    "archive_snapshot_authoritative": True,
+                    "source_durable_run_required": False,
+                },
+            }
+
+    monkeypatch.setattr(multi_alpha_router, "MultiAlphaCombineBacktestService", ArchiveDetailService)
+    app = FastAPI()
+    app.include_router(multi_alpha_router.router)
+    client = TestClient(app)
+
+    response = client.get("/multi-alpha/combine-backtest/runs/macb_archive_1/archive-detail")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["run"]["run_id"] == "macb_archive_1"
+    assert response.json()["data"]["recovery_readback_evidence"]["source_durable_run_required"] is False
+
+    missing = client.get("/multi-alpha/combine-backtest/runs/missing/archive-detail")
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["reason_code"] == "combine_backtest_archive_snapshot_not_found"

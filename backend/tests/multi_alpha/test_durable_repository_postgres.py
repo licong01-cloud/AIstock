@@ -33,6 +33,7 @@ from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepositoryError,
 )
 from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
+from backend.services.multi_alpha.durable_control import DurableMultiAlphaControlService
 from backend.services.multi_alpha.durable_submission import DurableCombineSubmissionService
 
 
@@ -146,12 +147,29 @@ def disposable_schema() -> Iterator[None]:
             cur.execute(migration)
             second_digest = _schema_digest(cur)
             assert first_digest == second_digest
+            p0_2_migration = (
+                REPO_ROOT / "backend/migrations/multi_alpha_p0_2_control_recovery_20260721.sql"
+            ).read_text(encoding="utf-8")
+            cur.execute(p0_2_migration)
+            p0_2_first_digest = _schema_digest(cur)
+            cur.execute(p0_2_migration)
+            p0_2_second_digest = _schema_digest(cur)
+            assert p0_2_first_digest == p0_2_second_digest
             cur.execute(
                 (REPO_ROOT / "backend/migrations/multi_alpha_durable_orchestration_20260718.preflight.sql").read_text(
                     encoding="utf-8"
                 )
             )
             assert dict(zip([item.name for item in cur.description], cur.fetchone()))["preflight_status"] == "ready"
+            cur.execute(
+                (
+                    REPO_ROOT
+                    / "backend/migrations/multi_alpha_p0_2_control_recovery_20260721.preflight.sql"
+                ).read_text(encoding="utf-8")
+            )
+            assert dict(zip([item.name for item in cur.description], cur.fetchone()))[
+                "preflight_status"
+            ] == "ready"
         yield
     finally:
         with conn.cursor() as cur:
@@ -808,6 +826,119 @@ def test_durable_submission_and_planner_are_idempotent_in_postgres() -> None:
         for child in first_plan.children
     ]
     assert len({row["attempt_id"] for row in initial_attempts}) == 9
+
+
+def test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres() -> None:
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    assert repository.preflight_p0_2_schema(raise_on_error=True).ready is True
+    task_id = "mact_p0_2_zero_child"
+    run_id = "macb_p0_2_zero_child"
+    repository.create_task(
+        DurableTaskSpec(
+            task_id=task_id,
+            task_name="P0-2 zero-child lifecycle",
+            roster_hash="p0_2_roster",
+            roster=[{"leg_id": "L1"}],
+            default_request={"normalize_method": "rank"},
+            source_kind="test",
+        )
+    )
+    request = durable_run_request_payload(
+        roster_hash="p0_2_roster",
+        roster=[{"leg_id": "L1"}],
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
+    repository.create_run(
+        DurableRunSpec(
+            run_id=run_id,
+            task_id=task_id,
+            request_hash=request_hash_for(request),
+            roster_hash="p0_2_roster",
+            roster=[{"leg_id": "L1"}],
+            oos_start="2026-01-01",
+            oos_end="2026-06-29",
+            normalize_method="rank",
+            walk_forward={"enabled": True},
+            backtest_config={"topk": 25},
+        )
+    )
+    control = DurableMultiAlphaControlService(repository)
+
+    control.submit(
+        run_id=run_id,
+        action="pause",
+        idempotency_key="pg-pause-zero-child",
+        requested_by="postgres-test",
+    )
+    pause_command = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
+    assert pause_command is not None and pause_command["status"] == "reconciling"
+    pause_run = repository.claim_next_pause_drain_run(owner_id="pg-pause", lease_seconds=60)
+    assert pause_run is not None and pause_run["id"] == run_id
+    paused = repository.transition_run_with_event(
+        run_id,
+        token=OwnershipToken(
+            owner_id=str(pause_run["owner_id"]),
+            fencing_token=int(pause_run["fencing_token"]),
+            row_version=int(pause_run["row_version"]),
+        ),
+        expected_statuses=("pause_requested",),
+        next_status="paused",
+        phase="pause_drained",
+    )
+    repository.yield_run_ownership(
+        run_id,
+        token=OwnershipToken(
+            owner_id=str(paused["owner_id"]),
+            fencing_token=int(paused["fencing_token"]),
+            row_version=int(paused["row_version"]),
+        ),
+        phase="paused_waiting_resume",
+    )
+    closed_pause = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
+    assert closed_pause is not None and closed_pause["status"] == "succeeded"
+
+    control.submit(
+        run_id=run_id,
+        action="resume",
+        idempotency_key="pg-resume-zero-child",
+        requested_by="postgres-test",
+    )
+    resumed = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
+    assert resumed is not None and resumed["status"] == "succeeded"
+    assert repository.get_run(run_id)["status"] == "preparing"  # type: ignore[index]
+
+    control.submit(
+        run_id=run_id,
+        action="cancel",
+        idempotency_key="pg-cancel-zero-child",
+        requested_by="postgres-test",
+    )
+    cancel_command = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
+    assert cancel_command is not None and cancel_command["status"] == "reconciling"
+    finalizable = repository.claim_next_finalizable_run(owner_id="pg-finalizer", lease_seconds=60)
+    assert finalizable is not None and finalizable["id"] == run_id
+    cancelled = repository.finalize_run_with_business_readback(
+        run_id,
+        token=OwnershipToken(
+            owner_id=str(finalizable["owner_id"]),
+            fencing_token=int(finalizable["fencing_token"]),
+            row_version=int(finalizable["row_version"]),
+        ),
+        expected_statuses=("cancel_requested", "cancelling"),
+        next_status="cancelled",
+        expected_child_count=0,
+        expected_scheme_result_count=0,
+        expected_loo_result_count=0,
+        progress={"completed_children": 0},
+        reason_code="operator_cancelled",
+    )
+    assert cancelled["status"] == "cancelled"
+    closed_cancel = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
+    assert closed_cancel is not None and closed_cancel["status"] == "succeeded"
 
 
 def _schema_digest(cur: Any) -> str:
