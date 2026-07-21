@@ -115,6 +115,35 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/renovate.json",
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
+WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
+    ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
+    "scripts/aistock_feature_workflow.py": ("backend/tests/scripts/test_aistock_feature_workflow.py",),
+    "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
+    "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
+    "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
+    "scripts/issue_flow.py": (
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_issue_flow_pr_quality.py",
+    ),
+    "scripts/llm_provider_adapter.py": ("backend/tests/scripts/test_llm_provider_adapter.py",),
+    "scripts/nightly_adaptive_scheduler.py": ("backend/tests/scripts/test_nightly_adaptive_scheduler.py",),
+    "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
+    "scripts/nightly_silent_degradation_audit.py": (
+        "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    ),
+    "noxfile.py": ("backend/tests/test_noxfile_validation_env.py",),
+}
+WORKFLOW_AUTHORITY_PREFIXES = (".codex/skills/", ".claude/commands/")
+WORKFLOW_AUTHORITY_FILES = {
+    "docs/codex_project_memory.md",
+    "docs/standards/README.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+}
 CATALOG_VALIDATION_FILES = {
     "noxfile.py",
     "backend/services/validation/catalog_integrity.py",
@@ -207,6 +236,25 @@ def _prompt_evaluation_required(path: str) -> bool:
 
 def _catalog_validation_required(path: str) -> bool:
     return path in CATALOG_VALIDATION_FILES or path.startswith(CATALOG_VALIDATION_PREFIXES)
+
+
+def _workflow_test_targets(paths: list[str]) -> list[str]:
+    targets: list[str] = []
+    for path in paths:
+        path_targets = list(WORKFLOW_TEST_TARGETS_BY_FILE.get(path, ()))
+        if path.startswith("backend/tests/") and path.endswith(".py"):
+            path_targets.append(path)
+        if path in WORKFLOW_AUTHORITY_FILES or path.startswith(WORKFLOW_AUTHORITY_PREFIXES):
+            path_targets.extend(
+                [
+                    "backend/tests/scripts/test_issue_flow.py",
+                    "backend/tests/scripts/test_aistock_issue_workflow.py",
+                ]
+            )
+        for target in path_targets:
+            if target not in targets:
+                targets.append(target)
+    return targets
 
 
 def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
@@ -415,6 +463,7 @@ def classify_changed_files(
         for path in non_bug_registry_files
         if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
+    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
     go_files = [path for path in non_bug_registry_files if _is_go_path(path)]
     business_files = [
@@ -436,7 +485,7 @@ def classify_changed_files(
             + ", ".join(unmapped_code_files)
         )
 
-    workflow_validation_required = bool(workflow_fast_files)
+    workflow_validation_required = bool(workflow_test_targets)
     workflow_validation_only = (
         bool(normalized)
         and bool(workflow_fast_files)
@@ -508,6 +557,7 @@ def classify_changed_files(
         "workflow_fast_files": workflow_fast_files,
         "workflow_validation_only": workflow_validation_only,
         "workflow_validation_required": workflow_validation_required,
+        "workflow_test_targets": workflow_test_targets,
         "docs_lite_required": docs_lite_only,
         "prompt_evaluation_files": prompt_evaluation_files,
         "prompt_evaluation_required": bool(prompt_evaluation_files),
@@ -552,6 +602,7 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"unmapped_code_files={json.dumps(payload['unmapped_code_files'])}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
+        f"workflow_test_targets={json.dumps(payload['workflow_test_targets'])}",
         f"docs_lite_required={str(payload['docs_lite_required']).lower()}",
         f"docs_fast_required={str(payload['docs_fast_required']).lower()}",
         f"docs_fast_tier={payload['docs_fast_tier'] or ''}",
@@ -590,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         "go_required": payload["go_required"],
         "unmapped_code_files": payload["unmapped_code_files"],
         "workflow_validation_required": payload["workflow_validation_required"],
+        "workflow_test_targets": payload["workflow_test_targets"],
         "docs_lite_required": payload["docs_lite_required"],
         "docs_fast_required": payload["docs_fast_required"],
         "docs_fast_tier": payload["docs_fast_tier"],

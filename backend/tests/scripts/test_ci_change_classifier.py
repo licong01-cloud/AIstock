@@ -690,6 +690,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["workflow_validation_required"].endswith(
         "steps.classify.outputs.workflow_validation_required }}"
     )
+    assert jobs["classify-changes"]["outputs"]["workflow_test_targets"].endswith(
+        "steps.classify.outputs.workflow_test_targets }}"
+    )
     assert jobs["classify-changes"]["outputs"]["prompt_evaluation_required"].endswith(
         "steps.classify.outputs.prompt_evaluation_required }}"
     )
@@ -712,8 +715,13 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
         == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     )
     assert jobs["workflow-validation-tests"]["if"] == (
-        "needs.classify-changes.outputs.workflow_validation_required == 'true'"
+        "needs.classify-changes.outputs.workflow_validation_required == 'true' && "
+        "needs.classify-changes.outputs.workflow_test_targets != '[]'"
     )
+    workflow_runs = "\n".join(str(step.get("run", "")) for step in jobs["workflow-validation-tests"]["steps"])
+    assert "WORKFLOW_TEST_TARGETS" in workflow_runs
+    assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
+    assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
     assert jobs["frontend-quality"]["if"] == "needs.classify-changes.outputs.frontend_required == 'true'"
     frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
     assert "npm exec tsc" in frontend_runs
@@ -832,6 +840,28 @@ def test_workflow_and_nox_validation_tests_route_without_product_modules(tmp_pat
     assert payload["catalog_validation_required"] is True
     assert payload["backend_required"] is False
     assert payload["unmapped_code_files"] == []
+
+
+def test_workflow_sources_select_only_their_direct_test_targets(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_issue_workflow.py",
+            "scripts/issue_flow.py",
+            "scripts/ci_change_classifier.py",
+            "noxfile.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_issue_flow_pr_quality.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/test_noxfile_validation_env.py",
+    ]
+    assert "backend/tests/scripts/test_llm_provider_adapter.py" not in payload["workflow_test_targets"]
+    assert "backend/tests/scripts/test_nightly_adaptive_scheduler.py" not in payload["workflow_test_targets"]
 
 
 def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:

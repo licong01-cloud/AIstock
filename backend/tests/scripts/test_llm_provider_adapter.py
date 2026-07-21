@@ -227,7 +227,7 @@ def test_triage_quality_smoke_cli_uses_compact_success_output(capsys, tmp_path):
     assert output.exists()
 
 
-def test_test_plan_advice_allows_runner_enabled_catalog_plan():
+def test_test_plan_advice_blocks_runner_plans_outside_changed_file_selection():
     payload = adapter.build_test_plan_advice(
         "github_models",
         adapter.load_config(),
@@ -238,10 +238,10 @@ def test_test_plan_advice_allows_runner_enabled_catalog_plan():
 
     assert payload["schema_version"] == adapter.TEST_PLAN_ADVICE_SCHEMA_VERSION
     assert payload["provider"] == "github_models"
-    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["deterministic_gate"]["workflow_gate"] == "blocked"
     assert payload["deterministic_gate"]["runner_enabled_only"] is True
     assert payload["deterministic_gate"]["command_keys_allowlisted"] is True
-    assert payload["deterministic_gate"]["validation_select_compatible"] is True
+    assert payload["deterministic_gate"]["validation_select_compatible"] is False
     assert payload["deterministic_gate"]["shell_commands_allowed"] is False
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert [item["plan_key"] for item in payload["test_plan_advice"]] == [
@@ -314,7 +314,7 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert exit_code == 0
     assert '"check": "test-plan-advice"' in captured.out
     assert '"workflow_gate": "passed"' not in captured.out
-    assert '"advised_plan_count": 3' in captured.out
+    assert '"advised_plan_count": 1' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
 

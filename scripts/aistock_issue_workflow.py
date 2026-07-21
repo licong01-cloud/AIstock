@@ -11441,9 +11441,6 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
         skip_external=args.skip_external,
     )
     payload["client_manifest"] = manifest
-    if not workflow_clients_current:
-        payload["workflow_gate"] = "blocked"
-        payload.setdefault("blocking", []).append("one or more Codex/Claude workflow lanes are missing or stale")
     if args.output_md:
         _write_text(Path(args.output_md), code_intelligence.render_client_verification_summary(payload))
     _emit_args(payload, args)

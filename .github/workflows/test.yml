@@ -36,6 +36,7 @@ jobs:
       go_required: ${{ steps.classify.outputs.go_required }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
       workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
+      workflow_test_targets: ${{ steps.classify.outputs.workflow_test_targets }}
       docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
       static_gate_required: ${{ steps.classify.outputs.static_gate_required }}
       catalog_validation_required: ${{ steps.classify.outputs.catalog_validation_required }}
@@ -360,7 +361,7 @@ jobs:
   workflow-validation-tests:
     name: Workflow validation fast lane
     needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.workflow_validation_required == 'true'
+    if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -378,16 +379,12 @@ jobs:
           python -m pip install pyyaml pytest ruff nox requests
 
       - name: Run focused workflow validation tests
+        env:
+          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
         run: |
-          python -m pytest \
-            backend/tests/scripts/test_ci_change_classifier.py \
-            backend/tests/scripts/test_issue_flow.py \
-            backend/tests/scripts/test_aistock_issue_workflow.py \
-            backend/tests/scripts/test_ci_failure_issue_summary.py \
-            backend/tests/scripts/test_code_intelligence_adapter.py \
-            backend/tests/scripts/test_llm_provider_adapter.py \
-            backend/tests/scripts/test_nightly_adaptive_scheduler.py \
-            -q -p no:cacheprovider
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
+          mapfile -t workflow_test_targets < workflow_test_targets.txt
+          python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
 
   prompt-evaluation:
     name: Validation LLM prompt evaluation

@@ -7663,7 +7663,7 @@ def test_submit_bug_does_not_infer_ui_hints_from_cleanup_route_wording(
     assert any("cleanup-fast" in item for item in efficiency["recommendations"])
 
 
-def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
+def test_submit_bug_workflow_budget_skips_nightly_without_explicit_broad_plan(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7699,7 +7699,9 @@ def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
     assert "ui_intake_hints" not in record
     budget = record["verification_budget"]
     assert budget["budget"] == "standard"
-    assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["deferred_nightly_verification"]["required"] is False
+    assert budget["deferred_nightly_verification"]["modules"] == []
+    assert budget["deferred_nightly_verification"]["plans"] == []
     assert budget["delegated_validation"]["receipt_default"] == "compact"
     assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
 

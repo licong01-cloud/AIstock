@@ -1,43 +1,39 @@
 {
-  "actual": "Validation catalog and MCP changes can recommend Validation Center UI, Research Assistant backend, or other consumer suites solely because they appear in impact_modules.",
+  "actual": "A change to issue workflow and classifier runs unrelated LLM provider, code intelligence, failure summary, and nightly scheduler tests.",
   "allowed_write_scope": [
-    "scripts/issue_flow.py",
-    "backend/tests/scripts/test_issue_flow_pr_quality.py",
-    "backend/tests/scripts/test_llm_provider_adapter.py",
-    "backend/tests/scripts/test_issue_flow.py",
-    "backend/tests/test_validation_module_ownership.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "tests/aistock_validation/bugs/20260722_BUG-816-indirect-impact-modules-automatically-add-unrelated-validation-plans.json",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/bugs/20260722_BUG-819-workflow-ci-fast-lane-runs-a-fixed-unrelated-test-matrix.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-816",
+  "bug_id": "BUG-819",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-21T20:26:25.802810Z",
-  "description": "Validation catalog and MCP changes can recommend Validation Center UI, Research Assistant backend, or other consumer suites solely because they appear in impact_modules.",
+  "created_at": "2026-07-21T21:47:17.223050Z",
+  "description": "A change to issue workflow and classifier runs unrelated LLM provider, code intelligence, failure summary, and nightly scheduler tests.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260722-4187fbd48d08",
-      "timestamp": "2026-07-21T20:26:25.802806Z"
+      "note": "Promoted from IC-20260722-c58a587e7867",
+      "timestamp": "2026-07-21T21:47:17.223045Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Only primary modules selected from changed files contribute tests by default; cross-module plans are added through an explicit primary-module recommendation or acceptance contract.",
-  "first_seen_at": "2026-07-21T20:26:25.802810Z",
+  "expected": "The classifier emits direct workflow test targets from changed workflow files and CI runs only those targets; unmapped workflow code remains fail-closed.",
+  "first_seen_at": "2026-07-21T21:47:17.223050Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 2585,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2585",
-  "last_seen_at": "2026-07-21T20:26:25.802810Z",
+  "github_issue_number": 2589,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2589",
+  "last_seen_at": "2026-07-21T21:47:17.223050Z",
   "module": "validation",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -45,7 +41,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/issue_flow.py validation-select --changed-file backend/mcp/common.py",
+  "reproduce_command": "rg -n 'test_llm_provider_adapter|test_nightly_adaptive_scheduler' .github/workflows/test.yml",
   "required_verification": [
     "l0",
     "guardrail_changed_files"
@@ -57,10 +53,10 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "Indirect impact modules automatically add unrelated validation plans",
+  "title": "Workflow CI fast lane runs a fixed unrelated test matrix",
   "trigger_condition": {
-    "fingerprint": "4187fbd48d08094b3c9f2fd3",
-    "source_event_id": "FE-20260722-4187fbd48d08"
+    "fingerprint": "c58a587e78678d00bec553e9",
+    "source_event_id": "FE-20260722-c58a587e7867"
   },
   "verification_budget": {
     "budget": "standard",
