@@ -21,9 +21,32 @@ from backend.services.advisory_historical_range.models import (
 )
 from backend.services.advisory_historical_range.repository import (
     PostgresHistoricalRangeRepository,
+    _catalog_operation_is_sealable,
 )
 from backend.tests.advisory_historical_range.conftest import date_plan, digest
 from backend.tests.advisory_historical_range.conftest import research_spec, resolved_request
+
+
+def test_catalog_operation_sealable_preserves_valid_zero_unresolved_count() -> None:
+    operation = {
+        "status": "COMPLETED",
+        "catalog_generation": 1,
+        "catalog_phase": "VERIFY",
+        "cumulative_resolved_count": 13,
+        "cumulative_unresolved_count": 0,
+        "latest_checkpoint_ref": {"artifact_kind": "SOURCE_CATALOG_CHECKPOINT"},
+    }
+
+    assert _catalog_operation_is_sealable(
+        operation,
+        expected_catalog_generation=1,
+        expected_requirement_count=13,
+    )
+    assert not _catalog_operation_is_sealable(
+        {**operation, "cumulative_unresolved_count": None},
+        expected_catalog_generation=1,
+        expected_requirement_count=13,
+    )
 
 
 class _FakeCursor:
