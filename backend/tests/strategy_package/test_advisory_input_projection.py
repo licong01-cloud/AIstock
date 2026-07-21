@@ -10,8 +10,10 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     STRATEGY_PACKAGE_SELECTION_QUERY_CONTRACT_HASH,
 )
 from backend.services.strategy_package.advisory_input_projection import (
+    HISTORICAL_RANGE_QUERY_CONTRACT_HASH,
     REASON_INPUT_PROJECTION_CONFLICT,
     REASON_INPUT_PROJECTION_UNAVAILABLE,
+    SELECTION_QUERY_CONTRACT_HASH,
     AdvisoryInputProjectionError,
     StrategyPackageAdvisoryInputProjectionV1,
     project_advisory_inputs,
@@ -33,6 +35,11 @@ from backend.services.strategy_package.models import (
 
 
 HASH = "a" * 64
+
+
+def test_query_contract_hashes_remain_stable_after_projection_dependency_isolation() -> None:
+    assert SELECTION_QUERY_CONTRACT_HASH == "2f6bcc0df667586129c40069ea133f5f5316c525ad019f1e953840251ace2f16"
+    assert HISTORICAL_RANGE_QUERY_CONTRACT_HASH == "24d9739380376179884da57716bf52c0ac2082cd39e51429894a458b47d706ce"
 
 
 def _component(alpha_id: str, refs: list[str]) -> AlphaComponent:
@@ -216,6 +223,7 @@ def test_projection_module_has_no_runtime_validation_or_shared_consumer_imports(
         if isinstance(node, ast.ImportFrom)
     )
     forbidden_fragments = {
+        "advisory_phase0a",
         "repository",
         "asset_store",
         "validator",

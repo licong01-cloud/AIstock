@@ -25,7 +25,9 @@
     }
   ],
   "evidence_uris": [
-    "DEV Phase1R batch ahrb_eb97f1151ebc1968d86e81c89acd4205 package pkg_378eb9c91e104c64935404e257e932ee stderr ImportError datetime.UTC"
+    "DEV Phase1R batch ahrb_eb97f1151ebc1968d86e81c89acd4205 package pkg_378eb9c91e104c64935404e257e932ee stderr ImportError datetime.UTC",
+    "WSL distro Ubuntu, Conda env rdagent-gpu, python scripts/strategy_package_live_inference.py --help exited 0 after dependency isolation",
+    "Selection query contract SHA 2f6bcc0df667586129c40069ea133f5f5316c525ad019f1e953840251ace2f16 and Historical Range query contract SHA 24d9739380376179884da57716bf52c0ac2082cd39e51429894a458b47d706ce remained unchanged"
   ],
   "expected": "StrategyPackage input projection uses a StrategyPackage-owned canonical hash dependency and the existing WSL Conda environment can import and execute historical inference without initializing Advisory consumer modules.",
   "first_seen_at": "2026-07-21T08:20:04.734226Z",
