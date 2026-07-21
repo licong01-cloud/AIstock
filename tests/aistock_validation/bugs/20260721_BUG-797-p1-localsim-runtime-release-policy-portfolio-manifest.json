@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-797",
-  "closed_at": null,
+  "closed_at": "2026-07-21T09:51:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -39,8 +39,8 @@
   "expected": "LocalSIM run 仅接受 runtime release 内完整且自洽的 validated_execution_policy_id、policy_sha256、policy_json；hash 与 normalized policy 精确一致。scheduler 和 broker 不再从 portfolio 或 manifest 选择另一份业务 policy。缺失/冲突时 typed fail-loud 并给出 release/binding context；单 alpha、多 alpha、需要模型和不需要模型的 package 均沿用各自已冻结 policy。",
   "first_seen_at": "2026-07-21T05:31:16.137855Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "aaf0a06961201fe0e08780f5606f6f217ea6db43",
+  "fixed_at": "2026-07-21T10:01:34.739149Z",
   "github_issue_number": 2532,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2532",
   "last_seen_at": "2026-07-21T05:31:16.137855Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2540",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -69,6 +70,11 @@
     "fingerprint": "1b29d66af01db6e05560dac6",
     "source_event_id": "FE-20260721-1b29d66af01d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_daemon_sim_e2e.py -k policy_authority_or_strategy_runtime_release_can_persist_full_execution_policy_snapshot_or_simulation_binding_admission_accepts_active_package_types -q -p no:cacheprovider -> 13 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
