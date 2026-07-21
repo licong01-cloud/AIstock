@@ -204,6 +204,136 @@ def test_v2_source_revision_hash_ignores_retry_observation_timestamp() -> None:
     assert first.source_revision_set_hash == retry.source_revision_set_hash
 
 
+def test_v2_provenance_preserves_single_and_multi_alpha_window_lineage() -> None:
+    trade_date = date(2026, 7, 10)
+    calendar_identity = {
+        "dataset_id": "market.trading_calendar",
+        "effective_trade_date": trade_date.isoformat(),
+        "calendar_version": "market.trading_calendar.v1",
+        "calendar_source": "market.trading_calendar",
+    }
+    calendar_identity_hash = canonical_evidence_json_sha256(calendar_identity)
+
+    def window(start: str, required: int) -> dict:
+        lineage = {
+            "window_start_date": start,
+            "required_window": required,
+            "window_resolution": "trading_calendar",
+        }
+        return {
+            **lineage,
+            "window_lineage_hash": canonical_evidence_json_sha256(
+                {"calendar_identity_hash": calendar_identity_hash, **lineage}
+            ),
+        }
+
+    receipts = [
+        SourceReadReceipt(
+            source_role=role,
+            dataset_id=f"unit.{role}",
+            row_count=3,
+            content_hash=f"{index + 1:x}" * 64,
+            first_observed_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+        ).model_dump(mode="json")
+        for index, role in enumerate(
+            ("pit_universe", "market_history", "fundamental_moneyflow", "trading_calendar")
+        )
+    ]
+    base_context = {
+        "effective_trade_date": trade_date.isoformat(),
+        "score_trade_date": trade_date.isoformat(),
+        "pit_mode": "stock_universe_pit_v1",
+        "calendar_version": "market.trading_calendar.v1",
+        "calendar_identity_hash": calendar_identity_hash,
+        "calendar_source": "market.trading_calendar",
+        "universe_input_hash": "b" * 64,
+    }
+
+    def provenance(input_context: dict):
+        return build_selection_artifact_v2_provenance(
+            result=SimpleNamespace(
+                scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
+                universe_count=3,
+                source_read_receipts=receipts,
+                input_context=input_context,
+            ),
+            requested_trade_date=trade_date,
+            cutoff_date=trade_date,
+            include_reference_price=False,
+            asset_closure=[{"asset_role": "unit", "asset_id": "unit", "sha256": "c" * 64}],
+            asset_closure_status="COMPLETE",
+            asset_reason_codes=[],
+            provider_semantics={"provider_semantics_id": "unit_live_inference"},
+        )
+
+    single_window = window("2025-06-03", 260)
+    single = provenance({**base_context, "calendar_hash": single_window["window_lineage_hash"], **single_window})
+    per_leg = {
+        "alpha_short": window("2026-03-01", 60),
+        "alpha_long": window("2025-06-03", 260),
+    }
+    multi = provenance(
+        {
+            **base_context,
+            "calendar_hash": calendar_identity_hash,
+            "per_leg_window_lineage": per_leg,
+        }
+    )
+
+    assert single.artifact_input_context["calendar_identity_hash"] == calendar_identity_hash
+    assert single.artifact_input_context["required_window"] == 260
+    assert single.artifact_input_context["window_lineage_hash"] == single_window["window_lineage_hash"]
+    assert multi.artifact_input_context["per_leg_window_lineage"] == per_leg
+
+
+def test_v2_provenance_rejects_partially_supplied_window_lineage() -> None:
+    result = SimpleNamespace(
+        scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
+        universe_count=3,
+        source_read_receipts=[
+            SourceReadReceipt(
+                source_role=role,
+                dataset_id=f"unit.{role}",
+                row_count=3,
+                content_hash=f"{index + 1:x}" * 64,
+                first_observed_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            ).model_dump(mode="json")
+            for index, role in enumerate(
+                ("pit_universe", "market_history", "fundamental_moneyflow", "trading_calendar")
+            )
+        ],
+        input_context={
+            "effective_trade_date": "2026-07-10",
+            "score_trade_date": "2026-07-10",
+            "pit_mode": "stock_universe_pit_v1",
+            "calendar_version": "market.trading_calendar.v1",
+            "calendar_hash": "a" * 64,
+            "calendar_source": "market.trading_calendar",
+            "universe_input_hash": "b" * 64,
+            "window_start_date": "2025-06-03",
+        },
+    )
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        build_selection_artifact_v2_provenance(
+            result=result,
+            requested_trade_date=date(2026, 7, 10),
+            cutoff_date=date(2026, 7, 10),
+            include_reference_price=False,
+            asset_closure=[],
+            asset_closure_status="COMPLETE",
+            asset_reason_codes=[],
+            provider_semantics={"provider_semantics_id": "unit_live_inference"},
+        )
+
+    assert exc_info.value.context["reason_code"] == "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"
+    assert set(exc_info.value.context["missing_fields"]) == {
+        "required_window",
+        "window_resolution",
+        "window_lineage_hash",
+    }
+
+
 def test_force_regenerate_requires_explicit_diagnostic_identity() -> None:
     with pytest.raises(RuntimeConfigInvalidError) as exc_info:
         StrategyPackageSelectionArtifactService._validate_v2_generation_mode(
