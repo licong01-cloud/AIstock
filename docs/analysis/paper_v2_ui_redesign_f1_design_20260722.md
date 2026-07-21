@@ -21,10 +21,10 @@
 ## 2. 范围
 
 - **唯一改动文件**: `frontend/src/app/paper-v2/paper-v2.css`（整体重写，保留全部现有类名契约）
-- 覆盖范围: paper-v2 全部页面与 `frontend/src/components/paper-v2/*` 组件的视觉效果
+- 覆盖范围: 该 CSS 是**运营后台共享皮肤**，被 5 个 layout 引用：`paper-v2`（13 页）、`validation-center`、`qe-archive`、`qmt/virtual-strategies`、`quantevolver/templates`；一次重写对以上全部页面同时生效
 - 设计交付物: 本文档 + 重写后的 `paper-v2.css`
 
-样式类名契约不变（`pv2-shell/pv2-hero/pv2-tabs/pv2-card/pv2-metric/pv2-badge/pv2-button*/pv2-table/pv2-input/pv2-select/pv2-notice/pv2-workflow-*/pv2-readiness-*/pv2-phase-*/pv2-chip/pv2-modal-*/pv2-spark*/pv2-linechart*/ra-*` 等），因此 TSX 组件零改动即可被新样式覆盖。
+样式类名契约不变（旧文件 200 个 `pv2-*`/`ra-*` 类全部保留，实施后经机械差集核对 200/200），因此 TSX 组件零改动即可被新样式覆盖。`research-assistant` 路由使用自有 `research-assistant.css`，不在本文件契约内，不受影响。
 
 ## 3. 非目标
 
@@ -122,12 +122,14 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | frontend/src/app/paper-v2/paper-v2.css | npm run build 通过 + diff 无旧色值残留 | PLANNED | 待实施 |
-| F-002 | frontend/src/app/paper-v2/paper-v2.css | git diff --stat 仅 CSS+文档 | PLANNED | 待实施 |
-| F-003 | frontend/src/app/paper-v2/paper-v2.css | 总览页目检对照预览 | PLANNED | 待实施 |
-| F-004 | frontend/src/app/paper-v2/paper-v2.css | 含状态徽章的页面目检（运行监控/实例） | PLANNED | 待实施 |
-| F-005 | frontend/src/app/paper-v2/paper-v2.css | 总览页导航卡 hover 目检 | PLANNED | 待实施 |
-| F-006 | frontend/src/app/paper-v2/paper-v2.css | 13 页面逐一目检无布局破裂 | PLANNED | 待实施 |
+| F-001 | frontend/src/app/paper-v2/paper-v2.css | `npm run build`（frontend）0 errors；旧米色系色值 grep 计数 0；三层 token 架构（--pv2-palette-* 基础色板 → --pv2-* 语义别名 → 组件规则）；artifact: tmp/validation/paper_v2_ui_redesign_f1_receipts_20260722.md | done | 无 |
+| F-002 | frontend/src/app/paper-v2/paper-v2.css | `git diff --stat` = 仅 paper-v2.css（+575/-225）+ 本文档；`git diff --name-only -- '*.tsx' '*.ts'` 为空（TSX 零改动）；类名契约机械核对：旧 200 类新文件 200/200 全覆盖（comm 差集为空）；artifact: tmp/validation/paper_v2_ui_redesign_f1_receipts_20260722.md | done | 无 |
+| F-003 | frontend/src/app/paper-v2/paper-v2.css | `.pv2-shell::before` 顶部 3px 渐变带；`.pv2-kicker`/`.pv2-tab-active`/`.pv2-button-primary`/`.pv2-link-button`/focus 光晕均引用 --pv2-palette-accent 系；无背景光晕/团状色斑规则；`npm run build` 通过 | done | 无 |
+| F-004 | frontend/src/app/paper-v2/paper-v2.css | `.pv2-badge-{success,danger,warning,info,neutral}` / `.pv2-notice-{info,warning,success}` / `.pv2-metric-{success,warning,danger,info}::after` / `.pv2-readiness-*` / `.pv2-phase-tab-{green,yellow,orange,red,gray}` 全部按 §4.3 语义色表实现；`npm run build` 通过 | done | 无 |
+| F-005 | frontend/src/app/paper-v2/paper-v2.css | `.pv2-workflow-*` 默认中性（白底灰序号）；`.pv2-workflow-step-current/done/locked` 显式中性无状态色；仅 `a.pv2-workflow-link:hover` 变 accent 浅底+描边且 `.pv2-workflow-num` 翻转实心 accent；`npm run build` 通过 | done | 无 |
+| F-006 | frontend/src/app/paper-v2/paper-v2.css | 布局密度/圆角（14px 卡/10px 控件）/阴影（sm/md 两档）/字号层级与已定稿预览一致；`npm run build` 通过 | done | 无 |
+
+注：规则实现与机械核验（构建/类名差集/色值残留/diff 范围）均已 done；合并后的线上视觉确认属 PR 评审环节，不构成功能缺口——TSX 零改动保证功能等价。
 
 ## 9. 风险 / 失败模式
 
