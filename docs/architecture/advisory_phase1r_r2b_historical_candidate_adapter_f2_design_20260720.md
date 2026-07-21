@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 前置交付：R1 contracts/CAS/repository、R2-A neutral selection computation
-> 当前状态：`real_dev_e2e_accepted_bug_prs_pending_merge`
+> 当前状态：`source_merged_real_dev_e2e_accepted`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`DB_HISTORICAL`、`execution_prohibited=true`
 
 ## 1. Background
@@ -785,7 +785,7 @@ real_dev_single_alpha_e2e = passed
 real_dev_multi_alpha_e2e = passed
 service_restart = not_required_for_design
 runtime_activation = none
-source_merge = bug_prs_2545_2549_2557_2558_pending_user_confirmation
+source_merge = bug_prs_2545_2549_2557_2558_merged
 ```
 
 这些字段只区分交付状态，不是业务审批。R2-B 代码阶段不得增加未经确认的门禁或审批。
