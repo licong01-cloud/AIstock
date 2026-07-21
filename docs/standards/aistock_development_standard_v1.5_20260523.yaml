@@ -1,10 +1,14 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
+source_sha256: b94ecd2610eb25776a51207ade4e7cb02dd367728f2b4d582ee309c5f4001f48
+source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-07-18"
+updated_at: "2026-07-22"
 rule_sync_policy:
   authority: human_markdown_standard
+  catalog_role: machine_enforcement_metadata_only
   requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
+  source_digest_required: true
   archive_directory: docs/standards/archive
 scan:
   default_roots:
@@ -111,7 +115,7 @@ rules:
         - api_scheduler_log_smoke_after_apply
         - validation_history_record
     baseline_policy: block_release_until_verified
-    remediation: Validate all DDL/DML in the existing DEV database first; do not create a new test database or require a production backup/export/snapshot. Execute production DDL/DML only for the explicitly authorized target, keep DEV validation, authorization, migration, and readback as separate states, and report production_ddl_gate=noop when no schema change exists.
+    remediation: Validate DDL/DML in the existing DEV database, treat production backup/export/snapshot as a separate operations activity, execute the explicitly authorized production target, record validation, authorization, migration, and readback separately, and report production_ddl_gate=noop when no schema change exists.
 
   - rule_id: ERR-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-err-fallback-001

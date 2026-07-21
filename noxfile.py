@@ -382,72 +382,55 @@ def _guardrail_baseline_json(session: nox.Session) -> str:
     )
 
 
+def _l0_changed_files() -> list[str]:
+    paths: list[str] = []
+    commands = (
+        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
+        ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
+        ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
+    )
+    for command in commands:
+        result = subprocess.run(
+            ["git", *command],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"git {' '.join(command)} failed")
+        paths.extend(line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip())
+    return list(dict.fromkeys(paths))
+
+
+def _l0_scan_paths(posargs: list[str]) -> list[str]:
+    if posargs:
+        return list(dict.fromkeys(path.replace("\\", "/") for path in posargs if path.strip()))
+    paths = _l0_changed_files()
+    if not paths:
+        raise RuntimeError("l0 found no changed files; pass explicit paths when validating a clean checkout")
+    return paths
+
+
+def _path_scope_includes(paths: list[str], target: str) -> bool:
+    prefix = target.rstrip("/") + "/"
+    return any(path == target or path.startswith(prefix) for path in paths)
+
+
 @nox.session(venv_backend="none")
 def l0(session: nox.Session) -> None:
-    """Run local static gates that do not start AIstock services."""
-    scan_paths = session.posargs or [
-        "noxfile.py",
-        "scripts/aistock_validate.py",
-        "scripts/aistock_guardrail_scan.py",
-        "scripts/aistock_module_ownership_scan.py",
-        "scripts/issue_flow.py",
-        "scripts/aistock_issue_workflow.py",
-        "scripts/aistock_feature_workflow.py",
-        "scripts/ci_failure_issue_summary.py",
-        "scripts/validation_center_readonly_smoke.py",
-        "scripts/aistock_data_quality_smoke.py",
-        "scripts/paper_v2_live_validation.py",
-        "backend/services/audit_backed_data_health.py",
-        "backend/services/data_refresh_audit.py",
-        "backend/services/data_sync_targets.py",
-        "backend/services/tushare_dataset_specs.py",
-        "backend/services/tushare_sync_engine.py",
-        "backend/ingestion/tdx_scheduler.py",
-        "backend/routers/ingestion.py",
-        "backend/services/quantevolver/completion_contract.py",
-        "backend/tests/test_dataset_refresh_audit.py",
-        "backend/tests/test_data_sync_targets.py",
-        "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/tests/test_ingestion_data_stats_readiness_api.py",
-        "backend/tests/test_aistock_validate_metadata.py",
-        "backend/tests/test_aistock_validate_coverage.py",
-        "backend/tests/test_aistock_guardrail_scan.py",
-        "backend/tests/test_validation_git_status_provider.py",
-        "backend/tests/test_validation_module_ownership.py",
-        "backend/tests/test_validation_center_api.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_feature_workflow.py",
-        "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/services/validation/plan_catalog.py",
-        "backend/tests/unified_engine/test_qe_completion_contract.py",
-        "backend/tests/paper_trading_v2",
-        "backend/tests/selection_center",
-        "backend/tests/strategy_package",
-        "frontend/playwright.config.ts",
-        "frontend/src/app/validation-center",
-        "frontend/src/lib/validation",
-        "frontend/tests/validation-center",
-        "frontend/tests/paper-v2",
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "tests/aistock_validation/catalog/test_plans.yaml",
-        "tests/aistock_validation/modules/local_data_management.md",
-        "tests/aistock_validation/catalog/file_ownership.yaml",
-        "tests/aistock_validation/modules/development_guardrails.md",
-        "docs/standards/aistock_issue_workflow_quickstart.md",
-        ".codex/skills/fix-aistock-issue",
-        ".github/workflows/pr-quality.yml",
-        ".github/workflows/semgrep.yml",
-        ".github/workflows/codeql.yml",
-        ".github/workflows/dependency-update-validate.yml",
-        ".pre-commit-config.yaml",
-        ".semgrep.yml",
-        "ruff.toml",
-        ".github/renovate.json",
-    ]
-    _validate_in_tree_codex_skill(session, ".codex/skills/verify-aistock-feature")
-    _validate_in_tree_codex_skill(session, ".codex/skills/fix-aistock-issue")
+    """Run static gates only for explicit or current-branch changed files."""
+    try:
+        scan_paths = _l0_scan_paths(session.posargs)
+    except RuntimeError as exc:
+        session.error(str(exc))
+        return
+    for skill_path in (".codex/skills/verify-aistock-feature", ".codex/skills/fix-aistock-issue"):
+        if _path_scope_includes(scan_paths, skill_path):
+            _validate_in_tree_codex_skill(session, skill_path)
     session.run(
         "python",
         ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
@@ -475,16 +458,127 @@ def l0(session: nox.Session) -> None:
     )
 
 
+def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
+    """Run one module-owned Playwright target without starting production services."""
+
+    _ensure_frontend_node_modules(session)
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            target,
+            env=_env(
+                {
+                    "BACKEND_PORT": "8012",
+                    "FRONTEND_PORT": "3012",
+                    "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def frontend_type_lint(session: nox.Session) -> None:
+    """Run the direct shared-frontend compile and lint contract."""
+
+    _ensure_frontend_node_modules(session)
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
+        session.run("npm", "run", "lint", external=True)
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def hmm_evolution_ui(session: nox.Session) -> None:
+    """Run only the HMM Evolution mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/hmm-evolution")
+
+
+@nox.session(venv_backend="none")
+def watchlist_ui(session: nox.Session) -> None:
+    """Run only the Watchlist mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/watchlist")
+
+
+@nox.session(venv_backend="none")
+def strategy_package_governance_ui(session: nox.Session) -> None:
+    """Run only the Strategy Package governance mocked UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/strategy-package-governance")
+
+
+@nox.session(venv_backend="none")
+def watchlist_backend(session: nox.Session) -> None:
+    """Run Watchlist service, router, and data-contract regressions."""
+
+    _run_pytest(
+        session,
+        "backend/tests/watchlist",
+        "backend/tests/test_watchlist_category_entry_tracking.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qlib_data_backend(session: nox.Session) -> None:
+    """Run Qlib exporter and PIT-universe regressions only."""
+
+    _run_pytest(
+        session,
+        "backend/tests/qlib_exporter",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qmt_client_contract(session: nox.Session) -> None:
+    """Run the direct QMT client diagnostics and timeout contracts."""
+
+    _run_pytest(
+        session,
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_build_qmt_order_diagnostic_marks_stale_cancelable_and_bad_status_msg",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_default_is_independent_from_query_timeout",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_diagnostic_includes_retry_identity",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
 @nox.session(venv_backend="none")
 def guardrail_changed_files(session: nox.Session) -> None:
     """Run P0/P1 development-standard guardrails on staged or changed files."""
     mode_flag = session.posargs[0] if session.posargs else "--staged-only"
     if mode_flag not in {"--staged-only", "--changed-only"}:
         session.error("First optional argument must be --staged-only or --changed-only.")
+    scan_args = [mode_flag]
+    if mode_flag == "--changed-only":
+        try:
+            scan_args = _l0_scan_paths([])
+        except RuntimeError as exc:
+            session.error(str(exc))
+            return
     session.run(
         "python",
         "scripts/aistock_guardrail_scan.py",
-        mode_flag,
+        *scan_args,
         "--baseline-json",
         _guardrail_baseline_json(session),
         "--fail-new-only",
@@ -499,7 +593,7 @@ def guardrail_changed_files(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        mode_flag,
+        *scan_args,
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *_validation_artifact_args(

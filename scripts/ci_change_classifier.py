@@ -24,6 +24,7 @@ DOCS_FAST_PREFIXES = (
     "docs/design/",
     "docs/handoff/",
     "docs/operations/",
+    "docs/process/",
 )
 DOCS_FAST_ROOT_FILES = {"README.md"}
 DOCS_FAST_OPERATIONS_FILE_PREFIX = "docs/operations_"
@@ -70,13 +71,12 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_issue_flow_pr_quality.py",
     "backend/tests/scripts/test_llm_provider_adapter.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "backend/services/validation/plan_catalog.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
     "configs/validation/design_drift_audit.yaml",
@@ -108,16 +108,57 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "tests/aistock_validation/catalog/test_plans.yaml",
     "noxfile.py",
     ".pre-commit-config.yaml",
     ".semgrep.yml",
     "ruff.toml",
     ".github/renovate.json",
 }
-WORKFLOW_VALIDATION_FAST_LANE_PREFIXES = ("tests/aistock_validation/catalog/",)
+WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
+WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
+    ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
+    "scripts/aistock_feature_workflow.py": ("backend/tests/scripts/test_aistock_feature_workflow.py",),
+    "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
+    "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
+    "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
+    "scripts/issue_flow.py": (
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_issue_flow_pr_quality.py",
+    ),
+    "scripts/llm_provider_adapter.py": ("backend/tests/scripts/test_llm_provider_adapter.py",),
+    "scripts/nightly_adaptive_scheduler.py": ("backend/tests/scripts/test_nightly_adaptive_scheduler.py",),
+    "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
+    "scripts/nightly_silent_degradation_audit.py": (
+        "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    ),
+    "noxfile.py": ("backend/tests/test_noxfile_validation_env.py",),
+}
+WORKFLOW_AUTHORITY_PREFIXES = (".codex/skills/", ".claude/commands/")
+WORKFLOW_AUTHORITY_FILES = {
+    "docs/codex_project_memory.md",
+    "docs/standards/README.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+}
+CATALOG_VALIDATION_FILES = {
+    "noxfile.py",
+    "backend/services/validation/catalog_integrity.py",
+    "backend/services/validation/file_ownership.py",
+    "backend/services/validation/module_registry.py",
+    "backend/services/validation/plan_catalog.py",
+    "backend/services/validation/ui_target_catalog.py",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "backend/tests/test_validation_module_ownership.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/test_validation_ui_target_catalog.py",
+    "scripts/aistock_module_ownership_scan.py",
+}
+CATALOG_VALIDATION_PREFIXES = ("tests/aistock_validation/catalog/",)
+SHARED_PLAN_KEYS = {"l0", "guardrail_changed_files", "validation_module_registry_l0"}
 PROMPT_EVALUATION_PATH_PREFIXES = ("prompt_packs/validation_llm/",)
 PROMPT_EVALUATION_FILES = {
     "configs/validation/llm_triage.yaml",
@@ -193,6 +234,29 @@ def _prompt_evaluation_required(path: str) -> bool:
     return path in PROMPT_EVALUATION_FILES or path.startswith(PROMPT_EVALUATION_PATH_PREFIXES)
 
 
+def _catalog_validation_required(path: str) -> bool:
+    return path in CATALOG_VALIDATION_FILES or path.startswith(CATALOG_VALIDATION_PREFIXES)
+
+
+def _workflow_test_targets(paths: list[str]) -> list[str]:
+    targets: list[str] = []
+    for path in paths:
+        path_targets = list(WORKFLOW_TEST_TARGETS_BY_FILE.get(path, ()))
+        if path.startswith("backend/tests/") and path.endswith(".py"):
+            path_targets.append(path)
+        if path in WORKFLOW_AUTHORITY_FILES or path.startswith(WORKFLOW_AUTHORITY_PREFIXES):
+            path_targets.extend(
+                [
+                    "backend/tests/scripts/test_issue_flow.py",
+                    "backend/tests/scripts/test_aistock_issue_workflow.py",
+                ]
+            )
+        for target in path_targets:
+            if target not in targets:
+                targets.append(target)
+    return targets
+
+
 def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
     sessions: list[str] = []
     for plan_key in selection.get("required_plans") or []:
@@ -208,22 +272,31 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
 def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     plans = flow._plans_by_key()
     selection = flow.select_validation(paths)
-    selected_plan_keys = [str(item) for item in selection.get("required_plans") or []]
-    for path in paths:
-        for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
-            if plan_key not in selected_plan_keys:
-                selected_plan_keys.append(plan_key)
-    sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
+    selected_plan_keys: list[str] = []
+    frontend_test_targets: list[str] = []
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
     for path in paths:
         path_selection = flow.select_validation([path])
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
+        if _is_frontend_path(path):
+            required_plans.extend(
+                str(plan_key)
+                for plan_key in path_selection.get("recommended_plans") or []
+                if (plans.get(str(plan_key)) or {}).get("ci_lane") == "frontend"
+            )
         for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
             if plan_key not in required_plans:
                 required_plans.append(plan_key)
+        for plan_key in required_plans:
+            if plan_key not in selected_plan_keys:
+                selected_plan_keys.append(plan_key)
+            plan = plans.get(plan_key) or {}
+            target = str(plan.get("frontend_test_path") or "").strip()
+            if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
+                frontend_test_targets.append(target)
         has_related_deferred_plan = any(
-            plan_key not in {"l0", "guardrail_changed_files", "validation_module_registry_l0"}
+            plan_key not in SHARED_PLAN_KEYS
             and bool((plans.get(plan_key) or {}).get("enabled", True))
             and bool((plans.get(plan_key) or {}).get("runner_enabled", True))
             for plan_key in required_plans
@@ -232,8 +305,10 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
+    sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
     return {
         "backend_sessions": sessions,
+        "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
         "unmapped_code_files": unmapped_files,
         "impacted_modules": selection.get("impacted_modules") or [],
@@ -343,6 +418,7 @@ def classify_changed_files(
     bug_registry_files = [path for path in normalized if path.startswith(BUG_REGISTRY_PREFIX)]
     non_bug_registry_files = [path for path in normalized if not path.startswith(BUG_REGISTRY_PREFIX)]
     prompt_evaluation_files = [path for path in normalized if _prompt_evaluation_required(path)]
+    catalog_validation_required = any(_catalog_validation_required(path) for path in normalized)
     docs_lite_only = bool(normalized) and all(_is_docs_lite_path(path) for path in normalized)
     docs_fast_tier = _docs_fast_tier(normalized, normalized_added)
     docs_controlled_only = bool(normalized) and all(_is_docs_controlled_path(path) for path in normalized)
@@ -387,15 +463,20 @@ def classify_changed_files(
         for path in non_bug_registry_files
         if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
+    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
     go_files = [path for path in non_bug_registry_files if _is_go_path(path)]
     business_files = [
         path
         for path in non_bug_registry_files
-        if path not in workflow_fast_files and path not in frontend_files and path not in go_files and not _is_docs_path(path)
+        if path not in workflow_fast_files
+        and path not in go_files
+        and not _is_docs_path(path)
+        and not _catalog_validation_required(path)
     ]
     catalog_selection = _catalog_backend_selection(business_files)
     backend_sessions = catalog_selection["backend_sessions"]
+    frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]
     unmapped_code_files = catalog_selection["unmapped_code_files"]
     if unmapped_code_files:
@@ -404,12 +485,12 @@ def classify_changed_files(
             + ", ".join(unmapped_code_files)
         )
 
-    workflow_validation_required = bool(workflow_fast_files)
+    workflow_validation_required = bool(workflow_test_targets)
     workflow_validation_only = (
         bool(normalized)
         and bool(workflow_fast_files)
         and all(
-            path in workflow_fast_files or _is_docs_path(path)
+            path in workflow_fast_files or _catalog_validation_required(path) or _is_docs_path(path)
             for path in non_bug_registry_files
         )
         and not business_files
@@ -449,6 +530,8 @@ def classify_changed_files(
         classification = "docs_controlled"
     elif workflow_validation_only:
         classification = "workflow_validation_only"
+    elif catalog_validation_required and not business_files and not frontend_files and not go_files:
+        classification = "catalog_validation_only"
     elif frontend_required and not backend_required and not go_required:
         classification = "frontend_ci_required"
     elif go_required and not backend_required and not frontend_required:
@@ -474,6 +557,7 @@ def classify_changed_files(
         "workflow_fast_files": workflow_fast_files,
         "workflow_validation_only": workflow_validation_only,
         "workflow_validation_required": workflow_validation_required,
+        "workflow_test_targets": workflow_test_targets,
         "docs_lite_required": docs_lite_only,
         "prompt_evaluation_files": prompt_evaluation_files,
         "prompt_evaluation_required": bool(prompt_evaluation_files),
@@ -483,6 +567,7 @@ def classify_changed_files(
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,
+        "frontend_test_targets": frontend_test_targets,
         "frontend_files": frontend_files,
         "go_required": go_required,
         "go_files": go_files,
@@ -493,6 +578,7 @@ def classify_changed_files(
             "reason": None,
         },
         "static_gate_required": not docs_lite_only,
+        "catalog_validation_required": catalog_validation_required,
         "pr_quality_required": True,
         "classification": classification,
         "reasons": reasons,
@@ -511,15 +597,18 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"backend_required={str(payload['backend_required']).lower()}",
         f"backend_sessions={json.dumps(payload['backend_sessions'])}",
         f"frontend_required={str(payload['frontend_required']).lower()}",
+        f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",
         f"unmapped_code_files={json.dumps(payload['unmapped_code_files'])}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
+        f"workflow_test_targets={json.dumps(payload['workflow_test_targets'])}",
         f"docs_lite_required={str(payload['docs_lite_required']).lower()}",
         f"docs_fast_required={str(payload['docs_fast_required']).lower()}",
         f"docs_fast_tier={payload['docs_fast_tier'] or ''}",
         f"docs_controlled_required={str(payload['docs_controlled_required']).lower()}",
         f"static_gate_required={str(payload['static_gate_required']).lower()}",
+        f"catalog_validation_required={str(payload['catalog_validation_required']).lower()}",
         f"prompt_evaluation_required={str(payload['prompt_evaluation_required']).lower()}",
         f"classification={payload['classification']}",
     ]
@@ -548,14 +637,17 @@ def main(argv: list[str] | None = None) -> int:
         "backend_required": payload["backend_required"],
         "backend_sessions": payload["backend_sessions"],
         "frontend_required": payload["frontend_required"],
+        "frontend_test_targets": payload["frontend_test_targets"],
         "go_required": payload["go_required"],
         "unmapped_code_files": payload["unmapped_code_files"],
         "workflow_validation_required": payload["workflow_validation_required"],
+        "workflow_test_targets": payload["workflow_test_targets"],
         "docs_lite_required": payload["docs_lite_required"],
         "docs_fast_required": payload["docs_fast_required"],
         "docs_fast_tier": payload["docs_fast_tier"],
         "docs_controlled_required": payload["docs_controlled_required"],
         "static_gate_required": payload["static_gate_required"],
+        "catalog_validation_required": payload["catalog_validation_required"],
         "prompt_evaluation_required": payload["prompt_evaluation_required"],
         "changed_file_count": payload["changed_file_count"],
     }, ensure_ascii=False, sort_keys=True))

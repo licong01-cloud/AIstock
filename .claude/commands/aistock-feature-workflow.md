@@ -1,5 +1,7 @@
 # aistock-feature-workflow
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the feature procedure.
+
 Use this Claude Code command only for real AIstock feature delivery or architecture/capability implementation. Do not use it for BUG fixes, docs cleanup, merge-only aftercare, or read-only triage.
 
 ## Context Budget

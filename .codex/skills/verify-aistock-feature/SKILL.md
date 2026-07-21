@@ -5,6 +5,8 @@ description: "Use for real AIstock feature delivery that needs Feature Card/desi
 
 # Verify AIstock Feature
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the feature procedure.
+
 Use this skill only after the task is confirmed as new feature delivery or architecture/capability implementation.
 
 ## Context Budget

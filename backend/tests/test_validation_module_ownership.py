@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.validation.file_ownership import FileOwnershipCatalog, FileOwnershipError, write_scan_outputs
+from backend.services.validation.file_ownership import FileOwnershipCatalog, write_scan_outputs
 from backend.services.validation.module_registry import ModuleRegistry, ModuleRegistryError
 from scripts.aistock_module_ownership_scan import main as ownership_scan_main
 
@@ -93,6 +93,27 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert match.ownership_status == "mapped"
     assert match.primary_module == "validation.guardrails"
     assert "validation.module_quality" in match.impact_modules
+
+    hmm_frontend = catalog.match_path("frontend/src/app/hmm-evolution/page.tsx")
+    assert hmm_frontend.ownership_status == "mapped"
+    assert hmm_frontend.primary_module == "hmm.evolution"
+
+    client_instruction = catalog.match_path("CLAUDE.md")
+    assert client_instruction.ownership_status == "mapped"
+    assert client_instruction.primary_module == "docs.standards"
+
+    process_doc = catalog.match_path("docs/process/research_assistant_blueprint_execution_runbook_20260531.md")
+    assert process_doc.ownership_status == "mapped"
+    assert process_doc.primary_module == "docs.standards"
+
+    assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
+    assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")
+    assert registry.get_module("watchlist").test_plans_required == ("l0", "watchlist_backend")
+    assert registry.get_module("validation.runner").test_plans_required == ("l0", "validation_catalog_integrity")
+
+    plan_catalog = catalog.match_path("backend/services/validation/plan_catalog.py")
+    assert plan_catalog.ownership_status == "mapped"
+    assert plan_catalog.primary_module == "validation.runner"
 
 
 def test_registry_rejects_duplicate_module_id(tmp_path: Path) -> None:

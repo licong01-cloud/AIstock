@@ -3212,6 +3212,92 @@ def test_install_client_plan_can_copy_global_codex_skill(
     assert applied["client_manifest_after"]["claude_feature_command_status"] == "current"
     assert applied["client_manifest_after"]["claude_router_command_status"] == "current"
 
+    isolated_codex_home = isolated_workflow_root / "official_codex_home"
+    untouched_claude_home = isolated_workflow_root / "untouched_claude_home"
+    sentinel = untouched_claude_home / "commands" / "keep.md"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("keep", encoding="utf-8")
+    codex_only = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(isolated_codex_home),
+        claude_home=str(untouched_claude_home),
+        install_claude=False,
+    )
+    assert codex_only["install_codex"] is True
+    assert codex_only["install_claude"] is False
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (untouched_claude_home / "commands" / "fix-aistock-issue.md").exists()
+
+
+def test_verify_clients_workflow_only_checks_every_lane(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "verified_codex_home"
+    claude_home = isolated_workflow_root / "verified_claude_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        claude_home=str(claude_home),
+    )
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--codex-home",
+            str(codex_home),
+            "--claude-home",
+            str(claude_home),
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert len(payload["client_manifest"]["codex_entries"]) == len(workflow.CLIENT_CODEX_SKILLS)
+    assert len(payload["client_manifest"]["claude_entries"]) == len(workflow.CLIENT_CLAUDE_COMMANDS)
+    assert all(item["status"] == "current" for item in payload["client_manifest"]["codex_entries"].values())
+    assert all(item["status"] == "current" for item in payload["client_manifest"]["claude_entries"].values())
+
+
+def test_verification_budget_does_not_require_nightly_without_deferred_plans() -> None:
+    budget = workflow._verification_budget_for_record(
+        {
+            "title": "Workflow validation issue",
+            "description": "P1 workflow regression",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0"],
+        }
+    )
+
+    assert budget["deferred_nightly_verification"] == {
+        "required": False,
+        "modules": [],
+        "plans": [],
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
+    }
+
+
+def test_verification_budget_requires_nightly_for_explicit_broad_plan() -> None:
+    budget = workflow._verification_budget_for_record(
+        {
+            "title": "Validation Center regression",
+            "description": "Cross-module API flow needs delegated coverage",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0", "validation_center_backend"],
+        }
+    )
+
+    assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["deferred_nightly_verification"]["plans"] == ["validation_center_backend"]
+    assert budget["deferred_nightly_verification"]["modules"] == ["validation", "validation_center"]
+
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
@@ -7577,7 +7663,7 @@ def test_submit_bug_does_not_infer_ui_hints_from_cleanup_route_wording(
     assert any("cleanup-fast" in item for item in efficiency["recommendations"])
 
 
-def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
+def test_submit_bug_workflow_budget_skips_nightly_without_explicit_broad_plan(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7613,7 +7699,9 @@ def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
     assert "ui_intake_hints" not in record
     budget = record["verification_budget"]
     assert budget["budget"] == "standard"
-    assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["deferred_nightly_verification"]["required"] is False
+    assert budget["deferred_nightly_verification"]["modules"] == []
+    assert budget["deferred_nightly_verification"]["plans"] == []
     assert budget["delegated_validation"]["receipt_default"] == "compact"
     assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
 

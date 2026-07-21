@@ -154,6 +154,7 @@ modules:
     api_routes: [/api/v1/strategy-packages/*]
     test_plans:
       required_on_change: [l0, paper_v2_backend]
+      recommended: [strategy_package_governance_ui]
   - module_id: hmm
     display_name: HMM
     module_type: product_feature
@@ -172,6 +173,7 @@ modules:
     description_zh: 覆盖隔离的 HMM 候选注册、离线评估身份、持久批次状态机和 QE 实验资产只读契约，不控制模拟盘或生产交易。
     test_plans:
       required_on_change: [l0, hmm_evolution_backend]
+      recommended: [hmm_evolution_ui]
   - module_id: factor_library
     display_name: Factor library
     module_type: product_feature
@@ -198,7 +200,7 @@ modules:
     description_zh: 覆盖 Qlib 导出、Bin/H5 数据集、PIT 股票池、分钟数据链和数据候选验证。
     ui_routes: [/qlib]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, qlib_data_backend]
   - module_id: market_regime
     display_name: Market Regime
     module_type: data_pipeline
@@ -208,8 +210,7 @@ modules:
     ui_routes: [/market-regime]
     api_routes: [/api/v1/market/regime-label/*]
     test_plans:
-      required_on_change: [l0]
-      recommended: [market_regime_ui]
+      required_on_change: [l0, market_regime_ui]
   - module_id: rl_execution
     display_name: RL Execution (Models + Module)
     module_type: product_feature
@@ -248,7 +249,8 @@ modules:
     description_zh: Covers watchlist, cloud screening, and candidate-stock management workflows.
     ui_routes: [/watchlist, /cloud-screening]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, watchlist_backend]
+      recommended: [watchlist_ui]
   - module_id: market_news
     display_name: Market news
     module_type: data_pipeline
@@ -275,7 +277,7 @@ modules:
     description_zh: 覆盖 QMT 客户端、账户、订单、持仓和未来真实执行接入，属于高风险交易基础设施。
     ui_routes: [/qmt]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, qmt_client_contract]
   - module_id: rdagent
     display_name: RD-Agent
     module_type: product_feature
@@ -535,7 +537,7 @@ modules:
     description: Controlled nox runner, plan catalog, execution records, and evidence archive.
     description_zh: 覆盖受控 nox runner、测试计划白名单、执行记录、日志和自动归档。
     test_plans:
-      required_on_change: [l0, validation_catalog_integrity, validation_center_backend]
+      required_on_change: [l0, validation_catalog_integrity]
   - module_id: validation.workflow_automation
     display_name: Validation workflow automation
     parent_module: validation
@@ -544,9 +546,8 @@ modules:
     description: CI and Nightly discovery, issue intake, code intelligence, drift audits, and failure candidate automation.
     description_zh: 覆盖 CI 与 Nightly 发现、问题接入、代码智能、漂移审计和失败候选自动化。
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, validation_workflow_automation]
       recommended:
-        - validation_workflow_automation
         - validation_discovery_issue_intake_readonly
         - workflow_discovery_root_clean_guard
         - code_intelligence_discovery_affected_tests_quality
@@ -580,7 +581,6 @@ modules:
     description_zh: 覆盖模块注册表、文件归属、commit 影响分析、工作区 dirty 状态和模块质量优先级矩阵。
     test_plans:
       required_on_change: [l0, validation_module_registry_l0]
-      recommended: [validation_center_real_port_ui]
   - module_id: platform
     display_name: Platform
     module_type: technical_layer
@@ -597,8 +597,8 @@ modules:
     description: Unified MCP gateway, profile registry, tool manifest, and client-facing MCP configuration.
     description_zh: 覆盖统一 MCP gateway、profile 注册表、工具清单和客户端侧 MCP 配置。
     test_plans:
-      required_on_change: [l0]
-      recommended: [mcp_gateway_manifest_quality, mcp_gateway_phase5_assistant, mcp_gateway_phase6_resource_monitor, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
+      required_on_change: [l0, mcp_gateway_manifest_quality]
+      recommended: [mcp_gateway_phase5_assistant, mcp_gateway_phase6_resource_monitor, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
   - module_id: platform.api
     display_name: Platform API
     parent_module: platform
@@ -643,6 +643,8 @@ modules:
     risk_level: medium
     description: Shared frontend navigation, API clients, UI components, and build configuration.
     description_zh: 覆盖共享前端导航、API client、通用组件、布局和前端构建配置。
+    test_plans:
+      required_on_change: [l0, frontend_type_lint]
   - module_id: docs
     display_name: Documentation
     module_type: docs

@@ -310,6 +310,8 @@ def _apply_validation_budget(
 
 
 def _deferred_modules_from_plans(module: str, plans: list[str]) -> list[str]:
+    if not plans:
+        return []
     modules = [module] if module else []
     modules.extend(str(item).replace("_backend", "").replace("_ui", "").replace("_l2", "").replace("_l3", "") for item in plans)
     return [item for item in flow._unique_strings(modules) if item]
@@ -3833,7 +3835,7 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             ],
         },
         "deferred_nightly_verification": {
-            "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
+            "required": bool(split["deferred"]),
             "modules": [item for item in deferred_modules if item],
             "plans": split["deferred"],
             "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
@@ -7026,17 +7028,21 @@ def build_client_install_plan(
     apply: bool = False,
     codex_home: str | None = None,
     claude_home: str | None = None,
+    install_codex: bool = True,
+    install_claude: bool = True,
 ) -> dict[str, Any]:
+    if not install_codex and not install_claude:
+        raise WorkflowError("install-client requires at least one target client")
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
     source_codex_skills = [
         (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
         for key, name in CLIENT_CODEX_SKILLS
-    ]
+    ] if install_codex else []
     source_claude_commands = [
         (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
         for key, name in CLIENT_CLAUDE_COMMANDS
-    ]
+    ] if install_claude else []
     blocking: list[str] = []
     for _key, name, source, _target in source_codex_skills:
         if not source.exists():
@@ -7076,6 +7082,8 @@ def build_client_install_plan(
         "actions": actions,
         "codex_home": str(target_home),
         "claude_home": str(target_claude_home),
+        "install_codex": install_codex,
+        "install_claude": install_claude,
         "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
@@ -11389,12 +11397,37 @@ def cmd_install_client(args: argparse.Namespace) -> int:
         apply=args.apply,
         codex_home=args.codex_home,
         claude_home=args.claude_home,
+        install_codex=not args.skip_codex,
+        install_claude=not args.skip_claude,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
 
 def cmd_verify_clients(args: argparse.Namespace) -> int:
+    manifest = _client_manifest(
+        Path(args.codex_home) if args.codex_home else None,
+        Path(args.claude_home) if args.claude_home else None,
+    )
+    if args.skip_codex and args.skip_claude:
+        raise WorkflowError("verify-clients requires at least one target client")
+    workflow_clients_current = (
+        (args.skip_codex or manifest.get("codex_skill_status") == "current")
+        and (args.skip_claude or manifest.get("claude_command_status") == "current")
+    )
+    if args.workflow_only:
+        payload = {
+            "schema_version": "aistock_workflow_client_verification_v1",
+            "workflow_gate": "ready" if workflow_clients_current else "blocked",
+            "client_manifest": manifest,
+            "codex_home": args.codex_home or str(_codex_home()),
+            "claude_home": args.claude_home or str(_claude_home()),
+            "verify_codex": not args.skip_codex,
+            "verify_claude": not args.skip_claude,
+        }
+        _emit_args(payload, args)
+        return 0 if workflow_clients_current else 2
+
     changed = list(args.changed_file or [])
     if args.changed_files_file:
         changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
@@ -11407,6 +11440,7 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         skip_external=args.skip_external,
     )
+    payload["client_manifest"] = manifest
     if args.output_md:
         _write_text(Path(args.output_md), code_intelligence.render_client_verification_summary(payload))
     _emit_args(payload, args)
@@ -11697,6 +11731,8 @@ def build_parser() -> argparse.ArgumentParser:
     install_client.add_argument("--apply", action="store_true")
     install_client.add_argument("--codex-home")
     install_client.add_argument("--claude-home")
+    install_client.add_argument("--skip-codex", action="store_true")
+    install_client.add_argument("--skip-claude", action="store_true")
     add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
 
@@ -11710,6 +11746,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_clients.add_argument("--changed-files-file")
     verify_clients.add_argument("--module", default="validation")
     verify_clients.add_argument("--root")
+    verify_clients.add_argument("--codex-home")
+    verify_clients.add_argument("--claude-home")
+    verify_clients.add_argument("--workflow-only", action="store_true")
+    verify_clients.add_argument("--skip-codex", action="store_true")
+    verify_clients.add_argument("--skip-claude", action="store_true")
     verify_clients.add_argument("--output-dir")
     verify_clients.add_argument("--skip-external", action="store_true")
     verify_clients.add_argument("--output-md")

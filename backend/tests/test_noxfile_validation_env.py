@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,85 @@ import noxfile  # noqa: E402
 
 def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
+
+
+def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(noxfile.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("git should not run"))
+
+    assert noxfile._l0_scan_paths(["scripts\\issue_flow.py", "scripts/issue_flow.py"]) == [
+        "scripts/issue_flow.py"
+    ]
+
+
+def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    outputs = iter(
+        [
+            "scripts/issue_flow.py\n",
+            "noxfile.py\nscripts/issue_flow.py\n",
+            "backend/tests/test_noxfile_validation_env.py\n",
+        ]
+    )
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, stdout=next(outputs), stderr="")
+
+    monkeypatch.setattr(noxfile.subprocess, "run", fake_run)
+
+    assert noxfile._l0_scan_paths([]) == [
+        "scripts/issue_flow.py",
+        "noxfile.py",
+        "backend/tests/test_noxfile_validation_env.py",
+    ]
+
+
+def test_l0_skill_validation_stays_within_changed_path_scope() -> None:
+    paths = [".codex/skills/verify-aistock-feature/SKILL.md", "scripts/issue_flow.py"]
+
+    assert noxfile._path_scope_includes(paths, ".codex/skills/verify-aistock-feature") is True
+    assert noxfile._path_scope_includes(paths, ".codex/skills/fix-aistock-issue") is False
+
+
+def test_validation_registry_l0_keeps_business_dependencies_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest_args: list[str] = []
+
+    class DummySession:
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    def capture_pytest(_session: object, *args: str) -> None:
+        pytest_args.extend(args)
+
+    monkeypatch.setattr(noxfile, "_run_pytest", capture_pytest)
+    noxfile.validation_module_registry_l0(DummySession())  # type: ignore[arg-type]
+
+    assert "backend/tests/test_validation_module_ownership.py" in pytest_args
+    assert "backend/tests/test_validation_ui_target_catalog.py" not in pytest_args
+
+
+def test_changed_file_guardrail_uses_committed_branch_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[tuple[object, ...]] = []
+
+    class DummySession:
+        posargs = ["--changed-only"]
+
+        def run(self, *args: object, **_kwargs: object) -> None:
+            commands.append(args)
+
+        def error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    monkeypatch.setattr(
+        noxfile,
+        "_l0_scan_paths",
+        lambda _posargs: ["scripts/issue_flow.py", "backend/tests/scripts/test_issue_flow.py"],
+    )
+    noxfile.guardrail_changed_files(DummySession())  # type: ignore[arg-type]
+
+    assert len(commands) == 2
+    for command in commands:
+        assert "--changed-only" not in command
+        assert "scripts/issue_flow.py" in command
+        assert "backend/tests/scripts/test_issue_flow.py" in command
 
 
 def test_env_prefers_self_hosted_source_dotenv_without_copying(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
