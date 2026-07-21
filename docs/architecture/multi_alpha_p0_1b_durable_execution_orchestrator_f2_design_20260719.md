@@ -5,7 +5,7 @@
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / PostgreSQL durable orchestration
 - 日期：2026-07-19
 - 状态：`IMPLEMENTED_MERGED_PRODUCTION_DDL_VERIFIED_RUNTIME_SMOKE_COMPLETE`
-- 实施修订：AIstock durable submission/orchestrator、跨来源 reservation ledger、QE Workspace submission receipt、Archive/read-model、execution deadline 证据与结果分类均已实现并合入。AIstock PR #2509 / merge commit `67a54a90` 与 RD-Agent companion PR #5 已合入；reservation DDL 已在生产应用并通过 SQL/application preflight，durable orchestrator 此前已完成启动 smoke。BUG-786 transport 和 BUG-793 capacity 修复也已合入。当前 backend 进程按用户明确要求停止，本状态不表示服务当前正在运行，也不授权重启
+- 实施修订：AIstock durable submission/orchestrator、跨来源 reservation ledger、QE Workspace submission receipt、Archive/read-model、execution deadline 证据与结果分类均已实现并合入。AIstock PR #2509 / merge commit `67a54a90` 与 RD-Agent companion PR #5 已合入；reservation DDL 已在生产应用并通过 SQL/application preflight，durable orchestrator 此前已完成启动 smoke。BUG-786 transport 和 BUG-793 capacity 修复也已合入。实时 backend 进程状态不是本文持久权威，操作前必须现场核查；本状态不授权重启
 - 范围：仅 P0-1B；不提前实现 P0-2 控制恢复、P0-3 创建器或 P0-4 UI 运行网格
 - 运行边界：QE-only；不得读写或调用 Selection、Advisory、Paper、模拟盘、QMT、实时荐股和生产交易路径
 - 设计原则：在现有 combine-backtest、`QEWorkspaceClient`、P0-1A durable schema 和 QE Workspace 服务上增量改造；只增加共享执行 reservation ledger 与 submission receipt，不创建“多 Alpha v2”或平行平台
@@ -493,10 +493,10 @@ P0-1B 必须覆盖当前生产代码中的所有直接 QE Workspace 提交点，
 
 只有所有计划 child terminal 且预期业务行已完成 exact readback 时才收口：
 
-1. run 已进入取消流程且没有仍成功完成的必要 child：`cancelled`；P0-2 才开放该控制入口。
+1. run 已进入 operator cancel 流程：按 P0-2 聚合为 `cancelled`，但 cancel 到达前全部 child 已成功时保持 `succeeded`；P0-1B 本身不开放该控制入口。
 2. request 指定 baseline，而 baseline child 不是 `succeeded`：`failed`。
 3. 成功 scheme 数量为 0：`failed`。
-4. 成功 scheme 数量大于 0，并存在任一 `failed/not_computable/cancelled` child：`partial_failed`。
+4. 不存在 operator cancel 上下文，成功 scheme 数量大于 0，并存在任一技术 `failed/not_computable` child：`partial_failed`；`cancelled` child 只按第 1 条控制语义处理，不污染 Alpha 技术结果。
 5. baseline（如有）、全部 scheme 和全部计划 LOO 均 `succeeded`：`succeeded`。
 6. 不计划的 LOO（例如 roster 数量不大于 2）不参与 partial 判定；planner 不创建该 child。
 7. parent terminal transition 与业务结果 readback 在同一事务收口；Archive 不放进该事务，也不阻止 terminal commit。
@@ -929,7 +929,7 @@ AIstock PR 与 RD-Agent PR/commit 必须分别记录。代码可以先后合入�
 - P0-1B RD-Agent receipt 源码：`merged_and_validated`；companion PR #5，receipt/retry/task/model-source/file/tar 套件 `24 passed`。
 - P0-1B reservation DDL：`production_applied_and_verified`；BUG-785 记录包含 DEV/production migration、preflight、容量原子性、active remote 冲突、终态 retry、lease takeover/fencing 和零残留证据。
 - backend/frontend dependency：`noop`；本阶段没有 frontend 改动和新增依赖。
-- durable orchestrator 此前已完成 backend 启动 smoke、schema ready 和 active import 核对；当前 backend 进程按用户明确要求停止，本文不授权或执行重启。没有因本次文档更新创建、停止或恢复 QE 实验。
+- durable orchestrator 此前已完成 backend 启动 smoke、schema ready 和 active import 核对；实时进程状态操作前现场核查，2026-07-21 14:27 只读观察到 `0.0.0.0:8001` 正在监听。本文未启停服务，也没有创建、停止或恢复 QE 实验。
 
 ### 24.2 P0-1B rollout
 
@@ -969,4 +969,4 @@ AIstock PR 与 RD-Agent PR/commit 必须分别记录。代码可以先后合入�
 
 ## 26. 退出条件与下一阶段
 
-F-301～F-323 已随 P0-1B 源码、DDL、receipt 配套、验证与运行 smoke 收口，P0-1B 可以报告完成。下一阶段为 P0-2 control/recovery；其从属设计是 `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`，用户确认前不合入、不编码。P0-1B 完成不代表 P0-3 UI、P0-4 child grid 或整个多 Alpha 基础底座已经完成。任何缺失的运行证据必须作为待补实验/诊断保留，不用于淘汰研究方向。
+F-301～F-323 已随 P0-1B 源码、DDL、receipt 配套、验证与运行 smoke 收口，P0-1B 可以报告完成。下一阶段为 P0-2 control/recovery；其从属设计是 `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`，按既有授权范围和正常开发流程进入实现，不新增设计合入或编码审批门。P0-2 在本底座上增加 command/delivery fencing、process-incarnation typed kill、内容哈希执行身份、`not_recovered/partial_recovered` successor 语义和 Archive v2 recovery 快照，不反向改写 P0-1B 历史运行事实。P0-1B 完成不代表 P0-3 UI、P0-4 child grid 或整个多 Alpha 基础底座已经完成。任何缺失的运行证据必须作为待补实验/诊断保留，不用于淘汰研究方向。
