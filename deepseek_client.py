@@ -513,5 +513,5 @@ class DeepSeekClient:
             else:
                 # 如果无法解析JSON，返回文本响应
                 return {"decision_text": response}
-        except:
+        except Exception:
             return {"decision_text": response}

@@ -12,7 +12,7 @@ raise NotImplementedError when invoked.
 from dataclasses import dataclass, field
 from typing import Any, Dict
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -62,7 +62,7 @@ def infer_hmm_for_symbol(
 def main() -> None:
     args = _parse_args()
 
-    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.utcnow()
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone.utc)
     cfg = HMMPredictionConfig()
     infer_hmm_for_symbol(
         ts_code=args.symbol,
