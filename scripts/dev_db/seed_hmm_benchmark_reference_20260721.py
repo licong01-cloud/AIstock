@@ -50,10 +50,10 @@ BENCHMARK_EXPERIMENT_IDS = (
 )
 # 2026-07-22 user-approved ruling: the workspace-fallback cold/warm benchmark
 # runs on the only approved+verifiable fallback loop qe_20260502_131502_9b54/Loop1
-# (its LABEL0 is h10, so the fallback spec uses label_horizon_days=10).  The
-# evaluation path resolves the workspace node via DEV qe_evolution_tasks and
-# requires the source loop row to be completed, so that task/loop/experiment
-# metadata must be seeded as reference data too.
+# (its LABEL0 uses a 10-period horizon, so the approved spec sets
+# label_horizon_days=10).  The evaluation path resolves the workspace node via
+# DEV qe_evolution_tasks and requires the source loop row to be completed, so
+# that task/loop/experiment metadata must be seeded as reference data too.
 FALLBACK_TASK_ID = "qe_20260502_131502_9b54"
 FALLBACK_LOOP_ID = "qe_20260502_131502_9b54_Loop1"
 FALLBACK_EXPERIMENT_IDS = (
