@@ -9,6 +9,7 @@ rules:
       - backend/inference_engine.py
       - scripts/strategy_package_live_inference.py
       - backend/tests/test_inference_engine_historical_readonly.py
+      - backend/tests/test_inference_strict_scoring_alignment.py
       - backend/tests/scripts/test_strategy_package_live_inference.py
     primary_module: advisory.historical_range
     impact_modules: [tests.backend]
