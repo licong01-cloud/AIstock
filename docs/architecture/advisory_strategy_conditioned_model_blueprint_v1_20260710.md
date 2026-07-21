@@ -1,9 +1,9 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v1
 
 > 日期：2026-07-10
-> 修订日期：2026-07-21
+> 修订日期：2026-07-22
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成。本文于 2026-07-19 增补正式的“历史范围研究与新策略上线前验证”能力边界：它是用户显式启动、可恢复、逐交易日执行的 Advisory 业务功能，不是诊断脚本或自动 daily scheduler。Phase 1R F2 实施级详细设计已形成于 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R1 contracts、状态/identity/hash、独立 CAS、additive migration 与 repositories 已由 PR `#2481` 合入，R2-A 与 R2-B 也已合入。R1/R2-B migration 已在 DEV apply/verify/exact-reapply，R2-B 已在 `2026-07-03` 完成单 Alpha 与原生多 Alpha 的真实 candidate E2E 和跨模块隔离验收。production DDL 未执行、运行时未激活；下一实现批次固定为 R3 逐日列表 executor 与原子日提交，R4-R5/API/UI 仍未实现。Phase 0B 模型价值审计、模型训练和用户可见模型预测同样尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
+> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成。本文于 2026-07-19 增补正式的“历史范围研究与新策略上线前验证”能力边界：它是用户显式启动、可恢复、逐交易日执行的 Advisory 业务功能，不是诊断脚本或自动 daily scheduler。Phase 1R 父设计位于 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R1 contracts、状态/identity/hash、独立 CAS、additive migration 与 repositories 已由 PR `#2481` 合入，R2-A 与 R2-B 也已合入。R1/R2-B migration 已在 DEV apply/verify/exact-reapply，R2-B 已在 `2026-07-03` 完成单 Alpha 与原生多 Alpha 的真实 candidate E2E 和跨模块隔离验收。R3 实施级子设计已完成正式审核并冻结于 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`，源码和 corrective migration 尚未实现。production DDL 未执行、运行时未激活；R4-R5/API/UI 仍未实现。Phase 0B 模型价值审计、模型训练和用户可见模型预测同样尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证、candidate-count 运行门禁和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -237,7 +237,7 @@ SelectionRun 已完成
 - `advisory_model_rank/advisory_model_score` 独立存储。
 - 影子阶段不得覆盖当前用于进入/退出的 `candidate.rank`。
 - Paper v2 继续读取原始 `SelectionRun.aggregate_results`。
-- 正式复评所需候选深度必须覆盖 `rank_exit_threshold`；不足时延续现有 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT` fail-closed 语义。
+- 当前/legacy `AdvisoryProgramService._evaluate_review` 为行为 parity 暂时保留现有 final-list synthetic rank 和 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT` 诊断边界；该约束不外推为 Phase 1R package/candidate-count 门禁。Phase 1R 使用 candidate v2 raw/stage/universe evidence，并与 current wrapper 共同使用 `LEGACY_COMPATIBLE_MISSING_RANK_V1 = observed_max_selection_rank + 1`；即使 final top-k 小于 `rank_exit_threshold` 也能执行 baseline list，但不会人为强制增加弱确认。
 
 模型关闭或回滚时恢复的是 `selection_effective_rank`，不是 HMM 前的 `alpha_raw_rank`。五层 rank 必须带各自 stage、生成配置和 hash，禁止继续引入含义不明确的“源排名”新字段。
 
@@ -258,9 +258,9 @@ HistoricalRangeResearchOrchestrator
 - 单日 `MANUAL_HISTORICAL_RESEARCH` 的候选必须来自 identity/hash 匹配的既有单包 `SelectionRun` artifact/DSE；该路径不得现场重算 Selection，也不得把 current-semantics 结果冒充当时真实 evidence。
 - `HISTORICAL_RANGE_RESEARCH` 为验证当前冻结策略语义，允许通过 Advisory 独立 orchestration adapter 按显式历史交易日调用与现有 Selection 相同的 StrategyPackage 推理、HMM/risk/tradability 和证据生成语义。该 adapter 只能写 Advisory 范围研究命名空间，不得写普通 Selection run、Paper/模拟盘 artifact 或当前荐股 list；不得复制、简化或重新实现第二套选股算法。
 - legacy preview、aggregate 诊断或跨包合成结果在两条路径中都不能作为权威候选源。
-- Advisory 可以在自己的 effective runtime profile 中请求更深的 `selection.top_k`，用于模型候选召回和生命周期退出观察，但不得修改普通 Selection Center 或 Paper v2 的默认运行配置。单 Alpha 仍受 Selection v1 上限 50 约束；原生多 Alpha 父包只能使用 frozen manifest 已声明的 `topk/topk_variants/secondary_topk`，否则现有 runtime 会 `TOPK_RUNTIME_MISMATCH`。缺少所需深度变体时，必须发布经正常验证的新父包版本或另立 Advisory 深池契约，不能临时覆盖。
+- Advisory 可以在自己的 effective runtime profile 中请求更深的 `selection.top_k`，用于模型候选召回和额外观察，但不得修改普通 Selection Center 或 Paper v2 的默认运行配置。单 Alpha 仍受 Selection v1 上限 50 约束；原生多 Alpha 父包只能使用 frozen manifest 已声明的 `topk/topk_variants/secondary_topk`，否则现有 runtime 会 `TOPK_RUNTIME_MISMATCH`。缺少更深变体只会使依赖该深度的后续模型 capability unavailable；不能阻断已准入 package 的 Phase 1R baseline list，也不能要求为逐日荐股换包。
 - 每次运行必须持久化 `requested_top_k`、manifest top-k variant、Alpha 总评分数量、HMM/risk policy 前后候选数量、硬过滤前后数量、eligible universe 标识及 hash、effective runtime config、候选运行 identity 和 artifact hash；单日精确研究额外记录来源 `SelectionRun id`，范围研究记录独立 `range_day_run_id`，不得伪造 SelectionRun。
-- 候选截断必须同时满足模型特征深度与 `rank_exit_threshold` 观察深度；前者不足使用 `ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT`，后者不足继续使用现有 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT`，两者不得混用。
+- 模型特征深度不足使用 `ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT`，只影响对应模型 capability。现有 current/legacy wrapper 可为 parity 保留既有 final-list synthetic rank/诊断，但 Phase 1R baseline lifecycle 不再使用 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT` 作为 candidate-count gate；它依据 candidate v2 raw/stage/universe closure 把 active symbol 分类为 INCLUDED/EXCLUDED/ABSENT/OUTSIDE，并使用 R3 冻结的 current-compatible synthetic missing rank，不改变弱确认、退出或替换语义。
 - 为 HMM/risk overlay 消融，Phase 1 必须保存同一权威运行的 Alpha 原始深池、HMM 调整后深池、risk policy 调整后深池和硬过滤后正式深池。
 
 ### 6.4 多策略包独立性
@@ -1108,12 +1108,13 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 - 进入条件：单日 StrategyPackage/Selection 推理语义、历史 PIT 数据访问、Advisory Program/config projection 和列表生命周期契约稳定；不要求等待最新交易日或 O4 所选前瞻日期完成。
 - 交付物：`HistoricalRangeResearchRequest/Run/DayRun/Receipt`、交易日展开、逐日 orchestration、幂等/resume/cancel、前日 list hash chain、研究 list/outcome/summary、API/UI、repo-external artifacts 和 retrospective SEALED dataset bridge。
 - 正确性要求：范围首日无未来 active state；每日日任务只读当日 cutoff 前数据；未来行情只作为成熟 outcome；同一日重试收敛；跨日 list transition 顺序唯一；多 Program 独立；合法数据可从首日贯通到最终报告。
+- 日级输入身份：R3 使用与 Alpha component/lookback 解耦、且不按当日 positive PIT universe过滤的 canonical `DECISION_MARK_SET`，将 candidate ref、mark-set ref、前日 exact receipt 和 canonical list semantics 一起闭合为 `day_input_hash v3`。准确的停牌、terminal no-quote 或退出 universe 形成显式 mark/rank evidence，不转永久 waiting。
 - 新策略语义：包完成正常准入后即可创建范围任务，不重复验证 package 资产。历史日期早于 package/manifest/code vintage 时仍可运行 current-semantics research，但固定标记 `RETROSPECTIVE_RESEARCH_ONLY`，不得发布 package calibration 或用户可见 READY capability。
 - 模型衔接：范围结果可以立即进入 Phase 0B 和内部 research bootstrap；正式 OOS、概率/区间校准和 Program 模型启用仍由后续阶段独立验收。
 - 隔离：不写普通 Selection run、当前 Advisory list/episode、模拟盘、Paper、QE/Qlib/backtest 或交易表；不创建 scheduler、审批、角色、package re-approval 或运行时 DDL。
 - 共享计算所有权：R2 的公共候选计算契约位于中立的 StrategyPackage 计算模块，由现有 Selection wrapper 和 Phase 1R adapter 分别调用；Advisory 不 import `simulation_runtime`、Paper 或模拟盘模块，公共计算也不持有 repository、sink 或默认生产依赖。
 - 发布/回滚：范围任务是显式用户命令/API；关闭该能力只停止新任务和未开始日期，保留已完成研究事实，不影响现有单日 runner 和当前荐股基线。
-- 详细设计等级：F2。已形成 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`，并同步修订 Phase 0A.2/Phase 1 对 `REPLAY` 与 observation source 的从属表述。R1/R2-A/R2-B 已合入，R2-B 已完成 DEV-first migration 与单/原生多 Alpha candidate E2E。R3-R5、production DDL 和 runtime activation 分别保持 `pending`，不得互相冒充完成。
+- 详细设计等级：F2。父设计为 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R3 唯一实施级子设计为 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`。R1/R2-A/R2-B 已合入，R2-B 已完成 DEV-first migration 与单/原生多 Alpha candidate E2E；R3 设计已按正式审核修订 candidate-count gate、active mark coverage、day-input v3、多 Alpha mark lineage、rank mapping、CAS upstream、top-level executor 和 typed JSON contract，source/corrective migration/DEV 多日 E2E 仍未开始。R4-R5、production DDL 和 runtime activation 分别保持未完成，不得互相冒充完成。
 
 ### Phase 0B：基线质量与可建模性审计
 
@@ -1216,7 +1217,7 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过 PIT、OOS、immutabl
 2. research policy、历史 dated binding、manual multi-Program runner、immutable Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
 3. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与原第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
 4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 3 项；模型表与部署表仍由 Phase 2 专项设计闭合。
-5. 历史范围研究执行器与新策略上线前验证 F2 设计：已形成 `advisory_phase1r_historical_range_research_f2_design_20260719.md`，覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离，并同步修订 Phase 0A.2/Phase 1 从属契约。R1 foundation、R2-A 与 R2-B 已合入，R2-B 已完成真实 DEV candidate E2E；下一批次为 R3，后续状态以该详细设计和逐批验收记录为准。
+5. 历史范围研究执行器与新策略上线前验证 F2 设计：父设计 `advisory_phase1r_historical_range_research_f2_design_20260719.md` 覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离；R3 子设计 `advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 已闭合 shared list transition、无 candidate-count gate 的 active rank observation、独立 decision-mark set/day-input v3、deterministic projection、durable day lease/takeover、execute-until-blocked、terminal PARTIAL、exact receipt upstream、原子 day commit、恢复和真实多日验收。R1 foundation、R2-A 与 R2-B 已合入并完成真实 DEV candidate E2E；下一任务为 R3 源码实现，后续状态以父/子设计和逐批验收记录为准。
 6. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
 7. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
 8. HMM、行业黑名单和风格化行业优先级设计。
@@ -1348,7 +1349,7 @@ peak-before-stop path correctness
 | F-040 | §6.5、Phase 0A.2 §1.3/§7.2/§11.3 | explicit completed trade date and research isolation；`backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py` | design_ready | none |
 | F-041 | §1.2、§2、§6.6、Phase 1R | 正式范围研究产品边界、持久化任务和用户可见研究结果；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-042 | §6.2-6.3、§6.6、§25.1、Phase 1R | 冻结 package/config/code、复用权威推理语义、零 package 二次准入和零共享模块副作用；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-043 | §6.6、§16.1-16.2、§21.3 | 日任务幂等/恢复、前日 list hash chain、ENTER/HOLD/EXIT/WATCH、有界 active list；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-043 | §6.3、§6.6、§16.1-16.2、§21.3 | 日任务幂等/恢复、decision-mark-set/day-input v3、前日 exact receipt chain、无 candidate-count gate 的 ENTER/HOLD/EXIT/WATCH 和有界 active list；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-044 | §4.1、§6.6、§14.2、Phase 1R | 新策略 current-semantics 历史验证、收益成熟和 RETROSPECTIVE_RESEARCH_ONLY 语义；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-045 | §3、§14.2、§17、Phase 1R/0B | retrospective dataset bridge、formal OOS 隔离及 Selection/模拟盘/Paper/QE 隔离；artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 
@@ -1359,7 +1360,7 @@ peak-before-stop path correctness
 1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、immutable evidence 与 manual historical runner 代码；不创建 scheduler。
 2. 对现有 single current manifest 和 native multi parent 执行只读 research preflight；手工选择已有历史 binding 可解析的 Program/date，不创建 successor binding 或正式 `T0`。
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
-4. Phase 1R R1/R2-A/R2-B 已合入，R1/R2-B migration 已在现有 DEV 数据库按 `.env` 完成 apply/verify/exact-reapply，R2-B 单/原生多 Alpha candidate E2E 与隔离回执已通过。R3 继续完成列表状态机、有限 executor 和原子日提交。production DDL 仍是独立状态，必须在 DEV 证据基础上获得具体目标授权；不得新建测试数据库替代 DEV，也不得把历史 disposable 结果当作 DEV 证据。
+4. Phase 1R R1/R2-A/R2-B 已合入，R1/R2-B migration 已在现有 DEV 数据库按 `.env` 完成 apply/verify/exact-reapply，R2-B 单/原生多 Alpha candidate E2E 与隔离回执已通过。R3 详细设计已按正式审核修订，下一步按其验收索引实现共享列表状态机、canonical decision-mark/day-input、execute-until-blocked、durable day lease/takeover、terminal PARTIAL、exact receipt closure 和原子日提交。production DDL 仍是独立状态，必须在 DEV 证据基础上获得具体目标授权；不得新建测试数据库替代 DEV，也不得把历史 disposable 结果当作 DEV 证据。
 5. 按 Phase 1R F2 设计完成 R4-R5 后发布历史范围研究功能；使用显式历史区间执行单/多 Alpha 独立逐日研究、恢复和收益成熟 E2E，不等待最新交易日，也不改变当前荐股 list。production DDL 仍需 DEV 验证完成并获得用户对具体生产目标的明确授权。
 6. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并将 formal 与 retrospective source 分区构建为各自 SEALED snapshot；observer 不触发荐股，范围研究不改变 evidence level。
 7. 执行 Phase 0B、模型训练和制品提升；配置启用仅服务 Advisory 的模型预测 writer，无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。

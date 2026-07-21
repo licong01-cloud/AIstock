@@ -1,11 +1,11 @@
 # Advisory Phase 1R 历史范围研究与新策略上线前验证 F2 详细设计
 
 > 日期：2026-07-19
-> 修订日期：2026-07-20
+> 修订日期：2026-07-22
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_r2a_r2b_merged_r2b_real_dev_accepted`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 已按 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md` 完成源码、DEV migration 和 `2026-07-03` 单/原生多 Alpha candidate E2E，验收见 `docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md`。修复 PR `#2545/#2549/#2557/#2558` 已合入，production DDL 未执行、运行时未激活；R3-R5、API、UI 和完整范围任务仍未实现
+> 当前状态：`r1_r2a_r2b_merged_r2b_real_dev_accepted_r3_design_reviewed_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 已按 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md` 完成源码、DEV migration 和 `2026-07-03` 单/原生多 Alpha candidate E2E，验收见 `docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md`。修复 PR `#2545/#2549/#2557/#2558` 已合入；R3 实施级子设计已完成正式审核并冻结于 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`，源码和 R3 corrective migration 尚未实现。production DDL 未执行、运行时未激活；R4-R5、API、UI 和完整范围任务仍未实现
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -304,7 +304,7 @@ WAITING_INPUT/RETRYABLE_FAILED/PARTIAL -> RUNNING | CANCELLED
 - `COMPLETED`：date-plan 已全部物化，且全部日期均为 `COMPLETE|VALID_NO_CANDIDATE`。
 - `WAITING_INPUT`：尚无成功日期，首个未完成日期缺少可恢复输入，且没有不可恢复失败。
 - `RETRYABLE_FAILED`：尚无成功日期，首个日期执行失败但同一冻结 request 可重试。
-- `PARTIAL`：至少一个日期成功，后继日期发生可重试失败或等待输入；resume 仍从首个非成功日期继续。
+- `PARTIAL` 有两种结构化形态：recoverable PARTIAL 至少一个日期成功、后继日期为 WAITING_INPUT/RETRYABLE_FAILED，且无 `finished_at/final_receipt`；terminal PARTIAL 至少一个日期成功、随后首个阻断日期不可恢复 FAILED，具有 `finished_at/final_receipt` 且 immutable。两者不得由 error 文本猜测。
 - `FAILED`：首个阻断日期不可恢复，后继日期保持未开始；不得跳过失败日期继续构造列表链。
 - `CANCELLED`：显式取消后未开始日期转取消；已成功日期不改写。
 
@@ -324,7 +324,7 @@ WAITING_INPUT | RETRYABLE_FAILED
 - 第一日默认空 active state，不依赖当前列表。
 - 第 N 日只有第 N-1 日为 `COMPLETE` 或 `VALID_NO_CANDIDATE` 且前日 list full readback 通过后才能提交 list transition。
 - 候选预计算可以并行，但 day list commit 必须按 Program/日期串行。
-- `VALID_NO_CANDIDATE` 是正常日终态，仍生成空候选 evidence、HOLD/EXIT/WATCH 评估和 list version。
+- `VALID_NO_CANDIDATE` 是正常 candidate 日终态，仍生成空候选 evidence、HOLD/EXIT 评估和 list version；ENTER/WATCH 为零，但不强制清空已有 active episode。raw-zero 不增加弱排名确认；filtered-zero、active symbol 未进入 raw signal 或退出 PIT universe 使用 R3 冻结的 evidence-closed synthetic missing rank `observed_max_selection_rank + 1`，仅在结果大于 `rank_exit_threshold` 时增加弱确认。candidate 数量/top-k 不得触发失败或换包；只有真实 source/stage/universe evidence 缺失才 WAITING_INPUT，artifact 自相矛盾或 tamper 才 FAILED。
 - `RETRYABLE_FAILED` 必须有稳定 retry reason 和 attempt receipt；`FAILED` 是当前冻结 request 下不可恢复终态，二者不得共用模糊布尔字段。
 
 ### 7.4 Outcome 状态
@@ -429,7 +429,7 @@ StrategyPackageSelectionComputationResultV1
 - DB 只保存 ref、semantic hash、file hash、schema version 和 range/day identity；
 - 不写 `strategy_pkg.selection_score_artifact`；
 - 相同 semantic payload exact rerun 返回同一 ref；碰撞或 readback 不一致显式失败；
-- 单/原生多 Alpha component lineage 全量保存；R3 发布 candidate 后再由 `candidate_input_hash + candidate ref/hash + previous list/day receipt + list semantics` 单向派生 `day_input_hash`，禁止循环 identity。
+- 单/原生多 Alpha component lineage 全量保存；R3 发布 candidate 和与 Alpha legs 独立的 `DECISION_MARK_SET` 后，再由 `candidate_input_hash + candidate ref/hash + decision-mark-set ref/hash + previous list/day receipt exact ref/hash + canonical list semantics` 单向派生 `day_input_hash v3`，禁止循环 identity。
 
 ### 8.4 PIT 和 HMM
 
@@ -491,8 +491,8 @@ AdvisoryListVersionBuilder.build(
 - 当前权威 candidate artifact 中未进入、未持有、未退出且不处于数据等待的候选统一记录 `WATCH`。`WATCH` 无 episode、不占 active slot、不消耗 replacement budget、不进入下一日 active state；其数量最多等于当日冻结 candidate depth，因此列表总量有界。
 - 纯 transition result 同时返回 lifecycle decisions 和 `watch_candidates`。现有 `run_review`/legacy `run_replay` wrapper 为保持旧持久化 parity 只消费 lifecycle decisions；Phase 1R builder 将 `watch_candidates` 投影为独立 `WATCH` list item。两者共享同一排序、阈值、退出和补位计算，不形成第二套算法。
 - 退出行保留在当日 list，但不进入下一日 active state。
-- 当前日期因数据库分区尚未读全、暂时性 source read 或可恢复 artifact 缺失而无法形成要求的退出观察深度时，当前日为 `WAITING_INPUT`；attempt 可保存候选 ref 和诊断 decision，但不得提交 canonical list version、episode snapshot 或下一日 hash，resume 仍引用上一成功日链头。
-- 冻结 package manifest/top-k variant 从结构上无法达到 `rank_exit_threshold` 所需深度时，当前日以 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT` 进入不可恢复 `FAILED`；只能使用满足深度的新 package/config 创建 superseding batch，不能让原 batch 永久等待或静默 HOLD。
+- 当前日期的 source/stage/universe evidence 确实缺失时，当前日为 `WAITING_INPUT`；attempt 可保存已闭合的 candidate/mark refs 和诊断，但不得提交 canonical list version、episode snapshot 或下一日 hash，resume 仍引用上一成功日链头。
+- 冻结 package manifest/top-k、final candidate depth 或 Program 数量本身不构成运行门禁。active symbol 的 INCLUDED/EXCLUDED/ABSENT_FROM_RAW_SIGNAL/OUTSIDE_PIT_UNIVERSE 分类和 legacy-compatible synthetic missing rank 必须按 R3 子设计闭合，不得要求策略包二次验证、换包或创建 superseding package/config。
 - end date 不强制把仍 active 的 episode 伪造为 EXIT；报告使用 range-end mark 并保留 `ACTIVE_AT_RANGE_END`。
 
 ### 9.3 Hash chain
@@ -500,13 +500,15 @@ AdvisoryListVersionBuilder.build(
 ```text
 candidate_input_hash = hash(range_run + program + date + frozen config/code/selection semantics
                             + calendar/universe + sealed catalog/query contract)
-day_input_hash = hash(candidate_input_hash + candidate artifact ref/hash
-                      + previous_list_hash/day_receipt_hash + list semantics)
+day_input_hash_v3 = hash(candidate_input_hash + candidate artifact ref/hash
+                         + decision-mark-set ref/hash + mark policy hash
+                         + previous_list_hash/day_receipt exact ref/hash
+                         + canonical list semantics version/hash)
 list_content_hash = hash(day decisions + items + episode snapshots)
-day_receipt_hash = hash(day_input_hash + list_content_hash + refs + status)
+day_receipt_hash = hash(day_input_hash_v3 + list_content_hash + exact upstream refs + status)
 ```
 
-`candidate_input_hash` 不包含 candidate artifact，candidate artifact v2 保存该 hash；R3 在 artifact 发布/readback 后才派生 `day_input_hash`，因此不存在自引用。后一日必须引用前一日 `list_content_hash` 和 `day_receipt_hash`。同一输入产生不同输出、或同一业务键收到不同 input hash，均为冲突。
+`candidate_input_hash` 不包含 candidate artifact，candidate artifact v2 保存该 hash；R3 在 candidate 和 decision-mark-set artifact 发布/readback 后才派生 `day_input_hash v3`，因此不存在自引用。后一日必须引用前一日 `list_content_hash`、exact day receipt ref 和 `day_receipt_hash`。同一输入产生不同输出、或同一业务键收到不同 input hash，均为冲突。
 
 ## 10. 市场价格、收益与结果成熟
 
@@ -516,9 +518,9 @@ day_receipt_hash = hash(day_input_hash + list_content_hash + refs + status)
 - `price_timing_policy` 在 Phase 1R 固定为 `PIT_DECISION_THEN_MATURE`。现有 current/replay wrapper 为保持旧输出 parity 使用 `LEGACY_INLINE_PRICE_REQUIRED`；两个 adapter 共享相同排序、退出、补位和列表状态机，不共享价格可用时间假设。
 - `signal_close` basis 可在 T 日闭合；`next_open_executable`、`next_close` 的实际 entry/exit price 属于随后交易日 outcome evidence。
 - ENTER/EXIT/HOLD/WATCH action、active recommendation state 和 list hash 在 T 日提交，只保存 T 日可计算的 rule guidance、intended execution date/basis 和 `execution_status=NOT_DUE`；不得读取未来实际价格决定是否荐入、淘汰或补位。
-- 冻结 policy 明确要求的 T 日 reference/mark 缺失时，day 为 `WAITING_INPUT` 且不提交 list；只有未来 intended execution price 未到期时才允许 day 完成并把 execution 标记为 `NOT_DUE|MATURING`。两类缺失不得共用 reason code。
+- R3 使用独立于 Alpha legs 和当日 positive PIT universe 的 batch/day mark source。新候选合法停牌/无 quote 时转 WATCH；ACTIVE episode 有完整 suspend/terminal state 时使用经 as-of-T adj factor 归一的 carry-forward recommendation mark并继续 rank/time/price rule。只有既无 quote、又无完整 market-state/previous-mark/source evidence 时才 `WAITING_INPUT`；准确的停牌、退市或 universe 变化不能阻断整个范围。
 - 后续 outcome refresh 追加 `EXECUTED|UNEXECUTED|CENSORED|TERMINAL` execution evidence、实际价格和 price-quality，不改写原 action、list version、episode identity 或前日 hash chain。
-- 最后一个历史荐股日即使 intended entry/exit 尚未成熟也可以完成 day/list；对应 execution/outcome 保持 `NOT_DUE|MATURING`，因此范围功能不依赖最新交易日之后的数据才能生成荐股结果。
+- 最后一个历史荐股日即使 intended entry/exit 尚未成熟也可以完成 day/list；若 next session 位于 frozen date-plan 之外，结构化 guidance 保存 requested basis 和 `NEXT_SESSION_OUTSIDE_FROZEN_DATE_PLAN`，DB intended date/basis 成对为空，由 R4 outcome 使用新 source revision 解析。对应 execution/outcome 保持 `NOT_DUE|MATURING`，因此范围功能不依赖最新交易日之后的数据才能生成荐股结果。
 - 当前日 active episode 的 stop/take/rank/time-stop 只使用当前日可知 mark 和既有 episode state。
 - 任何未来实际价格都不能写入 candidate artifact、day input hash、list content hash、ranking features 或 T 日 action predicate，只能进入追加式 outcome evidence。
 
@@ -539,7 +541,7 @@ day_receipt_hash = hash(day_input_hash + list_content_hash + refs + status)
 
 ## 11. 数据库设计
 
-字段语义、自然键、状态约束和索引由本文冻结；实现 migration 只能在不改变这些业务语义的前提下选择等价 SQL。ID/hash/ref 使用 `TEXT`，交易日使用 `DATE`，时间使用 `TIMESTAMPTZ`，计数/序号使用非负 `INTEGER/BIGINT`，结构化 payload 使用 `JSONB`。只允许 additive migration。
+字段语义、自然键、状态约束和索引由本文冻结；实现 migration 只能在不改变这些业务语义的前提下选择等价 SQL。ID/hash/ref 使用 `TEXT`，交易日使用 `DATE`，时间使用 `TIMESTAMPTZ`，计数/序号使用非负 `INTEGER/BIGINT`，结构化 payload 使用 `JSONB`。默认只增加 schema；若已应用约束无法表达本文既定正向状态，允许通过单独 committed forward corrective migration 增加 nullable 列并原位替换命名 CHECK/trigger/function，但禁止 DROP 业务列/表、重写既有事实或做 destructive DML。
 
 ### 11.1 `app.advisory_historical_range_batch`
 
@@ -606,6 +608,8 @@ error_json / frozen_program_json
 UNIQUE(batch_id, research_program_id)
 ```
 
+`PARTIAL` 必须由 `finished_at/final_receipt` 区分 recoverable 与 terminal：recoverable PARTIAL 可 resume，terminal PARTIAL 表示已有成功日后遇到不可恢复阻断并不可再改写。batch 的 recoverable aggregate 只计入未 finished 的 PARTIAL。
+
 ### 11.3 `app.advisory_historical_range_day_run`
 
 ```text
@@ -615,6 +619,7 @@ decision_trade_date
 ordinal
 status
 attempt_no
+worker_id / lease_token nullable
 lease_expires_at nullable / current_fencing_token nullable
 previous_day_run_id/hash nullable
 previous_list_version_id/hash nullable
@@ -629,6 +634,8 @@ UNIQUE(range_run_id, ordinal)
 ```
 
 `day_run_id` 由 `(range_run_id,decision_trade_date,ordinal)` 确定性派生。day-plan 物化 exact retry 使用 `INSERT ... ON CONFLICT` 后全字段比对；same key/different date/ordinal/hash 必须冲突。
+
+RUNNING day 必须同时持久化 `worker_id/lease_token/lease_expires_at/current_fencing_token`；非 RUNNING 清空当前 worker/lease。该契约保证服务重启后可从 DB 构造 expired-attempt receipt 和更高 fencing takeover，不能依赖进程内状态恢复。
 
 ### 11.4 Attempt 与 operation receipt
 
@@ -741,7 +748,7 @@ dataset-bridges/<hash>.json
 - DB commit 前 artifact 必须已 durable；DB 只保存已 readback 的 ref。
 - pre-seal requirement-plan/checkpoint artifact 使用独立 planning envelope，以 `user_request_semantic_hash + requirement_plan_hash + catalog_generation` 关闭 identity，不伪造 `resolved_request_hash`；DATE_PLAN/FROZEN_PROGRAM/REQUEST 及所有 day/range artifacts 只在 seal 时发布并必须具有 sealed resolved request hash。
 - candidate artifact 必须使用 v2 payload并持久保存 candidate input、positive universe、raw/source receipts、stage trace/closure、candidate outcome/no-candidate reasons 和全部 candidate facts；v1 空 candidates payload 不满足正式证据。
-- day finish 前预生成 list/item/episode IDs，构造 canonical list payload 和 day receipt，先将 candidate/list/day receipt CAS artifacts 原子写入并完整 readback，再用一个数据库事务写 list/items/episode snapshots、artifact refs 和 day 成功终态。数据库事务失败只留下可识别 orphan CAS，不产生半个 canonical day。
+- day finish 前预生成 list/item/episode IDs，构造 canonical typed list payload 和 day receipt，先将 candidate、decision-mark-set 和 day receipt CAS artifacts 写入并完整 readback，再用一个数据库事务写 candidate/list/items/episode snapshots、artifact refs 和 day 成功终态。DAY receipt upstream 必须精确等于 candidate + mark set + 非首日 predecessor receipt；数据库事务失败只留下可识别 orphan CAS，不产生半个 canonical day。
 - range summary/outcome refresh 同样先生成 immutable outcome/summary artifacts，再以 operation receipt 事务追加 DB rows；不得先把 batch 标记完成再补 artifact。
 - sealed artifact schema 必须包含 producer contract version、resolved request hash、range/day identity、semantic content hash、file SHA、source revision refs 和上游 refs；planning artifact 必须包含 planning identity/generation/cursor/checkpoint closure。只验证文件存在不足以通过。
 - orphan artifact 由后续 GC 设计按无 DB ref 和 retention policy 清理，不在失败路径立即删除。
@@ -753,7 +760,7 @@ dataset-bridges/<hash>.json
 - `POST create` 在短事务中持久化 `PLANNING` batch、requirement-plan ref、CREATE 和 BUILD_SOURCE_CATALOG operation，立即返回 `202`；HTTP 请求不扫描历史 partitions、不运行模型。
 - catalog executor 默认每次 claim 最多处理 32 个 requirements，发布 checkpoint 并推进稳定 ordinal cursor。missing input 转 `WAITING_INPUT`，补齐后 resume 同一 batch；DISCOVER/VERIFY 全部完成后 seal request并创建 Program runs、把唯一 canonical batch 转 `QUEUED`，相同 resolved hash 的并发后提交 batch 转 `DEDUPLICATED`。
 - sealed 后 day rows 由 executor 默认每事务最多 500 行按 ordinal keyset cursor 物化，因此日期跨度不扩大 create 或 seal transaction。
-- executor 只处理显式创建的有限任务，不按日期自动发现或生成任务，因此不是 daily scheduler。
+- executor 只处理显式创建的有限任务，不按日期自动发现或生成任务，因此不是 daily scheduler。正式 `execute_until_blocked` application service 在单次显式调用中自动消费 bounded internal slices，直到 terminal 或真实 waiting/retryable 边界；slice 大小只控制内存/吞吐，不能要求用户或测试逐 slice 人工推进业务状态。
 - 服务重启后不自动篡改状态；过期 lease 的 `RUNNING` attempt 可由用户 resume 或同一 API client 重试恢复。
 - resume 前比较冻结的 selection/list semantics version/hash 与当前 executor；相同 contract 可继续。语义 hash 不同则返回 `ADVISORY_HISTORICAL_RANGE_CODE_SEMANTICS_MISMATCH`，保留原 batch 并要求以当前代码创建新的 superseding batch，不允许在同一列表 hash chain 中混用两套语义。
 - resume 根据 `waiting_stage` 分流：CATALOG 从 catalog checkpoint 首个 unresolved requirement继续；DAY_INPUT 从每个 Program 首个非终态 day 开始，已完成日 full readback 后跳过。两类 cursor/attempt 不得互换。
@@ -913,9 +920,14 @@ ADVISORY_HISTORICAL_RANGE_SOURCE_REVISION_MISMATCH
 ADVISORY_HISTORICAL_RANGE_CODE_SEMANTICS_MISMATCH
 ADVISORY_HISTORICAL_RANGE_PREVIOUS_DAY_PENDING
 ADVISORY_HISTORICAL_RANGE_DAY_INPUT_PENDING
-ADVISORY_HISTORICAL_RANGE_DECISION_MARK_PENDING
-ADVISORY_HISTORICAL_RANGE_EXIT_DEPTH_INPUT_PENDING
-ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT
+ADVISORY_HR_DECISION_MARK_SOURCE_UNAVAILABLE
+ADVISORY_HR_ENTRY_MARK_NOT_AVAILABLE
+ADVISORY_HR_SUSPENDED_MARK_CARRY_FORWARD
+ADVISORY_HR_TERMINAL_MARK_CARRY_FORWARD
+ADVISORY_HR_ACTIVE_EXCLUDED_BY_STAGE
+ADVISORY_HR_ACTIVE_ABSENT_FROM_RAW_SIGNAL
+ADVISORY_HR_ACTIVE_OUTSIDE_PIT_UNIVERSE
+ADVISORY_HR_RANK_SOURCE_UNAVAILABLE
 ADVISORY_HISTORICAL_RANGE_DAY_RETRYABLE
 ADVISORY_HISTORICAL_RANGE_DAY_FAILED
 ADVISORY_HISTORICAL_RANGE_OPERATION_CONFLICT
@@ -1056,15 +1068,16 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - 实现 `HistoricalRangeAdmittedPackageResolver`、durable catalog planner、historical signal/PIT/frozen-HMM provider 和 range-owned artifact adapter；不得调用 package validator/health、普通 Selection repository 或默认 production constructor。
 - 完成 catalog WAITING_INPUT/resume、单 Alpha、原生多 Alpha各一个已完成历史交易日 candidate E2E，并证明两者只写 Phase 1R planning rows/CAS、不会写普通 Selection/Paper/模拟盘/QE 路径。
 - R2 不新建平行表或独立手工 DML。R2-B 发布 candidate artifact v2 和 typed facts，不提前写 day success；R3 在 list transition 完成后复用 R1 `commit_successful_day`，校验 v2 candidate evidence并把 candidate/list/episode/day receipt 一次事务提交。不得用空 list、空 episode、candidate v1 或假成功态绕过该事务边界。
-- R1 尚未执行 migration 中的 `package_version BIGINT` 与真实 StrategyPackage 字符串版本冲突，R2-B 实施必须在首次 DEV apply 前把原 migration 修正为 `TEXT`；这属于尚未应用 schema 声明的纠正，不是对既有数据库做非 additive ALTER，不新增业务表或独立 DML。首次应用后仍只允许 additive migration。
+- R1 尚未执行 migration 中的 `package_version BIGINT` 与真实 StrategyPackage 字符串版本冲突，R2-B 实施必须在首次 DEV apply 前把原 migration 修正为 `TEXT`；这属于尚未应用 schema 声明的纠正，不是对既有数据库做非 additive ALTER，不新增业务表或独立 DML。首次应用后的 schema 演进遵守 §11 的 forward-only 规则；R3 只允许其子设计列明的 day worker/lease 与 terminal PARTIAL 最小 corrective migration。
 
 实施拆分状态：R2-A 只完成前两项，即 computation contracts/core 与 current Selection wrapper parity；R2-B 按子设计实现 admitted package resolver、可恢复 catalog planning/seal、historical PIT/frozen-HMM signal provider、candidate artifact v2 和单/原生多 Alpha 历史 candidate E2E。R2-B 同时必须关闭 Phase 1R 的 `trading.rdagent_signal` 写入和 ST PIT ensure/rebuild，并用 direct tests 证明 current InferenceEngine、Selection、Simulation、Paper 默认路径不变；R2-A 不得以“R2 完成”申报，R2-B 也不得重新引入普通 Selection repository、current readiness、package health、资产二次验证或不存在的 rolling metric provider。
 
 #### R3：列表状态机、executor 与恢复
 
-- 提取 `AdvisoryListTransitionEngine` 和 list builder。
-- batch/run/day orchestration、lease/fencing、resume/cancel。
-- 多 Program、多日、valid empty、partial/failure/retry。
+- 唯一实施级子设计为 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`。
+- 提取 `AdvisoryListTransitionEngine` 和 current/historical adapters；current review/replay 必须逐分支 parity，historical adapter 固定 `PIT_DECISION_THEN_MATURE`。
+- 实现 canonical list-semantics v2、decision-mark-set artifact、day-input v3、strict list/mark/guidance payload、deterministic list builder、execute-until-blocked orchestration、durable worker/lease/fencing、resume/cancel 和 candidate/list/episode/day receipt 原子提交。
+- 完整支持多 Program、多日、valid empty、EXCLUDED/ABSENT/OUTSIDE active observation、停牌/terminal no-quote、recoverable/terminal partial、failure/retry；R3 corrective migration 只纠正 day worker/lease 和 terminal PARTIAL 表达，不增加业务表、审批、角色或二次 package gate。
 
 #### R4：Outcome、summary 与 Phase 1 bridge
 
@@ -1096,7 +1109,9 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - outcome maturity 和 policy hash。
 - T 日 action 对 T+1 实际价格扰动保持不变；最后一日 next-open outcome 未成熟时 day/list 仍完成。
 - CAS containment/tamper/collision/readback。
-- candidate artifact v2 对正 universe、raw zero-score、stage closure 和 no-candidate reason 完整闭合；candidate_input_hash/day_input_hash 无循环。
+- candidate artifact v2 对正 universe、raw zero-score、stage closure 和 no-candidate reason 完整闭合；decision-mark-set 与 Alpha legs 解耦；candidate_input_hash/day_input_hash v3 无循环。
+- historical rank observation 的 EXCLUDED/ABSENT/OUTSIDE synthetic missing rank、raw-zero freeze、current weak-confirmation parity 和 candidate-count-not-a-gate 逐分支验证。
+- strict list summary/rule guidance/episode mark payload、decision-mark-set source closure 和 DAY/RANGE/operation exact upstream-set验证。
 - prohibited import/field/role/approval/package-gate scan。
 
 ### 20.2 L1
@@ -1177,20 +1192,20 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-930 | 禁止调用 `SelectionCenterService.run_packages` 写普通 run |
 | F-931 | shared selection computation 位于中立模块、无 repository/sink 副作用且普通 Selection parity 不变 |
 | F-932 | range-owned candidate artifact v2 CAS 和 valid-empty 日级证据完整 |
-| F-933 | 日行情、ST、行业、股票池和 frozen HMM evidence 严格 PIT |
-| F-934 | T+1 实际价格只进入追加式 execution/outcome，不影响 T 候选、action、list hash 或最后一日完成 |
-| F-935 | Advisory list transition 纯逻辑复用且无第二套算法 |
-| F-936 | 首日空 seed 和前日 list hash chain 防止未来状态泄漏 |
-| F-937 | ENTER/HOLD/EXIT/WATCH、替换配对和 active list 有界 |
+| F-933 | 日行情、ST、行业、股票池、全市场 decision-mark source 和 frozen HMM evidence 严格 PIT且不读取回测/Paper数据 |
+| F-934 | T+1 实际价格只进入追加式 execution/outcome；T decision-mark set闭合 raw/adj/state source，不影响最后一日完成 |
+| F-935 | Advisory list transition 纯逻辑复用且无第二套算法；historical active-rank 分类和 current-compatible synthetic missing rank 完整冻结 |
+| F-936 | 首日空 seed、前日 exact receipt/list hash chain 和 day-input v3 防止未来状态泄漏 |
+| F-937 | ENTER/HOLD/EXIT/WATCH、替换配对、停牌/退出 universe 语义和 active list 有界 |
 | F-938 | valid-no-candidate 仍形成合法日终态和列表 |
 | F-939 | range end 不伪造退出，active episode 使用 mark |
 | F-940 | candidate/episode/list/range 四层 outcome 和 maturity 完整 |
 | F-941 | Phase 1 outcome 时间轴、成本、benchmark 和企业行动复用 |
 | F-942 | rule_default 与模型能力状态不混淆 |
-| F-943 | 独立 additive DB schema、planning checkpoint/seal、自然键、DB invariants、append-only facts 和短事务 |
+| F-943 | 独立 additive DB schema、planning checkpoint/seal、自然键、DB invariants、append-only facts、typed JSON contract 和短事务 |
 | F-944 | legacy replay 数据不自动迁移或冒充 Phase 1R |
-| F-945 | exact artifact refs、CAS readback 和无 latest 扫描 |
-| F-946 | catalog/day 有限 executor、resume/cancel 不形成同步扫描、scheduler 或审批 |
+| F-945 | candidate/mark/day/range/operation exact artifact refs、upstream closure、CAS readback 和无 latest 扫描 |
+| F-946 | catalog/day bounded primitive + execute-until-blocked service、resume/cancel 不形成全局扫描、scheduler 或审批 |
 | F-947 | 新 API 无手工候选/行情、派生 package identity、SQL、production selector 或 package gate 参数 |
 | F-948 | UI 提供完整历史验证体验且不编辑候选/结果 |
 | F-949 | Phase 1 新 lineage 与 formal OOS selector 永久隔离 |
@@ -1199,10 +1214,10 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-952 | stable reason code、后台诊断日志和无敏感信息泄漏 |
 | F-953 | 实施批次禁止 placeholder、mock-only 和同步简化版冒充完成 |
 | F-954 | 数据库操作使用现有 DEV 与显式 `.env` 先验证，不新建测试库替代 DEV；DDL 仅开发/发布执行且无逐次备份门禁 |
-| F-955 | 真实多日单/多 Alpha 正向 E2E、恢复和 exact rerun 可达 |
+| F-955 | 真实多日单/多 Alpha正向 E2E、跨 slice自动推进、停牌/active-rank路径、恢复和 exact rerun 可达 |
 | F-956 | 设计、代码、DDL、DEV、production 和 runtime 状态分开报告 |
 | F-988 | HTTP create 不扫描全范围，catalog planning 可分块 checkpoint、等待、恢复、seal once 和并发 dedup |
-| F-989 | candidate_input_hash 与 day_input_hash 单向闭合，无循环 identity |
+| F-989 | candidate_input_hash、decision-mark-set 和 day_input_hash v3 单向闭合，无循环 identity |
 | F-990 | HMM 禁止 config-only latest/trained_at 猜测，多 Alpha 禁止不存在的 rolling metric provider |
 | F-991 | current InferenceEngine、Selection、Simulation 和 Paper 正向依赖测试属于 R2 必选验收 |
 | F-992 | requirement missing 不伪造空 revision，补齐后同 planning batch 可恢复 |
@@ -1223,35 +1238,35 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 | F-925 | §1、§6.3、§19 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-926 | §7 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-927 | §6-7、§11 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-928 | §11.4、§13 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-929 | §7.1-7.3、§13.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-928 | §11.4、§13 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-929 | §7.1-7.3、§13.3 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
 | F-930 | §8.1、§18 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-931 | §8.1、§19 R2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-932 | §8.3、§12 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-933 | §8.4 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-934 | §8.4、§10.1 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-935 | §9.1、§19 R3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-936 | §7.3、§9.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-937 | §9.2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-938 | §7.3、§9.2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-939 | §9.2、§10.2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-934 | §8.4、§10.1 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-935 | §9.1、§19 R3 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-936 | §7.3、§9.3 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-937 | §9.2 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-938 | §7.3、§9.2 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-939 | §9.2、§10.2 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
 | F-940 | §7.4、§10.2、§11.5 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-941 | §10.2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-942 | §10.3、§15.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-943 | §11、§13.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-943 | §11、§13.3 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
 | F-944 | §11.6、§14.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-945 | §12 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-946 | §13 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-945 | §12 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-946 | §13 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
 | F-947 | §14 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-948 | §15、§20.5 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-949 | §16.1-16.2 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
 | F-950 | §16.3 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-951 | §18、§20.4-20.6 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-952 | §17 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-953 | §19、§20 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-954 | §2.2、§20.4、§23 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-955 | §20.2-20.5 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
-| F-956 | §23、§24 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-951 | §18、§20.4-20.6 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-952 | §17 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-953 | §19、§20 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-954 | §2.2、§20.4、§23 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-955 | §20.2-20.5 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
+| F-956 | §23、§24 | artifact: `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` | design_ready | none |
 | F-988 | §6.1、§7.1/7.5、§13 | `backend/tests/advisory_historical_range/test_r2b_catalog_planner.py` | design_ready | none |
 | F-989 | §8.3、§9.3 | `backend/tests/advisory_historical_range/test_r2b_models.py`; repository contract tests | design_ready | none |
 | F-990 | §8.2/8.4、R2-B 子设计 | `backend/tests/advisory_historical_range/test_r2b_historical_providers.py`; `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
@@ -1280,14 +1295,16 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - additive tables 保留，不做 destructive rollback。
 - 不修改 StrategyPackage、当前 Program binding、Selection、Paper 或模拟盘状态。
 
-### 23.3 Production gates
+### 23.3 Production Gates / 交付状态（非业务门禁）
 
 ```text
 phase1r_r1_code_merge = merged_pr_2481_commit_6d400b40
-dev_ddl_gate = pending_existing_dev_plan_apply_verify_exact_reapply
-production_ddl_gate = pending_until_dev_verified_and_user_authorizes_exact_production_target
-production_frontend_dependency_gate = noop unless implementation adds a declared dependency
-production_backend_dependency_gate = noop unless implementation adds a declared dependency
+phase1r_r1_r2b_dev_schema = applied_verified_exact_reapplied
+r3_design = ready
+r3_source_and_corrective_migration = not_implemented
+production_ddl = not_executed
+production_frontend_dependency = noop unless implementation adds a declared dependency
+production_backend_dependency = noop unless implementation adds a declared dependency
 production_runtime_activation = none
 ```
 
@@ -1319,4 +1336,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1、R2-A 与 R2-B 已完成源码合入；R2-B 已在真实 DEV 集成源码闭包完成可恢复 catalog planning、历史 candidate adapter、单/原生多 Alpha WSL 推理、candidate artifact v2 和跨模块零写入验收。下一阶段固定为 R3：在不改变 R2-B candidate-only 边界的前提下，实现共享列表 transition 接入、逐日有序 executor、candidate/list/episode/day receipt 原子提交和失败恢复。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
+R1、R2-A 与 R2-B 已完成源码合入；R2-B 已在真实 DEV 集成源码闭包完成可恢复 catalog planning、历史 candidate adapter、单/原生多 Alpha WSL 推理、candidate artifact v2 和跨模块零写入验收。R3 详细设计已形成，下一任务固定为按 `advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 实现共享列表 transition 接入、逐日有序 executor、candidate/list/episode/day receipt 原子提交和失败恢复；R3 源码、corrective migration 和 DEV 多日验收仍未完成。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复或隔离证据时不得声明 R3 完成，缺少 R5 UI 证据时不得声明 Phase 1R 完成。
