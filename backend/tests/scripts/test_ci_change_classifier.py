@@ -146,6 +146,24 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert qe_mcp_payload["backend_sessions"] == ["qe_data_contract_backend"]
     assert qe_mcp_payload["unmapped_code_files"] == []
 
+    qe_multi_alpha_p0_2_payload = classifier.classify_changed_files(
+        [
+            "backend/mcp/modules/qe_archive.py",
+            "backend/mcp/tool_manifest.py",
+            "backend/migrations/multi_alpha_p0_2_control_recovery_20260721.sql",
+            "backend/migrations/qe_archive_multi_alpha_p0_2_recovery_20260721.sql",
+            "backend/tests/mcp/test_qe_archive_module.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_multi_alpha_p0_2_payload["classification"] == "targeted_ci_required"
+    assert qe_multi_alpha_p0_2_payload["backend_sessions"] == [
+        "qe_data_contract_backend",
+        "qe_read_backend",
+    ]
+    assert qe_multi_alpha_p0_2_payload["unmapped_code_files"] == []
+
     hmm_payload = classifier.classify_changed_files(
         ["backend/services/hmm_data_source/cache_manager.py"],
         repo_root=tmp_path,
