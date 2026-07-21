@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-789",
-  "closed_at": null,
+  "closed_at": "2026-07-21T03:41:59Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,8 +38,8 @@
   "expected": "Historical completed QE loops resolve an immutable authoritative experiment_id/recorder_id through persisted QE metadata or an explicit compatibility manifest. Multiple recorder directories must never be selected by mtime, directory order, or silent fallback.",
   "first_seen_at": "2026-07-20T06:55:07.383320Z",
   "fix_branch": "bug/BUG-789-hmm-evolution-cannot-resolve-historical-qe-recor-20260720",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1851a52e100c34a973b3c76acd813dc11ab5bf3d",
+  "fixed_at": "2026-07-21T03:44:44.285458Z",
   "github_issue_number": 2505,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2505",
   "last_seen_at": "2026-07-20T06:55:07.383320Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2517",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -67,6 +68,9 @@
     "fingerprint": "dbf7a8e9213daa190198c93e",
     "source_event_id": "FE-20260720-dbf7a8e9213d"
   },
+  "validation_evidence": [
+    "rtk gh pr checks 2517 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
