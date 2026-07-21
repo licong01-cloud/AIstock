@@ -18,6 +18,9 @@ from backend.services.hmm_data_source import (
     BacktestDataSource,
     ArtifactCacheManager,
 )
+from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
+    LEGACY_QE_ARTIFACT_MANIFESTS,
+)
 
 
 class TestIsolationConstraints:
@@ -81,6 +84,22 @@ class TestIsolationConstraints:
         for forbidden_suffix in (".json", ".yaml", ".toml"):
             for allowed in BacktestDataSource.ALLOWED_ARTIFACTS:
                 assert not allowed.endswith(forbidden_suffix)
+
+    def test_legacy_manifest_does_not_expand_artifact_download_whitelist(self):
+        assert LEGACY_QE_ARTIFACT_MANIFESTS
+        for entry in LEGACY_QE_ARTIFACT_MANIFESTS:
+            assert entry.recorder_evidence.workspace_path == "run.log"
+            assert entry.recorder_evidence.terminal_status == "FINISHED"
+            assert {item.artifact_name for item in entry.artifacts} == {
+                "pred.pkl",
+                "label.pkl",
+            }
+            assert all(
+                item.workspace_path.endswith(f"/artifacts/{item.artifact_name}")
+                for item in entry.artifacts
+            )
+
+        assert "run.log" not in BacktestDataSource.ALLOWED_ARTIFACTS
 
     def test_cache_directory_isolation(self, tmp_path):
         """验证缓存目录完全隔离"""
