@@ -2866,12 +2866,14 @@ class WslStrategyPackageInferenceProvider:
         conda_sh: str | None = None,
         conda_env: str | None = None,
         repo_root: Path | str | None = None,
+        safe_artifact_roots: tuple[Path | str, ...] = (),
         timeout_seconds: int = 3600,
     ) -> None:
         self.distro = distro or os.getenv("QLIB_WSL_DISTRO") or "Ubuntu"
         self.conda_sh = conda_sh or os.getenv("QLIB_WSL_CONDA_SH") or "~/miniconda3/etc/profile.d/conda.sh"
         self.conda_env = conda_env or os.getenv("QLIB_WSL_CONDA_ENV") or "rdagent-gpu"
         self.repo_root = Path(repo_root or Path.cwd()).resolve()
+        self.safe_artifact_roots = tuple(Path(root).resolve(strict=False) for root in safe_artifact_roots)
         self.timeout_seconds = timeout_seconds
 
     def run(
@@ -2973,6 +2975,13 @@ class WslStrategyPackageInferenceProvider:
         exports = ["PYTHONIOENCODING=utf-8", "PYTHONDONTWRITEBYTECODE=1", "AISTOCK_STRICT_INFERENCE=1"]
         if historical_read_only:
             exports.append("PGOPTIONS='-c default_transaction_read_only=on'")
+        if self.safe_artifact_roots:
+            translated_roots = ":".join(
+                win_to_wsl_path(str(root)) for root in self.safe_artifact_roots
+            )
+            exports.append(
+                f"AISTOCK_STRATEGY_PACKAGE_RUNTIME_ROOTS={self._quote(translated_roots)}"
+            )
         for key in keys:
             value = os.getenv(key)
             if value is not None:

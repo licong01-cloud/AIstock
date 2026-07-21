@@ -337,7 +337,10 @@ def build_historical_strategy_package_signal_preparation(
         cache_root=runtime_root,
         asset_store=package_asset_store,
     )
-    inference_provider = wsl_inference_provider or WslStrategyPackageInferenceProvider(repo_root=repository_root)
+    inference_provider = wsl_inference_provider or WslStrategyPackageInferenceProvider(
+        repo_root=repository_root,
+        safe_artifact_roots=(runtime_root,),
+    )
     raw_artifact_preparer = StrategyPackageSelectionArtifactService(
         package_repository=package_reader,
         artifact_repository=_ForbiddenSelectionArtifactRepository(),
