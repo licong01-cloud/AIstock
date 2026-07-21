@@ -939,6 +939,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-037` | MiniQMT broker trade restart replay 以 exact identity/time 合并 durable+snapshot facts，并 exactly-once 恢复 BUY/SELL cash、lot、child、algo |
 | `F-038` | MiniQMT parent outcome、child、trade 与 daily-run/batch/intent projection 可重建；stale/conflict 只读可见且自动恢复，不自动 repair |
 | `F-039` | runtime trade date、broker raw date/time 与 TCA UTC 规范化 authority 分离；numeric/compact/time-only/ISO 不歧义猜测 |
+| `F-040` | MiniQMT Phase 1 physical generation 由同一 `data_session_key` 的 subscriber process lifecycle 单调拥有；last-lease release、failed prepare、rebuild、shutdown 后不得复用已分配或 fenced generation，迟到 callback 永久拒绝且 successor bootstrap/callback 继续由同一 single writer 接受 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -983,6 +984,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-037` | §4.4、§5.9、§9 P0-F；`MiniQMTExecutionRuntime.recover/record_trade_event`；`MiniQMTOmsLedger` | backend/tests/miniqmt_execution_runtime/test_runtime.py；BUY/SELL replay twice、reserve release、T+1 lot、partial snapshot union、settlement retry and conflict negatives | implemented_verified | explicitly approved production-state separation：production broker replay observation remains separate |
 | `F-038` | §7、§9 P0-F；client recovery projection、scheduler parent/child carriers、`SimulationRuntimeOpsService`、`SimulationPlatformObservability` | backend/tests/simulation_runtime/test_ops_api.py；backend/tests/simulation_runtime/test_lifecycle_scheduler.py；parent/child/trade projection stale/conflict and auto-clear | implemented_verified | explicitly approved production-state separation：diagnostics readback after merge/restart remains separate |
 | `F-039` | §5.9、§9 P0-F；runtime broker time parsers；`tca_capture.py` | backend/tests/simulation_runtime/test_tca_capture.py；backend/tests/miniqmt_execution_runtime/test_runtime.py；epoch/compact/time-only/ISO and mismatch matrix | implemented_verified | none |
+| `F-040` | §4.2 MiniQMT quote ownership、§4.4 tick model、§5.9 fail-loud health；`RealtimeQuoteSubscriber._next_phase_one_generation_locked`、`QuoteIngressWorker` active/fenced diagnostics | backend/tests/infra/test_realtime_quote_subscriber_leases.py last-release/reacquire、failed candidate、late callback race、multi-session isolation；backend/tests/miniqmt_execution_runtime/test_quote_ingress.py same-supervisor reacquire/normalized projection/active-failure auto-clear；backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py factory close/later runtime；backend/tests/simulation_runtime/test_lifecycle_scheduler.py morning/lunch/afternoon quote-window lifecycle | implemented_verified | source PR/CI/merge 与用户重启后的正常交易日 runtime observation 分离；不表示生产已激活 |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
@@ -1042,6 +1044,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-050` | `F-033,024` | BUG-795 已统一全部注册分钟算法的 non-final board-lot/final exact residual 语义；Base child 默认拒绝 residual，TWAP/POV/V25 只在可证明 final 时显式启用，V24 等继承统一默认；ledger/StepFill authority 保持不变 | BUG-795 / issue #2530；Trading Core TWAP/VWAP/AC/POV/SBB 300-share SELL matrix、50-share final residual、V24/V25 non-final/final exact direct test、V25.1 helper direct test，以及 LocalSIM 300-share TWAP direct test | IMPLEMENTED_VERIFIED | 更新本地 gate 与 PR/CI；合入并由用户重启后在正常交易日只读核验，不执行 DDL/DML/config/broker call |
 | `SIM-P-051` | `F-030,031,013,014,015,021,022,024` | BUG-796 将 LocalSIM economic commit 与 mark/NAV projection 解耦：明确 transient mark gap 先提交 order/fill/event/cash/state/position hashes，run 保持 `INTRADAY_RUNNING + INTRADAY_VALUATION_PENDING`；next cadence 在推进新 minute event 前必须重新证明 exact economic receipt/state/outbox 与 Paper economic facts，闭合后才恢复同 outbox/generation，mark 可用后生成 exact completion/account/performance receipt；economic/projection/readback 失败均保留显式 retry/terminal evidence且不重复经济事实 | BUG-796 / issue #2531；healthy fill + missing passive holding、restart pending/recovery、same generation/outbox、pending economic readback fault injection、account drift conflict、transient-only classifier、projection connection retry、projected readback recovery、active/stale diagnostics direct tests | IMPLEMENTED_VERIFIED | 更新修复 PR 并检查 CI；合入后由用户重启并补正常交易日只读 evidence；DDL/DML/config/broker 均为 noop；BUG-795 child sizing 已合入，BUG-797 frozen policy 仍独立追踪 |
 | `SIM-P-052` | `F-004,005,024` | BUG-797 删除 scheduler release→portfolio 与 broker manifest/flat-policy fallback；LocalSIM run context 验证 persisted release snapshot exact schema/normalized hash/ID-SHA，binding admission 仍只检查 package lifecycle；Paper daemon 显式 wiring；历史 incomplete release typed fail/retire | BUG-797 / issue #2532；single/multi/model-code required/optional binding、scheduler release-over-portfolio、incomplete release no-fallback、release 顶层 ID/SHA 与 snapshot 冲突、broker missing/empty/hash/alias、daemon E2E direct tests | IMPLEMENTED_VERIFIED | 更新修复 PR 并检查 CI；合入后由用户重启并只读核对实际 release policy reason；DDL/DML/config/broker 均为 noop；BUG-795/796 已合入 |
+| `SIM-P-053` | `F-016,017,020,021,022,024,040` | BUG-806 将 Phase 1 physical generation authority 从可删除 active feed 提升为 subscriber-owned per-session high-watermark；candidate 建立前预留 generation，failed prepare/last release/rebuild/shutdown 均保留 fenced history；successor generation 严格递增，旧 callback 继续 fail loud，多个 logical consumers 与 single writer 语义不变 | BUG-806 / issue #2566；subscriber last-release/reacquire、failed candidate non-reuse、late callback race、multi-session isolation；same-supervisor raw/normalized capture；factory close/later runtime；scheduler morning→lunch release→afternoon reacquire；worker active/fenced/current diagnostics 与 recovery auto-clear direct tests | IMPLEMENTED_VERIFIED | `source_merge=pending_pr`；`production_ddl=noop`；`production_config=noop`；`restart=pending_user_after_merge`；`binding_migration=noop`；`runtime_observation=pending_normal_trading_day`。合入并由用户重启后，按只读 diagnostics 核对上午启动、午休释放、下午 generation successor/bootstrap/callback；本 BUG 不调用 broker |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -1224,6 +1227,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_business_semantic_drift` | pass | Selection/Target、策略信号、方向数量、算法行为、数据源、T+1、涨跌停、停牌和 broker route 不变；new binding 只核对已冻结 runtime policy component，不复核 package alpha/model/assets；single/multi/model-code-required/optional 共享同一路径 |
 | `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、execution gate 或 package 二次完整性检查；历史 incomplete release 的 typed refusal 是既有 immutable release contract，不要求补数据或人工解锁 |
 | `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG/GitHub scope；未执行 DDL/DML/config、未调用生产 broker、未启停或重启服务；source PR/CI/merge 与用户重启后的 runtime readback 分开记录 |
+
+`BUG-806` MiniQMT quote generation lifecycle 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass | generation high-watermark 由 subscriber 按 session/process lifecycle 持有，并覆盖 successful/failed prepare、last release、partial release、rebuild、shutdown、same-supervisor reacquire、factory recreate、scheduler 午休恢复和迟到 callback；不是清空 worker fence、永久订阅或 mock-only 绕过 |
+| `no_silent_error` | pass | 旧 generation 仍以 `ADAPTIVE_IS_QUOTE_ORDERING_REJECTED` fail loud；capture/prepare/publish 显式 ack 规则不变；health 同时呈现 current/active/preparing/fenced/high-watermark generation，worker 保留 last failure 并仅在成功 successor publication 后清除 active failure |
+| `no_business_semantic_drift` | pass | 多 logical consumer 共用一个 physical feed/single writer、symbol union、bootstrap all-or-nothing、watchdog bounded rebuild、B0 controller registry、Selection/策略信号/方向数量/执行算法/LocalSIM 和唯一 event-loop broker route均未改变；未引入 LEGACY_B0、普通 quote、minute/compiler fallback |
+| `no_unrequested_gate_or_approval` | pass | 修复仅恢复自动 lifecycle successor；未新增 RBAC、审批、人工 acknowledge、人工恢复、业务开关或 runtime gate，合法下午/失败重试/次日 runtime 均沿既有 scheduler tick 自动继续 |
+| `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；`production_ddl_gate=noop`、前后端 dependency gate 均为 `noop`；未执行 DDL/DML/config、未调用 broker、未启停或重启服务。source PR/CI/merge 与用户重启后的正常交易日只读观察分开记录 |
 
 ## 17. Definition of Done
 

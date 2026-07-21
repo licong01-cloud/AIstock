@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 import backend.infra.realtime_quote_subscriber as subscriber_module
+from backend.execution_algos.adaptive_is.contracts import QuoteSourceMethod
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError, QuoteContractReasonCode
 from backend.infra.realtime_quote_subscriber import (
     PhaseOneLeaseCallbacks,
@@ -144,16 +145,25 @@ def test_same_feed_lease_reuses_physical_subscription_then_rebuilds_and_fences_o
 
     assert len(fake_xtdata.subscribe_calls) == 1
     assert lease_two.generation == lease_one.generation
-    assert subscriber.release_phase_one_lease(data_session_key="session-same-feed", lease_id=lease_two.lease_id, max_symbols=4)
+    assert subscriber.release_phase_one_lease(
+        data_session_key="session-same-feed", lease_id=lease_two.lease_id, max_symbols=4
+    )
     assert second.fenced == [lease_two.generation]
-    assert subscriber.release_phase_one_lease(data_session_key="session-same-feed", lease_id="missing", max_symbols=4) is False
-    rebuilt_generation = subscriber.rebuild_phase_one_leases(data_session_key="session-same-feed", owner="scheduler-A", max_symbols=4)
+    assert (
+        subscriber.release_phase_one_lease(data_session_key="session-same-feed", lease_id="missing", max_symbols=4)
+        is False
+    )
+    rebuilt_generation = subscriber.rebuild_phase_one_leases(
+        data_session_key="session-same-feed", owner="scheduler-A", max_symbols=4
+    )
     assert rebuilt_generation == lease_one.generation + 1
     subscriber.shutdown_phase_one_leases(data_session_key="session-same-feed")
     assert subscriber.phase_one_health(data_session_key="session-same-feed")["status"] == "INACTIVE"
 
 
-def test_phase_one_replacement_failure_preserves_the_old_feed_and_owner_conflict_is_loud(fake_xtdata: _FakeXtData) -> None:
+def test_phase_one_replacement_failure_preserves_the_old_feed_and_owner_conflict_is_loud(
+    fake_xtdata: _FakeXtData,
+) -> None:
     subscriber = RealtimeQuoteSubscriber()
     first = _Recorder()
     subscriber.acquire_phase_one_lease(
@@ -182,6 +192,20 @@ def test_phase_one_replacement_failure_preserves_the_old_feed_and_owner_conflict
     assert after["generation"] == before["generation"]
     assert after["symbols"] == before["symbols"]
     assert fake_xtdata.unsubscribe_calls == [102]
+
+    retry = subscriber.acquire_phase_one_lease(
+        data_session_key="session-A",
+        owner="scheduler-A",
+        consumer_id="consumer-two-retry",
+        symbols=["000002.SZ"],
+        callbacks=_Recorder().callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+    assert retry.generation == before["generation"] + 2
+    retry_health = subscriber.phase_one_health(data_session_key="session-A")
+    assert retry_health["fenced_generation"] == before["generation"] + 1
+    assert retry_health["generation_high_watermark"] == retry.generation
 
     with pytest.raises(QuoteContractError) as owner_exc:
         subscriber.acquire_phase_one_lease(
@@ -214,7 +238,9 @@ def test_phase_one_replacement_failure_preserves_the_old_feed_and_owner_conflict
     subscriber.shutdown_phase_one_leases(data_session_key="session-A")
 
 
-def test_stale_generation_callback_is_fenced_after_successful_replacement(fake_xtdata: _FakeXtData, caplog: pytest.LogCaptureFixture) -> None:
+def test_stale_generation_callback_is_fenced_after_successful_replacement(
+    fake_xtdata: _FakeXtData, caplog: pytest.LogCaptureFixture
+) -> None:
     subscriber = RealtimeQuoteSubscriber()
     first = _Recorder()
     subscriber.acquire_phase_one_lease(
@@ -239,8 +265,173 @@ def test_stale_generation_callback_is_fenced_after_successful_replacement(fake_x
     fake_xtdata.emit(101, {"000001.SZ": {"lastPrice": 9.0}})
 
     assert any("STALE_GENERATION" in record.message for record in caplog.records)
-    assert all(delivery.generation != 1 or delivery.source_method.value == "BOOTSTRAP_FULL_TICK" for delivery in first.deliveries)
+    assert all(
+        delivery.generation != 1 or delivery.source_method.value == "BOOTSTRAP_FULL_TICK"
+        for delivery in first.deliveries
+    )
     subscriber.shutdown_phase_one_leases(data_session_key="session-A")
+
+
+def test_last_lease_release_reacquire_advances_generation_and_keeps_old_callback_fenced(
+    fake_xtdata: _FakeXtData,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    subscriber = RealtimeQuoteSubscriber()
+    first = _Recorder()
+    first_lease = subscriber.acquire_phase_one_lease(
+        data_session_key="session-release-reacquire",
+        owner="scheduler-A",
+        consumer_id="morning-consumer",
+        symbols=["000001.SZ"],
+        callbacks=first.callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+    first_sequence = fake_xtdata.subscribe_calls[-1]["sequence"]
+
+    assert subscriber.release_phase_one_lease(
+        data_session_key="session-release-reacquire",
+        lease_id=first_lease.lease_id,
+        max_symbols=4,
+    )
+    released_health = subscriber.phase_one_health(data_session_key="session-release-reacquire")
+    assert released_health["current_generation"] is None
+    assert released_health["active_generation"] is None
+    assert released_health["fenced_generation"] == first_lease.generation
+    assert released_health["generation_high_watermark"] == first_lease.generation
+
+    afternoon = _Recorder()
+    afternoon_lease = subscriber.acquire_phase_one_lease(
+        data_session_key="session-release-reacquire",
+        owner="scheduler-A",
+        consumer_id="afternoon-consumer",
+        symbols=["000001.SZ"],
+        callbacks=afternoon.callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+
+    assert afternoon_lease.generation > first_lease.generation
+    active_health = subscriber.phase_one_health(data_session_key="session-release-reacquire")
+    assert active_health["current_generation"] == afternoon_lease.generation
+    assert active_health["active_generation"] == afternoon_lease.generation
+    assert active_health["fenced_generation"] == first_lease.generation
+    assert afternoon.deliveries[-1].generation == afternoon_lease.generation
+    assert afternoon.deliveries[-1].source_method == QuoteSourceMethod.BOOTSTRAP_FULL_TICK
+    delivery_count = len(afternoon.deliveries)
+
+    fake_xtdata.emit(first_sequence, {"000001.SZ": {"lastPrice": 9.0, "time": "13000000"}})
+
+    assert len(afternoon.deliveries) == delivery_count
+    assert any("STALE_GENERATION" in record.message for record in caplog.records)
+    subscriber.shutdown_phase_one_leases(data_session_key="session-release-reacquire")
+
+
+def test_generation_history_isolated_per_data_session_key(fake_xtdata: _FakeXtData) -> None:
+    subscriber = RealtimeQuoteSubscriber()
+    session_a = subscriber.acquire_phase_one_lease(
+        data_session_key="session-generation-A",
+        owner="scheduler-A",
+        consumer_id="consumer-A1",
+        symbols=["000001.SZ"],
+        callbacks=_Recorder().callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+    assert subscriber.release_phase_one_lease(
+        data_session_key="session-generation-A",
+        lease_id=session_a.lease_id,
+        max_symbols=4,
+    )
+    session_a_reacquired = subscriber.acquire_phase_one_lease(
+        data_session_key="session-generation-A",
+        owner="scheduler-A",
+        consumer_id="consumer-A2",
+        symbols=["000001.SZ"],
+        callbacks=_Recorder().callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+    session_b = subscriber.acquire_phase_one_lease(
+        data_session_key="session-generation-B",
+        owner="scheduler-A",
+        consumer_id="consumer-B1",
+        symbols=["000002.SZ"],
+        callbacks=_Recorder().callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+
+    assert session_a_reacquired.generation == 2
+    assert session_b.generation == 1
+    subscriber.shutdown_phase_one_leases()
+
+
+def test_last_release_and_reacquire_are_serialized_while_late_callback_stays_fenced(
+    fake_xtdata: _FakeXtData,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    subscriber = RealtimeQuoteSubscriber()
+    morning = subscriber.acquire_phase_one_lease(
+        data_session_key="session-last-release-race",
+        owner="scheduler-A",
+        consumer_id="morning",
+        symbols=["000001.SZ"],
+        callbacks=_Recorder().callbacks(),
+        bootstrap_fetcher=_bootstrap,
+        max_symbols=4,
+    )
+    morning_sequence = fake_xtdata.subscribe_calls[-1]["sequence"]
+    unsubscribe_started = threading.Event()
+    allow_unsubscribe = threading.Event()
+    original_unsubscribe = fake_xtdata.unsubscribe_quote
+
+    def blocking_unsubscribe(sequence: int) -> None:
+        unsubscribe_started.set()
+        assert allow_unsubscribe.wait(timeout=2)
+        original_unsubscribe(sequence)
+
+    fake_xtdata.unsubscribe_quote = blocking_unsubscribe  # type: ignore[method-assign]
+    released: list[bool] = []
+    afternoon: list[object] = []
+    release_thread = threading.Thread(
+        target=lambda: released.append(
+            subscriber.release_phase_one_lease(
+                data_session_key="session-last-release-race",
+                lease_id=morning.lease_id,
+                max_symbols=4,
+            )
+        )
+    )
+    reacquire_thread = threading.Thread(
+        target=lambda: afternoon.append(
+            subscriber.acquire_phase_one_lease(
+                data_session_key="session-last-release-race",
+                owner="scheduler-A",
+                consumer_id="afternoon",
+                symbols=["000001.SZ"],
+                callbacks=_Recorder().callbacks(),
+                bootstrap_fetcher=_bootstrap,
+                max_symbols=4,
+            )
+        )
+    )
+
+    release_thread.start()
+    assert unsubscribe_started.wait(timeout=2)
+    reacquire_thread.start()
+    assert reacquire_thread.is_alive()
+    fake_xtdata.emit(morning_sequence, {"000001.SZ": {"lastPrice": 9.0, "time": "13000000"}})
+    allow_unsubscribe.set()
+    release_thread.join(timeout=2)
+    reacquire_thread.join(timeout=2)
+
+    assert released == [True]
+    assert len(afternoon) == 1
+    assert afternoon[0].generation > morning.generation  # type: ignore[union-attr]
+    fake_xtdata.emit(morning_sequence, {"000001.SZ": {"lastPrice": 9.1, "time": "13000100"}})
+    assert sum("STALE_GENERATION" in record.message for record in caplog.records) >= 2
+    subscriber.shutdown_phase_one_leases(data_session_key="session-last-release-race")
 
 
 def test_phase_one_capacity_rejects_only_the_new_union_and_keeps_existing_feed(fake_xtdata: _FakeXtData) -> None:

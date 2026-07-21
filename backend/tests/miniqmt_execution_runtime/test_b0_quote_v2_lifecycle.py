@@ -26,11 +26,14 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
 from backend.services.miniqmt_execution_runtime.quote_ingress import (
     PhaseOneQuoteProjectionSink,
     PhaseOneRawQuoteSnapshotStore,
+    QuoteIngressSupervisor,
 )
+from backend.infra.realtime_quote_subscriber import RealtimeQuoteSubscriber
+import backend.infra.realtime_quote_subscriber as subscriber_module
 from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame
 
 from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
-from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _projection_context
+from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _FakeXtData, _payload, _projection_context
 
 
 class _LifecycleSupervisor:
@@ -163,11 +166,7 @@ def test_lifecycle_without_observation_persists_runtime_wait_not_quote_less_acti
     second = controller.lifecycle_tick(now_utc=CLOCK_AT)
 
     events = repository.list_events("runtime-p1e", include_archived=True)
-    waiting = [
-        event
-        for event in events
-        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
-    ]
+    waiting = [event for event in events if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"]
     assert len(waiting) == 1
     assert waiting[0].event_type.value == "TIMER"
     assert waiting[0].source == "quote_ingress"
@@ -214,9 +213,7 @@ def test_quote_wait_recovery_rejects_tampered_durable_fingerprint() -> None:
         if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
     )
     wait_event = events[wait_index]
-    events[wait_index] = wait_event.model_copy(
-        update={"payload": {**wait_event.payload, "wait_fingerprint": "0" * 64}}
-    )
+    events[wait_index] = wait_event.model_copy(update={"payload": {**wait_event.payload, "wait_fingerprint": "0" * 64}})
 
     with pytest.raises(QuoteContractError) as exc_info:
         B0QuoteV2Controller(
@@ -261,6 +258,48 @@ def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_in
     assert supervisor.leases == {}
     assert supervisor.sinks == {}
     assert released_contexts == [runtime.config.runtime_id]
+
+
+def test_factory_close_then_later_runtime_reacquires_quote_without_registry_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_xtdata = _FakeXtData()
+    monkeypatch.setattr(subscriber_module, "_load_xtdata", lambda: fake_xtdata)
+    source, runtime, _gateway, _repository = _runtime_controller()
+    supervisor = QuoteIngressSupervisor(
+        subscriber=RealtimeQuoteSubscriber(),
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:lifecycle-reacquire",
+        owner="simulation-scheduler",
+        bootstrap_fetcher=lambda symbols: {symbol: _payload(10.0) for symbol in symbols},
+        normalized_store=source.normalized_store,
+        context_store=source.context_store,
+    )
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:lifecycle-reacquire",
+    )
+    morning = factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+    morning_generation = supervisor.health()["subscription"]["generation"]
+
+    morning.close()
+
+    _second_source, afternoon_runtime, _second_gateway, _second_repository = _runtime_controller()
+    afternoon_runtime.config = afternoon_runtime.config.model_copy(update={"runtime_id": "runtime-p1e-afternoon"})
+    afternoon = factory.create(
+        runtime=afternoon_runtime,
+        assignments=source.assignments,
+        symbols=tuple(source.symbols),
+    )
+
+    health = supervisor.health()
+    assert factory.get("runtime-p1e") is None
+    assert factory.get("runtime-p1e-afternoon") is afternoon
+    assert factory.health()["controller_count"] == 1
+    assert health["subscription"]["generation"] > morning_generation
+    assert health["writer"]["ordering_rejected_count"] == 0
+    supervisor.shutdown()
 
 
 def test_runtime_leases_share_physical_feed_but_isolate_coordinator_and_symbol_failure() -> None:

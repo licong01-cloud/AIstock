@@ -21,7 +21,12 @@ from backend.execution_algos.adaptive_is.contracts import (
     TradabilitySnapshot,
     TradabilityState,
 )
-from backend.execution_algos.adaptive_is.reasons import QuoteContractError, QuoteContractReasonCode, QuoteContractStage
+from backend.execution_algos.adaptive_is.reasons import (
+    QuoteContractError,
+    QuoteContractReasonCode,
+    QuoteContractStage,
+    quote_contract_error,
+)
 from backend.infra.realtime_quote_subscriber import PhaseOneQuoteDelivery, RealtimeQuoteSubscriber
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngressRuntimeConfig
 from backend.services.miniqmt_execution_runtime.quote_eligibility import (
@@ -132,7 +137,14 @@ def _projection_context() -> QuoteEvaluationContext:
             "quote_contract": {
                 "schema_version": "miniqmt_quote_contract_policy_v2",
                 "control_revision": "B0_QUOTE_V2",
-                "required_capabilities": ["CALENDAR", "DEPTH_UNIT_SHARES", "EXCHANGE_TIMESTAMP", "FIVE_LEVEL_DEPTH", "RAW_PRICE_BASIS", "TRADABILITY"],
+                "required_capabilities": [
+                    "CALENDAR",
+                    "DEPTH_UNIT_SHARES",
+                    "EXCHANGE_TIMESTAMP",
+                    "FIVE_LEVEL_DEPTH",
+                    "RAW_PRICE_BASIS",
+                    "TRADABILITY",
+                ],
                 "max_receive_age_ms": 1000,
                 "max_source_lag_ms": 1000,
                 "max_exchange_age_ms": 1000,
@@ -149,26 +161,64 @@ def _projection_context() -> QuoteEvaluationContext:
         snapshot_set_id="ingress-calendar-set",
         snapshot_by_market={
             market: CalendarSnapshot(
-                calendar_id=f"ingress-{market.value}", market=market, trade_date=trade_date, timezone="Asia/Shanghai",
-                session_segments=segments, effective_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), source_version="checksum-v1:schedule-v1",
+                calendar_id=f"ingress-{market.value}",
+                market=market,
+                trade_date=trade_date,
+                timezone="Asia/Shanghai",
+                session_segments=segments,
+                effective_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+                source_version="checksum-v1:schedule-v1",
             )
             for market in MarketCode
         },
     )
     clock = build_execution_clock_event(
-        calendar_snapshot_set=calendar_set, clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
-        clock_monotonic_ns=2_000_000_000, clock_domain_id="test-clock", source="test",
+        calendar_snapshot_set=calendar_set,
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=2_000_000_000,
+        clock_domain_id="test-clock",
+        source="test",
     )
     tradability = TradabilitySnapshot(
-        schema_version="adaptive_is_tradability_snapshot_v1", tradability_id="ingress-tradability", symbol="000001.SZ", market=MarketCode.SZ,
-        board="MAIN", trade_date=trade_date, price_basis=PriceBasis.RAW_CNY_PER_SHARE, pre_close=Decimal("10"),
-        limit_up=Decimal("11"), limit_down=Decimal("9"), price_tick=Decimal("0.01"), lot_size=100,
-        is_suspended=False, suspension_source="market.suspend_d", security_status="LISTED", openint_status=None,
-        observed_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), source="authority", source_version="authority-v1", state=TradabilityState.TRADABLE,
+        schema_version="adaptive_is_tradability_snapshot_v1",
+        tradability_id="ingress-tradability",
+        symbol="000001.SZ",
+        market=MarketCode.SZ,
+        board="MAIN",
+        trade_date=trade_date,
+        price_basis=PriceBasis.RAW_CNY_PER_SHARE,
+        pre_close=Decimal("10"),
+        limit_up=Decimal("11"),
+        limit_down=Decimal("9"),
+        price_tick=Decimal("0.01"),
+        lot_size=100,
+        is_suspended=False,
+        suspension_source="market.suspend_d",
+        security_status="LISTED",
+        openint_status=None,
+        observed_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        source="authority",
+        source_version="authority-v1",
+        state=TradabilityState.TRADABLE,
     )
     return QuoteEvaluationContext(
-        calendar_snapshot_set=calendar_set, clock=clock, continuity_generation=1, continuity_valid=True, policy=policy,
-        symbols={"000001.SZ": QuoteSymbolContext(symbol="000001.SZ", board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=tradability, product_type="EQUITY", product_type_proven_equity=True, authority_source_version="authority-v1")},
+        calendar_snapshot_set=calendar_set,
+        clock=clock,
+        continuity_generation=1,
+        continuity_valid=True,
+        policy=policy,
+        symbols={
+            "000001.SZ": QuoteSymbolContext(
+                symbol="000001.SZ",
+                board="MAIN",
+                depth_quantity_unit=DepthQuantityUnit.SHARES,
+                unit_evidence_version="unit-v1",
+                tradability=tradability,
+                product_type="EQUITY",
+                product_type_proven_equity=True,
+                authority_source_version="authority-v1",
+            )
+        },
     )
 
 
@@ -183,13 +233,23 @@ def test_projection_sink_is_single_writer_and_bounded_with_raw_normalized_admiss
     sink.on_generation_published(2)
     frame = capture_raw_quote_frame(
         {
-            "time": "09300000", "lastPrice": "10.00", "preClose": "10.00", "openint": "OPEN",
-            "bidPrice": ["9.99", "9.98", None, None, None], "bidVol": [100, 100, 0, 0, 0],
-            "askPrice": ["10.01", "10.02", None, None, None], "askVol": [100, 100, 0, 0, 0],
+            "time": "09300000",
+            "lastPrice": "10.00",
+            "preClose": "10.00",
+            "openint": "OPEN",
+            "bidPrice": ["9.99", "9.98", None, None, None],
+            "bidVol": [100, 100, 0, 0, 0],
+            "askPrice": ["10.01", "10.02", None, None, None],
+            "askVol": [100, 100, 0, 0, 0],
         },
-        callback_symbol="000001.SZ", source_session_id="projection-session", ingress_generation=2, ingress_sequence=1,
-        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), received_monotonic_ns=1_999_500_000,
-        clock_domain_id="test-clock", source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+        callback_symbol="000001.SZ",
+        source_session_id="projection-session",
+        ingress_generation=2,
+        ingress_sequence=1,
+        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        received_monotonic_ns=1_999_500_000,
+        clock_domain_id="test-clock",
+        source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
     )
     sink.project(frame)
 
@@ -220,13 +280,23 @@ def test_projection_observation_failure_is_loud_without_rewriting_normalized_quo
     sink.on_generation_published(2)
     frame = capture_raw_quote_frame(
         {
-            "time": "09300000", "lastPrice": "10.00", "preClose": "10.00", "openint": "OPEN",
-            "bidPrice": ["9.99", "9.98", None, None, None], "bidVol": [100, 100, 0, 0, 0],
-            "askPrice": ["10.01", "10.02", None, None, None], "askVol": [100, 100, 0, 0, 0],
+            "time": "09300000",
+            "lastPrice": "10.00",
+            "preClose": "10.00",
+            "openint": "OPEN",
+            "bidPrice": ["9.99", "9.98", None, None, None],
+            "bidVol": [100, 100, 0, 0, 0],
+            "askPrice": ["10.01", "10.02", None, None, None],
+            "askVol": [100, 100, 0, 0, 0],
         },
-        callback_symbol="000001.SZ", source_session_id="projection-session", ingress_generation=2, ingress_sequence=1,
-        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), received_monotonic_ns=1_999_500_000,
-        clock_domain_id="test-clock", source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+        callback_symbol="000001.SZ",
+        source_session_id="projection-session",
+        ingress_generation=2,
+        ingress_sequence=1,
+        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        received_monotonic_ns=1_999_500_000,
+        clock_domain_id="test-clock",
+        source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
     )
     sink.project(frame)
 
@@ -444,6 +514,31 @@ def test_worker_reaches_restart_cap_then_a_later_lifecycle_epoch_can_retry() -> 
     worker.shutdown()
 
 
+def test_successful_successor_generation_clears_active_failure_but_keeps_diagnostics_history() -> None:
+    worker = QuoteIngressWorker(
+        consumer_id="active-failure-recovery-test",
+        config=_config(),
+        frame_sink=lambda _frame: None,
+    )
+    worker.admit_symbols(("000001.SZ",))
+    failure = quote_contract_error(
+        QuoteContractReasonCode.CONSUMER_FAILURE,
+        "writer failed before a bounded generation rebuild",
+        context={"consumer_id": "active-failure-recovery-test", "generation": 1},
+    )
+    worker.record_loud_failure(failure)
+    assert worker.health()["active_failure"]["reason_code"] == QuoteContractReasonCode.CONSUMER_FAILURE.value
+
+    assert worker.on_generation_published("SIM:active-failure-recovery", 2) is True
+
+    health = worker.health()
+    assert health["active_failure"] is None
+    assert health["last_failure"]["reason_code"] == QuoteContractReasonCode.CONSUMER_FAILURE.value
+    assert health["active_generation"] == 2
+    assert health["fenced_generation"] == -1
+    worker.shutdown()
+
+
 def test_loud_rate_limit_preserves_failure_first_last_and_occurrence_count() -> None:
     failures: list[QuoteContractError] = []
     worker = QuoteIngressWorker(
@@ -499,15 +594,53 @@ def test_supervisor_is_default_off_and_release_isolated_from_the_subscriber(fake
     supervisor.shutdown()
 
 
+def test_supervisor_reacquires_after_last_release_without_reusing_fenced_generation(
+    fake_xtdata: _FakeXtData,
+) -> None:
+    def full_depth_payload() -> dict[str, object]:
+        return {
+            **_payload(10.0),
+            "bidPrice": [9.99, 9.98, None, None, None],
+            "askPrice": [10.01, 10.02, None, None, None],
+            "bidVol": [100, 100, 0, 0, 0],
+            "askVol": [100, 100, 0, 0, 0],
+        }
+
+    context_store = QuoteEvaluationContextStore()
+    context_store.publish(_projection_context())
+    subscriber = RealtimeQuoteSubscriber()
+    supervisor = QuoteIngressSupervisor(
+        subscriber=subscriber,
+        config=_config(),
+        data_session_key="SIM:lunch-reacquire",
+        owner="simulation-scheduler",
+        bootstrap_fetcher=lambda symbols: {symbol: full_depth_payload() for symbol in symbols},
+        context_store=context_store,
+    )
+    morning = supervisor.acquire_consumer(consumer_id="morning", symbols=["000001.SZ"])
+    assert supervisor.release_consumer(consumer_id="morning") is True
+
+    afternoon = supervisor.acquire_consumer(consumer_id="afternoon", symbols=["000001.SZ"])
+
+    assert afternoon.generation > morning.generation
+    _wait_until(lambda: supervisor.snapshot_store.snapshot().get("000001.SZ") is not None)
+    _wait_until(lambda: supervisor.normalized_store.get("000001.SZ") is not None)
+    health = supervisor.health()
+    assert health["writer"]["generation"] == afternoon.generation
+    assert health["writer"]["active_generation"] == afternoon.generation
+    assert health["writer"]["fenced_generation"] == morning.generation
+    assert health["writer"]["active_failure"] is None
+    assert health["writer"]["ordering_rejected_count"] == 0
+    supervisor.shutdown()
+
+
 def test_invalid_bootstrap_raw_frame_is_loud_and_never_published(fake_xtdata: _FakeXtData) -> None:
     supervisor = QuoteIngressSupervisor(
         subscriber=RealtimeQuoteSubscriber(),
         config=_config(),
         data_session_key="SIM:invalid-bootstrap",
         owner="scheduler-owner-A",
-        bootstrap_fetcher=lambda symbols: {
-            symbol: {"time": object(), "lastPrice": object()} for symbol in symbols
-        },
+        bootstrap_fetcher=lambda symbols: {symbol: {"time": object(), "lastPrice": object()} for symbol in symbols},
     )
 
     with pytest.raises(QuoteContractError) as exc_info:

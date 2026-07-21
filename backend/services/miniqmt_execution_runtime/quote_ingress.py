@@ -515,6 +515,7 @@ class QuoteIngressWorker:
         self._last_drain_at: datetime | None = None
         self._last_heartbeat_monotonic_ns: int | None = None
         self._last_failure: dict[str, Any] | None = None
+        self._active_failure: dict[str, Any] | None = None
         self._failure_samples: dict[str, dict[str, Any]] = {}
         self._last_loud_emitted_monotonic_ns: dict[str, int] = {}
         self._restart_count = 0
@@ -661,7 +662,11 @@ class QuoteIngressWorker:
         for frame in pending_frames:
             if not self.ingest_frame(frame):
                 return False
-        return self._start_writer_if_needed()
+        started = self._start_writer_if_needed()
+        if started:
+            with self._lock:
+                self._active_failure = None
+        return started
 
     def prepare_generation(self, data_session_key: str, generation: int) -> bool:
         """Pure readiness check used before a physical generation is committed."""
@@ -780,6 +785,8 @@ class QuoteIngressWorker:
                 "consumer_id": self._consumer_id,
                 "status": self._status,
                 "generation": self._active_generation,
+                "active_generation": self._active_generation,
+                "fenced_generation": self._fenced_generation,
                 "thread_alive": thread_alive,
                 "last_drain_at": self._last_drain_at.isoformat() if self._last_drain_at is not None else None,
                 "backlog": mailbox["backlog"],
@@ -787,6 +794,7 @@ class QuoteIngressWorker:
                 "restart_count": self._restart_count,
                 "writer_heartbeat_age_ms": heartbeat_age_ms,
                 "last_failure": self._last_failure,
+                "active_failure": self._active_failure,
                 "accepted_count": mailbox["accepted_count"],
                 "coalesced_count": mailbox["coalesced_count"],
                 "ordering_rejected_count": mailbox["ordering_rejected_count"],
@@ -896,6 +904,7 @@ class QuoteIngressWorker:
         sample["last_observed_at"] = now
         sample["occurrence_count"] = int(sample["occurrence_count"]) + 1
         self._last_failure = {**payload, **sample, "sample_key": sample_key}
+        self._active_failure = self._last_failure
         self._status = status
 
     def _emit_loud(self, error: QuoteContractError) -> None:
