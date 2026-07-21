@@ -467,12 +467,13 @@ def test_resolver_uses_allowlisted_cross_loop_st_pit_with_truthful_provenance() 
     )
 
     st_pit = resolved.evidence["st_pit"]
+    assert st_pit["artifact_name"] == "qe_event_risk_policy.json"
     assert st_pit["binding_mode"] == receipt.binding_mode
     assert st_pit["coverage_semantics"] == "allowlisted_cross_loop_immutable_artifact_v1"
     assert st_pit["compatibility_receipt"]["artifact_source"] == {
         "task_id": receipt.artifact_source_task_id,
         "loop_name": receipt.artifact_source_loop_name,
-        "path": "qe_event_risk_policy.json",
+        "artifact_name": "qe_event_risk_policy.json",
     }
     assert st_pit["compatibility_receipt"]["artifact_sha256"] == receipt.sha256
 
