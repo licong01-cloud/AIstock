@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 前置交付：R1 contracts/CAS/repository、R2-A neutral selection computation
-> 当前状态：`design_ready_not_implemented`
+> 当前状态：`real_dev_e2e_accepted_bug_prs_pending_merge`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`DB_HISTORICAL`、`execution_prohibited=true`
 
 ## 1. Background
@@ -759,8 +759,8 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-974 | valid empty closure | `backend/tests/advisory_historical_range/test_r2b_candidate_projector.py`; `backend/tests/scripts/test_strategy_package_live_inference.py` | design_ready | none |
 | F-975 | candidate artifact payload v2 + CAS publish/readback | `backend/tests/advisory_historical_range/test_r2b_candidate_producer.py`; `backend/tests/advisory_historical_range/test_r2b_candidate_projector.py` | design_ready | none |
 | F-976 | R1 repository/day transaction boundary | `backend/tests/advisory_historical_range/test_repository.py` | design_ready | none |
-| F-977 | explicit DEV single Alpha artifact receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
-| F-978 | explicit DEV native multi Alpha artifact receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
+| F-977 | explicit DEV single Alpha artifact receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | passed_dev | none |
+| F-978 | explicit DEV native multi Alpha artifact receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | passed_dev | none |
 | F-979 | static imports/shared repository spies | `backend/tests/advisory_historical_range/test_r2b_candidate_producer.py` | design_ready | none |
 | F-980 | failure taxonomy/error propagation | `backend/tests/advisory_historical_range/test_r2b_candidate_producer.py` | design_ready | none |
 | F-981 | 本文 No Additional Gates | `artifact: docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md` | design_ready | none |
@@ -769,21 +769,23 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-984 | candidate/day hash builders and repository closure | `backend/tests/advisory_historical_range/test_r2b_models.py`; `backend/tests/advisory_historical_range/test_repository.py` | design_ready | none |
 | F-985 | current consumer composition roots/default policies | `backend/tests/test_inference_engine_historical_readonly.py`; `backend/tests/selection_center/test_runtime_selection.py`; `backend/tests/simulation_runtime/test_strategy_package_selection_service.py`; `backend/tests/paper_trading_v2/test_day_runner.py`; `backend/tests/paper_trading_v2/test_session.py` | design_ready | none |
 | F-986 | manifest frozen-weight adapter/unsupported rolling branch | `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
-| F-987 | planning -> QUEUED -> candidate positive-path receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
+| F-987 | planning -> QUEUED -> candidate positive-path receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | passed_dev | none |
 
 ## 15. Production Gates
 
 ```text
 design_document = ready
 source_code = implemented_and_locally_reviewed
-new_schema = r1_migration_contract_correction_only
-r1_migration_contract_correction = package_version_plus_planning_checkpoint_plus_candidate_v2_before_first_dev_apply
-dev_ddl_dml = not_executed
+new_schema = r1_migration_plus_bug799_corrective_trigger_migration
+r1_migration_contract_correction = applied_to_dev
+corrective_migration = bug799_applied_verified_exact_reapplied_in_dev
+dev_ddl_dml = migration_applied_verified_exact_reapplied; planning_rows_only
 production_ddl_dml = not_executed
-real_dev_single_alpha_e2e = pending
-real_dev_multi_alpha_e2e = pending
+real_dev_single_alpha_e2e = passed
+real_dev_multi_alpha_e2e = passed
 service_restart = not_required_for_design
 runtime_activation = none
+source_merge = bug_prs_2545_2549_2557_2558_pending_user_confirmation
 ```
 
 这些字段只区分交付状态，不是业务审批。R2-B 代码阶段不得增加未经确认的门禁或审批。

@@ -5,7 +5,7 @@
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_code_merged_r2a_source_delivery_accepted_r2b_design_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），DEV/production DDL 均未执行、运行时未激活；R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 详细设计见 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md`，其代码、真实 candidate E2E、R3-R5、API、UI 和真实范围任务仍未实现
+> 当前状态：`r1_r2a_merged_r2b_real_dev_accepted_bug_prs_pending_merge`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 已按 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md` 完成源码、DEV migration 和 `2026-07-03` 单/原生多 Alpha candidate E2E，验收见 `docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md`。修复 PR `#2545/#2549/#2557/#2558` 仍待用户确认合入，production DDL 未执行、运行时未激活；R3-R5、API、UI 和完整范围任务仍未实现
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -1319,4 +1319,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1 与 R2-A 已完成源码合入，下一步按 R2-B 子设计实施可恢复 catalog planning 与历史 candidate adapter。R2-B 以中立模块所有权、无 repository/sink 核心、requirement/checkpoint/sealed catalog、candidate artifact v2、只读 WSL inference、frozen HMM evidence、manifest frozen multi-alpha weights、无 package 二次验证和最小真实依赖测试矩阵为准。任何实现 PR 在报告完成前必须同时执行本文验收索引和 R2-B 子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
+R1 与 R2-A 已完成源码合入；R2-B 已在真实 DEV 集成源码闭包完成可恢复 catalog planning、历史 candidate adapter、单/原生多 Alpha WSL 推理、candidate artifact v2 和跨模块零写入验收，四个缺陷修复 PR 仍待用户确认合入。下一阶段固定为 R3：在不改变 R2-B candidate-only 边界的前提下，实现共享列表 transition 接入、逐日有序 executor、candidate/list/episode/day receipt 原子提交和失败恢复。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复、隔离或 UI 证据时不得声明 Phase 1R 完成。
