@@ -42,7 +42,7 @@ def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
 def test_validate_deepseek_provider_bootstraps_from_canonical_env_file(monkeypatch, tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        'DEEPSEEK_API_KEY="env-file-secret"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
+        'DEEPSEEK_API_KEY="x"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
         encoding="utf-8",
     )
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
