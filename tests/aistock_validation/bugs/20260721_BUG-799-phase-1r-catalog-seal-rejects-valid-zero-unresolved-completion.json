@@ -5,6 +5,7 @@
     "backend/services/advisory_historical_range/repository.py",
     "backend/tests/advisory_historical_range/test_isolation_and_migration.py",
     "backend/tests/advisory_historical_range/test_repository.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260721_BUG-799-phase-1r-catalog-seal-rejects-valid-zero-unresolved-completion.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,7 +30,8 @@
   "evidence_uris": [
     "DEV batch ahrb_d29847ba8fafee516423e8fc7dd1f2bf; operation ahrop_18f1588ee85e2bad0c9c2ad0434d416d",
     "DEV batch ahrb_eb97f1151ebc1968d86e81c89acd4205 sealed as QUEUED with two QUEUED range runs after application and trigger fixes",
-    "DEV migration sha256 f44c90f340f588996e82fe064e4fd2a96f1334669370d8126216f285c28f96b7; exact replay count 2; function sha256 565f0ff10fdfc5ec4fce108649c8df4ea701bd16e284c7545b27ca16811ef5d4"
+    "DEV migration sha256 f44c90f340f588996e82fe064e4fd2a96f1334669370d8126216f285c28f96b7; exact replay count 2; function sha256 565f0ff10fdfc5ec4fce108649c8df4ea701bd16e284c7545b27ca16811ef5d4",
+    "PR #2545 CI classified the corrective migration as unmapped; file ownership now maps it to advisory.historical_range without changing runtime behavior"
   ],
   "expected": "A COMPLETED VERIFY catalog with full resolved count, zero unresolved count, and a latest checkpoint seals the historical request.",
   "first_seen_at": "2026-07-21T07:41:56.315106Z",
