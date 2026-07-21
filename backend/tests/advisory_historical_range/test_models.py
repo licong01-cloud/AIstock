@@ -14,6 +14,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeListAction,
     HistoricalRangeListItemFactV1,
     HistoricalRangeResearchBatchRequestV1,
+    HistoricalRangeResolvedRequestSnapshotV1,
     HistoricalRangeSourceRevisionRefV1,
     ResearchProgramSpecV1,
     ResolvedHistoricalRangeRequestV1,
@@ -41,7 +42,13 @@ def test_user_and_resolved_hashes_exclude_request_metadata_and_display_name() ->
 
     assert first.request.user_request_semantic_hash == second.request.user_request_semantic_hash
     assert first.request_payload_sha256 == second.request_payload_sha256
-    assert first.batch_id == second.batch_id
+    assert first.batch_id != second.batch_id
+    assert first.range_run_id(first.frozen_programs[0].research_program_id) == second.range_run_id(
+        second.frozen_programs[0].research_program_id
+    )
+    assert HistoricalRangeResolvedRequestSnapshotV1.from_resolved(first).model_dump(
+        mode="json"
+    ) == HistoricalRangeResolvedRequestSnapshotV1.from_resolved(second).model_dump(mode="json")
 
 
 def test_business_config_changes_research_identity_and_request_hash() -> None:

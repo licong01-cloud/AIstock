@@ -13,6 +13,8 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactBindingsV1,
     HistoricalRangeArtifactKind,
     HistoricalRangeBatchStatus,
+    HistoricalRangeCatalogMemberDeltaV1,
+    HistoricalRangeCatalogPhase,
     HistoricalRangeDayAttemptV1,
     HistoricalRangeDayStatus,
     HistoricalRangeListAction,
@@ -22,9 +24,20 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeOperationRequestV1,
     HistoricalRangeOperationStatus,
     HistoricalRangeOperationType,
+    HistoricalRangePlanningArtifactBindingsV1,
     HistoricalRangeProgramStatus,
-    HistoricalRangeSourceRevisionRefV1,
+    HistoricalRangeRequirementPurpose,
+    HistoricalRangeResolvedRequestArtifactPayloadV1,
+    HistoricalRangeRevisionAdmissibility,
+    HistoricalRangeSourceCatalogCheckpointV1,
+    HistoricalRangeSourceRequirementPlanV1,
+    HistoricalRangeSourceRequirementV1,
+    HistoricalRangeSourceRevisionCatalogV1,
+    HistoricalRangeSourceRevisionMemberV1,
     build_candidate_artifact_payload,
+    build_candidate_input_hash,
+    build_catalog_member_chain_hash,
+    build_day_input_hash,
     build_day_receipt_payload,
     derive_list_content_hash,
 )
@@ -42,13 +55,23 @@ def _connection_factory():
     return psycopg2.connect(os.environ["AISTOCK_PHASE1R_TEST_DSN"])
 
 
-def _publish_creation_artifacts(*, store: HistoricalRangeArtifactStore, resolved) -> HistoricalRangeArtifactBindingsV1:
+def _publish_creation_artifacts(
+    *,
+    store: HistoricalRangeArtifactStore,
+    resolved,
+    catalog: HistoricalRangeSourceRevisionCatalogV1,
+) -> HistoricalRangeArtifactBindingsV1:
+    request_payload = HistoricalRangeResolvedRequestArtifactPayloadV1(
+        resolved_request=resolved,
+        source_revision_catalog=catalog,
+    )
     request = store.publish_payload(
         artifact_kind=HistoricalRangeArtifactKind.REQUEST,
-        producer_contract_version="phase1r_r1",
-        payload_schema_version=resolved.schema_version,
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version=request_payload.schema_version,
         resolved_request_hash=resolved.request_payload_sha256,
-        payload=resolved.model_dump(mode="json"),
+        payload=request_payload.model_dump(mode="json"),
+        source_revision_refs=catalog.source_revision_refs(),
     )
     date_plan = store.publish_payload(
         artifact_kind=HistoricalRangeArtifactKind.DATE_PLAN,
@@ -94,21 +117,180 @@ def _create_running_day(
     client_key: str,
     lease_expires_at: datetime,
 ):
-    resolved = resolved_request(
+    base_resolved = resolved_request(
         specs=(research_spec(package_id=f"pkg-{client_key}"),),
         client_key=client_key,
         request_id=f"request-{client_key}",
         trade_dates=(date(2026, 6, 1),),
     )
-    artifacts = _publish_creation_artifacts(store=store, resolved=resolved)
-    created = repository.create_batch(resolved=resolved, artifacts=artifacts)
+    requirement = HistoricalRangeSourceRequirementV1(
+        requirement_id="universe",
+        source_role="pit_universe",
+        dataset_id="market.stock_universe_pit",
+        query_template_id="StockUniversePitService.get_eligible_codes",
+        query_template_version="v1",
+        query_template_hash=digest("universe-query"),
+        parameter_template={"trade_date": "2026-06-01"},
+        partition_ref_template="shsz_st_pit_active_v1/2026-06-01",
+        decision_trade_date=date(2026, 6, 1),
+        required_for=HistoricalRangeRequirementPurpose.REQUEST_SEAL,
+        missing_reason_code="ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
+    )
+    plan = HistoricalRangeSourceRequirementPlanV1(
+        request=base_resolved.request,
+        date_plan=base_resolved.date_plan,
+        frozen_programs=base_resolved.frozen_programs,
+        query_contract_hash=digest("historical-query-contract"),
+        calendar_identity_hash=digest("calendar-identity"),
+        code_release_hash=base_resolved.frozen_programs[0].code_release_hash,
+        requirements=(requirement,),
+    )
+    member = HistoricalRangeSourceRevisionMemberV1(
+        requirement_id=requirement.requirement_id,
+        source_role=requirement.source_role,
+        dataset_id=requirement.dataset_id,
+        partition_ref=requirement.partition_ref_template,
+        decision_trade_date=requirement.decision_trade_date,
+        query_template_id=requirement.query_template_id,
+        query_template_version=requirement.query_template_version,
+        query_template_hash=requirement.query_template_hash,
+        parameter_hash=requirement.parameter_template_hash,
+        row_count=5000,
+        content_hash=digest(f"universe-content:{client_key}"),
+        admissibility=HistoricalRangeRevisionAdmissibility.RETROSPECTIVE_DB_CONTENT_HASH,
+        observed_at=datetime(2026, 7, 20, 1, tzinfo=UTC),
+    )
+    catalog = HistoricalRangeSourceRevisionCatalogV1(
+        requirement_plan_hash=plan.requirement_plan_hash,
+        catalog_generation=1,
+        query_contract_hash=plan.query_contract_hash,
+        calendar_identity_hash=plan.calendar_identity_hash,
+        members=(member,),
+    )
+    resolved_payload = base_resolved.model_dump(mode="python")
+    resolved_payload.update(
+        {
+            "batch_id": plan.batch_id,
+            "source_revision_catalog_hash": catalog.catalog_hash,
+            "request_payload_sha256": None,
+        }
+    )
+    resolved = type(base_resolved).model_validate(resolved_payload)
+    planning_artifact = store.publish_planning_payload(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+        planning_identity_hash=plan.planning_identity_hash,
+        batch_id=plan.batch_id,
+        catalog_generation=1,
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version=plan.schema_version,
+        payload=plan.model_dump(mode="json"),
+    )
+    created = repository.create_planning_batch(
+        plan=plan,
+        artifacts=HistoricalRangePlanningArtifactBindingsV1(
+            requirement_plan_ref=planning_artifact.ref,
+            artifact_root_identity_hash=store.root_identity_hash,
+        ),
+    )
+    claimed = repository.claim_catalog_operation(
+        operation_id=created.catalog_operation_id,
+        expected_row_version=1,
+        worker_id="catalog-worker-1",
+        lease_token="test-1",
+        lease_expires_at=lease_expires_at,
+    )
+    member_chain_hash = build_catalog_member_chain_hash(
+        members=(member,),
+        ordered_requirement_ids=(requirement.requirement_id,),
+    )
+    discover_checkpoint = HistoricalRangeSourceCatalogCheckpointV1(
+        requirement_plan_hash=plan.requirement_plan_hash,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        ordinal_start=1,
+        ordinal_end=1,
+        next_requirement_ordinal=2,
+        member_delta=(HistoricalRangeCatalogMemberDeltaV1(ordinal=1, member=member),),
+        cumulative_resolved_count=1,
+        cumulative_member_chain_hash=member_chain_hash,
+    )
+    discover_artifact = store.publish_planning_payload(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        planning_identity_hash=plan.planning_identity_hash,
+        batch_id=plan.batch_id,
+        catalog_generation=1,
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version=discover_checkpoint.schema_version,
+        payload=discover_checkpoint.model_dump(mode="json"),
+    )
+    verifying = repository.commit_catalog_checkpoint(
+        operation_id=created.catalog_operation_id,
+        expected_row_version=int(claimed["row_version"]),
+        expected_fencing_token=int(claimed["fencing_token"]),
+        checkpoint_ref=discover_artifact.ref,
+        checkpoint=discover_checkpoint,
+        target_status=HistoricalRangeOperationStatus.RUNNING,
+        advance_to_verify=True,
+        next_worker_id="catalog-worker-2",
+        next_lease_token="test-2",
+        next_lease_expires_at=lease_expires_at + timedelta(minutes=1),
+    )
+    verify_checkpoint = HistoricalRangeSourceCatalogCheckpointV1(
+        requirement_plan_hash=plan.requirement_plan_hash,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.VERIFY,
+        ordinal_start=1,
+        ordinal_end=1,
+        next_requirement_ordinal=2,
+        previous_checkpoint_ref=discover_artifact.ref,
+        previous_checkpoint_hash=discover_artifact.ref.semantic_content_hash,
+        member_delta=(HistoricalRangeCatalogMemberDeltaV1(ordinal=1, member=member),),
+        cumulative_resolved_count=1,
+        cumulative_member_chain_hash=member_chain_hash,
+    )
+    verify_artifact = store.publish_planning_payload(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        planning_identity_hash=plan.planning_identity_hash,
+        batch_id=plan.batch_id,
+        catalog_generation=1,
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version=verify_checkpoint.schema_version,
+        payload=verify_checkpoint.model_dump(mode="json"),
+    )
+    repository.commit_catalog_checkpoint(
+        operation_id=created.catalog_operation_id,
+        expected_row_version=int(verifying["row_version"]),
+        expected_fencing_token=int(verifying["fencing_token"]),
+        checkpoint_ref=verify_artifact.ref,
+        checkpoint=verify_checkpoint,
+        target_status=HistoricalRangeOperationStatus.COMPLETED,
+    )
+    artifacts = _publish_creation_artifacts(store=store, resolved=resolved, catalog=catalog)
+    sealed = repository.seal_planning_batch(
+        batch_id=plan.batch_id,
+        expected_row_version=int(
+            _scalar(
+                "SELECT row_version FROM app.advisory_historical_range_batch WHERE batch_id = %s",
+                (plan.batch_id,),
+            )
+        ),
+        plan=plan,
+        resolved=resolved,
+        catalog=catalog,
+        artifacts=artifacts,
+    )
     batch = repository.transition_batch(
-        batch_id=created.batch_id,
-        expected_row_version=2,
+        batch_id=sealed.batch_id,
+        expected_row_version=int(
+            _scalar(
+                "SELECT row_version FROM app.advisory_historical_range_batch WHERE batch_id = %s",
+                (sealed.batch_id,),
+            )
+        ),
         target_status=HistoricalRangeBatchStatus.RUNNING,
     )
     assert batch["status"] == "RUNNING"
-    range_run_id = created.range_run_ids[0]
+    range_run_id = sealed.range_run_ids[0]
     repository.transition_run(
         range_run_id=range_run_id,
         expected_row_version=1,
@@ -135,7 +317,7 @@ def _create_running_day(
         lease_expires_at=lease_expires_at,
         fencing_token=1,
     )
-    return resolved, artifacts, created, range_run_id, day_run_id
+    return resolved, artifacts, created, range_run_id, day_run_id, catalog
 
 
 def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover(tmp_path: Path) -> None:
@@ -160,7 +342,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
         )
         == 0
     )
-    resolved, _, created, range_run_id, day_run_id = _create_running_day(
+    resolved, _, created, range_run_id, day_run_id, catalog = _create_running_day(
         repository=repository,
         store=store,
         client_key="pg-positive",
@@ -168,16 +350,43 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
     )
 
     empty_candidates: tuple = ()
-    source_revision_refs = (
-        HistoricalRangeSourceRevisionRefV1(
-            revision_id="partition:2026-06-01",
-            revision_hash=digest("partition:2026-06-01"),
-        ),
+    source_revision_refs = catalog.source_revision_refs()
+    frozen = resolved.frozen_programs[0]
+    candidate_input_hash = build_candidate_input_hash(
+        range_run_id=range_run_id,
+        research_program_id=frozen.research_program_id,
+        decision_trade_date=date(2026, 6, 1),
+        frozen_program_hash=frozen.frozen_program_hash,
+        runtime_profile_hash=digest("runtime-profile"),
+        code_release_hash=frozen.code_release_hash,
+        selection_semantics_hash=resolved.selection_semantics_hash,
+        calendar_identity_hash=digest("calendar-identity"),
+        universe_identity_hash=digest("universe-identity"),
+        source_revision_catalog_hash=resolved.source_revision_catalog_hash,
+        query_contract_hash=digest("historical-query-contract"),
     )
+    stage_trace = {
+        stage: {
+            "stage": stage,
+            "status": "COMPLETE",
+            "input_count": 0,
+            "output_count": 0,
+            "excluded_count": 0,
+        }
+        for stage in ("alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")
+    }
+    raw_header = {
+        "artifact_id": "raw-signal",
+        "runtime_profile_hash": digest("runtime-profile"),
+        "selection_semantics_hash": resolved.selection_semantics_hash,
+        "code_release_hash": frozen.code_release_hash,
+        "calendar_identity_hash": digest("calendar-identity"),
+        "universe_identity_hash": digest("universe-identity"),
+    }
     candidate = store.publish_payload(
         artifact_kind=HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
-        producer_contract_version="phase1r_r1",
-        payload_schema_version="advisory_historical_range_candidate_artifact_payload_v1",
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version="advisory_historical_range_candidate_artifact_payload_v2",
         resolved_request_hash=resolved.request_payload_sha256,
         range_run_id=range_run_id,
         day_run_id=day_run_id,
@@ -185,6 +394,26 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
         payload=build_candidate_artifact_payload(
             range_run_id=range_run_id,
             day_run_id=day_run_id,
+            research_program_id=frozen.research_program_id,
+            decision_trade_date=date(2026, 6, 1),
+            candidate_input_hash=candidate_input_hash,
+            package_id=frozen.package_id,
+            package_version=frozen.package_version,
+            manifest_sha256=frozen.manifest_sha256,
+            alpha_mode=frozen.alpha_mode,
+            runtime_profile_hash=digest("runtime-profile"),
+            selection_semantics_hash=resolved.selection_semantics_hash,
+            code_release_hash=frozen.code_release_hash,
+            calendar_identity_hash=digest("calendar-identity"),
+            universe_identity_hash=digest("universe-identity"),
+            universe_count=5000,
+            raw_signal_identity_hash=digest(raw_header),
+            raw_signal_semantic_header=raw_header,
+            raw_inference_receipt={"status": "COMPLETE", "score_count": 0},
+            source_read_receipt_hashes=(digest("source-read"),),
+            stage_trace=stage_trace,
+            candidate_outcome="VALID_NO_CANDIDATE",
+            no_candidate_reason_codes=("NO_ALPHA_CANDIDATES",),
             candidates=empty_candidates,
             source_revision_refs=source_revision_refs,
         ),
@@ -203,7 +432,13 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
         list_content_hash=digest("initial-list-hash-seed"),
     )
     list_version = list_version.model_copy(update={"list_content_hash": derive_list_content_hash(list_version, (), ())})
-    day_input_hash = digest("day-input")
+    day_input_hash = build_day_input_hash(
+        candidate_input_hash=candidate_input_hash,
+        candidate_artifact_ref=candidate.ref,
+        previous_list_hash=None,
+        previous_day_receipt_hash=None,
+        list_semantics_hash=resolved.list_semantics_hash,
+    )
     receipt_payload = build_day_receipt_payload(
         range_run_id=range_run_id,
         day_run_id=day_run_id,
@@ -375,7 +610,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
         == 1
     )
 
-    _, _, spoofed, spoofed_run_id, spoofed_day_id = _create_running_day(
+    _, _, spoofed, spoofed_run_id, spoofed_day_id, _ = _create_running_day(
         repository=repository,
         store=store,
         client_key="pg-spoofed-aggregate",
@@ -468,7 +703,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
             )
     assert "CANDIDATE_PROJECTION" in str(watch_error.value).upper()
 
-    takeover_resolved, _, _, takeover_run_id, takeover_day_id = _create_running_day(
+    takeover_resolved, _, _, takeover_run_id, takeover_day_id, _ = _create_running_day(
         repository=repository,
         store=store,
         client_key="pg-takeover",

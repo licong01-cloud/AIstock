@@ -402,6 +402,30 @@ class MultiAlphaLivePredictionProvider:
         cutoff_date: date | None = None,
         inference_backend: str,
     ) -> list[SelectionScoreArtifact]:
+        prepared = self.prepare_artifacts(
+            package_id=package_id,
+            trade_dates=trade_dates,
+            data_source=data_source,
+            runtime_config=runtime_config,
+            include_reference_price=include_reference_price,
+            cutoff_date=cutoff_date,
+            inference_backend=inference_backend,
+            historical_read_only=False,
+        )
+        return [self.artifact_repository.save(artifact) for artifact in prepared]
+
+    def prepare_artifacts(
+        self,
+        *,
+        package_id: str,
+        trade_dates: Sequence[date],
+        data_source: str,
+        runtime_config: Mapping[str, Any] | None = None,
+        include_reference_price: bool = True,
+        cutoff_date: date | None = None,
+        inference_backend: str,
+        historical_read_only: bool = False,
+    ) -> list[SelectionScoreArtifact]:
         config = dict(runtime_config or {})
         self._ensure_enabled(config)
         self._ensure_deadline(config, package_id=package_id)
@@ -418,6 +442,23 @@ class MultiAlphaLivePredictionProvider:
             _raise("MULTI_ALPHA manifest must be frozen for live selection", REASON_LEG_MISSING, package_id=package_id)
 
         evidence = _multi_alpha_evidence(manifest)
+        if historical_read_only:
+            weight_policy = _weight_policy(manifest)
+            weight_mode = str(weight_policy.get("mode") or "").strip()
+            artifact_config = _artifact_config(config)
+            if weight_mode != "frozen_backtest_terminal_weights":
+                _raise(
+                    "historical range requires manifest-frozen MULTI_ALPHA terminal weights",
+                    "ADVISORY_HR_PACKAGE_WEIGHT_CONTRACT_UNSUPPORTED",
+                    package_id=package_id,
+                    weight_mode=weight_mode or None,
+                )
+            if "multi_alpha_weight_history" in artifact_config or "weight_history" in artifact_config:
+                _raise(
+                    "historical range forbids runtime-injected MULTI_ALPHA weight rows",
+                    "ADVISORY_HR_PACKAGE_WEIGHT_CONTRACT_UNSUPPORTED",
+                    package_id=package_id,
+                )
         legs = _legs(evidence, package_id=package_id)
         leg_ids = [leg["leg_id"] for leg in legs]
         topk = self._runtime_topk(manifest, config)
@@ -440,6 +481,7 @@ class MultiAlphaLivePredictionProvider:
                     cutoff_date=cutoff_date,
                     runtime_config=config,
                     inference_backend=inference_backend,
+                    historical_read_only=historical_read_only,
                 )
                 seed_frames = leg_execution.seed_frames
                 leg_executions[leg_slice.leg_id] = leg_execution
@@ -555,7 +597,9 @@ class MultiAlphaLivePredictionProvider:
                     "model_id": leg_slice.model_asset.model_id,
                     "factor_sha256": sorted(str(factor.sha256 or "") for factor in leg_slice.factor_set),
                     "seed_run_ids": list(leg_slice.seed_run_ids),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": (
+                        "FROZEN_ARTIFACT" if historical_read_only else "PROSPECTIVE_FIRST_OBSERVED"
+                    ),
                 }
                 for leg_slice in leg_slices
             ]
@@ -566,12 +610,15 @@ class MultiAlphaLivePredictionProvider:
                     "asset_ref": "multi_alpha_weight",
                     "sha256": weight_artifact.artifact_sha256,
                     "apply_date": current_date.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": (
+                        "FROZEN_ARTIFACT" if historical_read_only else "PROSPECTIVE_FIRST_OBSERVED"
+                    ),
                 }
             )
             asset_closure, asset_closure_status, asset_reason_codes = build_manifest_asset_closure(
                 manifest,
                 extra_entries=extra_asset_entries,
+                admissibility=("FROZEN_ARTIFACT" if historical_read_only else "PROSPECTIVE_FIRST_OBSERVED"),
             )
             provider_semantics = {
                 "provider_semantics_id": "multi_alpha_live_inference_v2",
@@ -684,7 +731,7 @@ class MultiAlphaLivePredictionProvider:
                 source_revision_set_hash=provenance.source_revision_set_hash,
                 asset_closure_hash=provenance.asset_closure_hash,
             )
-            artifacts.append(self.artifact_repository.save(artifact))
+            artifacts.append(artifact)
         return artifacts
 
     @staticmethod
@@ -780,6 +827,7 @@ class MultiAlphaLivePredictionProvider:
         cutoff_date: date | None,
         runtime_config: Mapping[str, Any],
         inference_backend: str,
+        historical_read_only: bool = False,
     ) -> ParentLegLiveInferenceResult:
         if not leg_slice.seed_run_ids:
             _raise(
@@ -818,11 +866,14 @@ class MultiAlphaLivePredictionProvider:
                 cache_namespace=f"leg_{leg_slice.leg_id}",
                 verify_model_code_contract=False,
             )
-            result = self.live_inference_provider.run(
-                workspace=prepared,
-                trade_date=trade_date,
-                cutoff_date=cutoff_date,
-            )
+            inference_kwargs: dict[str, Any] = {
+                "workspace": prepared,
+                "trade_date": trade_date,
+                "cutoff_date": cutoff_date,
+            }
+            if historical_read_only:
+                inference_kwargs["historical_read_only"] = True
+            result = self.live_inference_provider.run(**inference_kwargs)
         except TradingCoreError as exc:
             exc.context.setdefault("package_id", leg_slice.parent_package_id)
             exc.context.setdefault("leg_id", leg_slice.leg_id)
@@ -1999,7 +2050,10 @@ def _raise(message: str, reason_code: str, **context: Any) -> None:
         raise DataUnavailableError(message, context=error_context)
     if reason_code == REASON_RUNTIME_NOT_ENABLED:
         raise UnsupportedFeatureError(message, context=error_context)
-    if reason_code == REASON_TOPK_RUNTIME_MISMATCH:
+    if reason_code in {
+        REASON_TOPK_RUNTIME_MISMATCH,
+        "ADVISORY_HR_PACKAGE_WEIGHT_CONTRACT_UNSUPPORTED",
+    }:
         raise RuntimeConfigInvalidError(message, context=error_context)
     if reason_code == REASON_DEADLINE_EXCEEDED:
         raise RuntimeConfigInvalidError(message, context=error_context)

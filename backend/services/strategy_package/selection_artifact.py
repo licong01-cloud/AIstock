@@ -254,12 +254,15 @@ def build_manifest_asset_closure(
     *,
     observed_at: datetime | None = None,
     extra_entries: Sequence[Mapping[str, Any]] | None = None,
+    admissibility: str = "PROSPECTIVE_FIRST_OBSERVED",
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     """Freeze manifest-owned assets without putting local workspace paths in the closure."""
 
     seen_at = observed_at or datetime.now(timezone.utc)
     if seen_at.tzinfo is None:
         raise ValueError("asset closure observed_at must be timezone-aware")
+    if admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "FROZEN_ARTIFACT"}:
+        raise ValueError("unsupported asset closure admissibility")
     entries: list[dict[str, Any]] = [
         {
             "asset_role": "strategy_package_manifest",
@@ -267,7 +270,7 @@ def build_manifest_asset_closure(
             "asset_ref": None,
             "sha256": str(getattr(manifest, "manifest_sha256", "") or "").lower() or None,
             "first_observed_at": seen_at.isoformat(),
-            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+            "admissibility": admissibility,
         }
     ]
     incomplete = not _is_sha256_hex(entries[0]["sha256"])
@@ -285,7 +288,7 @@ def build_manifest_asset_closure(
                 "asset_ref": asset_ref,
                 "sha256": sha256,
                 "first_observed_at": seen_at.isoformat(),
-                "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                "admissibility": admissibility,
             }
         )
         incomplete = incomplete or not bool(asset_ref) or not _is_sha256_hex(sha256)
@@ -299,7 +302,7 @@ def build_manifest_asset_closure(
                     "asset_ref": code_ref,
                     "sha256": code_sha,
                     "first_observed_at": seen_at.isoformat(),
-                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                    "admissibility": admissibility,
                 }
             )
             incomplete = incomplete or not bool(code_ref) or not _is_sha256_hex(code_sha)
@@ -318,7 +321,7 @@ def build_manifest_asset_closure(
                 "sha256": sha256,
                 "required": required,
                 "first_observed_at": seen_at.isoformat(),
-                "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                "admissibility": admissibility,
             }
         )
         if required and (not asset_ref or not _is_sha256_hex(sha256)):
@@ -336,7 +339,7 @@ def build_manifest_asset_closure(
                 "asset_ref": asset_ref,
                 "sha256": sha256,
                 "first_observed_at": seen_at.isoformat(),
-                "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                "admissibility": admissibility,
             }
         )
         incomplete = incomplete or not bool(asset_ref) or not _is_sha256_hex(sha256)
@@ -1066,6 +1069,28 @@ class StrategyPackageSelectionArtifactService:
         include_reference_price: bool = True,
         cutoff_date: date | None = None,
     ) -> list[SelectionScoreArtifact]:
+        prepared = self.prepare_from_live_inference_dates(
+            package_id=package_id,
+            trade_dates=trade_dates,
+            data_source=data_source,
+            runtime_config=runtime_config,
+            include_reference_price=include_reference_price,
+            cutoff_date=cutoff_date,
+            historical_read_only=False,
+        )
+        return [self.artifact_repository.save(artifact) for artifact in prepared]
+
+    def prepare_from_live_inference_dates(
+        self,
+        *,
+        package_id: str,
+        trade_dates: list[date],
+        data_source: str = "DB_HISTORICAL",
+        runtime_config: dict[str, Any] | None = None,
+        include_reference_price: bool = True,
+        cutoff_date: date | None = None,
+        historical_read_only: bool = False,
+    ) -> list[SelectionScoreArtifact]:
         if data_source != "DB_HISTORICAL":
             raise DataUnavailableError(
                 "live StrategyPackage factor inference currently requires DB_HISTORICAL daily data",
@@ -1082,17 +1107,29 @@ class StrategyPackageSelectionArtifactService:
                 "strategy package manifest must be frozen before generating live selection artifacts",
                 context={"package_id": package_id},
             )
+        if historical_read_only:
+            if include_reference_price:
+                raise RuntimeConfigInvalidError(
+                    "historical range raw signal preparation forbids reference-price enrichment",
+                    context={"package_id": package_id},
+                )
         if manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
             provider, inference_backend = self._resolve_live_provider(runtime_config)
+            if historical_read_only and inference_backend != "wsl":
+                raise RuntimeConfigInvalidError(
+                    "historical range model inference must run in the configured WSL Conda environment",
+                    context={"package_id": package_id, "inference_backend": inference_backend},
+                )
             from .multi_alpha_live import MultiAlphaLivePredictionProvider
 
-            return MultiAlphaLivePredictionProvider(
+            multi_provider = MultiAlphaLivePredictionProvider(
                 package_repository=self.package_repository,
-                artifact_repository=self.artifact_repository,
+                artifact_repository=None,
                 runtime_asset_resolver=self.runtime_asset_resolver,
                 live_inference_provider=provider,
                 reference_price_loader=self._load_reference_prices,
-            ).generate_artifacts(
+            )
+            return multi_provider.prepare_artifacts(
                 package_id=package_id,
                 trade_dates=unique_dates,
                 data_source=data_source,
@@ -1100,11 +1137,24 @@ class StrategyPackageSelectionArtifactService:
                 include_reference_price=include_reference_price,
                 cutoff_date=cutoff_date,
                 inference_backend=inference_backend,
+                historical_read_only=historical_read_only,
             )
         runtime_hash = selection_artifact_runtime_hash_v2(runtime_config)
         topk = self._runtime_top_k(manifest, runtime_config)
+        frozen_source_loader = getattr(
+            self.runtime_asset_resolver,
+            "load_frozen_source_for_strategy_package",
+            None,
+        )
         source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
-        if callable(source_loader):
+        if historical_read_only:
+            if not callable(frozen_source_loader):
+                raise PackageAssetInvalidError(
+                    "historical range runtime resolver does not expose package-owned asset loading",
+                    context={"package_id": package_id},
+                )
+            source = frozen_source_loader(manifest=manifest, package_id=record.package_id)
+        elif callable(source_loader):
             source_kwargs: dict[str, Any] = {
                 "source_type": record.source_type,
                 "source_id": record.source_id,
@@ -1118,6 +1168,11 @@ class StrategyPackageSelectionArtifactService:
         else:
             source = self.runtime_asset_resolver.load_source(record.source_id)
         provider, inference_backend = self._resolve_live_provider(runtime_config)
+        if historical_read_only and inference_backend != "wsl":
+            raise RuntimeConfigInvalidError(
+                "historical range model inference must run in the configured WSL Conda environment",
+                context={"package_id": package_id, "inference_backend": inference_backend},
+            )
         prepared = self.runtime_asset_resolver.prepare_workspace(
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,
@@ -1130,11 +1185,14 @@ class StrategyPackageSelectionArtifactService:
         artifacts: list[SelectionScoreArtifact] = []
         for current_date in unique_dates:
             score_trade_date = cutoff_date or current_date
-            result = provider.run(
-                workspace=prepared,
-                trade_date=current_date,
-                cutoff_date=cutoff_date,
-            )
+            inference_kwargs: dict[str, Any] = {
+                "workspace": prepared,
+                "trade_date": current_date,
+                "cutoff_date": cutoff_date,
+            }
+            if historical_read_only:
+                inference_kwargs["historical_read_only"] = True
+            result = provider.run(**inference_kwargs)
             scores = self._scores_from_live_result(
                 result.scores,
                 package_id=package_id,
@@ -1149,7 +1207,10 @@ class StrategyPackageSelectionArtifactService:
                 for row in scores
                 if row.get("reference_price") is not None
             }
-            asset_closure, asset_closure_status, asset_reason_codes = build_manifest_asset_closure(manifest)
+            asset_closure, asset_closure_status, asset_reason_codes = build_manifest_asset_closure(
+                manifest,
+                admissibility=("FROZEN_ARTIFACT" if historical_read_only else "PROSPECTIVE_FIRST_OBSERVED"),
+            )
             provider_semantics = {
                 "provider_semantics_id": SELECTION_ARTIFACT_V2_PROVIDER_SEMANTICS,
                 "provider_version": "v2",
@@ -1237,7 +1298,7 @@ class StrategyPackageSelectionArtifactService:
                 source_revision_set_hash=provenance.source_revision_set_hash,
                 asset_closure_hash=provenance.asset_closure_hash,
             )
-            artifacts.append(self.artifact_repository.save(artifact))
+            artifacts.append(artifact)
         return artifacts
 
     @staticmethod
