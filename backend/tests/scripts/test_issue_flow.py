@@ -323,7 +323,7 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert "watchlist" in payload["impacted_modules"]
     assert payload["ownership"]["unmatched_files"] == []
     assert "validation_center_backend" not in payload["required_plans"]
-    assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
+    assert payload["required_plans"] == ["l0", "validation_module_registry_l0", "watchlist_backend"]
 
 
 def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
@@ -421,6 +421,15 @@ def test_process_docs_do_not_select_research_assistant_product_tests() -> None:
     assert "research_assistant_backend" not in payload["required_plans"]
     assert "research_assistant_mcp_contract" not in payload["required_plans"]
     assert "validation_center_backend" not in payload["required_plans"]
+
+
+def test_validation_plan_catalog_selects_runner_contract_only() -> None:
+    payload = flow.select_validation(["backend/services/validation/plan_catalog.py"])
+
+    assert payload["primary_modules"] == ["validation.runner"]
+    assert payload["required_plans"] == ["l0", "validation_catalog_integrity"]
+    assert "validation_center_backend" not in payload["recommended_plans"]
+    assert "validation_center_ui" not in payload["recommended_plans"]
 
 
 def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: pytest.CaptureFixture[str]) -> None:

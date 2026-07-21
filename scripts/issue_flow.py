@@ -398,7 +398,7 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
         primary_required.update(str(item) for item in _as_list(module_plans.get("required_on_change")))
-    for module_id in impacted:
+    for module_id in primary_modules:
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
         required.extend(_as_list(module_plans.get("required_on_change")))

@@ -81,6 +81,27 @@ rules:
     layer: validation_bug_registry
     risk_level: high
     ownership_reason: Local bug JSON records are workflow metadata; normal BUG registration and close-sync should validate schema/module quality without forcing full Validation Center backend tests.
+  - rule_id: validation_plan_catalog_services
+    priority: 120
+    include:
+      - backend/services/validation/catalog_integrity.py
+      - backend/services/validation/plan_catalog.py
+    primary_module: validation.runner
+    impact_modules: [validation.module_quality]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Plan allowlists and catalog integrity checks belong to the validation runner contract.
+  - rule_id: validation_ownership_catalog_services
+    priority: 120
+    include:
+      - backend/services/validation/file_ownership.py
+      - backend/services/validation/module_registry.py
+      - backend/services/validation/ui_target_catalog.py
+    primary_module: validation.module_quality
+    impact_modules: [validation.runner]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Ownership, module, and UI target catalogs select direct module validation plans.
   - rule_id: validation_services
     priority: 100
     include:

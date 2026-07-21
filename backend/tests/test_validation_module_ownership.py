@@ -109,6 +109,11 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
     assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")
     assert registry.get_module("watchlist").test_plans_required == ("l0", "watchlist_backend")
+    assert registry.get_module("validation.runner").test_plans_required == ("l0", "validation_catalog_integrity")
+
+    plan_catalog = catalog.match_path("backend/services/validation/plan_catalog.py")
+    assert plan_catalog.ownership_status == "mapped"
+    assert plan_catalog.primary_module == "validation.runner"
 
 
 def test_registry_rejects_duplicate_module_id(tmp_path: Path) -> None:

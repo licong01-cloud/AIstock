@@ -57,7 +57,7 @@ def test_large_feature_pr_infers_non_t0_tier_and_complexity_scope(monkeypatch) -
     assert summary["feature_linkage_gate"]["warnings"] == ["linked_issue_or_design", "scope_definition"]
 
 
-def test_validation_select_keeps_indirect_impact_plans_recommended() -> None:
+def test_validation_select_excludes_indirect_impact_plans_without_explicit_contract() -> None:
     payload = flow.select_validation(
         [
             "backend/mcp/common.py",
@@ -66,15 +66,13 @@ def test_validation_select_keeps_indirect_impact_plans_recommended() -> None:
         ]
     )
 
-    assert payload["primary_modules"] == ["platform.mcp_gateway"]
-    assert payload["required_plans"] == ["l0"]
+    assert payload["primary_modules"] == ["platform.mcp_gateway", "qe.data_completeness"]
+    assert payload["required_plans"] == ["l0", "mcp_gateway_manifest_quality", "qe_data_contract_backend"]
     assert "research_assistant_backend" not in payload["required_plans"]
     assert "research_pipeline_backend" not in payload["required_plans"]
-    promoted = {item["plan_key"] for item in payload["plan_promotions"]}
-    assert "research_assistant_backend" in promoted
-    assert "research_pipeline_backend" in promoted
-    assert "research_assistant_backend" in payload["recommended_plans"]
-    assert "research_pipeline_backend" in payload["recommended_plans"]
+    assert payload["plan_promotions"] == []
+    assert "research_assistant_backend" not in payload["recommended_plans"]
+    assert "research_pipeline_backend" not in payload["recommended_plans"]
 
 
 def test_p0p1_gate_still_blocks_real_bug_json_fix_without_evidence(
