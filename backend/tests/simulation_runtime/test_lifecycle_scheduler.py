@@ -136,6 +136,10 @@ from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightError,
     LiveInferencePreflightResult,
 )
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.trading_core.errors import (
     BrokerSubmitError,
     BrokerUnavailableError,
@@ -264,7 +268,8 @@ def _release_and_bindings(
             "schedule_window": {"mode": "open_to_close"},
         }
     execution_policy_json = _with_b0_quote_policy(execution_policy_json)
-    execution_policy_sha256 = canonical_json_sha256(execution_policy_json)
+    execution_policy_json = normalize_execution_policy_json(execution_policy_json)
+    execution_policy_sha256 = compute_execution_policy_sha256(execution_policy_json)
     release = service.create_release(
         package_id="pkg_scheduler",
         manifest_sha256="manifest_scheduler",
@@ -641,16 +646,39 @@ def _position_context(*, portfolio_id: str, local_broker=None, cash: float | Non
 
 
 def _local_sim_execution_policy() -> dict[str, Any]:
-    return {
-        "policy_id": "exec_policy_twap",
-        "policy_sha256": "exec_policy_hash_twap",
-        "policy_json": {
+    policy_json = normalize_execution_policy_json(
+        {
             "algo_code": "TWAP",
             "algo_config": {
                 "allow_partial_fill": True,
                 "split_count": 1,
             },
-        },
+        }
+    )
+    return {
+        "policy_id": "exec_policy_twap",
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
+
+
+def _canonical_local_sim_policy_for_test(policy: dict[str, Any]) -> dict[str, Any]:
+    raw_policy_json = policy.get("policy_json")
+    assert isinstance(raw_policy_json, dict)
+    normalized = normalize_execution_policy_json(raw_policy_json)
+    id_field = next(
+        field
+        for field in (
+            "validated_execution_policy_id",
+            "policy_version_id",
+            "policy_id",
+        )
+        if field in policy
+    )
+    return {
+        id_field: str(policy[id_field]),
+        "policy_sha256": compute_execution_policy_sha256(normalized),
+        "policy_json": normalized,
     }
 
 
@@ -665,7 +693,9 @@ def _local_sim_context_with_real_broker(
 ) -> SimulationRunContext:
     manifest = _score_weighted_manifest(release)
     current_positions = dict(positions or {})
-    policy = execution_policy or _local_sim_execution_policy()
+    policy = _canonical_local_sim_policy_for_test(
+        execution_policy or _local_sim_execution_policy()
+    )
     broker = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=cash,
@@ -698,11 +728,11 @@ def _local_sim_realtime_context_with_real_broker(
     cash: float,
     positions: dict[str, PositionLot],
 ) -> SimulationRunContext:
-    policy = {
+    policy = _canonical_local_sim_policy_for_test({
         "policy_id": "exec_policy_twap_streaming",
-        "policy_sha256": "exec_policy_hash_twap_streaming",
+        "policy_sha256": "placeholder_replaced_by_test_helper",
         "policy_json": {"algo_code": "TWAP", "algo_config": {"allow_partial_fill": True, "split_count": 6}},
-    }
+    })
     broker = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=100_000,
@@ -11938,8 +11968,8 @@ def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -
     assert ctx.market_data_source == MinuteDataSource.TDX_REALTIME.value
 
 
-def test_production_context_provider_rejects_stale_portfolio_policy_when_release_policy_is_vnpy_id_only() -> None:
-    """LocalSim must not fall back to stale portfolio V25 when the runtime release points to vn.py."""
+def test_production_context_provider_policy_authority_rejects_incomplete_release_without_portfolio_fallback() -> None:
+    """LocalSim must not use stale portfolio V25 when the release snapshot is incomplete."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
@@ -11972,15 +12002,20 @@ def test_production_context_provider_rejects_stale_portfolio_policy_when_release
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
-    with pytest.raises(RuntimeConfigInvalidError, match="snapshot is missing full policy_json") as exc_info:
+    with pytest.raises(RuntimeConfigInvalidError, match="fields are not exact") as exc_info:
         provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
-    assert exc_info.value.context["release_execution_policy_version_id"] == policy_id
-    assert exc_info.value.context["portfolio_policy_algo_code"] == "V25_1_SMALL_CAP"
-    assert "LocalSim-compatible execution policy" in exc_info.value.context["required_action"]
+    assert exc_info.value.context["reason_code"] == (
+        "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID"
+    )
+    assert exc_info.value.context["missing_fields"] == ["policy_json"]
+    assert exc_info.value.context["portfolio_policy_consulted"] is False
+    assert "retire incomplete historical LocalSIM releases" in exc_info.value.context[
+        "required_action"
+    ]
 
 
-def test_production_context_provider_uses_runtime_release_policy_snapshot_over_portfolio_default() -> None:
+def test_production_context_provider_policy_authority_uses_runtime_release_snapshot_over_portfolio_default() -> None:
     """Runtime release policy_json is authoritative when present."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
@@ -12042,8 +12077,8 @@ def test_production_context_provider_uses_runtime_release_policy_snapshot_over_p
     assert market_data.calls[-1]["require_day_features"] is False
 
 
-def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_core_localsim_recovery():
-    """Alpha-core LocalSim recovery must use the Paper v2 validated policy snapshot, not manifest.minute_execution_policy."""
+def test_production_context_provider_policy_authority_never_uses_portfolio_policy_for_recovery():
+    """LocalSim recovery must keep the frozen release policy and ignore portfolio/manifest policy."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     release = _make_test_release()
@@ -12058,10 +12093,10 @@ def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_c
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
         execution_policy={
-            "validated_execution_policy_id": "exec_policy_close_price",
-            "policy_sha256": "policy_sha256",
+            "validated_execution_policy_id": "exec_policy_stale_portfolio_v25",
+            "policy_sha256": "stale_portfolio_hash_not_consulted",
             "policy_json": {
-                "algo_code": "CLOSE_PRICE",
+                "algo_code": "V25_1_SMALL_CAP",
                 "algo_config": {"allow_partial_fill": True},
             },
         },
@@ -12075,6 +12110,7 @@ def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_c
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.execution_policy_payload == release.release_config_json["execution_policy"]
     assert ctx.local_broker is not None
     ctx.local_broker._market_data_provider = market_data
     handle = ctx.local_broker.submit_order_intent(
@@ -12254,10 +12290,27 @@ def _make_test_release(
 ):
     from backend.services.simulation_runtime.models import StrategyRuntimeRelease
 
-    policy_payload = execution_policy or {
-        "policy_version_id": execution_policy_version_id,
-        "policy_sha256": execution_policy_sha256,
-    }
+    if execution_policy is None:
+        policy_json = normalize_execution_policy_json(
+            {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            }
+        )
+        execution_policy_sha256 = compute_execution_policy_sha256(policy_json)
+        policy_payload = {
+            "policy_version_id": execution_policy_version_id,
+            "policy_sha256": execution_policy_sha256,
+            "policy_json": policy_json,
+        }
+    else:
+        policy_payload = dict(execution_policy)
+        raw_policy_json = policy_payload.get("policy_json")
+        if isinstance(raw_policy_json, dict) and raw_policy_json:
+            normalized = normalize_execution_policy_json(raw_policy_json)
+            execution_policy_sha256 = compute_execution_policy_sha256(normalized)
+            policy_payload["policy_sha256"] = execution_policy_sha256
+            policy_payload["policy_json"] = normalized
     return StrategyRuntimeRelease(
         package_id="pkg",
         manifest_sha256="aa",

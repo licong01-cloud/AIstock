@@ -37,6 +37,10 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteExecutionMarketInput,
     PaperV2MinuteMarketDataProvider,
 )
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     DataUnavailableError,
@@ -62,6 +66,19 @@ _TRADE_DATE = date(2024, 1, 2)
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
+
+
+def _explicit_daemon_execution_policy(manifest) -> dict:
+    minute_policy = manifest.minute_execution_policy
+    assert minute_policy is not None
+    policy_json = normalize_execution_policy_json(
+        minute_policy.model_dump(mode="json")
+    )
+    return {
+        "validated_execution_policy_id": "paper_v2_daemon_e2e_explicit_policy",
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
 
 
 class _FakeProvider(PaperV2MinuteMarketDataProvider):
@@ -151,6 +168,7 @@ def _wire(
         data_source=MinuteDataSource.DB_HISTORICAL,
         manifest=manifest,
         market_data_provider=provider or _FakeProvider(symbol="600000.SH"),
+        execution_policy=_explicit_daemon_execution_policy(manifest),
     )
     gateway = SimGateway.from_local_sim(backend)
     gateway.connect()
@@ -353,6 +371,7 @@ def test_simgateway_lifecycle_invariants(tmp_path: Path) -> None:
         data_source=MinuteDataSource.DB_HISTORICAL,
         manifest=manifest,
         market_data_provider=_FakeProvider(symbol="600000.SH"),
+        execution_policy=_explicit_daemon_execution_policy(manifest),
     )
     gateway = SimGateway.from_local_sim(backend)
     assert gateway.state == SimGatewayConnectionState.INIT

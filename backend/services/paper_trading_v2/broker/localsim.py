@@ -38,7 +38,9 @@ from backend.services.paper_trading_v2.market_data import (
     assert_broker_market_source_match,
     pre_trade_tradability_is_suspended,
 )
-from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
+from backend.services.strategy_package.execution_policy import (
+    validate_frozen_execution_policy_snapshot,
+)
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
@@ -55,7 +57,6 @@ from backend.services.trading_core.errors import (
     ExecutionAlgoError,
     InvalidStateTransitionError,
     RiskRuleError,
-    RuntimeConfigInvalidError,
     TradingCoreError,
 )
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
@@ -1987,23 +1988,17 @@ class LocalSimBackend(BrokerBackend):
         manifest: StrategyPackageManifest,
         execution_policy: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        if execution_policy is not None:
-            payload = dict(execution_policy)
-            policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
-            return normalize_execution_policy_json(dict(policy_json))
-
-        minute_policy = getattr(manifest, "minute_execution_policy", None)
-        if minute_policy is not None:
-            return normalize_execution_policy_json(minute_policy.model_dump(mode="json"))
-
-        raise RuntimeConfigInvalidError(
-            "LocalSim execution requires a validated execution policy snapshot",
+        snapshot = validate_frozen_execution_policy_snapshot(
+            execution_policy,
             context={
+                "stage": "LOCAL_SIM_BROKER_INITIALIZATION",
                 "package_id": manifest.package_id,
                 "manifest_sha256": manifest.manifest_sha256,
                 "manifest_version": manifest.manifest_version,
+                "manifest_policy_consulted": False,
             },
         )
+        return dict(snapshot["policy_json"])
 
     def _build_status(self, handle_id: str, order: Order) -> OrderHandleStatus:
         state = _ORDER_STATUS_TO_HANDLE_STATE.get(order.status)

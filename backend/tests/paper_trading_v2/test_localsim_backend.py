@@ -38,6 +38,10 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteExecutionMarketInput,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
@@ -65,6 +69,20 @@ from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_ma
 
 
 TRADE_DATE = date(2024, 1, 2)
+
+
+def _test_execution_policy_snapshot(
+    policy_json: dict,
+    *,
+    policy_id: str = "exec_policy_test_localsim",
+    id_field: str = "validated_execution_policy_id",
+) -> dict:
+    normalized = normalize_execution_policy_json(policy_json)
+    return {
+        id_field: policy_id,
+        "policy_sha256": compute_execution_policy_sha256(normalized),
+        "policy_json": normalized,
+    }
 
 
 def _make_market_input(
@@ -161,6 +179,34 @@ def _build_backend(
 ) -> tuple[LocalSimBackend, FakeMarketDataProvider, StrategyPackageManifest]:
     manifest = make_paper_enabled_manifest()
     market_data_provider = provider or FakeMarketDataProvider()
+    if execution_policy is None:
+        minute_policy = manifest.minute_execution_policy
+        assert minute_policy is not None
+        execution_policy = _test_execution_policy_snapshot(
+            minute_policy.model_dump(mode="json")
+        )
+    else:
+        raw_policy_json = execution_policy.get("policy_json")
+        assert isinstance(raw_policy_json, dict)
+        policy_id = str(
+            execution_policy.get("validated_execution_policy_id")
+            or execution_policy.get("policy_version_id")
+            or execution_policy.get("policy_id")
+        )
+        id_field = next(
+            field
+            for field in (
+                "validated_execution_policy_id",
+                "policy_version_id",
+                "policy_id",
+            )
+            if field in execution_policy
+        )
+        execution_policy = _test_execution_policy_snapshot(
+            raw_policy_json,
+            policy_id=policy_id,
+            id_field=id_field,
+        )
     backend = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=initial_cash,
@@ -1249,6 +1295,11 @@ def test_localsim_init_rejects_miniqmt_realtime_source() -> None:
 
 def test_localsim_init_accepts_tdx_and_db() -> None:
     manifest = make_paper_enabled_manifest()
+    minute_policy = manifest.minute_execution_policy
+    assert minute_policy is not None
+    execution_policy = _test_execution_policy_snapshot(
+        minute_policy.model_dump(mode="json")
+    )
     for source in (MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL):
         LocalSimBackend(
             portfolio_id=f"p_{source.value.lower()}",
@@ -1256,6 +1307,7 @@ def test_localsim_init_accepts_tdx_and_db() -> None:
             data_source=source,
             manifest=manifest,
             market_data_provider=FakeMarketDataProvider(),
+            execution_policy=execution_policy,
         )
 
 
@@ -1318,7 +1370,7 @@ def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
     assert [fill.quantity for fill in snapshot["fills"]] == [1547]
 
 
-def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
+def test_localsim_policy_authority_uses_explicit_validated_execution_policy_snapshot() -> None:
     manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
     provider = FakeMarketDataProvider()
     backend = LocalSimBackend(
@@ -1327,14 +1379,13 @@ def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
         data_source=MinuteDataSource.DB_HISTORICAL,
         manifest=manifest,
         market_data_provider=provider,
-        execution_policy={
-            "validated_execution_policy_id": "exec_policy_close",
-            "policy_sha256": "policy_sha256",
-            "policy_json": {
+        execution_policy=_test_execution_policy_snapshot(
+            {
                 "algo_code": "CLOSE_PRICE",
                 "algo_config": {"allow_partial_fill": True},
             },
-        },
+            policy_id="exec_policy_close",
+        ),
     )
 
     handle = backend.submit_order_intent(_buy_intent(backend, quantity=100))
@@ -1343,10 +1394,10 @@ def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
     assert provider.calls[-1]["require_day_features"] is False
 
 
-def test_localsim_fails_fast_without_execution_policy_snapshot() -> None:
-    manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
+def test_localsim_policy_authority_fails_fast_without_snapshot_even_when_manifest_has_policy() -> None:
+    manifest = make_paper_enabled_manifest()
 
-    with pytest.raises(RuntimeConfigInvalidError, match="validated execution policy snapshot"):
+    with pytest.raises(RuntimeConfigInvalidError, match="explicit non-empty object") as exc_info:
         LocalSimBackend(
             portfolio_id="paper_local_missing_policy",
             initial_cash=100_000,
@@ -1354,9 +1405,11 @@ def test_localsim_fails_fast_without_execution_policy_snapshot() -> None:
             manifest=manifest,
             market_data_provider=FakeMarketDataProvider(),
         )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_MISSING"
+    assert exc_info.value.context["manifest_policy_consulted"] is False
 
 
-def test_localsim_explicit_empty_execution_policy_does_not_fall_back_to_manifest() -> None:
+def test_localsim_policy_authority_explicit_empty_snapshot_does_not_fall_back_to_manifest() -> None:
     with pytest.raises(RuntimeConfigInvalidError, match="non-empty object"):
         LocalSimBackend(
             portfolio_id="paper_local_empty_explicit_policy",
@@ -1368,11 +1421,35 @@ def test_localsim_explicit_empty_execution_policy_does_not_fall_back_to_manifest
         )
 
 
-def test_localsim_empty_portfolio_policy_falls_back_to_legacy_manifest_policy() -> None:
-    backend, provider, _ = _build_backend()
+def test_localsim_policy_authority_rejects_hash_or_identity_alias_conflicts() -> None:
+    policy_json = {"algo_code": "CLOSE_PRICE", "algo_config": {}}
+    snapshot = _test_execution_policy_snapshot(policy_json)
+    snapshot["policy_version_id"] = "conflicting_alias"
+    with pytest.raises(RuntimeConfigInvalidError) as alias_exc:
+        LocalSimBackend(
+            portfolio_id="paper_local_policy_alias_conflict",
+            initial_cash=100_000,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            manifest=make_paper_enabled_manifest(),
+            market_data_provider=FakeMarketDataProvider(),
+            execution_policy=snapshot,
+        )
+    assert alias_exc.value.context["reason_code"] == (
+        "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID"
+    )
 
-    assert backend.submit_order_intent(_buy_intent(backend))
-    assert provider.calls[-1]["require_day_features"] is False
+    hash_conflict = _test_execution_policy_snapshot(policy_json)
+    hash_conflict["policy_sha256"] = "0" * 64
+    with pytest.raises(RuntimeConfigInvalidError) as hash_exc:
+        LocalSimBackend(
+            portfolio_id="paper_local_policy_hash_conflict",
+            initial_cash=100_000,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            manifest=make_paper_enabled_manifest(),
+            market_data_provider=FakeMarketDataProvider(),
+            execution_policy=hash_conflict,
+        )
+    assert hash_exc.value.context["reason_code"] == "LOCALSIM_EXECUTION_POLICY_HASH_CONFLICT"
 
 
 def test_submit_order_intent_rejects_cross_portfolio_intent() -> None:

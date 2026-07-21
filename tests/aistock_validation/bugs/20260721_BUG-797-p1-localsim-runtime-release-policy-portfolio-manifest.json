@@ -5,10 +5,12 @@
     "backend/services/simulation_runtime/service.py",
     "backend/services/simulation_runtime/models.py",
     "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/paper_trading_v2/daemon/demo_run.py",
     "backend/services/strategy_package/execution_policy.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
     "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/paper_trading_v2/test_daemon_sim_e2e.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260721_BUG-797-p1-localsim-runtime-release-policy-portfolio-manifest.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
