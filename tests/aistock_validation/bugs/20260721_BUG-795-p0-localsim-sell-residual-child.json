@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-795",
-  "closed_at": null,
+  "closed_at": "2026-07-21T09:36:17Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -41,8 +41,8 @@
   "expected": "所有注册分钟算法的非最终 SELL child 均满足对应板块最小数量与增量；只有 final child 且数量等于全部 remaining quantity 时允许 residual 清仓。主板 300 股多切片不得产生 50 股中间单，最终总成交仍精确为 300；科创板最小 200、1 股增量和最终 residual 语义保持。",
   "first_seen_at": "2026-07-21T05:28:15.228973Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fbc981892b88435088c4676322443edad47d3a56",
+  "fixed_at": "2026-07-21T09:53:34.600096Z",
   "github_issue_number": 2530,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2530",
   "last_seen_at": "2026-07-21T05:28:15.228973Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2534",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -71,6 +72,11 @@
     "fingerprint": "daa341ca7a4a05ae08dcb12d",
     "source_event_id": "FE-20260721-daa341ca7a4a"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/trading_core/test_minute_execution.py backend/tests/paper_trading_v2/test_localsim_backend.py -k sell_small_multi_slice_or_pov_sell_residual_or_twap_final_child_or_v24_v25_sell_residual_or_localsim_twap_sell -q -p no:cacheprovider -> 8 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
