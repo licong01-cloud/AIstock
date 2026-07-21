@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-805",
-  "closed_at": null,
+  "closed_at": "2026-07-21T15:54:07.853820Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,8 +32,8 @@
   "expected": "Selection artifact v2 preserves and normalizes every provided historical window-lineage group so Phase 1R can compare exact single- and multi-Alpha windows without changing model scores or package admission.",
   "first_seen_at": "2026-07-21T09:06:55.483671Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c410b8c299592f7a747c6966dbfed43987d3aab1",
+  "fixed_at": "2026-07-21T15:54:07.853834Z",
   "github_issue_number": 2556,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2556",
   "last_seen_at": "2026-07-21T09:06:55.483671Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2558",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "02706a38a841c106e6409cf5",
     "source_event_id": "FE-20260721-02706a38a841"
   },
+  "validation_evidence": [
+    "source PR CI green; selection evidence tests passed; R2-B v4 E2E passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
