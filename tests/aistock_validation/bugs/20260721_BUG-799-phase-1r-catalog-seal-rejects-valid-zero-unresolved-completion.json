@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-799",
-  "closed_at": null,
+  "closed_at": "2026-07-21T15:17:39Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -36,8 +36,8 @@
   "expected": "A COMPLETED VERIFY catalog with full resolved count, zero unresolved count, and a latest checkpoint seals the historical request.",
   "first_seen_at": "2026-07-21T07:41:56.315106Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "73eb3599882973baba6686397cf5456dbb587f7b",
+  "fixed_at": "2026-07-21T15:44:04.482295Z",
   "github_issue_number": 2542,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2542",
   "last_seen_at": "2026-07-21T07:41:56.315106Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2545",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -65,6 +66,9 @@
     "fingerprint": "5f4c067d2b08639816da70c4",
     "source_event_id": "FE-20260721-5f4c067d2b08"
   },
+  "validation_evidence": [
+    "source PR CI green; DEV migration apply verify exact-reapply; R2-B v4 E2E passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
