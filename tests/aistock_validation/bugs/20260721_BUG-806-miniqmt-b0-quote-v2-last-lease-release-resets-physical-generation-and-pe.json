@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-806",
-  "closed_at": null,
+  "closed_at": "2026-07-21T18:04:47Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -47,8 +47,8 @@
   "expected": "同一 data_session_key/process owner 生命周期内 generation 严格单调；last lease release 后再次 acquire 获得晚于已 fenced generation 的 generation，新 bootstrap/callback 返回显式 True ACK，旧 callback 继续被拒绝。",
   "first_seen_at": "2026-07-21T15:51:13.384932Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4932c808f0372748a79e3c17fc69c4a59c6d6fd0",
+  "fixed_at": "2026-07-21T18:06:34.172048Z",
   "github_issue_number": 2566,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2566",
   "last_seen_at": "2026-07-21T15:51:13.384932Z",
@@ -56,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2570",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -68,7 +69,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -77,6 +78,12 @@
     "fingerprint": "cbc8364aa956850893ce1146",
     "source_event_id": "FE-20260721-cbc8364aa956"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s miniqmt_execution_runtime_l2 -> 381 passed, 1 skipped",
+    "python -m nox -s simulation_core_l2 -> 436 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
