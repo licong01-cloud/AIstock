@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-803",
-  "closed_at": null,
+  "closed_at": "2026-07-21T15:53:05.214847Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,8 +34,8 @@
   "expected": "The historical composition passes only its explicit task runtime root to the WSL safe-artifact-root environment so the existing workspace policy accepts that materialized local cache while continuing to reject worker paths and all unrelated roots.",
   "first_seen_at": "2026-07-21T08:31:14.369163Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6b700eb9d8f86335c728bbab38ae795251676a5d",
+  "fixed_at": "2026-07-21T15:53:05.214861Z",
   "github_issue_number": 2550,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2550",
   "last_seen_at": "2026-07-21T08:31:14.369163Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2557",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "396194e60a27dc33b3f7ac31",
     "source_event_id": "FE-20260721-396194e60a27"
   },
+  "validation_evidence": [
+    "source PR CI green; runtime-root propagation tests passed; R2-B v4 E2E passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
