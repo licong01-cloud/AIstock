@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v2.4
+> **版本**: v2.5
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-21
-> **状态**: Phase 0 已完成；Phase 1 P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；BUG-788 后单例与 Loop1～Loop10 同口径真实运行均 <100 秒且成功，既有 10 候选 receipt <30 分钟；BUG-798 pre-ST-PIT 兼容源码待合入及重启后复验，lease recovery 与真实 UI/Playwright 仍待外部验收
+> **状态**: Phase 0 已完成；Phase 1 P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；BUG-800/BUG-801/BUG-804 后 pre-ST-PIT 兼容批次 9/9 成功，worker 进程中断按批准状态机 fail-closed 为 timed_out、显式 retry 2/2 成功；严格冷热缓存分段 receipt、长期服务监督与真实 UI/Playwright 仍待外部验收
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -26,8 +26,8 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 
 **Phase 0-3 目标与当前状态**:
 - ✅ 离线快速评估：BUG-788 后 forward-return 重试 55.4 秒完成；Loop1～Loop10 同口径单例 evaluation 各 69.3～99.3 秒，均小于 10 分钟，partial label/market evidence 以 degraded warning 显式保留。
-- 🟡 批量对比筛选：batch-relative scorer/top-3、有界并发共享输入和 lease recovery 源码已实现；既有 10 候选 batch `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded、约 12 分 37 秒，当前代码严格冷热缓存复跑和进程中断 recovery 仍待补。
-- 🟡 自动评估执行：独立 Windows worker service 已在 schema v2 与 BUG-788/BUG-789 后重启并自动消费真实 durable queue；不创建任务、不训练 HMM、不接入 FastAPI 或 Phase 3 scheduler。当前 10-case queue receipt 已完成，长期监督、进程中断 lease recovery 与服务化部署仍待完成。
+- 🟡 批量对比筛选：batch-relative scorer/top-3、有界并发共享输入和 durable retry 已实现；既有 10 候选 batch `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded、约 12 分 37 秒，pre-ST-PIT 兼容 batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded、约 24 分 4 秒。严格冷热缓存分阶段 timing/RSS receipt 仍待补，不能用总耗时替代。
+- 🟡 自动评估执行：独立 Windows worker service 已自动消费真实 durable queue；不创建任务、不训练 HMM、不接入 FastAPI 或 Phase 3 scheduler。进程中断验收确认 evaluation lease 过期后 fail-closed 为 `timed_out`，旧终态不原地复活，只有显式 `retry-failed` 创建新 generation；retry batch 2/2 succeeded。长期监督与服务化部署仍待完成。
 - ⬜ 风险预警可视化：每日板块风险预警 + 状态热力图由 Phase 2 交付。
 - ⬜ 滚动训练自动化：研究候选滚动训练与时效性监控由 Phase 3 交付。
 - ✅ 数据环境隔离：Phase 0 数据源、Phase 1 source manifest 与只读 market repository 已完成。
@@ -103,7 +103,8 @@ Phase 1 当前进度：
   versioned evaluator、input adapter、latest-common/交易日 market repository、durable executor 和
   `hmm_recommendation_v1` scorer；BUG-736/BUG-737 由 PR #2377（merge
   `8372d043afc1a47fc1c8cd341c70adccc2b236c9`）完成旧诊断唯一计算路径迁移。
-- F-007/F-009 已验证；P1-C 的 worker CLI、真实 API/UI 源码和 BUG-742～BUG-748 审计硬化已完成；BUG-772/PR #2471 修复冻结 legacy ST-PIT runtime artifact 重放，BUG-788/BUG-789 后 Loop1～Loop10 同口径 API/worker receipt 已完成。BUG-798 的 pre-ST-PIT allowlisted compatibility 源码待合入并在 worker 重启后补真实 receipt；进程中断 lease recovery 与实机 UI/Playwright 尚未完成。
+- F-007/F-009 已验证；P1-C 的 worker CLI、真实 API/UI 源码和 BUG-742～BUG-748 审计硬化已完成；BUG-772/PR #2471 修复冻结 legacy ST-PIT runtime artifact 重放，BUG-788/BUG-789 后 Loop1～Loop10 同口径 API/worker receipt 已完成。BUG-800/BUG-801/BUG-804 后 pre-ST-PIT 兼容 batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded，path-free provenance、worker 单项失败存活和 immutable artifact replay 均通过真实运行。
+- 2026-07-21 受控中断 PID 73948 后，两个已运行 evaluation 在 90 秒 lease 到期时按详细设计进入 `timed_out`，剩余 evaluation 由新 worker PID 37024 完成；显式 retry batch `hmmb_9e1d0eaf43d1432bb1cbbbba53cca5b6` 只包含两个超时项并 2/2 succeeded。该语义是 fail-closed terminalization + explicit retry，不是自动重新认领同一 evaluation。严格冷热缓存分段 receipt 与实机 UI/Playwright 尚未完成。
 - 2026-07-18 用户已批准将 Phase 1 worker 从“仅人工有限命令”扩展为显式 `--serve` 独立服务；2026-07-19 已在 Windows 显式启动并完成首次真实 queue receipt。该 activation 不包含 Phase 3 自动滚动训练调度，也不改变 QE/Paper/生产 snapshot 隔离边界。
 
 ---
@@ -297,7 +298,7 @@ integration receipt 已完成；Phase 1 implementation unlocked。
 - P1-A/P1-B 后端基础、evaluator、executor、source manifest、market repository 和 scorer 已合入 main。
 - 旧 `hmm_offline_diagnostic.py` 已复用唯一 evaluator/Phase 0 缓存/canonical 只读行情 repository，
   不再包含硬编码 DB 凭据、QE config 下载或宽泛异常吞错。
-- API 端点、`/hmm-evolution` UI 和 worker CLI/service 源码属于 P1-C 且已实现；BUG-773～BUG-777 的 schema v2 已于 2026-07-20 完成生产 DDL 与 exact verify。2026-07-21 独立 Windows worker 已加载 BUG-788/BUG-789 后代码：forward-return 重试 55.4 秒成功、Loop1～Loop10 同口径 v2 evaluation 全部 succeeded，Prediction Store `zero_copy=true`、market transaction read-only，缺失 label/market evidence 保持显式 degraded。pre-ST-PIT 参考 Loop 的完整 v2 重放暴露 BUG-798，源码修复仍须合入并在下一次独立 worker 重启后补真实 receipt；进程中断 lease recovery 与实机 UI/Playwright 仍未完成。
+- API 端点、`/hmm-evolution` UI 和 worker CLI/service 源码属于 P1-C 且已实现；BUG-773～BUG-777 的 schema v2 已于 2026-07-20 完成生产 DDL 与 exact verify。2026-07-21 独立 Windows worker 已加载 BUG-800/BUG-801/BUG-804 后代码：pre-ST-PIT 兼容 batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded，Prediction Store/QE workspace artifact hash、兼容 ST-PIT donor receipt、market content hash 与 read-only transaction 均保留，缺失 label/market evidence 显式 degraded。受控 worker 中断按 §12.3 状态机把过期 evaluation 终态化为 `timed_out`，显式 retry 新 generation 2/2 succeeded；不自动复活旧 evaluation。严格冷热缓存分段 receipt 与实机 UI/Playwright 仍未完成。
 
 **2026-07-19 性能事实（非通过回执）**：旧同步 preparation 路径的 API 202 前耗时约 66～69 秒；
 batch `created_at → completed_at` 观测为 Loop1 146.638s、Loop2 222.352s、Loop3 304.339s、
@@ -326,8 +327,8 @@ POST /api/v1/hmm-evolution/batches/{batch_id}/retry-failed
 **验收标准**:
 - [ ] 单个评估在标准验收基准数据集、指定硬件上冷缓存 < 10 分钟。
 - [ ] 批量 10 个候选复用只读输入、限制并发，在同一基准上 < 30 分钟。
-- [ ] 结果具备内容校验重放，行情/asset/universe 漂移时结构化失败，并具有 heartbeat、取消和幂等语义；若未来要求完全离线永久重建，必须另交付不可变行情 artifact。
-- [ ] 与至少 10 个历史 QE case 做方向性/排序一致性对照；差异只作为证据，不作为未经批准的淘汰门禁。
+- [x] 结果具备内容校验重放，行情/asset/universe 漂移时结构化失败，并具有 heartbeat、取消、幂等、lease 超时终态化和显式 retry 语义；若未来要求完全离线永久重建，必须另交付不可变行情 artifact。
+- [x] 与至少 10 个历史 QE case 做方向性/排序一致性对照；差异只作为证据，不作为未经批准的淘汰门禁。
 - [ ] 前端以中文表格、指标卡、对比图、固定证据区和独立详情页为主；不使用 Paper v2
   视觉依赖、抽屉式列表或原始 JSON/manifest/error dump 作为信息界面。
 
@@ -873,10 +874,10 @@ docs/
 2. **P0-B artifact/cache hardening**：处理 F-004，并补可信 manifest 与容量边界。
 3. **P0-C 验证与文档收敛**：处理 F-005，修正文档、专用 CI、受控 smoke 和 benchmark。
 4. **P1-A asset/schema/repository（已完成外部验收）**：交付 F-006/F-008 的 QE 全资产只读 reader、Python bootstrap、repository 和任务状态机。
-5. **P1-B evaluator（完整性修复中）**：已从既有诊断脚本抽取唯一纯计算逻辑；2026-07-19 登记
-   BUG-768～BUG-770，补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据完整性和逐日状态语义，
-   修复完成并通过验证后才恢复“已完成”结论。
-6. **P1-C API/UI（源码与审计硬化已完成，外部验收部分完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；BUG-770～BUG-772 修复逐日状态、路由和冻结 ST-PIT 重放；BUG-788/BUG-789 后 schema v2 worker、10-case 与既有 10 候选性能 receipt 已完成。继续完成 BUG-798 重启后真实复验、进程中断 lease recovery 与真实 UI/Playwright。
+5. **P1-B evaluator（已完成外部验收）**：既有诊断脚本已迁入唯一纯计算逻辑；BUG-768～BUG-774、
+   BUG-788、BUG-798、BUG-800 和 BUG-804 补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据、
+   逐日状态、内容校验重放和 pre-ST-PIT allowlisted compatibility；F-007/F-009 已验证。
+6. **P1-C API/UI（源码与审计硬化已完成，外部验收部分完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；schema v2 worker、10-case、10/9 候选性能、进程中断 fail-closed 与显式 retry receipt 已完成。继续补严格冷热缓存分段 timing/RSS、长期服务监督与真实 UI/Playwright。
 7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
 8. **P3 研究训练**：先交付 F-014；F-015 自动调度部分等待独立语义批准。
 
@@ -914,12 +915,12 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 | F-003 | `realtime_source.py`; `models.py`; BUG-689/#2266 | `python -m pytest backend/tests/hmm_data_source/test_realtime_source.py backend/tests/hmm_evolution/test_service.py -q`；candidate identity、隐式 latest 拒绝、filter contract | verified | 无 |
 | F-004 | `cache_manager.py`; `artifact_manifest.py`; `prediction_store_resolver.py`; BUG-690/#2270 | `python -m pytest backend/tests/hmm_data_source/test_cache_manager.py backend/tests/hmm_data_source/test_backtest_source.py -q`；路径/原子/跨进程锁/容量/reparse/corruption fail-loud | verified | 无 |
 | F-005 | `noxfile.py`; `ci_change_classifier.py`; BUG-691/#2273 | `python -m nox -s hmm_data_source_backend`；`backend/tests/hmm_data_source/test_realtime_source.py` 与 integration receipt | verified | 无 |
-| F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；AIstock QE asset reader + candidate bootstrap/repository；RD-Agent PR #4 | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 Loop8 complete catalog/zero-copy receipt；2026-07-20 DEV/production `hmm_evolution_v2` exact verify | approved_by_user_implementation_complete_external_acceptance_pending | schema v2 production DDL 已 applied_and_verified；API/worker v2 重启与完整外部验收仍 pending |
-| F-007 | Phase 1 详细设计 §7/§8；`evaluator.py`、`input_adapter.py`、`market_repository.py`、`source_manifest.py`、`universe.py`；BUG-772～BUG-774、BUG-788、BUG-798 | `python -m pytest backend/tests/hmm_evolution/test_market_repository.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_universe.py -q`；2026-07-21 Loop1～Loop10 market hash/read-only/zero-copy receipt；BUG-798 config/pool/donor artifact hash direct smoke | approved_by_user_implementation_complete_external_acceptance_partial | 当前 10-case 已重跑；BUG-798 源码合入后仍需 worker 重启和 pre-ST-PIT Loop1 真实终态 receipt，不宣称永久离线重建 |
-| F-008 | Phase 1 详细设计 §10～§13；durable batch/evaluation/item repository、worker/input adapter/executor；BUG-742/BUG-743 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`；既有 dev PostgreSQL 8-worker receipt；10 候选 `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded、约 12 分 37 秒 | approved_by_user_implementation_complete_external_acceptance_partial | 10 候选性能目标已有 receipt；仍需进程中断 lease recovery、严格冷热缓存刷新与服务化部署验收 |
+| F-006 | Phase 1 详细设计 §5.3/§6/§10/§11；AIstock QE asset reader + candidate bootstrap/repository；RD-Agent PR #4 | `python -m pytest backend/tests/hmm_evolution/test_qe_asset_reader.py backend/tests/hmm_evolution/test_candidate_artifact.py backend/tests/hmm_evolution/test_repository_integration.py -q`；真实 Loop8 complete catalog/zero-copy receipt；2026-07-20 DEV/production `hmm_evolution_v2` exact verify；2026-07-21 pre-ST-PIT 兼容 batch 9/9 succeeded | verified | 无 |
+| F-007 | Phase 1 详细设计 §7/§8；`evaluator.py`、`input_adapter.py`、`market_repository.py`、`source_manifest.py`、`universe.py`；BUG-772～BUG-774、BUG-788、BUG-798、BUG-800、BUG-804 | `python -m pytest backend/tests/hmm_evolution/test_market_repository.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_universe.py -q`；Loop1～Loop10 market hash/read-only/zero-copy receipt；pre-ST-PIT batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded，path-free donor receipt 与 artifact/source/market hash 回读通过；设计边界仍是不承诺永久离线重建、行情内容漂移 fail loud | verified | 无 |
+| F-008 | Phase 1 详细设计 §10～§13；durable batch/evaluation/item repository、worker/input adapter/executor；BUG-742/BUG-743/BUG-801 | `python -m pytest backend/tests/hmm_evolution/test_worker.py backend/tests/hmm_evolution/test_input_adapter.py backend/tests/hmm_evolution/test_repository_integration.py -q`；10 候选 `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded；中断 batch `hmmb_39fe2314e09041a9a056467a87d4fb46` fail-closed 为 2 timed_out + 1 succeeded；retry batch `hmmb_9e1d0eaf43d1432bb1cbbbba53cca5b6` 2/2 succeeded | approved_by_user_implementation_complete_external_acceptance_partial | lease/fencing/显式 retry 已验收；严格冷热缓存分阶段 timing/RSS receipt 仍 pending |
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式 | approved_by_user_implementation_complete_external_acceptance_partial | API/worker 10-case 已完成；仍需真实页面截图与完整 Playwright；风险/训练页不得用静态占位冒充完成 |
-| F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 Windows 独立 worker PID 74728、5 秒 polling、10-case queue 全部终态成功且活动队列归零 | approved_by_user_implementation_complete_external_acceptance_partial | schema v2 restart/queue receipt 已完成；仍需长期监督、进程中断 lease recovery 和服务化部署验收 |
+| F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零 | approved_by_user_implementation_complete_external_acceptance_partial | 中断 fail-closed/显式恢复已完成；长期监督与正式服务化部署验收仍 pending |
 | F-011 | Phase 2 独立 F2 详细设计目标：versioned state generator + alert state machine | `backend/tests/hmm_risk/test_state_generator.py`、`backend/tests/hmm_risk/test_alert_state_machine.py`（目标路径，PR 实现前不得标完成） | approved_by_user_for_implementation | 先完成唯一计算权威、watermark/dedupe/revision/freshness 详细设计 |
 | F-012 | Phase 2 advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
 | F-013 | 本文 §2.2/Phase 2 UI 契约；risk evidence/report + `/hmm-risk` 默认首页 | `frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：L1/L2/7 日 heatmap、固定详情、预警、renderer/error） | approved_by_user_for_implementation | Phase 2 F2 设计与真实 API/UI 未完成；不新增交易 heat score |
@@ -971,6 +972,7 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.5 | 2026-07-21 | 回填 BUG-800/BUG-801/BUG-804 后 pre-ST-PIT 9/9 真实回执；按 Phase 1 详细设计修正 worker 中断语义为 lease 过期 fail-closed `timed_out` + 显式 retry 新 generation，并记录 3 候选中断批次与 2/2 retry；保留严格冷热缓存、长期监督和真实 UI/Playwright 缺口。 |
 | v2.4 | 2026-07-21 | 回填 schema v2 worker、BUG-788/BUG-789 与 Loop1～Loop10 真实运行 receipt；登记 BUG-798，并定义 donor identity、config/pool/artifact/coverage 全固定且 provenance 显式的 pre-ST-PIT cross-loop compatibility，禁止 live/近似/静默 fallback。 |
 | v2.3 | 2026-07-20 | 回填 BUG-775 `hmm_evolution_v2` DEV-first 生产 DDL receipt：exact schema/constraint/index/comment verify、受保护数据摘要不变、repository read smoke 通过；明确 API/worker 未重启，运行时激活仍与 DDL 分开报告 |
 | v2.2 | 2026-07-19 | 对齐 BUG-773～BUG-777：修正 BIGINT 行情收益、加入版本化 value/missing-evidence content hash 与历史 known-invalid 语义、API durable preparation receipt、`metric_availability_ratio`、真实 end-to-end 性能口径、legacy ST-PIT 兼容约束、Phase 2 state-generator F2 前置和可核验验收矩阵；schema v2 生产 DDL 独立 pending |
