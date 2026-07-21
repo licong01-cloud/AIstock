@@ -175,6 +175,8 @@ def get_history_window(
     adj: str = "front",
     nan_policy: str = "dataservice_default",
     strict_fundamental: Optional[bool] = None,
+    allow_xtquant_fallback: bool = True,
+    allow_tushare_adj_fallback: bool = True,
 ) -> pd.DataFrame:
     """Return a historical window as MultiIndex(datetime, instrument).
 
@@ -232,7 +234,7 @@ def get_history_window(
     # 如果TimescaleDB有数据，直接使用
     if df_ts is not None and not df_ts.empty:
         df_result = _apply_qlib_field_naming(df_ts, fields)
-    else:
+    elif allow_xtquant_fallback:
         # Fallback: xtquant (only when TimescaleDB has no data or fails)
         logger.info("TimescaleDB无数据，尝试使用xtquant作为备选数据源")
         try:
@@ -274,6 +276,17 @@ def get_history_window(
             )
             log_data_source_failure("TimescaleDB history source raised error", context=ctx_ts, exc=exc)
             raise DataSourceError(f"get_history_window: TimescaleDB error: {exc}", context=ctx_ts) from exc
+    else:
+        ctx_ts = DataSourceContext(
+            api="get_history_window",
+            source="timescaledb",
+            universe_size=len(universe),
+            freq=freq,
+        )
+        raise DataSourceError(
+            "get_history_window: TimescaleDB returned no data and external fallback is disabled",
+            context=ctx_ts,
+        )
 
     # 2. 注入基本面与资金流数据 (REQ-DATASVC-P3-005)
     strict_fund = bool(strict_fundamental) if strict_fundamental is not None else (
@@ -343,7 +356,7 @@ def get_history_window(
     if fields is None or any(f.endswith("factor") for f in fields):
         try:
             from .adj_factor_provider import AdjFactorProvider
-            provider = AdjFactorProvider()
+            provider = AdjFactorProvider(use_tushare_fallback=allow_tushare_adj_fallback)
             adj_df = provider.get_adj_factor(universe, start or datetime(2000, 1, 1), end or datetime.now())
             if not adj_df.empty:
                 adj_df = provider.calculate_qfq_factor(adj_df)
@@ -359,8 +372,18 @@ def get_history_window(
                 df_result["factor"] = merged.set_index(["datetime", "instrument"])["qfq_factor"].fillna(1.0)
                 if fields and "$factor" in fields:
                     df_result = df_result.rename(columns={"factor": "$factor"})
-            else:
+            elif allow_tushare_adj_fallback:
                 df_result["factor"] = 1.0
+            else:
+                raise DataSourceError(
+                    "get_history_window: database adj_factor is empty and external fallback is disabled",
+                    context=DataSourceContext(
+                        api="get_history_window",
+                        source="market.adj_factor",
+                        universe_size=len(universe),
+                        freq=freq,
+                    ),
+                )
         except Exception as e:
             logger.error(f"Failed to fetch adj_factor: {e}")
             raise DataSourceError(f"复权因子查询失败，不应默认使用 factor=1.0: {e}") from e

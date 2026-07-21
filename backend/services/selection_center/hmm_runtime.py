@@ -80,6 +80,7 @@ class SectorHMMRuntime:
         manifest_sha256: str,
         require_frozen_snapshot: bool = False,
         effective_trade_date: date | None = None,
+        receipt_admissibility: str = "PROSPECTIVE_FIRST_OBSERVED",
     ) -> HMMAdjustmentResult:
         if not profile.enabled:
             return HMMAdjustmentResult(
@@ -270,7 +271,7 @@ class SectorHMMRuntime:
             "as_of_trade_date": trade_date.isoformat(),
             "effective_trade_date": effective_trade_date.isoformat() if effective_trade_date else None,
             "first_observed_at": observed_at.isoformat(),
-            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+            "admissibility": receipt_admissibility,
             "model_sha256": model_sha256,
             "model_artifact_sha256": model_sha256,
             "coefficients_sha256": coefficients_sha256,
@@ -328,11 +329,21 @@ class SectorHMMRuntime:
         trade_date: date,
         profile: RuntimeHMMProfile,
         package_id: str,
+        require_frozen_snapshot: bool = False,
     ) -> dict[str, Any]:
         """Validate the HMM artifact shape before live selection inference starts."""
 
         if not profile.enabled:
             return {"enabled": False}
+        if require_frozen_snapshot and profile.model_config_id and not profile.model_snapshot_id:
+            raise HMMRuntimeUnavailableError(
+                "historical HMM preflight requires an explicit model_snapshot_id",
+                context={
+                    "reason_code": "ADVISORY_HR_HMM_FROZEN_EVIDENCE_UNAVAILABLE",
+                    "package_id": package_id,
+                    "model_config_id": profile.model_config_id,
+                },
+            )
         profile = self._resolve_profile_snapshot(profile)
         if not profile.model_snapshot_id:
             raise HMMRuntimeUnavailableError(
@@ -372,6 +383,7 @@ class SectorHMMRuntime:
             profile=profile,
             trade_date=trade_date,
             package_id=package_id,
+            allow_generate=not require_frozen_snapshot,
         )
         daily_coefficients = artifact.payload.get("daily_coefficients")
         stock_sector_map = artifact.payload.get("stock_sector_map")
@@ -484,6 +496,7 @@ class SectorHMMRuntime:
             "enabled": True,
             "model_config_id": profile.model_config_id,
             "snapshot_id": profile.model_snapshot_id,
+            "model_snapshot_id": profile.model_snapshot_id,
             "snapshot_status": snapshot.get("status"),
             "signal_preset": profile.signal_preset,
             "model_path": str(model_path),
@@ -492,6 +505,19 @@ class SectorHMMRuntime:
             "sector_count": len(day_coefficients),
             "coefficient_count": len(valid_sector_codes),
             "stock_sector_map_count": len(stock_sector_map),
+            "generation_mode": "EXACT_SNAPSHOT" if require_frozen_snapshot else "PREFLIGHT",
+            "model_artifact_sha256": _file_sha256(model_path),
+            "coefficient_sha256": _file_sha256(artifact.path),
+            "input_data_max_dates_hash": (
+                canonical_evidence_json_sha256(snapshot["input_data_max_dates"])
+                if snapshot.get("input_data_max_dates") is not None
+                else None
+            ),
+            "snapshot_trained_at": _time_value(snapshot.get("trained_at")),
+            "available_at": _time_value(snapshot.get("available_at")),
+            "training_information_cutoff": _time_value(snapshot.get("training_information_cutoff")),
+            "as_of_trade_date": day_key,
+            "effective_trade_date": day_key,
         }
 
     def _load_snapshot(self, snapshot_id: str) -> dict[str, Any]:

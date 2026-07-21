@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import psycopg2.extras
@@ -31,8 +31,10 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactEnvelopeV1,
     HistoricalRangeBatchStatus,
     HistoricalRangeCandidateFactV1,
+    HistoricalRangeCandidateArtifactPayloadV2,
     HistoricalRangeContractError,
     HistoricalRangeDatePlanV1,
+    HistoricalRangeHMMBindingSetV1,
     HistoricalRangeDayAttemptV1,
     HistoricalRangeDayPlanEntryV1,
     HistoricalRangeDayStatus,
@@ -42,11 +44,21 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeOperationAttemptV1,
     HistoricalRangeOperationRequestV1,
     HistoricalRangeOperationStatus,
+    HistoricalRangeOperationType,
     HistoricalRangeOutcomeFactV1,
     HistoricalRangeProgramStatus,
+    HistoricalRangePlanningArtifactBindingsV1,
+    HistoricalRangeResolvedRequestArtifactPayloadV1,
+    HistoricalRangeSourceRequirementPlanV1,
+    HistoricalRangeSourceCatalogCheckpointV1,
+    HistoricalRangeCatalogPhase,
+    HistoricalRangeSourceRevisionCatalogV1,
     HistoricalRangeSummaryFactV1,
     ResolvedHistoricalRangeRequestV1,
-    build_candidate_artifact_payload,
+    build_candidate_input_hash,
+    build_day_input_hash,
+    build_catalog_member_chain_hash,
+    append_catalog_member_chain_hash,
     build_day_receipt_payload,
     derive_day_run_id,
     derive_list_content_hash,
@@ -61,11 +73,19 @@ ConnFactory = Callable[[], AbstractContextManager[Any]]
 
 
 @dataclass(frozen=True)
-class CreatedHistoricalRangeBatch:
+class CreatedHistoricalRangePlanningBatch:
     batch_id: str
-    range_run_ids: tuple[str, ...]
     create_operation_id: str
+    catalog_operation_id: str
     idempotent: bool
+
+
+@dataclass(frozen=True)
+class SealedHistoricalRangeBatch:
+    batch_id: str
+    canonical_batch_id: str
+    range_run_ids: tuple[str, ...]
+    deduplicated: bool
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,16 @@ class DayCommitResult:
     idempotent: bool
 
 
+@dataclass(frozen=True)
+class HistoricalRangeCatalogPlanningState:
+    batch: dict[str, Any]
+    operation: dict[str, Any]
+    plan: HistoricalRangeSourceRequirementPlanV1
+    checkpoint_chain: tuple[tuple[HistoricalRangeArtifactRefV1, HistoricalRangeSourceCatalogCheckpointV1], ...]
+    discovered_members: dict[str, Any]
+    current_phase_members: dict[str, Any]
+
+
 class PostgresHistoricalRangeRepository:
     """Durable Phase 1R repository with exact-retry conflict detection."""
 
@@ -96,208 +126,458 @@ class PostgresHistoricalRangeRepository:
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
 
-    def create_batch(
+    def create_planning_batch(
         self,
         *,
-        resolved: ResolvedHistoricalRangeRequestV1,
-        artifacts: HistoricalRangeArtifactBindingsV1,
-    ) -> CreatedHistoricalRangeBatch:
-        self._validate_creation_artifacts(resolved=resolved, artifacts=artifacts)
-        request_json = resolved.model_dump(mode="json")
-        request_json["artifact_refs"] = {
-            "request": artifacts.request_ref.model_dump(mode="json"),
-            "date_plan": artifacts.date_plan_ref.model_dump(mode="json"),
-            "frozen_programs": {
-                key: value.model_dump(mode="json") for key, value in sorted(artifacts.frozen_program_refs.items())
-            },
-        }
-        create_operation_key = f"create:{resolved.request.client_idempotency_key}"
-        create_operation = HistoricalRangeOperationRequestV1(
-            operation_id=derive_prefixed_id(
-                "ahrop",
-                {
-                    "batch_id": resolved.batch_id,
-                    "operation_type": "CREATE",
-                    "operation_idempotency_key": create_operation_key,
-                    "request_payload_sha256": resolved.request_payload_sha256,
-                },
-            ),
-            batch_id=resolved.batch_id,
-            operation_type="CREATE",
-            operation_idempotency_key=create_operation_key,
-            request_payload_sha256=str(resolved.request_payload_sha256),
-            expected_row_version=2,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        artifacts: HistoricalRangePlanningArtifactBindingsV1,
+    ) -> CreatedHistoricalRangePlanningBatch:
+        self._validate_planning_artifact(plan=plan, artifacts=artifacts)
+        create_operation = self._planning_operation_request(
+            plan=plan, operation_type=HistoricalRangeOperationType.CREATE
         )
+        catalog_operation = self._planning_operation_request(
+            plan=plan,
+            operation_type=HistoricalRangeOperationType.BUILD_SOURCE_CATALOG,
+        )
+        request_json = {
+            "schema_version": "advisory_historical_range_planning_request_payload_v1",
+            "request": plan.request.model_dump(mode="json"),
+            "planning_identity_hash": plan.planning_identity_hash,
+            "requirement_plan_ref": artifacts.requirement_plan_ref.model_dump(mode="json"),
+            "requirement_plan_hash": plan.requirement_plan_hash,
+        }
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (resolved.request.user_request_semantic_hash,),
+                    (plan.request.client_idempotency_key,),
                 )
-                existing = self._find_existing_batch(cur=cur, resolved=resolved)
+                existing = self._find_planning_batch_by_key(
+                    cur=cur,
+                    client_idempotency_key=plan.request.client_idempotency_key,
+                )
                 if existing is not None:
-                    self._assert_existing_batch_matches(existing=existing, resolved=resolved)
-                    self._bind_request_key(
-                        cur=cur,
-                        resolved=resolved,
-                        batch_id=str(existing["batch_id"]),
-                        request_ref=artifacts.request_ref,
-                    )
-                    return self._created_batch_result(
-                        cur=cur,
-                        batch_id=str(existing["batch_id"]),
-                        create_operation_id=create_operation.operation_id,
-                        idempotent=True,
-                    )
-
-                cur.execute(
-                    """
-                    SELECT previous.batch_id
-                    FROM app.advisory_historical_range_batch AS previous
-                    LEFT JOIN app.advisory_historical_range_batch AS successor
-                      ON successor.supersedes_batch_id = previous.batch_id
-                    WHERE previous.user_request_semantic_hash = %s
-                      AND successor.batch_id IS NULL
-                    ORDER BY previous.created_at DESC, previous.batch_id DESC
-                    LIMIT 1
-                    FOR UPDATE OF previous
-                    """,
-                    (resolved.request.user_request_semantic_hash,),
-                )
-                predecessor_row = cur.fetchone()
-                supersedes_batch_id = str(predecessor_row["batch_id"]) if predecessor_row is not None else None
+                    self._assert_planning_batch_matches(existing=existing, plan=plan, artifacts=artifacts)
+                    return self._planning_batch_result(cur=cur, batch_id=str(existing["batch_id"]), idempotent=True)
                 cur.execute(
                     """
                     INSERT INTO app.advisory_historical_range_batch (
                         batch_id, request_id, client_idempotency_key,
-                        user_request_semantic_hash, request_payload_sha256,
-                        supersedes_batch_id, start_trade_date, end_trade_date,
-                        calendar_id, calendar_version, ordered_trade_dates_hash,
-                        date_plan_ref, date_plan_hash, source_revision_catalog_hash,
-                        selection_semantics_version, selection_semantics_hash,
-                        list_semantics_version, list_semantics_hash,
+                        user_request_semantic_hash, planning_identity_hash,
+                        requirement_plan_ref, requirement_plan_hash, requirement_plan_artifact_hash,
+                        start_trade_date, end_trade_date, calendar_id, calendar_version,
+                        ordered_trade_dates_hash, selection_semantics_version,
+                        selection_semantics_hash, list_semantics_version, list_semantics_hash,
                         per_program_input_warmup_ranges_hash,
                         program_count, trade_date_count, planned_day_count,
-                        status, row_version, artifact_root_identity_hash,
-                        request_payload_json
+                        status, catalog_generation, catalog_phase, catalog_cursor_ordinal,
+                        catalog_resolved_count, catalog_unresolved_count,
+                        catalog_member_chain_hash, row_version,
+                        artifact_root_identity_hash, request_payload_json
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        'QUEUED', 1, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s,
+                        'PLANNING', 1, 'DISCOVER', 1, 0, 0, %s, 1, %s, %s
                     )
-                    ON CONFLICT DO NOTHING
                     RETURNING batch_id
                     """,
                     (
-                        resolved.batch_id,
-                        resolved.request.request_id,
-                        resolved.request.client_idempotency_key,
-                        resolved.request.user_request_semantic_hash,
-                        resolved.request_payload_sha256,
-                        supersedes_batch_id,
-                        resolved.date_plan.start_trade_date,
-                        resolved.date_plan.end_trade_date,
-                        resolved.date_plan.calendar_id,
-                        resolved.date_plan.calendar_version,
-                        resolved.date_plan.ordered_trade_dates_hash,
-                        psycopg2.extras.Json(artifacts.date_plan_ref.model_dump(mode="json")),
-                        artifacts.date_plan_ref.semantic_content_hash,
-                        resolved.source_revision_catalog_hash,
-                        resolved.selection_semantics_version,
-                        resolved.selection_semantics_hash,
-                        resolved.list_semantics_version,
-                        resolved.list_semantics_hash,
-                        resolved.date_plan.per_program_input_warmup_ranges_hash,
-                        len(resolved.frozen_programs),
-                        len(resolved.date_plan.ordered_trade_dates),
-                        len(resolved.frozen_programs) * len(resolved.date_plan.ordered_trade_dates),
+                        plan.batch_id,
+                        plan.request.request_id,
+                        plan.request.client_idempotency_key,
+                        plan.request.user_request_semantic_hash,
+                        plan.planning_identity_hash,
+                        psycopg2.extras.Json(artifacts.requirement_plan_ref.model_dump(mode="json")),
+                        plan.requirement_plan_hash,
+                        artifacts.requirement_plan_ref.semantic_content_hash,
+                        plan.date_plan.start_trade_date,
+                        plan.date_plan.end_trade_date,
+                        plan.date_plan.calendar_id,
+                        plan.date_plan.calendar_version,
+                        plan.date_plan.ordered_trade_dates_hash,
+                        plan.frozen_programs[0].selection_semantics_version,
+                        plan.frozen_programs[0].selection_semantics_hash,
+                        plan.frozen_programs[0].list_semantics_version,
+                        plan.frozen_programs[0].list_semantics_hash,
+                        plan.date_plan.per_program_input_warmup_ranges_hash,
+                        len(plan.frozen_programs),
+                        len(plan.date_plan.ordered_trade_dates),
+                        len(plan.frozen_programs) * len(plan.date_plan.ordered_trade_dates),
+                        canonical_json_sha256([]),
                         artifacts.artifact_root_identity_hash,
                         psycopg2.extras.Json(request_json),
                     ),
                 )
-                inserted_batch = cur.fetchone()
-                if inserted_batch is None:
-                    existing = self._find_existing_batch(cur=cur, resolved=resolved)
-                    if existing is None:
-                        raise self._repository_error(
-                            "batch insert conflicted without a resolvable idempotent row",
-                            batch_id=resolved.batch_id,
-                        )
-                    self._assert_existing_batch_matches(existing=existing, resolved=resolved)
-                    self._bind_request_key(
-                        cur=cur,
-                        resolved=resolved,
-                        batch_id=str(existing["batch_id"]),
-                        request_ref=artifacts.request_ref,
+                if cur.fetchone() is None:
+                    raise self._repository_error(
+                        "planning batch insert did not return its identity", batch_id=plan.batch_id
                     )
-                    return self._created_batch_result(
-                        cur=cur,
-                        batch_id=str(existing["batch_id"]),
-                        create_operation_id=create_operation.operation_id,
-                        idempotent=True,
-                    )
-                self._bind_request_key(
-                    cur=cur,
-                    resolved=resolved,
-                    batch_id=resolved.batch_id,
-                    request_ref=artifacts.request_ref,
+                cur.execute(
+                    """
+                    INSERT INTO app.advisory_historical_range_request_key (
+                        client_idempotency_key, batch_id, request_id,
+                        user_request_semantic_hash, planning_identity_hash,
+                        requirement_plan_ref, requirement_plan_hash, requirement_plan_artifact_hash
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        plan.request.client_idempotency_key,
+                        plan.batch_id,
+                        plan.request.request_id,
+                        plan.request.user_request_semantic_hash,
+                        plan.planning_identity_hash,
+                        psycopg2.extras.Json(artifacts.requirement_plan_ref.model_dump(mode="json")),
+                        plan.requirement_plan_hash,
+                        artifacts.requirement_plan_ref.semantic_content_hash,
+                    ),
                 )
-                for frozen in resolved.frozen_programs:
-                    frozen_json = frozen.model_dump(mode="json")
-                    frozen_json["artifact_ref"] = artifacts.frozen_program_refs[frozen.research_program_id].model_dump(
-                        mode="json"
+                self._insert_operation(cur=cur, request=create_operation)
+                self._complete_planning_create_operation(
+                    cur=cur,
+                    request=create_operation,
+                    requirement_plan_ref=artifacts.requirement_plan_ref,
+                )
+                self._insert_operation(cur=cur, request=catalog_operation)
+                return CreatedHistoricalRangePlanningBatch(
+                    batch_id=plan.batch_id,
+                    create_operation_id=create_operation.operation_id,
+                    catalog_operation_id=catalog_operation.operation_id,
+                    idempotent=False,
+                )
+
+    def load_catalog_planning_state(self, *, operation_id: str) -> HistoricalRangeCatalogPlanningState:
+        """Load the exact current-generation checkpoint chain for worker resume."""
+
+        with self._conn_factory() as conn:
+            conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_operation WHERE operation_id = %s",
+                    (operation_id,),
+                )
+                operation_row = cur.fetchone()
+                if operation_row is None:
+                    raise self._repository_error("catalog operation does not exist", operation_id=operation_id)
+                operation = dict(operation_row)
+                if str(operation["operation_type"]) != HistoricalRangeOperationType.BUILD_SOURCE_CATALOG.value:
+                    raise ValueError("load_catalog_planning_state requires BUILD_SOURCE_CATALOG")
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_batch WHERE batch_id = %s",
+                    (operation["batch_id"],),
+                )
+                batch_row = cur.fetchone()
+                if batch_row is None:
+                    raise self._repository_error("catalog batch does not exist", operation_id=operation_id)
+                batch = dict(batch_row)
+            conn.rollback()
+        plan_ref = HistoricalRangeArtifactRefV1.model_validate(batch["requirement_plan_ref"])
+        plan = HistoricalRangeSourceRequirementPlanV1.model_validate(
+            self._artifact_store.load_planning(plan_ref).payload
+        )
+        chain: list[tuple[HistoricalRangeArtifactRefV1, HistoricalRangeSourceCatalogCheckpointV1]] = []
+        current_raw = operation.get("latest_checkpoint_ref")
+        visited: set[str] = set()
+        while current_raw is not None:
+            ref = HistoricalRangeArtifactRefV1.model_validate(current_raw)
+            if ref.semantic_content_hash in visited:
+                raise self._repository_error("catalog checkpoint chain contains a cycle", operation_id=operation_id)
+            visited.add(ref.semantic_content_hash)
+            envelope = self._artifact_store.load_planning(ref)
+            checkpoint = HistoricalRangeSourceCatalogCheckpointV1.model_validate(envelope.payload)
+            if (
+                envelope.batch_id != batch["batch_id"]
+                or envelope.planning_identity_hash != batch["planning_identity_hash"]
+                or checkpoint.catalog_generation != int(operation["catalog_generation"])
+                or checkpoint.requirement_plan_hash != plan.requirement_plan_hash
+            ):
+                raise self._repository_error(
+                    "catalog checkpoint chain differs from durable planning identity",
+                    operation_id=operation_id,
+                )
+            chain.append((ref, checkpoint))
+            current_raw = (
+                checkpoint.previous_checkpoint_ref.model_dump(mode="json")
+                if checkpoint.previous_checkpoint_ref is not None
+                else None
+            )
+            if len(chain) > len(plan.requirements) * 2 + 2:
+                raise self._repository_error("catalog checkpoint chain is longer than its plan", operation_id=operation_id)
+        chain.reverse()
+        discovered: dict[str, Any] = {}
+        current_phase_members: dict[str, Any] = {}
+        current_phase = HistoricalRangeCatalogPhase(str(operation["catalog_phase"]))
+        for _ref, checkpoint in chain:
+            for delta in checkpoint.member_delta:
+                if checkpoint.phase is HistoricalRangeCatalogPhase.DISCOVER:
+                    discovered[delta.member.requirement_id] = delta.member
+                if checkpoint.phase is current_phase:
+                    current_phase_members[delta.member.requirement_id] = delta.member
+        return HistoricalRangeCatalogPlanningState(
+            batch=batch,
+            operation=operation,
+            plan=plan,
+            checkpoint_chain=tuple(chain),
+            discovered_members=discovered,
+            current_phase_members=current_phase_members,
+        )
+
+    def seal_planning_batch(
+        self,
+        *,
+        batch_id: str,
+        expected_row_version: int,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        resolved: ResolvedHistoricalRangeRequestV1,
+        catalog: HistoricalRangeSourceRevisionCatalogV1,
+        artifacts: HistoricalRangeArtifactBindingsV1,
+    ) -> SealedHistoricalRangeBatch:
+        if batch_id != plan.batch_id or batch_id != resolved.batch_id:
+            raise ValueError("planning and resolved batch identities differ")
+        if resolved.request != plan.request or resolved.date_plan != plan.date_plan:
+            raise ValueError("resolved request/date plan differs from the frozen requirement plan")
+        resolved_base_programs = tuple(item.without_resolved_hmm_binding() for item in resolved.frozen_programs)
+        if resolved_base_programs != plan.frozen_programs:
+            raise ValueError("resolved Program base semantics differ from the frozen requirement plan")
+        if catalog.requirement_plan_hash != plan.requirement_plan_hash:
+            raise ValueError("catalog requirement plan hash differs from planning request")
+        self._validate_creation_artifacts(resolved=resolved, catalog=catalog, artifacts=artifacts)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                batch = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_batch",
+                    key_name="batch_id",
+                    key_value=batch_id,
+                )
+                self._assert_planning_batch_matches(existing=batch, plan=plan, artifacts=None)
+                if str(batch["status"]) == HistoricalRangeBatchStatus.DEDUPLICATED.value or batch.get(
+                    "sealed_at"
+                ) is not None:
+                    return self._exact_sealed_batch_result(
+                        cur=cur,
+                        batch=batch,
+                        resolved=resolved,
+                        catalog=catalog,
+                        artifacts=artifacts,
+                    )
+                self._require_row_version(batch, expected_row_version, entity="batch", identity=batch_id)
+                if str(batch["status"]) != HistoricalRangeBatchStatus.PLANNING.value:
+                    raise self._repository_error(
+                        "request seal requires PLANNING batch state",
+                        batch_id=batch_id,
+                        status=batch["status"],
+                    )
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))",
+                    (resolved.request_payload_sha256,),
+                )
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM app.advisory_historical_range_operation
+                    WHERE batch_id = %s AND operation_type = 'BUILD_SOURCE_CATALOG'
+                    FOR UPDATE
+                    """,
+                    (batch_id,),
+                )
+                catalog_operation = cur.fetchone()
+                expected_requirement_count = len(plan.requirements)
+                if (
+                    catalog_operation is None
+                    or str(catalog_operation["status"]) != HistoricalRangeOperationStatus.COMPLETED.value
+                    or int(catalog_operation["catalog_generation"] or 0) != catalog.catalog_generation
+                    or str(catalog_operation["catalog_phase"] or "") != "VERIFY"
+                    or int(catalog_operation["cumulative_resolved_count"] or -1) != expected_requirement_count
+                    or int(catalog_operation["cumulative_unresolved_count"] or -1) != 0
+                    or catalog_operation["latest_checkpoint_ref"] is None
+                ):
+                    raise self._repository_error(
+                        "source catalog operation is not complete and sealable",
+                        batch_id=batch_id,
+                    )
+                checkpoint_ref = HistoricalRangeArtifactRefV1.model_validate(catalog_operation["latest_checkpoint_ref"])
+                checkpoint_envelope = self._artifact_store.load_planning(checkpoint_ref)
+                checkpoint = HistoricalRangeSourceCatalogCheckpointV1.model_validate(checkpoint_envelope.payload)
+                expected_chain_hash = build_catalog_member_chain_hash(
+                    members=catalog.members,
+                    ordered_requirement_ids=tuple(item.requirement_id for item in plan.requirements),
+                )
+                if (
+                    checkpoint.catalog_generation != catalog.catalog_generation
+                    or checkpoint.phase.value != "VERIFY"
+                    or checkpoint.next_requirement_ordinal != expected_requirement_count + 1
+                    or checkpoint.cumulative_resolved_count != expected_requirement_count
+                    or checkpoint.cumulative_member_chain_hash != expected_chain_hash
+                    or str(catalog_operation["cumulative_member_chain_hash"]) != expected_chain_hash
+                ):
+                    raise self._repository_error(
+                        "source catalog checkpoint chain does not close the sealed catalog",
+                        batch_id=batch_id,
+                    )
+                cur.execute(
+                    """
+                    SELECT batch_id
+                    FROM app.advisory_historical_range_batch
+                    WHERE request_payload_sha256 = %s
+                      AND batch_id <> %s
+                      AND status <> 'DEDUPLICATED'
+                    FOR UPDATE
+                    """,
+                    (resolved.request_payload_sha256, batch_id),
+                )
+                canonical = cur.fetchone()
+                if canonical is not None:
+                    canonical_batch_id = str(canonical["batch_id"])
+                    dedup_payload = {
+                        "schema_version": "advisory_historical_range_dedup_receipt_v1",
+                        "batch_id": batch_id,
+                        "canonical_batch_id": canonical_batch_id,
+                        "request_payload_sha256": resolved.request_payload_sha256,
+                        "requirement_plan_hash": plan.requirement_plan_hash,
+                    }
+                    dedup = self._artifact_store.publish_payload(
+                        artifact_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+                        producer_contract_version="phase1r_r2b",
+                        payload_schema_version="advisory_historical_range_dedup_receipt_v1",
+                        resolved_request_hash=str(resolved.request_payload_sha256),
+                        payload=dedup_payload,
+                        upstream_refs=(artifacts.request_ref,),
                     )
                     cur.execute(
                         """
-                        INSERT INTO app.advisory_historical_range_run (
-                            range_run_id, batch_id, research_program_id,
-                            source_program_id, source_program_version,
-                            source_binding_version_id, package_id, package_version,
-                            manifest_sha256, alpha_mode, program_config_hash,
-                            runtime_config_hash, review_policy_hash,
-                            style_profile_hash, code_release_id, code_release_hash,
-                            target_package_asset_root_hash,
-                            input_warmup_contract_hash,
-                            admitted_package_projection_hash,
-                            status, row_version, day_plan_ref, day_plan_hash,
-                            frozen_program_json
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, 'QUEUED', 1, %s, %s, %s
-                        )
+                        UPDATE app.advisory_historical_range_batch
+                        SET status = 'DEDUPLICATED', row_version = row_version + 1,
+                            canonical_batch_id = %s,
+                            deduplicated_request_payload_sha256 = %s,
+                            dedup_receipt_ref = %s, dedup_receipt_hash = %s,
+                            started_at = COALESCE(started_at, %s), finished_at = %s
+                        WHERE batch_id = %s AND row_version = %s
                         """,
                         (
-                            resolved.range_run_id(frozen.research_program_id),
-                            resolved.batch_id,
-                            frozen.research_program_id,
-                            frozen.source_program_id,
-                            frozen.source_program_version,
-                            frozen.source_binding_version_id,
-                            frozen.package_id,
-                            frozen.package_version,
-                            frozen.manifest_sha256,
-                            frozen.alpha_mode.value,
-                            frozen.program_config_hash,
-                            frozen.runtime_config_hash,
-                            frozen.review_policy_hash,
-                            frozen.style_profile_hash,
-                            frozen.code_release_id,
-                            frozen.code_release_hash,
-                            frozen.target_package_asset_root_hash,
-                            frozen.input_warmup_contract_hash,
-                            frozen.admitted_package_projection_hash,
-                            psycopg2.extras.Json(artifacts.date_plan_ref.model_dump(mode="json")),
-                            artifacts.date_plan_ref.semantic_content_hash,
-                            psycopg2.extras.Json(frozen_json),
+                            canonical_batch_id,
+                            resolved.request_payload_sha256,
+                            psycopg2.extras.Json(dedup.ref.model_dump(mode="json")),
+                            dedup.ref.semantic_content_hash,
+                            datetime.now(UTC),
+                            datetime.now(UTC),
+                            batch_id,
+                            expected_row_version,
                         ),
                     )
-                self._sync_batch_aggregate(cur=cur, batch_id=resolved.batch_id)
-                self._insert_operation(cur=cur, request=create_operation)
-                return self._created_batch_result(
+                    if cur.rowcount != 1:
+                        raise HistoricalRangeContractError(
+                            REASON_ROW_VERSION_CONFLICT,
+                            "planning batch changed before deduplication committed",
+                            context={"batch_id": batch_id},
+                        )
+                    return SealedHistoricalRangeBatch(
+                        batch_id=batch_id,
+                        canonical_batch_id=canonical_batch_id,
+                        range_run_ids=(),
+                        deduplicated=True,
+                    )
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 2))",
+                    (resolved.request.user_request_semantic_hash,),
+                )
+                cur.execute(
+                    """
+                    SELECT predecessor.batch_id
+                    FROM app.advisory_historical_range_batch AS predecessor
+                    LEFT JOIN app.advisory_historical_range_batch AS successor
+                      ON successor.supersedes_batch_id = predecessor.batch_id
+                    WHERE predecessor.user_request_semantic_hash = %s
+                      AND predecessor.batch_id <> %s
+                      AND predecessor.request_payload_sha256 IS NOT NULL
+                      AND predecessor.request_payload_sha256 <> %s
+                      AND predecessor.status <> 'DEDUPLICATED'
+                      AND successor.batch_id IS NULL
+                    ORDER BY predecessor.sealed_at DESC, predecessor.batch_id DESC
+                    LIMIT 1
+                    FOR UPDATE OF predecessor
+                    """,
+                    (
+                        resolved.request.user_request_semantic_hash,
+                        batch_id,
+                        resolved.request_payload_sha256,
+                    ),
+                )
+                predecessor = cur.fetchone()
+                supersedes_batch_id = str(predecessor["batch_id"]) if predecessor is not None else None
+                request_json = dict(batch["request_payload_json"])
+                request_json["resolved_request"] = resolved.model_dump(mode="json")
+                request_json["artifact_refs"] = {
+                    "request": artifacts.request_ref.model_dump(mode="json"),
+                    "date_plan": artifacts.date_plan_ref.model_dump(mode="json"),
+                    "frozen_programs": {
+                        key: value.model_dump(mode="json")
+                        for key, value in sorted(artifacts.frozen_program_refs.items())
+                    },
+                }
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_batch
+                    SET request_payload_sha256 = %s,
+                        request_artifact_ref = %s, request_artifact_hash = %s,
+                        date_plan_ref = %s, date_plan_hash = %s,
+                        source_revision_catalog_ref = %s, source_revision_catalog_hash = %s,
+                        supersedes_batch_id = %s,
+                        status = 'QUEUED', row_version = row_version + 1,
+                        request_payload_json = %s, sealed_at = %s
+                    WHERE batch_id = %s AND row_version = %s
+                    """,
+                    (
+                        resolved.request_payload_sha256,
+                        psycopg2.extras.Json(artifacts.request_ref.model_dump(mode="json")),
+                        artifacts.request_ref.semantic_content_hash,
+                        psycopg2.extras.Json(artifacts.date_plan_ref.model_dump(mode="json")),
+                        artifacts.date_plan_ref.semantic_content_hash,
+                        psycopg2.extras.Json(artifacts.request_ref.model_dump(mode="json")),
+                        catalog.catalog_hash,
+                        supersedes_batch_id,
+                        psycopg2.extras.Json(request_json),
+                        datetime.now(UTC),
+                        batch_id,
+                        expected_row_version,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "planning batch changed before request seal committed",
+                        context={"batch_id": batch_id},
+                    )
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_request_key
+                    SET request_payload_sha256 = %s,
+                        request_artifact_ref = %s,
+                        request_artifact_hash = %s
+                    WHERE client_idempotency_key = %s AND batch_id = %s
+                    """,
+                    (
+                        resolved.request_payload_sha256,
+                        psycopg2.extras.Json(artifacts.request_ref.model_dump(mode="json")),
+                        artifacts.request_ref.semantic_content_hash,
+                        resolved.request.client_idempotency_key,
+                        batch_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise self._repository_error("planning request key was not sealed", batch_id=batch_id)
+                range_run_ids = self._insert_sealed_program_runs(
                     cur=cur,
-                    batch_id=resolved.batch_id,
-                    create_operation_id=create_operation.operation_id,
-                    idempotent=False,
+                    resolved=resolved,
+                    artifacts=artifacts,
+                )
+                self._sync_batch_aggregate(cur=cur, batch_id=batch_id)
+                return SealedHistoricalRangeBatch(
+                    batch_id=batch_id,
+                    canonical_batch_id=batch_id,
+                    range_run_ids=range_run_ids,
+                    deduplicated=False,
                 )
 
     def get_or_create_operation(
@@ -332,6 +612,684 @@ class PostgresHistoricalRangeRepository:
                 created_row = dict(created)
                 self._assert_operation_matches(created_row, request)
                 return created_row, not inserted
+
+    def claim_catalog_operation(
+        self,
+        *,
+        operation_id: str,
+        expected_row_version: int,
+        worker_id: str,
+        lease_token: str,
+        lease_expires_at: datetime,
+        expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
+    ) -> dict[str, Any]:
+        worker_id = str(worker_id or "").strip()
+        lease_token = str(lease_token or "").strip()
+        if not worker_id or not lease_token:
+            raise ValueError("catalog claim requires worker_id and lease_token")
+        if lease_expires_at.tzinfo is None or lease_expires_at <= datetime.now(UTC):
+            raise ValueError("catalog lease_expires_at must be a future timezone-aware timestamp")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                operation = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_operation",
+                    key_name="operation_id",
+                    key_value=operation_id,
+                )
+                self._require_row_version(operation, expected_row_version, entity="operation", identity=operation_id)
+                if str(operation["operation_type"]) != HistoricalRangeOperationType.BUILD_SOURCE_CATALOG.value:
+                    raise ValueError("claim_catalog_operation requires BUILD_SOURCE_CATALOG")
+                status = HistoricalRangeOperationStatus(str(operation["status"]))
+                if status not in {
+                    HistoricalRangeOperationStatus.QUEUED,
+                    HistoricalRangeOperationStatus.WAITING_INPUT,
+                    HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+                    HistoricalRangeOperationStatus.RUNNING,
+                }:
+                    raise self._repository_error(
+                        "catalog operation is not claimable",
+                        operation_id=operation_id,
+                        status=status.value,
+                    )
+                batch = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_batch",
+                    key_name="batch_id",
+                    key_value=str(operation["batch_id"]),
+                )
+                if status is HistoricalRangeOperationStatus.RUNNING:
+                    current_lease = operation.get("lease_expires_at")
+                    if current_lease is None or current_lease > datetime.now(UTC):
+                        raise self._repository_error(
+                            "catalog operation takeover requires an expired lease",
+                            operation_id=operation_id,
+                        )
+                    self._require_expired_operation_attempt(current=operation, attempt=expired_attempt)
+                    self._validate_planning_operation_attempt(
+                        batch=batch,
+                        operation=operation,
+                        attempt=expired_attempt,
+                    )
+                    self._insert_operation_attempt(cur=cur, attempt=expired_attempt)
+                    if str(batch["status"]) != HistoricalRangeBatchStatus.PLANNING.value:
+                        raise self._repository_error(
+                            "expired catalog operation requires PLANNING batch state",
+                            operation_id=operation_id,
+                            batch_status=batch["status"],
+                        )
+                elif expired_attempt is not None:
+                    raise ValueError("expired_attempt is accepted only for a RUNNING catalog takeover")
+                if status is HistoricalRangeOperationStatus.WAITING_INPUT:
+                    if (
+                        str(batch["status"]) != HistoricalRangeBatchStatus.WAITING_INPUT.value
+                        or str(batch["waiting_stage"] or "") != "CATALOG"
+                    ):
+                        raise self._repository_error(
+                            "waiting catalog operation does not match batch waiting state",
+                            operation_id=operation_id,
+                        )
+                    cur.execute(
+                        """
+                        UPDATE app.advisory_historical_range_batch
+                        SET status = 'PLANNING', waiting_stage = NULL,
+                            row_version = row_version + 1
+                        WHERE batch_id = %s AND row_version = %s
+                        """,
+                        (batch["batch_id"], batch["row_version"]),
+                    )
+                    if cur.rowcount != 1:
+                        raise HistoricalRangeContractError(
+                            REASON_ROW_VERSION_CONFLICT,
+                            "batch changed while resuming its catalog operation",
+                            context={"batch_id": batch["batch_id"]},
+                        )
+                elif str(batch["status"]) != HistoricalRangeBatchStatus.PLANNING.value:
+                    raise self._repository_error(
+                        "catalog operation requires PLANNING batch state",
+                        operation_id=operation_id,
+                        batch_status=batch["status"],
+                    )
+                next_attempt = int(operation["attempt_no"]) + 1
+                next_fencing = int(operation["fencing_token"] or 0) + 1
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET status = 'RUNNING', row_version = row_version + 1,
+                        attempt_no = %s, worker_id = %s, lease_token = %s,
+                        lease_expires_at = %s, fencing_token = %s,
+                        result_row_version = NULL, result_status = NULL,
+                        result_ref = NULL, result_hash = NULL,
+                        error_json = NULL, started_at = COALESCE(started_at, %s),
+                        finished_at = NULL
+                    WHERE operation_id = %s AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        next_attempt,
+                        worker_id,
+                        lease_token,
+                        lease_expires_at,
+                        next_fencing,
+                        datetime.now(UTC),
+                        operation_id,
+                        expected_row_version,
+                    ),
+                )
+                return self._return_updated(cur, entity="operation", identity=operation_id)
+
+    def _validate_planning_operation_attempt(
+        self,
+        *,
+        batch: dict[str, Any],
+        operation: dict[str, Any],
+        attempt: HistoricalRangeOperationAttemptV1,
+    ) -> None:
+        ref = attempt.attempt_receipt_ref
+        if ref is None or attempt.result_hash != ref.semantic_content_hash:
+            raise ValueError("planning operation attempt receipt/hash is incomplete")
+        if ref.artifact_kind not in {
+            HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
+            HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        }:
+            raise ValueError("planning operation attempt must use a planning artifact receipt")
+        envelope = self._artifact_store.load_planning(ref)
+        if (
+            envelope.batch_id != str(batch["batch_id"])
+            or envelope.planning_identity_hash != str(batch["planning_identity_hash"])
+        ):
+            raise ValueError("planning operation attempt receipt belongs to another batch")
+        if ref.artifact_kind is HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN:
+            if canonicalize(ref.model_dump(mode="json")) != canonicalize(batch["requirement_plan_ref"]):
+                raise ValueError("planning operation attempt requirement plan ref differs from the batch")
+        elif envelope.catalog_generation != int(operation["catalog_generation"]):
+            raise ValueError("planning operation attempt checkpoint uses another catalog generation")
+
+    def commit_catalog_checkpoint(
+        self,
+        *,
+        operation_id: str,
+        expected_row_version: int,
+        expected_fencing_token: int,
+        checkpoint_ref: HistoricalRangeArtifactRefV1,
+        checkpoint: HistoricalRangeSourceCatalogCheckpointV1,
+        target_status: HistoricalRangeOperationStatus,
+        advance_to_verify: bool = False,
+        next_worker_id: str | None = None,
+        next_lease_token: str | None = None,
+        next_lease_expires_at: datetime | None = None,
+        reason_codes: Sequence[str] = (),
+        error_json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if target_status not in {
+            HistoricalRangeOperationStatus.RUNNING,
+            HistoricalRangeOperationStatus.WAITING_INPUT,
+            HistoricalRangeOperationStatus.COMPLETED,
+        }:
+            raise ValueError("catalog checkpoint target must be RUNNING, WAITING_INPUT, or COMPLETED")
+        if advance_to_verify and target_status is not HistoricalRangeOperationStatus.RUNNING:
+            raise ValueError("advance_to_verify requires a RUNNING rollover")
+        if target_status is HistoricalRangeOperationStatus.RUNNING:
+            if not str(next_worker_id or "").strip() or not str(next_lease_token or "").strip():
+                raise ValueError("catalog rollover requires the next worker and lease token")
+            if (
+                next_lease_expires_at is None
+                or next_lease_expires_at.tzinfo is None
+                or next_lease_expires_at <= datetime.now(UTC)
+            ):
+                raise ValueError("catalog rollover requires a future timezone-aware lease")
+        normalized_reason_codes = tuple(sorted(str(item or "").strip() for item in reason_codes))
+        if any(not item for item in normalized_reason_codes) or len(normalized_reason_codes) != len(
+            set(normalized_reason_codes)
+        ):
+            raise ValueError("catalog checkpoint reason_codes must be nonblank and duplicate-free")
+        envelope = self._artifact_store.load_planning(checkpoint_ref)
+        if (
+            checkpoint_ref.artifact_kind is not HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT
+            or envelope.payload != checkpoint.model_dump(mode="json")
+        ):
+            raise ValueError("catalog checkpoint ref does not read back the supplied checkpoint")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                operation = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_operation",
+                    key_name="operation_id",
+                    key_value=operation_id,
+                )
+                latest_ref = operation.get("latest_checkpoint_ref")
+                same_checkpoint = latest_ref is not None and canonicalize(latest_ref) == canonicalize(
+                    checkpoint_ref.model_dump(mode="json")
+                )
+                if same_checkpoint and (
+                    (target_status is HistoricalRangeOperationStatus.RUNNING and operation["status"] == "RUNNING")
+                    or (
+                        target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+                        and operation["status"] == "WAITING_INPUT"
+                    )
+                    or (
+                        target_status is HistoricalRangeOperationStatus.COMPLETED and operation["status"] == "COMPLETED"
+                    )
+                ):
+                    self._assert_catalog_checkpoint_exact_retry(
+                        cur=cur,
+                        operation=operation,
+                        expected_row_version=expected_row_version,
+                        expected_fencing_token=expected_fencing_token,
+                        checkpoint_ref=checkpoint_ref,
+                        checkpoint=checkpoint,
+                        target_status=target_status,
+                        advance_to_verify=advance_to_verify,
+                        next_worker_id=next_worker_id,
+                        next_lease_token=next_lease_token,
+                        next_lease_expires_at=next_lease_expires_at,
+                        reason_codes=normalized_reason_codes,
+                        error_json=error_json,
+                    )
+                    return operation
+                if (
+                    str(operation["operation_type"]) != HistoricalRangeOperationType.BUILD_SOURCE_CATALOG.value
+                    or str(operation["status"]) != HistoricalRangeOperationStatus.RUNNING.value
+                ):
+                    raise self._repository_error(
+                        "catalog checkpoint commit requires RUNNING operation",
+                        operation_id=operation_id,
+                        status=operation["status"],
+                    )
+                self._require_row_version(operation, expected_row_version, entity="operation", identity=operation_id)
+                if int(operation["fencing_token"] or 0) != expected_fencing_token:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "catalog operation fencing token differs from the active claim",
+                        context={"operation_id": operation_id},
+                    )
+                batch = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_batch",
+                    key_name="batch_id",
+                    key_value=str(operation["batch_id"]),
+                )
+                if (
+                    envelope.batch_id != str(batch["batch_id"])
+                    or envelope.planning_identity_hash != str(batch["planning_identity_hash"])
+                    or checkpoint.requirement_plan_hash != str(batch["requirement_plan_hash"])
+                    or checkpoint.catalog_generation != int(operation["catalog_generation"])
+                    or checkpoint.phase.value != str(operation["catalog_phase"])
+                ):
+                    raise ValueError("catalog checkpoint identity differs from the claimed operation")
+                current_cursor = operation.get("stable_keyset_cursor_json") or {"next_requirement_ordinal": 1}
+                if int(current_cursor.get("next_requirement_ordinal") or 0) != checkpoint.ordinal_start:
+                    raise ValueError("catalog checkpoint ordinal does not match the stable operation cursor")
+                expected_resolved_count = int(operation["cumulative_resolved_count"] or 0) + len(
+                    checkpoint.member_delta
+                )
+                if checkpoint.cumulative_resolved_count != expected_resolved_count:
+                    raise ValueError("catalog checkpoint cumulative resolved count does not extend operation state")
+                expected_chain_hash = str(operation["cumulative_member_chain_hash"])
+                for delta in checkpoint.member_delta:
+                    expected_chain_hash = append_catalog_member_chain_hash(
+                        previous_chain_hash=expected_chain_hash,
+                        ordinal=delta.ordinal,
+                        member=delta.member,
+                    )
+                if checkpoint.cumulative_member_chain_hash != expected_chain_hash:
+                    raise ValueError("catalog checkpoint member chain does not extend operation state")
+                previous_ref = operation.get("latest_checkpoint_ref")
+                if previous_ref is None:
+                    if checkpoint.previous_checkpoint_ref is not None:
+                        raise ValueError("first catalog checkpoint cannot reference a predecessor")
+                elif canonicalize(previous_ref) != canonicalize(
+                    checkpoint.previous_checkpoint_ref.model_dump(mode="json")
+                    if checkpoint.previous_checkpoint_ref is not None
+                    else None
+                ):
+                    raise ValueError("catalog checkpoint predecessor differs from the durable chain head")
+                if (
+                    target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+                    and not checkpoint.unresolved_requirement_delta
+                ):
+                    raise ValueError("WAITING_INPUT checkpoint requires an unresolved requirement")
+                if (
+                    target_status is not HistoricalRangeOperationStatus.WAITING_INPUT
+                    and checkpoint.unresolved_requirement_delta
+                ):
+                    raise ValueError("resolved catalog checkpoint cannot contain unresolved requirements")
+                unresolved_reason_codes = tuple(
+                    sorted(item.reason_code for item in checkpoint.unresolved_requirement_delta)
+                )
+                if target_status is HistoricalRangeOperationStatus.WAITING_INPUT:
+                    if normalized_reason_codes != unresolved_reason_codes:
+                        raise ValueError("WAITING_INPUT attempt reasons differ from unresolved checkpoint reasons")
+                elif normalized_reason_codes or error_json is not None:
+                    raise ValueError("successful catalog checkpoint cannot carry error evidence")
+                plan_envelope = self._artifact_store.load_planning(
+                    HistoricalRangeArtifactRefV1.model_validate(batch["requirement_plan_ref"])
+                )
+                plan = HistoricalRangeSourceRequirementPlanV1.model_validate(plan_envelope.payload)
+                if advance_to_verify and checkpoint.next_requirement_ordinal != len(plan.requirements) + 1:
+                    raise ValueError("DISCOVER can advance to VERIFY only after all requirements resolve")
+                if target_status is HistoricalRangeOperationStatus.COMPLETED and (
+                    checkpoint.phase is not HistoricalRangeCatalogPhase.VERIFY
+                    or checkpoint.next_requirement_ordinal != len(plan.requirements) + 1
+                    or checkpoint.cumulative_resolved_count != len(plan.requirements)
+                ):
+                    raise ValueError("catalog operation can complete only after the full VERIFY pass")
+                now = datetime.now(UTC)
+                attempt_status = (
+                    HistoricalRangeOperationStatus.WAITING_INPUT.value
+                    if target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+                    else HistoricalRangeOperationStatus.COMPLETED.value
+                )
+                attempt = HistoricalRangeOperationAttemptV1(
+                    attempt_id=derive_prefixed_id(
+                        "ahroa",
+                        {
+                            "operation_id": operation_id,
+                            "attempt_no": operation["attempt_no"],
+                            "fencing_token": expected_fencing_token,
+                            "checkpoint_hash": checkpoint_ref.semantic_content_hash,
+                        },
+                    ),
+                    operation_id=operation_id,
+                    attempt_no=int(operation["attempt_no"]),
+                    worker_id=str(operation["worker_id"]),
+                    lease_token=str(operation["lease_token"]),
+                    fencing_token=expected_fencing_token,
+                    status=attempt_status,
+                    input_cursor_json=current_cursor,
+                    result_cursor_json={"next_requirement_ordinal": checkpoint.next_requirement_ordinal},
+                    input_hash=canonical_json_sha256(
+                        {
+                            "planning_identity_hash": batch["planning_identity_hash"],
+                            "catalog_generation": checkpoint.catalog_generation,
+                            "phase": checkpoint.phase.value,
+                            "ordinal_start": checkpoint.ordinal_start,
+                            "previous_checkpoint_hash": checkpoint.previous_checkpoint_hash,
+                        }
+                    ),
+                    result_hash=checkpoint_ref.semantic_content_hash,
+                    attempt_receipt_ref=checkpoint_ref,
+                    reason_codes=normalized_reason_codes,
+                    error_json=error_json,
+                    started_at=operation["updated_at"],
+                    finished_at=now,
+                )
+                self._insert_operation_attempt(cur=cur, attempt=attempt)
+                next_phase = "VERIFY" if advance_to_verify else checkpoint.phase.value
+                next_cursor = 1 if advance_to_verify else checkpoint.next_requirement_ordinal
+                next_resolved_count = 0 if advance_to_verify else checkpoint.cumulative_resolved_count
+                next_unresolved_count = 0 if advance_to_verify else len(checkpoint.unresolved_requirement_delta)
+                next_chain_hash = (
+                    canonical_json_sha256([]) if advance_to_verify else checkpoint.cumulative_member_chain_hash
+                )
+                rollover = target_status is HistoricalRangeOperationStatus.RUNNING
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET status = %s, row_version = row_version + 1,
+                        attempt_no = %s, worker_id = %s, lease_token = %s,
+                        lease_expires_at = %s, fencing_token = %s,
+                        stable_keyset_cursor_json = %s,
+                        catalog_phase = %s,
+                        latest_checkpoint_ref = %s, latest_checkpoint_hash = %s,
+                        cumulative_resolved_count = %s,
+                        cumulative_unresolved_count = %s,
+                        cumulative_member_chain_hash = %s,
+                        result_status = %s, result_ref = %s, result_hash = %s,
+                        error_json = %s, finished_at = %s
+                    WHERE operation_id = %s AND row_version = %s AND fencing_token = %s
+                    RETURNING *
+                    """,
+                    (
+                        target_status.value,
+                        int(operation["attempt_no"]) + (1 if rollover else 0),
+                        next_worker_id if rollover else None,
+                        next_lease_token if rollover else None,
+                        next_lease_expires_at if rollover else None,
+                        expected_fencing_token + (1 if rollover else 0),
+                        psycopg2.extras.Json({"next_requirement_ordinal": next_cursor}),
+                        next_phase,
+                        psycopg2.extras.Json(checkpoint_ref.model_dump(mode="json")),
+                        checkpoint_ref.semantic_content_hash,
+                        next_resolved_count,
+                        next_unresolved_count,
+                        next_chain_hash,
+                        None if rollover else target_status.value,
+                        None if rollover else psycopg2.extras.Json(checkpoint_ref.model_dump(mode="json")),
+                        None if rollover else checkpoint_ref.semantic_content_hash,
+                        psycopg2.extras.Json(error_json) if error_json is not None else None,
+                        now if target_status is HistoricalRangeOperationStatus.COMPLETED else None,
+                        operation_id,
+                        expected_row_version,
+                        expected_fencing_token,
+                    ),
+                )
+                updated = self._return_updated(cur, entity="operation", identity=operation_id)
+                batch_status = (
+                    HistoricalRangeBatchStatus.WAITING_INPUT.value
+                    if target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+                    else HistoricalRangeBatchStatus.PLANNING.value
+                )
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_batch
+                    SET status = %s, waiting_stage = %s,
+                        catalog_generation = %s, catalog_phase = %s,
+                        catalog_cursor_ordinal = %s,
+                        catalog_resolved_count = %s,
+                        catalog_unresolved_count = %s,
+                        catalog_member_chain_hash = %s,
+                        latest_catalog_checkpoint_ref = %s,
+                        latest_catalog_checkpoint_hash = %s,
+                        row_version = row_version + 1
+                    WHERE batch_id = %s AND row_version = %s
+                    """,
+                    (
+                        batch_status,
+                        "CATALOG" if target_status is HistoricalRangeOperationStatus.WAITING_INPUT else None,
+                        checkpoint.catalog_generation,
+                        next_phase,
+                        next_cursor,
+                        next_resolved_count,
+                        next_unresolved_count,
+                        next_chain_hash,
+                        psycopg2.extras.Json(checkpoint_ref.model_dump(mode="json")),
+                        checkpoint_ref.semantic_content_hash,
+                        batch["batch_id"],
+                        batch["row_version"],
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "batch changed before catalog checkpoint committed",
+                        context={"batch_id": batch["batch_id"]},
+                    )
+                return updated
+
+    @staticmethod
+    def _assert_catalog_checkpoint_exact_retry(
+        *,
+        cur: Any,
+        operation: dict[str, Any],
+        expected_row_version: int,
+        expected_fencing_token: int,
+        checkpoint_ref: HistoricalRangeArtifactRefV1,
+        checkpoint: HistoricalRangeSourceCatalogCheckpointV1,
+        target_status: HistoricalRangeOperationStatus,
+        advance_to_verify: bool,
+        next_worker_id: str | None,
+        next_lease_token: str | None,
+        next_lease_expires_at: datetime | None,
+        reason_codes: tuple[str, ...],
+        error_json: dict[str, Any] | None,
+    ) -> None:
+        if int(operation["row_version"]) < expected_row_version + 1:
+            raise HistoricalRangeContractError(
+                REASON_ROW_VERSION_CONFLICT,
+                "catalog checkpoint retry does not follow the supplied row version",
+                context={"operation_id": operation["operation_id"]},
+            )
+        cur.execute(
+            """
+            SELECT *
+            FROM app.advisory_historical_range_operation_attempt
+            WHERE operation_id = %s AND fencing_token = %s AND result_hash = %s
+            """,
+            (
+                operation["operation_id"],
+                expected_fencing_token,
+                checkpoint_ref.semantic_content_hash,
+            ),
+        )
+        attempt = cur.fetchone()
+        expected_attempt_status = (
+            HistoricalRangeOperationStatus.WAITING_INPUT.value
+            if target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+            else HistoricalRangeOperationStatus.COMPLETED.value
+        )
+        if (
+            attempt is None
+            or str(attempt["status"]) != expected_attempt_status
+            or canonicalize(attempt.get("attempt_receipt_ref"))
+            != canonicalize(checkpoint_ref.model_dump(mode="json"))
+            or tuple(attempt.get("reason_codes_json") or ()) != reason_codes
+            or canonicalize(attempt.get("error_json")) != canonicalize(error_json)
+            or canonicalize(attempt.get("result_cursor_json"))
+            != canonicalize({"next_requirement_ordinal": checkpoint.next_requirement_ordinal})
+        ):
+            raise HistoricalRangeContractError(
+                REASON_IDEMPOTENCY_CONFLICT,
+                "catalog checkpoint retry differs from its committed attempt",
+                context={"operation_id": operation["operation_id"]},
+            )
+        if target_status is HistoricalRangeOperationStatus.RUNNING:
+            expected_phase = "VERIFY" if advance_to_verify else checkpoint.phase.value
+            expected_cursor = 1 if advance_to_verify else checkpoint.next_requirement_ordinal
+            if (
+                int(operation["fencing_token"]) != expected_fencing_token + 1
+                or int(operation["attempt_no"]) != int(attempt["attempt_no"]) + 1
+                or str(operation["worker_id"]) != str(next_worker_id)
+                or str(operation["lease_token"]) != str(next_lease_token)
+                or next_lease_expires_at is None
+                or operation["lease_expires_at"] != next_lease_expires_at
+                or str(operation["catalog_phase"]) != expected_phase
+                or int((operation.get("stable_keyset_cursor_json") or {}).get("next_requirement_ordinal") or 0)
+                != expected_cursor
+            ):
+                raise HistoricalRangeContractError(
+                    REASON_IDEMPOTENCY_CONFLICT,
+                    "catalog rollover retry differs from the committed successor claim",
+                    context={"operation_id": operation["operation_id"]},
+                )
+        elif int(operation["fencing_token"]) != expected_fencing_token:
+            raise HistoricalRangeContractError(
+                REASON_IDEMPOTENCY_CONFLICT,
+                "catalog terminal checkpoint retry uses a different fencing token",
+                context={"operation_id": operation["operation_id"]},
+            )
+
+    def restart_catalog_generation(
+        self,
+        *,
+        operation_id: str,
+        expected_row_version: int,
+        expected_fencing_token: int,
+        drift_receipt_ref: HistoricalRangeArtifactRefV1,
+        next_worker_id: str,
+        next_lease_token: str,
+        next_lease_expires_at: datetime,
+        error_json: dict[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            not str(next_worker_id or "").strip()
+            or not str(next_lease_token or "").strip()
+            or next_lease_expires_at.tzinfo is None
+            or next_lease_expires_at <= datetime.now(UTC)
+        ):
+            raise ValueError("catalog generation restart requires a complete future successor lease")
+        reason_code = "ADVISORY_HR_SOURCE_REVISION_DRIFT"
+        now = datetime.now(UTC)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                operation = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_operation",
+                    key_name="operation_id",
+                    key_value=operation_id,
+                )
+                self._require_row_version(operation, expected_row_version, entity="operation", identity=operation_id)
+                if (
+                    str(operation["operation_type"]) != HistoricalRangeOperationType.BUILD_SOURCE_CATALOG.value
+                    or str(operation["status"]) != HistoricalRangeOperationStatus.RUNNING.value
+                    or int(operation["fencing_token"] or 0) != expected_fencing_token
+                    or str(operation["catalog_phase"]) != HistoricalRangeCatalogPhase.VERIFY.value
+                ):
+                    raise self._repository_error(
+                        "catalog generation restart requires the active VERIFY claim",
+                        operation_id=operation_id,
+                    )
+                batch = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_batch",
+                    key_name="batch_id",
+                    key_value=str(operation["batch_id"]),
+                )
+                if str(batch["status"]) != HistoricalRangeBatchStatus.PLANNING.value:
+                    raise self._repository_error(
+                        "catalog generation restart requires PLANNING batch state",
+                        operation_id=operation_id,
+                    )
+                attempt = HistoricalRangeOperationAttemptV1(
+                    attempt_id=derive_prefixed_id(
+                        "ahroa",
+                        {
+                            "operation_id": operation_id,
+                            "attempt_no": operation["attempt_no"],
+                            "fencing_token": expected_fencing_token,
+                            "reason_code": reason_code,
+                        },
+                    ),
+                    operation_id=operation_id,
+                    attempt_no=int(operation["attempt_no"]),
+                    worker_id=str(operation["worker_id"]),
+                    lease_token=str(operation["lease_token"]),
+                    fencing_token=expected_fencing_token,
+                    status=HistoricalRangeOperationStatus.RETRYABLE_FAILED.value,
+                    input_cursor_json=operation.get("stable_keyset_cursor_json"),
+                    result_cursor_json={"restart_catalog_generation": int(operation["catalog_generation"]) + 1},
+                    input_hash=canonical_json_sha256(
+                        {
+                            "planning_identity_hash": batch["planning_identity_hash"],
+                            "catalog_generation": operation["catalog_generation"],
+                            "catalog_phase": operation["catalog_phase"],
+                            "cursor": operation.get("stable_keyset_cursor_json"),
+                        }
+                    ),
+                    result_hash=drift_receipt_ref.semantic_content_hash,
+                    attempt_receipt_ref=drift_receipt_ref,
+                    reason_codes=(reason_code,),
+                    error_json=error_json,
+                    started_at=operation["updated_at"],
+                    finished_at=now,
+                )
+                self._validate_planning_operation_attempt(
+                    batch=batch,
+                    operation=operation,
+                    attempt=attempt,
+                )
+                self._insert_operation_attempt(cur=cur, attempt=attempt)
+                next_generation = int(operation["catalog_generation"]) + 1
+                empty_chain_hash = canonical_json_sha256([])
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET status = 'RUNNING', row_version = row_version + 1,
+                        attempt_no = attempt_no + 1, worker_id = %s, lease_token = %s,
+                        lease_expires_at = %s, fencing_token = fencing_token + 1,
+                        stable_keyset_cursor_json = NULL,
+                        catalog_generation = %s, catalog_phase = 'DISCOVER',
+                        latest_checkpoint_ref = NULL, latest_checkpoint_hash = NULL,
+                        cumulative_resolved_count = 0, cumulative_unresolved_count = 0,
+                        cumulative_member_chain_hash = %s,
+                        result_status = NULL, result_ref = NULL, result_hash = NULL,
+                        error_json = NULL, finished_at = NULL
+                    WHERE operation_id = %s AND row_version = %s AND fencing_token = %s
+                    RETURNING *
+                    """,
+                    (
+                        next_worker_id,
+                        next_lease_token,
+                        next_lease_expires_at,
+                        next_generation,
+                        empty_chain_hash,
+                        operation_id,
+                        expected_row_version,
+                        expected_fencing_token,
+                    ),
+                )
+                updated = self._return_updated(cur, entity="operation", identity=operation_id)
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_batch
+                    SET catalog_generation = %s, catalog_phase = 'DISCOVER',
+                        catalog_cursor_ordinal = 1,
+                        catalog_resolved_count = 0, catalog_unresolved_count = 0,
+                        catalog_member_chain_hash = %s,
+                        latest_catalog_checkpoint_ref = NULL,
+                        latest_catalog_checkpoint_hash = NULL,
+                        row_version = row_version + 1
+                    WHERE batch_id = %s AND row_version = %s
+                    """,
+                    (next_generation, empty_chain_hash, batch["batch_id"], batch["row_version"]),
+                )
+                if cur.rowcount != 1:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "batch changed before catalog generation restart committed",
+                        context={"batch_id": batch["batch_id"]},
+                    )
+                return updated
 
     def materialize_day_plan_chunk(
         self,
@@ -1027,7 +1985,9 @@ class PostgresHistoricalRangeRepository:
         if terminal_status is HistoricalRangeDayStatus.VALID_NO_CANDIDATE and included_count != 0:
             raise ValueError("VALID_NO_CANDIDATE cannot contain included candidates")
         finished = finished_at or datetime.now(UTC)
-        range_run_id, resolved_request_hash = self._get_day_artifact_identity(day_run_id)
+        day_identity = self._get_day_artifact_identity(day_run_id)
+        range_run_id = str(day_identity["range_run_id"])
+        resolved_request_hash = str(day_identity["request_payload_sha256"])
         candidate_envelope = self._load_artifact(
             candidate_artifact_ref,
             expected_kind=HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
@@ -1035,14 +1995,101 @@ class PostgresHistoricalRangeRepository:
             range_run_id=range_run_id,
             day_run_id=day_run_id,
         )
-        candidate_payload = build_candidate_artifact_payload(
-            range_run_id=range_run_id,
-            day_run_id=day_run_id,
-            candidates=candidates,
-            source_revision_refs=candidate_envelope.source_revision_refs,
+        candidate_payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(candidate_envelope.payload)
+        if (
+            candidate_payload.range_run_id != range_run_id
+            or candidate_payload.day_run_id != day_run_id
+            or candidate_payload.research_program_id != str(day_identity["research_program_id"])
+            or candidate_payload.decision_trade_date != day_identity["decision_trade_date"]
+        ):
+            raise ValueError("candidate artifact day/Program identity differs from the repository day")
+        if candidate_payload.source_revision_refs != candidate_envelope.source_revision_refs:
+            raise ValueError("candidate artifact payload/envelope source revision refs differ")
+        canonical_candidates = tuple(sorted(candidates, key=lambda item: (item.symbol, item.candidate_id)))
+        if candidate_payload.candidates != canonical_candidates:
+            raise ValueError("candidate artifact facts differ from the canonical day candidates")
+        expected_outcome = (
+            "CANDIDATES_AVAILABLE" if terminal_status is HistoricalRangeDayStatus.COMPLETE else "VALID_NO_CANDIDATE"
         )
-        if canonicalize(candidate_envelope.payload) != canonicalize(candidate_payload):
-            raise ValueError("candidate artifact payload differs from the canonical candidate/source facts")
+        if candidate_payload.candidate_outcome != expected_outcome:
+            raise ValueError("candidate artifact outcome differs from the successful day status")
+        request_ref = HistoricalRangeArtifactRefV1.model_validate(day_identity["request_artifact_ref"])
+        request_envelope = self._load_artifact(
+            request_ref,
+            expected_kind=HistoricalRangeArtifactKind.REQUEST,
+            resolved_request_hash=resolved_request_hash,
+        )
+        request_payload = HistoricalRangeResolvedRequestArtifactPayloadV1.model_validate(request_envelope.payload)
+        frozen_program = next(
+            (
+                item
+                for item in request_payload.resolved_request.frozen_programs
+                if item.research_program_id == candidate_payload.research_program_id
+            ),
+            None,
+        )
+        if frozen_program is None:
+            raise ValueError("candidate artifact Program is absent from the sealed request")
+        frozen_identity = {
+            "package_id": frozen_program.package_id,
+            "package_version": frozen_program.package_version,
+            "manifest_sha256": frozen_program.manifest_sha256,
+            "alpha_mode": frozen_program.alpha_mode,
+            "selection_semantics_hash": frozen_program.selection_semantics_hash,
+            "code_release_hash": frozen_program.code_release_hash,
+        }
+        candidate_identity = {
+            "package_id": candidate_payload.package_id,
+            "package_version": candidate_payload.package_version,
+            "manifest_sha256": candidate_payload.manifest_sha256,
+            "alpha_mode": candidate_payload.alpha_mode,
+            "selection_semantics_hash": candidate_payload.selection_semantics_hash,
+            "code_release_hash": candidate_payload.code_release_hash,
+        }
+        if candidate_identity != frozen_identity:
+            raise ValueError("candidate artifact package/code semantics differ from the frozen Program")
+        catalog = request_payload.source_revision_catalog
+        if candidate_payload.calendar_identity_hash != catalog.calendar_identity_hash:
+            raise ValueError("candidate artifact calendar identity differs from the sealed catalog")
+        component_ids = {item.component_id for item in frozen_program.admitted_package_projection.components}
+        expected_members = tuple(
+            member
+            for member in catalog.members
+            if member.decision_trade_date in {None, candidate_payload.decision_trade_date}
+            and member.package_id in {None, frozen_program.package_id}
+            and member.component_id in {None, *component_ids}
+        )
+        expected_refs = {
+            (str(item.revision_id), str(item.revision_hash))
+            for item in expected_members
+        }
+        candidate_refs = {(item.revision_id, item.revision_hash) for item in candidate_payload.source_revision_refs}
+        if not expected_refs or candidate_refs != expected_refs:
+            raise ValueError("candidate artifact source refs do not equal the sealed Program/day catalog members")
+        expected_candidate_input_hash = build_candidate_input_hash(
+            range_run_id=range_run_id,
+            research_program_id=candidate_payload.research_program_id,
+            decision_trade_date=candidate_payload.decision_trade_date,
+            frozen_program_hash=str(frozen_program.frozen_program_hash),
+            runtime_profile_hash=candidate_payload.runtime_profile_hash,
+            code_release_hash=frozen_program.code_release_hash,
+            selection_semantics_hash=frozen_program.selection_semantics_hash,
+            calendar_identity_hash=catalog.calendar_identity_hash,
+            universe_identity_hash=candidate_payload.universe_identity_hash,
+            source_revision_catalog_hash=str(catalog.catalog_hash),
+            query_contract_hash=catalog.query_contract_hash,
+        )
+        if candidate_payload.candidate_input_hash != expected_candidate_input_hash:
+            raise ValueError("candidate_input_hash does not close the sealed Program/day inputs")
+        expected_day_input_hash = build_day_input_hash(
+            candidate_input_hash=candidate_payload.candidate_input_hash,
+            candidate_artifact_ref=candidate_artifact_ref,
+            previous_list_hash=list_version.previous_list_hash,
+            previous_day_receipt_hash=list_version.previous_day_receipt_hash,
+            list_semantics_hash=str(day_identity["list_semantics_hash"]),
+        )
+        if day_input_hash != expected_day_input_hash:
+            raise ValueError("day_input_hash does not derive from the candidate artifact and list predecessor")
         day_receipt_payload = build_day_receipt_payload(
             range_run_id=range_run_id,
             day_run_id=day_run_id,
@@ -1385,12 +2432,16 @@ class PostgresHistoricalRangeRepository:
                     )
                 return not inserted
 
-    def _get_day_artifact_identity(self, day_run_id: str) -> tuple[str, str]:
+    def _get_day_artifact_identity(self, day_run_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT day.range_run_id, batch.request_payload_sha256
+                    SELECT day.range_run_id, day.decision_trade_date,
+                           run.research_program_id,
+                           batch.request_payload_sha256,
+                           batch.request_artifact_ref,
+                           batch.list_semantics_hash
                     FROM app.advisory_historical_range_day_run AS day
                     JOIN app.advisory_historical_range_run AS run
                       ON run.range_run_id = day.range_run_id
@@ -1403,7 +2454,9 @@ class PostgresHistoricalRangeRepository:
                 row = cur.fetchone()
         if row is None:
             raise self._repository_error("day run does not exist", day_run_id=day_run_id)
-        return str(row["range_run_id"]), str(row["request_payload_sha256"])
+        if row["request_payload_sha256"] is None or row["request_artifact_ref"] is None:
+            raise self._repository_error("day run belongs to an unsealed batch", day_run_id=day_run_id)
+        return dict(row)
 
     def _get_run_artifact_identity(self, range_run_id: str) -> tuple[str, str]:
         with self._conn_factory() as conn:
@@ -2011,20 +3064,339 @@ class PostgresHistoricalRangeRepository:
         ):
             raise self._repository_error("successful day attempt readback conflict", day_run_id=day_run_id)
 
+    def _validate_planning_artifact(
+        self,
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        artifacts: HistoricalRangePlanningArtifactBindingsV1,
+    ) -> None:
+        if artifacts.artifact_root_identity_hash != self._artifact_store.root_identity_hash:
+            raise ValueError("artifact_root_identity_hash differs from the configured artifact store")
+        envelope = self._artifact_store.load_planning(artifacts.requirement_plan_ref)
+        if (
+            envelope.artifact_kind is not HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN
+            or envelope.planning_identity_hash != plan.planning_identity_hash
+            or envelope.batch_id != plan.batch_id
+            or envelope.catalog_generation != 1
+            or canonicalize(envelope.payload) != canonicalize(plan.model_dump(mode="json"))
+        ):
+            raise ValueError("requirement plan artifact differs from the planning request")
+
+    @staticmethod
+    def _planning_operation_request(
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        operation_type: HistoricalRangeOperationType,
+    ) -> HistoricalRangeOperationRequestV1:
+        operation_key = f"{operation_type.value.lower()}:{plan.request.client_idempotency_key}"
+        return HistoricalRangeOperationRequestV1(
+            operation_id=derive_prefixed_id(
+                "ahrop",
+                {
+                    "batch_id": plan.batch_id,
+                    "operation_type": operation_type.value,
+                    "operation_idempotency_key": operation_key,
+                    "planning_identity_hash": plan.planning_identity_hash,
+                },
+            ),
+            batch_id=plan.batch_id,
+            operation_type=operation_type,
+            operation_idempotency_key=operation_key,
+            planning_identity_hash=plan.planning_identity_hash,
+            expected_row_version=1,
+        )
+
+    @staticmethod
+    def _find_planning_batch_by_key(
+        *,
+        cur: Any,
+        client_idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT batch.*
+            FROM app.advisory_historical_range_request_key AS request_key
+            JOIN app.advisory_historical_range_batch AS batch
+              ON batch.batch_id = request_key.batch_id
+            WHERE request_key.client_idempotency_key = %s
+            FOR UPDATE OF batch, request_key
+            """,
+            (client_idempotency_key,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    def _assert_planning_batch_matches(
+        *,
+        existing: dict[str, Any],
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        artifacts: HistoricalRangePlanningArtifactBindingsV1 | None,
+    ) -> None:
+        expected = {
+            "batch_id": plan.batch_id,
+            "request_id": plan.request.request_id,
+            "client_idempotency_key": plan.request.client_idempotency_key,
+            "user_request_semantic_hash": plan.request.user_request_semantic_hash,
+            "planning_identity_hash": plan.planning_identity_hash,
+            "requirement_plan_hash": plan.requirement_plan_hash,
+            "start_trade_date": plan.date_plan.start_trade_date,
+            "end_trade_date": plan.date_plan.end_trade_date,
+            "calendar_id": plan.date_plan.calendar_id,
+            "calendar_version": plan.date_plan.calendar_version,
+            "ordered_trade_dates_hash": plan.date_plan.ordered_trade_dates_hash,
+            "program_count": len(plan.frozen_programs),
+            "trade_date_count": len(plan.date_plan.ordered_trade_dates),
+            "planned_day_count": len(plan.frozen_programs) * len(plan.date_plan.ordered_trade_dates),
+        }
+        mismatches = {
+            key: {"expected": value, "actual": existing.get(key)}
+            for key, value in expected.items()
+            if existing.get(key) != value
+        }
+        if artifacts is not None:
+            expected_ref = artifacts.requirement_plan_ref.model_dump(mode="json")
+            if canonicalize(existing.get("requirement_plan_ref")) != canonicalize(expected_ref):
+                mismatches["requirement_plan_ref"] = {
+                    "expected": expected_ref,
+                    "actual": existing.get("requirement_plan_ref"),
+                }
+            if existing.get("requirement_plan_artifact_hash") != artifacts.requirement_plan_ref.semantic_content_hash:
+                mismatches["requirement_plan_artifact_hash"] = {
+                    "expected": artifacts.requirement_plan_ref.semantic_content_hash,
+                    "actual": existing.get("requirement_plan_artifact_hash"),
+                }
+            if existing.get("artifact_root_identity_hash") != artifacts.artifact_root_identity_hash:
+                mismatches["artifact_root_identity_hash"] = {
+                    "expected": artifacts.artifact_root_identity_hash,
+                    "actual": existing.get("artifact_root_identity_hash"),
+                }
+        if mismatches:
+            raise HistoricalRangeContractError(
+                REASON_IDEMPOTENCY_CONFLICT,
+                "same client idempotency key resolved to different planning semantics",
+                context={
+                    "client_idempotency_key": plan.request.client_idempotency_key,
+                    "existing_batch_id": existing.get("batch_id"),
+                    "mismatches": mismatches,
+                },
+            )
+
+    @staticmethod
+    def _planning_batch_result(
+        *,
+        cur: Any,
+        batch_id: str,
+        idempotent: bool,
+    ) -> CreatedHistoricalRangePlanningBatch:
+        cur.execute(
+            """
+            SELECT operation_id, operation_type
+            FROM app.advisory_historical_range_operation
+            WHERE batch_id = %s AND operation_type IN ('CREATE', 'BUILD_SOURCE_CATALOG')
+            """,
+            (batch_id,),
+        )
+        operations = {str(row["operation_type"]): str(row["operation_id"]) for row in cur.fetchall()}
+        if set(operations) != {"CREATE", "BUILD_SOURCE_CATALOG"}:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "planning batch does not contain its required operations",
+                context={"batch_id": batch_id, "operation_types": sorted(operations)},
+            )
+        return CreatedHistoricalRangePlanningBatch(
+            batch_id=batch_id,
+            create_operation_id=operations["CREATE"],
+            catalog_operation_id=operations["BUILD_SOURCE_CATALOG"],
+            idempotent=idempotent,
+        )
+
+    @staticmethod
+    def _exact_sealed_batch_result(
+        *,
+        cur: Any,
+        batch: dict[str, Any],
+        resolved: ResolvedHistoricalRangeRequestV1,
+        catalog: HistoricalRangeSourceRevisionCatalogV1,
+        artifacts: HistoricalRangeArtifactBindingsV1,
+    ) -> SealedHistoricalRangeBatch:
+        batch_id = str(batch["batch_id"])
+        status = str(batch["status"])
+        if status == HistoricalRangeBatchStatus.DEDUPLICATED.value:
+            canonical_batch_id = str(batch.get("canonical_batch_id") or "")
+            if (
+                not canonical_batch_id
+                or batch.get("deduplicated_request_payload_sha256") != resolved.request_payload_sha256
+                or batch.get("request_payload_sha256") is not None
+                or batch.get("sealed_at") is not None
+            ):
+                raise HistoricalRangeContractError(
+                    REASON_IDEMPOTENCY_CONFLICT,
+                    "deduplicated planning batch differs from the seal retry",
+                    context={"batch_id": batch_id},
+                )
+            cur.execute(
+                """
+                SELECT request_payload_sha256, user_request_semantic_hash, status
+                FROM app.advisory_historical_range_batch
+                WHERE batch_id = %s
+                """,
+                (canonical_batch_id,),
+            )
+            canonical = cur.fetchone()
+            if (
+                canonical is None
+                or canonical["request_payload_sha256"] != resolved.request_payload_sha256
+                or canonical["user_request_semantic_hash"] != resolved.request.user_request_semantic_hash
+                or str(canonical["status"]) == HistoricalRangeBatchStatus.DEDUPLICATED.value
+            ):
+                raise HistoricalRangeContractError(
+                    REASON_IDEMPOTENCY_CONFLICT,
+                    "deduplicated planning batch canonical target differs from the seal retry",
+                    context={"batch_id": batch_id, "canonical_batch_id": canonical_batch_id},
+                )
+            return SealedHistoricalRangeBatch(
+                batch_id=batch_id,
+                canonical_batch_id=canonical_batch_id,
+                range_run_ids=(),
+                deduplicated=True,
+            )
+
+        expected = {
+            "request_payload_sha256": resolved.request_payload_sha256,
+            "request_artifact_ref": artifacts.request_ref.model_dump(mode="json"),
+            "request_artifact_hash": artifacts.request_ref.semantic_content_hash,
+            "date_plan_ref": artifacts.date_plan_ref.model_dump(mode="json"),
+            "date_plan_hash": artifacts.date_plan_ref.semantic_content_hash,
+            "source_revision_catalog_ref": artifacts.request_ref.model_dump(mode="json"),
+            "source_revision_catalog_hash": catalog.catalog_hash,
+        }
+        mismatches = {
+            key: {"expected": value, "actual": batch.get(key)}
+            for key, value in expected.items()
+            if canonicalize(batch.get(key)) != canonicalize(value)
+        }
+        if batch.get("sealed_at") is None or mismatches:
+            raise HistoricalRangeContractError(
+                REASON_IDEMPOTENCY_CONFLICT,
+                "sealed planning batch differs from the seal retry",
+                context={"batch_id": batch_id, "mismatches": mismatches},
+            )
+        cur.execute(
+            """
+            SELECT range_run_id, research_program_id
+            FROM app.advisory_historical_range_run
+            WHERE batch_id = %s
+            ORDER BY research_program_id
+            """,
+            (batch_id,),
+        )
+        actual_runs = tuple((str(row["research_program_id"]), str(row["range_run_id"])) for row in cur.fetchall())
+        expected_runs = tuple(
+            (program.research_program_id, resolved.range_run_id(program.research_program_id))
+            for program in resolved.frozen_programs
+        )
+        if actual_runs != expected_runs:
+            raise HistoricalRangeContractError(
+                REASON_IDEMPOTENCY_CONFLICT,
+                "sealed planning batch Program runs differ from the seal retry",
+                context={"batch_id": batch_id, "actual_runs": actual_runs, "expected_runs": expected_runs},
+            )
+        return SealedHistoricalRangeBatch(
+            batch_id=batch_id,
+            canonical_batch_id=batch_id,
+            range_run_ids=tuple(run_id for _, run_id in actual_runs),
+            deduplicated=False,
+        )
+
+    @staticmethod
+    def _insert_sealed_program_runs(
+        *,
+        cur: Any,
+        resolved: ResolvedHistoricalRangeRequestV1,
+        artifacts: HistoricalRangeArtifactBindingsV1,
+    ) -> tuple[str, ...]:
+        range_run_ids: list[str] = []
+        for frozen in resolved.frozen_programs:
+            range_run_id = resolved.range_run_id(frozen.research_program_id)
+            frozen_json = frozen.model_dump(mode="json")
+            frozen_json["artifact_ref"] = artifacts.frozen_program_refs[frozen.research_program_id].model_dump(
+                mode="json"
+            )
+            cur.execute(
+                """
+                INSERT INTO app.advisory_historical_range_run (
+                    range_run_id, batch_id, research_program_id,
+                    source_program_id, source_program_version,
+                    source_binding_version_id, package_id, package_version,
+                    manifest_sha256, alpha_mode, program_config_hash,
+                    runtime_config_hash, review_policy_hash,
+                    style_profile_hash, code_release_id, code_release_hash,
+                    target_package_asset_root_hash,
+                    input_warmup_contract_hash,
+                    admitted_package_projection_hash,
+                    status, row_version, day_plan_ref, day_plan_hash,
+                    frozen_program_json
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, 'QUEUED', 1, %s, %s, %s
+                )
+                """,
+                (
+                    range_run_id,
+                    resolved.batch_id,
+                    frozen.research_program_id,
+                    frozen.source_program_id,
+                    frozen.source_program_version,
+                    frozen.source_binding_version_id,
+                    frozen.package_id,
+                    frozen.package_version,
+                    frozen.manifest_sha256,
+                    frozen.alpha_mode.value,
+                    frozen.program_config_hash,
+                    frozen.runtime_config_hash,
+                    frozen.review_policy_hash,
+                    frozen.style_profile_hash,
+                    frozen.code_release_id,
+                    frozen.code_release_hash,
+                    frozen.target_package_asset_root_hash,
+                    frozen.input_warmup_contract_hash,
+                    frozen.admitted_package_projection_hash,
+                    psycopg2.extras.Json(artifacts.date_plan_ref.model_dump(mode="json")),
+                    artifacts.date_plan_ref.semantic_content_hash,
+                    psycopg2.extras.Json(frozen_json),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "sealed Program run insert did not affect exactly one row",
+                    context={"range_run_id": range_run_id},
+                )
+            range_run_ids.append(range_run_id)
+        return tuple(range_run_ids)
+
     def _validate_creation_artifacts(
         self,
         *,
         resolved: ResolvedHistoricalRangeRequestV1,
+        catalog: HistoricalRangeSourceRevisionCatalogV1,
         artifacts: HistoricalRangeArtifactBindingsV1,
     ) -> None:
         if artifacts.artifact_root_identity_hash != self._artifact_store.root_identity_hash:
             raise ValueError("artifact_root_identity_hash differs from the configured artifact store")
-        self._load_artifact(
+        request_payload = HistoricalRangeResolvedRequestArtifactPayloadV1(
+            resolved_request=resolved,
+            source_revision_catalog=catalog,
+        )
+        request_envelope = self._load_artifact(
             artifacts.request_ref,
             expected_kind=HistoricalRangeArtifactKind.REQUEST,
             resolved_request_hash=str(resolved.request_payload_sha256),
-            expected_payload=resolved.model_dump(mode="json"),
+            expected_payload=request_payload.model_dump(mode="json"),
         )
+        if request_envelope.source_revision_refs != catalog.source_revision_refs():
+            raise ValueError("request artifact source refs differ from the sealed source catalog")
         self._load_artifact(
             artifacts.date_plan_ref,
             expected_kind=HistoricalRangeArtifactKind.DATE_PLAN,
@@ -2043,6 +3415,18 @@ class PostgresHistoricalRangeRepository:
                 range_run_id=resolved.range_run_id(frozen.research_program_id),
                 expected_payload=frozen.model_dump(mode="json"),
             )
+            binding_ref = frozen.resolved_hmm_binding_set_ref
+            if binding_ref is not None:
+                envelope = self._artifact_store.load_planning(binding_ref)
+                binding_set = HistoricalRangeHMMBindingSetV1.model_validate(envelope.payload)
+                if (
+                    envelope.artifact_kind is not HistoricalRangeArtifactKind.HMM_BINDING_SET
+                    or binding_set.binding_set_hash != frozen.resolved_hmm_binding_set_hash
+                    or binding_set.research_program_id != frozen.research_program_id
+                    or binding_set.package_id != frozen.package_id
+                    or binding_set.base_runtime_config_hash != frozen.runtime_config_hash
+                ):
+                    raise ValueError("resolved HMM binding set differs from the frozen Program")
 
     def _load_artifact(
         self,
@@ -2114,192 +3498,22 @@ class PostgresHistoricalRangeRepository:
             )
 
     @staticmethod
-    def _find_existing_batch(
-        *,
-        cur: Any,
-        resolved: ResolvedHistoricalRangeRequestV1,
-    ) -> dict[str, Any] | None:
-        cur.execute(
-            """
-            SELECT batch.*
-            FROM app.advisory_historical_range_request_key AS request_key
-            JOIN app.advisory_historical_range_batch AS batch
-              ON batch.batch_id = request_key.batch_id
-            WHERE request_key.client_idempotency_key = %s
-            FOR UPDATE OF batch, request_key
-            """,
-            (resolved.request.client_idempotency_key,),
-        )
-        by_key = cur.fetchone()
-        if by_key is not None:
-            row = dict(by_key)
-            if row["request_payload_sha256"] != resolved.request_payload_sha256:
-                raise HistoricalRangeContractError(
-                    REASON_IDEMPOTENCY_CONFLICT,
-                    "same client idempotency key resolved to different business identity",
-                    context={
-                        "client_idempotency_key": resolved.request.client_idempotency_key,
-                        "existing_batch_id": row["batch_id"],
-                    },
-                )
-            return row
-        cur.execute(
-            """
-            SELECT * FROM app.advisory_historical_range_batch
-            WHERE request_payload_sha256 = %s
-            FOR UPDATE
-            """,
-            (resolved.request_payload_sha256,),
-        )
-        by_payload = cur.fetchone()
-        return dict(by_payload) if by_payload is not None else None
-
-    @staticmethod
-    def _bind_request_key(
-        *,
-        cur: Any,
-        resolved: ResolvedHistoricalRangeRequestV1,
-        batch_id: str,
-        request_ref: HistoricalRangeArtifactRefV1,
-    ) -> None:
-        cur.execute(
-            """
-            INSERT INTO app.advisory_historical_range_request_key (
-                client_idempotency_key, batch_id, request_id,
-                request_payload_sha256, request_artifact_ref,
-                request_artifact_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (client_idempotency_key) DO NOTHING
-            """,
-            (
-                resolved.request.client_idempotency_key,
-                batch_id,
-                resolved.request.request_id,
-                resolved.request_payload_sha256,
-                psycopg2.extras.Json(request_ref.model_dump(mode="json")),
-                request_ref.semantic_content_hash,
-            ),
-        )
-        cur.execute(
-            """
-            SELECT batch_id, request_payload_sha256,
-                   request_artifact_ref, request_artifact_hash
-            FROM app.advisory_historical_range_request_key
-            WHERE client_idempotency_key = %s
-            """,
-            (resolved.request.client_idempotency_key,),
-        )
-        row = cur.fetchone()
-        if (
-            row is None
-            or str(row["batch_id"]) != batch_id
-            or str(row["request_payload_sha256"]) != resolved.request_payload_sha256
-            or canonicalize(row["request_artifact_ref"]) != canonicalize(request_ref.model_dump(mode="json"))
-            or str(row["request_artifact_hash"]) != request_ref.semantic_content_hash
-        ):
-            raise HistoricalRangeContractError(
-                REASON_IDEMPOTENCY_CONFLICT,
-                "client idempotency key is already bound to different resolved semantics",
-                context={
-                    "client_idempotency_key": resolved.request.client_idempotency_key,
-                    "batch_id": batch_id,
-                },
-            )
-
-    @staticmethod
-    def _assert_existing_batch_matches(
-        *,
-        existing: dict[str, Any],
-        resolved: ResolvedHistoricalRangeRequestV1,
-    ) -> None:
-        exact = {
-            "batch_id": resolved.batch_id,
-            "user_request_semantic_hash": resolved.request.user_request_semantic_hash,
-            "request_payload_sha256": resolved.request_payload_sha256,
-            "start_trade_date": resolved.date_plan.start_trade_date,
-            "end_trade_date": resolved.date_plan.end_trade_date,
-            "calendar_id": resolved.date_plan.calendar_id,
-            "calendar_version": resolved.date_plan.calendar_version,
-            "ordered_trade_dates_hash": resolved.date_plan.ordered_trade_dates_hash,
-            "source_revision_catalog_hash": resolved.source_revision_catalog_hash,
-            "selection_semantics_version": resolved.selection_semantics_version,
-            "selection_semantics_hash": resolved.selection_semantics_hash,
-            "list_semantics_version": resolved.list_semantics_version,
-            "list_semantics_hash": resolved.list_semantics_hash,
-            "per_program_input_warmup_ranges_hash": resolved.date_plan.per_program_input_warmup_ranges_hash,
-            "program_count": len(resolved.frozen_programs),
-            "trade_date_count": len(resolved.date_plan.ordered_trade_dates),
-            "planned_day_count": len(resolved.frozen_programs) * len(resolved.date_plan.ordered_trade_dates),
-        }
-        mismatches = {
-            key: {"expected": value, "actual": existing.get(key)}
-            for key, value in exact.items()
-            if existing.get(key) != value
-        }
-        if mismatches:
-            raise HistoricalRangeContractError(
-                REASON_REPOSITORY_CONFLICT,
-                "existing batch differs from the resolved request",
-                context={"batch_id": existing.get("batch_id"), "mismatches": mismatches},
-            )
-
-    @staticmethod
-    def _created_batch_result(
-        *,
-        cur: Any,
-        batch_id: str,
-        create_operation_id: str,
-        idempotent: bool,
-    ) -> CreatedHistoricalRangeBatch:
-        cur.execute(
-            """
-            SELECT range_run_id
-            FROM app.advisory_historical_range_run
-            WHERE batch_id = %s
-            ORDER BY research_program_id
-            """,
-            (batch_id,),
-        )
-        range_run_ids = tuple(str(row["range_run_id"]) for row in cur.fetchall())
-        cur.execute(
-            """
-            SELECT operation_id FROM app.advisory_historical_range_operation
-            WHERE batch_id = %s AND operation_type = 'CREATE'
-            ORDER BY created_at, operation_id
-            LIMIT 1
-            """,
-            (batch_id,),
-        )
-        operation = cur.fetchone()
-        if operation is None:
-            raise HistoricalRangeContractError(
-                REASON_REPOSITORY_CONFLICT,
-                "batch exists without its CREATE operation",
-                context={"batch_id": batch_id},
-            )
-        persisted_operation_id = str(operation["operation_id"])
-        if not idempotent and persisted_operation_id != create_operation_id:
-            raise HistoricalRangeContractError(
-                REASON_REPOSITORY_CONFLICT,
-                "created batch operation identity differs from the request",
-                context={"batch_id": batch_id},
-            )
-        return CreatedHistoricalRangeBatch(
-            batch_id=batch_id,
-            range_run_ids=range_run_ids,
-            create_operation_id=persisted_operation_id,
-            idempotent=idempotent,
-        )
-
-    @staticmethod
     def _insert_operation(*, cur: Any, request: HistoricalRangeOperationRequestV1) -> bool:
         cur.execute(
             """
             INSERT INTO app.advisory_historical_range_operation (
                 operation_id, batch_id, operation_type,
                 operation_idempotency_key, request_payload_sha256,
-                expected_row_version, status, row_version, attempt_no
-            ) VALUES (%s, %s, %s, %s, %s, %s, 'QUEUED', 1, 0)
+                planning_identity_hash, expected_row_version,
+                catalog_generation, catalog_phase,
+                cumulative_resolved_count, cumulative_unresolved_count,
+                cumulative_member_chain_hash,
+                status, row_version, attempt_no
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                'QUEUED', 1, 0
+            )
             ON CONFLICT DO NOTHING
             """,
             (
@@ -2308,10 +3522,97 @@ class PostgresHistoricalRangeRepository:
                 request.operation_type.value,
                 request.operation_idempotency_key,
                 request.request_payload_sha256,
+                request.planning_identity_hash,
                 request.expected_row_version,
+                1 if request.operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG else None,
+                "DISCOVER" if request.operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG else None,
+                0 if request.operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG else None,
+                0 if request.operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG else None,
+                canonical_json_sha256([])
+                if request.operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG
+                else None,
             ),
         )
         return cur.rowcount == 1
+
+    def _complete_planning_create_operation(
+        self,
+        *,
+        cur: Any,
+        request: HistoricalRangeOperationRequestV1,
+        requirement_plan_ref: HistoricalRangeArtifactRefV1,
+    ) -> None:
+        now = datetime.now(UTC)
+        worker_id = "phase1r-planning-create"
+        lease_token = derive_prefixed_id(
+            "ahrlease",
+            {"operation_id": request.operation_id, "planning_identity_hash": request.planning_identity_hash},
+        )
+        cur.execute(
+            """
+            UPDATE app.advisory_historical_range_operation
+            SET status = 'RUNNING', row_version = row_version + 1,
+                attempt_no = 1, worker_id = %s, lease_token = %s,
+                lease_expires_at = %s, fencing_token = 1,
+                started_at = %s
+            WHERE operation_id = %s AND row_version = 1 AND status = 'QUEUED'
+            RETURNING *
+            """,
+            (
+                worker_id,
+                lease_token,
+                now + timedelta(minutes=1),
+                now,
+                request.operation_id,
+            ),
+        )
+        running = cur.fetchone()
+        if running is None:
+            raise self._repository_error(
+                "CREATE operation could not enter RUNNING state",
+                operation_id=request.operation_id,
+            )
+        attempt = HistoricalRangeOperationAttemptV1(
+            attempt_id=derive_prefixed_id(
+                "ahroa",
+                {"operation_id": request.operation_id, "attempt_no": 1, "fencing_token": 1},
+            ),
+            operation_id=request.operation_id,
+            attempt_no=1,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            fencing_token=1,
+            status=HistoricalRangeOperationStatus.COMPLETED.value,
+            input_hash=str(request.planning_identity_hash),
+            result_hash=requirement_plan_ref.semantic_content_hash,
+            attempt_receipt_ref=requirement_plan_ref,
+            started_at=now,
+            finished_at=now,
+        )
+        self._insert_operation_attempt(cur=cur, attempt=attempt)
+        cur.execute(
+            """
+            UPDATE app.advisory_historical_range_operation
+            SET status = 'COMPLETED', row_version = row_version + 1,
+                result_status = 'PLANNING_CREATED',
+                result_ref = %s, result_hash = %s,
+                finished_at = %s
+            WHERE operation_id = %s AND row_version = 2
+              AND status = 'RUNNING' AND fencing_token = 1
+            RETURNING operation_id
+            """,
+            (
+                psycopg2.extras.Json(requirement_plan_ref.model_dump(mode="json")),
+                requirement_plan_ref.semantic_content_hash,
+                now,
+                request.operation_id,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise self._repository_error(
+                "CREATE operation could not commit its planning receipt",
+                operation_id=request.operation_id,
+            )
 
     @staticmethod
     def _assert_operation_matches(
@@ -2324,6 +3625,7 @@ class PostgresHistoricalRangeRepository:
             "operation_type": request.operation_type.value,
             "operation_idempotency_key": request.operation_idempotency_key,
             "request_payload_sha256": request.request_payload_sha256,
+            "planning_identity_hash": request.planning_identity_hash,
             "expected_row_version": request.expected_row_version,
         }
         if any(row.get(key) != value for key, value in expected.items()):

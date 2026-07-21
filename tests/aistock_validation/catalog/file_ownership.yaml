@@ -6,11 +6,15 @@ rules:
       - backend/services/advisory_historical_range/**
       - backend/tests/advisory_historical_range/**
       - backend/db/migrations/add_advisory_historical_range_phase1r_20260719.sql
+      - backend/inference_engine.py
+      - scripts/strategy_package_live_inference.py
+      - backend/tests/test_inference_engine_historical_readonly.py
+      - backend/tests/scripts/test_strategy_package_live_inference.py
     primary_module: advisory.historical_range
     impact_modules: [tests.backend]
     layer: backend_service
     risk_level: high
-    ownership_reason: Phase 1R historical-range research owns isolated contracts, CAS, persistence, migration, and direct regression tests.
+    ownership_reason: Phase 1R historical-range research owns isolated contracts, CAS, persistence, migration, explicit historical read-only inference entry points, and direct regression tests.
   - rule_id: advisory_dev_input_onboarding
     priority: 105
     include:

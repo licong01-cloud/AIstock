@@ -8,7 +8,6 @@ QE backtest ``pred.pkl`` artifacts.
 from __future__ import annotations
 
 import argparse
-import builtins
 import json
 import math
 import os
@@ -26,10 +25,20 @@ if str(REPO_ROOT) not in sys.path:
 
 import backend.inference_engine as inference_engine_module  # noqa: E402
 from backend.inference_engine import InferenceEngine  # noqa: E402
+from backend.services.strategy_package.advisory_input_projection import (  # noqa: E402
+    get_strategy_package_inference_required_window,
+)
 
 
-def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date) -> list[dict[str, Any]]:
+def _score_rows_from_frame(
+    df_scores: pd.DataFrame,
+    expected_date,
+    *,
+    allow_empty: bool = False,
+) -> list[dict[str, Any]]:
     if df_scores is None or df_scores.empty:
+        if allow_empty:
+            return []
         raise ValueError(f"live inference produced no score rows for {expected_date}")
     if isinstance(df_scores, pd.Series):
         df_scores = df_scores.to_frame(name="score")
@@ -64,27 +73,8 @@ def _parse_date(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d")
 
 
-def _patch_windows_debug_open() -> None:
-    original_open = builtins.open
-
-    def patched_open(file, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if isinstance(file, str) and file.startswith("f:/Dev/AIstock/debug_tools/"):
-            redirected = Path("/mnt/f/Dev/AIstock/debug_tools") / Path(file).name
-            redirected.parent.mkdir(parents=True, exist_ok=True)
-            return original_open(redirected, *args, **kwargs)
-        return original_open(file, *args, **kwargs)
-
-    builtins.open = patched_open
-
-
 def _strategy_package_required_window(factor_order: list[str] | None = None) -> int:
-    max_window = 61
-    for factor in factor_order or []:
-        for match in re.findall(r"(\d+)\s*d", str(factor), flags=re.IGNORECASE):
-            max_window = max(max_window, int(match) + 5)
-        if "250" in str(factor):
-            max_window = max(max_window, 260)
-    return max_window
+    return get_strategy_package_inference_required_window(factor_order or [])
 
 
 def _patch_strategy_package_data_window() -> None:
@@ -118,6 +108,7 @@ def main() -> int:
     parser.add_argument("--trade-date", required=True)
     parser.add_argument("--cutoff-date")
     parser.add_argument("--output-path", required=True)
+    parser.add_argument("--historical-read-only", action="store_true")
     args = parser.parse_args()
 
     runtime_workspace = Path(args.runtime_workspace)
@@ -126,13 +117,17 @@ def main() -> int:
     trade_dt = _parse_date(args.trade_date)
     cutoff_dt = _parse_date(args.cutoff_date) if args.cutoff_date else None
     expected_date = (cutoff_dt or trade_dt).date()
+    output_path = Path(args.output_path)
 
     os.environ["AISTOCK_STRICT_INFERENCE"] = "1"
     os.environ.setdefault("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", "1.8")
     os.environ.setdefault("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", "20")
-    # The shared InferenceEngine writes diagnostics to a Windows-style path.
-    # Redirect only that path while running inside WSL.
-    _patch_windows_debug_open()
+    diagnostic_path = (
+        output_path.parent / "diagnostics" / "qe_diagnosis.txt"
+        if args.historical_read_only
+        else Path("/mnt/f/Dev/AIstock/debug_tools/qe_diagnosis.txt")
+    )
+    diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
     _patch_strategy_package_data_window()
     engine = InferenceEngine()
     df_scores = engine.run_inference(
@@ -142,6 +137,16 @@ def main() -> int:
         cutoff_date=cutoff_dt,
         experiment_id="strategy_package_live",
         workspace_path=str(runtime_workspace),
+        persist_signals=not args.historical_read_only,
+        universe_ensure=not args.historical_read_only,
+        receipt_admissibility=(
+            "RETROSPECTIVE_DB_CONTENT_HASH"
+            if args.historical_read_only
+            else "PROSPECTIVE_FIRST_OBSERVED"
+        ),
+        allow_external_market_fallback=not args.historical_read_only,
+        use_selection_data_cache=not args.historical_read_only,
+        diagnostic_output_path=str(diagnostic_path),
     )
     if not isinstance(df_scores, pd.DataFrame):
         raise TypeError(f"InferenceEngine returned {type(df_scores).__name__}, expected DataFrame")
@@ -153,11 +158,17 @@ def main() -> int:
     input_context = execution_receipt.get("input_context")
     if isinstance(universe_count, bool) or not isinstance(universe_count, int) or universe_count < 0:
         raise RuntimeError("live inference execution receipt has no valid universe_count")
+    if args.historical_read_only and universe_count == 0:
+        raise RuntimeError("historical inference cannot prove an empty candidate result with an empty universe")
     if not isinstance(source_read_receipts, list) or not all(isinstance(item, dict) for item in source_read_receipts):
         raise RuntimeError("live inference execution receipt has no valid source_read_receipts")
     if not isinstance(input_context, dict):
         raise RuntimeError("live inference execution receipt has no valid input_context")
-    scores = _score_rows_from_frame(df_scores, expected_date)
+    scores = _score_rows_from_frame(
+        df_scores,
+        expected_date,
+        allow_empty=args.historical_read_only,
+    )
     payload: dict[str, Any] = {
         "ok": True,
         "scores": scores,
@@ -173,7 +184,6 @@ def main() -> int:
             "strict_feature_filter": getattr(inference_engine_module, "LAST_STRICT_FEATURE_FILTER", None),
         },
     }
-    output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return 0

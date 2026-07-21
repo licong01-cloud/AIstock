@@ -231,6 +231,8 @@ HistoricalRangeResolvedRequestArtifactPayloadV1
   source_revision_catalog
 ```
 
+`HistoricalRangeDatePlanV1` 的 warmup contract 必须保存每个 Program、每个 Alpha 腿、每个 `decision_trade_date=T` 的精确 `window_start_trade_date`。range-level `warmup_start_trade_date` 只表示首日最早窗口，不得复用于后续交易日。日历 source requirement 对每个 T 从全部 Program/Alpha 当日窗口的最早起点开始闭合；completed watermark 只查询 `MAX(trade_date) WHERE trade_date <= request.end_trade_date`，不得把与请求无关的全库最新交易日写入历史请求 identity。
+
 R1 `HistoricalRangeArtifactKind` 增加 `SOURCE_REQUIREMENT_PLAN` 和 `SOURCE_CATALOG_CHECKPOINT`，但不把未封存 planning artifact 塞入要求 `resolved_request_hash` 的 sealed envelope。`HistoricalRangeArtifactStore` 增加显式 planning publish/load 方法并返回同一强类型 ref；planning envelope 禁止 range/day identity 和 source revision refs。requirement-plan payload 内含 ordered trade dates、frozen Program payloads/hashes 和全部 source requirements；seal 后由相同 payload逐字段生成正式 DATE_PLAN/FROZEN_PROGRAM artifacts，不重新读取 package 当前状态。
 
 checkpoint 是链式增量 artifact，不复制此前全部 members。每个 BUILD_SOURCE_CATALOG operation attempt 保存本 chunk checkpoint ref/hash；operation row 只保存 latest checkpoint、cursor、generation 和累计计数/hash。resume 验证 previous ref/hash 与 append-only attempt 链一致后继续；seal 按 ordinal 顺序流式读取全部 checkpoint delta，验证无缺口、无重复、累计 chain hash 和 final catalog hash。该结构使 catalog payload/存储随 requirement 数线性增长，禁止每个 checkpoint 重写完整 catalog 的二次方实现。
@@ -255,6 +257,10 @@ R1 `REQUEST` artifact 继续使用现有 artifact kind，但 payload 改为上�
 catalog resolver 优先读取现有 `app.advisory_source_availability_event`/source revision identity；没有 formal event 的历史分区使用同一只读查询结果生成 `RETROSPECTIVE_DB_CONTENT_HASH`。后者只证明本次学术重算，不升级为 formal OOS evidence。
 
 每个 historical DB provider 在返回业务值前调用 `HistoricalRangeSourceRevisionVerifier`。若 catalog member 来自 formal immutable event，则校验 event/ref；若来自 retrospective content hash，则用相同 partition query 重新计算 current hash。候选 symbol subset 的 query parameter/row receipt 进入 `component_lineage_json`，但 source ref 指向已验证的完整 partition revision。current partition 与 catalog 不同立即返回 source revision mismatch，不允许仅凭旧 catalog ref 继续运行。
+
+code release requirement 的 bound parameters 必须保存 git commit 与实际执行 closure 的有序文件 SHA 清单，使 `code_release_hash` 可解释、可重算。dirty/未提交但实际执行的源码以文件内容进入 hash，不设置 clean-worktree 门禁。`suspend` 与 `st_risk` 的零行集合是合法 revision；universe、market、fundamental、calendar、HMM 和 package/code 输入零行仍是缺失数据。
+
+最终 VERIFY checkpoint 与 operation completion 先持久化，再执行外部 CAS/request seal。若进程在两者之间失败，`seal_completed_catalog` 必须从已完成 VERIFY chain 幂等恢复；不得因 operation 已 `COMPLETED` 而形成无法 claim、无法 seal 的永久半完成 batch。
 
 ### 5.4 Catalog partitions
 
@@ -317,6 +323,8 @@ Phase 1R 使用 `HistoricalRangeRuntimeAssetResolver` 只解析 manifest 已冻�
 - Phase 1R 拒绝页面、API 或 `runtime_config.multi_alpha_weight_history/weight_history` 注入的任意 rows。若数据库中存在绕过当前 promotion 产生的 `live_rolling_ic_weighted` record，返回 `ADVISORY_HR_PACKAGE_WEIGHT_CONTRACT_UNSUPPORTED`，保留 package identity/context，不回退 terminal/equal weights，也不修改 package 状态。
 - 未来只有在 StrategyPackage promotion、manifest 和 package-owned DB metric contract 先完成独立批准设计并正式准入后，才能新增对应 HistoricalRange adapter；不得在 R2-B 中预留返回假 rows 的简化分支。当前范围对所有能够按现行准入流程进入系统的原生多 Alpha 父包是完整支持，不是子集交付。
 
+Historical-range query contract 必须明确 `include_reference_price=false`，且 logical inputs 不包含 `reference_price`。未被推理消费的数据不得生成 requirement 或形成额外 `WAITING_INPUT` 条件。
+
 ### 5.6 WSL inference and database isolation
 
 Phase 1R signal provider固定使用 WSL Conda inference：
@@ -347,6 +355,41 @@ Phase 1R signal provider固定使用 WSL Conda inference：
 7. snapshot/coefficients/input max date/hash 均进入 catalog、candidate artifact v2 和 HMM receipt。raw candidates 为零时生成明确 `NO_ALPHA_CANDIDATES` stage receipt，仍不得省略正 universe/raw inference evidence。
 
 requirement plan 中的 base Program config hash 在 planning 期间不改写。HMM requirements 按 decision day T 建立；若 create 时只有 `model_config_id`，每个 T 的 fulfillment 都必须绑定当日可用的 exact snapshot/evidence。seal 后的 `HistoricalRangeFrozenProgramV1` 同时保存 base config hash 和 `resolved_hmm_binding_set_ref/hash`，binding set 按 T 排序并逐项关闭 snapshot/model/coefficient/cutoff identity。这样补齐输入不会把 planning request 偷换成另一套用户配置，也不会把 snapshot 动态解析隐藏在 day execution 中。
+
+HMM 补充证据使用现有 append-only `app.advisory_source_availability_event`，不新增表，也不由 planning worker 写入。requirement 固定 `dataset_name=hmm.frozen_evidence_bundle`、`source_role=hmm_frozen_evidence` 和以下 partition contract：
+
+```json
+{
+  "schema_version": "advisory_hmm_frozen_evidence_partition_v1",
+  "selector": {
+    "schema_version": "advisory_hmm_frozen_evidence_selector_v1",
+    "research_program_id": "...",
+    "package_id": "...",
+    "decision_trade_date": "YYYY-MM-DD",
+    "model_config_id": "...",
+    "model_snapshot_id": "optional explicit snapshot",
+    "signal_preset": "..."
+  },
+  "phase0a_hmm_metadata": {
+    "model_snapshot_id": "...",
+    "model_artifact_sha256": "...",
+    "coefficient_sha256": "...",
+    "snapshot_trained_at": "...",
+    "available_at": "...",
+    "training_information_cutoff": "...",
+    "as_of_trade_date": "YYYY-MM-DD",
+    "effective_trade_date": "YYYY-MM-DD",
+    "generation_mode": "EXACT_SNAPSHOT",
+    "input_data_max_dates": {}
+  }
+}
+```
+
+producer 必须通过 `build_hmm_frozen_evidence_partition` 生成该 partition，并令 availability event 的 `row_count=1`、`partition_content_hash=canonical_sha256(normalized phase0a_hmm_metadata)`。catalog 只按 frozen selector 查询正式 PASS event，不读取 `model_train_snapshots` 猜测 snapshot；metadata、selector、T cutoff 或 content hash 不闭合时保持显式 `WAITING_INPUT`。DISCOVER 与 VERIFY 必须重新读取同一 ledger contract；出现后继 event 或内容漂移时触发 source revision drift，不能沿用旧 member。
+
+seal 从最终 catalog member 构造 `HistoricalRangeHMMBindingSetV1`，以 `HMM_BINDING_SET` planning CAS 固化每个 T 的 metadata 与 exact source revision ref，再把 ref/hash 写入 resolved frozen Program。base `runtime_config/runtime_config_hash` 保持不变。day candidate 执行加载并 readback binding-set，验证其 Program/package/base-config/catalog lineage 后，只在内存中生成 day-local runtime profile copy并注入当日 snapshot；不得写回 Program、binding、snapshot registry 或共享 Selection 配置。
+
+raw candidates 为零且 HMM 启用时，仍必须对 exact frozen snapshot、model、coefficient、trained/available/cutoff 和 input max-date evidence 执行只读 preflight；不得因为没有候选而跳过 artifact 读取与 SHA 对照，也不得触发系数生成或训练。
 
 ### 5.8 Risk and tradability providers
 
@@ -569,13 +612,13 @@ R2-B 使用结构化错误和 reason code，不返回 `None`、空 dict 或 succ
   - canonical builder 和 current persisted artifact 逐字段 parity，current repository save 恰好一次；Phase 1R deterministic id 不受 UUID/time/path 影响，package-owned resolver 不调用 QE source fallback。
 - `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py`
   - per-leg window lineage 独立，公共 PIT identity 一致，manifest frozen weights 不读取回测文件或注入 rows；legacy/future rolling mode 显式 unsupported 且无 fallback。
-- `backend/tests/simulation_runtime/test_selection_computation_parity.py`
+- `backend/tests/strategy_package/test_selection_computation.py`
   - 现有 Selection wrapper 候选、排除项、stage trace 和 error parity。
-- `backend/tests/selection_center/test_strategy_package_current_inference_parity.py`
+- `backend/tests/selection_center/test_runtime_selection.py`
   - current Selection composition root 未传 historical policy 时仍使用现有 PIT ensure、signal persistence、artifact/DSE/trace 语义。
-- `backend/tests/simulation_runtime/test_strategy_package_current_inference_parity.py`
+- `backend/tests/simulation_runtime/test_strategy_package_selection_service.py`
   - Simulation Runtime 使用同一普通 artifact 和默认 current policies，结果及错误 reason 不变。
-- `backend/tests/paper_trading_v2/test_strategy_package_current_inference_parity.py`
+- `backend/tests/paper_trading_v2/test_day_runner.py` 与 `backend/tests/paper_trading_v2/test_session.py`
   - Paper v2 readiness/day runner 的 StrategyPackage artifact 查询、生成和失败语义不变。
 - `backend/tests/advisory_historical_range/test_r2b_historical_providers.py`
   - explicit conn、no ensure/no write、HMM frozen evidence、config-only waiting、receipt/catalog closure。
@@ -595,10 +638,10 @@ pytest backend/tests/advisory_historical_range/test_r2b_candidate_producer.py
 pytest backend/tests/advisory_historical_range/test_r2b_catalog_planner.py
 pytest backend/tests/strategy_package/test_selection_signal_preparation.py
 pytest backend/tests/strategy_package/test_multi_alpha_signal_preparation.py
-pytest backend/tests/simulation_runtime/test_selection_computation_parity.py
-pytest backend/tests/selection_center/test_strategy_package_current_inference_parity.py
-pytest backend/tests/simulation_runtime/test_strategy_package_current_inference_parity.py
-pytest backend/tests/paper_trading_v2/test_strategy_package_current_inference_parity.py
+pytest backend/tests/strategy_package/test_selection_computation.py
+pytest backend/tests/selection_center/test_runtime_selection.py
+pytest backend/tests/simulation_runtime/test_strategy_package_selection_service.py
+pytest backend/tests/paper_trading_v2/test_day_runner.py backend/tests/paper_trading_v2/test_session.py
 pytest backend/tests/test_inference_engine_historical_readonly.py
 pytest backend/tests/scripts/test_strategy_package_live_inference.py
 artifact: <explicit Phase 1R DEV candidate CAS receipt path>
@@ -709,9 +752,9 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-967 | WSL provider/runner contract | `backend/tests/scripts/test_strategy_package_live_inference.py` | design_ready | none |
 | F-968 | single/multi real preparation adapters | `backend/tests/strategy_package/test_selection_signal_preparation.py`; `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
 | F-969 | multi-alpha context aggregator | `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
-| F-970 | `HistoricalRangeHMMProvider` frozen evidence contract | `backend/tests/advisory_historical_range/test_r2b_historical_providers.py` | design_ready | none |
+| F-970 | `HistoricalRangeHMMProvider` frozen evidence、WAITING/resume、binding-set 与 day-local contract | `backend/tests/advisory_historical_range/test_r2b_hmm_binding.py`; `backend/tests/advisory_historical_range/test_r2b_historical_providers.py` | design_ready | none |
 | F-971 | explicit ST/suspend/industry providers | `backend/tests/advisory_historical_range/test_r2b_historical_providers.py` | design_ready | none |
-| F-972 | `StrategyPackageSelectionComputation.compute` adapter | `backend/tests/simulation_runtime/test_selection_computation_parity.py` | design_ready | none |
+| F-972 | `StrategyPackageSelectionComputation.compute` adapter | `backend/tests/strategy_package/test_selection_computation.py`; `backend/tests/simulation_runtime/test_strategy_package_selection_service.py` | design_ready | none |
 | F-973 | `HistoricalRangeCandidateProjector` | `backend/tests/advisory_historical_range/test_r2b_candidate_projector.py` | design_ready | none |
 | F-974 | valid empty closure | `backend/tests/advisory_historical_range/test_r2b_candidate_projector.py`; `backend/tests/scripts/test_strategy_package_live_inference.py` | design_ready | none |
 | F-975 | candidate artifact payload v2 + CAS publish/readback | `backend/tests/advisory_historical_range/test_r2b_candidate_producer.py`; `backend/tests/advisory_historical_range/test_r2b_candidate_projector.py` | design_ready | none |
@@ -724,7 +767,7 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 | F-982 | acceptance record release-state section | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
 | F-983 | catalog planning operation/checkpoint/seal | `backend/tests/advisory_historical_range/test_r2b_catalog_planner.py` | design_ready | none |
 | F-984 | candidate/day hash builders and repository closure | `backend/tests/advisory_historical_range/test_r2b_models.py`; `backend/tests/advisory_historical_range/test_repository.py` | design_ready | none |
-| F-985 | current consumer composition roots/default policies | `backend/tests/test_inference_engine_historical_readonly.py`; `backend/tests/selection_center/test_strategy_package_current_inference_parity.py`; `backend/tests/simulation_runtime/test_strategy_package_current_inference_parity.py`; `backend/tests/paper_trading_v2/test_strategy_package_current_inference_parity.py` | design_ready | none |
+| F-985 | current consumer composition roots/default policies | `backend/tests/test_inference_engine_historical_readonly.py`; `backend/tests/selection_center/test_runtime_selection.py`; `backend/tests/simulation_runtime/test_strategy_package_selection_service.py`; `backend/tests/paper_trading_v2/test_day_runner.py`; `backend/tests/paper_trading_v2/test_session.py` | design_ready | none |
 | F-986 | manifest frozen-weight adapter/unsupported rolling branch | `backend/tests/strategy_package/test_multi_alpha_signal_preparation.py` | design_ready | none |
 | F-987 | planning -> QUEUED -> candidate positive-path receipt | `artifact: docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md` | design_ready | none |
 
@@ -732,11 +775,13 @@ R2-B 源码合入不激活 Phase 1R scheduler/API/UI，也不要求服务重启�
 
 ```text
 design_document = ready
-source_code = not_started
+source_code = implemented_and_locally_reviewed
 new_schema = r1_migration_contract_correction_only
 r1_migration_contract_correction = package_version_plus_planning_checkpoint_plus_candidate_v2_before_first_dev_apply
 dev_ddl_dml = not_executed
 production_ddl_dml = not_executed
+real_dev_single_alpha_e2e = pending
+real_dev_multi_alpha_e2e = pending
 service_restart = not_required_for_design
 runtime_activation = none
 ```
