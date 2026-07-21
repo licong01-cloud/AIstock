@@ -1283,6 +1283,50 @@ def test_submit_order_intent_returns_terminal_status_synchronously() -> None:
     backend.unsubscribe_fill_callback(sub)
 
 
+def test_localsim_twap_sell_does_not_submit_subminimum_intermediate_children() -> None:
+    position = PositionLot(
+        portfolio_id="paper_local_sell_slices",
+        symbol="000001.SZ",
+        quantity=300,
+        available_quantity=300,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    provider = FakeMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=6)}
+    )
+    backend, _, _ = _build_backend(
+        portfolio_id="paper_local_sell_slices",
+        initial_cash=100_000.0,
+        provider=provider,
+        initial_positions={"000001.SZ": position},
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_sell_slices",
+            "policy_sha256": "sha_twap_sell_slices",
+            "policy_json": {
+                "algo_code": "TWAP",
+                "algo_config": {"split_count": 6, "allow_partial_fill": False},
+            },
+        },
+    )
+    intent = OrderIntent(
+        package_id=backend.package_id,
+        portfolio_id=backend.portfolio_id,
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        quantity=300,
+        order_type=OrderType.MARKET,
+        target_trade_date=TRADE_DATE,
+    )
+
+    handle = backend.submit_order_intent(intent)
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+
+    assert backend.query_status(handle).state == "filled"
+    assert [fill.quantity for fill in snapshot["fills"]] == [100, 100, 100]
+    assert "000001.SZ" not in backend.query_positions()
+
+
 def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
     initial_lot = PositionLot(
         portfolio_id="paper_star_exit",
