@@ -25,7 +25,8 @@
     }
   ],
   "evidence_uris": [
-    "expected 2025-06-03/260/trading_calendar actual null/null/null for alpha_001"
+    "expected 2025-06-03/260/trading_calendar actual null/null/null for alpha_001",
+    "Selection artifact evidence regressions 20 passed; complete single/multi window groups preserved and partial groups failed explicitly"
   ],
   "expected": "Selection artifact v2 preserves and normalizes every provided historical window-lineage group so Phase 1R can compare exact single- and multi-Alpha windows without changing model scores or package admission.",
   "first_seen_at": "2026-07-21T09:06:55.483671Z",

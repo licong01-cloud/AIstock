@@ -235,7 +235,7 @@ def _live_input_context(
                 ],
             },
         )
-    return {
+    context = {
         "requested_trade_date": requested_trade_date.isoformat(),
         "effective_trade_date": effective_trade_date,
         "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
@@ -246,6 +246,94 @@ def _live_input_context(
         "calendar_hash": _required_v2_hash(raw_context.get("calendar_hash"), field_name="calendar_hash"),
         "calendar_source": calendar_source,
         "universe_input_hash": _required_v2_hash(raw_context.get("universe_input_hash"), field_name="universe_input_hash"),
+    }
+    calendar_identity_hash = raw_context.get("calendar_identity_hash")
+    if calendar_identity_hash is not None:
+        context["calendar_identity_hash"] = _required_v2_hash(
+            calendar_identity_hash,
+            field_name="calendar_identity_hash",
+        )
+
+    window_fields = ("window_start_date", "required_window", "window_resolution", "window_lineage_hash")
+    provided_window_fields = [field for field in window_fields if raw_context.get(field) is not None]
+    if provided_window_fields:
+        missing_window_fields = [field for field in window_fields if raw_context.get(field) is None]
+        if missing_window_fields:
+            raise DataUnavailableError(
+                "live inference single-Alpha window lineage is incomplete",
+                context={
+                    "reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE,
+                    "missing_fields": missing_window_fields,
+                },
+            )
+        context.update(_normalized_window_lineage(raw_context, field_prefix="input_context"))
+
+    raw_per_leg = raw_context.get("per_leg_window_lineage")
+    if raw_per_leg is not None:
+        if not isinstance(raw_per_leg, Mapping) or not raw_per_leg:
+            raise DataUnavailableError(
+                "live inference multi-Alpha window lineage must be a non-empty object",
+                context={"reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE},
+            )
+        context["per_leg_window_lineage"] = {
+            str(leg_id): _normalized_window_lineage(
+                lineage,
+                field_prefix=f"per_leg_window_lineage.{leg_id}",
+            )
+            for leg_id, lineage in sorted(raw_per_leg.items(), key=lambda item: str(item[0]))
+        }
+    return context
+
+
+def _normalized_window_lineage(value: Any, *, field_prefix: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise DataUnavailableError(
+            "live inference window lineage must be an object",
+            context={"reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE, "field": field_prefix},
+        )
+    required_fields = ("window_start_date", "required_window", "window_resolution", "window_lineage_hash")
+    missing = [field for field in required_fields if value.get(field) in (None, "")]
+    if missing:
+        raise DataUnavailableError(
+            "live inference window lineage is incomplete",
+            context={
+                "reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE,
+                "field": field_prefix,
+                "missing_fields": missing,
+            },
+        )
+    raw_required_window = value["required_window"]
+    if isinstance(raw_required_window, bool):
+        raw_required_window = None
+    try:
+        required_window = int(raw_required_window)
+    except (TypeError, ValueError) as exc:
+        raise DataUnavailableError(
+            "live inference required_window must be a positive integer",
+            context={"reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE, "field": field_prefix},
+        ) from exc
+    if required_window <= 0:
+        raise DataUnavailableError(
+            "live inference required_window must be a positive integer",
+            context={"reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE, "field": field_prefix},
+        )
+    window_resolution = str(value["window_resolution"]).strip()
+    if not window_resolution:
+        raise DataUnavailableError(
+            "live inference window_resolution must be non-empty",
+            context={"reason_code": REASON_SOURCE_RECEIPT_INCOMPLETE, "field": field_prefix},
+        )
+    return {
+        "window_start_date": _date_text(
+            value["window_start_date"],
+            field_name=f"{field_prefix}.window_start_date",
+        ),
+        "required_window": required_window,
+        "window_resolution": window_resolution,
+        "window_lineage_hash": _required_v2_hash(
+            value["window_lineage_hash"],
+            field_name=f"{field_prefix}.window_lineage_hash",
+        ),
     }
 
 
