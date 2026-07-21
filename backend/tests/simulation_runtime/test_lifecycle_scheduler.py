@@ -693,9 +693,7 @@ def _local_sim_context_with_real_broker(
 ) -> SimulationRunContext:
     manifest = _score_weighted_manifest(release)
     current_positions = dict(positions or {})
-    policy = _canonical_local_sim_policy_for_test(
-        execution_policy or _local_sim_execution_policy()
-    )
+    policy = _canonical_local_sim_policy_for_test(execution_policy or _local_sim_execution_policy())
     broker = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=cash,
@@ -728,11 +726,13 @@ def _local_sim_realtime_context_with_real_broker(
     cash: float,
     positions: dict[str, PositionLot],
 ) -> SimulationRunContext:
-    policy = _canonical_local_sim_policy_for_test({
-        "policy_id": "exec_policy_twap_streaming",
-        "policy_sha256": "placeholder_replaced_by_test_helper",
-        "policy_json": {"algo_code": "TWAP", "algo_config": {"allow_partial_fill": True, "split_count": 6}},
-    })
+    policy = _canonical_local_sim_policy_for_test(
+        {
+            "policy_id": "exec_policy_twap_streaming",
+            "policy_sha256": "placeholder_replaced_by_test_helper",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"allow_partial_fill": True, "split_count": 6}},
+        }
+    )
     broker = LocalSimBackend(
         portfolio_id=portfolio_id,
         initial_cash=100_000,
@@ -9393,9 +9393,7 @@ def test_scheduler_localsim_persists_first_causal_bar_wait_and_resumes_without_r
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=selection_service,
-        context_provider=StaticSimulationRunContextProvider(
-            by_binding_id={local_binding.binding_id: first_context}
-        ),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: first_context}),
     )
     planned = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -9537,9 +9535,7 @@ def test_scheduler_localsim_first_causal_bar_wait_projection_recovers_from_outbo
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
-        context_provider=StaticSimulationRunContextProvider(
-            by_binding_id={local_binding.binding_id: context}
-        ),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
     )
     planned = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -9562,10 +9558,7 @@ def test_scheduler_localsim_first_causal_bar_wait_projection_recovers_from_outbo
     first_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
     assert failed.results[0].status == "FAILED_RETRYABLE"
     assert failed_run.run_payload_json["local_sim_economic_generation"] == 1
-    assert (
-        failed_run.run_payload_json["local_sim_projection_outbox_v1"]["status"]
-        == "PROJECTION_RETRYABLE"
-    ), (
+    assert failed_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTION_RETRYABLE", (
         failed_run.run_payload_json["local_sim_projection_outbox_v1"],
         failed_run.run_payload_json.get("submit_failure"),
     )
@@ -9588,10 +9581,7 @@ def test_scheduler_localsim_first_causal_bar_wait_projection_recovers_from_outbo
     assert recovered_run.run_payload_json["local_sim_economic_generation"] == 1
     assert recovered_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
     assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == first_order_ids
-    assert sum(
-        event["event_type"] == "RUN_INTRADAY_WAITING_FOR_CAUSAL_BAR"
-        for event in paper_repo.run_events
-    ) == 1
+    assert sum(event["event_type"] == "RUN_INTRADAY_WAITING_FOR_CAUSAL_BAR" for event in paper_repo.run_events) == 1
 
 
 def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_terminal() -> None:
@@ -12005,14 +11995,81 @@ def test_production_context_provider_policy_authority_rejects_incomplete_release
     with pytest.raises(RuntimeConfigInvalidError, match="fields are not exact") as exc_info:
         provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
-    assert exc_info.value.context["reason_code"] == (
-        "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID"
-    )
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID")
     assert exc_info.value.context["missing_fields"] == ["policy_json"]
     assert exc_info.value.context["portfolio_policy_consulted"] is False
-    assert "retire incomplete historical LocalSIM releases" in exc_info.value.context[
-        "required_action"
-    ]
+    assert "retire incomplete historical LocalSIM releases" in exc_info.value.context["required_action"]
+
+
+@pytest.mark.parametrize(
+    ("release_field", "drifted_value", "expected_context"),
+    [
+        (
+            "execution_policy_version_id",
+            "exec_policy_runtime_identity_drift",
+            {
+                "expected_policy_id": "exec_policy_runtime_identity_drift",
+                "snapshot_policy_id": "exec_policy_close_price",
+            },
+        ),
+        (
+            "execution_policy_sha256",
+            "0" * 64,
+            {"expected_policy_sha256": "0" * 64},
+        ),
+    ],
+)
+def test_production_context_provider_policy_authority_rejects_release_snapshot_identity_conflict(
+    release_field: str,
+    drifted_value: str,
+    expected_context: dict[str, str],
+) -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release()
+    drifted_release = release.model_copy(update={release_field: drifted_value})
+    manifest = _frozen_manifest(
+        package_id=drifted_release.package_id,
+        manifest_sha256=drifted_release.manifest_sha256,
+    )
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim release identity conflict",
+        package_id=drifted_release.package_id,
+        manifest_sha256=drifted_release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "unused_portfolio_policy",
+            "policy_sha256": "unused_portfolio_policy_hash",
+            "policy_json": {
+                "algo_code": "V25_1_SMALL_CAP",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+    )
+    binding = _make_test_binding(
+        drifted_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        provider.load_context(
+            runtime_release=drifted_release,
+            binding=binding,
+            trade_date=TRADE_DATE,
+        )
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT")
+    for key, value in expected_context.items():
+        assert exc_info.value.context[key] == value
+    assert exc_info.value.context["portfolio_policy_consulted"] is False
+    assert exc_info.value.context["manifest_policy_consulted"] is False
 
 
 def test_production_context_provider_policy_authority_uses_runtime_release_snapshot_over_portfolio_default() -> None:
