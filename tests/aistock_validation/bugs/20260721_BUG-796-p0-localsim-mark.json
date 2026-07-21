@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-796",
-  "closed_at": null,
+  "closed_at": "2026-07-21T09:43:55Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -36,8 +36,8 @@
   "expected": "orders/fills/events/cash/states 与 position lots 先按单写者事务持久化；mark 不完整时 run 保持 INTRADAY_RUNNING 且 generation 显式 VALUATION_PENDING，缺失 symbol/reason 可诊断。下一 cadence 只补同一 generation 的权威 marks、account snapshot 和 performance，并经 outbox/readback 去重；健康经济事实不得因单 symbol mark 缺失回滚。",
   "first_seen_at": "2026-07-21T05:29:46.920122Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b93825218429156e3d306a0a5c849a5eded1eb55",
+  "fixed_at": "2026-07-21T09:57:20.510851Z",
   "github_issue_number": 2531,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2531",
   "last_seen_at": "2026-07-21T05:29:46.920122Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2538",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -66,6 +67,11 @@
     "fingerprint": "f3ad9494e31544259c5df900",
     "source_event_id": "FE-20260721-f3ad9494e315"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py -k valuation_pending_or_economic_readback_or_projection_readback_failure_or_projection_business_conflict_or_projection_connection_retry -q -p no:cacheprovider -> 12 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
