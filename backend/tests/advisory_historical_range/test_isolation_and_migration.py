@@ -8,6 +8,13 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = REPOSITORY_ROOT / "backend" / "services" / "advisory_historical_range"
 MIGRATION = REPOSITORY_ROOT / "backend" / "db" / "migrations" / "add_advisory_historical_range_phase1r_20260719.sql"
+QUEUED_AGGREGATE_FIX_MIGRATION = (
+    REPOSITORY_ROOT
+    / "backend"
+    / "db"
+    / "migrations"
+    / "fix_advisory_historical_range_batch_queued_aggregate_20260721.sql"
+)
 
 
 def test_phase1r_foundation_has_no_shared_runtime_imports() -> None:
@@ -118,3 +125,14 @@ def test_migration_has_runtime_invariants_without_approval_events() -> None:
     assert "attempt.status = 'completed'" in sql
     assert "requirement_plan_artifact_hash text not null" in sql
     assert "requirement_plan_ref, 'source_requirement_plan', requirement_plan_artifact_hash" in sql
+
+
+def test_queued_aggregate_fix_limits_seal_rule_to_status_transition() -> None:
+    sql = QUEUED_AGGREGATE_FIX_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "create or replace function app.verify_advisory_historical_range_batch_transition()" in sql
+    assert "new.status is distinct from old.status and old.status <> 'planning'" in sql
+    assert "or new.sealed_at is null" in sql
+    assert "advisory_historical_range_batch_child_aggregate_invalid" in sql
+    assert "disable trigger" not in sql
+    assert "drop trigger" not in sql

@@ -1,7 +1,10 @@
 {
-  "actual": "seal_planning_batch raises HistoricalRangeContractError: source catalog operation is not complete and sealable.",
+  "actual": "seal_planning_batch first rejected a COMPLETED VERIFY operation because zero unresolved rows were coerced to -1; after that check was corrected, the batch trigger rejected the required same-state QUEUED aggregate refresh.",
   "allowed_write_scope": [
+    "backend/db/migrations/fix_advisory_historical_range_batch_queued_aggregate_20260721.sql",
     "backend/services/advisory_historical_range/repository.py",
+    "backend/tests/advisory_historical_range/test_isolation_and_migration.py",
+    "backend/tests/advisory_historical_range/test_repository.py",
     "tests/aistock_validation/bugs/20260721_BUG-799-phase-1r-catalog-seal-rejects-valid-zero-unresolved-completion.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -14,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-21T07:41:56.315106Z",
-  "description": "seal_planning_batch raises HistoricalRangeContractError: source catalog operation is not complete and sealable.",
+  "description": "Real DEV R2-B validation found two fail-closed defects in one seal transaction: Python 'or -1' changed the valid cumulative_unresolved_count=0 into -1, and the database trigger applied the PLANNING-to-QUEUED transition rule again during QUEUED-to-QUEUED child aggregate synchronization.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,7 +27,9 @@
     }
   ],
   "evidence_uris": [
-    "DEV batch ahrb_d29847ba8fafee516423e8fc7dd1f2bf; operation ahrop_18f1588ee85e2bad0c9c2ad0434d416d"
+    "DEV batch ahrb_d29847ba8fafee516423e8fc7dd1f2bf; operation ahrop_18f1588ee85e2bad0c9c2ad0434d416d",
+    "DEV batch ahrb_eb97f1151ebc1968d86e81c89acd4205 sealed as QUEUED with two QUEUED range runs after application and trigger fixes",
+    "DEV migration sha256 f44c90f340f588996e82fe064e4fd2a96f1334669370d8126216f285c28f96b7; exact replay count 2; function sha256 565f0ff10fdfc5ec4fce108649c8df4ea701bd16e284c7545b27ca16811ef5d4"
   ],
   "expected": "A COMPLETED VERIFY catalog with full resolved count, zero unresolved count, and a latest checkpoint seals the historical request.",
   "first_seen_at": "2026-07-21T07:41:56.315106Z",
@@ -39,7 +44,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "pytest backend/tests/advisory_historical_range/test_postgres_contracts.py -k seal",
   "required_verification": [

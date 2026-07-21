@@ -7,7 +7,7 @@ writes ordinary Selection, Advisory, Paper, simulation, QE, or QMT tables.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -113,6 +113,30 @@ class HistoricalRangeCatalogPlanningState:
     checkpoint_chain: tuple[tuple[HistoricalRangeArtifactRefV1, HistoricalRangeSourceCatalogCheckpointV1], ...]
     discovered_members: dict[str, Any]
     current_phase_members: dict[str, Any]
+
+
+def _catalog_operation_is_sealable(
+    operation: Mapping[str, Any] | None,
+    *,
+    expected_catalog_generation: int,
+    expected_requirement_count: int,
+) -> bool:
+    if operation is None:
+        return False
+    catalog_generation = operation.get("catalog_generation")
+    resolved_count = operation.get("cumulative_resolved_count")
+    unresolved_count = operation.get("cumulative_unresolved_count")
+    return (
+        str(operation.get("status")) == HistoricalRangeOperationStatus.COMPLETED.value
+        and catalog_generation is not None
+        and int(catalog_generation) == expected_catalog_generation
+        and str(operation.get("catalog_phase") or "") == HistoricalRangeCatalogPhase.VERIFY.value
+        and resolved_count is not None
+        and int(resolved_count) == expected_requirement_count
+        and unresolved_count is not None
+        and int(unresolved_count) == 0
+        and operation.get("latest_checkpoint_ref") is not None
+    )
 
 
 class PostgresHistoricalRangeRepository:
@@ -384,14 +408,10 @@ class PostgresHistoricalRangeRepository:
                 )
                 catalog_operation = cur.fetchone()
                 expected_requirement_count = len(plan.requirements)
-                if (
-                    catalog_operation is None
-                    or str(catalog_operation["status"]) != HistoricalRangeOperationStatus.COMPLETED.value
-                    or int(catalog_operation["catalog_generation"] or 0) != catalog.catalog_generation
-                    or str(catalog_operation["catalog_phase"] or "") != "VERIFY"
-                    or int(catalog_operation["cumulative_resolved_count"] or -1) != expected_requirement_count
-                    or int(catalog_operation["cumulative_unresolved_count"] or -1) != 0
-                    or catalog_operation["latest_checkpoint_ref"] is None
+                if not _catalog_operation_is_sealable(
+                    catalog_operation,
+                    expected_catalog_generation=catalog.catalog_generation,
+                    expected_requirement_count=expected_requirement_count,
                 ):
                     raise self._repository_error(
                         "source catalog operation is not complete and sealable",
