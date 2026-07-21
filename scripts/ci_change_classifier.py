@@ -71,6 +71,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_issue_flow_pr_quality.py",
     "backend/tests/scripts/test_llm_provider_adapter.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
@@ -123,6 +124,7 @@ CATALOG_VALIDATION_FILES = {
     "backend/services/validation/ui_target_catalog.py",
     "backend/tests/test_validation_catalog_integrity.py",
     "backend/tests/test_validation_module_ownership.py",
+    "backend/tests/test_noxfile_validation_env.py",
     "backend/tests/test_validation_ui_target_catalog.py",
     "scripts/aistock_module_ownership_scan.py",
 }

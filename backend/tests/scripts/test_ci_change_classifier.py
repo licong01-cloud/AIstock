@@ -819,6 +819,21 @@ def test_catalog_change_uses_catalog_gate_without_workflow_suite(tmp_path: Path)
     assert payload["unmapped_code_files"] == []
 
 
+def test_workflow_and_nox_validation_tests_route_without_product_modules(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/scripts/test_issue_flow_pr_quality.py",
+            "backend/tests/test_noxfile_validation_env.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_validation_required"] is True
+    assert payload["catalog_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
+
+
 def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     import yaml
 
