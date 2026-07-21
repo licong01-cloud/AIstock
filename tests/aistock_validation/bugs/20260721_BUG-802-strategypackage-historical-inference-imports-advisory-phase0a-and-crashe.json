@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-802",
-  "closed_at": null,
+  "closed_at": "2026-07-21T15:22:54Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,8 +32,8 @@
   "expected": "StrategyPackage input projection uses a StrategyPackage-owned canonical hash dependency and the existing WSL Conda environment can import and execute historical inference without initializing Advisory consumer modules.",
   "first_seen_at": "2026-07-21T08:20:04.734226Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7cd2c2dc1fa57b22ca6cb2c179e85fa4775be679",
+  "fixed_at": "2026-07-21T15:50:17.386814Z",
   "github_issue_number": 2547,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2547",
   "last_seen_at": "2026-07-21T08:20:04.734226Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2549",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "f131d338f87ef46a506687a3",
     "source_event_id": "FE-20260721-f131d338f87e"
   },
+  "validation_evidence": [
+    "source PR CI green; WSL Python 3.10 entry passed; R2-B v4 E2E passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
