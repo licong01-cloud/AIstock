@@ -1,7 +1,7 @@
 # Advisory Phase 1R R2-B Source Delivery 验收记录
 
 > 更新日期：2026-07-21  
-> 当前状态：`real_dev_e2e_passed_bug_prs_pending_merge`
+> 当前状态：`real_dev_e2e_passed_source_merged`
 > 详细设计：`docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md`
 
 ## 1. 验收边界
@@ -127,11 +127,11 @@ R2-B 的真实 DEV 功能验收已闭合，但源码合入、production DDL 和�
 
 | Design ID | 状态 | 原因 |
 |---|---|---|
-| F-977 单 Alpha 真实 DEV E2E | passed_dev_pending_merge | `2026-07-03` 生成 1200 个完整候选事实、20 INCLUDED 与可读回 candidate artifact v2 |
-| F-978 原生多 Alpha 真实 DEV E2E | passed_dev_pending_merge | 同日生成 25 个候选、25 INCLUDED 与 9 个 source revision refs；两腿独立 window lineage 保留 |
+| F-977 单 Alpha 真实 DEV E2E | passed_dev_merged | `2026-07-03` 生成 1200 个完整候选事实、20 INCLUDED 与可读回 candidate artifact v2 |
+| F-978 原生多 Alpha 真实 DEV E2E | passed_dev_merged | 同日生成 25 个候选、25 INCLUDED 与 9 个 source revision refs；两腿独立 window lineage 保留 |
 | F-982 DEV/production release | separated | DEV migration 已 apply/verify/exact-reapply；production DDL 待具体目标授权，服务未重启、runtime 未激活 |
-| F-987 planning 到 candidate 正向回执 | passed_dev_pending_merge | planning 自动完成 13/13 requirements 并依次生成两个 Program candidate CAS，无审批或 latest-day gate |
-| source PR merge | pending_user_confirmation | PR `#2545/#2549/#2557/#2558` 已 rebase、目标测试与 GitHub CI 通过，尚未合入 |
+| F-987 planning 到 candidate 正向回执 | passed_dev_merged | planning 自动完成 13/13 requirements 并依次生成两个 Program candidate CAS，无审批或 latest-day gate |
+| source PR merge | completed | PR `#2545/#2549/#2557/#2558` 已分别合入为 `73eb3599`、`7cd2c2dc`、`6b700eb9`、`c410b8c2` |
 | R3-R5/API/UI/模型预测 | not_in_r2b | 仍按父设计后续阶段实施，不由本回执提前申报 |
 
 ## 7. 交付状态
@@ -145,8 +145,8 @@ real_dev_single_alpha_e2e = passed
 real_dev_multi_alpha_e2e = passed
 service_restart = not_requested
 runtime_activation = none
-merge_state = bug_prs_pending_user_confirmation
+merge_state = bug_prs_merged
 bug_prs = 2545,2549,2557,2558
 ```
 
-因此当前结论是：F-977、F-978 和 F-987 已在真实 DEV 集成源码闭包上通过；R2-B 可进入用户确认合入阶段。四个修复 PR 未合入，production DDL 未授权、未执行，服务未重启，R3 日执行器与完整 Phase 1R 仍未完成。
+因此当前结论是：F-977、F-978 和 F-987 已在真实 DEV 集成源码闭包上通过，四个修复 PR 已合入主线，R2-B source delivery 完成。production DDL 未授权、未执行，服务未重启，R3 日执行器与完整 Phase 1R 仍未完成。
