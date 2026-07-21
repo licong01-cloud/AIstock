@@ -581,7 +581,6 @@ modules:
     description_zh: 覆盖模块注册表、文件归属、commit 影响分析、工作区 dirty 状态和模块质量优先级矩阵。
     test_plans:
       required_on_change: [l0, validation_module_registry_l0]
-      recommended: [validation_center_real_port_ui]
   - module_id: platform
     display_name: Platform
     module_type: technical_layer
