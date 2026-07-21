@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-804",
-  "closed_at": null,
+  "closed_at": "2026-07-21T08:58:19Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,8 +31,8 @@
   "expected": "Replay compares immutable content and source identity fields; fallback remains observable enqueue evidence but does not participate in content identity. SHA256, source, URI, size, row_count, selected_row_count and zero_copy checks remain fail-closed.",
   "first_seen_at": "2026-07-21T08:50:07.986711Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "004ce2064ae4f313f081f0590cdef26c89297b32",
+  "fixed_at": "2026-07-21T08:58:58.897722Z",
   "github_issue_number": 2553,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2553",
   "last_seen_at": "2026-07-21T08:50:07.986711Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2554",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.evolution"
   ],
@@ -60,6 +61,12 @@
     "fingerprint": "8a26f9655314f4ed3662bc47",
     "source_event_id": "FE-20260721-8a26f9655314"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_evolution/test_input_adapter.py -q -> 5 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s hmm_evolution_backend -> 193 passed, 2 deselected"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
