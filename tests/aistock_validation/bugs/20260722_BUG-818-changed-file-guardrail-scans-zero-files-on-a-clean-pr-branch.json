@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-818",
-  "closed_at": null,
+  "closed_at": "2026-07-21T22:36:06Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,8 +28,8 @@
   "expected": "Changed-only guardrails derive the committed branch diff plus staged/worktree changes and pass the exact paths to both guardrail and ownership scans.",
   "first_seen_at": "2026-07-21T21:36:02.067224Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2ca8b718acda1df566302f8c0915e7987742402a",
+  "fixed_at": "2026-07-21T22:38:53.826586Z",
   "github_issue_number": 2588,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2588",
   "last_seen_at": "2026-07-21T21:36:02.067224Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2587",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -57,6 +58,9 @@
     "fingerprint": "42192a43d338d674a8bd91a3",
     "source_event_id": "FE-20260722-42192a43d338"
   },
+  "validation_evidence": [
+    "PR #2587 required checks passed; workflow CI ran only changed workflow targets; backend, frontend, and TDX business suites skipped as unrelated"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
