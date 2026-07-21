@@ -25,6 +25,16 @@ class _FillFactorAProcessor:
         return df
 
 
+class _ParameterlessDnn:
+    def parameters(self):  # noqa: ANN201
+        return iter(())
+
+
+class _ParameterlessPytorchModel:
+    def __init__(self) -> None:
+        self.dnn_model = _ParameterlessDnn()
+
+
 def _feature_frame():
     index = pd.MultiIndex.from_tuples(
         [
@@ -72,6 +82,14 @@ def test_saved_qe_infer_processors_apply_before_strict_filter(tmp_path):
 
     assert processed.loc[features.index[1], "factor_a"] == 0.0
     assert list(processed.columns) == ["factor_a", "factor_b"]
+
+
+def test_pytorch_model_without_parameter_dimension_fails_visibly(tmp_path):
+    model_path = tmp_path / "model.pkl"
+    model_path.write_bytes(pickle.dumps(_ParameterlessPytorchModel()))
+
+    with pytest.raises(ValueError, match="no parameter dimension"):
+        inference_engine.load_model_from_pkl(model_path)
 
 
 def test_score_frame_rejects_length_mismatch_after_filtering(monkeypatch):

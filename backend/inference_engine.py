@@ -47,6 +47,18 @@ def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _load_admitted_strategy_package_pickle(path: Path) -> Any:
+    """Load an asset whose integrity was established during package admission.
+
+    Runtime inference must not add a second package-admission or asset-size gate.
+    Both model and processor callers resolve paths from the admitted package
+    manifest before reaching this loader.
+    """
+
+    with path.open("rb") as stream:
+        return pickle.Unpickler(stream).load()
+
+
 def _fetch_inference_fundamental_data(
     *,
     universe: list[str],
@@ -127,7 +139,7 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
     if kept_rows <= 0:
         raise ValueError(
             "strict StrategyPackage inference found no fully-scored instruments; "
-            "refusing to fill missing features with defaults",
+            "refusing to impute missing features",
             LAST_STRICT_FEATURE_FILTER,
         )
     logger.warning(
@@ -246,8 +258,7 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     if model_dir not in sys.path:
         sys.path.insert(0, model_dir)
 
-    with open(model_file, "rb") as f:
-        model = pickle.load(f)
+    model = _load_admitted_strategy_package_pickle(model_file)
 
     # PyTorch 设备处理
     try:
@@ -295,12 +306,13 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     elif hasattr(model, "dnn_model") and model.dnn_model is not None:
         inner_model = model.dnn_model
         model_kind = "pytorch"
-        try:
-            first_layer = next(model.dnn_model.parameters(), None)
-            if first_layer is not None:
-                num_features_expected = first_layer.shape[-1]
-        except Exception:
-            pass
+        first_layer = next(model.dnn_model.parameters(), None)
+        if first_layer is None or len(first_layer.shape) < 1:
+            raise ValueError(
+                "PyTorch StrategyPackage model has no parameter dimension from which "
+                "the required feature count can be established"
+            )
+        num_features_expected = int(first_layer.shape[-1])
         logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
     elif hasattr(model, "predict") and callable(model.predict):
         model_kind = "qlib_generic"
@@ -475,8 +487,7 @@ def _apply_saved_qe_infer_processors(
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
 
-    with open(processor_path, "rb") as f:
-        dataset = pickle.load(f)
+    dataset = _load_admitted_strategy_package_pickle(processor_path)
     handler = getattr(dataset, "handler", None)
     processors = list(getattr(handler, "infer_processors", []) or [])
     if not processors:

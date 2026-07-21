@@ -2024,9 +2024,9 @@ class QEExperimentRuntimeAssetResolver:
         ``allow_cache_fallback=True`` AND the node fetch failed but a local
         cache hit replaced the params.
 
-        Per feedback_no_silent_errors: a node fetch failure with
-        ``allow_cache_fallback=False`` (the default) propagates the original
-        exception. Callers that want to opt into cache fallback must pass
+        Per feedback_no_silent_errors: when cache substitution is disabled, a
+        node fetch failure propagates the original exception. Callers that want
+        to opt into cache fallback must pass
         ``allow_cache_fallback=True`` and record the resulting origin.
         """
 

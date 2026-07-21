@@ -125,7 +125,7 @@ def main() -> int:
     diagnostic_path = (
         output_path.parent / "diagnostics" / "qe_diagnosis.txt"
         if args.historical_read_only
-        else Path("/mnt/f/Dev/AIstock/debug_tools/qe_diagnosis.txt")
+        else Path.cwd() / "debug_tools" / "qe_diagnosis.txt"
     )
     diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
     _patch_strategy_package_data_window()

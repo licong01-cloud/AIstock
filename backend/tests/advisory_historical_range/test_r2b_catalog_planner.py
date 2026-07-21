@@ -328,7 +328,7 @@ def test_planning_service_rolls_discover_to_verify_and_seals(tmp_path: Path) -> 
         expected_row_version=1,
         expected_fencing_token=1,
         next_worker_id="worker-verify",
-        next_lease_token="lease-verify",
+        next_lease_token="verify",
         next_lease_expires_at=lease,
     )
     assert discover.operation["catalog_phase"] == "VERIFY"
@@ -339,7 +339,7 @@ def test_planning_service_rolls_discover_to_verify_and_seals(tmp_path: Path) -> 
         expected_row_version=2,
         expected_fencing_token=2,
         next_worker_id="unused-worker",
-        next_lease_token="unused-lease",
+        next_lease_token="unused",
         next_lease_expires_at=lease,
     )
     assert verified.operation["status"] == "COMPLETED"

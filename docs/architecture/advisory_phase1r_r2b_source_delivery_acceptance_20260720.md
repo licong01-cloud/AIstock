@@ -49,6 +49,7 @@ R2-B 没有激活 scheduler 或运行入口，不写普通 Selection、Paper、�
 python -m pytest \
   backend/tests/advisory_historical_range \
   backend/tests/test_inference_engine_historical_readonly.py \
+  backend/tests/test_inference_strict_scoring_alignment.py \
   backend/tests/scripts/test_strategy_package_live_inference.py \
   backend/tests/test_strategy_package_live_inference_window_patch.py \
   backend/tests/strategy_package/test_selection_signal_preparation.py \
@@ -62,7 +63,7 @@ python -m pytest \
   backend/tests/paper_trading_v2/test_session.py \
   backend/tests/paper_trading_v2/test_day_runner.py -q
 
-result: 295 passed, 2 skipped
+result: 307 passed, 2 skipped
 ```
 
 该最终矩阵已包含逐日窗口、calendar closure、HMM config-only WAITING/resume/binding-set、HMM raw-empty、直接 projector，以及 Paper v2 `test_day_runner.py`/`test_session.py` 的正向依赖回归。

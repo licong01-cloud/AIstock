@@ -90,3 +90,32 @@ def test_historical_runner_rejects_empty_universe_as_valid_empty(tmp_path, monke
 
     with pytest.raises(RuntimeError, match="empty universe"):
         runner.main()
+
+
+def test_current_runner_derives_diagnostic_path_from_repo_working_directory(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = tmp_path / "result" / "scores.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner, "InferenceEngine", _Engine)
+    monkeypatch.setattr(runner, "_patch_strategy_package_data_window", lambda: None)
+    monkeypatch.setattr(runner, "_score_rows_from_frame", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "strategy_package_live_inference.py",
+            "--runtime-workspace",
+            str(workspace),
+            "--trade-date",
+            "2026-06-02",
+            "--output-path",
+            str(output),
+        ],
+    )
+
+    assert runner.main() == 0
+    assert _Engine.captured["diagnostic_output_path"] == str(
+        tmp_path / "debug_tools" / "qe_diagnosis.txt"
+    )
+    assert _Engine.captured["persist_signals"] is True

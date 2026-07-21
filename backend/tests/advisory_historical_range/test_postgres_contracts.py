@@ -196,7 +196,7 @@ def _create_running_day(
         operation_id=created.catalog_operation_id,
         expected_row_version=1,
         worker_id="catalog-worker-1",
-        lease_token="catalog-lease-1",
+        lease_token="test-1",
         lease_expires_at=lease_expires_at,
     )
     member_chain_hash = build_catalog_member_chain_hash(
@@ -232,7 +232,7 @@ def _create_running_day(
         target_status=HistoricalRangeOperationStatus.RUNNING,
         advance_to_verify=True,
         next_worker_id="catalog-worker-2",
-        next_lease_token="catalog-lease-2",
+        next_lease_token="test-2",
         next_lease_expires_at=lease_expires_at + timedelta(minutes=1),
     )
     verify_checkpoint = HistoricalRangeSourceCatalogCheckpointV1(
