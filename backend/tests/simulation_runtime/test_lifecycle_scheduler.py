@@ -92,6 +92,8 @@ from backend.services.simulation_runtime.lifecycle import (
 )
 from backend.services.simulation_runtime.models import (
     LocalSimEconomicReceiptV1,
+    LocalSimExecutionRuntimeStatus,
+    LocalSimExecutionStateV1,
     LocalSimMarketMarkProvenance,
     LocalSimMarketMarkV1,
     LocalSimProjectionOutboxV1,
@@ -9057,12 +9059,131 @@ def test_scheduler_localsim_projection_readback_failure_recovers_without_rewrite
     assert failed_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
     assert failed_run.run_payload_json["local_sim_projection_readback_failure"]
     assert failed_run.run_payload_json["local_sim_projection_readback_failure"]["attempt_count"] == 1
-    scheduler._replay_pending_local_sim_projection(run_id=run_id, paper_repository=paper_repo)
+    recovered_tick = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 33),
+    )
     recovered = repo.get_simulation_daily_run(run_id)
+    assert recovered_tick.results[0].status == "LOCALSIM_PROJECTION_RECOVERED"
     assert recovered.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert "local_sim_projection_readback_failure" not in recovered.run_payload_json
     assert "submit_failure" not in recovered.run_payload_json
     assert len(paper_repo.run_events) == event_count
+
+
+def test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state() -> None:
+    release, binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = InMemoryPaperTradingV2Repository()
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_durable_runtime_recovery",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={binding.binding_id: first_context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = planned.results[0].run.run_id
+    assert submitted.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
+    order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    states = repo.list_local_sim_execution_states(run_id)
+    assert states and any(not state.is_terminal for state in states)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": len(states),
+            "submit_failure": {
+                "stage": "LOCAL_SIM_INTRADAY_ADVANCE_FAILED",
+                "type": "DataUnavailableError",
+                "message": "transient shared provider interruption after the prior durable generation",
+                "context": {"reason_code": "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"},
+            },
+        },
+    )
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    recovery_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_durable_runtime_recovery",
+        release=release,
+        paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash),
+        positions=first_broker.query_positions(),
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={binding.binding_id: recovery_context}
+    )
+
+    recovered_tick = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 33),
+    )
+
+    recovered = repo.get_simulation_daily_run(run_id)
+    assert recovered_tick.results[0].status == "LOCALSIM_DURABLE_RUNTIME_RECOVERED"
+    assert recovered.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert recovered.run_payload_json["local_sim_failed_run_recovery_v1"]["parent_resubmitted"] is False
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == order_ids
+
+    # A PROJECTED flag alone is not enough: recovery must independently prove
+    # the Paper v2 projection.  Missing orders remain loud and the failed run
+    # must not be revived from only the runtime-side state hashes.
+    paper_repo.orders[run_id] = paper_repo.orders[run_id][1:]
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            "submit_failure": {
+                "stage": "LOCAL_SIM_INTRADAY_ADVANCE_FAILED",
+                "type": "DataUnavailableError",
+                "message": "forced post-projection recovery readback check",
+                "context": {"reason_code": "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"},
+            },
+        },
+        payload_unset=("local_sim_failed_run_recovery_v1",),
+    )
+    refused = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 34),
+    )
+    refused_run = repo.get_simulation_daily_run(run_id)
+    assert refused.results[0].status == "FAILED_TERMINAL"
+    assert refused.results[0].error["context"]["reason_code"] == "LOCALSIM_ECONOMIC_FACT_READBACK_FAILED"
+    assert refused.results[0].error["context"]["stage"] == "LOCAL_SIM_DURABLE_RUNTIME_RECOVERY"
+    assert refused.results[0].error["context"]["parent_resubmitted"] is False
+    assert refused_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert "local_sim_failed_run_recovery_v1" not in refused_run.run_payload_json
+    assert "pre_run_failure" not in refused_run.run_payload_json
 
 
 def test_scheduler_localsim_projection_business_conflict_is_terminal_not_retryable() -> None:
@@ -9216,6 +9337,231 @@ def test_scheduler_localsim_projection_outbox_tamper_fails_loud() -> None:
         scheduler._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repo)
 
     assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"
+
+
+def test_scheduler_localsim_persists_first_causal_bar_wait_and_resumes_without_resubmit() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio_id = "portfolio_localsim_first_causal_bar_wait"
+    position = PositionLot(
+        portfolio_id=portfolio_id,
+        symbol="000003.SZ",
+        quantity=600,
+        available_quantity=600,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={position.symbol: position},
+    )
+    selection_service = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection_service,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: first_context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+
+    waiting = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 30, 55),
+    )
+
+    run_id = planned.results[0].run.run_id
+    waiting_run = repo.get_simulation_daily_run(run_id)
+    waiting_states = repo.list_local_sim_execution_states(run_id)
+    assert waiting.results[0].status == "LOCALSIM_INTRADAY_RUNNING", waiting.results[0].error
+    assert waiting_run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert waiting_run.run_payload_json["broker_called"] is True
+    assert waiting_run.run_payload_json["local_sim_economic_generation"] == 1
+    assert waiting_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
+    assert waiting_run.run_payload_json["local_sim_persistence"]["status"] == "INTRADAY_WAITING_FOR_CAUSAL_BAR"
+    assert waiting_run.run_payload_json["local_sim_persistence"]["valuation_status"] == (
+        "WAITING_FOR_FIRST_CAUSAL_MARK"
+    )
+    assert waiting_run.run_payload_json["local_sim_persistence"]["nav"] is None
+    assert "strategy_performance" not in waiting_run.run_payload_json
+    assert paper_repo.snapshots == {}
+    assert waiting_states
+    assert all(
+        state.runtime_status == LocalSimExecutionRuntimeStatus.WAITING_FOR_CAUSAL_BAR
+        and state.sequence == 0
+        and state.last_processed_bar_time is None
+        for state in waiting_states
+    )
+    waiting_execution = waiting.results[0].execution_result
+    assert waiting_execution is not None
+    waiting_snapshot = waiting_execution.broker_result.execution_snapshot
+    tampered_payload = waiting_states[0].model_dump(mode="python")
+    tampered_payload.update({"order_id": "order_cross_chain_tamper", "state_hash": ""})
+    tampered_state = LocalSimExecutionStateV1.model_validate(tampered_payload)
+    with pytest.raises(DataUnavailableError) as chain_exc:
+        SimulationLifecycleScheduler._validate_local_sim_execution_states(
+            binding=local_binding,
+            run=waiting_run,
+            execution=waiting_execution,
+            orders=tuple(waiting_snapshot.orders),
+            states=(tampered_state, *waiting_states[1:]),
+        )
+    assert chain_exc.value.context["reason_code"] == "LOCALSIM_DURABLE_ACTION_CHAIN_CONFLICT"
+    first_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    assert len(first_order_ids) == len(waiting_states)
+    assert paper_repo.list_fills_for_run(run_id) == []
+    with pytest.raises(DataUnavailableError) as account_drift_exc:
+        scheduler._local_sim_existing_projection_result(
+            run_id=run_id,
+            observed_positions={position.symbol: position},
+            observed_account=SimpleNamespace(cash=99_999.0),
+        )
+    assert account_drift_exc.value.context["reason_code"] == "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT"
+
+    waiting_replay_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={position.symbol: position},
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: waiting_replay_context}
+    )
+    waiting_replay = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 30, 58),
+    )
+    assert waiting_replay.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
+    assert repo.get_simulation_daily_run(run_id).run_payload_json["local_sim_economic_generation"] == 1
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == first_order_ids
+
+    resumed_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={position.symbol: position},
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: resumed_context}
+    )
+    resumed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 31, 5),
+    )
+
+    resumed_run = repo.get_simulation_daily_run(run_id)
+    resumed_states = repo.list_local_sim_execution_states(run_id)
+    assert resumed.results[0].status == "LOCALSIM_INTRADAY_RUNNING", resumed.results[0].error
+    assert resumed_run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert resumed_run.run_payload_json["local_sim_economic_generation"] == 2
+    assert any(state.last_processed_bar_time is not None for state in resumed_states)
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == first_order_ids
+    assert paper_repo.list_fills_for_run(run_id)
+
+
+def test_scheduler_localsim_first_causal_bar_wait_projection_recovers_from_outbox_without_resubmit() -> None:
+    fail_wait_projection = [True]
+
+    class OneShotWaitProjectionFailureRepository(InMemoryPaperTradingV2Repository):
+        def save_run_event(self, *, run_id, event_type, message, context=None):
+            if event_type == "RUN_INTRADAY_WAITING_FOR_CAUSAL_BAR" and fail_wait_projection[0]:
+                fail_wait_projection[0] = False
+                raise psycopg2.OperationalError("forced first-bar wait projection interruption")
+            return super().save_run_event(
+                run_id=run_id,
+                event_type=event_type,
+                message=message,
+                context=context,
+            )
+
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    paper_repo = OneShotWaitProjectionFailureRepository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_wait_projection_retry",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+
+    failed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 30, 55),
+    )
+
+    run_id = planned.results[0].run.run_id
+    failed_run = repo.get_simulation_daily_run(run_id)
+    first_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    assert failed.results[0].status == "FAILED_RETRYABLE"
+    assert failed_run.run_payload_json["local_sim_economic_generation"] == 1
+    assert (
+        failed_run.run_payload_json["local_sim_projection_outbox_v1"]["status"]
+        == "PROJECTION_RETRYABLE"
+    ), (
+        failed_run.run_payload_json["local_sim_projection_outbox_v1"],
+        failed_run.run_payload_json.get("submit_failure"),
+    )
+    assert first_order_ids
+
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 30, 58),
+    )
+
+    recovered_run = repo.get_simulation_daily_run(run_id)
+    assert recovered.results[0].status == "LOCALSIM_PROJECTION_RECOVERED", (
+        recovered.results[0].error,
+        recovered_run.run_payload_json.get("submit_failure"),
+    )
+    assert recovered_run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert recovered_run.run_payload_json["local_sim_economic_generation"] == 1
+    assert recovered_run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == first_order_ids
+    assert sum(
+        event["event_type"] == "RUN_INTRADAY_WAITING_FOR_CAUSAL_BAR"
+        for event in paper_repo.run_events
+    ) == 1
 
 
 def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_terminal() -> None:
@@ -12130,3 +12476,22 @@ def test_local_sim_fact_payload_rejects_non_finite_numbers(invalid_value: object
             fact_type="unit_non_finite_number",
         )
     assert exc_info.value.context["reason_code"] == "LOCALSIM_FACT_JSON_NUMBER_INVALID"
+
+
+def test_local_sim_snapshot_rejects_cross_plan_facts_instead_of_filtering_them() -> None:
+    execution = SimpleNamespace(
+        run=SimpleNamespace(run_id="run_snapshot_identity_conflict"),
+        execution_plan=SimpleNamespace(
+            plan_id="plan_snapshot_identity_conflict",
+            intents=(SimpleNamespace(intent_id="intent_expected"),),
+        ),
+    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        SimulationLifecycleScheduler._filter_local_sim_snapshot_by_plan(
+            execution=execution,
+            orders=(SimpleNamespace(order_id="order_other", intent_id="intent_other"),),
+            fills=(),
+            events=(),
+            cash_entries=(),
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_SNAPSHOT_PLAN_IDENTITY_CONFLICT"

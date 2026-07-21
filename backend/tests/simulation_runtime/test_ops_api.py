@@ -1730,7 +1730,10 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
 ) -> None:
     repo, run_id, plan_id = repo_with_plan
     run = repo.get_simulation_daily_run(run_id)
-    last_bar = datetime(2026, 5, 21, 1, 30, tzinfo=UTC)
+    # Production TDX bars are naive Asia/Shanghai timestamps.  The causal
+    # cursor precedes the first processed bar; cursor-minus-bar therefore used
+    # to collapse to zero and hide a genuinely stalled LocalSIM event loop.
+    last_bar = datetime(2026, 5, 21, 9, 30)
     state = LocalSimExecutionStateV1(
         run_id=run.run_id,
         binding_id=run.binding_id,
@@ -1747,10 +1750,11 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
         remaining_quantity=80,
         algo_code="V25",
         order_status="PARTIAL",
-        runtime_status=LocalSimExecutionRuntimeStatus.ACTIVE,
+        runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_DATA,
         schedule_version="v25_platform_observability",
-        causality_cursor=last_bar.replace(minute=35),
+        causality_cursor=last_bar.replace(second=0) - timedelta(seconds=5),
         last_processed_bar_time=last_bar,
+        waiting_reason_code="LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
         idempotency_key="localsim-platform-observability",
     )
     repo.update_simulation_daily_run(
@@ -1759,6 +1763,16 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
         payload_patch={
             "last_stage": "INTRADAY_RUNNING",
             "local_sim_execution_states_v1": [state.model_dump(mode="json")],
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": "INTRADAY_PERSISTED",
+                "order_count": 1,
+                "fill_count": 1,
+                "order_event_count": 1,
+                "cash_ledger_count": 1,
+                "position_count": 1,
+                "terminal": False,
+            },
         },
     )
     observed_at = datetime(2026, 5, 21, 1, 35, tzinfo=UTC)
@@ -1781,6 +1795,83 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
     assert metrics["simulation_localsim_active_algo_count"] == 1
     assert metrics["simulation_localsim_partial_count"] == 1
     assert metrics["simulation_localsim_causal_bar_lag_seconds"] == 300.0
+
+    lunch_at = datetime(2026, 5, 21, 4, 0, tzinfo=UTC)
+    lunch_service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(
+            last_run_at=lunch_at,
+            market_phase="LUNCH_BREAK",
+        ),  # type: ignore[arg-type]
+    )
+    lunch = lunch_service.platform_diagnostics(run_id=run_id, generated_at=lunch_at)
+    assert lunch["layers"]["business"][0]["facts"]["max_bar_lag_seconds"] == 9000.0
+    assert not any(
+        alert["alert_type"] == "LOCAL_SIM_CAUSAL_BAR_NOT_PROGRESSING"
+        for alert in lunch["alerts"]["items"]
+    )
+
+    future_state_payload = state.model_dump(mode="python")
+    future_state_payload.update(
+        {
+            "last_processed_bar_time": datetime(2026, 5, 21, 9, 36),
+            "state_hash": "",
+        }
+    )
+    future_state = LocalSimExecutionStateV1.model_validate(future_state_payload)
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={
+            "local_sim_execution_states_v1": [future_state.model_dump(mode="json")],
+        },
+    )
+    with pytest.raises(RuntimeConfigInvalidError) as future_exc:
+        service.platform_diagnostics(run_id=run_id, generated_at=observed_at)
+    assert future_exc.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_BAR_TIME_IN_FUTURE"
+
+
+@pytest.mark.parametrize(
+    "persistence_status",
+    [
+        "INTRADAY_WAITING_FOR_CAUSAL_BAR",
+        "INTRADAY_PERSISTED",
+        "PERSISTED",
+        "PERSISTED_WITH_CAPACITY_RESIDUAL",
+        "PERSISTED_WITH_RESIDUAL",
+        "PERSISTED_WITH_TERMINAL_FAILURE",
+    ],
+)
+def test_platform_diagnostics_accepts_every_scheduler_emitted_localsim_persistence_status(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+    persistence_status: str,
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": persistence_status,
+                "order_count": 0,
+                "fill_count": 0,
+                "order_event_count": 0,
+                "cash_ledger_count": 0,
+                "position_count": 0,
+                "terminal": persistence_status.startswith("PERSISTED"),
+            },
+        },
+    )
+    observed_at = datetime(2026, 5, 21, 1, 35, tzinfo=UTC)
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=observed_at),  # type: ignore[arg-type]
+    )
+
+    payload = service.platform_diagnostics(run_id=run_id, generated_at=observed_at)
+
+    assert payload["layers"]["durability"][0]["facts"]["persistence_status"] == persistence_status
 
 
 def test_platform_diagnostics_exposes_unreconstructible_localsim_submitted_projection(
