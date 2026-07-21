@@ -12,7 +12,11 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from backend.execution_algos.adaptive_is.contracts import QuoteSourceMethod
-from backend.execution_algos.adaptive_is.reasons import QuoteContractError, QuoteContractReasonCode, quote_contract_error
+from backend.execution_algos.adaptive_is.reasons import (
+    QuoteContractError,
+    QuoteContractReasonCode,
+    quote_contract_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +94,9 @@ class _PhaseOnePhysicalFeed:
 
     def all_states_for_symbol(self, symbol: str) -> tuple[_PhaseOneLeaseState, ...]:
         return tuple(
-            state
-            for state in (*self.leases.values(), *self.pending_leases.values())
-            if symbol in state.lease.symbols
+            state for state in (*self.leases.values(), *self.pending_leases.values()) if symbol in state.lease.symbols
         )
+
 
 try:
     import xtquant.xtdata as xtdata  # type: ignore[import-not-found]
@@ -141,6 +144,8 @@ class RealtimeQuoteSubscriber:
         self._phase_one_active: dict[str, _PhaseOnePhysicalFeed] = {}
         self._phase_one_preparing: dict[tuple[str, int], _PhaseOnePhysicalFeed] = {}
         self._phase_one_owner_by_session: dict[str, str] = {}
+        self._phase_one_generation_high_watermark: dict[str, int] = {}
+        self._phase_one_fenced_generation: dict[str, int] = {}
         self._phase_one_failure_samples: dict[str, dict[str, Any]] = {}
         self._phase_one_last_failure: dict[str, Any] | None = None
         self._phase_one_capacity_rejected_total = 0
@@ -327,8 +332,10 @@ class RealtimeQuoteSubscriber:
                     *(state.lease.symbols for state in candidate_states),
                     normalized,
                 )
-                self._assert_phase_one_capacity(desired_symbols, max_symbols=max_symbols, data_session_key=data_session_key)
-                generation = (active.generation + 1) if active is not None else 1
+                self._assert_phase_one_capacity(
+                    desired_symbols, max_symbols=max_symbols, data_session_key=data_session_key
+                )
+                generation = self._next_phase_one_generation_locked(data_session_key, reserve=False)
                 pending = _PhaseOneLeaseState(
                     lease=PhaseOneQuoteLease(
                         lease_id=lease_id,
@@ -362,7 +369,11 @@ class RealtimeQuoteSubscriber:
                 raise quote_contract_error(
                     QuoteContractReasonCode.CONSUMER_FAILURE,
                     "Phase 1 quote consumer did not acknowledge generation publication",
-                    context={"data_session_key": data_session_key, "generation": active.generation, "lease_id": lease_id},
+                    context={
+                        "data_session_key": data_session_key,
+                        "generation": active.generation,
+                        "lease_id": lease_id,
+                    },
                 )
             with self._lock:
                 active.pending_leases.pop(lease_id, None)
@@ -375,18 +386,26 @@ class RealtimeQuoteSubscriber:
                 raise quote_contract_error(
                     QuoteContractReasonCode.CONSUMER_FAILURE,
                     "Phase 1 quote consumer failed while activating an existing generation",
-                    context={"data_session_key": data_session_key, "generation": active.generation, "lease_id": lease_id},
+                    context={
+                        "data_session_key": data_session_key,
+                        "generation": active.generation,
+                        "lease_id": lease_id,
+                    },
                 )
             return pending.lease
 
-        return self._replace_phase_one_feed(
-            data_session_key=data_session_key,
-            owner=owner,
-            old_feed=active,
-            candidate_states=prepared_states,
-            desired_symbols=desired_symbols,
-            bootstrap_fetcher=bootstrap_fetcher,
-        ).leases[lease_id].lease
+        return (
+            self._replace_phase_one_feed(
+                data_session_key=data_session_key,
+                owner=owner,
+                old_feed=active,
+                candidate_states=prepared_states,
+                desired_symbols=desired_symbols,
+                bootstrap_fetcher=bootstrap_fetcher,
+            )
+            .leases[lease_id]
+            .lease
+        )
 
     def rebuild_phase_one_leases(self, *, data_session_key: str, owner: str, max_symbols: int) -> int:
         """Create a fenced successor generation for all current logical leases."""
@@ -450,13 +469,16 @@ class RealtimeQuoteSubscriber:
                 remaining_states = tuple(
                     state for active_lease_id, state in active.leases.items() if active_lease_id != lease_id
                 )
-                should_fence_only = bool(remaining_states) and self._union_phase_one_symbols(
-                    *(state.lease.symbols for state in remaining_states)
-                ) == active.symbols
+                should_fence_only = (
+                    bool(remaining_states)
+                    and self._union_phase_one_symbols(*(state.lease.symbols for state in remaining_states))
+                    == active.symbols
+                )
             if not remaining_states:
                 self._phase_one_active.pop(data_session_key, None)
                 self._phase_one_owner_by_session.pop(data_session_key, None)
                 active.fenced = True
+                self._record_phase_one_fenced_generation_locked(data_session_key, active.generation)
                 physical_to_unsubscribe = active.physical_subscription_id
             else:
                 physical_to_unsubscribe = None
@@ -502,12 +524,20 @@ class RealtimeQuoteSubscriber:
                 for (session_key, _generation), feed in self._phase_one_preparing.items()
                 if session_key == data_session_key
             ]
+            preparing_generation = max((feed.generation for feed in preparing), default=None)
+            fenced_generation = self._phase_one_fenced_generation.get(data_session_key)
+            generation_high_watermark = self._phase_one_generation_high_watermark.get(data_session_key, 0)
             if active is None:
                 return {
                     "data_session_key": data_session_key,
                     "status": "PREPARING" if preparing else "INACTIVE",
                     "owner": self._phase_one_owner_by_session.get(data_session_key),
-                    "generation": preparing[-1].generation if preparing else None,
+                    "generation": preparing_generation,
+                    "current_generation": preparing_generation,
+                    "active_generation": None,
+                    "preparing_generation": preparing_generation,
+                    "fenced_generation": fenced_generation,
+                    "generation_high_watermark": generation_high_watermark,
                     "physical_subscription_id": preparing[-1].physical_subscription_id if preparing else None,
                     "symbols": list(preparing[-1].symbols) if preparing else [],
                     "lease_count": len(preparing[-1].leases) + len(preparing[-1].pending_leases) if preparing else 0,
@@ -524,12 +554,16 @@ class RealtimeQuoteSubscriber:
                 "status": "DEGRADED" if failed_lease_count else "ACTIVE",
                 "owner": active.owner,
                 "generation": active.generation,
+                "current_generation": active.generation,
+                "active_generation": active.generation,
+                "fenced_generation": fenced_generation,
+                "generation_high_watermark": generation_high_watermark,
                 "physical_subscription_id": active.physical_subscription_id,
                 "symbols": list(active.symbols),
                 "lease_count": len(active.leases),
                 "pending_lease_count": len(active.pending_leases),
                 "failed_lease_count": failed_lease_count,
-                "preparing_generation": preparing[-1].generation if preparing else None,
+                "preparing_generation": preparing_generation,
                 "bootstrap_covered_symbols": list(active.bootstrap_covered_symbols),
                 "bootstrap_coverage_ratio": active.bootstrap_coverage_ratio,
                 "callback_total": active.callback_total,
@@ -572,12 +606,11 @@ class RealtimeQuoteSubscriber:
         with self._lock:
             session_keys = [data_session_key]
             active_feeds = [self._phase_one_active.pop(key) for key in session_keys if key in self._phase_one_active]
-            preparing_keys = [
-                key for key in self._phase_one_preparing if key[0] == data_session_key
-            ]
+            preparing_keys = [key for key in self._phase_one_preparing if key[0] == data_session_key]
             preparing_feeds = [self._phase_one_preparing.pop(key) for key in preparing_keys]
             for feed in (*active_feeds, *preparing_feeds):
                 feed.fenced = True
+                self._record_phase_one_fenced_generation_locked(feed.data_session_key, feed.generation)
                 self._phase_one_owner_by_session.pop(feed.data_session_key, None)
             released_session_keys = {feed.data_session_key for feed in (*active_feeds, *preparing_feeds)}
         for session_key in released_session_keys:
@@ -603,7 +636,8 @@ class RealtimeQuoteSubscriber:
         desired_symbols: tuple[str, ...],
         bootstrap_fetcher: Callable[[List[str]], Mapping[str, Mapping[str, Any]]],
     ) -> _PhaseOnePhysicalFeed:
-        generation = (old_feed.generation + 1) if old_feed is not None else 1
+        with self._lock:
+            generation = self._next_phase_one_generation_locked(data_session_key, reserve=True)
         preparing_states = tuple(
             _PhaseOneLeaseState(
                 lease=replace(
@@ -645,17 +679,23 @@ class RealtimeQuoteSubscriber:
             self.start()
             sequence = xtdata_mod.subscribe_whole_quote(
                 code_list=list(desired_symbols),
-                callback=lambda datas, bound_session=data_session_key, bound_generation=generation: self._on_phase_one_quote(
-                    bound_session,
-                    bound_generation,
-                    datas,
+                callback=lambda datas, bound_session=data_session_key, bound_generation=generation: (
+                    self._on_phase_one_quote(
+                        bound_session,
+                        bound_generation,
+                        datas,
+                    )
                 ),
             )
             if not isinstance(sequence, int) or sequence <= 0:
                 raise quote_contract_error(
                     QuoteContractReasonCode.SUBSCRIPTION_UNAVAILABLE,
                     "xtdata.subscribe_whole_quote did not return a positive subscription id",
-                    context={"data_session_key": data_session_key, "generation": generation, "subscription_id": sequence},
+                    context={
+                        "data_session_key": data_session_key,
+                        "generation": generation,
+                        "subscription_id": sequence,
+                    },
                 )
             preparing.physical_subscription_id = sequence
             self._bootstrap_phase_one_states(preparing, tuple(preparing.leases.values()))
@@ -722,7 +762,9 @@ class RealtimeQuoteSubscriber:
                 with self._lock:
                     state.lease = replace(state.lease, status="FAILED")
         if old_feed is not None:
-            old_feed.fenced = True
+            with self._lock:
+                old_feed.fenced = True
+                self._record_phase_one_fenced_generation_locked(data_session_key, old_feed.generation)
             for state in old_feed.leases.values():
                 self._safe_generation_fenced(state, data_session_key, old_feed.generation)
             self._unsubscribe_phase_one_physical(
@@ -821,13 +863,21 @@ class RealtimeQuoteSubscriber:
             error = quote_contract_error(
                 QuoteContractReasonCode.PAYLOAD_INVALID,
                 "xtdata whole-quote callback payload must be a mapping",
-                context={"data_session_key": data_session_key, "generation": generation, "payload_type": type(datas).__name__},
+                context={
+                    "data_session_key": data_session_key,
+                    "generation": generation,
+                    "payload_type": type(datas).__name__,
+                },
             )
             self._emit_phase_one_failure((), error)
             return
         with self._lock:
             active = self._phase_one_active.get(data_session_key)
-            feed = active if active is not None and active.generation == generation else self._phase_one_preparing.get((data_session_key, generation))
+            feed = (
+                active
+                if active is not None and active.generation == generation
+                else self._phase_one_preparing.get((data_session_key, generation))
+            )
             if feed is None or feed.fenced:
                 stale_error = quote_contract_error(
                     QuoteContractReasonCode.ORDERING_REJECTED,
@@ -883,8 +933,17 @@ class RealtimeQuoteSubscriber:
                             ),
                         )
                     )
-        for state, delivery in deliveries:
-            self._safe_phase_one_quote_callback(state, delivery)
+            # Immutable capture and generation fencing form one subscriber-side
+            # critical section.  A failed preparing feed must not become fenced
+            # between the feed/lease check above and the consumer capture ACK;
+            # otherwise a late candidate callback can be accepted into the
+            # worker after its generation has already been retired.  Consumer
+            # callbacks only capture into the bounded ingress worker/mailbox and
+            # do not perform broker or database work, so serializing this small
+            # section preserves the existing delivery contract without widening
+            # the physical-subscription lifecycle.
+            for state, delivery in deliveries:
+                self._safe_phase_one_quote_callback(state, delivery)
 
     def _discard_preparing_phase_one_feed(self, feed: _PhaseOnePhysicalFeed) -> None:
         with self._lock:
@@ -892,6 +951,7 @@ class RealtimeQuoteSubscriber:
             if self._phase_one_active.get(feed.data_session_key) is None:
                 self._phase_one_owner_by_session.pop(feed.data_session_key, None)
             feed.fenced = True
+            self._record_phase_one_fenced_generation_locked(feed.data_session_key, feed.generation)
         self._release_phase_one_process_owner_if_idle(feed.data_session_key)
         for state in (*feed.leases.values(), *feed.pending_leases.values()):
             self._safe_generation_fenced(state, feed.data_session_key, feed.generation)
@@ -900,6 +960,29 @@ class RealtimeQuoteSubscriber:
             data_session_key=feed.data_session_key,
             generation=feed.generation,
             states=tuple((*feed.leases.values(), *feed.pending_leases.values())),
+        )
+
+    def _next_phase_one_generation_locked(self, data_session_key: str, *, reserve: bool) -> int:
+        known_generations = [self._phase_one_generation_high_watermark.get(data_session_key, 0)]
+        active = self._phase_one_active.get(data_session_key)
+        if active is not None:
+            known_generations.append(active.generation)
+        known_generations.extend(
+            generation for session_key, generation in self._phase_one_preparing if session_key == data_session_key
+        )
+        generation = max(known_generations) + 1
+        if reserve:
+            self._phase_one_generation_high_watermark[data_session_key] = generation
+        return generation
+
+    def _record_phase_one_fenced_generation_locked(self, data_session_key: str, generation: int) -> None:
+        self._phase_one_generation_high_watermark[data_session_key] = max(
+            self._phase_one_generation_high_watermark.get(data_session_key, 0),
+            generation,
+        )
+        self._phase_one_fenced_generation[data_session_key] = max(
+            self._phase_one_fenced_generation.get(data_session_key, -1),
+            generation,
         )
 
     def _unsubscribe_phase_one_physical(
@@ -1080,7 +1163,9 @@ class RealtimeQuoteSubscriber:
         try:
             acknowledged = state.callbacks.on_generation_prepared(data_session_key, generation)
             if acknowledged is not True:
-                raise RuntimeError("consumer callback did not return an explicit True generation preparation acknowledgment")
+                raise RuntimeError(
+                    "consumer callback did not return an explicit True generation preparation acknowledgment"
+                )
         except Exception as exc:  # noqa: BLE001 - lifecycle callback cannot poison a shared feed
             error = quote_contract_error(
                 QuoteContractReasonCode.CONSUMER_FAILURE,
@@ -1281,11 +1366,19 @@ class RealtimeQuoteSubscriber:
                         "time": int(df_time.iloc[0, 0]) if df_time is not None and not df_time.empty else None,
                         "lastPrice": float(df_price.iloc[0, 0]),
                         "close": float(df_price.iloc[0, 0]),
-                        "volume": float(df_volume.iloc[0, 0]) if df_volume is not None and not df_volume.empty else None,
-                        "open": float(data.get("open").iloc[0, 0]) if "open" in data and not data["open"].empty else None,
-                        "high": float(data.get("high").iloc[0, 0]) if "high" in data and not data["high"].empty else None,
+                        "volume": float(df_volume.iloc[0, 0])
+                        if df_volume is not None and not df_volume.empty
+                        else None,
+                        "open": float(data.get("open").iloc[0, 0])
+                        if "open" in data and not data["open"].empty
+                        else None,
+                        "high": float(data.get("high").iloc[0, 0])
+                        if "high" in data and not data["high"].empty
+                        else None,
                         "low": float(data.get("low").iloc[0, 0]) if "low" in data and not data["low"].empty else None,
-                        "amount": float(data.get("amount").iloc[0, 0]) if "amount" in data and not data["amount"].empty else None,
+                        "amount": float(data.get("amount").iloc[0, 0])
+                        if "amount" in data and not data["amount"].empty
+                        else None,
                     }
                     return quote
 

@@ -773,6 +773,7 @@ def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
         "python",
         "-m",
         "compileall",
+        "backend/infra/realtime_quote_subscriber.py",
         "backend/services/miniqmt_execution_runtime",
         "backend/services/qmt_strategy_ledger/order_service.py",
         "backend/services/qmt_strategy_ledger/repository.py",
@@ -780,6 +781,7 @@ def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
         "backend/tests/miniqmt_execution_runtime",
         "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
         "backend/tests/qmt_strategy_ledger/test_repository.py",
