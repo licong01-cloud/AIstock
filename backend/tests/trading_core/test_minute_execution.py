@@ -12,12 +12,17 @@ from backend.services.trading_core.oms import OMS
 from backend.services.paper_trading_v2.models import OrderExecutionState
 
 
-def make_order(quantity: int = 600, *, symbol: str = "000001.SZ"):
+def make_order(
+    quantity: int = 600,
+    *,
+    symbol: str = "000001.SZ",
+    side: OrderSide = OrderSide.BUY,
+):
     intent = OrderIntent(
         package_id="pkg_1",
         portfolio_id="paper_1",
         symbol=symbol,
-        side=OrderSide.BUY,
+        side=side,
         quantity=quantity,
         target_trade_date=date(2024, 1, 2),
     )
@@ -63,6 +68,71 @@ def test_minute_execution_twap_fills_order() -> None:
     assert sum(fill.quantity for fill in fills) == 600
     assert len(fills) == 3
     assert len(events) == 3
+
+
+@pytest.mark.parametrize(
+    ("algo_code", "algo_config", "market_context"),
+    [
+        ("TWAP", {"split_count": 6}, {}),
+        ("VWAP", {}, {"volume_profile": [1.0] * 6}),
+        ("AC_OPTIMAL", {"total_bars": 6}, {"sigma": 0.02}),
+        ("SBB_EMA", {"split_count": 6}, {"close_series": [10.0] * 20}),
+    ],
+)
+def test_sell_small_multi_slice_never_emits_intermediate_residual_child(
+    algo_code: str,
+    algo_config: dict,
+    market_context: dict,
+) -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=300, side=OrderSide.SELL)
+
+    final_order, fills, _ = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(6),
+        algo_code=algo_code,
+        algo_config=algo_config,
+        market_context=market_context,
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert sum(fill.quantity for fill in fills) == 300
+    assert all(fill.quantity >= 100 and fill.quantity % 100 == 0 for fill in fills)
+
+
+def test_pov_sell_residual_is_only_emitted_when_child_closes_remaining_parent() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=300, side=OrderSide.SELL)
+    bars = make_bars(6, volume=1_000)
+    bars[-1] = bars[-1].model_copy(update={"volume": 10_000})
+
+    final_order, fills, _ = engine.execute_order(
+        order=order,
+        minute_bars=bars,
+        algo_code="POV",
+        algo_config={"target_participation": 0.05, "max_participation": 0.2},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in fills] == [300]
+
+
+def test_twap_final_child_can_close_exact_subminimum_sell_residual() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=50, side=OrderSide.SELL)
+
+    final_order, fills, _ = engine.execute_order(
+        order=order,
+        minute_bars=make_bars(6),
+        algo_code="TWAP",
+        algo_config={"split_count": 6},
+        allow_partial_fill=False,
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in fills] == [50]
 
 
 def test_minute_execution_preserves_valid_star_board_lot_quantity() -> None:

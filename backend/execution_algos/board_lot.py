@@ -68,15 +68,23 @@ def _ceil_to_increment(qty: int, increment: int) -> int:
     return q * increment
 
 
-def round_to_board_lot(qty: int, stock_id: str, *, side: str = "BUY") -> int:
+def round_to_board_lot(
+    qty: int,
+    stock_id: str,
+    *,
+    side: str = "BUY",
+    allow_sell_residual: bool = True,
+) -> int:
     """Floor ``qty`` to a legal board-lot quantity.
 
     For BUY side the result is always a legal increment multiple, so it may
     return 0 when the requested quantity is below the board minimum.
 
-    For SELL side residuals below the board minimum are preserved verbatim
-    (the exchange residual rule lets a holder dump < min_qty in one shot).
-    Callers that want to enforce min_qty must check ``qty >= min_qty`` first.
+    For SELL side residuals below the board minimum are preserved verbatim only
+    when ``allow_sell_residual`` is true.  That flag is reserved for a child
+    that closes the entire remaining parent quantity; intermediate children
+    must pass false so the exchange residual exception cannot leak into an
+    ordinary split.
     """
 
     min_qty, increment = board_lot_rule(stock_id)
@@ -84,7 +92,7 @@ def round_to_board_lot(qty: int, stock_id: str, *, side: str = "BUY") -> int:
     if qty <= 0:
         return 0
     side_norm = str(side or "").strip().upper()
-    if side_norm == "SELL" and qty < min_qty:
+    if side_norm == "SELL" and allow_sell_residual and qty < min_qty:
         return qty  # residual flush is legal for SELL
     floored = _floor_to_increment(qty, increment)
     if floored < min_qty:
