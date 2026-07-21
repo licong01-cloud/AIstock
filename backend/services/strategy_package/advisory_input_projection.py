@@ -8,13 +8,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from backend.data_service.preprocessor import get_required_data_window
-from backend.services.advisory_phase0a.policy import canonical_json_sha256
 from backend.services.strategy_package.models import (
     AlphaMode,
     FactorAsset,
     RuntimeAssetManifest,
     StrategyPackageManifest,
 )
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
 
 PROJECTION_SCHEMA_VERSION = "strategy_package_advisory_input_projection_v1"
