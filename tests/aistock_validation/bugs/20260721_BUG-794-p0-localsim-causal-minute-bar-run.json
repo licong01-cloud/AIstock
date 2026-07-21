@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-794",
-  "closed_at": null,
+  "closed_at": "2026-07-21T05:16:27Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -36,8 +36,8 @@
   "expected": "同日执行窗口尚无已闭合 causal minute bar 时，已提交 LocalSIM run 保持 INTRADAY_RUNNING，逐 symbol 持久化 WAITING_FOR_CAUSAL_BAR；首根有效 bar 到达后从 durable cursor 幂等继续，不重复建单或成交。真实行情缺失/非法、持久化失败和不可恢复冲突继续 typed fail loud，不改选股、目标、计划、V25/T+1/limit/suspend 语义，不增加门禁审批。",
   "first_seen_at": "2026-07-21T04:00:02.553147Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7d27c47d42b533af6b8d353e1f8b697da0be3524",
+  "fixed_at": "2026-07-21T05:19:08.729416Z",
   "github_issue_number": 2524,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2524",
   "last_seen_at": "2026-07-21T04:00:02.553147Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2528",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "efc41d2dcadaf79e9693440c",
     "source_event_id": "FE-20260721-efc41d2dcada"
   },
+  "validation_evidence": [
+    "GitHub PR #2528 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
