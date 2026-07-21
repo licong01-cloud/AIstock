@@ -4,8 +4,8 @@
 - 父级权威：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / PostgreSQL durable orchestration
 - 日期：2026-07-19
-- 状态：`IMPLEMENTED_VALIDATED_AWAITING_COMMIT_AND_RUNTIME_ACTIVATION`
-- 实施修订：AIstock durable submission/orchestrator、跨来源 reservation ledger、QE Workspace submission receipt、Archive/read-model、execution deadline 证据与结果分类均已实现；BUG-785 初轮相关小矩阵为 `205 passed, 8 skipped`，二次审核后的修复点矩阵为 `45 passed, 3 skipped`，RD-Agent receipt/retry/path/tar 套件为 `24 passed`。更新后的 reservation DDL 已在现有 `127.0.0.1:5433/aistock_dev` 幂等执行两次并通过 preflight、容量原子性、active remote 冲突、终态 retry、lease takeover/fencing 和零残留清理验证；生产 DDL 未执行，代码尚未提交合入，WSL/远端 contract 尚未部署，backend 尚未重启激活
+- 状态：`IMPLEMENTED_MERGED_PRODUCTION_DDL_VERIFIED_RUNTIME_SMOKE_COMPLETE`
+- 实施修订：AIstock durable submission/orchestrator、跨来源 reservation ledger、QE Workspace submission receipt、Archive/read-model、execution deadline 证据与结果分类均已实现并合入。AIstock PR #2509 / merge commit `67a54a90` 与 RD-Agent companion PR #5 已合入；reservation DDL 已在生产应用并通过 SQL/application preflight，durable orchestrator 此前已完成启动 smoke。BUG-786 transport 和 BUG-793 capacity 修复也已合入。当前 backend 进程按用户明确要求停止，本状态不表示服务当前正在运行，也不授权重启
 - 范围：仅 P0-1B；不提前实现 P0-2 控制恢复、P0-3 创建器或 P0-4 UI 运行网格
 - 运行边界：QE-only；不得读写或调用 Selection、Advisory、Paper、模拟盘、QMT、实时荐股和生产交易路径
 - 设计原则：在现有 combine-backtest、`QEWorkspaceClient`、P0-1A durable schema 和 QE Workspace 服务上增量改造；只增加共享执行 reservation ledger 与 submission receipt，不创建“多 Alpha v2”或平行平台
@@ -13,18 +13,20 @@
 
 ---
 
-## 1. 背景、结论与当前实施事实
+## 1. 背景、结论与实施事实
 
-P0-1A 已完成以下事实：
+P0-1A 已完成以下事实；第 4～8 项记录的是 P0-1B 设计启动时的缺口基线，不再代表 2026-07-21 当前源码：
 
 1. PR #2464 已合入 durable task/run/child/attempt/event models、repository、migration、schema preflight 和历史回填。
 2. 2026-07-19 已在生产 `127.0.0.1:5432/aistock` 应用 migration，SQL 与 application preflight 均为 `ready`。
 3. 生产历史回填已生成 12 个 task、关联 41/41 个 run、生成 138 个结果 child；没有伪造 attempt/event，保护摘要执行前后保持一致。
-4. 当前 `MultiAlphaCombineBacktestService.submit_run()` 仍由 FastAPI 进程内 daemon thread 持有异步生命周期。
-5. 当前 child pred-backtest 仍由 `ThreadPoolExecutor` 调度，节点占用仍包含进程内 `_NODE_RESERVATIONS`。
-6. `RemotePredBacktestExecutor` 仍把“准备、提交、轮询、结果获取”压缩在一个同步调用中，并在返回 metrics 后才暴露远端 identity。
-7. 当前 `QEWorkspaceClient.create_and_run_loop()` 与 `F:\Dev\RD-Agent-main\rdagent\app\api_endpoints\qe_evolution_api.py` 的 `LoopRunRequest` 都没有 idempotency/submission intent 字段；服务端每次 POST 都会再次注册 background task，客户端仅靠确定性 `task_id/Loop1` 不能证明远端只执行一次。
-8. `qe_experiments` 没有权威 `node_id`，现有部分提交路径又在远端 POST 成功后才写 `assigned_node_id/qe_loop_id`；仅把多个业务表做读取并集不能形成“提交前已占位”的全局容量事实。
+4. 设计启动时，`MultiAlphaCombineBacktestService.submit_run()` 仍由 FastAPI 进程内 daemon thread 持有异步生命周期。
+5. 设计启动时，child pred-backtest 仍由 `ThreadPoolExecutor` 调度，节点占用仍包含进程内 `_NODE_RESERVATIONS`。
+6. 设计启动时，`RemotePredBacktestExecutor` 仍把“准备、提交、轮询、结果获取”压缩在一个同步调用中，并在返回 metrics 后才暴露远端 identity。
+7. 设计启动时，`QEWorkspaceClient.create_and_run_loop()` 与 `F:\Dev\RD-Agent-main\rdagent\app\api_endpoints\qe_evolution_api.py` 的 `LoopRunRequest` 都没有 idempotency/submission intent 字段；服务端每次 POST 都会再次注册 background task，客户端仅靠确定性 `task_id/Loop1` 不能证明远端只执行一次。
+8. 设计启动时，`qe_experiments` 没有权威 `node_id`，部分提交路径又在远端 POST 成功后才写 `assigned_node_id/qe_loop_id`；仅把多个业务表做读取并集不能形成“提交前已占位”的全局容量事实。
+
+截至 2026-07-21，上述第 4～8 项已由 P0-1B 实现关闭：新 production multi-alpha submit 已委托 durable submission/orchestrator；QE Workspace receipt 与 coordinator 提供 bind-before-submit 和服务端幂等；共享 reservation 在远端 POST 前形成容量事实；WSL/远端统一走 `QEWorkspaceClient`。对应代码、DDL 和运行 smoke 状态见第 24 节。
 
 因此 P0-1B 的目标是让已经存在的 durable schema 成为新 combine-backtest 的权威业务运行状态，同时增加一个不复制业务指标的共享 QE execution reservation ledger，并为 WSL/远端 QE Workspace 增加服务端 submission receipt。两者共同关闭“远端响应丢失重复执行”和“提交后才记录节点导致容量超卖”的窗口。
 
@@ -857,36 +859,36 @@ AIstock PR 与 RD-Agent PR/commit 必须分别记录。代码可以先后合入�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-201 | §2、§3、§18 | `git diff --check`; `backend/tests/multi_alpha/test_durable_contract.py` | verified_source | none |
-| F-204 | §6.3、§9、§13 | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | verified_source_runtime_not_activated | none |
+| F-204 | §6.3、§9、§13 | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | verified_source_and_runtime_smoke | none |
 | F-205 | §6.3、§10 | `backend/tests/multi_alpha/test_durable_execution_adapter.py`; `backend/tests/test_multi_alpha_remote_dispatch.py` | verified_source | none |
-| F-206 | §6.4、§11、§17.1 | `backend/tests/multi_alpha/test_durable_capacity.py`; `backend/migrations/qe_execution_reservation_20260719.preflight.sql`; `validation-receipt: 127.0.0.1:5433/aistock_dev reservation migration/preflight PASS 2026-07-20` | verified_dev_production_not_applied | none |
+| F-206 | §6.4、§11、§17.1 | `backend/tests/multi_alpha/test_durable_capacity.py`; `backend/migrations/qe_execution_reservation_20260719.preflight.sql`; BUG-785 DEV/production validation receipt | verified_dev_and_production | none |
 | F-209 | §8.3、§12.4 | `backend/tests/multi_alpha/test_durable_parent_finalization.py`; `validation-receipt: DEV atomic business-row validation 2026-07-19` | verified_dev | none |
 | F-210 | §12、§14 | `backend/tests/multi_alpha/test_durable_repository.py::test_event_failure_rolls_back_the_state_transition`; `backend/tests/multi_alpha/test_durable_repository.py::test_deadline_evidence_and_event_are_one_idempotent_attempt_transaction` | verified_source | none |
-| F-215 | §12.5、§16、§20.7 | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py` | verified_source_runtime_not_activated | none |
-| F-216 | §3、§6.6、§18.4 | `backend/tests/multi_alpha/test_durable_contract.py`; `backend/tests/multi_alpha/test_durable_submission.py` | verified_source_runtime_not_activated | none |
-| F-218 | §20 | `python -m pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/test_multi_alpha_remote_dispatch.py backend/tests/multi_alpha backend/tests/unified_engine/test_qe_workspace_submission_receipt.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/unified_engine/test_qe_backtest_recorder_isolation_hotfix.py -q`; `validation-receipt: F2 workflow PASS` | verified_source_runtime_not_activated | none |
+| F-215 | §12.5、§16、§20.7 | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py` | verified_source_and_runtime_smoke | none |
+| F-216 | §3、§6.6、§18.4 | `backend/tests/multi_alpha/test_durable_contract.py`; `backend/tests/multi_alpha/test_durable_submission.py` | verified_source_and_runtime_smoke | none |
+| F-218 | §20 | `python -m pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/test_multi_alpha_remote_dispatch.py backend/tests/multi_alpha backend/tests/unified_engine/test_qe_workspace_submission_receipt.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/unified_engine/test_qe_backtest_recorder_isolation_hotfix.py -q`; `validation-receipt: F2 workflow PASS` | verified_source_and_runtime_smoke | none |
 | F-301 | §2、§5、§18 | `git diff --check`; `backend/tests/multi_alpha/test_durable_contract.py` | verified_source | none |
 | F-302 | §6.1、§7、§15 | `backend/tests/multi_alpha/test_durable_submission.py::test_default_facade_delegates_submit_without_starting_legacy_execution`; `backend/tests/multi_alpha/test_durable_submission.py::test_production_facade_requires_explicit_test_flag_for_legacy_mode` | verified_source | none |
 | F-303 | §6.1、§10.3、§15 | `backend/tests/multi_alpha/test_durable_submission.py::test_sync_wait_timeout_returns_current_state_without_cancelling_run`; `backend/tests/multi_alpha/test_durable_submission.py::test_submit_api_returns_202_for_bounded_wait_timeout` | verified_source | none |
 | F-304 | §6.2、§8 | `backend/tests/multi_alpha/test_durable_plan.py` | verified_source | none |
 | F-305 | §6.5、§12、§14 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_stale_worker_cannot_terminalize_successor_attempt_or_child`; `validation-receipt: DEV lease takeover/fencing stale-owner rejection PASS 2026-07-20` | verified_dev | none |
-| F-306 | §6.3、§10 | `backend/tests/multi_alpha/test_durable_execution_adapter.py::test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator`; `backend/tests/multi_alpha/test_durable_contract.py::test_all_production_workspace_loop_submission_is_coordinator_owned` | verified_source_runtime_not_activated | none |
+| F-306 | §6.3、§10 | `backend/tests/multi_alpha/test_durable_execution_adapter.py::test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator`; `backend/tests/multi_alpha/test_durable_contract.py::test_all_production_workspace_loop_submission_is_coordinator_owned` | verified_source_and_runtime_smoke | none |
 | F-307 | §8.2、§10、§13 | `backend/tests/multi_alpha/test_durable_execution_adapter.py::test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime`; `backend/tests/multi_alpha/test_durable_execution_adapter.py::test_existing_artifact_byte_mismatch_is_loud`; result-manifest test | verified_source | none |
 | F-308 | §9 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_remote_acceptance_survives_local_receipt_transition_failure`; `validation-receipt: DEV reservation INSERT/source claim atomic PASS 2026-07-20` | verified_dev | none |
-| F-309 | §9、§13、§20.5 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_transport_response_loss_recovers_persisted_receipt`; `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_remote_acceptance_survives_local_receipt_transition_failure`; `backend/tests/test_qe_evolution_scheduler.py::test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume`; `backend/tests/test_qe_evolution_scheduler.py::test_remote_acceptance_is_not_failed_when_resource_session_sync_errors`; `artifact: F:/Dev/RD-Agent-worktrees/qe-submission-receipt-20260719/test/app/test_qe_evolution_submission_receipt.py` | verified_source_runtime_not_activated | none |
+| F-309 | §9、§13、§20.5 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_transport_response_loss_recovers_persisted_receipt`; `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_remote_acceptance_survives_local_receipt_transition_failure`; `backend/tests/test_qe_evolution_scheduler.py::test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume`; `backend/tests/test_qe_evolution_scheduler.py::test_remote_acceptance_is_not_failed_when_resource_session_sync_errors`; RD-Agent receipt tests | verified_source_and_runtime_smoke | none |
 | F-310 | §10.2、§13 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_transport_and_receipt_unavailable_stays_reconciling_and_keeps_slot`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_unqualified_remote_timeout_remains_reconciling_not_failed` | verified_source | none |
-| F-311 | §6.4、§11、§17.1 | coordinator ownership contract; active execution import tests; `test_reconciler_releases_terminal_receipt_and_keeps_capacity_auditable`; `backend/tests/test_qe_experiment_status_scanner.py` | verified_source_runtime_not_activated | none |
+| F-311 | §6.4、§11、§17.1 | coordinator ownership contract; active execution import tests; `test_reconciler_releases_terminal_receipt_and_keeps_capacity_auditable`; `backend/tests/test_qe_experiment_status_scanner.py` | verified_source_and_runtime_smoke | none |
 | F-312 | §11.2、§14 | `backend/tests/multi_alpha/test_durable_capacity.py::test_reservation_insert_and_source_claim_share_one_transaction`; `validation-receipt: DEV concurrent capacity=1 produced one acquired/one waiting PASS 2026-07-20` | verified_dev | none |
 | F-313 | §6.4、§11.4 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_capacity_contract_is_wsl_two_remote_four_and_request_can_only_lower`; `backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_full_capacity_persists_waiting_and_never_posts`; `backend/tests/test_qe_experiment_status_scanner.py::test_pending_capacity_experiment_is_resubmitted_without_ui`; `backend/tests/test_qe_experiment_status_scanner.py::test_running_multi_alpha_resumes_pending_node_before_status_poll` | verified_source | none |
 | F-314 | §8.3、§12.4 | `backend/tests/multi_alpha/test_durable_parent_finalization.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_completed_invalid_result_is_explicitly_failed_not_retried_forever` | verified_source | none |
-| F-315 | §12.5、§16、§20.7 | `backend/tests/multi_alpha/test_durable_parity.py::test_durable_result_rows_match_existing_combine_persistence_formula`; `backend/tests/multi_alpha/test_archive_health.py` | verified_source_runtime_not_activated | none |
-| F-316 | §6.6、§15.3、§18.4 | `backend/tests/multi_alpha/test_durable_submission.py::test_submission_refuses_to_queue_when_process_worker_is_not_ready`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_worker_retries_transient_initialization_instead_of_exiting`; `backend/tests/multi_alpha/test_durable_contract.py` | verified_source_runtime_not_activated | none |
+| F-315 | §12.5、§16、§20.7 | `backend/tests/multi_alpha/test_durable_parity.py::test_durable_result_rows_match_existing_combine_persistence_formula`; `backend/tests/multi_alpha/test_archive_health.py` | verified_source_and_runtime_smoke | none |
+| F-316 | §6.6、§15.3、§18.4 | `backend/tests/multi_alpha/test_durable_submission.py::test_submission_refuses_to_queue_when_process_worker_is_not_ready`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_worker_retries_transient_initialization_instead_of_exiting`; `backend/tests/multi_alpha/test_durable_contract.py` | verified_source_and_runtime_smoke | none |
 | F-317 | §3.2、§20.1 | `backend/tests/multi_alpha/test_durable_contract.py::test_durable_orchestrator_has_no_legacy_daemon_or_gpu_telemetry_fallback` | verified_source | none |
-| F-318 | §20 | initial related matrix `205 passed, 8 skipped`; `python -m pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/test_qe_experiment_status_scanner.py backend/tests/test_qe_evolution_scheduler.py backend/tests/multi_alpha/test_durable_orchestrator_restart.py backend/tests/multi_alpha/test_durable_submission.py backend/tests/multi_alpha/test_durable_capacity.py -q -m "not postgres"` => `45 passed, 3 skipped`; DEV transaction receipt；compile/Ruff；`git diff --check`; RD-Agent receipt/path suite `24 passed` | verified_source_and_dev_runtime_not_activated | none |
-| F-319 | §9.4、§20.4、§20.5 | `artifact: F:/Dev/RD-Agent-worktrees/qe-submission-receipt-20260719/test/app/test_qe_evolution_submission_receipt.py`; terminal retry、legacy migration、task/model-source/file escape、unsafe tar、nested mlruns；`24 passed` | verified_source_runtime_not_activated | none |
+| F-318 | §20 | `backend/tests/multi_alpha/test_qe_submission_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py`; `backend/tests/multi_alpha/test_durable_capacity.py`; initial matrix `205 passed, 8 skipped`；focused matrix `45 passed, 3 skipped` | verified_source_dev_and_runtime_smoke | none |
+| F-319 | §9.4、§20.4、§20.5 | `artifact: F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py`; terminal retry、path/tar suite `24 passed` | verified_source_and_runtime_smoke | none |
 | F-320 | §6.1、§7、§20.2 | `backend/tests/multi_alpha/test_durable_submission.py::test_task_identity_allows_distinct_run_scenarios_and_keeps_original_defaults`; distinct-run test | verified_source | none |
-| F-321 | §11、§17.1、§20.3 | migration/preflight/rollback source；`backend/tests/multi_alpha/test_durable_capacity.py`; `backend/tests/multi_alpha/test_active_execution_import.py`; `validation-receipt: DEV migration x2 schema digest/preflight/zero-residue PASS 2026-07-20` | verified_dev_production_not_applied | none |
-| F-322 | §12.5、§16、§20.6 | `backend/tests/multi_alpha/test_archive_health.py::test_post_terminal_archive_states_are_visible_and_retry_is_idempotent`; Archive error test | verified_source_runtime_not_activated | none |
+| F-321 | §11、§17.1、§20.3 | migration/preflight/rollback source；`backend/tests/multi_alpha/test_durable_capacity.py`; `backend/tests/multi_alpha/test_active_execution_import.py`; BUG-785 DEV/production receipt | verified_dev_and_production | none |
+| F-322 | §12.5、§16、§20.6 | `backend/tests/multi_alpha/test_archive_health.py::test_post_terminal_archive_states_are_visible_and_retry_is_idempotent`; Archive error test | verified_source_and_runtime_smoke | none |
 | F-323 | §10.3、§15、§20.2、§20.6 | `backend/tests/multi_alpha/test_durable_submission.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py::test_completed_after_deadline_is_ingested_with_evidence`; `backend/tests/multi_alpha/test_durable_execution_adapter.py::test_collect_result_distinguishes_not_visible_from_invalid_content`; `validation-receipt: DEV deadline transaction PASS` | verified_dev | none |
 
 ## 23. DESIGN-COMPLIANCE-001 Review
@@ -923,11 +925,11 @@ AIstock PR 与 RD-Agent PR/commit 必须分别记录。代码可以先后合入�
 
 - P0-1A DDL：`applied_and_verified`。
 - P0-1A 历史回填：`applied_and_verified`。
-- P0-1B AIstock 源码：`implemented_and_validated_uncommitted`；初轮相关小矩阵 `205 passed, 8 skipped`，二次审核修复点矩阵 `45 passed, 3 skipped`，changed-file compile/Ruff 已通过；尚未提交、合入或激活。
-- P0-1B RD-Agent receipt 源码：`implemented_and_validated_uncommitted`；receipt/retry/task/model-source/file/tar 套件 `24 passed`，compile、模块 Ruff 与 API critical Ruff 已通过；WSL/远端服务尚未部署。
-- P0-1B reservation DDL：`127.0.0.1:5433/aistock_dev` 已确认并应用更新后的 active-only remote identity contract；migration 连续两次通过，preflight、容量原子性、终态后 retry、lease takeover/fencing 和测试数据零残留均通过。生产库未应用、未修改。
+- P0-1B AIstock 源码：`merged_and_validated`；PR #2509，merge commit `67a54a90`。
+- P0-1B RD-Agent receipt 源码：`merged_and_validated`；companion PR #5，receipt/retry/task/model-source/file/tar 套件 `24 passed`。
+- P0-1B reservation DDL：`production_applied_and_verified`；BUG-785 记录包含 DEV/production migration、preflight、容量原子性、active remote 冲突、终态 retry、lease takeover/fencing 和零残留证据。
 - backend/frontend dependency：`noop`；本阶段没有 frontend 改动和新增依赖。
-- 当前没有重启 backend、WSL QE Workspace 或远端 QE Workspace，没有创建 QE 实验；仅修改并清理 DEV 验证数据，未修改生产 DB。
+- durable orchestrator 此前已完成 backend 启动 smoke、schema ready 和 active import 核对；当前 backend 进程按用户明确要求停止，本文不授权或执行重启。没有因本次文档更新创建、停止或恢复 QE 实验。
 
 ### 24.2 P0-1B rollout
 
@@ -967,4 +969,4 @@ AIstock PR 与 RD-Agent PR/commit 必须分别记录。代码可以先后合入�
 
 ## 26. 退出条件与下一阶段
 
-只有同时满足 F-301～F-323，才能报告 P0-1B 完成。届时允许进入 P0-2 control/recovery 实现；不得因为 P0-1B 完成而宣称 P0-3 UI、P0-4 child grid 或整个多 Alpha 基础底座已经完成。任何缺失的运行证据都必须作为待补实验/诊断保留，不用于淘汰研究方向。
+F-301～F-323 已随 P0-1B 源码、DDL、receipt 配套、验证与运行 smoke 收口，P0-1B 可以报告完成。下一阶段为 P0-2 control/recovery；其从属设计是 `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`，用户确认前不合入、不编码。P0-1B 完成不代表 P0-3 UI、P0-4 child grid 或整个多 Alpha 基础底座已经完成。任何缺失的运行证据必须作为待补实验/诊断保留，不用于淘汰研究方向。
