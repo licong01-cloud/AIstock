@@ -180,6 +180,9 @@ def ensure_sector_data(cur) -> None:
     CREATE TABLE IF NOT EXISTS market.sector_data (
         trade_date           DATE NOT NULL,
         ts_code              TEXT NOT NULL,
+        l1_code              TEXT NOT NULL,
+        l2_code              TEXT NOT NULL,
+        mapping_in_date      DATE NOT NULL,
         sw2_open             NUMERIC,
         sw2_high             NUMERIC,
         sw2_low              NUMERIC,
@@ -202,7 +205,9 @@ def ensure_sector_data(cur) -> None:
         sw2_mf_buy_elg_vol   NUMERIC,
         sw2_mf_sell_elg_vol  NUMERIC,
         sw2_mf_net_vol       NUMERIC,
-        PRIMARY KEY (trade_date, ts_code)
+        PRIMARY KEY (trade_date, ts_code),
+        CONSTRAINT ck_sector_data_mapping_in_date
+            CHECK (mapping_in_date <= trade_date)
     );
     """)
 
@@ -210,6 +215,8 @@ def ensure_sector_data(cur) -> None:
     cur.execute("SELECT create_hypertable('market.sector_data', 'trade_date', if_not_exists => TRUE);")
     cur.execute("SELECT set_chunk_time_interval('market.sector_data', interval '30 days');")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sector_data_ts_code ON market.sector_data (ts_code);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sector_data_l1_date ON market.sector_data (l1_code, trade_date);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sector_data_l2_date ON market.sector_data (l2_code, trade_date);")
 
     cur.execute("COMMENT ON TABLE market.sector_data IS '申万L2二级行业数据展开到个股级别（22列），PIT映射 + 资金流聚合';")
     comments = {
@@ -239,6 +246,14 @@ def ensure_sector_data(cur) -> None:
         "sw2_mf_net_vol":      "L2行业净资金流入量（手，成分股聚合）",
     }
     for col, desc in comments.items():
+        cur.execute(f"COMMENT ON COLUMN market.sector_data.{col} IS %s;", (desc,))
+
+    identity_comments = {
+        "l1_code": "PIT mapping L1 code used when this row was built",
+        "l2_code": "PIT mapping L2 code used when this row was built",
+        "mapping_in_date": "in_date of the exact PIT mapping row used when this row was built",
+    }
+    for col, desc in identity_comments.items():
         cur.execute(f"COMMENT ON COLUMN market.sector_data.{col} IS %s;", (desc,))
 
 
