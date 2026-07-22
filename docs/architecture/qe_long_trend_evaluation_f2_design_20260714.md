@@ -6,7 +6,7 @@
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
-- 当前阶段：Phase 1 / 工作流 A 的 QE-only 契约、严格数据读取、纯计算核、entry/exit evidence bridge 和 authoritative portfolio 已实现并通过定向 oracle；CAS、状态机、三表、API/MCP/UI、历史补算、真实 Qlib resolver 与 E2E 仍按 Phase 2–5 继续。本 changeset 不执行 DDL、不创建评价任务、不重启服务，也不预写 PR/merge 状态
+- 当前阶段：Phase 1 / 工作流 A 的 QE-only 契约、严格数据读取、纯计算核、entry/exit evidence bridge 和 authoritative portfolio 已实现并通过定向 oracle；Phase 2 计算节点、真实 Recorder/snapshot resolver、专属 CAS、资源阶段与恢复编排已形成从属 F2 设计 `docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`，代码尚未开始；三表、API/MCP/UI、历史补算和真实 E2E 仍按 Phase 3–5 继续。本 changeset 不执行 DDL、不创建评价任务、不重启服务，也不预写 PR/merge 状态
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
 - 相关蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8
 
@@ -692,6 +692,8 @@ Loop 详情增加“长期趋势”页签：
 5. 建立 formula、calendar、suspension、limit state、delist/data-gap、sector PIT、order/trade/position reconciliation 的 unit oracle。
 
 ### Phase 2：计算节点、资源阶段和制品
+
+实现级从属设计：`docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`。该设计以现有 `QEWorkspaceClient`、workspace catalog/dataset identity、`results_only_retry` Recorder 解析、`QEResourcePhaseService` 和 Prediction Store 原子 CAS 模式为代码基线，完整定义 normal/`long_trend_only` 同核、RD node job、CPU 单槽、streaming collect、独立 CAS、重启恢复和 compact receipt；不提前实现 Phase 3–5，也不增加科研门禁。
 
 1. ConfigComposer 固化 profile、feature snapshot 和 evaluator source SHA；
 2. worker wrapper 接入 normal Loop 与 `long_trend_only`；

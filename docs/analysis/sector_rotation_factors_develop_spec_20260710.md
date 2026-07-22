@@ -3,10 +3,11 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v5.6（多 Alpha QE 演进底座详细设计审计修订、P0-1～P0-4 语义收口与 R12 状态保持，2026-07-18）
+- 当前版本：v5.7（多 Alpha P0-1～P0-4 合入与运行验收收口、F-014 Phase 2 详细设计，2026-07-22）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
+- F-014 Phase 2 实现级设计：`docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`
 
 ---
 
@@ -133,7 +134,7 @@ v5.6 对多 Alpha P0 F2 详细设计执行逐项语义审计并完成修订：�
 | QE 任务与数仓状态 | `R10_R11_COMPLETE_FULLY_ARCHIVED` | R10 51/51；R11A 9/9；R11B 6/6；R11 backfill run `qear_bf_f9115c130b94464089b45de3f26c5fdf` 15/15 | R10/R11 成功 Loop 已进入研究总账与 Archive。BUG-741 只修复恢复状态重算，不改变模型、预测、回测或研究指标；后续实验可直接引用数仓和 prediction-store 制品。 |
 | R12G EfficientGATs 执行 canary | `COMPLETED_1_OF_1_GPU_SERIAL_NO_TELEMETRY` | `qe_20260718_040323_9a4a`；RankIC `0.10569`、CAGR `62.12%`、Sharpe `1.8108`、最大回撤 `-15.78%`、年化换手 `5.72` | cooperative execution canary 已完成；没有调用 `nvidia-smi`、NVML 或任何 GPU/显存轮询。该结果说明新的 chunk/yield 执行方式没有使当前 Loop 丢失训练结果，图模型仍保持 WSL 1 串行。 |
 | R12P 跨任务四腿组合 | `FAILED_ORCHESTRATION_TRIAL_NO_ALPHA_RESULT` | 最新 run `macb_453ca2d0c5b21b40_20240701_20260629_20260718T092728399999Z`；baseline child 在 3600 秒触发 `combine_backtest_scheme_timeout` | 当前 run 没有形成可比较的四腿组合结果，不能解释为模型、因子或 portfolio fusion 失败。保留全部 run/child 错误证据；待 P0 多 Alpha 持久化编排和子任务恢复完成后，可复用相同 prediction 仅重跑缺失子任务。 |
-| 多 Alpha QE 演进平台基础 | `CURRENT_TIER1_FUNCTIONAL_P0_F2_DESIGN_READY` | 第 4.11、9.9、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | 现有组合计算、场景回放、结果/Archive/UI adapter 可用；下一步第一优先级是 P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 自动演进同风格创建器、P0-4 子任务运行网格和重启恢复可见性。不是另建新版本。 |
+| 多 Alpha QE 演进平台基础 | `P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED` | 第 4.11、9.9、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | 持久化编排、生命周期/子任务恢复、QE 规范创建器、child/attempt grid、event SSE 和重启 readback 已完成；后续研究直接复用现有平台，不另建新版本。 |
 | 两层板块 oracle 上界 | `DESIGN_READY_RUN_PENDING` | 第 9.5 节；F-018 | 先做 reality/oracle 四格与 soft gating，预注册阈值和置信区间；它是不可部署的未来信息上界，不是 Alpha 证据。 |
 | 两层板块→个股模型 | `RESEARCH_PLANNED` | 第 9.5 节 | oracle 与现实 hard/soft 两层模型可并行；板块层和个股层分别归因。oracle 弱结果只描述其当前口径，不停止完整工程或新假设。 |
 | R8M 多期限共享表示 | `DESIGN_PLANNED_NOT_STARTED` | 第 9.6.3 节；F-019 | 独立实验比较独立训练、共享头、冻结迁移和全量微调；transfer matrix/LOO/梯度冲突与各 F-014 可用指标族共同形成分析，不存在全局裁决门。 |
@@ -928,7 +929,9 @@ h60 的 CAGR/Sharpe 仅小幅变化，RankIC 下降且换手接近 h40 的两倍
 
 截至 2026-07-18，R9S 24/24、R10 51/51、R11A 9/9、R11B 6/6、R12G 1/1 均已完成，R11 的 15 个 Loop 已 fully archived；R12P 最新正式 run 在 baseline 子任务超时后失败，未产生四腿 Alpha 比较结果。后续分为“基础研发第一优先级”和“可并行科研方向”。基础研发用于提高任务可靠性和操作效率，不构成模型、因子或研究方向的许可门槛；科研仍可在 QE-only 范围按资源继续。
 
-#### 9.9.1 基础研发第一优先级：多 Alpha P0-1～P0-4
+#### 9.9.1 已完成基础研发：多 Alpha P0-1～P0-4
+
+截至 2026-07-22，P0-1 durable orchestration、P0-2 lifecycle/recovery、P0-3 规范 QE 创建器和 P0-4 child/attempt observability 已全部合入并完成生产 DDL、服务重启、真实 API/SSE/readback 与 CLI Playwright 运行态验证。实现 PR 为 #2464、#2509、#2580、RD-Agent #6 和 #2593；运行态 close-sync PR #2606 已合入。以下四项保留为架构事实和回归基线，不再列为待开发任务。
 
 1. **P0-1 持久化父子任务编排与后端重启接管**：在现有 `multi_alpha_combine_backtest_run`、service、router、Prediction Store 和 `QEWorkspaceClient` 上增量实现 task/run/child/attempt/event 权威状态；状态 transition 与 event 同一 DB transaction，用 lease/fencing/CAS 防止重复派发，持久化远端 `qe_task_id/qe_loop_id`，后端重启后先核对远端状态再继续派发或汇总。节点容量统一读取现有 QE active execution 来源并按 remote identity 去重；schema/worker 不可用只影响 multi-alpha 写能力，FastAPI 和非 QE 模块继续运行。删除每个 run 一个 daemon thread 的生命周期所有权，但不重写组合、权重、LOO 和 pred-backtest 业务算法。
 2. **P0-2 暂停/恢复/取消与子任务级恢复**：暂停只停止派发新子任务并允许当前子任务完成；恢复继续未完成子任务；取消通过既有 `QEWorkspaceClient.kill_loop` 终止在途子任务并保留成功结果；legacy `stop` 委托 cancel/kill，保持现有单 Alpha 停止语义，禁止改成 pause。为 baseline/scheme/LOO 提供 `backtest_only`、`results_only` 和 `rematerialize_and_backtest` 明确模式；缺少所选模式需要的资产时返回稳定错误，不静默切换为其他模式，也不整组覆盖已成功结果。
@@ -940,7 +943,7 @@ h60 的 CAGR/Sharpe 仅小幅变化，RankIC 下降且换手接近 h40 的两倍
 #### 9.9.2 科研方向优先级（与基础研发可并行）
 
 1. **P0：EfficientGATs 单 Loop 执行行为 canary（已完成）**：`qe_20260718_040323_9a4a` 复用 R11B h40 seed123 的模型、因子、标签、数据与策略，显式启用 attention query chunk 和 cooperative yield，保持 `gpu_serial_graph=1`、`resource_telemetry_enabled=false`；1/1 完成，RankIC `0.10569`、CAGR `62.12%`、Sharpe `1.8108`。该 canary 证明当前执行方式可完成训练和回测，不调用 `nvidia-smi`、NVML 或任何 GPU/显存轮询；桌面体感仍作为独立执行证据记录。
-2. **P0：F-014 Phase 2 与 R8–R11 真实重评**：并行开发真实 Recorder resolver、QE-only CAS/状态/三表/API/MCP/UI 和历史补算；每个已可计算指标族立即用于 R8–R11 的 MFE/MAE、time-to-hit、trend capture、false early-exit、post-exit opportunity 和回撤路径分析，平台完整度不控制其他实验。
+2. **P0：F-014 Phase 2 与 R8–R11 真实重评**：Phase 2 按 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md` 开发真实 Recorder/snapshot resolver、QE node job、CPU 单槽、资源恢复、streaming collect、专属 CAS 和 compact receipt；Phase 3–5 再接三表/API/MCP/UI 与历史补算。每个已可计算指标族立即用于 R8–R11 的 MFE/MAE、time-to-hit、trend capture、false early-exit、post-exit opportunity 和回撤路径分析，平台完整度不控制其他实验。
 3. **P0：低成本板块回撤预警 overlay**：复用现有 R8–R11 prediction，不重训主模型；先实现独立 QE-only overlay/strategy adapter，以板块宽度恶化、资金流背离、领导扩散衰减、波动/拥挤上升和相对强弱拐点生成板块风险状态。现有 HMM 只覆盖系数调整或新买入过滤，不能冒充动态退出。比较 hold10/20、无 overlay、只入场 gating、有界减仓、退出与重入，输出 `1/3/5/10` 日预警提前量、避免回撤、false early-exit、重入延迟、趋势捕获和成本。
 4. **P0：图模型 sector gating 与板块时序动态图**：R11B 已完成 `l2 embedding only` 的 h40/h60 基线，后续以 h40 为效率锚点扩展动态 residual co-movement、flow/state、leadership 多关系与未来 5/10/20 日回撤 hazard。图输出优先作为板块风险预算/条件输入，不重复 R7 的简单等权 prediction fusion；图训练继续 `gpu_serial_graph=1`。
 5. **P1：跨任务 portfolio fusion 与任务级 LOO（当前 run 编排失败，研究方向保留）**：R12P 使用 LGBM G14-FP h60、LSTM G15-FPL h60、TCN G13-F h40 与 EfficientGATs G14-FP h40 的已归档 prediction；最新 run 在 baseline 子任务 3600 秒超时后失败，未形成 equal、IC weighted、risk parity、orthogonality-aware 或 LOO 的有效比较。待 P0 子任务恢复具备后复用同一 prediction，仅恢复缺失子任务；该失败不外推到 portfolio fusion、sector gating 或任一 Alpha 腿。
@@ -1131,13 +1134,13 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ### Phase G0-H：多 Alpha QE 演进底座 P0-1～P0-4
 
-该 Phase 是后续基础研发第一优先级，但不是科研准入条件；实施必须引用 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md` 的稳定 `F-201`～`F-218` 条目。
+`[P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED]` 该 Phase 已于 2026-07-22 完成。实施与运行证据以 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md` 的稳定 `F-201`～`F-218` 条目为权威；完成事实不构成科研准入条件。
 
 1. **P0-1 durable orchestration**：在现有 combine-backtest 表和服务上增加 first-class task、child、attempt、event 与 run lease/fencing/CAS；权威状态和 event 同事务；将 `QEWorkspaceClient` 作为 WSL/远端统一执行契约；统一读取现有 QE active execution 来源并按 remote identity 去重；启动 scanner/worker 在后端重启后核对并接管，不重复提交远端 loop。schema 缺失只让 multi-alpha worker/写接口结构化不可用，不得阻止整个 FastAPI 或非 QE 模块启动。
 2. **P0-2 lifecycle/recovery**：提供 run 的 pause/resume/cancel；legacy stop 委托 cancel/kill 并保持现有单 Alpha 终止语义。提供 child 的 `backtest_only/results_only/rematerialize_and_backtest` retry；所有动作保留 lineage、attempt、远端 ID 和已成功结果，不把未知远端状态静默变成失败，也不创建伪 child pause 状态。
 3. **P0-3 create/composer UI**：以 `/quantevolver/evolution` 为规范入口，抽取并复用单 Alpha QE 自动演进页面的 shell、task list、create dialog、node selector、status/action 组件；多 Alpha 表单覆盖现有 request 全字段，旧 `/multi-alpha/combine-backtest` 路由只做兼容映射并复用同一组件/DOM/样式。
 4. **P0-4 child observability**：在现有 QE 详情布局增加 child/attempt grid、DB event + workspace/remote log、restart reconciliation 状态和单子任务操作；复用 `LoopDetailPanel`、`EvolutionTrajectory`、`LogsPanel` 和现有 combine diagnostics，不增加另一套页面风格。
-5. 完成 backend repository/service/router/startup、additive migration、frontend adapter/components、API/UI/DB 定向测试、restart E2E、并发/取消/恢复/历史回填验证；禁止简化版、静默错误、隐式 fallback、指标伪造和未经用户确认的门禁/审批。
+5. backend repository/service/router/startup、additive migration、frontend adapter/components、API/UI/DB 定向测试、restart E2E、并发/取消/恢复/历史回填验证均已完成；P0-3/P0-4 CLI Playwright 为 `8 passed`，父/从属 F2 validator 均通过。后续修改继续禁止简化版、静默错误、隐式 fallback、指标伪造和未经用户确认的门禁/审批。
 
 ## 14. Verification Plan / 验证计划
 
@@ -1221,6 +1224,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 - v5.3 研究进度 rollout：补入 R9S 24/24、R10 48 个成功 Loop、R10 source archive 修复状态、R11A/R11B 运行进度和 BUG-730 源码合入/运行时待加载事实；将图模型从静态 h20 关系预测扩展为正在执行的 h40/h60 基线，以及后续板块时序动态图、回撤 hazard、sector gating 和动态退出。本文只更新蓝图，不写 DB、不启动或中断实验、不重启服务、不启动 F-014 evaluation，也不触发非 QE 模块。
 - v5.4 研究进度 rollout：补入 R10 51/51、R11A 9/9、R11B 6/6、BUG-741/PR #2391 的 results-only 恢复事实和 R11 Archive 15/15；增加 hold10/20/30 matched-seed、EfficientGATs h40/h60 完整均值及 cooperative-execution canary、sector-risk overlay、sector gating 和跨任务 portfolio fusion 顺序。R12G `qe_20260718_040323_9a4a` 与 R12P `macb_453ca2d0c5b21b40_20240701_20260629_20260717T201644965348Z` 已启动；文档与实验均保持 QE-only，不触发非 QE 模块。
 - v5.5 多 Alpha foundation rollout：补入 R12G 1/1 完成与 R12P 最新 run 的 orchestration timeout 事实；新增第 4.11、9.9.1、Phase G0-H、F-022 和 `multi_alpha_qe_evolution_foundation_f2_design_20260718.md`，把 durable orchestration、lifecycle/recovery、QE 同风格创建器和 child observability 列为基础研发 P0-1～P0-4。本 changeset 只更新设计文档，不执行 DDL、不修改代码、不创建/恢复实验、不写 DB、不重启服务；未来实现不在 DDL 前额外导出数据库。
+- v5.7 基础研发收口与 F-014 Phase 2 rollout：P0-1～P0-4 已通过 #2464/#2509/#2580/RD-Agent #6/#2593 合入并完成 DDL、重启、API/SSE/readback 和 CLI Playwright 运行验收，#2606 已将状态 close-sync 为 runtime verified。下一正式开发任务为 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md` 定义的真实 resolver、node worker、资源恢复、专属 CAS 与 compact receipt；本次文档更新不修改代码、DB、数据或运行时，不创建实验，也不增加科研门禁。
 - v5.6 多 Alpha foundation design audit：修正未经逐项确认的批准标记、stop/pause 语义、child `not_computable` 和聚合规则、跨 QE 路径容量统计、状态/event 原子性、Archive 静默初始化、schema 的 QE-scoped failure 以及规范 UI 入口/逐像素视觉验收。该修订仍只更新设计文档，不执行 DDL、不修改运行代码、不创建/恢复实验、不写 DB、不重启服务。
 - Schema rollout：现有 factor h20 指标已可用；未来 F-014 三表必须通过版本化 migration 和独立 DDL 授权，依赖既有每日备份，不在 DDL 前额外导出数据库。
 - Data rollout：R8–R12 当前继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
@@ -1231,17 +1235,17 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 | 项目 | 当前状态 | 说明 |
 |---|---|---|
-| source merge | HISTORICAL_SOURCE_BUG730_BUG741_MERGED_V56_DOC_UNMERGED | 历史前置批次、长标签基础架构、R7 combine-backtest、F-014 Phase 1、BUG-730 与 BUG-741 已在 main；v5.6 文档尚在独立分支，PR/merge 状态以实际 GitHub 状态为准，不在文档中预写。 |
+| source merge | MULTI_ALPHA_P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED_F014_P2_DESIGN_READY | 历史前置批次、长标签基础架构、R7 combine-backtest、F-014 Phase 1、BUG-730/741 与 Multi-Alpha P0-1～P0-4 已在 main；v5.7/F-014 Phase 2 设计的 PR/merge 状态以实际 GitHub 状态为准，不在文档中预写。 |
 | QE dataset | VERIFIED_20260630 | 当前 QE 快照已支持 R6–R12，并被 R8/R9/R10/R11/R12 冻结复用；未来数据切换继续要求版本化快照和回滚保留。 |
 | 唯一硬边界 | QE_ONLY_ZERO_NON_QE_IMPACT | 所有实验、评价、缓存、CAS、表、API/MCP/UI 和写入仅限 QE；不读取、修改、调用或影响任何非 QE 模块。 |
 | factor asset | RESEARCH_AVAILABLE_IN_QE | catalog 1525/1528/1532 可供 QE；本蓝图不接入荐股、模拟盘或生产交易。 |
-| QE schema | F014_AND_MULTI_ALPHA_P0_ADDITIVE_TABLES_PENDING | 现有 factor h20 指标和 combine-backtest 结果表可读写；F-014 QE-only additive 表，以及多 Alpha task/child/attempt/event 与 run 状态扩展尚未实现。该状态不影响已有结果查询或其他 QE 实验。 |
+| QE schema | MULTI_ALPHA_P0_APPLIED_F014_TABLES_PENDING | 现有 factor h20 指标、combine-backtest 结果和 Multi-Alpha task/child/attempt/event/recovery schema 已应用并验证；F-014 QE-only 三张 additive evaluation 表属于 Phase 3，尚未实施。该平台状态不影响已有科研结果或其他 QE 实验。 |
 | QE research writes | FACTOR_WRITES_COMPLETE_R10_R11_FULLY_ARCHIVED | 官方因子指标/相关性已持久化；R9S、R10、R11 已进入研究总账，R11A/R11B source-status 均为 fully archived。本 v5.4 文档任务不额外写 DB。 |
 | frontend/backend dependency | noop | 本批无依赖或 lockfile 变化。 |
 | candidate snapshot | VERIFIED_QE_20260630 | R6–R12 当前使用该快照；其他快照可另立 identity 并行研究。 |
 | QE experiment | R12G_COMPLETE_R12P_ORCHESTRATION_FAILED | R9S 24/24、R10 51/51、R11A 9/9、R11B 6/6、R12G 1/1；R12P 最新 run 因 baseline child timeout 失败且无四腿 Alpha 结果。后续保持远端 CPU 最多 4 并行、WSL 标准 GPU 最多 2 并行/图模型 1 串行，P0 worker 在容量不足时排队而不是失败。 |
-| multi-alpha platform | TIER1_FUNCTIONAL_P0_F2_DESIGN_READY | 组合、场景回放、结果/Archive/UI adapter 可用；durable orchestration、pause/resume/cancel、child retry/results-only、QE 同风格创建器和 child grid 待按 F-022 实现。 |
-| service/runtime restart | BACKEND_RESTART_COMPLETED_DOCS_ONLY_CHANGE | 用户已完成后端重启，当前单 Alpha和多 Alpha查询 API 均可访问。本文档任务不再次重启、不改变运行时；后续 P0 的目标是使在途远端 child 在重启后可自动核对和接管。 |
+| multi-alpha platform | P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED | durable orchestration、pause/resume/cancel、child retry/results-only、QE 规范创建器、child/attempt grid、event SSE 和重启 readback 均已实现并验收；后续研究可直接使用该底座。 |
+| service/runtime restart | MULTI_ALPHA_RUNTIME_VERIFIED_F014_P2_DESIGN_ONLY | 用户已完成 AIstock backend/frontend 及此前 WSL/远端 QE API 重启，Multi-Alpha P0 运行态已验证。本 v5.7/F-014 Phase 2 设计任务不再次重启或改变运行时。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
 ## 18. Research Sources / 一手研究来源
