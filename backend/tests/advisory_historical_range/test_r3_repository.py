@@ -11,6 +11,7 @@ from backend.services.advisory_historical_range.executor import (
     _decision_cutoff,
     _list_all_execution_runs,
 )
+from backend.services.advisory_historical_range.catalog_planner import HistoricalRangeSourceInputUnavailable
 from backend.services.advisory_historical_range.models import (
     HistoricalRangeContractError,
     HistoricalRangeCandidateFactV1,
@@ -48,6 +49,15 @@ def test_deterministic_contract_errors_are_terminal_not_retryable() -> None:
         HistoricalRangeDayStatus.WAITING_INPUT,
         ("STRATEGY_PACKAGE_RUNTIME_ASSETS_INCOMPLETE",),
     )
+    assert _classify_failure(
+        HistoricalRangeSourceInputUnavailable(
+            "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+            "sealed historical source is no longer available",
+        )
+    ) == (
+        HistoricalRangeDayStatus.WAITING_INPUT,
+        ("ADVISORY_HR_SOURCE_REVISION_MISMATCH",),
+    )
     assert _classify_failure(RuntimeConfigInvalidError("invalid frozen runtime")) == (
         HistoricalRangeDayStatus.FAILED,
         ("ADVISORY_HR_RUNTIME_CONFIG_INVALID",),
@@ -79,6 +89,15 @@ def test_batch_aggregate_refresh_locks_batch_before_reading_child_counts() -> No
     aggregate_position = source.index("self._batch_aggregate")
     update_position = source.index("UPDATE app.advisory_historical_range_batch")
     assert lock_position < aggregate_position < update_position
+
+
+def test_retryable_day_claim_refreshes_run_aggregate_before_returning_claim() -> None:
+    source = inspect.getsource(PostgresHistoricalRangeRepository.claim_next_day)
+
+    running_update_position = source.index("SET status = 'RUNNING'")
+    aggregate_refresh_position = source.index("self._sync_run_aggregate")
+    return_position = source.index("return self._claimed_day_from_row")
+    assert running_update_position < aggregate_refresh_position < return_position
 
 
 def test_successful_day_readback_allows_only_its_typed_direct_predecessor_for_decision_marks() -> None:

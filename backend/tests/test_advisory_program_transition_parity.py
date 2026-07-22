@@ -131,4 +131,3 @@ def test_current_wrapper_matches_shared_lifecycle_engine(mark: float, expected_a
     )
     assert [item.action for item in current.decisions] == [expected_action]
     assert [item.action for item in direct.decisions if item.action != "WATCH"] == [expected_action]
-

@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
+from backend.services.advisory_historical_range.catalog_planner import HistoricalRangeSourceInputUnavailable
 from backend.services.advisory_historical_range.executor import (
     HistoricalRangeBatchExecutionService,
     HistoricalRangeDayExecutor,
@@ -418,6 +419,50 @@ def test_executor_preserves_trading_core_reason_and_domain_error_code(tmp_path) 
         "domain_error_code": "DATA_UNAVAILABLE",
     }
     assert repository.failure_calls[0]["error_json"] == attempt.error_json
+
+
+def test_executor_preserves_source_input_reason_and_safe_context(tmp_path) -> None:
+    store, batch, run, claim, _request, _candidate_payload, _candidate_ref, _mark_set, _mark_ref = (
+        _sealed_execution_context(tmp_path)
+    )
+    repository = _Repository(batch=batch, run=run, claim=claim)
+
+    def _raise_source_input(**_kwargs):
+        raise HistoricalRangeSourceInputUnavailable(
+            "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+            "sealed historical source is unavailable",
+            context={
+                "requirement_id": "requirement-1",
+                "source_role": "market_history",
+                "absolute_path": "must-not-persist",
+            },
+        )
+
+    executor = HistoricalRangeDayExecutor(
+        repository=repository,
+        artifact_store=store,
+        candidate_producer=SimpleNamespace(produce=_raise_source_input),
+        decision_mark_provider=SimpleNamespace(),
+    )
+
+    result = executor.execute_batch_slice(
+        batch_id=batch.batch_id,
+        worker_id="test-worker",
+        max_day_commits_per_slice=1,
+    )
+
+    assert result[0].status is HistoricalRangeDayStatus.WAITING_INPUT
+    assert result[0].reason_codes == ("ADVISORY_HR_SOURCE_REVISION_MISMATCH",)
+    attempt = repository.failure_calls[0]["attempt"]
+    assert attempt.error_json == {
+        "reason_codes": ["ADVISORY_HR_SOURCE_REVISION_MISMATCH"],
+        "stage": "CLAIM_INPUT",
+        "error_type": "HistoricalRangeSourceInputUnavailable",
+        "source_input_context": {
+            "requirement_id": "requirement-1",
+            "source_role": "market_history",
+        },
+    }
 
 
 def test_future_candidate_prefetch_failure_does_not_fail_current_day(tmp_path) -> None:

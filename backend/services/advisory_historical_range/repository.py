@@ -2093,6 +2093,7 @@ class PostgresHistoricalRangeRepository:
                         "day changed while being claimed",
                         context={"day_run_id": day_data["day_run_id"]},
                     )
+                self._sync_run_aggregate(cur=cur, range_run_id=range_run_id)
                 return self._claimed_day_from_row(
                     row=dict(claimed),
                     batch_id=batch_id,

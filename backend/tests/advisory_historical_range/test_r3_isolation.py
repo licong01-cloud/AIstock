@@ -49,4 +49,3 @@ def test_r3_has_no_role_approval_or_package_readmission_flow() -> None:
     assert "from_environment" not in (ROOT / "backend/services/advisory_historical_range/composition.py").read_text(
         encoding="utf-8"
     )
-

@@ -22,6 +22,7 @@ from psycopg2 import errors as postgres_errors
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.candidate_producer import HistoricalRangeCandidateProducer
+from backend.services.advisory_historical_range.catalog_planner import HistoricalRangeSourceInputUnavailable
 from backend.services.advisory_historical_range.decision_mark_provider import HistoricalRangeDecisionMarkProvider
 from backend.services.advisory_historical_range.list_transition import HistoricalRangeListTransitionAdapter
 from backend.services.advisory_historical_range.models import (
@@ -490,9 +491,12 @@ class HistoricalRangeDayExecutor:
                 raise
             status, reason_codes = _classify_failure(exc)
             LOGGER.exception(
-                "R3 historical day execution failed stage=%s day_run_id=%s error_type=%s",
+                "R3 historical day execution failed stage=%s day_run_id=%s status=%s "
+                "reason_codes=%s error_type=%s",
                 stage,
                 claim.day_run_id,
+                status.value,
+                ",".join(reason_codes),
                 type(exc).__name__,
             )
             failure = self._build_failure_attempt(
@@ -787,6 +791,14 @@ class HistoricalRangeDayExecutor:
         error_json = {"reason_codes": list(reason_codes), "stage": stage, "error_type": type(error).__name__}
         if isinstance(error, TradingCoreError):
             error_json["domain_error_code"] = error.error_code
+        elif isinstance(error, HistoricalRangeSourceInputUnavailable):
+            source_context = {
+                key: str(error.context[key])
+                for key in ("requirement_id", "source_role", "package_id", "component_id", "decision_trade_date")
+                if error.context.get(key) is not None
+            }
+            if source_context:
+                error_json["source_input_context"] = source_context
         payload = HistoricalRangeDayAttemptReceiptPayloadV1(
             day_run_id=claim.day_run_id,
             attempt_no=claim.attempt_no,
@@ -1975,6 +1987,8 @@ def _failure_input_hash(
 def _classify_failure(exc: Exception) -> tuple[HistoricalRangeDayStatus, tuple[str, ...]]:
     if isinstance(exc, HistoricalRangeDayWaitingInput):
         return HistoricalRangeDayStatus.WAITING_INPUT, exc.reason_codes
+    if isinstance(exc, HistoricalRangeSourceInputUnavailable):
+        return HistoricalRangeDayStatus.WAITING_INPUT, (exc.reason_code,)
     if isinstance(exc, HistoricalRangeContractError):
         return HistoricalRangeDayStatus.FAILED, (exc.reason_code,)
     if isinstance(exc, TradingCoreError):

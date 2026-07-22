@@ -58,4 +58,3 @@ def test_formal_service_resumes_explicit_dev_batch_until_durable_boundary() -> N
     assert result.batch_id == batch_id
     assert result.executed_day_count >= result.successful_day_count
     assert not any(day_run_id.startswith("no-claim:") for day_run_id in result.blocking_day_run_ids)
-
