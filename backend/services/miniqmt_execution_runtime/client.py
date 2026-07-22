@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -769,11 +770,11 @@ class MiniQMTExecutionRuntimeClient:
         batch_id = preflight_result.batch_id
         request_by_parent_intent_id.update(preflight_result.request_by_parent_intent_id)
         submitted_parent_ids = set(preflight_result.submit_parent_intent_ids)
-        results_by_parent_id = {
-            parent_id: result
-            for request, result in zip(preflight_result.requests, preflight_result.results, strict=False)
-            if (parent_id := _parent_id_from_request(request))
-        }
+        results_by_parent_id = _event_loop_result_objects_by_parent(
+            preflight_result.results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_ORDER_INTENT_PERSIST",
+        )
         for index, intent in enumerate(parent_intents, start=1):
             if intent.intent_id not in submitted_parent_ids:
                 continue
@@ -1264,12 +1265,16 @@ class MiniQMTExecutionRuntimeClient:
             )
             parent_results = results_by_batch_parent.setdefault(batch_id, {})
             existing_result = parent_results.get(child.parent_intent_id)
-            if existing_result is None or result.success or not existing_result.success:
-                # One parent can emit multiple Adaptive IS child slices.  A
-                # later rejected slice must not erase an earlier accepted
-                # broker side effect from the parent-level batch projection;
-                # all child rejections remain exact in runtime_evidence.
-                parent_results[child.parent_intent_id] = result
+            parent_results[child.parent_intent_id] = (
+                _merge_event_loop_parent_submit_result(
+                    existing=existing_result,
+                    incoming=result,
+                    parent_intent_id=child.parent_intent_id,
+                    batch_id=batch_id,
+                )
+                if existing_result is not None
+                else result
+            )
 
         updated: dict[str, dict[str, Any]] = {}
         for batch_id, parent_results in results_by_batch_parent.items():
@@ -1286,12 +1291,23 @@ class MiniQMTExecutionRuntimeClient:
                 )
             requests = tuple(_event_loop_requests_from_batch(batch))
             stored_results = _event_loop_results_from_batch(batch, requests=requests)
-            results_by_parent = {
-                parent_id: result
-                for request, result in zip(requests, stored_results, strict=True)
-                if (parent_id := _parent_id_from_request(request))
-            }
-            results_by_parent.update(parent_results)
+            results_by_parent = _event_loop_result_objects_by_parent(
+                stored_results,
+                batch_id=batch_id,
+                stage="MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+            )
+            for parent_id, result in parent_results.items():
+                existing_result = results_by_parent.get(parent_id)
+                results_by_parent[parent_id] = (
+                    _merge_event_loop_parent_submit_result(
+                        existing=existing_result,
+                        incoming=result,
+                        parent_intent_id=parent_id,
+                        batch_id=batch_id,
+                    )
+                    if existing_result is not None
+                    else result
+                )
             ordered_results = tuple(
                 results_by_parent.get(_parent_id_from_request(request))
                 or ManagedOrderSubmitResult(
@@ -1357,10 +1373,12 @@ class MiniQMTExecutionRuntimeClient:
             return None
         requests = tuple(_event_loop_requests_from_batch(batch))
         stored_results = _event_loop_results_from_batch(batch, requests=requests)
-        for request, result in zip(requests, stored_results, strict=True):
-            if _parent_id_from_request(request) == parent_intent_id:
-                return result.preflight
-        return None
+        result = _event_loop_result_objects_by_parent(
+            stored_results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_STORED_PREFLIGHT",
+        ).get(parent_intent_id)
+        return result.preflight if result is not None else None
 
     def _event_loop_preflight_parent_intents(
         self,
@@ -1486,7 +1504,7 @@ class MiniQMTExecutionRuntimeClient:
                 results_list.append(
                     ManagedOrderSubmitResult(
                         False,
-                        None,
+                        parent_id,
                         None,
                         "dependent buy deferred until same-batch sell proceeds are reconciled",
                         preflight,
@@ -1498,7 +1516,7 @@ class MiniQMTExecutionRuntimeClient:
                 results_list.append(
                     ManagedOrderSubmitResult(
                         False,
-                        None,
+                        parent_id,
                         None,
                         "buy skipped by funds-only capacity allocator",
                         preflight,
@@ -2036,7 +2054,13 @@ class MiniQMTExecutionRuntimeClient:
         results = list(stored_results)
         retry_indexes = [
             index
-            for index, (request, result) in enumerate(zip(requests, stored_results, strict=True))
+            for index, (request, result) in enumerate(
+                _event_loop_request_result_pairs(
+                    requests=requests,
+                    results=stored_results,
+                    stage="MINIQMT_EVENT_LOOP_DEPENDENT_BUY_RETRY",
+                )
+            )
             if _is_dependent_buy_proceeds_deferred(request, result.preflight)
         ]
         submit_parent_ids: set[str] = set()
@@ -2064,7 +2088,7 @@ class MiniQMTExecutionRuntimeClient:
                     continue
                 results[index] = ManagedOrderSubmitResult(
                     False,
-                    None,
+                    parent_id,
                     None,
                     (
                         "dependent buy still waiting for reconciled sell proceeds"
@@ -2089,13 +2113,28 @@ class MiniQMTExecutionRuntimeClient:
         requests: tuple[ManagedOrderRequest, ...],
         results: tuple[ManagedOrderSubmitResult, ...],
     ) -> tuple[ManagedOrderSubmitResult, ...]:
-        if len(results) == len(requests):
-            return results
-        results_by_parent = {
-            parent_id: result
-            for request, result in zip(requests, results, strict=False)
-            if (parent_id := _parent_id_from_request(request))
-        }
+        results_by_parent = _event_loop_result_objects_by_parent(
+            results,
+            batch_id=str(requests[0].metadata.get("qmt_batch_id") or "") if requests else "",
+            stage="MINIQMT_EVENT_LOOP_RESULT_PROJECTION",
+        )
+        request_parent_ids = {_parent_id_from_request(request) for request in requests}
+        extra_parent_ids = sorted(set(results_by_parent) - request_parent_ids)
+        if extra_parent_ids:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop results contain parents outside the canonical request set",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECTION",
+                    "qmt_batch_id": str(requests[0].metadata.get("qmt_batch_id") or "") if requests else None,
+                    "request_identities": [_parent_id_from_request(request) for request in requests],
+                    "result_identities": list(results_by_parent),
+                    "duplicate_request_identities": [],
+                    "duplicate_result_identities": [],
+                    "missing_result_identities": [],
+                    "extra_result_identities": extra_parent_ids,
+                },
+            )
         ordered: list[ManagedOrderSubmitResult] = []
         for request in requests:
             parent_id = _parent_id_from_request(request)
@@ -2107,7 +2146,7 @@ class MiniQMTExecutionRuntimeClient:
             ordered.append(
                 ManagedOrderSubmitResult(
                     False,
-                    None,
+                    parent_id,
                     None,
                     "event_loop residual intent was not submitted to broker",
                     preflight,
@@ -2139,6 +2178,12 @@ class MiniQMTExecutionRuntimeClient:
         now = datetime.now(UTC)
         existing = getattr(repository, "get_order_batch", lambda _batch_id: None)(batch_id)
         created_at = existing.created_at if existing is not None else now
+        results = _canonical_event_loop_result_objects(
+            requests=requests,
+            results=results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_BATCH_PERSIST",
+        )
         status = _event_loop_batch_status(requests, results)
         metadata = _event_loop_batch_metadata(
             requests=requests,
@@ -3540,6 +3585,153 @@ def _parent_id_from_request(request: ManagedOrderRequest) -> str:
     ).strip()
 
 
+def _event_loop_result_objects_by_parent(
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    *,
+    batch_id: str,
+    stage: str,
+) -> dict[str, ManagedOrderSubmitResult]:
+    result_by_parent: dict[str, ManagedOrderSubmitResult] = {}
+    duplicate_result_identities: list[str] = []
+    result_identities: list[str | None] = []
+    for result in results:
+        parent_id = str(result.intent_id or "").strip()
+        result_identities.append(parent_id or None)
+        if not parent_id:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop result requires a non-empty parent intent identity",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "result.intent_id",
+                    "result_identities": result_identities,
+                    "duplicate_result_identities": duplicate_result_identities,
+                },
+            )
+        if parent_id in result_by_parent:
+            duplicate_result_identities.append(parent_id)
+            raise BrokerSubmitError(
+                "MiniQMT event_loop result parent intent identity is duplicated",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "result.intent_id",
+                    "result_identities": result_identities,
+                    "duplicate_result_identities": duplicate_result_identities,
+                },
+            )
+        result_by_parent[parent_id] = result
+    return result_by_parent
+
+
+def _canonical_event_loop_result_objects(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    batch_id: str,
+    stage: str,
+) -> tuple[ManagedOrderSubmitResult, ...]:
+    request_identities = [_parent_id_from_request(request) for request in requests]
+    duplicate_request_identities = sorted(
+        identity for identity, count in Counter(request_identities).items() if identity and count > 1
+    )
+    result_by_parent = _event_loop_result_objects_by_parent(results, batch_id=batch_id, stage=stage)
+    result_identities = list(result_by_parent)
+    invalid_carriers = [
+        {
+            "parent_intent_id": parent_id,
+            "success": result.success,
+            "broker_called": result.broker_called,
+            "qmt_order_id": result.qmt_order_id,
+        }
+        for parent_id, result in result_by_parent.items()
+        if (
+            result.success
+            and (
+                result.broker_called is not True or not isinstance(result.qmt_order_id, str) or not result.qmt_order_id
+            )
+        )
+        or (not result.success and result.qmt_order_id is not None)
+    ]
+    missing = sorted(set(request_identities) - set(result_identities))
+    extra = sorted(set(result_identities) - set(request_identities))
+    if (
+        not all(request_identities)
+        or duplicate_request_identities
+        or len(results) != len(requests)
+        or missing
+        or extra
+        or invalid_carriers
+    ):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop request/result parent identity sets do not close",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                "stage": stage,
+                "qmt_batch_id": batch_id or None,
+                "conflict_field": "request/result parent identity set",
+                "request_identities": request_identities,
+                "result_identities": result_identities,
+                "request_count": len(requests),
+                "result_count": len(results),
+                "duplicate_request_identities": duplicate_request_identities,
+                "duplicate_result_identities": [],
+                "missing_result_identities": missing,
+                "extra_result_identities": extra,
+                "invalid_result_carriers": invalid_carriers,
+            },
+        )
+    return tuple(result_by_parent[parent_id] for parent_id in request_identities)
+
+
+def _event_loop_request_result_pairs(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    stage: str,
+) -> tuple[tuple[ManagedOrderRequest, ManagedOrderSubmitResult], ...]:
+    batch_id = str(requests[0].metadata.get("qmt_batch_id") or "") if requests else ""
+    canonical_results = _canonical_event_loop_result_objects(
+        requests=requests,
+        results=results,
+        batch_id=batch_id,
+        stage=stage,
+    )
+    result_by_parent = _event_loop_result_objects_by_parent(canonical_results, batch_id=batch_id, stage=stage)
+    return tuple((request, result_by_parent[_parent_id_from_request(request)]) for request in requests)
+
+
+def _merge_event_loop_parent_submit_result(
+    *,
+    existing: ManagedOrderSubmitResult,
+    incoming: ManagedOrderSubmitResult,
+    parent_intent_id: str,
+    batch_id: str,
+) -> ManagedOrderSubmitResult:
+    identities = {str(existing.intent_id or "").strip(), str(incoming.intent_id or "").strip()}
+    if identities != {parent_intent_id}:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop child results cannot be merged across parent identities",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                "qmt_batch_id": batch_id,
+                "conflict_field": "child result parent identity",
+                "expected_identity": parent_intent_id,
+                "actual_identities": sorted(identities),
+            },
+        )
+    if existing.success:
+        return existing
+    if incoming.success:
+        return incoming
+    if existing.broker_called:
+        return existing
+    return incoming
+
+
 def _event_loop_requests_from_batch(batch: OrderBatchRecord) -> list[ManagedOrderRequest]:
     if not isinstance(batch.request_json, dict):
         raise _event_loop_durable_batch_error(
@@ -3714,7 +3906,7 @@ def _validate_event_loop_durable_request_row(
     parent_aliases = {
         key: raw_metadata[key]
         for key in ("runtime_parent_intent_id", "execution_plan_intent_id")
-        if key in raw_metadata and raw_metadata[key] is not None
+        if key in raw_metadata
     }
     if not parent_aliases or any(not isinstance(value, str) or not value.strip() for value in parent_aliases.values()):
         raise _event_loop_durable_batch_error(
@@ -3766,8 +3958,9 @@ def _event_loop_results_from_batch(
             value=len(raw_results),
             expected=len(requests),
         )
-    parsed: list[ManagedOrderSubmitResult] = []
-    for index, (request, raw_result) in enumerate(zip(requests, raw_results, strict=True)):
+    raw_results_by_parent: dict[str, tuple[int, dict[str, Any]]] = {}
+    duplicate_result_identities: list[str] = []
+    for index, raw_result in enumerate(raw_results):
         if not isinstance(raw_result, dict):
             raise _event_loop_durable_batch_error(
                 batch=batch,
@@ -3776,14 +3969,86 @@ def _event_loop_results_from_batch(
                 field_path=f"result_json.results[{index}]",
                 value=raw_result,
             )
+        parent_id = _event_loop_durable_result_parent_id(batch=batch, raw_result=raw_result, index=index)
+        if parent_id in raw_results_by_parent:
+            duplicate_result_identities.append(parent_id)
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable result parent identity is duplicated",
+                field_path=f"result_json.results[{index}].intent_id",
+                value=parent_id,
+                duplicate_result_identities=duplicate_result_identities,
+            )
+        raw_results_by_parent[parent_id] = (index, raw_result)
+
+    request_identities = [_parent_id_from_request(request) for request in requests]
+    result_identities = list(raw_results_by_parent)
+    missing_result_identities = sorted(set(request_identities) - set(result_identities))
+    extra_result_identities = sorted(set(result_identities) - set(request_identities))
+    if missing_result_identities or extra_result_identities:
+        conflict_identity = extra_result_identities[0] if extra_result_identities else None
+        conflict_index = raw_results_by_parent[conflict_identity][0] if conflict_identity is not None else None
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable request/result parent identity sets conflict",
+            field_path=(
+                f"result_json.results[{conflict_index}].intent_id"
+                if conflict_index is not None
+                else "result_json.results"
+            ),
+            value=conflict_identity,
+            expected=missing_result_identities[0] if missing_result_identities else None,
+            missing_result_identities=missing_result_identities,
+            extra_result_identities=extra_result_identities,
+        )
+
+    parsed: list[ManagedOrderSubmitResult] = []
+    for request in requests:
+        expected_parent_id = _parent_id_from_request(request)
+        index, raw_result = raw_results_by_parent[expected_parent_id]
         _validate_event_loop_durable_result_row(
             batch=batch,
             request=request,
             raw_result=raw_result,
             index=index,
+            result_parent_id=expected_parent_id,
         )
         parsed.append(_result_from_dict(raw_result))
     return tuple(parsed)
+
+
+def _event_loop_durable_result_parent_id(
+    *,
+    batch: OrderBatchRecord,
+    raw_result: dict[str, Any],
+    index: int,
+) -> str:
+    prefix = f"result_json.results[{index}]"
+    aliases = {
+        field_name: raw_result[field_name]
+        for field_name in ("intent_id", "parent_intent_id", "runtime_parent_intent_id")
+        if field_name in raw_result
+    }
+    if "intent_id" not in aliases or any(not isinstance(value, str) or not value.strip() for value in aliases.values()):
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable result requires a unique non-empty parent identity",
+            field_path=f"{prefix}.intent_id",
+            value=aliases,
+        )
+    normalized = {value.strip() for value in aliases.values()}
+    if len(normalized) != 1:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable result parent identity aliases conflict",
+            field_path=prefix,
+            value=aliases,
+        )
+    return next(iter(normalized))
 
 
 def _validate_event_loop_durable_result_row(
@@ -3792,6 +4057,7 @@ def _validate_event_loop_durable_result_row(
     request: ManagedOrderRequest,
     raw_result: dict[str, Any],
     index: int,
+    result_parent_id: str,
 ) -> None:
     prefix = f"result_json.results[{index}]"
     for field_name in ("success", "broker_called"):
@@ -3803,7 +4069,7 @@ def _validate_event_loop_durable_result_row(
                 field_path=f"{prefix}.{field_name}",
                 value=raw_result.get(field_name),
             )
-    for field_name in ("intent_id", "qmt_order_id"):
+    for field_name in ("qmt_order_id",):
         value = raw_result.get(field_name)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise _event_loop_durable_batch_error(
@@ -3814,8 +4080,8 @@ def _validate_event_loop_durable_result_row(
                 value=value,
             )
     expected_parent_id = _parent_id_from_request(request)
-    intent_id = raw_result.get("intent_id")
-    if intent_id is not None and intent_id != expected_parent_id:
+    intent_id = result_parent_id
+    if intent_id != expected_parent_id:
         raise _event_loop_durable_batch_error(
             batch=batch,
             reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
@@ -3845,6 +4111,14 @@ def _validate_event_loop_durable_result_row(
             batch=batch,
             reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
             message="MiniQMT event_loop no-broker durable result cannot carry qmt_order_id",
+            field_path=f"{prefix}.qmt_order_id",
+            value=raw_result.get("qmt_order_id"),
+        )
+    if raw_result["success"] is False and raw_result.get("qmt_order_id") is not None:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop rejected durable result cannot carry an accepted qmt_order_id",
             field_path=f"{prefix}.qmt_order_id",
             value=raw_result.get("qmt_order_id"),
         )
@@ -3949,19 +4223,94 @@ def _event_loop_durable_batch_error(
     field_path: str,
     value: Any,
     expected: Any | None = None,
+    duplicate_result_identities: list[str] | None = None,
+    missing_result_identities: list[str] | None = None,
+    extra_result_identities: list[str] | None = None,
 ) -> BrokerSubmitError:
+    identity_context = _event_loop_durable_identity_context(batch)
+    if duplicate_result_identities is not None:
+        identity_context["duplicate_result_identities"] = duplicate_result_identities
+    if missing_result_identities is not None:
+        identity_context["missing_result_identities"] = missing_result_identities
+    if extra_result_identities is not None:
+        identity_context["extra_result_identities"] = extra_result_identities
     context = {
         "reason_code": reason_code,
         "stage": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY",
         "qmt_batch_id": batch.batch_id,
         "field_path": field_path,
+        "conflict_field": field_path,
         "value_type": type(value).__name__,
+        **identity_context,
     }
     if isinstance(value, (str, int, float, bool)) or value is None:
         context["value"] = value
     if expected is not None:
         context["expected"] = expected
+        if isinstance(expected, str):
+            context["expected_identity"] = expected
+    if "identity" in field_path or field_path.endswith(".intent_id"):
+        context["actual_identity"] = value if isinstance(value, str) or value is None else None
     return BrokerSubmitError(message, context=context)
+
+
+def _event_loop_durable_identity_context(batch: OrderBatchRecord) -> dict[str, Any]:
+    raw_orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
+    raw_results = batch.result_json.get("results") if isinstance(batch.result_json, dict) else None
+    request_identities: list[str | None] = []
+    binding_id: str | None = None
+    run_id: str | None = None
+    if isinstance(raw_orders, list):
+        for raw_order in raw_orders:
+            metadata = raw_order.get("metadata") if isinstance(raw_order, dict) else None
+            metadata = metadata if isinstance(metadata, dict) else {}
+            identity = metadata.get("runtime_parent_intent_id") or metadata.get("execution_plan_intent_id")
+            request_identities.append(identity.strip() if isinstance(identity, str) and identity.strip() else None)
+            binding_id = binding_id or _first_non_empty_string(
+                metadata.get("binding_id"),
+                metadata.get("simulation_binding_id"),
+                metadata.get("release_binding_id"),
+            )
+            run_id = run_id or _first_non_empty_string(metadata.get("run_id"), metadata.get("simulation_run_id"))
+    result_identities = (
+        [raw_result.get("intent_id") if isinstance(raw_result, dict) else None for raw_result in raw_results or []]
+        if isinstance(raw_results, list)
+        else []
+    )
+    duplicate_request_identities = sorted(
+        identity for identity, count in Counter(request_identities).items() if identity is not None and count > 1
+    )
+    duplicate_result_identities = sorted(
+        identity for identity, count in Counter(result_identities).items() if identity is not None and count > 1
+    )
+    request_set = {identity for identity in request_identities if identity is not None}
+    result_set = {identity for identity in result_identities if identity is not None}
+    runtime_evidence = None
+    if isinstance(batch.result_json, dict) and isinstance(batch.result_json.get("runtime_evidence"), dict):
+        runtime_evidence = batch.result_json["runtime_evidence"]
+    elif isinstance(batch.metadata, dict) and isinstance(batch.metadata.get("runtime_evidence"), dict):
+        runtime_evidence = batch.metadata["runtime_evidence"]
+    runtime_id = _first_non_empty_string((runtime_evidence or {}).get("runtime_id"))
+    return {
+        "request_identities": request_identities,
+        "result_identities": result_identities,
+        "request_count": len(raw_orders) if isinstance(raw_orders, list) else None,
+        "result_count": len(raw_results) if isinstance(raw_results, list) else None,
+        "duplicate_request_identities": duplicate_request_identities,
+        "duplicate_result_identities": duplicate_result_identities,
+        "missing_result_identities": sorted(request_set - result_set),
+        "extra_result_identities": sorted(result_set - request_set),
+        "runtime_id": runtime_id,
+        "binding_id": binding_id,
+        "run_id": run_id,
+    }
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _logical_batch_id_for_event_loop_batch(batch: OrderBatchRecord) -> str | None:
@@ -4299,6 +4648,11 @@ def _event_loop_batch_status(
     requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
     results: tuple[ManagedOrderSubmitResult, ...],
 ) -> OrderBatchStatus:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_BATCH_STATUS",
+    )
     succeeded = sum(1 for result in results if result.success)
     pending = sum(1 for result in results if _is_event_loop_pending_result(result))
     failed = len(results) - succeeded - pending
@@ -4310,10 +4664,7 @@ def _event_loop_batch_status(
         return OrderBatchStatus.PARTIAL
     if any(result.broker_called for result in results):
         return OrderBatchStatus.FAILED
-    if results and any(
-        _is_non_compensating_batch_residual(request, result.preflight)
-        for request, result in zip(list(requests), results, strict=False)
-    ):
+    if results and any(_is_non_compensating_batch_residual(request, result.preflight) for request, result in pairs):
         return OrderBatchStatus.FAILED
     return OrderBatchStatus.PREFLIGHT_FAILED
 
@@ -4338,9 +4689,14 @@ def _event_loop_preflight_passed(
     requests: tuple[ManagedOrderRequest, ...],
     results: tuple[ManagedOrderSubmitResult, ...],
 ) -> bool:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_PREFLIGHT_STATUS",
+    )
     residual_failed = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success
         and not _is_event_loop_pending_result(result)
         and _is_non_compensating_batch_residual(request, result.preflight)
@@ -4358,9 +4714,14 @@ def _event_loop_compensation_required(
         return False
     failed = sum(1 for result in results if not result.success)
     pending = sum(1 for result in results if _is_event_loop_pending_result(result))
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_COMPENSATION_STATUS",
+    )
     residual_failed = sum(
         1
-        for request, result in zip(list(requests), results, strict=False)
+        for request, result in pairs
         if not result.success
         and not _is_event_loop_pending_result(result)
         and _is_non_compensating_batch_residual(request, result.preflight)
@@ -4448,7 +4809,11 @@ def _persist_event_loop_tca_batch_observations(
         )
         return
 
-    for request, result in zip(requests, results, strict=False):
+    for request, result in _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_TCA_CAPTURE",
+    ):
         parent_id = _parent_id_from_request(request)
         if not parent_id:
             LOGGER.error(
@@ -4579,14 +4944,19 @@ def _event_loop_batch_metadata(
     runtime_evidence: MiniQMTRuntimeEvidence,
     source: str,
 ) -> dict[str, Any]:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_BATCH_METADATA",
+    )
     dependent_buy_count = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success and _is_dependent_buy_proceeds_deferred(request, result.preflight)
     )
     capacity_residual_count = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success and _is_capacity_residual_skipped(request, result.preflight)
     )
     status = _event_loop_batch_status(requests, results)

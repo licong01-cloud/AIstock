@@ -2536,6 +2536,68 @@ def test_scheduler_pre_run_binding_failure_does_not_block_other_bindings() -> No
     assert qmt_run.execution_plan_id is not None
 
 
+def test_scheduler_miniqmt_durable_replay_failure_does_not_starve_later_localsim_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_qmt_replay_failure"),
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_local_after_qmt_failure"),
+            }
+        ),
+    )
+    original_run_binding = scheduler._run_binding_with_watchdog
+
+    def replay_failure_then_continue(*, binding, **kwargs):
+        if binding.binding_id == qmt_binding.binding_id:
+            raise BrokerSubmitError(
+                "durable result identity conflict",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY",
+                    "qmt_batch_id": "qmtbatch_scheduler_isolation",
+                    "binding_id": binding.binding_id,
+                },
+            )
+        return original_run_binding(binding=binding, **kwargs)
+
+    monkeypatch.setattr(scheduler, "_run_binding_with_watchdog", replay_failure_then_continue)
+
+    result = scheduler.run_once(trade_date=TRADE_DATE, data_source="DB_HISTORICAL", submit=False)
+    by_binding_id = {item.binding_id: item for item in result.results}
+    qmt_failure = by_binding_id[qmt_binding.binding_id]
+    local_result = by_binding_id[local_binding.binding_id]
+    qmt_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=qmt_binding.strategy_id,
+        binding_id=qmt_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    local_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=local_binding.strategy_id,
+        binding_id=local_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+
+    assert result.total_bindings == 2
+    assert result.failed_count == 1
+    assert result.planned_count == 1
+    assert qmt_failure.status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert qmt_failure.error["context"]["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT"
+    assert (
+        qmt_failure.error["context"]["pre_run_failure"]["context"]["stage"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY"
+    )
+    assert local_result.status == "PLANNED"
+    assert qmt_run is not None
+    assert qmt_run.run_payload_json["pre_run_failure"]["context"]["stage"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY"
+    assert local_run is not None
+    assert local_run.execution_plan_id is not None
+
+
 def test_scheduler_isolates_live_inference_preflight_failure_and_continues_later_bindings() -> None:
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
