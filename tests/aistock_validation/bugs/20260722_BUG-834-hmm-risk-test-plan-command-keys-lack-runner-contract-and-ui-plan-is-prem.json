@@ -1,6 +1,10 @@
 {
   "actual": "The HMM Risk Phase 2 Slice 0 branch adds enabled hmm_risk_backend and hmm_risk_ui plans, but neither command_key is present in plan_catalog.ALLOWED_COMMAND_KEYS. The backend plan must gain an exact runner mapping. The UI plan/session has no implemented frontend contract and currently skips, so it must not be registered before its owning UI slice. Catalog integrity must pass without disabling or bypassing the gate.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/validation/plan_catalog.py",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,20 +27,50 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The implemented HMM Risk backend plan has an exact runner allowlist mapping, no unimplemented UI plan/session is registered, and validation catalog integrity passes.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "noxfile.py",
+      "backend/services/validation/plan_catalog.py",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "noxfile.py",
+        "backend/services/validation/plan_catalog.py",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.runner"
+      ],
+      "matched_rules": [
+        "noxfile_validation_runner",
+        "validation_plan_catalog_services",
+        "validation_catalog_module_quality",
+        "validation_catalog_test_plans"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "noxfile.py",
+        "backend/services/validation/plan_catalog.py",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "noxfile.py",
+      "backend/services/validation/plan_catalog.py",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ]
   },
   "first_seen_at": "2026-07-22T20:15:58.313694Z",
   "fix_branch": null,
@@ -52,10 +86,11 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_validation_catalog_integrity.py --output-format json",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_module_registry_l0",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -72,28 +107,21 @@
   "ui_intake_hints": {
     "labels": [
       "bug",
-      "ui",
       "module:validation",
       "type:bug"
     ],
     "recommended_verification": [
       "l0"
     ],
-    "reproduce_required": true,
-    "reproduce_template": [
-      "Open the affected AIstock page/route.",
-      "Perform the visible user action that currently fails or looks wrong.",
-      "Verify the expected visible state, table, dialog, or form behavior."
-    ],
+    "reproduce_required": false,
+    "reproduce_template": [],
     "schema_version": "aistock_ui_issue_intake_hints_v1",
     "scope_source": "inferred_from_module_route_and_changed_files",
     "ui_component_scope": [],
-    "ui_issue": true,
-    "ui_route": "/session",
-    "ui_routes": [
-      "/session"
-    ],
-    "visual_acceptance_required": true
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
   },
   "verification_budget": {
     "budget": "standard",
