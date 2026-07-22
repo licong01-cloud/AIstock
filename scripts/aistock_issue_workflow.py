@@ -1484,6 +1484,8 @@ def _git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         ["git", *args],
         cwd=str(cwd),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
         env=_subprocess_env(["git", *args]),

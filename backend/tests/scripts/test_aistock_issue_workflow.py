@@ -111,6 +111,25 @@ def test_subprocess_env_ignores_non_git_commands(monkeypatch: pytest.MonkeyPatch
     assert workflow._subprocess_env(["python", "--version"]) is None
 
 
+def test_git_decodes_output_as_utf8_with_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(args: list[str], **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return workflow.subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="准备 worktree — 完成\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(workflow.subprocess, "run", fake_run)
+
+    assert workflow._git(["worktree", "list"]) == "准备 worktree — 完成"
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
 def _fetched_origin_payload() -> dict[str, Any]:
     return {
         "status": "fetched",
