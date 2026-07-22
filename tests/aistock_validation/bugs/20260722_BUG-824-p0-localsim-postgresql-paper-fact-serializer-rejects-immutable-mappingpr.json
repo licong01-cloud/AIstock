@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-824",
-  "closed_at": null,
+  "closed_at": "2026-07-22T06:36:17Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,8 +33,8 @@
   "expected": "LocalSIM canonicalizes every JSON-bearing order, fill and event payload at the PostgreSQL transaction boundary, commits atomic economic facts exactly once, and rejects unsupported values fail-loud without partial persistence or business fallback.",
   "first_seen_at": "2026-07-22T05:28:13.337219Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8390976c5790a41c51326e72885e585b5067c293",
+  "fixed_at": "2026-07-22T06:39:49.592919Z",
   "github_issue_number": 2607,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2607",
   "last_seen_at": "2026-07-22T05:28:13.337219Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2609",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime",
     "paper_v2"
@@ -64,6 +65,9 @@
     "fingerprint": "284fc30b4815d6ace819de64",
     "source_event_id": "FE-20260722-284fc30b4815"
   },
+  "validation_evidence": [
+    "paper_v2_backend ownership-routed module suite -> 1047 passed, 2 skipped, 2 xfailed; PR CI Backend tests (paper_v2_backend), Static gate, PR Quality, Semgrep, CodeQL and CI verdict -> SUCCESS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
