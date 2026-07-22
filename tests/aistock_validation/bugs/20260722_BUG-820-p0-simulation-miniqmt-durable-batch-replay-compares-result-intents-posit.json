@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-820",
-  "closed_at": null,
+  "closed_at": "2026-07-22T04:43:23Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -40,8 +40,8 @@
   "expected": "Set-equal unique durable request/result permutations replay by parent intent identity in canonical request order; true duplicate/missing/extra/alias/order-id/broker-called conflicts fail loud with structured evidence; replay/restart/multi-slice paths remain idempotent; an independent LocalSIM binding progresses when a MiniQMT binding fails if the authoritative blueprint requires per-binding isolation.",
   "first_seen_at": "2026-07-22T01:53:51.494283Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4fe7a4892b62223badafae1f8c5fbb806082e8bc",
+  "fixed_at": "2026-07-22T04:46:48.850759Z",
   "github_issue_number": 2591,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2591",
   "last_seen_at": "2026-07-22T01:53:51.494283Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2592",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -69,6 +70,9 @@
     "fingerprint": "d988b06471213077ee64406a",
     "source_event_id": "FE-20260722-d988b0647121"
   },
+  "validation_evidence": [
+    "PR #2592 required CI green; MiniQMT L2 and simulation_core L2 passed; independent strict-schema boundary matrix 15 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
