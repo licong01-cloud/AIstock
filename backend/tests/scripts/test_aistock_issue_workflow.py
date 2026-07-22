@@ -442,6 +442,18 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
+    submit_scope_root = tmp_path / "submit-scope"
+    monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
+    for relative_path in (
+        "scripts/aistock_issue_workflow.py",
+        ".claude/commands/fix-aistock-issue.md",
+        "frontend/src/app/paper-v2/page.tsx",
+        "frontend/src/app/paper-v2/advisory/page.tsx",
+        "backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py",
+    ):
+        path = submit_scope_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# existing workflow test fixture\n", encoding="utf-8")
     return tmp_path
 
 
@@ -2506,6 +2518,242 @@ def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -
     assert payload["workflow_gate"] == "needs_github_sync"
     assert payload["record"]["github_issue_number"] is None
     assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
+
+
+def test_submit_bug_file_preflight_rejects_nonexistent_changed_file(
+    isolated_workflow_root: Path,
+) -> None:
+    missing = "backend/services/simulation_runtime/lifecycle_scheduler.py"
+
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"--changed-file does not exist.*lifecycle_scheduler\.py",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[missing],
+            added_files=[],
+            module="simulation_runtime",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_accepts_existing_changed_and_explicit_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    changed = isolated_workflow_root / "scripts" / "aistock_issue_workflow.py"
+    changed.parent.mkdir(parents=True)
+    changed.write_text("# existing workflow\n", encoding="utf-8")
+
+    result = workflow._validate_submit_bug_file_inputs(
+        changed_files=[
+            r".\scripts\aistock_issue_workflow.py",
+            "scripts/aistock_issue_workflow.py",
+        ],
+        added_files=[r"backend\tests\scripts\test_submit_bug_added_file.py"],
+        module="validation.guardrails",
+        root=isolated_workflow_root,
+    )
+
+    assert result["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+    assert result["added_files"] == ["backend/tests/scripts/test_submit_bug_added_file.py"]
+    assert result["scope_files"] == [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_submit_bug_added_file.py",
+    ]
+    assert result["ownership"]["unmatched_files"] == []
+
+
+def test_submit_bug_file_preflight_rejects_existing_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    existing = isolated_workflow_root / "backend" / "tests" / "scripts" / "test_existing.py"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("# existing test\n", encoding="utf-8")
+
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"--added-file already exists.*use --changed-file",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=["backend/tests/scripts/test_existing.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_changed_directory(
+    isolated_workflow_root: Path,
+) -> None:
+    directory = isolated_workflow_root / "scripts" / "not_a_file"
+    directory.mkdir(parents=True)
+
+    with pytest.raises(workflow.WorkflowError, match=r"--changed-file must identify a file.*not_a_file"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=["scripts/not_a_file"],
+            added_files=[],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../outside.py",
+        "/absolute/path.py",
+        r"C:\outside\path.py",
+        r"\\server\share\path.py",
+        "scripts/bad?.py",
+        "scripts/NUL.py",
+        "scripts/trailing-dot.",
+    ],
+)
+def test_submit_bug_file_preflight_rejects_unsafe_paths(
+    isolated_workflow_root: Path,
+    unsafe_path: str,
+) -> None:
+    with pytest.raises(workflow.WorkflowError, match="repository-relative"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=[unsafe_path],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_cross_category_duplicate(
+    isolated_workflow_root: Path,
+) -> None:
+    with pytest.raises(workflow.WorkflowError, match="both --changed-file and --added-file"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            added_files=[r"scripts\aistock_issue_workflow.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_unowned_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"file ownership catalog has no match.*unowned/new_file\.py",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=["unowned/new_file.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_parser_exposes_added_file_separately() -> None:
+    args = workflow.build_parser().parse_args(
+        [
+            "submit-bug",
+            "--title",
+            "workflow file contract",
+            "--module",
+            "validation.guardrails",
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            "--added-file",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ]
+    )
+
+    assert args.changed_file == ["scripts/aistock_issue_workflow.py"]
+    assert args.added_file == ["backend/tests/scripts/test_new_workflow_contract.py"]
+
+
+def test_submit_bug_cli_rejects_invalid_scope_before_allocator_or_registry_mutation(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    result = workflow.main(
+        [
+            "submit-bug",
+            "--title",
+            "invalid changed file",
+            "--module",
+            "validation.guardrails",
+            "--severity",
+            "P1",
+            "--bug-id",
+            "BUG-118",
+            "--github-issue-number",
+            "188",
+            "--github-issue-url",
+            "https://github.com/licong01-cloud/AIstock/issues/188",
+            "--changed-file",
+            "scripts/nonexistent_workflow.py",
+            "--apply",
+        ]
+    )
+
+    assert result == 2
+    assert (
+        "--changed-file does not exist: scripts/nonexistent_workflow.py"
+        in capsys.readouterr().err
+    )
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 117
+    assert not list(workflow.BUGS_ROOT.glob("*BUG-118*.json"))
+    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-118").exists()
+
+
+def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
+    isolated_workflow_root: Path,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="workflow file scope contract",
+        module="validation.guardrails",
+        severity="P1",
+        description="Distinguish existing and planned files.",
+        expected="Exact file categories are persisted.",
+        actual="The old workflow merged both categories.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        added_files=["backend/tests/scripts/test_new_workflow_contract.py"],
+        plan_key="validation_workflow_automation",
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    expected_contract = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "added_files": ["backend/tests/scripts/test_new_workflow_contract.py"],
+        "scope_files": [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ],
+        "ownership": workflow.flow.match_changed_files(
+            [
+                "scripts/aistock_issue_workflow.py",
+                "backend/tests/scripts/test_new_workflow_contract.py",
+            ]
+        ),
+    }
+    assert payload["file_scope_contract"] == expected_contract
+    assert payload["record"]["file_scope_contract"] == expected_contract
+    assert set(payload["record"]["allowed_write_scope"]) >= set(expected_contract["scope_files"])
 
 
 def test_submit_bug_apply_with_existing_github_link_writes_registry(

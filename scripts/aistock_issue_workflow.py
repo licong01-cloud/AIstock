@@ -4020,7 +4020,24 @@ def build_submit_bug_plan(
     dry_run: bool = False,
     github_issue_extra_sections: list[str] | None = None,
     extra_github_labels: list[str] | None = None,
+    added_files: list[str] | None = None,
 ) -> dict[str, Any]:
+    file_input_preflight = _validate_submit_bug_file_inputs(
+        changed_files=changed_files,
+        added_files=list(added_files or []),
+        module=module,
+        root=_submit_bug_file_root(),
+    )
+    normalized_changed_files = file_input_preflight["changed_files"]
+    normalized_added_files = file_input_preflight["added_files"]
+    scope_files = file_input_preflight["scope_files"]
+    scope_file_contract = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": normalized_changed_files,
+        "added_files": normalized_added_files,
+        "scope_files": scope_files,
+        "ownership": file_input_preflight["ownership"],
+    }
     effective_apply = apply and not dry_run
     if create_fix_worktree and create_registry_worktree:
         raise WorkflowError("--create-fix-worktree and --create-registry-worktree are mutually exclusive")
@@ -4092,7 +4109,7 @@ def build_submit_bug_plan(
             nox_session=nox_session,
             reproduce_command=reproduce_command,
             evidence_ref=evidence_refs,
-            changed_file=changed_files,
+            changed_file=scope_files,
         )
         event = flow.build_failure_event(event_args)
         candidate = flow.candidate_from_event(
@@ -4123,13 +4140,14 @@ def build_submit_bug_plan(
         record.setdefault("production_ddl_gate", "noop")
         record.setdefault("production_frontend_dependency_gate", "noop")
         record.setdefault("production_backend_dependency_gate", "noop")
+        record["file_scope_contract"] = scope_file_contract
         if github_issue_extra_sections:
             record["github_issue_extra_sections"] = [str(section) for section in github_issue_extra_sections if str(section or "").strip()]
         ui_hints = _ui_intake_hints(
             title=title,
             module=module,
             description=description,
-            changed_files=changed_files,
+            changed_files=scope_files,
             reproduce_command=reproduce_command,
         )
         if ui_hints:
@@ -4249,6 +4267,8 @@ def build_submit_bug_plan(
             "url": record.get("github_issue_url"),
         },
         "record": record,
+        "file_input_preflight": file_input_preflight,
+        "file_scope_contract": scope_file_contract,
         "ui_intake_hints": ui_hints,
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "github_issue_labels": github_labels,
@@ -4901,6 +4921,117 @@ def _normalize_changed_files(changed_files: list[str] | None) -> list[str]:
             if str(path).strip()
         ]
     )
+
+
+def _submit_bug_file_root() -> Path:
+    return REPO_ROOT
+
+
+def _normalize_submit_bug_input_path(value: str, *, option: str, root: Path) -> str:
+    raw = str(value or "").strip()
+    normalized = raw.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:(?:/|$)", normalized)
+        or any(part == ".." for part in normalized.split("/"))
+    ):
+        raise WorkflowError(f"{option} must be a safe repository-relative path: {raw!r}")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if not parts:
+        raise WorkflowError(f"{option} must be a safe repository-relative path: {raw!r}")
+    reserved_windows_names = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+    if any(
+        re.search(r'[\x00:*?"<>|]', part)
+        or part.endswith((" ", "."))
+        or part.split(".", 1)[0].upper() in reserved_windows_names
+        for part in parts
+    ):
+        raise WorkflowError(f"{option} must be a safe repository-relative path: {raw!r}")
+    normalized = "/".join(parts)
+    try:
+        target = (root / Path(*parts)).resolve()
+    except OSError as exc:
+        raise WorkflowError(f"{option} must be a safe repository-relative path: {raw!r}") from exc
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise WorkflowError(f"{option} must be a safe repository-relative path: {raw!r}") from exc
+    return normalized
+
+
+def _normalize_submit_bug_input_group(values: list[str], *, option: str, root: Path) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        path = _normalize_submit_bug_input_path(value, option=option, root=root)
+        identity = path.casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(path)
+    return normalized
+
+
+def _validate_submit_bug_file_inputs(
+    *,
+    changed_files: list[str],
+    added_files: list[str],
+    module: str,
+    root: Path,
+) -> dict[str, Any]:
+    normalized_changed = _normalize_submit_bug_input_group(
+        changed_files,
+        option="--changed-file",
+        root=root,
+    )
+    normalized_added = _normalize_submit_bug_input_group(
+        added_files,
+        option="--added-file",
+        root=root,
+    )
+    changed_identities = {path.casefold() for path in normalized_changed}
+    category_duplicates = [path for path in normalized_added if path.casefold() in changed_identities]
+    if category_duplicates:
+        raise WorkflowError(
+            "file cannot be declared by both --changed-file and --added-file: "
+            + ", ".join(category_duplicates)
+        )
+
+    for path in normalized_changed:
+        target = root / Path(path)
+        if not target.exists():
+            raise WorkflowError(f"--changed-file does not exist: {path}")
+        if not target.is_file():
+            raise WorkflowError(f"--changed-file must identify a file, not a directory: {path}")
+    for path in normalized_added:
+        target = root / Path(path)
+        if target.exists():
+            raise WorkflowError(f"--added-file already exists; use --changed-file instead: {path}")
+
+    scope_files = normalized_changed + normalized_added
+    ownership = flow.match_changed_files(scope_files)
+    unmatched = list(ownership.get("unmatched_files") or [])
+    if unmatched:
+        raise WorkflowError(
+            "file ownership catalog has no match for submit-bug scope: " + ", ".join(unmatched)
+        )
+    return {
+        "schema_version": "aistock_submit_bug_file_preflight_v1",
+        "module": module,
+        "changed_files": normalized_changed,
+        "added_files": normalized_added,
+        "scope_files": scope_files,
+        "ownership": ownership,
+        "workflow_gate": "passed",
+    }
 
 
 def _path_in_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
@@ -11389,6 +11520,7 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         create_fix_worktree=args.create_fix_worktree,
         registry_pr_only=args.registry_pr_only,
         dry_run=args.dry_run,
+        added_files=list(args.added_file or []),
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "submitted"} else 2
@@ -11708,7 +11840,16 @@ def build_parser() -> argparse.ArgumentParser:
     submit_bug.add_argument("--actual")
     submit_bug.add_argument("--reproduce-command")
     submit_bug.add_argument("--evidence-ref", action="append")
-    submit_bug.add_argument("--changed-file", action="append")
+    submit_bug.add_argument(
+        "--changed-file",
+        action="append",
+        help="Existing repository-relative file expected to change; typos and directories are rejected.",
+    )
+    submit_bug.add_argument(
+        "--added-file",
+        action="append",
+        help="New repository-relative file planned by the fix; existing or unowned paths are rejected.",
+    )
     submit_bug.add_argument("--plan-key")
     submit_bug.add_argument("--nox-session")
     submit_bug.add_argument("--candidate-type", default="bug", choices=["bug", "regression", "infra_failure", "flaky"])
