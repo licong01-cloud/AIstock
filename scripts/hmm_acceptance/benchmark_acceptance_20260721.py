@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -32,13 +33,13 @@ import httpx
 import psycopg2
 
 API_BASE = "http://127.0.0.1:8011/api/v1/hmm-evolution"
-DEV_DSN = {
-    "host": "127.0.0.1",
-    "port": 5433,
-    "dbname": "aistock_dev",
-    "user": "postgres",
-    "password": "rRA8jgnD1HTy3MlIyXw1rnkjYFmxuiK1",
-}
+DEV_DB_ENV_KEYS = (
+    "TDX_DB_DEV_HOST",
+    "TDX_DB_DEV_PORT",
+    "TDX_DB_DEV_NAME",
+    "TDX_DB_DEV_USER",
+    "TDX_DB_DEV_PASSWORD",
+)
 TERMINAL_BATCH_STATUSES = {"completed", "partial_failed", "failed", "cancelled", "timed_out"}
 
 CANONICAL_SPEC: dict[str, Any] = {
@@ -124,16 +125,34 @@ def api(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     return payload
 
 
+def _dev_dsn_from_env() -> dict[str, Any]:
+    missing = [key for key in DEV_DB_ENV_KEYS if not os.getenv(key)]
+    if missing:
+        raise SystemExit(f"missing required DEV database config: {', '.join(missing)}")
+    dsn: dict[str, Any] = {
+        "host": os.environ["TDX_DB_DEV_HOST"],
+        "port": int(os.environ["TDX_DB_DEV_PORT"]),
+        "dbname": os.environ["TDX_DB_DEV_NAME"],
+        "user": os.environ["TDX_DB_DEV_USER"],
+        "password": os.environ["TDX_DB_DEV_PASSWORD"],
+    }
+    if dsn["host"] != "127.0.0.1" or dsn["port"] != 5433 or "dev" not in dsn["dbname"].lower():
+        raise SystemExit(
+            "refusing unsafe DEV database target: expected literal 127.0.0.1:5433 and a DEV database name"
+        )
+    return dsn
+
+
 def dev_conn() -> Any:
-    # DEV_DSN is hardcoded to 127.0.0.1:5433, so the connection target is fixed.
+    dsn = _dev_dsn_from_env()
     # NOTE: current_setting('port') cannot be used as the guard — DEV postgres runs
     # in a container publishing 5433->5432, so the server-reported port is 5432.
     # The authoritative invariant is the database identity itself.
-    conn = psycopg2.connect(options="-c default_transaction_read_only=on -c timezone=UTC", **DEV_DSN)
+    conn = psycopg2.connect(options="-c default_transaction_read_only=on -c timezone=UTC", **dsn)
     with conn.cursor() as cur:
         cur.execute("SELECT current_database()")
         (dbname,) = cur.fetchone()
-        if dbname != "aistock_dev":
+        if dbname != dsn["dbname"]:
             raise SystemExit(f"refusing non-DEV target: db={dbname}")
     return conn
 

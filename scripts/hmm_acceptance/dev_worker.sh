@@ -15,11 +15,22 @@ cd "$(dirname "$0")/../.."
 
 ROOT=F:/Dev/hmm_acceptance_20260721
 
-export TDX_DB_HOST=127.0.0.1
-export TDX_DB_PORT=5433
-export TDX_DB_NAME=aistock_dev
-export TDX_DB_USER=postgres
-export TDX_DB_PASSWORD=rRA8jgnD1HTy3MlIyXw1rnkjYFmxuiK1
+for key in TDX_DB_DEV_HOST TDX_DB_DEV_PORT TDX_DB_DEV_NAME TDX_DB_DEV_USER TDX_DB_DEV_PASSWORD; do
+  if [[ -z "${!key:-}" ]]; then
+    echo "REFUSE: missing required DEV database config: $key" >&2
+    exit 2
+  fi
+done
+if [[ "$TDX_DB_DEV_HOST" != "127.0.0.1" || "$TDX_DB_DEV_PORT" != "5433" || "$TDX_DB_DEV_NAME" != *dev* ]]; then
+  echo "REFUSE: unsafe DEV database target; expected literal 127.0.0.1:5433 and a DEV database name" >&2
+  exit 2
+fi
+export TDX_DB_HOST="$TDX_DB_DEV_HOST"
+export TDX_DB_PORT="$TDX_DB_DEV_PORT"
+export TDX_DB_NAME="$TDX_DB_DEV_NAME"
+export TDX_DB_USER="$TDX_DB_DEV_USER"
+printf -v TDX_DB_PASSWORD '%s' "$TDX_DB_DEV_PASSWORD"
+export TDX_DB_PASSWORD
 export HMM_EVOLUTION_RUNTIME_MODE=api_worker
 export PYTHONIOENCODING=utf-8
 # authoritative AIstock-owned filtered stock-pool cache (read-only; the exact
