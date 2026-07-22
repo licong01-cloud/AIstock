@@ -265,10 +265,7 @@ else:
 
             for c in list(df.columns):
                 if df[c].dtype == object:
-                    try:
-                        df[c] = pd.to_numeric(df[c], errors="ignore")
-                    except Exception:
-                        pass
+                    df[c] = pd.to_numeric(df[c], errors="ignore")
             return df
 
         ret_schema_df = _normalize_ret_df(ret_data_frame)
@@ -515,11 +512,17 @@ def _extract_training_diagnostics() -> dict:
             log_candidates.append(p)
 
     all_text = ""
+    log_read_errors = []
     for lf in log_candidates:
         try:
             all_text += lf.read_text(encoding="utf-8", errors="replace") + "\n"
-        except Exception:
-            pass
+        except OSError as exc:
+            log_read_errors.append(
+                {"path": str(lf), "error_type": type(exc).__name__, "message": str(exc)}
+            )
+
+    if log_read_errors:
+        result["log_read_errors"] = log_read_errors
 
     if not all_text:
         return result
@@ -1577,8 +1580,8 @@ def _extract_feature_importance_correlation(recorder) -> list:
                 # artifact_uri looks like file:///.../Loop1/mlruns/.../artifacts
                 ws_dir = _os.path.abspath(_os.path.join(str(art_uri).replace("file://", "").replace("file:", ""), "..", "..", "..", "..", ".."))
                 candidate_paths.append(_os.path.join(ws_dir, "combined_factors_df.parquet"))
-        except Exception:
-            pass
+        except (AttributeError, OSError, TypeError, ValueError) as e:
+            print(f"Warning: failed to resolve recorder artifact workspace: {type(e).__name__}: {e}")
         # Fallback: current working directory
         candidate_paths.append(_os.path.abspath("combined_factors_df.parquet"))
         candidate_paths.append(_os.path.abspath(_os.path.join(_os.path.dirname(__file__), "combined_factors_df.parquet")) if "__file__" in globals() else "")

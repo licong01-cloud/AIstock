@@ -8,6 +8,7 @@ independently so one malformed optional pickle cannot erase other evidence.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import os
@@ -100,6 +101,8 @@ def parse_artifacts(*, request: Mapping[str, Any], output_dir: Path) -> dict[str
         if source_value in (None, ""):
             results[name] = {"status": "missing", "reason_code": f"QELT_{name.upper()}_MISSING"}
             continue
+        obj: Any = None
+        normalized: Any = None
         try:
             source = Path(str(source_value)).resolve(strict=True)
             source.relative_to(allowed_root)
@@ -127,6 +130,14 @@ def parse_artifacts(*, request: Mapping[str, Any], output_dir: Path) -> dict[str
                 "reason_code": "QELT_PICKLE_PARSER_FAILED",
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
+        finally:
+            # Recorder pickle cannot be streamed safely, so the isolated
+            # parser processes exactly one allowlisted artifact at a time,
+            # records source bytes/output rows in its receipt, and releases
+            # the object before the next family is loaded.
+            obj = None
+            normalized = None
+            gc.collect()
     return {
         "schema_version": PARSER_RECEIPT_SCHEMA,
         "status": "completed_with_artifact_statuses",
@@ -147,7 +158,7 @@ def _reject_secrets() -> None:
 
 def _load_pickle(path: Path) -> Any:
     with path.open("rb") as handle:
-        return pickle.load(handle)  # noqa: S301 - exact trusted QE Recorder boundary.
+        return pickle.Unpickler(handle).load()  # noqa: S301 - exact trusted QE Recorder boundary.
 
 
 def _normalize_object(name: str, obj: Any):

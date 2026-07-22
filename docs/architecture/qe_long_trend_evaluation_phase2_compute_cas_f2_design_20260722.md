@@ -2,7 +2,7 @@
 
 - 文档类型：F2 跨仓库从属实现设计
 - 日期：2026-07-22
-- 状态：`IMPLEMENTED_LOCAL_VALIDATION_IN_PROGRESS_NOT_ACTIVATED`
+- 状态：`IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`
 - 父级权威：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` v1.6
 - 上位研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.7
 - 代码范围：AIstock QuantEvolver / QE Workspace Client / QE Resource Phase / RD-Agent QE Workspace
@@ -651,29 +651,29 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-014 | parent Phase 2 scope linkage | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md --tier F2` | IMPLEMENTED_LOCAL_VALIDATING | merge/DDL/runtime/canary pending |
-| F-301 | `backend/services/quantevolver/long_trend_evaluation_phase2.py` QE identity validation | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-302 | shared bundle/resolver/engine/store | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py` | IMPLEMENTED_LOCAL_TESTED | real canary pending |
-| F-303 | bundle builder + environment-bound RD allowlist extractor | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD evaluation API/capability tests | IMPLEMENTED_LOCAL_TESTED | none |
-| F-304 | exact recorder/catalog/frequency resolver + isolated parser | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-305 | dataset identity + strict reader | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; existing `backend/tests/unified_engine/test_qe_long_trend_contract_reader.py` | IMPLEMENTED_LOCAL_TESTED | real dataset canary pending |
-| F-306 | QE worker + streaming client | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `F:/Dev/RD-Agent-main/test/app/test_qe_long_trend_worker_recovery.py` | IMPLEMENTED_LOCAL_TESTED | real worker canary pending |
-| F-307 | Phase 1 family-local engine wrapper | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; existing `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-308 | RD request/job/claim/attempt/process manifests | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-309 | RD FIFO CPU slot held for worker lifetime | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `F:/Dev/RD-Agent-main/test/app/test_qe_long_trend_worker_recovery.py` | IMPLEMENTED_LOCAL_TESTED | real multi-job canary pending |
-| F-310 | independent `qelt:<evaluation_id>` resource phase/outbox | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_resource_phase_service.py` | IMPLEMENTED_LOCAL_TESTED | DDL/runtime pending |
-| F-311 | control-row inspect/reconcile/collect | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py` | IMPLEMENTED_LOCAL_TESTED | restart canary pending |
-| F-312 | dedicated long-trend CAS + family-aware required matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-313 | immutable success manifest | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-314 | registration/worker/published staged receipt adapter | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py` | IMPLEMENTED_LOCAL_TESTED | real normal Loop canary pending |
-| F-315 | worker terminal receipt | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `F:/Dev/RD-Agent-main/test/app/test_qe_long_trend_evaluation_api.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-316 | typed cancel | RD `test/app/test_qe_long_trend_evaluation_api.py` | IMPLEMENTED_LOCAL_TESTED | live PID canary pending |
-| F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; real canary receipt | IMPLEMENTED_LOCAL_CANARY_PENDING | DDL、两端重启与真实已完成 Loop canary 未授权/未执行 |
-| F-318 | ownership/import/route/schema diff | `qe.long_trend_evaluation` ownership/test plan；CI ownership receipt | IMPLEMENTED_LOCAL_VALIDATING | routed catalog tests in progress |
-| F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests | IMPLEMENTED_LOCAL_TESTED | DDL not applied |
-| F-320 | execution-environment identity binding | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | IMPLEMENTED_LOCAL_TESTED | deployment restart pending |
-| F-321 | frequency-aware summary/`_obj.pkl` resolver | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | IMPLEMENTED_LOCAL_TESTED | none |
-| F-322 | normal nonblocking adapter + internal registration + staged receipts | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD pending replay tests | IMPLEMENTED_LOCAL_TESTED | real normal Loop canary pending |
+| F-014 | parent Phase 2 scope linkage | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md --tier F2`; source implementation is locally verified while merge/DDL/runtime/canary remain separately reported operational facts | implemented_local_verified | none |
+| F-301 | `backend/services/quantevolver/long_trend_evaluation_phase2.py` QE identity validation | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py` | implemented_local_verified | none |
+| F-302 | shared bundle/resolver/engine/store | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real canary remains an activation receipt rather than a source-design exception | implemented_local_verified | none |
+| F-303 | bundle builder + environment-bound RD allowlist extractor | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD evaluation API/capability tests | implemented_local_verified | none |
+| F-304 | exact recorder/catalog/frequency resolver + isolated parser | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
+| F-305 | dataset identity + strict reader | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; existing `backend/tests/unified_engine/test_qe_long_trend_contract_reader.py`; real dataset canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-306 | QE worker + streaming client | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; real worker canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-307 | Phase 1 family-local engine wrapper | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; existing `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
+| F-308 | RD request/job/claim/attempt/process manifests | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
+| F-309 | RD FIFO CPU slot held for worker lifetime | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; multi-job canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-310 | independent `qelt:<evaluation_id>` resource phase/outbox | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_resource_phase_service.py`; DDL/runtime state is reported separately | implemented_local_verified | none |
+| F-311 | control-row inspect/reconcile/collect | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; restart canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-312 | dedicated long-trend CAS + family-aware required matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | implemented_local_verified | none |
+| F-313 | immutable success manifest | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | implemented_local_verified | none |
+| F-314 | registration/worker/published staged receipt adapter | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-315 | worker terminal receipt | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
+| F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest -q test/app/test_qe_long_trend_evaluation_api.py`（与 recovery 文件合计 12 passed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; DDL、两端重启与真实已完成 Loop canary 尚未执行且不冒充本地测试证据 | implemented_local_verified | none |
+| F-318 | ownership/import/route/schema diff | `python scripts/aistock_module_ownership_scan.py --changed-only --include-untracked --fail-on-unmapped --fail-on-ambiguous`; `python -m nox -s validation_catalog_integrity validation_module_registry_l0`; 32 个初始变更文件与后续 BUG-829 文件均重新执行目录路由 | implemented_local_verified | none |
+| F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests；DDL 未应用并作为生产状态单独报告 | implemented_local_verified | none |
+| F-320 | execution-environment identity binding | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py`; deployment restart state is separately reported | implemented_local_verified | none |
+| F-321 | frequency-aware summary/`_obj.pkl` resolver | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
+| F-322 | normal nonblocking adapter + internal registration + staged receipts | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD pending replay tests；real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
 
 ## 19. Rollout and Rollback / 发布与回滚
 
@@ -715,7 +715,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | 项目 | 状态 |
 |---|---|
-| design | `IMPLEMENTED_LOCAL_VALIDATION_IN_PROGRESS_NOT_ACTIVATED` |
+| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 23/23、路由本地测试与跨仓库定向测试通过） |
 | Phase 1 core | `MERGED_VERIFIED` |
 | AIstock Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |
 | RD-Agent Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |

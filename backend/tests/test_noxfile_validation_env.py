@@ -34,6 +34,7 @@ def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytes
             "scripts/issue_flow.py\n",
             "noxfile.py\nscripts/issue_flow.py\n",
             "backend/tests/test_noxfile_validation_env.py\n",
+            "backend/services/new_feature.py\n",
         ]
     )
 
@@ -46,6 +47,7 @@ def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytes
         "scripts/issue_flow.py",
         "noxfile.py",
         "backend/tests/test_noxfile_validation_env.py",
+        "backend/services/new_feature.py",
     ]
 
 

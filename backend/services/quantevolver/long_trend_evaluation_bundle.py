@@ -151,4 +151,3 @@ def _validate_bundle_relative_path(value: str) -> None:
     path = PurePosixPath(str(value or ""))
     if not value or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise QELongTrendError(QELongTrendReason.BUNDLE_INVALID, f"invalid bundle path: {value!r}")
-

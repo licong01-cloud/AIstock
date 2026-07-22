@@ -388,6 +388,7 @@ def _l0_changed_files() -> list[str]:
         ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
         ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
         ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
+        ("ls-files", "--others", "--exclude-standard"),
     )
     for command in commands:
         result = subprocess.run(

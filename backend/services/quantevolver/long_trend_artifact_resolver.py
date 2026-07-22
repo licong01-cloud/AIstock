@@ -179,4 +179,3 @@ def _safe_relative_path(value: str) -> None:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise QELongTrendError(QELongTrendReason.NON_QE_SOURCE_REJECTED, f"invalid catalog path: {value!r}")
-
