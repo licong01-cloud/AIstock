@@ -6,7 +6,7 @@
 >
 > 文档状态：`design_ready`。本文完成可直接拆分实施的架构、schema、事务、迁移、测试和验收设计；不表示源代码、DDL、生产配置、服务重启或真实 SIM 已完成。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1 implementation 仍为 `not_started`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1-A strict contracts/canonical/determinism 为 `implemented_verified`，K1-B/K1-C 仍为 `not_started`，K1 overall 为 `in_progress`，现有产品 runtime 未切换。
 >
 > 日期：2026-07-22。
 
@@ -895,14 +895,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
-| `F-053` | K1 detailed design §3 target module/dependency/import boundary | target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` | design_ready | none |
-| `F-054` | K1 detailed design §4-§5 strict contracts/recursive FrozenJson/raw-digest+hex codec | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` nested-mutation/canonical/error matrix | design_ready | none |
+| `F-053` | K1 detailed design §3 target module/dependency/import boundary；K1-A dependency direction 已按设计落地且无 runtime wiring | K1-A forbidden import/call scan zero findings；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` | design_ready | none |
+| `F-054` | `plugin_contracts.py` + `plugin_canonical.py` strict contracts/recursive FrozenJson/raw-digest+hex/decimal/time/error evidence/readback closure | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`；K1-A direct total 56 passed；canonical 95%、contracts 86% line+branch | implemented_verified | none |
 | `F-055` | K1 detailed design §7 route-independent catalog、descriptor/process binding、creation binding、aggregate/route receipts | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` route-isolation/zero-partial matrix | design_ready | none |
-| `F-056` | K1 detailed design §6 exact keyed deterministic context | target `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` raw-digest u53/retry/restart matrix | design_ready | none |
+| `F-056` | `deterministic_context.py` + `DeterministicExecutionContextV1` exact keyed logical context/ID/effect ordinal/raw-digest u53 | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` retry/restart/readback/draw/range/coercion matrix；97% line+branch | implemented_verified | none |
 | `F-057` | K1 detailed design §1、§8 current-three exact state/TWAP session/legacy projection；K1 shadow-only、runtime switch 属于 K3 | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` + existing parity/restart tests | design_ready | none |
 | `F-058` | K1 detailed design §1.2、§9 pinned compatibility lock/receipt；façade runtime 属于 K4 | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` | design_ready | none |
-| `F-059` | K1 detailed design §11 ownership/test routing/coverage | command `python -m nox -s l0`；implementation changed files route to target plan `miniqmt_execution_runtime_l2` | design_ready | none |
-| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
+| `F-059` | K1 detailed design §11 ownership/test routing/coverage | command `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` = 56 passed；command `python -m nox -s miniqmt_execution_runtime_l2` = 462 passed/1 skipped；classifier only selects the owned module | design_ready | none |
+| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001；all K1-A production gates noop | design_ready | none |
 
 `design_ready` 只表示本文可直接指导实施；所有代码、DDL、CI 和真实 SIM 状态仍必须在后续 PR 与上位蓝图 progress ledger 中独立更新。
 

@@ -2,7 +2,7 @@
 
 > 权威关系：本文是 [`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md) 的 K1 下位实施合同；模拟盘唯一上位权威仍是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。冲突时依次以上位蓝图、整体内核蓝图、本文为准。本文不得改写 StrategyPackage admission、Selection/Target、`B0_QUOTE_V2`、OMS、Gateway 或唯一 broker route 的 owner。
 >
-> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`not_started`。
+> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K1-A implemented_verified`，`K1-B/K1-C not_started`，K1 overall `in_progress`。
 >
 > 基线：`origin/main@e111e4795a4ee7545f8ad208381fa7c7af63aab3`，日期 2026-07-22。
 >
@@ -528,6 +528,8 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 - 先写 malformed type/hash/identity/time/decimal/draw、caller-input/returned-view nested mutation RED tests；
 - 不接 runtime/repository。
 
+当前实现状态：`implemented_verified`。实现位于 `backend/services/miniqmt_execution_runtime/plugin_canonical.py`、`plugin_contracts.py`、`deterministic_context.py`；直接证据位于 `test_algo_plugin_contracts.py` 和 `test_deterministic_execution_context.py`。RED 首轮因三个目标模块不存在产生 2 个 collection error；GREEN 为 56 个 strict/hash/event/state/effect/determinism 直接用例，changed-file classifier 只选择 `miniqmt_execution_runtime_l2`，该计划 462 passed、1 skipped。新增文件 line+branch coverage：canonical 95%、contracts 86%、determinism 97%。新模块未从现有 package `__init__`、runtime、repository、Gateway 或 OMS 接线；`source_merge=pending_pr`，不能写成 K1 complete 或 production activated。
+
 ### K1-B — registry/current-three manifests（3–4 人日）
 
 - 实现 route-independent immutable plugin catalog、serializable descriptor/process binding split、creation bindings、aggregate build failure receipt 和 per-route compatibility receipt；
@@ -649,14 +651,14 @@ K1 rollback 是 source revert：因没有 DB、配置、runtime switch 或 broke
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-053` | §3 target modules/dependency/import denylist | target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` AST + isolated import | design_ready | none |
-| `F-054` | §4-§5 target `backend/services/miniqmt_execution_runtime/plugin_contracts.py` and `plugin_canonical.py` | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` nested-mutation/raw-digest+hex/canonical/error matrix | design_ready | none |
+| `F-053` | §3 target modules/dependency/import denylist；K1-A modules only depend on stdlib/Pydantic/canonical/contracts in the approved direction | K1-A forbidden-import/call scan zero findings；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` AST + isolated import | design_ready | none |
+| `F-054` | `plugin_contracts.py` and `plugin_canonical.py` strict models、recursive FrozenJson、canonical decimal/time/JSON/raw digest+hex、typed JSON-safe error evidence、writer/readback hash closure | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` malformed identity/type/extra/hash/set permutation/duplicate JSON key/composite event/delivery/state/start/initialization/effect/deep-mutation/JSON readback matrix；direct total 56 passed；canonical 95%、contracts 86% line+branch | implemented_verified | none |
 | `F-055` | §7 target `backend/services/miniqmt_execution_runtime/plugin_registry.py` | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` descriptor/binding/creation/route-isolation/aggregate-failure matrix | design_ready | none |
-| `F-056` | §6 target `backend/services/miniqmt_execution_runtime/deterministic_context.py` | target `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` keyed hash/raw-digest u53/retry/restart/ordinal matrix | design_ready | none |
+| `F-056` | `deterministic_context.py` plus `DeterministicExecutionContextV1` exact keyed context/ID、raw-digest u53、BestLimit quantity、strict ordinal sequence | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` logical-time/hash/retry/readback/raw-digest/different ordinal/invalid coercion/range matrix；determinism 97% line+branch | implemented_verified | none |
 | `F-057` | §1、§8 target `backend/execution_algos/vnpy_style/plugin_manifests.py` | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` exact active-order/lineage/TWAP session/legacy drift + existing parity/restart paths | design_ready | none |
 | `F-058` | §1.2、§9 target `backend/execution_algos/vnpy_compat/locked_surface.py` and `receipts.py` | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` pinned source/signature/DTO/error characterization | design_ready | none |
-| `F-059` | §11 ownership/catalog/test plans and coverage | command: `python -m nox -s l0`；target plan `miniqmt_execution_runtime_l2` only when implementation changed files select it | design_ready | none |
-| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2` | design_ready | none |
+| `F-059` | §11 ownership/catalog/test plans and coverage | command: `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` = 56 passed；command: `python -m nox -s miniqmt_execution_runtime_l2` = 462 passed/1 skipped；classifier `targeted_ci_required`/unmapped empty；coverage 95/86/97 | design_ready | none |
+| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001 / 正式复核
 
