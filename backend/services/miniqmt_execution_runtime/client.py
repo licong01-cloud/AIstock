@@ -2197,38 +2197,39 @@ class MiniQMTExecutionRuntimeClient:
             and existing.metadata.get("dependent_buy_deferred")
         ):
             metadata["dependent_buy_retry"] = True
-        upsert(
-            OrderBatchRecord(
-                batch_id=batch_id,
-                strategy_id=_single_strategy_id(results),
-                account_id=requests[0].account_id if requests else "",
-                mode=requests[0].mode if requests else "SIM",
-                batch_status=status,
-                request_json={"orders": [_request_signature(request) for request in requests]},
-                result_json={
-                    "results": [result.to_dict() for result in results],
-                    "compensation_actions": [],
-                    "compensation_hint": (
-                        "partial event_loop broker submission; inspect accepted qmt_order_id values"
-                        if _event_loop_compensation_required(status, requests, results)
-                        else None
-                    ),
-                    "runtime_evidence": runtime_evidence.to_dict(),
-                },
-                metadata=metadata,
-                created_at=created_at,
-                submitted_at=now
-                if status
-                in {
-                    OrderBatchStatus.SUBMITTING,
-                    OrderBatchStatus.SUCCEEDED,
-                    OrderBatchStatus.PARTIAL,
-                    OrderBatchStatus.FAILED,
-                }
-                else None,
-                completed_at=now,
-            )
+        candidate = OrderBatchRecord(
+            batch_id=batch_id,
+            strategy_id=_single_strategy_id(results),
+            account_id=requests[0].account_id if requests else "",
+            mode=requests[0].mode if requests else "SIM",
+            batch_status=status,
+            request_json={"orders": [_request_signature(request) for request in requests]},
+            result_json={
+                "results": [_event_loop_durable_result_payload(result) for result in results],
+                "compensation_actions": [],
+                "compensation_hint": (
+                    "partial event_loop broker submission; inspect accepted qmt_order_id values"
+                    if _event_loop_compensation_required(status, requests, results)
+                    else None
+                ),
+                "runtime_evidence": runtime_evidence.to_dict(),
+            },
+            metadata=metadata,
+            created_at=created_at,
+            submitted_at=now
+            if status
+            in {
+                OrderBatchStatus.SUBMITTING,
+                OrderBatchStatus.SUCCEEDED,
+                OrderBatchStatus.PARTIAL,
+                OrderBatchStatus.FAILED,
+            }
+            else None,
+            completed_at=now,
         )
+        candidate_requests = tuple(_event_loop_requests_from_batch(candidate))
+        _event_loop_results_from_batch(candidate, requests=candidate_requests)
+        upsert(candidate)
 
     def execute_paper_vnpy_intent(
         self,
@@ -3580,9 +3581,151 @@ def _request_by_parent(
 
 
 def _parent_id_from_request(request: ManagedOrderRequest) -> str:
-    return str(
-        request.metadata.get("runtime_parent_intent_id") or request.metadata.get("execution_plan_intent_id") or ""
-    ).strip()
+    metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+    for field_name in ("runtime_parent_intent_id", "execution_plan_intent_id"):
+        value = metadata.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _normalized_parent_identity(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _event_loop_duplicate_string_identities(values: list[Any]) -> list[str]:
+    normalized = [identity for value in values if (identity := _normalized_parent_identity(value)) is not None]
+    return sorted(identity for identity, count in Counter(normalized).items() if count > 1)
+
+
+def _event_loop_json_safe_diagnostic_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else {"python_type": "float", "repr": repr(value)}
+    if isinstance(value, (list, tuple)):
+        return [_event_loop_json_safe_diagnostic_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key
+            if isinstance(key, str)
+            else f"<{type(key).__name__}:{_event_loop_json_safe_diagnostic_value(key)!r}>": (
+                _event_loop_json_safe_diagnostic_value(item)
+            )
+            for key, item in value.items()
+        }
+    return {"python_type": type(value).__name__, "repr": repr(value)}
+
+
+def _event_loop_durable_preflight_payload(preflight: OrderPreflightResult) -> dict[str, Any]:
+    primary_error = preflight.primary_error
+    return {
+        "allowed": preflight.allowed,
+        "primary_error": primary_error.to_dict() if primary_error is not None else None,
+        "primary_error_code": primary_error.code if primary_error is not None else None,
+        "errors": [error.to_dict() for error in preflight.errors],
+        "strategy_id": preflight.strategy_id,
+        "estimated_notional": float(preflight.estimated_notional),
+        "estimated_fee": float(preflight.estimated_fee),
+        "freeze_amount": float(preflight.freeze_amount),
+        "available_cash": float(preflight.available_cash) if preflight.available_cash is not None else None,
+        "strategy_available_sell_quantity": preflight.strategy_available_sell_quantity,
+        "pending_sell_quantity": preflight.pending_sell_quantity,
+        "broker_can_sell": preflight.broker_can_sell,
+    }
+
+
+def _event_loop_durable_result_payload(result: ManagedOrderSubmitResult) -> dict[str, Any]:
+    return {
+        "success": result.success,
+        "intent_id": result.intent_id,
+        "qmt_order_id": result.qmt_order_id,
+        "broker_message": result.broker_message,
+        "preflight": _event_loop_durable_preflight_payload(result.preflight),
+        "broker_called": result.broker_called,
+    }
+
+
+def _event_loop_request_identity_diagnostics(
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+) -> list[Any]:
+    diagnostics: list[Any] = []
+    for request in requests:
+        metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+        value = (
+            metadata.get("runtime_parent_intent_id")
+            if "runtime_parent_intent_id" in metadata
+            else metadata.get("execution_plan_intent_id")
+        )
+        diagnostics.append(_event_loop_json_safe_diagnostic_value(value))
+    return diagnostics
+
+
+def _canonical_event_loop_request_identities(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    batch_id: str,
+    stage: str,
+) -> list[str]:
+    request_identity_diagnostics = _event_loop_request_identity_diagnostics(requests)
+    result_identity_diagnostics = [_event_loop_json_safe_diagnostic_value(result.intent_id) for result in results]
+    request_identities: list[str] = []
+    for index, request in enumerate(requests):
+        metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+        aliases = {
+            field_name: metadata[field_name]
+            for field_name in ("runtime_parent_intent_id", "execution_plan_intent_id")
+            if field_name in metadata
+        }
+        normalized_aliases = {field_name: _normalized_parent_identity(value) for field_name, value in aliases.items()}
+        if not aliases or any(identity is None for identity in normalized_aliases.values()):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop request requires non-empty string parent identity aliases before persistence",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "request.metadata.parent_intent_id",
+                    "request_index": index,
+                    "request_identity_aliases": _event_loop_json_safe_diagnostic_value(aliases),
+                    "request_identities": request_identity_diagnostics,
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        request_identity_diagnostics
+                    ),
+                    "duplicate_result_identities": _event_loop_duplicate_string_identities(
+                        [result.intent_id for result in results]
+                    ),
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                },
+            )
+        distinct_aliases = set(normalized_aliases.values())
+        if len(distinct_aliases) != 1:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop request parent identity aliases conflict before persistence",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "request.metadata.parent_intent_id",
+                    "request_index": index,
+                    "request_identity_aliases": _event_loop_json_safe_diagnostic_value(aliases),
+                    "request_identities": request_identity_diagnostics,
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        request_identity_diagnostics
+                    ),
+                    "duplicate_result_identities": _event_loop_duplicate_string_identities(
+                        [result.intent_id for result in results]
+                    ),
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                },
+            )
+        request_identities.append(next(iter(distinct_aliases)))
+    return request_identities
 
 
 def _event_loop_result_objects_by_parent(
@@ -3590,27 +3733,36 @@ def _event_loop_result_objects_by_parent(
     *,
     batch_id: str,
     stage: str,
+    request_identities: list[str] | None = None,
 ) -> dict[str, ManagedOrderSubmitResult]:
     result_by_parent: dict[str, ManagedOrderSubmitResult] = {}
-    duplicate_result_identities: list[str] = []
-    result_identities: list[str | None] = []
+    raw_result_identities = [result.intent_id for result in results]
+    result_identity_diagnostics = [
+        _event_loop_json_safe_diagnostic_value(identity) for identity in raw_result_identities
+    ]
+    duplicate_result_identities = _event_loop_duplicate_string_identities(raw_result_identities)
     for result in results:
-        parent_id = str(result.intent_id or "").strip()
-        result_identities.append(parent_id or None)
-        if not parent_id:
+        parent_id = _normalized_parent_identity(result.intent_id)
+        if parent_id is None:
             raise BrokerSubmitError(
-                "MiniQMT event_loop result requires a non-empty parent intent identity",
+                "MiniQMT event_loop result requires an exact non-empty string parent intent identity",
                 context={
                     "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
                     "stage": stage,
                     "qmt_batch_id": batch_id or None,
                     "conflict_field": "result.intent_id",
-                    "result_identities": result_identities,
+                    "request_identities": list(request_identities or []),
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        list(request_identities or [])
+                    ),
                     "duplicate_result_identities": duplicate_result_identities,
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                    "actual_identity": _event_loop_json_safe_diagnostic_value(result.intent_id),
                 },
             )
         if parent_id in result_by_parent:
-            duplicate_result_identities.append(parent_id)
             raise BrokerSubmitError(
                 "MiniQMT event_loop result parent intent identity is duplicated",
                 context={
@@ -3618,8 +3770,15 @@ def _event_loop_result_objects_by_parent(
                     "stage": stage,
                     "qmt_batch_id": batch_id or None,
                     "conflict_field": "result.intent_id",
-                    "result_identities": result_identities,
+                    "request_identities": list(request_identities or []),
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        list(request_identities or [])
+                    ),
                     "duplicate_result_identities": duplicate_result_identities,
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                    "actual_identity": parent_id,
                 },
             )
         result_by_parent[parent_id] = result
@@ -3633,11 +3792,21 @@ def _canonical_event_loop_result_objects(
     batch_id: str,
     stage: str,
 ) -> tuple[ManagedOrderSubmitResult, ...]:
-    request_identities = [_parent_id_from_request(request) for request in requests]
+    request_identities = _canonical_event_loop_request_identities(
+        requests=requests,
+        results=results,
+        batch_id=batch_id,
+        stage=stage,
+    )
     duplicate_request_identities = sorted(
         identity for identity, count in Counter(request_identities).items() if identity and count > 1
     )
-    result_by_parent = _event_loop_result_objects_by_parent(results, batch_id=batch_id, stage=stage)
+    result_by_parent = _event_loop_result_objects_by_parent(
+        results,
+        batch_id=batch_id,
+        stage=stage,
+        request_identities=request_identities,
+    )
     result_identities = list(result_by_parent)
     invalid_carriers = [
         {
@@ -3647,31 +3816,36 @@ def _canonical_event_loop_result_objects(
             "qmt_order_id": result.qmt_order_id,
         }
         for parent_id, result in result_by_parent.items()
-        if (
+        if not isinstance(result.success, bool)
+        or not isinstance(result.broker_called, bool)
+        or not isinstance(result.broker_message, str)
+        or (
+            result.qmt_order_id is not None
+            and (not isinstance(result.qmt_order_id, str) or not result.qmt_order_id.strip())
+        )
+        or (
             result.success
             and (
-                result.broker_called is not True or not isinstance(result.qmt_order_id, str) or not result.qmt_order_id
+                result.broker_called is not True
+                or not isinstance(result.qmt_order_id, str)
+                or not result.qmt_order_id.strip()
             )
         )
-        or (not result.success and result.qmt_order_id is not None)
+        or (result.success is False and result.qmt_order_id is not None)
     ]
     missing = sorted(set(request_identities) - set(result_identities))
     extra = sorted(set(result_identities) - set(request_identities))
-    if (
-        not all(request_identities)
-        or duplicate_request_identities
-        or len(results) != len(requests)
-        or missing
-        or extra
-        or invalid_carriers
-    ):
+    identity_set_conflict = (
+        not all(request_identities) or duplicate_request_identities or len(results) != len(requests) or missing or extra
+    )
+    if identity_set_conflict or invalid_carriers:
         raise BrokerSubmitError(
-            "MiniQMT event_loop request/result parent identity sets do not close",
+            "MiniQMT event_loop request/result identity or carrier contract does not close",
             context={
                 "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
                 "stage": stage,
                 "qmt_batch_id": batch_id or None,
-                "conflict_field": "request/result parent identity set",
+                "conflict_field": ("request/result parent identity set" if identity_set_conflict else "result carrier"),
                 "request_identities": request_identities,
                 "result_identities": result_identities,
                 "request_count": len(requests),
@@ -3710,8 +3884,9 @@ def _merge_event_loop_parent_submit_result(
     parent_intent_id: str,
     batch_id: str,
 ) -> ManagedOrderSubmitResult:
-    identities = {str(existing.intent_id or "").strip(), str(incoming.intent_id or "").strip()}
-    if identities != {parent_intent_id}:
+    raw_identities = [existing.intent_id, incoming.intent_id]
+    identities = [_normalized_parent_identity(identity) for identity in raw_identities]
+    if any(identity is None for identity in identities) or set(identities) != {parent_intent_id}:
         raise BrokerSubmitError(
             "MiniQMT event_loop child results cannot be merged across parent identities",
             context={
@@ -3720,7 +3895,12 @@ def _merge_event_loop_parent_submit_result(
                 "qmt_batch_id": batch_id,
                 "conflict_field": "child result parent identity",
                 "expected_identity": parent_intent_id,
-                "actual_identities": sorted(identities),
+                "request_identities": [parent_intent_id],
+                "result_identities": [_event_loop_json_safe_diagnostic_value(identity) for identity in raw_identities],
+                "duplicate_request_identities": [],
+                "duplicate_result_identities": _event_loop_duplicate_string_identities(raw_identities),
+                "missing_result_identities": [],
+                "extra_result_identities": [],
             },
         )
     if existing.success:
@@ -4031,14 +4211,23 @@ def _event_loop_durable_result_parent_id(
         for field_name in ("intent_id", "parent_intent_id", "runtime_parent_intent_id")
         if field_name in raw_result
     }
-    if "intent_id" not in aliases or any(not isinstance(value, str) or not value.strip() for value in aliases.values()):
+    if "intent_id" not in aliases:
         raise _event_loop_durable_batch_error(
             batch=batch,
             reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
             message="MiniQMT event_loop durable result requires a unique non-empty parent identity",
             field_path=f"{prefix}.intent_id",
-            value=aliases,
+            value=None,
         )
+    for field_name, value in aliases.items():
+        if not isinstance(value, str) or not value.strip():
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable result requires exact non-empty string identity aliases",
+                field_path=f"{prefix}.{field_name}",
+                value=value,
+            )
     normalized = {value.strip() for value in aliases.values()}
     if len(normalized) != 1:
         raise _event_loop_durable_batch_error(
@@ -4243,48 +4432,56 @@ def _event_loop_durable_batch_error(
         "value_type": type(value).__name__,
         **identity_context,
     }
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        context["value"] = value
+    context["value"] = _event_loop_json_safe_diagnostic_value(value)
     if expected is not None:
-        context["expected"] = expected
+        context["expected"] = _event_loop_json_safe_diagnostic_value(expected)
         if isinstance(expected, str):
             context["expected_identity"] = expected
     if "identity" in field_path or field_path.endswith(".intent_id"):
-        context["actual_identity"] = value if isinstance(value, str) or value is None else None
+        context["actual_identity"] = _event_loop_json_safe_diagnostic_value(value)
     return BrokerSubmitError(message, context=context)
 
 
 def _event_loop_durable_identity_context(batch: OrderBatchRecord) -> dict[str, Any]:
     raw_orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
     raw_results = batch.result_json.get("results") if isinstance(batch.result_json, dict) else None
-    request_identities: list[str | None] = []
+    request_identities: list[Any] = []
     binding_id: str | None = None
     run_id: str | None = None
     if isinstance(raw_orders, list):
         for raw_order in raw_orders:
             metadata = raw_order.get("metadata") if isinstance(raw_order, dict) else None
             metadata = metadata if isinstance(metadata, dict) else {}
-            identity = metadata.get("runtime_parent_intent_id") or metadata.get("execution_plan_intent_id")
-            request_identities.append(identity.strip() if isinstance(identity, str) and identity.strip() else None)
+            identity = (
+                metadata.get("runtime_parent_intent_id")
+                if "runtime_parent_intent_id" in metadata
+                else metadata.get("execution_plan_intent_id")
+            )
+            request_identities.append(_event_loop_json_safe_diagnostic_value(identity))
             binding_id = binding_id or _first_non_empty_string(
                 metadata.get("binding_id"),
                 metadata.get("simulation_binding_id"),
                 metadata.get("release_binding_id"),
             )
             run_id = run_id or _first_non_empty_string(metadata.get("run_id"), metadata.get("simulation_run_id"))
-    result_identities = (
-        [raw_result.get("intent_id") if isinstance(raw_result, dict) else None for raw_result in raw_results or []]
+    result_identities: list[Any] = (
+        [
+            _event_loop_json_safe_diagnostic_value(
+                raw_result.get("intent_id") if isinstance(raw_result, dict) else None
+            )
+            for raw_result in raw_results or []
+        ]
         if isinstance(raw_results, list)
         else []
     )
-    duplicate_request_identities = sorted(
-        identity for identity, count in Counter(request_identities).items() if identity is not None and count > 1
-    )
-    duplicate_result_identities = sorted(
-        identity for identity, count in Counter(result_identities).items() if identity is not None and count > 1
-    )
-    request_set = {identity for identity in request_identities if identity is not None}
-    result_set = {identity for identity in result_identities if identity is not None}
+    duplicate_request_identities = _event_loop_duplicate_string_identities(request_identities)
+    duplicate_result_identities = _event_loop_duplicate_string_identities(result_identities)
+    request_set = {
+        identity for value in request_identities if (identity := _normalized_parent_identity(value)) is not None
+    }
+    result_set = {
+        identity for value in result_identities if (identity := _normalized_parent_identity(value)) is not None
+    }
     runtime_evidence = None
     if isinstance(batch.result_json, dict) and isinstance(batch.result_json.get("runtime_evidence"), dict):
         runtime_evidence = batch.result_json["runtime_evidence"]

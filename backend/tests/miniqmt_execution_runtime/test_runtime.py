@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -38,6 +39,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import (
     ManagedOrderSubmitResult,
+    OrderPreflightError,
     OrderPreflightResult,
     QmtManagedOrderService,
 )
@@ -1043,6 +1045,224 @@ def test_event_loop_valid_durable_batch_replay_preserves_request_result_identity
         assert stored_intent.metadata["broker_called"] is True
         assert stored_intent.metadata["broker_call_pending"] is False
         assert stored_intent.metadata["qmt_order_id"] is not None
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+@pytest.mark.parametrize(
+    "malformed_identity",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("   ", id="empty-string"),
+        pytest.param({}, id="object"),
+        pytest.param([], id="list"),
+        pytest.param(7, id="number"),
+        pytest.param(True, id="boolean"),
+    ],
+)
+def test_event_loop_durable_non_string_result_identity_fails_with_serializable_context(
+    malformed_identity,
+) -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    result_json = deepcopy(batch.result_json)
+    result_json["results"][0]["intent_id"] = malformed_identity
+    qmt_repo.upsert_order_batch(replace(batch, result_json=result_json))
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._event_loop_existing_batch_result(
+            batch_id=batch.batch_id,
+            requests=requests,
+            request_count=len(requests),
+            managed_order_service=None,
+        )
+
+    context = exc_info.value.context
+    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT"
+    assert context["stage"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY"
+    assert context["qmt_batch_id"] == batch.batch_id
+    assert context["field_path"] == "result_json.results[0].intent_id"
+    assert context["conflict_field"] == "result_json.results[0].intent_id"
+    assert context["value_type"] == type(malformed_identity).__name__
+    assert context["result_identities"][0] == malformed_identity
+    for field_name in (
+        "request_identities",
+        "result_identities",
+        "duplicate_request_identities",
+        "duplicate_result_identities",
+        "missing_result_identities",
+        "extra_result_identities",
+    ):
+        assert field_name in context
+    json.dumps(context, sort_keys=True)
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+def test_event_loop_batch_persist_rejects_whitespace_success_order_id_before_repository_upsert() -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    results = list(miniqmt_runtime_client._event_loop_results_from_batch(batch, requests=requests))
+    results[0] = replace(results[0], qmt_order_id="   ")
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+    initial_children = client.repository.list_child_orders(runtime_id, active_only=False)
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._upsert_event_loop_batch_record(
+            batch_id=batch.batch_id,
+            requests=tuple(requests),
+            results=tuple(results),
+            runtime_evidence=client.evidence_for_runtime(runtime_id, source="unit_test_whitespace_order_id"),
+            source="unit_test_whitespace_order_id",
+        )
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT"
+    assert exc_info.value.context["stage"] == "MINIQMT_EVENT_LOOP_BATCH_PERSIST"
+    assert exc_info.value.context["qmt_batch_id"] == batch.batch_id
+    assert exc_info.value.context["conflict_field"] == "result carrier"
+    assert qmt_repo.get_order_batch(batch.batch_id) == batch
+    assert client.repository.list_child_orders(runtime_id, active_only=False) == initial_children
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+def test_event_loop_batch_persist_rejects_non_string_result_identity_without_coercion() -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    results = list(miniqmt_runtime_client._event_loop_results_from_batch(batch, requests=requests))
+    malformed_identity = {"unexpected": "parent"}
+    results[0] = replace(results[0], intent_id=malformed_identity)
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+    initial_children = client.repository.list_child_orders(runtime_id, active_only=False)
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._upsert_event_loop_batch_record(
+            batch_id=batch.batch_id,
+            requests=tuple(requests),
+            results=tuple(results),
+            runtime_evidence=client.evidence_for_runtime(runtime_id, source="unit_test_non_string_identity"),
+            source="unit_test_non_string_identity",
+        )
+
+    context = exc_info.value.context
+    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT"
+    assert context["stage"] == "MINIQMT_EVENT_LOOP_BATCH_PERSIST"
+    assert context["qmt_batch_id"] == batch.batch_id
+    assert context["conflict_field"] == "result.intent_id"
+    assert context["result_identities"][0] == malformed_identity
+    json.dumps(context, sort_keys=True)
+    assert qmt_repo.get_order_batch(batch.batch_id) == batch
+    assert client.repository.list_child_orders(runtime_id, active_only=False) == initial_children
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+def test_event_loop_batch_persist_rejects_conflicting_request_aliases_before_repository_upsert() -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    results = miniqmt_runtime_client._event_loop_results_from_batch(batch, requests=requests)
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+    initial_children = client.repository.list_child_orders(runtime_id, active_only=False)
+    conflicting_requests = list(requests)
+    conflicting_requests[0] = replace(
+        conflicting_requests[0],
+        metadata={
+            **dict(conflicting_requests[0].metadata),
+            "execution_plan_intent_id": "intent_conflicting_alias",
+        },
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._upsert_event_loop_batch_record(
+            batch_id=batch.batch_id,
+            requests=tuple(conflicting_requests),
+            results=results,
+            runtime_evidence=client.evidence_for_runtime(runtime_id, source="unit_test_request_alias_conflict"),
+            source="unit_test_request_alias_conflict",
+        )
+
+    context = exc_info.value.context
+    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT"
+    assert context["stage"] == "MINIQMT_EVENT_LOOP_BATCH_PERSIST"
+    assert context["qmt_batch_id"] == batch.batch_id
+    assert context["conflict_field"] == "request.metadata.parent_intent_id"
+    assert context["request_identity_aliases"] == {
+        "runtime_parent_intent_id": requests[0].metadata["runtime_parent_intent_id"],
+        "execution_plan_intent_id": "intent_conflicting_alias",
+    }
+    json.dumps(context, sort_keys=True)
+    assert qmt_repo.get_order_batch(batch.batch_id) == batch
+    assert client.repository.list_child_orders(runtime_id, active_only=False) == initial_children
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+def test_event_loop_batch_persist_reuses_durable_reader_schema_before_repository_upsert() -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    results = list(miniqmt_runtime_client._event_loop_results_from_batch(batch, requests=requests))
+    results[0] = replace(
+        results[0],
+        preflight=replace(results[0].preflight, allowed="true"),
+    )
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client._upsert_event_loop_batch_record(
+            batch_id=batch.batch_id,
+            requests=tuple(requests),
+            results=tuple(results),
+            runtime_evidence=client.evidence_for_runtime(runtime_id, source="unit_test_write_read_schema_parity"),
+            source="unit_test_write_read_schema_parity",
+        )
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_DURABLE_BATCH_SCHEMA_INVALID"
+    assert exc_info.value.context["field_path"] == "result_json.results[0].preflight"
+    json.dumps(exc_info.value.context, sort_keys=True)
+    assert qmt_repo.get_order_batch(batch.batch_id) == batch
+    assert len(qmt_client.place_order_calls) == initial_broker_calls
+
+
+@pytest.mark.parametrize(
+    ("carrier", "allowed", "error_code", "broker_called", "broker_message"),
+    [
+        ("pending", True, None, False, "event_loop algo dispatched and running; child order pending tick trigger"),
+        ("preflight_failure", False, "RISK_REJECTED", False, "preflight rejected before broker call"),
+        ("dependent_buy_deferred", False, "SELL_PROCEEDS_REQUIRED", False, "dependent buy deferred"),
+        ("capacity_residual", False, "SKIPPED_INSUFFICIENT_CAPITAL", False, "capacity residual skipped"),
+        ("broker_rejection", True, None, True, "broker rejected child order"),
+    ],
+)
+def test_event_loop_batch_persist_and_readback_preserve_legal_non_success_carriers(
+    carrier: str,
+    allowed: bool,
+    error_code: str | None,
+    broker_called: bool,
+    broker_message: str,
+) -> None:
+    client, qmt_repo, qmt_client, batch, requests, initial_broker_calls = _durable_event_loop_batch_fixture()
+    results = list(miniqmt_runtime_client._event_loop_results_from_batch(batch, requests=requests))
+    errors = (
+        (OrderPreflightError(code=error_code, message=broker_message, context={"carrier": carrier}),)
+        if error_code is not None
+        else ()
+    )
+    results[0] = replace(
+        results[0],
+        success=False,
+        qmt_order_id=None,
+        broker_message=broker_message,
+        preflight=replace(results[0].preflight, allowed=allowed, errors=errors),
+        broker_called=broker_called,
+    )
+    runtime_id = batch.result_json["runtime_evidence"]["runtime_id"]
+
+    client._upsert_event_loop_batch_record(
+        batch_id=batch.batch_id,
+        requests=tuple(requests),
+        results=tuple(results),
+        runtime_evidence=client.evidence_for_runtime(runtime_id, source=f"unit_test_{carrier}"),
+        source=f"unit_test_{carrier}",
+    )
+
+    stored = qmt_repo.get_order_batch(batch.batch_id)
+    assert stored is not None
+    replayed = miniqmt_runtime_client._event_loop_results_from_batch(stored, requests=requests)
+    assert replayed[0].success is False
+    assert replayed[0].qmt_order_id is None
+    assert replayed[0].broker_called is broker_called
+    assert replayed[0].preflight.allowed is allowed
+    json.dumps(stored.result_json, sort_keys=True)
     assert len(qmt_client.place_order_calls) == initial_broker_calls
 
 
