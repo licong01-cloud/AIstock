@@ -3,8 +3,8 @@
 - 文档类型：F2 跨模块架构与实现级详细设计
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / QE UI
 - 日期：2026-07-18
-- 状态：`P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_SOURCE_IMPLEMENTED_VERIFIED_MERGE_RUNTIME_PENDING`
-- 审计修订：P0-1/P0-2 源码、DDL、AIstock 与 RD-Agent 部署、服务重启和 QE-only canary 已完成并验证。P0-3/P0-4 从属设计和源码已在隔离 worktree 实现：规范 QE route、正式多场景创建器、child/attempt grid、durable event cursor/SSE、日志/命令/Archive/恢复证据分区及旧 URL 映射均已通过源码级验证，当前等待提交合入与运行时部署；不新增设计合入、编码审批或研究门禁
+- 状态：`P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_MERGED_VERIFIED_RUNTIME_PENDING`
+- 审计修订：P0-1/P0-2 源码、DDL、AIstock 与 RD-Agent 部署、服务重启和 QE-only canary 已完成并验证。P0-3/P0-4 的规范 QE route、正式多场景创建器、child/attempt grid、durable event cursor/SSE、日志/命令/Archive/恢复证据分区及旧 URL 映射已通过源码级验证，并由 PR #2593 合入 `main`（merge commit `faaad2376ed381618aa66a60aa6d2740a4f42069`）；当前仅等待用户重启 backend/frontend 后执行运行态验收，不新增设计合入、编码审批或研究门禁
 - 用户授权本次设计范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性；不代表用户已逐项批准本文全部实现细节或未来偏差
 - 唯一运行边界：QE-only；不得影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行语义或其他非 QE 模块
 - 设计约束：遵循 `DESIGN-COMPLIANCE-001` 四项约束，基于现有架构增量开发，不另建“多 Alpha v2”
@@ -87,7 +87,7 @@ P0-2 的实现级从属设计为 `docs/architecture/multi_alpha_p0_2_control_rec
 - 后端重启后明确展示 `reconciling`、远端状态核对结果和是否重新接管。
 - 复用 `LogsPanel`、`LoopDetailPanel`、`EvolutionTrajectory`、`CombineDiagnosticsPanel` 和现有 adapter。
 
-P0-3/P0-4 的实现级从属设计为 `docs/architecture/multi_alpha_p0_3_p0_4_shared_qe_ui_f2_design_20260722.md`。截至 2026-07-22，规范 route、共享 shell、完整 request/multi-scenario composer、run-scoped child/attempt 投影、类型安全排序筛选、durable event cursor/SSE、P0-2 动作连接与证据分区均已完成源码实现和定向验证；尚未提交合入或部署运行时。
+P0-3/P0-4 的实现级从属设计为 `docs/architecture/multi_alpha_p0_3_p0_4_shared_qe_ui_f2_design_20260722.md`。截至 2026-07-22，规范 route、共享 shell、完整 request/multi-scenario composer、run-scoped child/attempt 投影、类型安全排序筛选、durable event cursor/SSE、P0-2 动作连接与证据分区均已完成源码实现和定向验证，并由 PR #2593 合入 `main`；运行态将在用户重启 backend/frontend 后验收。
 
 ## 3. Non-Goals / 非目标
 
@@ -1057,10 +1057,10 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-207 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：command/delivery、pause/resume/cancel/reconcile、typed kill receipt、durable stop/API/UI/MCP | `backend/tests/multi_alpha/test_durable_control.py`；`F:/Dev/RD-Agent-main/test/app/test_qe_evolution_kill_receipt.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | 无 |
 | F-208 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：狭义 results-only reference append、atomic successor、四种 disposition、reference/derived result、内容身份闭包和三种 retry mode | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/qe_archive/test_multi_alpha_recovery_archive.py` | DESIGN_READY | 无 |
 | F-209 | child result persistence、`not_computable` 和普通 deterministic aggregate rules 已由 P0-1B 实现；operator-cancel、`not_recovered/partial_recovered` 聚合扩展由 P0-2 设计覆盖 | `backend/tests/multi_alpha/test_durable_parent_finalization.py`；`backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_retry.py` | P0_1B_MERGED_VERIFIED_P0_2_DESIGN_READY | 无 |
-| F-210 | `durable_repository.py` atomic state/event transaction + event cursor/SSE/log adapter | `backend/tests/multi_alpha/test_durable_repository.py::test_event_failure_rolls_back_the_state_transition`；`backend/tests/multi_alpha/test_durable_router.py`；`frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | P0_4_SOURCE_IMPLEMENTED_VERIFIED | 无 |
-| F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts`; committed golden PNG | P0_3_SOURCE_IMPLEMENTED_VERIFIED | 无 |
-| F-212 | multi-alpha full request + multi-scenario create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | P0_3_SOURCE_IMPLEMENTED_VERIFIED | 无 |
-| F-213 | run-scoped child/attempt grid + runtime actions/events | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts`; `frontend/tests/multi-alpha-combine-backtest.spec.ts` | P0_4_SOURCE_IMPLEMENTED_VERIFIED | 无 |
+| F-210 | `durable_repository.py` atomic state/event transaction + event cursor/SSE/log adapter | `backend/tests/multi_alpha/test_durable_repository.py::test_event_failure_rolls_back_the_state_transition`；`backend/tests/multi_alpha/test_durable_router.py`；`frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | P0_4_MERGED_VERIFIED | 无 |
+| F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts`; committed golden PNG | P0_3_MERGED_VERIFIED | 无 |
+| F-212 | multi-alpha full request + multi-scenario create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | P0_3_MERGED_VERIFIED | 无 |
+| F-213 | run-scoped child/attempt grid + runtime actions/events | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts`; `frontend/tests/multi-alpha-combine-backtest.spec.ts` | P0_4_MERGED_VERIFIED | 无 |
 | F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py`；只扫描 `legacy_backfill`/未绑定历史 run，技术失败与数学不可计算分别映射为 `failed`/`not_computable` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason`；生产 12 task/41 run/138 child readback | P0_1A_PRODUCTION_VERIFIED | 无 |
 | F-215 | existing combiner/pred-backtest result parity + post-terminal Archive visibility/retry；P0-2 v2 继续补 cancelled/partial_recovered recovery snapshot | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | P0_1B_MERGED_VERIFIED_P0_2_DESIGN_READY | 无 |
 | F-216 | P0-1A durable schema 与 P0-1B `infra.qe_execution_reservation` 均保持 QE multi-alpha scoped，生产 preflight 已通过 | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped`; reservation schema tests；生产 preflight receipts | P0_1B_PRODUCTION_VERIFIED | 无 |
@@ -1072,7 +1072,7 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 ### 25.1 Rollout 顺序
 
 1. P0-1A/P0-1B 与 P0-2 源码、DDL、AIstock/RD-Agent 部署、重启和 canary 已完成并验证。
-2. P0-3/P0-4 从属设计、源码与定向验证已完成；下一步完成代码审核、PR/合入、根目录同步和安全清理。
+2. P0-3/P0-4 从属设计、源码、定向验证、PR #2593 合入、根目录同步和任务分支/worktree 清理已完成。
 3. 本阶段无新 DDL/依赖。源码部署后需要用户执行后端与前端运行时重启，再验证 canonical/legacy route、event SSE、child grid、创建器和 backend restart readback。
 4. 失败或缺失证据继续用于修复、补取和交叉分析，不淘汰研究方向。
 
@@ -1087,13 +1087,13 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 | 项目 | 当前状态 |
 |---|---|
-| design | `P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_SOURCE_IMPLEMENTED_VERIFIED_MERGE_RUNTIME_PENDING`；P0-2 从属设计 PR #2535 与 P0-3/P0-4 从属设计均保持 QE-only、无科研审批状态 |
-| source code | P0-1A PR #2464、P0-1B AIstock PR #2509、P0-2 AIstock PR #2580 / RD-Agent PR #6 均已合入；P0-3/P0-4 源码已在隔离 worktree 实现并通过后端、TypeScript、Playwright、Next build 与 F2 validator，等待提交/合入 |
+| design | `P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_MERGED_VERIFIED_RUNTIME_PENDING`；P0-2 从属设计 PR #2535 与 P0-3/P0-4 从属设计均保持 QE-only、无科研审批状态 |
+| source code | P0-1A PR #2464、P0-1B AIstock PR #2509、P0-2 AIstock PR #2580 / RD-Agent PR #6、P0-3/P0-4 AIstock PR #2593 均已合入；PR #2593 merge commit 为 `faaad2376ed381618aa66a60aa6d2740a4f42069`，后端、TypeScript、Playwright、Next build、F2 validator 与 PR CI 均通过 |
 | migration | P0-1A、P0-1B 与 P0-2 migrations 均已对 DEV/生产应用并通过 SQL/application preflight；P0-3/P0-4 无 schema 变化 |
 | P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等且不扫描 first-class run、技术失败/不可计算分类准确、8 worker 单一 claim、event 失败整事务回滚、lease 过期 owner 在重新 claim 前被拒绝且新 owner claim 后 stale fencing 被拒绝、schema 类型/约束/索引/注释缺失均 fail-loud |
 | BUG-767 | PR #2464 / close-sync PR #2467 已合入，GitHub issue #2459 已关闭；BUG JSON 的 `production_ddl_gate` 仍需后续元数据 close-sync，不影响已验证的生产 schema 事实 |
 | production DB | 已创建 durable schema；历史回填 12 task、41/41 run、138 child（59 scheme、79 LOO），attempt/event 均为 0，保护摘要 `733d48413364658972bbef1be625b205e1eb191c5df8e9e0f2465d3bea4bffa4` 不变，readback 无 mismatch/orphan |
-| backend/frontend runtime | 2026-07-22 用户重启 AIstock backend 后，WSL/远端 QE API 已按授权重启并完成 OpenAPI、typed kill、identity 与历史 readback canary；P0-3/P0-4 尚未部署，未重启 frontend |
+| backend/frontend runtime | 2026-07-22 用户此前已重启 AIstock backend，WSL/远端 QE API 已按授权重启并完成 OpenAPI、typed kill、identity 与历史 readback canary；P0-3/P0-4 源码现已同步到生产 checkout，但 backend/frontend 尚未为 PR #2593 重启，运行态验收待用户重启后执行；WSL/远端 QE API 本批无代码变化，无需再次重启 |
 | QE experiments | 本设计不创建、停止、恢复或修改实验 |
 | non-QE impact | `NONE_REQUIRED` |
 | research gates/approvals | `NONE_ADDED` |
