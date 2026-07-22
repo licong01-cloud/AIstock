@@ -125,6 +125,11 @@ class BacktestDataSource(HMMDataSourceInterface):
         self.repository = repository or HMMDataRepository()
         self._prediction_store_resolver = PredictionStoreArtifactResolver(model_store)
         self._artifact_source_info: dict[str, dict[str, Any]] = {}
+        # Artifacts actually downloaded from the QE workspace during this data
+        # source's lifetime.  A data source instance is scoped to one
+        # preparation/execution run, so this set is the direct evidence that
+        # separates a cold run (downloaded now) from a warm run (cache reuse).
+        self._downloaded_artifact_names: set[str] = set()
 
         # 内存缓存（避免重复加载 pickle）
         self._pred_cache: Optional[pd.DataFrame] = None
@@ -417,6 +422,7 @@ class BacktestDataSource(HMMDataSourceInterface):
             "trust_level": "trusted_computational_input",
             "zero_copy": False,
             "fallback": self.artifact_source_preference == "prediction_store_first",
+            "downloaded_in_run": artifact_name in self._downloaded_artifact_names,
         }
 
     async def _download_artifact(self, artifact_name: str):
@@ -489,6 +495,7 @@ class BacktestDataSource(HMMDataSourceInterface):
                     "remote_quality_status": remote_manifest.quality_status,
                 },
             )
+            self._downloaded_artifact_names.add(artifact_name)
 
         except Exception as e:
             raise DataSourceError(f"Failed to download {artifact_name} from QE workspace: {e}")

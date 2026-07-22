@@ -494,11 +494,13 @@ rules:
       - backend/tests/hmm_evolution/**
       - frontend/src/app/hmm-evolution/**
       - frontend/tests/hmm-evolution/**
+      - scripts/hmm_acceptance/**
+      - scripts/dev_db/seed_hmm_benchmark_reference_20260721.py
     primary_module: hmm.evolution
     impact_modules: [hmm, qe.core]
     layer: research_data_pipeline
     risk_level: high
-    ownership_reason: HMM Evolution is an isolated research state machine with explicit read-only QE inputs and a dedicated backend validation plan.
+    ownership_reason: HMM Evolution is an isolated research state machine with explicit read-only QE inputs and a dedicated backend validation plan; DEV acceptance drivers (benchmark/worker/seeder) share the same validation plan.
   - rule_id: hmm_services
     priority: 75
     include:

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .candidate_artifact import CandidateArtifactResolver
 from .errors import InvalidSpecError
 from .models import (
+    STAGE_MARKET_FREEZE,
+    STAGE_PREPARATION_QUEUE_WAIT,
+    STAGE_QE_SOURCE_LOAD,
+    STAGE_UNIVERSE_RESOLVE,
     BatchStatus,
     BatchItemStatus,
     CandidateLifecycle,
@@ -17,10 +22,22 @@ from .models import (
     EvaluationSpec,
     EvaluationPlan,
     EvaluationStatus,
+    ExecutionPurpose,
     canonical_json_sha256,
+    derive_cache_state,
+    normalize_execution_purpose,
 )
 from .input_adapter import HMMEvaluationInputAdapter
+from .performance_receipt import (
+    StageRecorder,
+    cache_evidence_from_artifact_info,
+    capture_hardware_identity,
+    capture_runtime_identity,
+    evidence_payload,
+)
 from .repository import HMMEvolutionRepository
+
+logger = logging.getLogger(__name__)
 
 
 class HMMEvolutionService:
@@ -147,7 +164,12 @@ class HMMEvolutionService:
         recommendation_version: str,
         created_by: str,
         idempotency_key: str | None = None,
+        execution_purpose: str | ExecutionPurpose | None = None,
+        benchmark_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
+        purpose, normalized_benchmark_id = normalize_execution_purpose(
+            execution_purpose, benchmark_id
+        )
         if not 1 <= len(plans) <= 50:
             raise InvalidSpecError("an HMM evaluation batch must contain 1..50 candidates")
         candidate_ids = [plan.candidate_id for plan in plans]
@@ -186,6 +208,8 @@ class HMMEvolutionService:
                 universe_id=plan.universe_id,
                 universe_hash=plan.universe_hash,
                 topk=plan.evaluation_spec.topk,
+                execution_purpose=purpose.value,
+                benchmark_id=normalized_benchmark_id,
             )
             items.append(
                 {
@@ -195,31 +219,34 @@ class HMMEvolutionService:
                     "item_status": self._item_status(evaluation["status"], created=created),
                 }
             )
-        request_hash = canonical_json_sha256(
-            {
-                "evaluations": sorted(
-                    (
-                        {
-                            "candidate_id": plan.candidate_id,
-                            "candidate_manifest_hash": plan.candidate_manifest_hash,
-                            "logical_evaluation_key": plan.logical_evaluation_key,
-                            "source_manifest_hash": plan.source_manifest_hash,
-                            "evaluation_spec_hash": plan.evaluation_spec_hash,
-                            "evaluator_version": plan.evaluator_version,
-                            "universe_id": plan.universe_id,
-                            "universe_hash": plan.universe_hash,
-                        }
-                        for plan in plans
-                    ),
-                    key=lambda item: (
-                        item["candidate_id"],
-                        item["logical_evaluation_key"],
-                    ),
+        request_identity: dict[str, Any] = {
+            "evaluations": sorted(
+                (
+                    {
+                        "candidate_id": plan.candidate_id,
+                        "candidate_manifest_hash": plan.candidate_manifest_hash,
+                        "logical_evaluation_key": plan.logical_evaluation_key,
+                        "source_manifest_hash": plan.source_manifest_hash,
+                        "evaluation_spec_hash": plan.evaluation_spec_hash,
+                        "evaluator_version": plan.evaluator_version,
+                        "universe_id": plan.universe_id,
+                        "universe_hash": plan.universe_hash,
+                    }
+                    for plan in plans
                 ),
-                "recommendation_spec": dict(recommendation_spec),
-                "recommendation_version": recommendation_version,
-            }
-        )
+                key=lambda item: (
+                    item["candidate_id"],
+                    item["logical_evaluation_key"],
+                ),
+            ),
+            "recommendation_spec": dict(recommendation_spec),
+            "recommendation_version": recommendation_version,
+        }
+        if purpose is ExecutionPurpose.BENCHMARK:
+            # Keep normal request hashes byte-identical to pre-v3 submissions.
+            request_identity["execution_purpose"] = purpose.value
+            request_identity["benchmark_id"] = normalized_benchmark_id
+        request_hash = canonical_json_sha256(request_identity)
         return self._repository.create_or_get_batch(
             request_hash=request_hash,
             items=items,
@@ -227,6 +254,8 @@ class HMMEvolutionService:
             recommendation_version=recommendation_version,
             created_by=created_by,
             idempotency_key=idempotency_key,
+            execution_purpose=purpose.value,
+            benchmark_id=normalized_benchmark_id,
         )
 
     async def prepare_and_create_batch(
@@ -238,6 +267,8 @@ class HMMEvolutionService:
         recommendation_version: str,
         created_by: str,
         idempotency_key: str | None = None,
+        execution_purpose: str | ExecutionPurpose | None = None,
+        benchmark_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if self._input_adapter is None:
             raise InvalidSpecError("HMM evaluation input adapter is not configured")
@@ -260,6 +291,8 @@ class HMMEvolutionService:
             recommendation_version=recommendation_version,
             created_by=created_by,
             idempotency_key=idempotency_key,
+            execution_purpose=execution_purpose,
+            benchmark_id=benchmark_id,
         )
 
     def submit_batch(
@@ -271,9 +304,14 @@ class HMMEvolutionService:
         recommendation_version: str,
         created_by: str,
         idempotency_key: str | None = None,
+        execution_purpose: str | ExecutionPurpose | None = None,
+        benchmark_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist a durable receipt without loading QE or market artifacts."""
 
+        purpose, normalized_benchmark_id = normalize_execution_purpose(
+            execution_purpose, benchmark_id
+        )
         normalized_ids = [str(candidate_id or "").strip() for candidate_id in candidate_ids]
         if not 1 <= len(normalized_ids) <= 50:
             raise InvalidSpecError("an HMM evaluation batch must contain 1..50 candidates")
@@ -302,6 +340,12 @@ class HMMEvolutionService:
             "recommendation_version": recommendation_version,
             "created_by": actor,
         }
+        if purpose is ExecutionPurpose.BENCHMARK:
+            # Normal submissions hash identically to pre-v3 so idempotency and
+            # shared-evaluation semantics stay unchanged; only benchmark
+            # submissions carry purpose identity in the durable request hash.
+            request_payload["execution_purpose"] = purpose.value
+            request_payload["benchmark_id"] = normalized_benchmark_id
         request_hash = canonical_json_sha256(request_payload)
         return self._repository.create_or_get_submission(
             request_hash=request_hash,
@@ -311,6 +355,8 @@ class HMMEvolutionService:
             recommendation_version=recommendation_version,
             created_by=actor,
             idempotency_key=idempotency_key,
+            execution_purpose=purpose.value,
+            benchmark_id=normalized_benchmark_id,
         )
 
     async def prepare_claimed_submission(
@@ -344,6 +390,19 @@ class HMMEvolutionService:
             raise InvalidSpecError("batch submission candidate_ids are invalid")
         evaluation_spec = EvaluationSpec.model_validate(payload.get("evaluation_spec"))
         current = dict(batch)
+        receipt = self._ensure_batch_receipt(current, owner_id=owner_id)
+        recorder = StageRecorder()
+        if current.get("created_at") is not None and current.get("started_at") is not None:
+            recorder.record(
+                STAGE_PREPARATION_QUEUE_WAIT,
+                started_at=current["created_at"],
+                completed_at=current["started_at"],
+            )
+            receipt = self._repository.merge_performance_receipt_progress(
+                receipt_id=str(receipt["receipt_id"]),
+                expected_row_version=int(receipt["row_version"]),
+                stage_timings=recorder.stage_payload(),
+            )
 
         def checkpoint(_phase: str) -> None:
             nonlocal current
@@ -354,23 +413,103 @@ class HMMEvolutionService:
                 expected_row_version=int(current["row_version"]),
                 lease_seconds=lease_seconds,
             )
+            if _phase == "before_shared_source_inputs":
+                recorder.start(STAGE_QE_SOURCE_LOAD)
+            elif _phase == "after_shared_source_inputs":
+                if recorder.is_open(STAGE_QE_SOURCE_LOAD):
+                    recorder.end(STAGE_QE_SOURCE_LOAD)
+                recorder.start(STAGE_UNIVERSE_RESOLVE)
+            elif _phase == "after_universe_resolution":
+                if recorder.is_open(STAGE_UNIVERSE_RESOLVE):
+                    recorder.end(STAGE_UNIVERSE_RESOLVE)
+            elif _phase == "before_market_watermark":
+                recorder.start(STAGE_MARKET_FREEZE)
+            elif _phase == "after_market_returns":
+                if recorder.is_open(STAGE_MARKET_FREEZE):
+                    recorder.end(STAGE_MARKET_FREEZE)
 
-        candidates = await asyncio.to_thread(
-            lambda: [self._repository.get_candidate(candidate_id) for candidate_id in normalized_ids]
+        try:
+            candidates = await asyncio.to_thread(
+                lambda: [self._repository.get_candidate(candidate_id) for candidate_id in normalized_ids]
+            )
+            checkpoint("after_candidate_validation")
+            prepared = await self._input_adapter.prepare_batch(
+                candidates=candidates,
+                evaluation_spec=evaluation_spec,
+                checkpoint=checkpoint,
+            )
+            materialized = await asyncio.to_thread(
+                self._repository.materialize_prepared_batch,
+                batch_id=str(current["batch_id"]),
+                plans=prepared.plans,
+                owner_id=owner_id,
+                fencing_token=int(current["fencing_token"]),
+                expected_row_version=int(current["row_version"]),
+            )
+        except BaseException:
+            try:
+                self._merge_batch_receipt_progress(
+                    receipt=receipt,
+                    recorder=recorder,
+                    artifact_source_info=None,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to merge partial batch receipt batch_id=%s receipt_id=%s",
+                    current.get("batch_id"),
+                    receipt.get("receipt_id"),
+                )
+            raise
+        self._merge_batch_receipt_progress(
+            receipt=receipt,
+            recorder=recorder,
+            artifact_source_info=prepared.artifact_source_info,
         )
-        checkpoint("after_candidate_validation")
-        prepared = await self._input_adapter.prepare_batch(
-            candidates=candidates,
-            evaluation_spec=evaluation_spec,
-            checkpoint=checkpoint,
+        return materialized
+
+    def _ensure_batch_receipt(
+        self,
+        batch: Mapping[str, Any],
+        *,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        receipt, _created = self._repository.create_performance_receipt(
+            receipt_level="batch",
+            batch_id=str(batch["batch_id"]),
+            eval_id=None,
+            execution_purpose=str(
+                batch.get("execution_purpose") or ExecutionPurpose.EVALUATION.value
+            ),
+            benchmark_id=str(batch["benchmark_id"]) if batch.get("benchmark_id") else None,
+            runtime_identity=capture_runtime_identity(
+                owner_id=owner_id, role="preparation_worker"
+            ),
+            hardware_identity=capture_hardware_identity(),
+            input_identity={
+                "request_hash": str(batch["request_hash"]),
+                "candidate_count": int(batch["candidate_count"]),
+            },
         )
-        return await asyncio.to_thread(
-            self._repository.materialize_prepared_batch,
-            batch_id=str(current["batch_id"]),
-            plans=prepared.plans,
-            owner_id=owner_id,
-            fencing_token=int(current["fencing_token"]),
-            expected_row_version=int(current["row_version"]),
+        return receipt
+
+    def _merge_batch_receipt_progress(
+        self,
+        *,
+        receipt: Mapping[str, Any],
+        recorder: StageRecorder,
+        artifact_source_info: Mapping[str, Mapping[str, Any]] | None,
+    ) -> None:
+        evidence = (
+            cache_evidence_from_artifact_info(artifact_source_info)
+            if artifact_source_info
+            else ()
+        )
+        self._repository.merge_performance_receipt_progress(
+            receipt_id=str(receipt["receipt_id"]),
+            expected_row_version=int(receipt["row_version"]),
+            stage_timings=recorder.stage_payload(),
+            cache_evidence=evidence_payload(evidence) if evidence else None,
+            cache_state=derive_cache_state(evidence).value if evidence else None,
         )
 
     def retry_failed_batch(

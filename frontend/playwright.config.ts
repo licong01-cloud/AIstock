@@ -42,6 +42,10 @@ export default defineConfig({
       NEXT_DEV_PORT: frontendPort,
       NEXT_DIST_DIR: `.next-dev-${frontendPort}`,
       NEXT_PUBLIC_API_BASE: nextPublicApiBase,
+      // Sidebar 告警轮询使用 NEXT_PUBLIC_TDX_BACKEND_BASE；不覆盖时 .env.local
+      // 的生产值会胜出并向 8001 发请求（真实验收守卫会因此失败）。
+      NEXT_PUBLIC_TDX_BACKEND_BASE:
+        process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || nextPublicApiBase.replace(/\/api\/v1\/?$/, ""),
       PAPER_V2_API_BASE: apiBase,
       PAPER_V2_API_PROXY_TARGET: paperV2ApiProxyTarget,
     },

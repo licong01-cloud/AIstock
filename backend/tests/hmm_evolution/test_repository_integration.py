@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from threading import Lock
 import time
 from typing import Any
@@ -143,6 +143,8 @@ def test_failed_preparation_receipt_can_be_retried_without_fake_items() -> None:
                     "recommendation_spec": {"schema_version": "hmm_recommendation_spec_v1"},
                     "recommendation_spec_hash": "b" * 64,
                     "recommendation_version": "hmm_recommendation_v1",
+                    "execution_purpose": "evaluation",
+                    "benchmark_id": None,
                 },
             },
             {"contains": "SELECT COUNT(*) AS item_count", "one": {"item_count": 0}},
@@ -546,6 +548,7 @@ class _ConcurrentRepository:
         self.eval_versions = {"eval-1": 1, "eval-2": 1, "eval-3": 1}
         self.pending = ["eval-1", "eval-2", "eval-3"]
         self.finalize_args: dict[str, Any] | None = None
+        self.receipt_versions: dict[str, int] = {}
         self.lock = Lock()
 
     def mark_expired_leases_timed_out(self):
@@ -563,6 +566,10 @@ class _ConcurrentRepository:
             "fencing_token": 5,
             "row_version": self.batch_version,
             "status": "running",
+            "request_hash": "d" * 64,
+            "candidate_count": 3,
+            "execution_purpose": "evaluation",
+            "benchmark_id": None,
         }
 
     def claim_evaluation(self, **_kwargs):
@@ -574,6 +581,43 @@ class _ConcurrentRepository:
             "candidate_id": f"candidate-{eval_id}",
             "fencing_token": 7,
             "row_version": self.eval_versions[eval_id],
+            "logical_evaluation_key": f"logical-{eval_id}",
+            "candidate_manifest_hash": "e" * 64,
+            "source_manifest_hash": "f" * 64,
+            "evaluation_spec_hash": "0" * 64,
+            "evaluator_version": "acceptance_v1",
+            "input_hash": "1" * 64,
+            "universe_hash": "2" * 64,
+            "run_generation": 1,
+        }
+
+    def create_performance_receipt(self, **kwargs):
+        receipt_id = f"hmpr_{kwargs.get('eval_id') or kwargs['batch_id']}"
+        self.receipt_versions[receipt_id] = 1
+        return {"receipt_id": receipt_id, "row_version": 1}, True
+
+    def merge_performance_receipt_progress(self, **kwargs):
+        receipt_id = kwargs["receipt_id"]
+        self.receipt_versions[receipt_id] = self.receipt_versions[receipt_id] + 1
+        return {"receipt_id": receipt_id, "row_version": self.receipt_versions[receipt_id]}
+
+    def finalize_performance_receipt(self, **kwargs):
+        receipt_id = kwargs["receipt_id"]
+        self.receipt_versions[receipt_id] = self.receipt_versions[receipt_id] + 1
+        return {
+            "receipt_id": receipt_id,
+            "row_version": self.receipt_versions[receipt_id],
+            "receipt_status": "final",
+        }
+
+    def get_evaluation(self, eval_id: str):
+        queued_at = datetime(2026, 7, 21, 1, 0, 0, tzinfo=timezone.utc)
+        return {
+            "eval_id": eval_id,
+            "status": "succeeded",
+            "queued_at": queued_at,
+            "completed_at": queued_at + timedelta(seconds=2),
+            "result_hash": "3" * 64,
         }
 
     def heartbeat_batch(self, **kwargs):
@@ -616,6 +660,7 @@ class _ConcurrentExecutor:
         return BatchExecutionInputs(
             inputs_by_eval_id={item["eval_id"]: object() for item in kwargs["evaluations"]},
             errors_by_eval_id={},
+            artifact_source_info={},
         )
 
     def execute_and_finalize(self, **kwargs):

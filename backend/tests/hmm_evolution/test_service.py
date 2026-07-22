@@ -147,6 +147,15 @@ class _MultiRepository(_Repository):
             "row_version": self.heartbeat_version,
         }
 
+    def create_performance_receipt(self, **kwargs):
+        return {"receipt_id": f"hmpr_{kwargs['batch_id']}", "row_version": 1}, True
+
+    def merge_performance_receipt_progress(self, **kwargs):
+        return {
+            "receipt_id": kwargs["receipt_id"],
+            "row_version": kwargs["expected_row_version"] + 1,
+        }
+
     def materialize_prepared_batch(self, **kwargs):
         self.materialized = kwargs
         return {"batch_id": kwargs["batch_id"], "status": "queued"}
@@ -360,7 +369,10 @@ def test_worker_preparation_materializes_claimed_receipt_after_heartbeats() -> N
             assert [item.candidate_id for item in candidates] == [candidate.candidate_id]
             if checkpoint:
                 checkpoint("before-freeze")
-            return SimpleNamespace(plans=(_plan(candidate, topk=evaluation_spec.topk),))
+            return SimpleNamespace(
+                plans=(_plan(candidate, topk=evaluation_spec.topk),),
+                artifact_source_info={},
+            )
 
     service = HMMEvolutionService(repository, input_adapter=_InputAdapter())  # type: ignore[arg-type]
     result = asyncio.run(
@@ -370,6 +382,8 @@ def test_worker_preparation_materializes_claimed_receipt_after_heartbeats() -> N
                 "status": "preparing",
                 "fencing_token": 3,
                 "row_version": 2,
+                "request_hash": "c" * 64,
+                "candidate_count": 1,
                 "request_payload": {
                     "schema_version": "hmm_batch_submission_v1",
                     "candidate_ids": [candidate.candidate_id],

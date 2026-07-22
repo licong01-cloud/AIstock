@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
@@ -64,6 +65,7 @@ class PreparedBatchInputs:
     market_returns: pd.DataFrame | None
     market_watermark: MarketWatermark | None
     market_read: MarketReturnRead | None
+    artifact_source_info: Mapping[str, Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,7 @@ class BatchExecutionInputs:
 
     inputs_by_eval_id: Mapping[str, EvaluationExecutionInputs]
     errors_by_eval_id: Mapping[str, HMMEvolutionError]
+    artifact_source_info: Mapping[str, Mapping[str, Any]]
 
 
 class HMMEvaluationInputAdapter:
@@ -266,6 +269,7 @@ class HMMEvaluationInputAdapter:
             market_returns=market_returns,
             market_watermark=market_watermark,
             market_read=market_read,
+            artifact_source_info=artifact_source_info,
         )
 
     async def load_evaluation(
@@ -562,13 +566,18 @@ class HMMEvaluationInputAdapter:
                 if eval_id in resolved_coefficients
             },
             errors_by_eval_id=coefficient_errors,
+            artifact_source_info=current_source_info,
         )
 
     @staticmethod
     def _default_source_factory(spec: EvaluationSpec, preference: str) -> Phase0BacktestSource:
+        cache_dir = os.getenv("HMM_EVOLUTION_ARTIFACT_CACHE_DIR", "").strip()
+        if not cache_dir:
+            cache_dir = "tmp/hmm_evolution_cache/"
         return BacktestDataSource(
             base_loop_ref=spec.base_loop_ref,
             label_horizon_days=spec.label_horizon_days,
+            cache_dir=cache_dir,
             artifact_source_preference=preference,
         )
 
