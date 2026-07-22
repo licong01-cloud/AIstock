@@ -9,7 +9,7 @@ from backend.services import sector_data_builder as module
 
 
 class _Cursor:
-    def __init__(self, preflight=(0, 0, 0, 0), build_rows=7):
+    def __init__(self, preflight=(0, 0, 0, 0, 0, 0), build_rows=7):
         self.preflight = preflight
         self.build_rows = build_rows
         self.executed = []
@@ -47,7 +47,7 @@ class _Connection:
         self.commits += 1
 
 
-def test_build_date_persists_exact_pit_identity_and_removes_stale_rows(monkeypatch):
+def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(monkeypatch):
     cursor = _Cursor()
     connection = _Connection(cursor)
     monkeypatch.setattr(module, "get_conn", lambda: connection)
@@ -61,18 +61,29 @@ def test_build_date_persists_exact_pit_identity_and_removes_stale_rows(monkeypat
         module._DELETE_STALE_DAY_SQL,
         module._BUILD_DAY_SQL,
     ]
-    assert "l1_code, l2_code, mapping_in_date" in module._BUILD_DAY_SQL
-    assert "l1_code             = EXCLUDED.l1_code" in module._BUILD_DAY_SQL
+    for _, params in cursor.executed:
+        assert params == {
+            "trade_date": dt.date(2026, 7, 22),
+            "live_universe_key": module.DEFAULT_ST_PIT_UNIVERSE_KEY,
+            "qe_universe_pattern": f"{module.IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+        }
+    assert "market.stock_universe_pit_spans" in module._BUILD_DAY_SQL
+    assert "JOIN authoritative_universes USING (universe_key)" in module._BUILD_DAY_SQL
+    assert "market.sw_index_member" in module._BUILD_DAY_SQL
+    assert "l1_code, l2_code, mapping_in_date" not in module._BUILD_DAY_SQL
+    assert "mapping_in_date     = EXCLUDED.mapping_in_date" not in module._BUILD_DAY_SQL
     assert "DISTINCT ON" not in module._BUILD_DAY_SQL
 
 
 @pytest.mark.parametrize(
     ("preflight", "message"),
     [
-        ((1, 0, 0, 0), "ambiguous_latest_mappings=1"),
-        ((0, 1, 0, 0), "invalid_mapping_identities=1"),
-        ((0, 0, 1, 0), "missing_sw_daily_facts=1"),
-        ((0, 0, 0, 1), "missing_l2_moneyflow_facts=1"),
+        ((1, 0, 0, 0, 0, 0), "universe_not_ready=1"),
+        ((0, 1, 0, 0, 0, 0), "missing_pit_mappings=1"),
+        ((0, 0, 1, 0, 0, 0), "ambiguous_latest_mappings=1"),
+        ((0, 0, 0, 1, 0, 0), "invalid_mapping_identities=1"),
+        ((0, 0, 0, 0, 1, 0), "missing_sw_daily_facts=1"),
+        ((0, 0, 0, 0, 0, 1), "missing_l2_moneyflow_facts=1"),
     ],
 )
 def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message):
@@ -87,19 +98,17 @@ def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message
     assert [sql for sql, _ in cursor.executed] == [module._PREFLIGHT_DAY_SQL]
 
 
-def test_schema_and_migration_keep_identity_contract_aligned():
+def test_schema_and_retirement_keep_sector_data_fact_only():
     root = Path(__file__).resolve().parents[3]
     schema = (root / "scripts/create_sw_sector_tables.py").read_text(encoding="utf-8")
-    migration = (
-        root / "backend/db/migrations/sector_data_pit_identity_v1.sql"
+    retirement = (
+        root / "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql"
     ).read_text(encoding="utf-8")
 
     for column in ("l1_code", "l2_code", "mapping_in_date"):
-        assert column in schema
-        assert f"ADD COLUMN IF NOT EXISTS {column}" in migration
-        assert f"ALTER COLUMN {column} SET NOT NULL" in migration
+        assert f"{column}              TEXT" not in schema
+        assert f"DROP COLUMN IF EXISTS {column}" in retirement
 
-    assert "SECTOR_DATA_PIT_IDENTITY_BACKFILL_INCOMPLETE" in migration
-    assert "SECTOR_DATA_PERSISTED_L2_FACT_INCOMPLETE_OR_CONFLICTING" in migration
-    assert "IS NOT DISTINCT FROM candidate.close" in migration
-    assert "COUNT(DISTINCT sw2_mf_net_vol) > 1" in migration
+    assert not (root / "backend/db/migrations/sector_data_pit_identity_v1.sql").exists()
+    assert "SECTOR_DATA_PERSISTED_PIT_IDENTITY_RETIREMENT_INCOMPLETE" in retirement
+    assert "resolve industry identity dynamically from sw_index_member" in retirement
