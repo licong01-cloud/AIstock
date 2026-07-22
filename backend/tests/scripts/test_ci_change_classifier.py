@@ -206,6 +206,26 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert simulation_payload["unmapped_code_files"] == []
 
 
+def test_sector_data_materialization_files_select_only_local_data_plan(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/sector_data_builder.py",
+            "scripts/create_sw_sector_tables.py",
+            "backend/db/migrations/sector_data_pit_identity_v1.sql",
+            "backend/tests/services/test_sector_data_builder.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_plan_keys"] == ["l0", "data_sync_autonomy_backend"]
+    assert payload["backend_sessions"] == ["data_sync_autonomy_backend"]
+    assert payload["catalog_impacted_modules"] == ["local_data"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

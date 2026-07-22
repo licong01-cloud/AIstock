@@ -528,6 +528,18 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: local_data_sector_data_materialization
+    priority: 95
+    include:
+      - backend/services/sector_data_builder.py
+      - scripts/create_sw_sector_tables.py
+      - backend/db/migrations/sector_data_pit_identity_*.sql
+      - backend/tests/services/test_sector_data_builder.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The sector_data builder, schema, PIT identity migration, and direct contract test form one local_data materialization boundary and must select the same focused plan.
   - rule_id: local_data_pipeline
     priority: 70
     include:
