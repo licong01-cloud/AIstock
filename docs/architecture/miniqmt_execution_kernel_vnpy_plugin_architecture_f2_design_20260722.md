@@ -6,6 +6,8 @@
 >
 > 文档状态：`design_ready`。本文完成可直接拆分实施的架构、schema、事务、迁移、测试和验收设计；不表示源代码、DDL、生产配置、服务重启或真实 SIM 已完成。
 >
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1 implementation 仍为 `not_started`。
+>
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
@@ -177,36 +179,46 @@ CI 必须用 import-boundary test 和 static guard 固定上述方向。
   "plugin_version": "2.0.0",
   "provider": "AISTOCK_DERIVED|VNPY_COMPAT",
   "implementation_ref": "python.module:ClassName",
+  "config_schema_version": "sniper_config_v2",
   "config_schema": {},
+  "config_schema_sha256": "sha256 of the strict config schema",
   "state_schema_version": "sniper_state_v2",
-  "subscribed_event_types": ["TICK", "ORDER", "TRADE", "SESSION", "EOD"],
+  "state_schema": {},
+  "state_schema_sha256": "sha256 of the complete durable state schema",
+  "subscribed_event_types": ["ALGO_START", "EOD", "ORDER", "SESSION", "TICK", "TRADE"],
   "market_data_requirements": [
     {
       "capability": "L1_BID",
+      "required_fields": ["price", "volume"],
+      "applicable_sides": ["SELL"],
       "event_types": ["TICK"],
-      "session_phases": ["CONTINUOUS"],
+      "session_phases": ["CONTINUOUS_AM", "CONTINUOUS_PM"],
       "absence_disposition": "WAIT_FOR_NEXT_VALID_EVENT"
     }
   ],
-  "required_facade_methods": ["send_order", "cancel_order", "get_tick", "get_contract"],
+  "required_facade_methods": ["cancel_order", "get_contract", "get_tick", "send_order"],
   "required_facade_object_fields": {},
   "supported_sides": ["BUY", "SELL"],
   "supported_order_types": ["LIMIT"],
   "supported_broker_backends": ["minqmt_sim"],
   "restart_policy": "DURABLE_RESTORE",
   "source_attribution": {},
-  "behavior_contract_sha256": "<lowercase sha256>",
-  "manifest_sha256": "<lowercase sha256>"
+  "compatibility_requirement": {},
+  "behavior_characterization_sha256": "sha256 of pinned behavior vectors",
+  "behavior_contract_sha256": "sha256 of the complete behavior closure",
+  "manifest_sha256": "sha256 of every preceding manifest field"
 }
 ```
 
 规则：
 
-- manifest `extra=forbid`，所有集合 canonical sort 后计算 hash；
+- 上述 top-level 字段集是 exact `ExecutionAlgoPluginManifestV2` schema；示例中的空 nested object 和 hash 说明文字只是父蓝图的 schema notation，不是可实例化 manifest value。current-three 的 non-empty config/state/source/compatibility nested schema、类型、枚举、canonical payload 和实际 hash 生成规则由 K1 下位设计固定；下位设计不得增加未同步到本节的 top-level manifest 字段；
+- manifest `extra=forbid`，所有 set-semantics 集合 canonical sort 后计算 hash；`market_data_requirements` 按 requirement hash 排序，effect/order 等业务有序数组不得排序；
 - `plugin_id + plugin_version + behavior_contract_sha256` 不可变；
 - config schema 必须在 algo instance 创建前完整验证，禁止在运行中默认补业务字段；
-- registry 只根据 manifest 构造插件，不允许 kernel 出现具体 algo 分支；
-- 未注册、hash 不一致、capability 不闭合时在创建 algo 前 typed fail loud，`broker_called=false`；
+- code-owned plugin catalog 只根据 manifest descriptor、pinned compatibility receipt 和显式 factory binding 构造，不允许 kernel 出现具体 algo 分支；process-local callable 不进入 canonical snapshot/hash；
+- plugin catalog 构建与 Gateway route capability 分离：schema/hash/source/factory binding 冲突使 catalog build fail loud；某个 plugin 对某个 route capability 不闭合只生成该 plugin/route 的 FAILED compatibility receipt，并在创建该 algo 前 typed fail loud、`broker_called=false`，不得阻止其它已登记 plugin 发布或运行；
+- 多版本登记必须由 catalog 内 hash-covered `creation_bindings[algo_code] -> exact plugin_id/version/manifest_sha256` 决定新实例版本；历史 restore 使用 snapshot frozen key；禁止自动 latest、运行时扫描或具体算法 hard-code；
 - registration 是代码/manifest 技术合同，不是人工审批门禁。
 
 ### 5.2 `RuntimeEventEnvelopeV2`
@@ -331,7 +343,7 @@ class ExecutionAlgoPluginV2(Protocol):
 
 插件及 façade 不得直接调用 `datetime.now()/utcnow()`、wall clock、`uuid4()` 或 process-global random。kernel 提供 `DeterministicExecutionContextV1`：logical time 来自 event/session authority；local order/action identity 由 algo/event/transition/ordinal 派生；需要随机行为的插件使用由 `runtime_id + algo_instance_id + transition_sequence + draw_ordinal` 派生的 deterministic PRNG seed。retry/restart 必须复现相同 draw、temporary order reference 和 effect hash，不能依赖进程内对象缓存。
 
-### 5.6 `MarketDataCapabilityRequestV1` 与 `MarketDataViewV2`
+### 5.6 `MarketDataRequirementV1` 与 `MarketDataViewV2`
 
 插件 manifest 可以声明：
 
@@ -349,7 +361,7 @@ kernel 只从同一 B0 normalized observation 投影 `MarketDataViewV2`。插件
 2. **当前 observation 暂缺**：静态能力已支持，但当前合法 observation 因尚未到达、合法空档或当前 session phase 不提供该字段时，transition 必须持久化 `WAITING_FOR_MARKET_DATA` 与 exact reason/market_data_id/null lineage，保持原 parent/algo 并等待下一真实 event；其它 algo 继续。不得把暂缺升级为永久拒绝、删除 intent 或 fallback。到 `SESSION_CLOSE/EOD` 仍未满足时按原 residual contract 自动终结，不无限等待。
 3. **已提供但非法/冲突**：B0 normalizer/eligibility 在插件前拒绝该 observation 并持久化 typed evidence；algo state 不推进、不形成空 delivery ACK，后续真实合法 observation 仍可继续。runtime/control/identity/hash 冲突属于既有 authority failure，按对应 runtime/symbol failure contract 处理，不能合成或忽略。
 
-manifest 的每项 `market_data_requirements` 必须明确 capability、适用 event/session phase 与唯一 `absence_disposition`；当前仅允许 `WAIT_FOR_NEXT_VALID_EVENT` 或 `TERMINAL_AT_SESSION_BOUNDARY`，二者都由 kernel 自动执行，不允许人工 acknowledge。`AUCTION_NATIVE` 只有 source 明确提供原生 auction payload 时才可满足。禁止从另一侧盘口、last price、minute bar、旧缓存或 timer 合成。
+manifest 的每项 `market_data_requirements` 必须明确 capability、`required_fields`、`applicable_sides`、适用 event/session phase 与唯一 `absence_disposition`。`required_fields` 只检查算法实际消费字段：Sniper 对手盘需要 price+volume，BestLimit/TWAP 只需要所用一侧 price；不得因未消费的 volume 或另一 side 字段暂缺而额外阻断。当前 absence 仅允许 `WAIT_FOR_NEXT_VALID_EVENT` 或 `TERMINAL_AT_SESSION_BOUNDARY`，二者都由 kernel 自动执行，不允许人工 acknowledge。`AUCTION_NATIVE` 只有 source 明确提供原生 auction payload 时才可满足。禁止从另一侧盘口、last price、minute bar、旧缓存或 timer 合成。
 
 ### 5.7 `BrokerCommandV2` 与 `BrokerCommandOutboxV1`
 
@@ -686,6 +698,8 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - generic registry，不修改 runtime 行为；
 - current three manifest 化；
 - `VnpyCompatibilitySurfaceV1` exact signature/object-field receipt、import/static negative tests；
+- 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
+- K1 当前仅 `design_ready`，未实施产品代码、runtime switch、DDL/DML、配置或 broker 行为；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -858,6 +872,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | Iceberg、Stop 只新增插件/manifest/tests即可接入，证明 kernel 不依赖具体算法 |
 | `F-051` | restart/replay、multi-slot、same-symbol、callback concurrency、plugin failure、diagnostics 和 event→delivery→transition→command→broker 完整 identity chain 可重建 |
 | `F-052` | additive migration、route retirement、rollout/rollback、生产 gates 和真实 SIM 验收完整且无人工门禁 |
+| `F-053` | K1 模块/依赖/import boundary 固定，插件不能越权到信号、runtime owner、DB 或 broker |
+| `F-054` | K1 strict DTO、recursive deep immutability、canonical raw-digest/hex hash、identity/type/time/decimal/error evidence writer/readback contract 完整 |
+| `F-055` | K1 route-independent code-owned catalog、serializable descriptor/process callable 分层、creation binding、aggregate build failure 与 per-route compatibility 语义完整 |
+| `F-056` | K1 deterministic logical time、exact keyed ID/effect hash、ordinal、raw-digest u53 random 在 retry/restart 下稳定 |
+| `F-057` | current-three exact manifest/config/state/event/capability/source、TWAP exchange-active seconds 与 legacy config shadow projection 完整且不改变现有 runtime |
+| `F-058` | pinned vn.py source/method/DTO/enum/return/error lock 与 immutable compatibility receipt 精确 |
+| `F-059` | K1 direct/negative/parity/import tests、changed-file test routing 与 coverage 可直接执行 |
+| `F-060` | K1 rollout/rollback、K2-K4 边界、无 fallback/人工门禁/平行 route 与生产状态分离完整 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -873,6 +895,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
+| `F-053` | K1 detailed design §3 target module/dependency/import boundary | target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` | design_ready | none |
+| `F-054` | K1 detailed design §4-§5 strict contracts/recursive FrozenJson/raw-digest+hex codec | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` nested-mutation/canonical/error matrix | design_ready | none |
+| `F-055` | K1 detailed design §7 route-independent catalog、descriptor/process binding、creation binding、aggregate/route receipts | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` route-isolation/zero-partial matrix | design_ready | none |
+| `F-056` | K1 detailed design §6 exact keyed deterministic context | target `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` raw-digest u53/retry/restart matrix | design_ready | none |
+| `F-057` | K1 detailed design §1、§8 current-three exact state/TWAP session/legacy projection；K1 shadow-only、runtime switch 属于 K3 | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` + existing parity/restart tests | design_ready | none |
+| `F-058` | K1 detailed design §1.2、§9 pinned compatibility lock/receipt；façade runtime 属于 K4 | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` | design_ready | none |
+| `F-059` | K1 detailed design §11 ownership/test routing/coverage | command `python -m nox -s l0`；implementation changed files route to target plan `miniqmt_execution_runtime_l2` | design_ready | none |
+| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
 
 `design_ready` 只表示本文可直接指导实施；所有代码、DDL、CI 和真实 SIM 状态仍必须在后续 PR 与上位蓝图 progress ledger 中独立更新。
 
@@ -882,8 +912,8 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | --- | --- | --- |
 | no simplified delivery | pass | contracts 覆盖 ALGO_START、exact routing、per-algo ordering、state/timer/failure transition、unknown outbox、pinned exact façade、migration、recovery、diagnostics 和 real-path evidence；不存在“至少几个方法”或 helper-only 完成口径 |
 | no silent error | pass | stale DISPATCHING 使用 nullable unknown 且禁止重提；plugin exception 原子 failure/child cancel/SKIPPED；schema/hash/identity/capability 全部 typed fail loud，无默认成功、空 transition 或算法 fallback |
-| no business semantic drift | pass | per-algo predecessor CAS 和 event owner routing 固定 callback order/slot isolation；signal/target/plan、方向数量、B0 authority、A 股规则、OMS/Gateway 和唯一 broker route 保持 owner 不变 |
-| no unauthorized gates | pass | capability 仅按静态 unsupported/当前暂缺/非法 observation 自动判定并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
+| no business semantic drift | pass | per-algo predecessor CAS 和 event owner routing 固定 callback order/slot isolation；K1 固定 current-three exact state 与 TWAP exchange-active seconds/午休/EOD/restart，legacy alias drift 不自动重解释；signal/target/plan、方向数量、B0 authority、A 股规则、OMS/Gateway 和唯一 broker route 保持 owner 不变 |
+| no unauthorized gates | pass | route-independent plugin catalog 与 per-plugin/per-route capability receipt 分离；单 route/plugin unsupported 不阻止其它 plugin；当前暂缺/非法 observation 按既有自动语义处理并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
 | no parallel product route | pass | 在现有 `MiniQMTExecutionRuntime` 内原地抽取 kernel/SPI，完整 vn.py runtime、legacy compiler/raw route 均不恢复 |
 | production state separation | pass | 文档、source、DDL、dependency、config、restart、binding、broker 和 runtime evidence 分别追踪 |
 
@@ -891,7 +921,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 
 整项架构优化只有同时满足以下条件才能标为实现完成：
 
-1. `F-043..F-052` 全部从 `design_ready` 更新为 `implemented_verified`，且每项有真实 implementation/test receipt；
+1. `F-043..F-060` 全部从 `design_ready` 更新为 `implemented_verified`，且每项有真实 implementation/test receipt；
 2. current three 和 Iceberg/Stop 均通过同一 SPI，新增后两者没有修改 kernel 业务分支；
 3. canonical B0 route 有真实 durable timer，TWAP 上午/午休/下午/EOD 完整；
 4. ALGO_START 与普通 event 的 event/delivery/state/transition/outbox/child/order/trade 链均可独立重建；
