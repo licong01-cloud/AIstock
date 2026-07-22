@@ -1,14 +1,14 @@
 # Advisory Phase 1R R3 源码与 DEV 验收记录
 
-> 更新日期：2026-07-22  
-> 当前状态：`source_and_dev_two_day_validated_long_range_execution_pending`  
+> 更新日期：2026-07-22
+> 当前状态：`source_and_dev_two_day_validated_long_range_blocked_by_dev_pit_drift`
 > 详细设计：`docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`
 
 ## 1. 验收边界
 
 本记录覆盖 R3 的共享名单生命周期算法、历史名单投影、逐 Program 有序日执行、租约恢复、typed receipt、原子日提交、DEV corrective migration 和真实 DEV 执行。它不申报 R4 outcome/summary、模型训练、收益/持股周期/买入止盈止损区间、API、UI 或完整 Phase 1R 已完成。
 
-本轮已在现有 DEV PostgreSQL 应用并精确重放 R3 corrective migration，已通过一个单 Alpha 与一个原生多 Alpha、两个连续交易日的正式服务 E2E。另一个 13 交易日批次已完成 133 项来源要求的 DISCOVER/VERIFY 封存，但没有完成全范围日执行，因此不能替代设计要求的 2 至 3 周完整 DEV E2E。
+本轮已在现有 DEV PostgreSQL 应用并精确重放 R3 corrective migration，已通过一个单 Alpha 与一个原生多 Alpha、两个连续交易日的正式服务 E2E。另一个 13 交易日批次已完成 133 项来源要求的 DISCOVER/VERIFY 封存；修复 retry resume aggregate 后，正式服务可以恢复到稳定边界，但当前 DEV `market.stock_universe_pit_spans` 只覆盖 `2026-05-01` 至 `2026-05-13`，与冻结区间 `2026-06-16` 至 `2026-07-03` 不一致，因此两个 Program 均以明确的 `ADVISORY_HR_SOURCE_REVISION_MISMATCH` 停在 `WAITING_INPUT`。该结果不能替代设计要求的 2 至 3 周完整 DEV E2E。
 
 本轮没有执行 production DDL/DML，没有重启服务、激活 scheduler 或修改 Selection、Paper、Simulation、QE、QMT 业务数据。
 
@@ -24,7 +24,7 @@
 | DAY/RANGE/operation typed receipt 与 full readback | `models.py`; `repository.py` | source_and_dev_passed |
 | R3 corrective migration | `backend/db/migrations/fix_advisory_historical_range_r3_executor_contract_20260722.sql` | dev_applied_reapplied_verified |
 | Selection/Paper/Simulation/QE/QMT 零写入隔离 | composition、AST/static tests、DEV protected counts | source_and_dev_passed |
-| 单/原生多 Alpha 2 至 3 周完整执行 | 设计 §17.5 | pending |
+| 单/原生多 Alpha 2 至 3 周完整执行 | 设计 §17.5 | blocked_by_dev_pit_source_revision_mismatch |
 
 ## 3. 复审与 BUG-827 修复
 
@@ -40,7 +40,9 @@
 10. 同一 batch 的 child aggregate 刷新先锁定 batch 行，再读取并写入聚合，消除并发 run 在 SELECT/UPDATE 之间的快照漂移。
 11. worker 在 day commit 后、run receipt 前退出时，后续 resume 即使没有 day 可 claim，也会逐 run 从持久日事实补齐 receipt，再汇总 batch。
 12. exact retry 使用同一 operation key 和原始 expected row version，直接返回既有 receipt，不新增 operation/day attempt 或改变 batch/run row version。
-13. 所有修复均位于 Phase 1R 执行、证据和历史 runtime namespace；没有新增角色、审批、人工确认、最新交易日或策略包二次 admission/health 门禁。
+13. retryable/waiting day 重新 claim 时，在同一事务内刷新 run child aggregate，延迟数据库约束不再阻断合法恢复。
+14. `HistoricalRangeSourceInputUnavailable` 显式映射为 `WAITING_INPUT` 并保留原始 reason code、安全的 requirement/source role context 与结构化 ERROR 日志，不再降级为未知 retryable failure。
+15. 所有修复均位于 Phase 1R 执行、证据和历史 runtime namespace；没有新增角色、审批、人工确认、最新交易日或策略包二次 admission/health 门禁。
 
 ## 4. DEV 验证证据
 
@@ -74,6 +76,17 @@
 
 `r3-multiday-v1` 已为两个 Program、13 个交易日完成 133 项来源要求的 DISCOVER/VERIFY 封存。该批次在早期代码和错误 runtime top-k 配置下未完成日执行，仅证明来源目录容量，不计入 2 至 3 周业务 E2E。
 
+### 4.4 长范围恢复与 DEV PIT 漂移
+
+- batch：`ahrb_f925f1b84ee19aa8e3f0bc67afd9d568`
+- 正式入口：`HistoricalRangeBatchExecutionService.resume_until_blocked`
+- retry aggregate 修复前：真实 PostgreSQL 延迟约束报 `ADVISORY_HISTORICAL_RANGE_RUN_CHILD_AGGREGATE_INVALID`
+- 修复后：正式 resume 到达稳定边界，batch `WAITING_INPUT`；两个 Program 均为 `WAITING_INPUT`，`waiting_day_count=1`、`retryable_day_count=0`
+- 两个首日均保存 `ADVISORY_HR_SOURCE_REVISION_MISMATCH`，不再保存 `ADVISORY_HR_DAY_UNCLASSIFIED_FAILURE`
+- 冻结日期：`2026-06-16` 至 `2026-07-03`；当前 DEV PIT span：`2026-05-01` 至 `2026-05-13`
+- 未修改或重建共享 `market.stock_universe_pit_spans`，未绕过 source revision 校验
+- 结论：代码恢复路径与错误可见性通过真实 DEV 验证；长范围成功执行仍受 DEV 数据覆盖阻断
+
 ## 5. 本地与直接依赖回归
 
 ```text
@@ -84,7 +97,7 @@ pytest:
   backend/tests/strategy_package/test_multi_alpha_signal_preparation.py
   backend/tests/test_advisory_program_transition_parity.py
 
-result: 119 passed, 3 skipped
+result: 121 passed, 3 skipped
 ```
 
 3 个 skip 属于默认未注入显式 PostgreSQL/真实 DEV batch roots 的外部测试，不是捕获异常后转成成功。对应 PostgreSQL 合同与 v6 真实 DEV 流程已分别显式执行。
@@ -110,23 +123,23 @@ BUG-827 finish --plan-only: PASS, workflow_gate=ready_for_pr
 | 禁止额外门禁审批 | PASS | 无角色、审批、备份、二次 package admission、最新交易日或容量业务门禁 |
 | 模块隔离 | PASS_SOURCE_DEV | protected relations 前后零变化；来源连接强制只读 |
 | DEV 正向可运行 | PASS_TWO_DAY | 单/原生多 Alpha 两日完成、读回、恢复和 exact retry 已通过 |
-| 2 至 3 周完整执行 | PENDING | 13 日 source catalog 已封存，但完整日执行与 replacement 事件仍待长时验收 |
+| 2 至 3 周完整执行 | BLOCKED_DEV_DATA | 13 日 source catalog 已封存，正式恢复可运行；当前 DEV PIT span 与冻结区间不一致，完整日执行与 replacement 事件仍未验收 |
 
 ## 7. 独立交付状态
 
 ```text
 design_document = reviewed_ready
 source_code = implemented_and_reviewed
-source_commit = b87679124e796564206032f4f5a7ff445f266073
+source_commit = 18e44db35f6930ef38a42d7813436a90a87ebfa2
 source_merge = not_requested
 r3_schema_delta = dev_applied_reapplied_verified
 dev_phase1r_dml = executed_for_validation
 dev_single_alpha_two_day_e2e = passed
 dev_multi_alpha_two_day_e2e = passed
-dev_two_to_three_week_execution = pending
+dev_two_to_three_week_execution = blocked_dev_pit_source_revision_mismatch
 production_ddl_dml = not_executed
 service_restart = not_requested
 runtime_activation = none
 ```
 
-当前结论：已发现的 v6 阻断缺陷均已修复，源码直接依赖、DEV PostgreSQL 合同、双日真实执行、恢复、精确重试和跨模块零写入已通过。由于设计明确要求的 2 至 3 周完整日执行尚未完成，本记录仍不能解释为 R3 已满足最终合入条件。
+当前结论：已发现的 v6 阻断缺陷及 13 日批次 retry resume aggregate/错误分类缺陷均已修复，源码直接依赖、DEV PostgreSQL 合同、双日真实执行、合法恢复、精确重试和跨模块零写入已通过。由于当前 DEV PIT span 不覆盖冻结的 13 日区间，设计明确要求的 2 至 3 周完整成功执行尚未完成，本记录仍不能解释为 R3 已满足最终合入条件。
