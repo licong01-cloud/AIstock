@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from .long_trend_evaluation_contract import EVALUATOR_VERSION, PROFILE_ID_V1
 
 from .qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
 
@@ -315,6 +317,42 @@ class HmmConfig(BaseModel):
         return self
 
 
+class LongTrendEvaluationOptIn(BaseModel):
+    """Explicit QE-only request for the normal-loop F-014 postprocess.
+
+    Node-owned environment and dataset manifests are intentionally not caller
+    supplied.  BacktestExecutor resolves and freezes them immediately before
+    composing the loop request.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = True
+    profile_id: str = PROFILE_ID_V1
+    evaluator_version: str = EVALUATOR_VERSION
+    feature_data_root_uri: str
+    outcome_data_root_uri: str
+    backtest_freq: str | None = None
+    mode: str = "normal_postprocess"
+
+    @model_validator(mode="after")
+    def _validate_authoritative_identity(self) -> "LongTrendEvaluationOptIn":
+        if self.enabled is not True:
+            raise ValueError("long_trend_evaluation exists only for enabled opt-in requests")
+        if self.profile_id != PROFILE_ID_V1:
+            raise ValueError(f"unsupported long-trend profile_id: {self.profile_id!r}")
+        if self.evaluator_version != EVALUATOR_VERSION:
+            raise ValueError(f"unsupported long-trend evaluator_version: {self.evaluator_version!r}")
+        if self.mode != "normal_postprocess":
+            raise ValueError("ExperimentConfig only accepts normal_postprocess mode")
+        for field_name in ("feature_data_root_uri", "outcome_data_root_uri"):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(f"long_trend_evaluation.{field_name} is required")
+        if self.backtest_freq is not None and not str(self.backtest_freq).strip():
+            raise ValueError("long_trend_evaluation.backtest_freq cannot be empty")
+        return self
+
+
 class ExperimentConfig(BaseModel):
     """Unified experiment configuration for all QE call paths.
 
@@ -361,6 +399,10 @@ class ExperimentConfig(BaseModel):
     # strategy constructors.
     runtime_flags: dict[str, Any] | None = None
     seed_ensemble: dict[str, Any] | None = None
+
+    # Explicit normal-loop F-014 postprocess.  Omitted by default so ordinary
+    # QE loop requests, commands, reservations, and metrics remain byte-stable.
+    long_trend_evaluation: LongTrendEvaluationOptIn | None = None
 
     # ── Model hyperparameters base ─────────────────────────────────────────────
     # For paths that start from model_params (Paths 2 & 3).

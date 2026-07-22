@@ -462,6 +462,29 @@ async def _lifespan(app: FastAPI):
         name="qe-execution-reservation-reconciler",
     )
 
+    async def _qe_long_trend_startup_reconcile():
+        from .services.quantevolver.long_trend_evaluation_phase2 import QELongTrendPhase2Service
+
+        try:
+            results = await QELongTrendPhase2Service().reconcile_nonterminal(limit=100)
+            logging.getLogger("aistock.qe_long_trend_phase2").info(
+                "QELT_STARTUP_RECONCILE_COMPLETED count=%s results=%s",
+                len(results),
+                results,
+            )
+        except Exception as exc:
+            logging.getLogger("aistock.qe_long_trend_phase2").error(
+                "QELT_STARTUP_RECONCILE_FAILED reason_code=%s error=%s",
+                getattr(exc, "reason_code", type(exc).__name__),
+                exc,
+                exc_info=True,
+            )
+
+    qe_long_trend_startup_task = asyncio.create_task(
+        _qe_long_trend_startup_reconcile(),
+        name="qe-long-trend-startup-reconcile",
+    )
+
     qe_archive_worker_task = None
     try:
         from .services.qe_archive.worker_loop import autostart_enabled, run_archive_worker_loop
@@ -511,6 +534,11 @@ async def _lifespan(app: FastAPI):
             await _cancel_background_task(
                 qe_reservation_reconcile_task,
                 task_name="qe-execution-reservation-reconciler",
+            )
+        if qe_long_trend_startup_task is not None:
+            await _cancel_background_task(
+                qe_long_trend_startup_task,
+                task_name="qe-long-trend-startup-reconcile",
             )
         if qe_archive_worker_task is not None:
             await _cancel_background_task(qe_archive_worker_task, task_name="qe-archive-worker")

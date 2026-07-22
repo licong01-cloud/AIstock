@@ -9,11 +9,14 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
+from pathlib import Path
 from enum import Enum
 from typing import Any
 
 from ..execution_manifest import build_and_audit_execution_manifest
 from ..experiment_config import ExperimentConfig, extract_qe_random_seed
+from ..long_trend_evaluation_bundle import build_long_trend_evaluator_bundle
+from ..long_trend_evaluation_contract import get_long_trend_profile
 from ..qe_active_execution_capacity import (
     QEExecutionSourceClaimFactory,
     QEWorkspaceSubmissionCoordinator,
@@ -95,6 +98,72 @@ class BacktestExecutor(BaseExecutor):
         if seed_ensemble:
             custom_params["_seed_ensemble_config"] = seed_ensemble
         strategy_params = config.build_strategy_params()
+        long_trend_descriptor: dict[str, Any] | None = None
+        if config.long_trend_evaluation is not None:
+            if not ctx.node_id:
+                raise ValueError("QE long-trend normal postprocess requires an explicit node_id")
+            if not all(
+                (
+                    ctx.resource_session_id,
+                    ctx.resource_source_run_key,
+                    ctx.resource_session_token,
+                )
+            ):
+                raise ValueError(
+                    "QE long-trend normal postprocess requires the parent Loop resource session identity and token"
+                )
+            environment = await self.client.get_execution_environment()
+            feature_dataset = await self.client.get_dataset_identity(
+                node_id=ctx.node_id,
+                data_root_uri=config.long_trend_evaluation.feature_data_root_uri,
+            )
+            outcome_dataset = await self.client.get_dataset_identity(
+                node_id=ctx.node_id,
+                data_root_uri=config.long_trend_evaluation.outcome_data_root_uri,
+            )
+            bundle = build_long_trend_evaluator_bundle(
+                repo_root=Path(__file__).resolve().parents[4],
+                execution_environment={
+                    "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
+                    "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
+                    "manifest": environment.manifest,
+                },
+            )
+            profile = get_long_trend_profile(config.long_trend_evaluation.profile_id)
+            long_trend_descriptor = {
+                "schema_version": "qe_long_trend_postprocess_descriptor_v1",
+                "task_id": ctx.task_id,
+                "loop_index": int(ctx.loop_index),
+                "node_id": ctx.node_id,
+                "run_id": None,
+                "backtest_freq": config.long_trend_evaluation.backtest_freq,
+                "label_horizon": config.label_horizon,
+                "strategy_topk": (
+                    int(strategy_params["topk"])
+                    if strategy_params and strategy_params.get("topk") is not None
+                    else None
+                ),
+                "long_trend_evaluation": config.long_trend_evaluation.model_dump(mode="json"),
+                "frozen_identity": {
+                    "profile_sha256": profile.profile_sha256,
+                    "evaluator_source_sha256": bundle.evaluator_source_sha256,
+                    "bundle_sha256": bundle.bundle_sha256,
+                    "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
+                    "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
+                    "feature_dataset": {
+                        "complete": feature_dataset.complete,
+                        "dataset": feature_dataset.dataset,
+                        "long_trend_snapshot": feature_dataset.long_trend_snapshot,
+                        "long_trend_snapshot_reason": feature_dataset.long_trend_snapshot_reason,
+                    },
+                    "outcome_dataset": {
+                        "complete": outcome_dataset.complete,
+                        "dataset": outcome_dataset.dataset,
+                        "long_trend_snapshot": outcome_dataset.long_trend_snapshot,
+                        "long_trend_snapshot_reason": outcome_dataset.long_trend_snapshot_reason,
+                    },
+                },
+            }
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
         loop = asyncio.get_running_loop()
@@ -126,12 +195,18 @@ class BacktestExecutor(BaseExecutor):
                 resource_source_run_key=ctx.resource_source_run_key,
                 resource_session_token=ctx.resource_session_token,
                 phase_pipeline_enabled=ctx.phase_pipeline_enabled,
+                long_trend_evaluation_descriptor=long_trend_descriptor,
             )
             return compose_res_local, stock_pool_payload
 
         compose_res, stock_pool_payload = await loop.run_in_executor(None, compose_call)
 
         experiment_files: dict[str, str] = dict(compose_res.get("experiment_files", {}) or {})
+        if long_trend_descriptor is not None:
+            normalized_descriptor = compose_res.get("long_trend_evaluation_descriptor")
+            if not isinstance(normalized_descriptor, dict):
+                raise ValueError("ConfigComposer did not return the frozen QE long-trend descriptor")
+            long_trend_descriptor = normalized_descriptor
         wsl_command: str = compose_res.get("wsl_command", "")
         if not wsl_command:
             raise ValueError(
@@ -217,6 +292,8 @@ class BacktestExecutor(BaseExecutor):
             rdagent_config["random_seed"] = fixed_seed
         if runtime_contract:
             rdagent_config.update(runtime_contract)
+        if long_trend_descriptor is not None:
+            rdagent_config["long_trend_evaluation"] = long_trend_descriptor
 
         # 5. Reserve the canonical cross-source slot before the QE Workspace POST.
         source = self._submission_source_for_context(ctx)
@@ -231,6 +308,7 @@ class BacktestExecutor(BaseExecutor):
                 wsl_command=wsl_command,
                 model_source=ctx.model_source,
                 callback_url=ctx.callback_url,
+                postprocess_descriptor=long_trend_descriptor,
             ),
         )
 

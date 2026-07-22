@@ -120,7 +120,12 @@ async def collect_results_only_artifacts(
 ) -> ResultsOnlyArtifacts:
     """Validate existing QE loop artifacts without launching qrun/backtest."""
 
-    recorder_ref = await _load_recorder_ref(client, task_id=task_id, loop_id=loop_id, node_id=node_id)
+    recorder_ref = await load_authoritative_recorder_ref(
+        client,
+        task_id=task_id,
+        loop_id=loop_id,
+        node_id=node_id,
+    )
     try:
         recorder_id = _safe_ref_component(recorder_ref.get("recorder_id"), field_name="recorder_id")
         experiment_id = _safe_ref_component(recorder_ref.get("experiment_id"), field_name="experiment_id")
@@ -347,6 +352,28 @@ async def _load_recorder_ref(
         loop_id=loop_id,
         node_id=node_id,
         details={"attempts": errors},
+    )
+
+
+async def load_authoritative_recorder_ref(
+    client: Any,
+    *,
+    task_id: str,
+    loop_id: str,
+    node_id: str | None = None,
+) -> dict[str, Any]:
+    """Shared exact recorder reference resolver.
+
+    This intentionally preserves the established results-only lookup order.
+    F-014 consumes the same authority and applies its stricter catalog contract
+    after this function returns.
+    """
+
+    return await _load_recorder_ref(
+        client,
+        task_id=task_id,
+        loop_id=loop_id,
+        node_id=node_id,
     )
 
 
@@ -590,20 +617,28 @@ def _validate_portfolio_report(
 
 
 async def _read_existing_metrics(client: Any, *, task_id: str, loop_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    read_error: str | None = None
     try:
         payload = await client.get_loop_metrics(task_id, loop_id)
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
+        payload = None
+        read_error = f"{type(exc).__name__}: {exc}"
+    if read_error is not None:
+        return None, read_error
     if not isinstance(payload, dict) or not payload:
         return None, f"metrics payload is empty or invalid: {payload!r}"
     return dict(payload), None
 
 
 async def _read_enhanced_metrics(client: Any, *, task_id: str, loop_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    read_error: str | None = None
     try:
         payload = await client.get_enhanced_metrics(task_id, loop_id)
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
+        payload = None
+        read_error = f"{type(exc).__name__}: {exc}"
+    if read_error is not None:
+        return None, read_error
     if not isinstance(payload, dict) or not payload:
         return None, f"enhanced metrics payload is empty or invalid: {payload!r}"
     return dict(payload), None

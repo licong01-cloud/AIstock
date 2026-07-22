@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -38,7 +38,14 @@ from ..services.quantevolver.qe_resource_phase_service import (
     QEResourcePhaseError,
     QEResourcePhaseService,
 )
+from ..services.quantevolver.long_trend_evaluation_contract import QELongTrendError, typed_null
+from ..services.quantevolver.long_trend_evaluation_phase2 import (
+    QELongTrendPhase2Error,
+    QELongTrendPhase2Service,
+)
+from ..services.quantevolver.qe_workspace_client import QELongTrendWorkspaceError, QEWorkspaceClient
 from ..services.quantevolver.experiment_config import (
+    LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
     normalize_label_horizon,
     normalize_qe_random_seed,
@@ -1838,6 +1845,24 @@ class LoopResourcePhasePayload(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class LongTrendNormalRegistrationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str
+    task_id: str
+    loop_index: int = Field(..., ge=1)
+    node_id: str
+    run_id: Optional[str] = None
+    long_trend_evaluation: Dict[str, Any]
+    frozen_identity: Dict[str, Any]
+    label_horizon: Optional[int] = None
+    strategy_topk: Optional[int] = Field(None, ge=1)
+    recorder_ref: Dict[str, Any]
+    registration_catalog: Dict[str, Any]
+    parent_resource_session_id: str
+    parent_resource_source_run_key: str
+
+
 class PromotionReviewCreateRequest(BaseModel):
     requested_by: str = Field("manual_user", description="Operator or UI identity requesting manual SOTA review")
     review_reason: Optional[str] = Field(None, description="Manual review note; does not approve SOTA")
@@ -1883,6 +1908,89 @@ def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhaseP
         raise HTTPException(
             status_code=status_code,
             detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+
+
+@router.post(
+    "/internal/long-trend-postprocess-registrations",
+    summary="Register one authenticated normal-Loop F-014 postprocess",
+)
+async def register_long_trend_postprocess(
+    request: Request,
+    payload: LongTrendNormalRegistrationPayload,
+):
+    if payload.schema_version != "qe_long_trend_normal_registration_request_v1":
+        raise HTTPException(status_code=400, detail={"reason_code": "QELT_CONTROL_STATE_CONFLICT"})
+    token = request.headers.get("X-QE-Resource-Token", "").strip()
+    if not token:
+        raise HTTPException(status_code=403, detail={"reason_code": AUTH_FAILED_REASON})
+    resource_service = QEResourcePhaseService()
+    try:
+        parent = resource_service.authenticate_session(
+            token=token,
+            session_id=payload.parent_resource_session_id,
+            source_run_key=payload.parent_resource_source_run_key,
+            task_id=payload.task_id,
+            loop_index=payload.loop_index,
+        )
+        if str(parent.get("node_id") or "") != payload.node_id:
+            raise QEResourcePhaseError(AUTH_FAILED_REASON, "parent resource node binding is invalid")
+        opt_in = LongTrendEvaluationOptIn.model_validate(payload.long_trend_evaluation)
+        service = QELongTrendPhase2Service(resource_service=resource_service)
+        async with QEWorkspaceClient.for_node(payload.node_id) as client:
+            prepared = await service.prepare_normal_postprocess(
+                task_id=payload.task_id,
+                loop_index=payload.loop_index,
+                node_id=payload.node_id,
+                opt_in=opt_in,
+                registration_catalog=payload.registration_catalog,
+                label_horizon=payload.label_horizon,
+                strategy_topk=payload.strategy_topk,
+                client=client,
+                run_id=payload.run_id,
+                frozen_identity=payload.frozen_identity,
+                expected_recorder_ref=payload.recorder_ref,
+            )
+            job_receipt = await service.submit(
+                prepared=prepared,
+                task_id=payload.task_id,
+                loop_index=payload.loop_index,
+                client=client,
+            )
+        row = service.control_repository.get(prepared.evaluation_id) or prepared.control_row
+        outcome_snapshot = payload.frozen_identity.get("outcome_dataset", {}).get("long_trend_snapshot")
+        evaluation_asof = (
+            outcome_snapshot.get("end_date")
+            if isinstance(outcome_snapshot, dict) and outcome_snapshot.get("end_date")
+            else typed_null("evaluation_asof")
+        )
+        receipt = {
+            "schema_version": "qe_long_trend_registration_v1",
+            "receipt_stage": "registered",
+            "evaluation_id": prepared.evaluation_id,
+            "profile_id": opt_in.profile_id,
+            "job_id": job_receipt.job_id if job_receipt is not None else typed_null("job_id"),
+            "request_sha": row["request_sha"],
+            "evaluation_asof": evaluation_asof,
+            "task_status": job_receipt.status if job_receipt is not None else str(row["status"]),
+            "platform_delivery_status": row.get("platform_delivery_status_json") or {},
+            "artifact_manifest_uri": typed_null("artifact_manifest_uri"),
+            "artifact_manifest_sha256": typed_null("artifact_manifest_sha256"),
+            "worker_terminal_sha256": typed_null("worker_terminal_sha256"),
+        }
+        return {"status": "success", "data": receipt}
+    except QEResourcePhaseError as exc:
+        raise HTTPException(status_code=403, detail={"reason_code": exc.reason_code, "message": exc.message}) from exc
+    except (ValueError, QELongTrendError, QELongTrendPhase2Error) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": getattr(exc, "reason_code", "QELT_CONTROL_STATE_CONFLICT"), "message": str(exc)},
+        ) from exc
+    except QELongTrendWorkspaceError as exc:
+        status_code = 503 if exc.reason_code == "QELT_NODE_STATE_UNKNOWN" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
         ) from exc
 
 

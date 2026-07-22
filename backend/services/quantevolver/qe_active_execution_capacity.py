@@ -75,6 +75,7 @@ class QEWorkspaceSubmissionPayload:
     execution_identity_hash: str | None = None
     execution_environment_snapshot_id: str | None = None
     execution_environment_manifest_sha256: str | None = None
+    postprocess_descriptor: Mapping[str, Any] | None = None
 
     @property
     def loop_id(self) -> str:
@@ -1103,6 +1104,7 @@ class QEWorkspaceSubmissionCoordinator:
                 execution_identity_hash=payload.execution_identity_hash,
                 execution_environment_snapshot_id=payload.execution_environment_snapshot_id,
                 execution_environment_manifest_sha256=payload.execution_environment_manifest_sha256,
+                postprocess_descriptor=dict(payload.postprocess_descriptor) if payload.postprocess_descriptor else None,
             )
         except QEWorkspaceSubmissionRejected as exc:
             if exc.status_code < 500:
@@ -1728,6 +1730,7 @@ def canonical_qe_workspace_request_digest(payload: QEWorkspaceSubmissionPayload)
                 "execution_environment_snapshot_id": payload.execution_environment_snapshot_id,
                 "execution_environment_manifest_sha256": payload.execution_environment_manifest_sha256,
             },
+            "postprocess_descriptor": dict(payload.postprocess_descriptor or {}),
         }
     )
     encoded = json.dumps(

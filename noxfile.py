@@ -994,6 +994,24 @@ def miniqmt_sim_trading_hours_l5(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_long_trend_phase2_backend(session: nox.Session) -> None:
+    """Run only F-014 long-trend compute, orchestration, CAS, and resource contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
+        "backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path backend regression tests only."""
     _run_pytest(

@@ -461,3 +461,28 @@ def test_resource_phase_query_returns_bounded_rows():
     state.list_rows = [{"session_id": "qers_1", "phases": [{"phase": "train"}]}]
     rows = service.list_resource_phases(task_id="qe_task", loop_index=1, limit=999)
     assert rows == state.list_rows
+
+
+def test_normal_loop_resource_session_cannot_impersonate_qelt_phase():
+    service, _state = _service_with_fake_state()
+    secret = service.create_session(
+        task_id="qe_task",
+        loop_index=2,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=False,
+    )
+    event = {
+        "session_id": secret.session_id,
+        "source_run_key": secret.source_run_key,
+        "task_id": "qe_task",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "node_id": "wsl2-5080",
+        "sequence_no": 1,
+        "phase": "long_trend_eval",
+        "phase_status": "running",
+        "metadata": {"evaluation_id": "qelt_" + "a" * 64},
+    }
+    with pytest.raises(QEResourcePhaseError, match="reserved for an independent") as exc_info:
+        service.ingest_event(token=secret.token, payload=event)
+    assert exc_info.value.reason_code == PHASE_INVALID_REASON

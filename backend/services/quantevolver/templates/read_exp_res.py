@@ -1115,7 +1115,7 @@ def _round_or_none(value, digits=6):
         if _np.isnan(value) or _np.isinf(value):
             return None
         return round(value, digits)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -1927,6 +1927,50 @@ def _generate_llm_summary(enhanced: dict) -> dict:
 # ============================================================
 # Generate enhanced output files
 # ============================================================
+def _load_long_trend_registration_observation():
+    success_path = Path.cwd() / "qe_long_trend_registration.json"
+    pending_path = Path.cwd() / "postprocess_registration_pending.json"
+    if success_path.is_file():
+        try:
+            payload = json.loads(success_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
+                "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
+            }
+        allowed = {
+            "schema_version", "receipt_stage", "evaluation_id", "profile_id", "job_id",
+            "request_sha", "evaluation_asof", "task_status", "platform_delivery_status",
+            "artifact_manifest_uri", "artifact_manifest_sha256", "worker_terminal_sha256",
+        }
+        if payload.get("schema_version") != "qe_long_trend_registration_v1" or set(payload) - allowed:
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
+                "reason_json": {"unexpected_fields": sorted(set(payload) - allowed)},
+            }
+        return {"status": "registered", "receipt": payload}
+    if pending_path.is_file():
+        try:
+            payload = json.loads(pending_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_PENDING_INVALID",
+                "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
+            }
+        return {
+            "status": "registration_pending",
+            "reason_code": payload.get("reason_code"),
+            "reason_json": payload.get("reason_json"),
+        }
+    return {
+        "status": "missing",
+        "reason_code": "QELT_REGISTRATION_RECEIPT_MISSING",
+    }
+
+
 if latest_recorder is not None:
     try:
         _summary_dict = metrics.to_dict() if metrics is not None else {}
@@ -1979,6 +2023,9 @@ if latest_recorder is not None:
                 print(f"Warning: excess_return fallback failed: {_fb_e}")
 
         _enhanced = {"summary": _summary_dict}
+        _long_trend_registration = _load_long_trend_registration_observation()
+        _enhanced["long_trend_registration"] = _long_trend_registration
+        _summary_dict["long_trend_registration_status"] = _long_trend_registration["status"]
         _enhanced["ic_diagnostics"] = _extract_ic_diagnostics(latest_recorder)
         _enhanced["training_diagnostics"] = _extract_training_diagnostics()
         _enhanced["return_curves"] = _extract_return_curves(latest_recorder)
