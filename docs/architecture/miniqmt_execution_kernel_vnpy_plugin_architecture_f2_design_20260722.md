@@ -6,6 +6,8 @@
 >
 > 文档状态：`design_ready`。本文完成可直接拆分实施的架构、schema、事务、迁移、测试和验收设计；不表示源代码、DDL、生产配置、服务重启或真实 SIM 已完成。
 >
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1 implementation 仍为 `not_started`。
+>
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
@@ -686,6 +688,8 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - generic registry，不修改 runtime 行为；
 - current three manifest 化；
 - `VnpyCompatibilitySurfaceV1` exact signature/object-field receipt、import/static negative tests；
+- 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
+- K1 当前仅 `design_ready`，未实施产品代码、runtime switch、DDL/DML、配置或 broker 行为；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -858,6 +862,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | Iceberg、Stop 只新增插件/manifest/tests即可接入，证明 kernel 不依赖具体算法 |
 | `F-051` | restart/replay、multi-slot、same-symbol、callback concurrency、plugin failure、diagnostics 和 event→delivery→transition→command→broker 完整 identity chain 可重建 |
 | `F-052` | additive migration、route retirement、rollout/rollback、生产 gates 和真实 SIM 验收完整且无人工门禁 |
+| `F-053` | K1 模块/依赖/import boundary 固定，插件不能越权到信号、runtime owner、DB 或 broker |
+| `F-054` | K1 strict DTO、canonical JSON/hash、identity/type/time/decimal/error evidence writer/readback contract 完整 |
+| `F-055` | K1 code-owned immutable registry、explicit factory binding、duplicate/conflict/zero-partial-publication 语义完整 |
+| `F-056` | K1 deterministic logical time、ID、ordinal、hash-based random 在 retry/restart 下稳定 |
+| `F-057` | current-three manifest/config/state/event/capability/source 与 legacy config shadow projection 完整且不改变现有 runtime |
+| `F-058` | pinned vn.py source/method/DTO/enum/return/error lock 与 immutable compatibility receipt 精确 |
+| `F-059` | K1 direct/negative/parity/import tests、changed-file test routing 与 coverage 可直接执行 |
+| `F-060` | K1 rollout/rollback、K2-K4 边界、无 fallback/人工门禁/平行 route 与生产状态分离完整 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -873,6 +885,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
+| `F-053` | K1 detailed design §3 target module/dependency/import boundary | target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` | design_ready | none |
+| `F-054` | K1 detailed design §4-§5 strict contracts/canonical codec | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` | design_ready | none |
+| `F-055` | K1 detailed design §7 immutable registry | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` | design_ready | none |
+| `F-056` | K1 detailed design §6 deterministic context | target `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` | design_ready | none |
+| `F-057` | K1 detailed design §1、§8 current-three/legacy projection；K1 shadow-only、runtime switch 属于 K3 | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` + existing parity/restart tests | design_ready | none |
+| `F-058` | K1 detailed design §1.2、§9 pinned compatibility lock/receipt；façade runtime 属于 K4 | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` | design_ready | none |
+| `F-059` | K1 detailed design §11 ownership/test routing/coverage | command `python -m nox -s l0`；implementation changed files route to target plan `miniqmt_execution_runtime_l2` | design_ready | none |
+| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
 
 `design_ready` 只表示本文可直接指导实施；所有代码、DDL、CI 和真实 SIM 状态仍必须在后续 PR 与上位蓝图 progress ledger 中独立更新。
 
@@ -891,7 +911,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 
 整项架构优化只有同时满足以下条件才能标为实现完成：
 
-1. `F-043..F-052` 全部从 `design_ready` 更新为 `implemented_verified`，且每项有真实 implementation/test receipt；
+1. `F-043..F-060` 全部从 `design_ready` 更新为 `implemented_verified`，且每项有真实 implementation/test receipt；
 2. current three 和 Iceberg/Stop 均通过同一 SPI，新增后两者没有修改 kernel 业务分支；
 3. canonical B0 route 有真实 durable timer，TWAP 上午/午休/下午/EOD 完整；
 4. ALGO_START 与普通 event 的 event/delivery/state/transition/outbox/child/order/trade 链均可独立重建；
