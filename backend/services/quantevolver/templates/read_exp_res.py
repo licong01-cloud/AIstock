@@ -1942,16 +1942,25 @@ def _load_long_trend_registration_observation():
                 "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
                 "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
             }
-        allowed = {
+        required = {
             "schema_version", "receipt_stage", "evaluation_id", "profile_id", "job_id",
             "request_sha", "evaluation_asof", "task_status", "platform_delivery_status",
             "artifact_manifest_uri", "artifact_manifest_sha256", "worker_terminal_sha256",
         }
-        if payload.get("schema_version") != "qe_long_trend_registration_v1" or set(payload) - allowed:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "qe_long_trend_registration_v1"
+            or payload.get("receipt_stage") != "registered"
+            or set(payload) != required
+        ):
             return {
                 "status": "invalid",
                 "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
-                "reason_json": {"unexpected_fields": sorted(set(payload) - allowed)},
+                "reason_json": {
+                    "missing_fields": sorted(required - set(payload)) if isinstance(payload, dict) else sorted(required),
+                    "unexpected_fields": sorted(set(payload) - required) if isinstance(payload, dict) else [],
+                    "payload_type": type(payload).__name__,
+                },
             }
         return {"status": "registered", "receipt": payload}
     if pending_path.is_file():
@@ -1963,10 +1972,47 @@ def _load_long_trend_registration_observation():
                 "reason_code": "QELT_REGISTRATION_PENDING_INVALID",
                 "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
             }
+        required = {
+            "schema_version", "receipt_stage", "status", "reason_code",
+            "reason_json", "descriptor_sha256",
+        }
+        allowed = required | {"pending_index_error"}
+        valid_descriptor_sha = (
+            payload.get("descriptor_sha256") is None
+            or (
+                isinstance(payload.get("descriptor_sha256"), str)
+                and len(payload["descriptor_sha256"]) == 64
+            )
+        ) if isinstance(payload, dict) else False
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "qe_long_trend_registration_pending_v1"
+            or payload.get("receipt_stage") != "registration_pending"
+            or payload.get("status") != "pending"
+            or not isinstance(payload.get("reason_code"), str)
+            or not payload.get("reason_code")
+            or not isinstance(payload.get("reason_json"), dict)
+            or not valid_descriptor_sha
+            or not required.issubset(payload)
+            or bool(set(payload) - allowed)
+            or (
+                "pending_index_error" in payload
+                and not isinstance(payload.get("pending_index_error"), dict)
+            )
+        ):
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_PENDING_INVALID",
+                "reason_json": {
+                    "missing_fields": sorted(required - set(payload)) if isinstance(payload, dict) else sorted(required),
+                    "unexpected_fields": sorted(set(payload) - allowed) if isinstance(payload, dict) else [],
+                    "payload_type": type(payload).__name__,
+                },
+            }
         return {
             "status": "registration_pending",
-            "reason_code": payload.get("reason_code"),
-            "reason_json": payload.get("reason_json"),
+            "reason_code": payload["reason_code"],
+            "reason_json": payload["reason_json"],
         }
     return {
         "status": "missing",

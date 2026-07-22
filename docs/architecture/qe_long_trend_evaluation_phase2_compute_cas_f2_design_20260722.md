@@ -99,7 +99,7 @@ F-014 Phase 1 已证明长期趋势指标、删失、episode、portfolio 和 ent
 - 不创建 `run_evaluation_metric/run_evaluation_artifact` 两张明细表；Phase 2 必须创建父设计已有的 `run_evaluation` 控制表，不另建临时/影子状态表；
 - 不新增公共 FastAPI route、MCP tool 或 frontend 页面；
 - 不执行 R8–R11 全量历史补算；只允许一个已完成 Loop 的显式 canary；
-- 不注册外部 cron、不扫描全部 Archive；在现有 backend lifespan 内运行单一 QE F-014 reconciler，按短周期、有限批次枚举 `run_evaluation` 可接管的非终态行。该 reconciler 复用 owner/lease/fencing/row-version CAS，负责正常提交后的持续 inspect/collect，也负责租约到期后的重启恢复；RD 侧 dispatcher 与 registration replayer 使用持久单例身份和 OS lock，API 重启只唤醒既有 spool，不创建新 evaluation；
+- 不注册外部 cron、不扫描全部 Archive；在现有 backend lifespan 内运行单一 QE F-014 reconciler，按短周期、有限批次枚举 `run_evaluation` 可接管的非终态行。该 reconciler 复用 owner/lease/fencing/row-version CAS，负责正常提交后的持续 inspect/collect，也负责租约到期后的重启恢复；RD dispatcher 使用持久 process identity，registration/outbox recovery 则绑定 RD API lifespan 并在每轮扫描持有跨进程非阻塞锁，API 重启激活当前部署代码且不创建新 evaluation；
 - 不改变训练、标签、因子、回测、策略、TopK、成本或执行公式；
 - 不修改通用 Prediction Store、`qe_archive.run_metric/run_artifact/raw_payload` writer；
 - 不模拟订单队列、撤单、涨跌停成交或分钟级执行；
@@ -142,7 +142,7 @@ F-014 Phase 1 已证明长期趋势指标、删失、episode、portfolio 和 ent
 | F-322 | normal Loop 严格执行 `qrun -> register/submit -> read_exp_res`；registration/worker/published receipt 分阶段同 identity，原 Loop及时释放 reservation，评价失败不改写训练/回测终态。 |
 | F-323 | 正常提交与重启恢复共用持续 reconciler；扫描跳过有效租约、按 `updated_at/evaluation_id` 轮转有限批次，失败原因和恢复持久化结果必须显式，不能依赖下一次后端重启。 |
 | F-324 | control secret 创建使用跨进程互斥和锁内二次检查；streaming collect 使用 HTTP read timeout 与 fenced lease heartbeat；任一 heartbeat/CAS 失败均结构化返回。 |
-| F-325 | dispatcher 使用持久 process identity 保证单例唤醒；typed cancel 在核对 attempt/PID/start_ticks/command hash 后终止该 worker 的独立进程组，使 parser 子进程不能成为孤儿；registration pending 在 RD API 存活期间持续回放。 |
+| F-325 | dispatcher 使用持久 process identity 保证单例唤醒；typed cancel 在核对 attempt/PID/start_ticks/command hash 后先持久化 intent、再终止该 worker 的独立进程组并记录 delivery 结果，使 parser 子进程不能成为孤儿；registration pending 与 resource outbox 由 RD API-lifecycle recovery task 持续回放，部署重启后不残留旧代码 daemon。 |
 
 ## 6. End-to-End Architecture / 端到端架构
 
@@ -350,7 +350,7 @@ POST /tasks/{task_id}/loops/{loop_id}/long-trend-evaluations/{evaluation_id}/can
 
 ### 9.4 typed cancel
 
-cancel intent 必须携带 expected `attempt_id/process_identity/request_sha`。匹配 PID、start ticks、command hash 后，还必须确认 worker 是 `start_new_session=True` 创建的独立 process-group leader，再向该精确进程组发送 SIGTERM，使 worker 与其 parser 子进程共同退出；process group 不匹配时 fail-closed，不退化为 PID-only kill。若 terminal receipt 已存在返回 already-terminal。已发布成功 CAS 不删除，正在 staging 的临时文件保留为失败证据或由同 attempt 清理，不触碰训练/回测进程。
+cancel intent 必须携带 expected `attempt_id/process_identity/request_sha`。匹配 PID、start ticks、command hash 后，还必须确认 worker 是 `start_new_session=True` 创建的独立 process-group leader。在 job 级 cancel lock 内先原子持久化 `requested` intent，再向该精确进程组发送 SIGTERM，使 worker 与其 parser 子进程共同退出，最后持久化 `signal_sent`；信号发送失败记录 `delivery_failed`，supervisor 不得据此伪造 cancelled。相同 attempt/process identity 的已发送 intent 幂等返回且不重复发信号；process group 不匹配时 fail-closed，不退化为 PID-only kill。若 terminal receipt 已存在返回 already-terminal。已发布成功 CAS 不删除，正在 staging 的临时文件保留为失败证据或由同 attempt 清理，不触碰训练/回测进程。
 
 ## 10. AIstock Phase 2 Service / AIstock 编排服务
 
@@ -437,7 +437,8 @@ normal 与 historical 都走该独立状态机。不得为了满足 transition �
 - 复用 resource session token SHA、单调 sequence 和 `qelt:<evaluation_id>` source binding；
 - secret 单独写入 0600 文件，request/manifest/log 不包含明文；
 - worker 本地 outbox 保存未送达事件；重复 sequence 幂等，payload hash 不同则 conflict；
-- AIstock 不可达时 worker 继续完成计算和 terminal receipt；恢复后重放事件。
+- AIstock 不可达时 worker 继续完成计算和 terminal receipt；worker 先即时重放一次，之后由 RD API-lifecycle recovery task 每轮与 registration pending 一并重放，AIstock 恢复后不依赖新任务或 RD 重启即可送达；
+- recovery task 在每轮扫描期间使用跨进程非阻塞锁，多 API worker 不重复执行；任务随 API shutdown 取消，重启后加载当前部署代码，不使用无限存活的 detached replay daemon。
 
 ### 11.3 reconcile 决策
 
@@ -451,7 +452,7 @@ normal 与 historical 都走该独立状态机。不得为了满足 transition �
 | 同 identity request/bundle 不同 | fail-fast conflict |
 | node/网络暂不可达 | `REMOTE_STATE_UNKNOWN`，不伪造失败 |
 
-AIstock startup reconciliation 只 claim `run_evaluation` 非终态行并执行上述决策；RD startup dispatcher 只扫描 `<loop_dir>/long_trend_evaluations` 既有 job，registration replayer 只枚举 `.qe_long_trend_registration_pending/` 专属 index。两端都不得扫描非 QE 表、Archive 全量或全部 workspace，不得创建新研究任务或重跑已成功 family。queued job 与 control-row 创建前的 typed pending registration 均可在服务重启后按冻结身份继续，不依赖下一个用户请求。
+AIstock startup reconciliation 只 claim `run_evaluation` 非终态行并执行上述决策；RD startup dispatcher 只扫描 `<loop_dir>/long_trend_evaluations` 既有 job，API-lifecycle recovery task 只枚举 `.qe_long_trend_registration_pending/` 专属 index 与 F-014 job outbox。两端都不得扫描非 QE 表、Archive 全量或全部 workspace，不得创建新研究任务或重跑已成功 family。queued job、未送达 resource event 与 control-row 创建前的 typed pending registration 均可在服务重启后按冻结身份继续，不依赖下一个用户请求；已存在成功 registration receipt 时可安全清理历史残留 pending index。
 
 ## 12. Dedicated QELongTrendArtifactStore / 专属 CAS
 
@@ -666,22 +667,22 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 | F-307 | Phase 1 family-local engine wrapper | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; existing `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
 | F-308 | RD request/job/claim/attempt/process manifests | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
 | F-309 | RD FIFO CPU slot held for worker lifetime | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; multi-job canary is separately tracked as activation evidence | implemented_local_verified | none |
-| F-310 | independent `qelt:<evaluation_id>` resource phase/outbox | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_resource_phase_service.py`; DDL/runtime state is reported separately | implemented_local_verified | none |
+| F-310 | independent `qelt:<evaluation_id>` resource phase/outbox | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_resource_phase_service.py`; RD `test_api_lifecycle_recovery_scan_replays_pending_outbox_without_new_job`; DDL/runtime state is reported separately | implemented_local_verified | none |
 | F-311 | control-row inspect/reconcile/collect | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; restart canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-312 | dedicated long-trend CAS + family-aware required matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | implemented_local_verified | none |
 | F-313 | immutable success manifest | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | implemented_local_verified | none |
 | F-314 | registration/worker/published staged receipt adapter | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-315 | worker terminal receipt | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
-| F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q`（15 passed，含精确 process-group 与非 leader fail-closed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q`（20 passed，含 intent-before-signal、delivery_failed、幂等发送、精确 process-group 与非 leader fail-closed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; DDL、两端重启与真实已完成 Loop canary 尚未执行且不冒充本地测试证据 | implemented_local_verified | none |
 | F-318 | ownership/import/route/schema diff | `python scripts/aistock_module_ownership_scan.py --changed-only --include-untracked --fail-on-unmapped --fail-on-ambiguous`; `python -m nox -s validation_catalog_integrity validation_module_registry_l0`; 32 个初始变更文件与后续 BUG-829 文件均重新执行目录路由 | implemented_local_verified | none |
 | F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests；DDL 未应用并作为生产状态单独报告 | implemented_local_verified | none |
 | F-320 | execution-environment identity binding | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py`; deployment restart state is separately reported | implemented_local_verified | none |
 | F-321 | frequency-aware summary/`_obj.pkl` resolver | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
 | F-322 | normal nonblocking adapter + internal registration + staged receipts | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD pending replay tests；real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
-| F-323 | continuous reconciler、lease-aware candidate rotation 与持久化恢复结果 | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `python -m nox -s qe_long_trend_phase2_backend`（94 passed） | implemented_local_verified | none |
+| F-323 | continuous reconciler、lease-aware candidate rotation 与持久化恢复结果 | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `python -m nox -s qe_long_trend_phase2_backend`（96 passed） | implemented_local_verified | none |
 | F-324 | secret single-writer、bounded streaming 与 fenced lease heartbeat | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`（并发创建、bounded stream、heartbeat、row-version CAS 直接测试） | implemented_local_verified | none |
-| F-325 | durable dispatcher singleton、process-group cancel、continuous registration replay | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q` -> 15 passed（singleton、精确 process-group、非 leader fail-closed、持续 replay） | implemented_local_verified | none |
+| F-325 | durable dispatcher singleton、process-group cancel、API-lifecycle registration/outbox recovery | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q` -> 20 passed（singleton、intent-before-signal、delivery failure、精确 process-group、非 leader fail-closed、部署可更新的持续 replay、成功 receipt 残留 index 自愈） | implemented_local_verified | none |
 
 ## 19. Rollout and Rollback / 发布与回滚
 
@@ -723,7 +724,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | 项目 | 状态 |
 |---|---|
-| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 26/26、AIstock 94 passed、RD-Agent 15 passed、路由本地测试通过） |
+| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 26/26、AIstock 96 passed、RD-Agent 20 passed、路由本地测试通过） |
 | Phase 1 core | `MERGED_VERIFIED` |
 | AIstock Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |
 | RD-Agent Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |

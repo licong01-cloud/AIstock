@@ -75,14 +75,26 @@ def main() -> int:
         if not isinstance(receipt, Mapping) or receipt.get("schema_version") != REGISTRATION_SCHEMA:
             raise RuntimeError("QELT_NODE_JOB_IDENTITY_CONFLICT: AIstock registration receipt is malformed")
         _atomic_json(Path("qe_long_trend_registration.json"), dict(receipt))
-        Path("postprocess_registration_pending.json").unlink(missing_ok=True)
+        pending_index_cleared = False
         try:
             _clear_pending_index(descriptor)
+            pending_index_cleared = True
         except Exception as cleanup_exc:
             print(
                 "[WARNING] reason_code=QELT_REGISTRATION_PENDING_INDEX_CLEANUP_FAILED "
                 f"error_type={type(cleanup_exc).__name__} message={cleanup_exc}"
             )
+        # Retain the hashed pending receipt while its index still exists.  The
+        # lifecycle-owned replayer can rerun this exact adapter and finish
+        # cleanup instead of being stranded with an unverifiable index.
+        if pending_index_cleared:
+            try:
+                Path("postprocess_registration_pending.json").unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                print(
+                    "[WARNING] reason_code=QELT_REGISTRATION_PENDING_RECEIPT_CLEANUP_FAILED "
+                    f"error_type={type(cleanup_exc).__name__} message={cleanup_exc}"
+                )
         print(
             "[INFO] reason_code=QELT_REGISTRATION_ACCEPTED "
             f"evaluation_id={receipt.get('evaluation_id')} task_status={receipt.get('task_status')}"

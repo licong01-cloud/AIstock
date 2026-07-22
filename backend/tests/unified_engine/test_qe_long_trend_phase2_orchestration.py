@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import asyncio
 import hashlib
@@ -36,6 +37,7 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceDatasetIdentity,
 )
 from backend.services.quantevolver.long_trend_pickle_parser_entry import ParserContractError, _reject_secrets
+from backend.services.quantevolver.templates import long_trend_postprocess_adapter as postprocess_adapter
 
 
 def test_long_trend_opt_in_is_explicit_strict_and_qe_only() -> None:
@@ -45,7 +47,6 @@ def test_long_trend_opt_in_is_explicit_strict_and_qe_only() -> None:
     )
     assert value.mode == "normal_postprocess"
     assert value.enabled is True
-
     with pytest.raises(ValidationError):
         LongTrendEvaluationOptIn.model_validate(
             {
@@ -60,6 +61,96 @@ def test_long_trend_opt_in_is_explicit_strict_and_qe_only() -> None:
             outcome_data_root_uri="/home/qe/factor_data",
             mode="paper_trading",
         )
+
+
+def test_registration_success_retains_pending_receipt_when_index_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    descriptor = {
+        "schema_version": postprocess_adapter.DESCRIPTOR_SCHEMA,
+        "task_id": "task-1",
+        "loop_index": 1,
+        "node_id": "node-1",
+        "backtest_freq": "1day",
+        "long_trend_evaluation": {"enabled": True},
+        "frozen_identity": {},
+    }
+    (tmp_path / "qe_long_trend_postprocess_descriptor.json").write_text(
+        json.dumps(descriptor),
+        encoding="utf-8",
+    )
+    (tmp_path / "qe_current_recorder.json").write_text(
+        json.dumps({"experiment_id": "exp-1", "recorder_id": "rec-1"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "qe_resource_session_secret.json").write_text(
+        json.dumps({"token": "secret", "session_id": "session-1", "source_run_key": "source-1"}),
+        encoding="utf-8",
+    )
+    pending_path = tmp_path / "postprocess_registration_pending.json"
+    pending_path.write_text('{"status":"pending"}', encoding="utf-8")
+
+    class Response:
+        status = 200
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+            return False
+
+        @staticmethod
+        def read() -> bytes:
+            return json.dumps(
+                {
+                    "data": {
+                        "schema_version": postprocess_adapter.REGISTRATION_SCHEMA,
+                        "evaluation_id": "qelt_" + "a" * 64,
+                        "task_status": "queued",
+                    },
+                },
+            ).encode("utf-8")
+
+    monkeypatch.setattr(postprocess_adapter, "_build_registration_catalog", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(postprocess_adapter, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(postprocess_adapter, "_registration_url", lambda: "http://aistock.invalid/register")
+    monkeypatch.setattr(postprocess_adapter.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        postprocess_adapter,
+        "_clear_pending_index",
+        lambda _descriptor: (_ for _ in ()).throw(PermissionError("index busy")),
+    )
+
+    assert postprocess_adapter.main() == 0
+    assert (tmp_path / "qe_long_trend_registration.json").is_file()
+    assert pending_path.is_file()
+
+
+def test_read_exp_res_marks_malformed_pending_receipt_invalid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source_path = Path(__file__).resolve().parents[2] / "services" / "quantevolver" / "templates" / "read_exp_res.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_load_long_trend_registration_observation"
+    )
+    module = ast.Module(body=[function], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"Path": Path, "json": json}
+    exec(compile(module, str(source_path), "exec"), namespace)
+    load_observation = namespace["_load_long_trend_registration_observation"]
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "postprocess_registration_pending.json").write_text(
+        json.dumps({"unexpected": True}),
+        encoding="utf-8",
+    )
+
+    result = load_observation()
+    assert result["status"] == "invalid"
+    assert result["reason_code"] == "QELT_REGISTRATION_PENDING_INVALID"
 
 
 def test_snapshot_evidence_remains_usable_when_legacy_manifest_is_incomplete() -> None:

@@ -1,5 +1,5 @@
 {
-  "actual": "Normal submissions can remain awaiting_collect until backend restart; restart recovery is one-shot and can be blocked by live leases or the first 100 rows; concurrent secret creation can overwrite the durable token; artifact streaming disables timeout and does not renew the fenced lease; PID-only cancellation can orphan parser children; dispatcher processes fan out; registration replay requires RD-Agent restart.",
+  "actual": "Formal reviews found lifecycle defects across both repositories: normal submissions could remain awaiting_collect until restart; recovery was one-shot; secret creation and artifact streaming were not lease-safe; cancellation originally used PID-only semantics and then sent SIGTERM before persisting its intent; resource outbox replay stopped after one immediate retry; detached registration replay could execute stale code after deployment; successful registration cleanup could strand an unverifiable pending index; and read_exp_res accepted malformed pending receipts as registration_pending.",
   "allowed_write_scope": [
     "backend/main.py",
     "backend/migrations/qe_long_trend_evaluation_control_phase2_20260722.preflight.sql",
@@ -48,7 +48,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-22T15:57:42.651300Z",
-  "description": "Formal review found missing continuous convergence, lease-safe restart recovery, race-safe control secrets, bounded artifact streaming, process-group cancellation, singleton dispatch, and durable registration replay across AIstock and RD-Agent.",
+  "description": "Formal reviews found missing continuous convergence, lease-safe restart recovery, race-safe control secrets, bounded artifact streaming, intent-before-signal process-group cancellation, singleton dispatch, API-lifecycle registration/outbox recovery, self-healing pending-index cleanup, and strict registration receipt validation across AIstock and RD-Agent.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -61,12 +61,19 @@
       "actor": "codex",
       "note": "Formal review remediation covers the complete unmerged Phase 2 feature delta so PR scope validation remains consistent; no non-QE business scope was added.",
       "timestamp": "2026-07-22T16:46:27.019641Z"
+    },
+    {
+      "action": "formal_review_followup",
+      "actor": "codex",
+      "note": "Second formal review added cancel intent ordering/idempotency, continuous resource outbox replay, API-lifecycle replay activation, pending-index self-healing, and strict pending receipt validation; no research gate or non-QE scope added.",
+      "timestamp": "2026-07-23T00:00:00Z"
     }
   ],
   "evidence_uris": [
-    "formal-review-20260722"
+    "formal-review-20260722",
+    "formal-review-20260723"
   ],
-  "expected": "Every submitted QE-only evaluation converges without restart dependency; recovery survives active leases and bounded batches; secrets are single-writer; streams are bounded and lease-safe; cancellation terminates the exact attempt process tree; dispatcher and registration replay remain durable without process fan-out.",
+  "expected": "Every submitted QE-only evaluation converges without restart dependency; recovery survives active leases and bounded batches; secrets are single-writer; streams are bounded and lease-safe; cancellation durably records the exact intent before signaling the exact attempt process tree and records delivery failures; dispatcher remains singleton; API-lifecycle registration and resource outbox replay activate current code after restart; successful registration cleanup self-heals; malformed receipts remain explicitly invalid.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -74,6 +81,8 @@
       "backend/services/quantevolver/long_trend_evaluation_phase2.py",
       "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
       "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/services/quantevolver/templates/long_trend_postprocess_adapter.py",
+      "backend/services/quantevolver/templates/read_exp_res.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
       "docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md"
@@ -217,7 +226,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
   "required_verification": [
