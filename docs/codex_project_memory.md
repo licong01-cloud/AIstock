@@ -18,7 +18,7 @@ This is the compact active-work snapshot as of 2026-07-21. Replace or remove it 
 - P0-1A completed: additive preflight/forward/guarded-rollback SQL; durable task/run/child/attempt/event models and repository; canonical request/artifact identity; explicit state machines; PostgreSQL claim, lease, fencing and row-version CAS; atomic state/event transactions; historical task/run/result-child dry-run, execute and readback without fabricated attempts or changes to historical metrics/status/reason/created_at/Archive.
 - P0-1A validation: Ruff and compile passed; existing plus new targeted matrix passed with `82 passed, 4 skipped`; the four opt-in PostgreSQL tests separately passed in a disposable PostgreSQL 16 container. That run verified two consecutive migrations without catalog drift, idempotent historical backfill, eight-worker single claim, event-failure transaction rollback, stale fencing rejection, and child/attempt remote identity/result persistence.
 - Production state: both P0-1A durable schema/backfill and P0-1B reservation DDL are applied and verified. Historical P0-1A backfill remains 12 tasks, 41/41 run assignments, 138 result children (59 scheme, 79 LOO), zero fabricated attempts/events, zero mismatches/orphans, with protected digest `733d48413364658972bbef1be625b205e1eb191c5df8e9e0f2465d3bea4bffa4` unchanged. No unrequested DB export or extra backup was created.
-- Runtime state: the P0-1B durable orchestrator previously passed startup smoke, schema readiness, and active-import reconciliation. Live process state is not durable documentation authority and must be checked before any operation; the last read-only observation on 2026-07-21 14:27 found `0.0.0.0:8001` listening. Do not start or restart it without a new direct instruction; source/DDL/deployment facts do not imply a currently running service.
+- Runtime state: the P0-1B durable orchestrator previously passed startup smoke, schema readiness, and active-import reconciliation. Live process state is not durable documentation authority and must be checked before any operation. Starting, stopping, or restarting a concrete program requires a new direct authorization for that program; source, DDL, and deployment facts do not imply a currently running service.
 - Remaining order: implement P0-2A through P0-2E under the existing authorized QE-only scope; next complete P0-3 QE-style creator and P0-4 child/attempt grid, events/logs, recovery and Archive visibility. Documentation/source development does not gain a confirmation gate; production DDL, dependency installation, and runtime activation remain separately reported and separately authorized.
 - Non-negotiable scope: QE-only isolation; reuse the current combine-backtest/QE Workspace/QE UI architecture; no parallel platform, simplified implementation, silent error/fallback, business-logic drift, research admission gate, or approval workflow. Missing data/artifacts must stay visible and recoverable rather than eliminate a research direction. Any future production DDL or runtime restart remains a separate explicit user-authorized step, and no extra DB export is performed before DDL.
 
@@ -48,7 +48,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Every non-trivial feature, bugfix, or documentation change uses a new task branch and an isolated worktree from latest `origin/main`.
 - Do not develop directly in `F:\Dev\AIstock` when it is on `main` or dirty.
 - Do not reuse another active window's physical worktree.
-- Do not create or keep a non-root worktree on local `main`; task worktrees must use task branches. If a stale worktree holds `main`, audit it outside the repo, remove it safely, and restore `F:\Dev\AIstock` to `main...origin/main`.
+- Do not create or keep a non-root worktree on local `main`; task worktrees must use task branches. If a stale worktree holds `main`, audit it read-only and report its exact absolute path, branch, and SHA. Removing that worktree or cleaning its branch requires separate user authorization for the named targets; merge or aftercare authorization does not imply cleanup authorization.
 - Before editing, check `git status --short --branch`, current branch, and recent commits.
 - Stage and commit only files belonging to the current task.
 - Never run destructive Git commands such as `git reset --hard`, `git checkout -- .`, or `git clean -fd` unless the user explicitly approves that exact action.
@@ -95,16 +95,16 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Production Safety Gates
 
-- Do not restart production backend `8001`, frontend `3000`, TDX `19080`, or other production services unless the user explicitly asks.
-- Do not write production DB data or apply DDL without explicit approval.
+- Do not start, stop, or restart production backend `8001`, frontend `3000`, TDX `19080`, or another concrete program unless the user explicitly authorizes that program.
+- Database DDL and DML must first be validated in the existing DEV database. Production DDL/DML requires explicit authorization for the specific production target; report DEV validation, production authorization, migration execution, and readback verification as separate states.
 - Local validation ports are owned by `noxfile.py`, environment variables, and the active standard; use the workflow-provided defaults instead of hardcoding ad hoc ports here.
 - Runtime activation and code merge are separate steps.
-- When the user explicitly authorizes merging a PR or branch into `main`, complete the aftercare loop before reporting done: merge/persist close-sync if required, fast-forward `F:\Dev\AIstock` so local `main` equals `origin/main`, clean only safe task branches/worktrees, and apply plus verify any committed production DDL required by the merged change.
+- Authorization to merge a PR or branch covers the source merge and required source/metadata synchronization only. It does not authorize production DDL/DML, dependency installation, runtime activation, program control, or deletion of files, worktrees, or branches; report each state separately and request target-specific authorization where required.
 - Every completion report must state:
   - `production_ddl_gate`: `noop`, `applied_and_verified`, or `pending`.
   - `production_frontend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.
   - `production_backend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.
-- If a merged change needs new DB objects, apply and verify the committed production migration before claiming production readiness; otherwise report `production_ddl_pending`.
+- If a merged change needs new DB objects, report `production_ddl_gate=pending` until the specific production target is authorized and the committed migration plus readback verification have completed. If there is no schema change, report `production_ddl_gate=noop`.
 
 ## Advisory Research Program Working Memory
 
