@@ -59,6 +59,15 @@ def test_historical_multi_alpha_preparation_uses_frozen_weights_and_forwards_rea
         "a1_plus3_LSTM_h20": "2024-03-01",
         "new_FUNDGROWTH_h20": "2024-03-01",
     }
+    assert {
+        call["cache_namespace"] for call in provider.runtime_asset_resolver.load_calls
+    } == {f"historical_{TRADE_DATE.isoformat()}"}
+    assert {
+        call["cache_namespace"] for call in provider.runtime_asset_resolver.prepare_calls
+    } == {
+        f"leg_a1_plus3_LSTM_h20__historical_{TRADE_DATE.isoformat()}",
+        f"leg_new_FUNDGROWTH_h20__historical_{TRADE_DATE.isoformat()}",
+    }
 
 
 def test_historical_multi_alpha_rejects_runtime_weight_rows_and_rolling_contract() -> None:

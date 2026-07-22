@@ -849,6 +849,9 @@ class MultiAlphaLivePredictionProvider:
                 model_id=leg_slice.model_asset.model_id,
             )
         try:
+            historical_cache_namespace = (
+                f"historical_{trade_date.isoformat()}" if historical_read_only else None
+            )
             source = source_loader(
                 manifest=manifest,
                 package_id=leg_slice.parent_package_id,
@@ -856,14 +859,18 @@ class MultiAlphaLivePredictionProvider:
                 model_asset=leg_slice.model_asset,
                 factor_set=list(leg_slice.factor_set),
                 runtime_assets=leg_slice.runtime_assets,
+                cache_namespace=historical_cache_namespace,
             )
+            workspace_cache_namespace = f"leg_{leg_slice.leg_id}"
+            if historical_cache_namespace is not None:
+                workspace_cache_namespace = f"{workspace_cache_namespace}__{historical_cache_namespace}"
             prepared = self.runtime_asset_resolver.prepare_workspace(
                 package_id=leg_slice.parent_package_id,
                 manifest_sha256=leg_slice.parent_manifest_sha256,
                 source=source,
                 runtime_config=seed_config,
                 path_converter=win_to_wsl_path if inference_backend == "wsl" else None,
-                cache_namespace=f"leg_{leg_slice.leg_id}",
+                cache_namespace=workspace_cache_namespace,
                 verify_model_code_contract=False,
             )
             inference_kwargs: dict[str, Any] = {

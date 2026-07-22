@@ -77,6 +77,47 @@ _MARKET_HISTORY_SQL = """
     ORDER BY price.trade_date, price.ts_code
 """
 
+_DECISION_MARK_DAILY_MARKET_SQL = """
+    SELECT jsonb_build_object(
+        'trade_date', COALESCE(price.trade_date, adj.trade_date),
+        'ts_code', COALESCE(price.ts_code, adj.ts_code),
+        'close_li', price.close_li,
+        'adj_factor', adj.adj_factor
+    ) AS payload
+    FROM market.kline_daily_raw AS price
+    FULL OUTER JOIN market.adj_factor AS adj
+      ON adj.ts_code = price.ts_code AND adj.trade_date = price.trade_date
+    WHERE COALESCE(price.trade_date, adj.trade_date) = %s
+    ORDER BY COALESCE(price.ts_code, adj.ts_code)
+"""
+
+_DECISION_MARK_MARKET_STATE_SQL = """
+    WITH suspended AS (
+        SELECT DISTINCT ts_code
+        FROM market.suspend_d
+        WHERE trade_date = %s AND suspend_type = 'S'
+    ), pit AS (
+        SELECT ts_code
+        FROM market.stock_universe_pit_spans
+        WHERE universe_key = 'shsz_st_pit_active_v1'
+          AND eligible_start <= %s
+          AND eligible_end >= %s
+    )
+    SELECT jsonb_build_object(
+        'ts_code', basic.ts_code,
+        'list_date', basic.list_date,
+        'delist_date', basic.delist_date,
+        'list_status', basic.list_status,
+        'suspended', suspended.ts_code IS NOT NULL,
+        'pit_eligible', pit.ts_code IS NOT NULL
+    ) AS payload
+    FROM market.stock_basic AS basic
+    LEFT JOIN suspended ON suspended.ts_code = basic.ts_code
+    LEFT JOIN pit ON pit.ts_code = basic.ts_code
+    WHERE basic.list_date IS NULL OR basic.list_date <= %s
+    ORDER BY basic.ts_code
+"""
+
 _SUSPEND_SQL = """
     SELECT jsonb_build_object(
         'trade_date', trade_date,
@@ -247,6 +288,7 @@ class PostgresHistoricalRangeSourceRevisionVerifier:
         package_id: str,
         component_ids: set[str],
         decision_trade_date: date,
+        source_roles: frozenset[str] | None = None,
     ) -> tuple[HistoricalRangeSourceRevisionRefV1, ...]:
         selected = tuple(
             member
@@ -255,6 +297,7 @@ class PostgresHistoricalRangeSourceRevisionVerifier:
             and member.package_id in {None, package_id}
             and member.component_id in {None, *component_ids}
             and _member_matches_research_program(member, research_program_id=research_program_id)
+            and (source_roles is None or member.source_role in source_roles)
         )
         if not selected:
             raise HistoricalRangeContractError(
@@ -617,6 +660,13 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
                 _MARKET_HISTORY_SQL,
                 (universe_key, trade_date, trade_date, start, trade_date),
                 required_non_null=("adj_factor",),
+            )
+        if query_id == "historical_decision_mark_daily_market":
+            return self._stream_query(_DECISION_MARK_DAILY_MARKET_SQL, (trade_date,))
+        if query_id == "historical_decision_mark_market_state":
+            return self._stream_query(
+                _DECISION_MARK_MARKET_STATE_SQL,
+                (trade_date, trade_date, trade_date, trade_date),
             )
         if query_id == "historical_fundamental_moneyflow_window":
             start = date.fromisoformat(str(parameters["start_date"]))

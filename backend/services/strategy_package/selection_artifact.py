@@ -1188,6 +1188,11 @@ class StrategyPackageSelectionArtifactService:
             raise RuntimeConfigInvalidError("live selection artifact generation requires trade_dates")
         self._validate_v2_generation_mode(runtime_config)
         unique_dates = sorted(set(trade_dates))
+        historical_cache_namespace = (
+            f"historical_{_canonical_json_sha256([item.isoformat() for item in unique_dates])[:16]}"
+            if historical_read_only
+            else None
+        )
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
         if not manifest.manifest_sha256:
@@ -1241,7 +1246,13 @@ class StrategyPackageSelectionArtifactService:
                     "historical range runtime resolver does not expose package-owned asset loading",
                     context={"package_id": package_id},
                 )
-            source = frozen_source_loader(manifest=manifest, package_id=record.package_id)
+            frozen_source_kwargs: dict[str, Any] = {
+                "manifest": manifest,
+                "package_id": record.package_id,
+            }
+            if _callable_accepts_keyword(frozen_source_loader, "cache_namespace"):
+                frozen_source_kwargs["cache_namespace"] = historical_cache_namespace
+            source = frozen_source_loader(**frozen_source_kwargs)
         elif callable(source_loader):
             source_kwargs: dict[str, Any] = {
                 "source_type": record.source_type,
@@ -1267,6 +1278,7 @@ class StrategyPackageSelectionArtifactService:
             source=source,
             runtime_config=runtime_config,
             path_converter=win_to_wsl_path if inference_backend == "wsl" else None,
+            cache_namespace=historical_cache_namespace,
             verify_model_code_contract=False,
         )
 
