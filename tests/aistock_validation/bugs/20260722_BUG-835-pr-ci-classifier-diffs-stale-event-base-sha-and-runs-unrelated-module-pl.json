@@ -1,6 +1,15 @@
 {
   "actual": "PR #2642 changed only one HMM design document and one BUG JSON, but AIstock CI run 29953296539 used BASE_SHA=cb77e7ab while the checked-out merge ref was merged into current main b97d8554. The generated changed_files.txt therefore contained 38 files from intervening main commits and incorrectly scheduled qe_read_backend and qe_long_trend_phase2_backend. Pull-request classification must derive the exact PR diff from the checked-out merge ref/current base and must not run modules absent from changed-file ownership unless an explicit dependency, shared contract, or cross-module acceptance item exists.",
   "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/dependency-update-validate.yml",
+    "scripts/ci_changed_files.py",
+    "backend/tests/scripts/test_ci_changed_files.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260722_BUG-835-pr-ci-classifier-diffs-stale-event-base-sha-and-runs-unrelated-module-pl.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,20 +32,68 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every pull-request workflow derives changed files from the current base ref and PR head, while push workflows use the before SHA; the stale event base SHA cannot add intervening main files or unrelated module plans.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_changed_files.py",
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        ".github/workflows/test.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_changed_files.py",
+        "backend/tests/scripts/test_ci_changed_files.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        "dev_quality_tooling",
+        "validation_catalog_module_quality"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/test.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_changed_files.py",
+        "backend/tests/scripts/test_ci_changed_files.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_changed_files.py",
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
   },
   "first_seen_at": "2026-07-22T20:26:36.916444Z",
   "fix_branch": null,
@@ -52,10 +109,11 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ci_changed_files.py::test_pull_request_uses_current_base_ref_when_event_base_sha_is_stale -q",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -72,15 +130,10 @@
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
-      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "No broad or cross-module plan is justified; local validation is limited to the changed validation.guardrails and validation.module_quality modules."
     },
     "delegated_validation": {
       "receipt_default": "compact",
@@ -109,7 +162,9 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -132,15 +187,10 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
-        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "No broad or cross-module plan is justified; local validation is limited to the changed validation.guardrails and validation.module_quality modules."
       },
       "delegated_validation": {
         "receipt_default": "compact",
@@ -169,7 +219,9 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files",
+        "validation_module_registry_l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

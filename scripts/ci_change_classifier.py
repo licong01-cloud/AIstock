@@ -68,6 +68,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_aistock_feature_workflow.py",
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_changed_files.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
@@ -101,6 +102,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/aistock_guardrail_scan.py",
     "scripts/bug_registry_metadata_check.py",
     "scripts/ci_change_classifier.py",
+    "scripts/ci_changed_files.py",
     "scripts/ci_failure_issue_summary.py",
     "scripts/code_intelligence_adapter.py",
     "scripts/issue_flow.py",
@@ -124,6 +126,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
     "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
     "scripts/issue_flow.py": (

@@ -44,16 +44,18 @@ jobs:
       - name: Detect and select the changed dependency surface
         id: changes
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/dependency_update
-          base_sha="$BASE_SHA"
-          if [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]]; then
-            base_sha="$(git rev-parse HEAD^)"
-          fi
-
-          mapfile -t changed_files < <(git diff --name-only --diff-filter=ACMRT "$base_sha...$HEAD_SHA")
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/dependency_update/all-changed-files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --diff-filter ACMRT
+          mapfile -t changed_files < tmp/validation/dependency_update/all-changed-files.txt
           dependency_files=()
           has_frontend=false
           for file in "${changed_files[@]}"; do
