@@ -7,7 +7,7 @@
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；本 PR 只交付设计，不实施代码、DDL、依赖安装、服务重启、日任务或生产写入；任何后续 PR 合入仍须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A 已于 2026-07-23 获用户明确批准；任何后续 PR 合入仍须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -66,12 +66,19 @@ Phase 2 新增域内的唯一计算入口为 `HMMRiskStateGenerator`，版本 `h
 observation、posterior、state、transition、severity 或 revision 逻辑。旧 Selection/QE/precompute 路径保持冻结，
 不纳入本次“唯一入口”改造，也不以重构名义迁移。
 
+`market.sector_data` 保持只有股票/日期与 22 个 `sw2_*` 事实字段，不持久化 `l1_code`、`l2_code` 或
+`mapping_in_date`。物化层只取所有 ready 的既有实盘滚动池与 QE 不可变 PIT 池在目标日的 eligible 并集，
+不绑定单一 pool key；Phase 2 消费端仍按请求冻结的精确股票池解析当日 eligible 股票，再按历史日动态关联
+`market.sw_index_member`；完整 mapping rows 与 canonical hash 冻结在 `hmm_risk` InputManifest/result evidence。
+股票池 eligibility 与行业归属是两个已有权威，禁止在 `sector_data` 建立第三套派生身份或股票池规则。
+
 ## 2. Scope / 范围
 
 ### 2.1 In scope
 
 - 新 schema `hmm_risk`、exact bootstrap/verify、repository 和 current views。
 - candidate/model/input identity 解析、共同水位、PIT mapping/content hashes。
+- 复用现有全局股票池 PIT，并动态关联 `sw_index_member`；`sector_data` schema 保持 fact-only。
 - C-001-A candidate capability、C-002-A direct L1/L2 state-model-set、状态/transition/severity；禁止跨层 posterior aggregation。
 - durable daily generation job、显式失败、idempotency、lease/fencing 和迟到数据重算。
 - alerts、risk event lifecycle、retrospective report。
@@ -222,7 +229,9 @@ L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origi
 
 ### 5.2 Sector aggregate canonicalization
 
-对 `market.sector_data` 同一 L2/date 的重复 stock rows，先比较所有 observation 字段；只有值完全一致时
+先按请求冻结的全局股票池 PIT 取得目标日 eligible 股票，再将 `market.sector_data` 按
+`trade_date/ts_code` 动态关联 5.3 的历史行业 mapping。对同一 L2/date 的重复 eligible stock rows，
+先比较所有 observation 字段；只有值完全一致时
 才能折叠为一条 sector observation。任一字段不一致、非有限、单位不符或缺失时，该 sector/date 失败并
 记录 row identities；禁止 `DISTINCT ON` 静默挑一行。
 
@@ -231,6 +240,7 @@ L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origi
 mapping 使用 `in_date <= as_of_date AND (out_date IS NULL OR out_date >= as_of_date)`；冻结
 `symbol/l1_code/l1_name/l2_code/l2_name/in_date/out_date` 的排序 canonical hash。symbol 多重 active mapping、
 L2 对应多个 L1、缺 code 或空 mapping 均显式失败。历史日不得读取当前成员关系。
+mapping 只从 `sw_index_member` 动态解析，不要求或读取 `sector_data.l1_code/l2_code/mapping_in_date`。
 
 ## 6. 唯一 State Generator 契约
 
@@ -693,8 +703,10 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-003 | retrospective adverse-outcome oracle 的 horizon、return、threshold/quantile、universe、缺失与 denominator | `RESOLVED_USER_APPROVED_C003_A` | 5/10/20 连续 return evidence；5D excess q20 次级 oracle；90% minimum coverage；OPPORTUNITY 单列 |
 | C-004 | 是否迁移、包装或退役 legacy gate | `RESOLVED_NO_MIGRATION` | Phase 2 冻结旧 producer/consumer，不运行其测试 |
 | C-005 | PR 是否可以自动合入 | `RESOLVED_PER_PR_USER_CONFIRMATION` | branch/commit/push/PR/CI 可继续；每个 PR 在 merge 前停下并取得用户明确确认 |
+| C-006 | `sector_data` 是否需要持久化行业 PIT identity，股票 eligibility 是否另建规则 | `RESOLVED_USER_APPROVED_C006_A` | `sector_data` 保持 22 字段事实表；先复用全局股票池 PIT，再动态关联 `sw_index_member`，mapping snapshot/hash 写入 `hmm_risk` evidence；不执行 sector identity 生产 DDL/DML |
 
 C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
+C-006-A 已于 2026-07-23 获用户明确批准并回填本文；它不新增运行时审批或第二套股票池。
 C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
@@ -738,7 +750,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 ### 21.1 Rollout
 
 1. C-001-A/C-002-A/C-003-A 已获批准；本设计 PR #2616 已获本次用户明确合入授权。
-2. 合入设计后，先完成阻断 canonical sector identity 的独立 BUG，再开始 Slice 0 state-model-set/schema implementation。
+2. BUG-832 退休 `sector_data` 持久化 identity 与 repair DML；生产 `sector_data` 已符合 fact-only 目标，无需 identity DDL/DML。
 3. Slice 0 在现有 DEV DB 验证 L1/L2 artifact preparation、schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
 4. Slice 1/2 在 DEV 运行 fixture、真实只读 market input、人工 job 和 bounded worker；只写 DEV `hmm_risk.*`。
 5. Slice 3 在安全端口完成真实 API/UI acceptance；未通过前不切 `/hmm`。
@@ -759,6 +771,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 - 本设计 PR：`production_frontend_dependency_gate=noop`。
 - 本设计 PR：`production_backend_dependency_gate=noop`。
 - 本设计 PR：`production_runtime_activation_gate=noop`。
+- `sector_data` identity DDL/DML：`noop`，生产表保持 fact-only，行业 mapping 动态解析。
 - 未来 schema implementation：DEV `applied_and_verified` 后，production DDL 仍为 `pending`，需要目标明确授权。
 - 未来源码合入不等于 API/UI/worker 激活；首次 production manual worker run 单独授权。
 - Phase 2 scheduler：未批准、未实现、未启用。
@@ -767,11 +780,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 - no_simplified_delivery：五张持久表/current views、全 candidate evidence matrix、direct L1/L2、唯一 generator、job/revision、API、真实 UI 与 confirmed report 均为完成边界；未决项不以子集、默认或静态页代替。
 - no_silent_error：candidate/model/watermark/mapping/sector/L1/persistence/renderer 全部有 reason code；partial 不标 success。
-- no_business_semantic_drift：预警 severity 保持父设计；C-001-A capability、C-002-A direct model set 与 C-003-A oracle 均有用户明确批准；旧 gate 冻结，只产生 advisory analysis。
-- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001-A/C-002-A/C-003-A/C-005 均来自用户明确决定；只保留规范要求的 production DDL/runtime 独立授权。
+- no_business_semantic_drift：预警 severity 保持父设计；C-001-A capability、C-002-A direct model set、C-003-A oracle 与 C-006-A fact/universe/mapping 分层均有用户明确批准；旧 gate 冻结，只产生 advisory analysis。
+- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001-A/C-002-A/C-003-A/C-005/C-006-A 均来自用户明确决定；只保留规范要求的 production DDL/runtime 独立授权。
 
 ## 24. 当前完成状态与下一步
 
-本文件已回填 C-001-A/C-002-A/C-003-A 用户批准，F-011/F-012/F-013 均为 `DESIGN_READY_USER_APPROVED`。
-下一步在本设计合入后先登记并修复 canonical sector identity 数据缺陷，再从 Slice 0 开始实现。当前没有执行代码实现、
-数据库 DDL/DML、依赖安装、服务重启或 job；本设计状态不表示 Phase 2 功能已实现或 runtime 已激活。
+本文件已回填 C-001-A/C-002-A/C-003-A/C-006-A 用户批准，F-011/F-012/F-013 均为 `DESIGN_READY_USER_APPROVED`。
+BUG-832 合入并在 DEV 完成 identity retirement readback 后，从 Slice 0 开始实现。生产 `sector_data` 不执行
+identity DDL/DML；当前仍未执行 Phase 2 代码、依赖安装、服务重启或 job，本设计状态不表示 Phase 2 功能已实现或 runtime 已激活。

@@ -2,9 +2,9 @@
 
 > 权威关系：本文是 [`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md) 的 K1 下位实施合同；模拟盘唯一上位权威仍是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。冲突时依次以上位蓝图、整体内核蓝图、本文为准。本文不得改写 StrategyPackage admission、Selection/Target、`B0_QUOTE_V2`、OMS、Gateway 或唯一 broker route 的 owner。
 >
-> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`not_started`。
+> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K1-A implemented_verified`，`K1-B/K1-C not_started`，K1 overall `in_progress`。
 >
-> 基线：`origin/main@e111e4795a4ee7545f8ad208381fa7c7af63aab3`，日期 2026-07-22。
+> 当前实现基线：`origin/main@b03f368a6bfe188219478eca542b0a4c8bde3c76`，审核补修日期 2026-07-23。
 >
 > 交付边界：本文只定义 K1 contracts、code-owned plugin catalog/registry construction、deterministic context、current-three manifests、pinned vn.py compatibility lock/receipt 和 import boundary。本文不实施产品代码、不执行 DDL/DML、不修改生产配置、不调用 broker、不启动、停止或重启服务。
 
@@ -120,13 +120,15 @@ K1 不新增 repository、router、scheduler、gateway、OMS、DB migration 或 
 
 ```text
 plugin_canonical                         # dependency leaf
-plugin_contracts -> plugin_canonical
+plugin_contracts -> plugin_canonical + jsonschema
 deterministic_context -> plugin_contracts + plugin_canonical
 plugin_registry -> plugin_contracts + plugin_canonical + deterministic_context
 current-three manifest descriptors -> plugin_contracts + plugin_canonical
 vnpy_compat locked surface/receipts -> plugin_contracts + plugin_canonical
 composition root -> plugin_registry + explicit process bindings + creation bindings
 ```
+
+`jsonschema` 只用于校验 code-owned manifest 的 config/state JSON Schema 定义以及 writer/readback instance；它是仓库已锁定的后端依赖，不提供网络、动态插件加载、默认值注入或运行时 gate。schema `$ref/$dynamicRef` 只允许当前 document 内可解析到现存目标的 `#`/`#/...` local JSON pointer，外部 URI、anchor alias 或 missing target 在 validator 运行前拒绝，禁止隐式网络 retrieval。校验必须先 `check_schema`，再汇总确定性排序后的 instance violations；不得只 hash schema 而不执行 schema。
 
 插件/manifest/compat 模块禁止导入：
 
@@ -163,7 +165,7 @@ FrozenJsonObjectV1 = tuple[FrozenJsonMemberV1, ...]  # key Unicode code-point so
 FrozenJsonValueV1  = FrozenJsonScalarV1 | FrozenJsonArrayV1 | FrozenJsonObjectV1
 ```
 
-`FrozenJsonValueV1` 字段使用 Pydantic `BeforeValidator(freeze_json_v1)` 和 explicit serializer；`freeze_json_v1()` 在 strict type validation 前深拷贝并递归校验，不能依赖 Pydantic 把 list/dict 自动转 tuple。`thaw_json_v1()` 每次返回新的普通 JSON view，调用方修改 view 不得反向修改 model。`config_schema/state_schema/payload/state/source_attribution/context/metadata/correlation/ordered_failures` 等字段均存 `FrozenJsonValueV1` 或具体 frozen submodel。禁止用 `MappingProxyType` 包住仍可变的 nested value，也禁止把 caller 原始 dict 引用留在 private attribute。
+`FrozenJsonValueV1` 字段使用 Pydantic `BeforeValidator(freeze_json_v1)` 和 explicit serializer；`freeze_json_v1()` 在 strict type validation 前深拷贝并递归校验，不能依赖 Pydantic 把 list/dict 自动转 tuple。三个公开 marker constructor 自身也必须递归 freeze、校验 member type/key、拒绝 duplicate key 并规范排序；不得把“已经是 marker”当作可信输入后原样保留 caller-owned nested value。`thaw_json_v1()` 每次返回新的普通 JSON view，调用方修改 view 不得反向修改 model。`config_schema/state_schema/payload/state/source_attribution/context/metadata/correlation/ordered_failures` 等字段均存 `FrozenJsonValueV1` 或具体 frozen submodel。禁止用 `MappingProxyType` 包住仍可变的 nested value，也禁止把 caller 原始 dict 引用留在 private attribute。
 
 补充规则：
 
@@ -173,7 +175,7 @@ FrozenJsonValueV1  = FrozenJsonScalarV1 | FrozenJsonArrayV1 | FrozenJsonObjectV1
 - datetime 必须 timezone-aware，规范为 UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ`；naive、offset ambiguity 拒绝；
 - 外部 mapping 只允许字符串 key；duplicate key、非 JSON 类型、NaN/Infinity、bytes、set/tuple carrier 拒绝；内部 tuple 只由 `freeze_json_v1()` 生成，canonical serializer 根据 frozen object/array 类型分别输出 JSON object/array；
 - enum 只接受精确值，不大小写猜测；legacy normalization 只能在独立 projection 中执行并保留原值/hash；
-- error context 先经过 JSON-safe evidence codec；malformed value 只进入 evidence，不进入 set/sort/Counter，错误构造器不得二次抛异常。
+- error context 先经过 JSON-safe evidence codec；malformed value 只进入 evidence，不进入 set/sort/Counter，错误构造器不得二次抛异常。异常对象的 `__str__`、自定义 Mapping/BaseModel evidence renderer 再次失败时必须输出原类型与 `*_render_error_type`，不得覆盖 primary failure 或返回空 context。
 
 ### 4.2 Canonical JSON V1
 
@@ -266,19 +268,20 @@ K1 model 必须逐字段实现整体蓝图 §5.2/§5.3：
 
 - event：`schema_version,event_id,event_key_sha256,runtime_id,sequence,event_type,event_time_utc,monotonic_ns,source,symbol,payload_schema_version,payload,payload_sha256,source_identity,correlation`；
 - delivery：`schema_version,delivery_id,event_id,runtime_id,algo_instance_id,plugin_manifest_sha256,algo_delivery_sequence,previous_delivery_id,status,attempt_count,lease_owner,lease_expires_at,transition_id,last_error_json,created_at_utc,updated_at_utc`；
-- event/source/payload schema/source identity 使用整体蓝图固定 composite table；model validator 不允许任意 enum 交叉组合；
-- `ALGO_START` 必须 sequence 1 delivery 且 source identity closure 含 parent/plugin/config hash；
+- event/source/payload schema/source identity 使用整体蓝图固定 composite table；每种 event 的 source identity key set 必须与表中 exact set 相等，missing/extra 都拒绝，model validator 不允许任意 enum 交叉组合；
+- `ALGO_START` 必须 sequence 1 delivery；source identity exact closure 为 `algo_instance_id,runtime_id,parent_intent_id,strategy_slot_id,algo_code,plugin_id,plugin_version,plugin_manifest_sha256,plugin_config_sha256`，并重新计算整体蓝图 §5.5 的 `mqalgo_*`；
+- `delivery_id = "mqdelivery_" + hash_hex_v1("miniqmt_algo_event_delivery_identity_v1", {event_id,algo_instance_id,plugin_manifest_sha256})`；writer 与 readback model validator 使用同一公式，不接受 caller-supplied alias；
 - delivery predecessor/sequence 是 K2 repository constraint；K1 仅保证 DTO 无法表达负数、空 identity 或非法状态组合。
 
 ### 5.4 State/start/transition contracts
 
-`AlgoStateSnapshotV2` 精确字段：`schema_version,algo_instance_id,plugin_id,plugin_version,plugin_manifest_sha256,state_schema_version,transition_sequence,last_applied_delivery_sequence,last_applied_delivery_id,last_closed_delivery_sequence,state,state_sha256,last_applied_event_id,updated_at_utc`。state 先通过 manifest state schema 并 deep-freeze，再计算 `hash_hex_v1("execution_algo_state_v2", state)`；schema/hash/identity mismatch typed fail loud。`updated_at_utc` 只能等于当前 deterministic context logical time，不读取 commit wall clock。
+`AlgoStateSnapshotV2` 精确字段：`schema_version,algo_instance_id,plugin_id,plugin_version,plugin_manifest_sha256,state_schema_version,transition_sequence,last_applied_delivery_sequence,last_applied_delivery_id,last_closed_delivery_sequence,state,state_sha256,last_applied_event_id,updated_at_utc`。authoritative writer 必须同时接收 exact manifest 与 `DeterministicExecutionContextV1`：先 `check_schema`，再按 manifest state schema 校验 state、deep-freeze 并计算 `hash_hex_v1("execution_algo_state_v2", state)`；readback 必须调用同一 `validate_against_authority_v1(manifest, context)` 重新证明 plugin/schema/algo/hash/time closure。`updated_at_utc` 只能取当前 context logical time，不接受 caller timestamp，不读取 commit wall clock。
 
 `AlgoStartContextV1` 精确字段：
 
 - runtime/algo/parent/strategy-slot identity；
 - symbol、side、canonical price/quantity、board-lot/volume-increment frozen facts；
-- plugin manifest/config payload/hash；
+- plugin manifest/config payload/hash；config 必须通过 manifest config schema，不能只验证 hash；
 - exact `ALGO_START` event/delivery identity；
 - `DeterministicExecutionContextV1`；
 - immutable contract/account/market capability projection及各自 hash；
@@ -286,13 +289,13 @@ K1 model 必须逐字段实现整体蓝图 §5.2/§5.3：
 
 `AlgoInitializationV1` 与 `AlgoTransitionV1` 均包含：`next_state,broker_commands,timer_mutations,diagnostic_observations,terminal_outcome,effect_set_sha256`。initialization 还必须引用 exact start event/delivery。ordered effect array 不排序；ordinal 是 identity 的一部分。
 
-`BrokerCommandV2`：`schema_version,command_type(SUBMIT_LIMIT|CANCEL_ORDER),runtime_id,algo_instance_id,parent_intent_id,transition_id,ordinal,local_vt_orderid,symbol,side,order_type,price_decimal,quantity,owned_broker_order_id,reason_code,metadata,payload_sha256,command_id`。`SUBMIT_LIMIT` 禁止 broker order ID；`CANCEL_ORDER` 必须引用该 algo durable-owned local/broker mapping。K1 model 不调用 Gateway。
+`BrokerCommandV2`：`schema_version,command_type(SUBMIT_LIMIT|CANCEL_ORDER),runtime_id,algo_instance_id,parent_intent_id,transition_id,ordinal,local_vt_orderid,symbol,side,order_type,price_decimal,quantity,owned_broker_order_id,reason_code,metadata,payload_sha256,command_id`。`SUBMIT_LIMIT.local_vt_orderid = "mqlocalorder_" + hash_hex_v1("miniqmt_local_order_identity_v1", {runtime_id,algo_instance_id,parent_intent_id,transition_id,ordinal,symbol,side,order_type})`；`command_id = "mqcommand_" + hash_hex_v1("miniqmt_broker_command_identity_v2", exact business payload)`。writer 生成、readback 重算；相同 ID/different payload 必须在 effect hash 前拒绝。`SUBMIT_LIMIT` 禁止 broker order ID；`CANCEL_ORDER` 必须引用该 algo durable-owned local/broker mapping。K1 model 不调用 Gateway。
 
-`TimerMutationV1`：`schema_version,mutation_type(UPSERT_ONE_SHOT|CANCEL),algo_instance_id,transition_id,ordinal,timer_name,schedule_epoch,due_at_exchange_utc,catch_up_policy,payload,payload_sha256,schedule_id,timer_occurrence_id`。CANCEL 不得伪造 due；UPSERT 必须在 session authority 可表达的边界内。
+`TimerMutationV1`：`schema_version,mutation_type(UPSERT_ONE_SHOT|CANCEL),algo_instance_id,transition_id,ordinal,timer_name,schedule_epoch,due_at_exchange_utc,catch_up_policy,payload,payload_sha256,schedule_id,timer_occurrence_id`。`schedule_id = "mqtimersched_" + hash_hex_v1("miniqmt_timer_schedule_identity_v1", {algo_instance_id,timer_name,schedule_epoch})`；`timer_occurrence_id = "mqtimerocc_" + hash_hex_v1("miniqmt_timer_occurrence_identity_v1", {schedule_id,due_at_exchange_utc})`。effect array 中的 timer mutation identity 使用 `"mqtimermut_" + hash_hex_v1("miniqmt_timer_mutation_identity_v1", exact mutation payload)`，因此同 schedule/due 但 payload/ordinal 漂移不会共享 effect hash。CANCEL 不得伪造 due；UPSERT 必须在 session authority 可表达的边界内。
 
-`DiagnosticObservationV1`：`schema_version,observation_id,runtime_id,algo_instance_id,event_id,transition_id,ordinal,severity(INFO|WARNING|ERROR),reason_code,message,context,context_sha256,observed_at_logical_utc`。空返回、missing contract/tick、rounded-zero、unsupported surface 和 schema failure 都必须有 typed reason；log 不能替代 failure receipt。
+`DiagnosticObservationV1`：`schema_version,observation_id,runtime_id,algo_instance_id,event_id,transition_id,ordinal,severity(INFO|WARNING|ERROR),reason_code,message,context,context_sha256,observed_at_logical_utc`。`observation_id = "mqdiag_" + hash_hex_v1("miniqmt_diagnostic_observation_identity_v1", exact preceding fields with observation_id omitted)`；writer 从 deterministic context 取得 runtime/algo/event/logical time，readback 重算 identity，并用 `validate_against_context_v1` 证明 authority closure。空返回、missing contract/tick、rounded-zero、unsupported surface 和 schema failure 都必须有 typed reason；log 不能替代 failure receipt。
 
-`effect_set_sha256 = hash_hex_v1("miniqmt_algo_effect_set_v1", {"next_state_sha256":...,"ordered_command_ids":[...],"ordered_timer_mutation_ids":[...],"ordered_diagnostic_observation_ids":[...],"terminal_outcome":null|...})`。五个 key 必须全部存在，ordered arrays 保留 ordinal 顺序且不得 canonical sort；同 transition 输入必须得到同一 hash。K2 才规定与 repository/outbox 的原子提交。
+`effect_set_sha256 = hash_hex_v1("miniqmt_algo_effect_set_v1", {"next_state_sha256":...,"ordered_command_ids":[...],"ordered_timer_mutation_ids":[...],"ordered_diagnostic_observation_ids":[...],"terminal_outcome":null|...})`。五个 key 必须全部存在，且每个 ID 已由对应 DTO 的完整 business closure 重算通过；ordered arrays 保留 ordinal 顺序且不得 canonical sort。同 transition 输入必须得到同一 hash；same ID/different payload 不得形成相同 effect hash。K2 才规定与 repository/outbox 的原子提交。
 
 ## 6. Deterministic Execution Context / 确定性
 
@@ -332,7 +335,7 @@ draw_u53(draw_ordinal) =
     ) >> 3) / 2^53)
 ```
 
-BestLimit 的等价 draw 为 `int(min_volume + (max_volume - min_volume) * draw_u53(n))`，每个 draw ordinal 写入 next state；retry/restart 使用相同 ordinal 得到相同 quantity。禁止用 `random.Random` 版本行为、全局 seed、进程缓存或重新抽取。action/local order/timer/diagnostic ID 均使用 `derive_id`；logical timestamp 只来自 context。
+BestLimit 的等价 draw 为 `int(min_volume + (max_volume - min_volume) * draw_u53(n))`，每个 draw ordinal 写入 next state；retry/restart 使用相同 ordinal 得到相同 quantity。禁止用 `random.Random` 版本行为、全局 seed、进程缓存或重新抽取。插件内部 action identity 使用上述 `derive_id`；具备可独立 readback exact fields 的 algo/delivery/local order/command/timer/diagnostic DTO 使用 §5 的字段闭包专用公式并由 model validator 重算，两类公式不得混用或接受 caller alias。所有 logical timestamp 只来自 context。
 
 ordinal 必须从当前 transition 的 effect collector 按调用顺序分配并落入 state/receipt。duplicate ordinal、跳号、同 ordinal 不同 payload 是 terminal deterministic conflict。
 
@@ -528,6 +531,8 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 - 先写 malformed type/hash/identity/time/decimal/draw、caller-input/returned-view nested mutation RED tests；
 - 不接 runtime/repository。
 
+当前实现状态：`implemented_verified`。实现位于 `backend/services/miniqmt_execution_runtime/plugin_canonical.py`、`plugin_contracts.py`、`deterministic_context.py`；直接证据位于 `test_algo_plugin_contracts.py` 和 `test_deterministic_execution_context.py`。初始 RED 因三个目标模块不存在产生 2 个 collection error；正式审核补充的 marker mutation、error renderer、exact source identity、same-command-ID/different-payload effect 与 schema/time authority matrix 为 5 failed。最终 GREEN 为 67 个 strict/hash/event/schema/state/effect/determinism 直接用例；changed-file classifier 为 `targeted_ci_required`、`unmapped_code_files=[]`，只选择 `miniqmt_execution_runtime_l2`，该计划 473 passed、1 skipped。当前 line+branch coverage：canonical 94%、contracts 85%、determinism 97%。schema violation evidence 最多消费并呈现 32 项且显式标记 truncation；通用 `derive_id_v1` 仅保留插件内部 `ACTION` kind，持久化 DTO 不存在可竞争的第二 identity authority。新模块未从现有 package `__init__`、runtime、repository、Gateway 或 OMS 接线；`source_merge=pending_pr_update`，不能写成 K1 complete 或 production activated。
+
 ### K1-B — registry/current-three manifests（3–4 人日）
 
 - 实现 route-independent immutable plugin catalog、serializable descriptor/process binding split、creation bindings、aggregate build failure receipt 和 per-route compatibility receipt；
@@ -549,9 +554,10 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 
 ### 11.1 Direct tests
 
-- strict model：null/empty/whitespace/object/list/number/bool identity、extra、enum、nonfinite、naive datetime、decimal scale、JSON key collision；
-- canonical/hash：dict insertion order、process/restart、manifest set order、ordered effects、same identity/different closure、raw digest/hex distinction、exact keyed payload vectors；
-- deep immutability：构建后修改 caller 原始 nested dict/list、修改 thawed/readback view、复用 mutable default 均不能改变 frozen object/hash；
+- strict model：null/empty/whitespace/object/list/number/bool identity、extra、enum、nonfinite、naive datetime、decimal scale、JSON key collision、JSON Schema definition/config/state instance；
+- canonical/hash：dict insertion order、process/restart、manifest set order、ordered effects、same identity/different closure、raw digest/hex distinction、exact keyed payload vectors、algo/delivery/local-order/command/timer/diagnostic readback recomputation；
+- deep immutability：构建后修改 caller 原始 nested dict/list、修改 thawed/readback view、复用 mutable default，以及直接构造公开 marker 后修改 caller nested value，均不能改变 frozen object/hash；
+- error evidence：异常 `__str__` 或 Mapping renderer 再次失败时输出 primary type 与 render error type，不能二次抛异常；
 - catalog：descriptor input permutation、duplicate key、missing/duplicate creation binding、historical restore key、factory binding module/qualname/signature/source mismatch、caller binding dict mutation 不换掉 sealed callable、callable 不可进入 hash、bad source/hash、aggregate FAILED receipt、zero partial publication；
 - route compatibility：一个 unsupported plugin/route 只产生 FAILED route receipt，current-three 其它 registration/snapshot/hash 不变；不同 route receipt 不改 catalog；
 - deterministic：same context retry/restart、different transition/ordinal、BestLimit raw-digest u53 exact vectors、duplicate/skip ordinal、no wall-clock/uuid/global random imports；
@@ -649,25 +655,25 @@ K1 rollback 是 source revert：因没有 DB、配置、runtime switch 或 broke
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-053` | §3 target modules/dependency/import denylist | target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` AST + isolated import | design_ready | none |
-| `F-054` | §4-§5 target `backend/services/miniqmt_execution_runtime/plugin_contracts.py` and `plugin_canonical.py` | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` nested-mutation/raw-digest+hex/canonical/error matrix | design_ready | none |
+| `F-053` | §3 target modules/dependency/import denylist；K1-A dependency direction 保持，`plugin_contracts` 仅新增仓库已锁定 `jsonschema` 用于 schema authority，不连接 runtime/network/DB | changed-file classifier `targeted_ci_required`、`unmapped_code_files=[]`；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` AST + isolated import 仍属 K1-C | design_ready | none |
+| `F-054` | `plugin_contracts.py` and `plugin_canonical.py` strict models、public-marker-safe recursive FrozenJson、JSON Schema definition/instance authority、canonical decimal/time/JSON/raw digest+hex、typed JSON-safe error evidence、writer/readback hash closure | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` malformed identity/type/extra/hash/set permutation/duplicate JSON key/exact composite event/delivery/state/config/initialization/effect/deep-mutation/broken-renderer/bounded-schema-evidence/JSON readback matrix；direct total 67 passed；canonical 94%、contracts 85% line+branch | implemented_verified | none |
 | `F-055` | §7 target `backend/services/miniqmt_execution_runtime/plugin_registry.py` | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` descriptor/binding/creation/route-isolation/aggregate-failure matrix | design_ready | none |
-| `F-056` | §6 target `backend/services/miniqmt_execution_runtime/deterministic_context.py` | target `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` keyed hash/raw-digest u53/retry/restart/ordinal matrix | design_ready | none |
+| `F-056` | `deterministic_context.py`、`DeterministicExecutionContextV1` 与 contract DTO exact algo/delivery/local-order/command/timer/diagnostic/effect identity closure、raw-digest u53、BestLimit quantity、strict ordinal sequence | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` logical-time/hash/retry/readback/raw-digest/different ordinal/invalid coercion/range；`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` same-ID/different-payload、authority-time/readback identity matrix；determinism 97% line+branch | implemented_verified | none |
 | `F-057` | §1、§8 target `backend/execution_algos/vnpy_style/plugin_manifests.py` | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` exact active-order/lineage/TWAP session/legacy drift + existing parity/restart paths | design_ready | none |
 | `F-058` | §1.2、§9 target `backend/execution_algos/vnpy_compat/locked_surface.py` and `receipts.py` | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` pinned source/signature/DTO/error characterization | design_ready | none |
-| `F-059` | §11 ownership/catalog/test plans and coverage | command: `python -m nox -s l0`；target plan `miniqmt_execution_runtime_l2` only when implementation changed files select it | design_ready | none |
-| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2` | design_ready | none |
+| `F-059` | §11 ownership/catalog/test plans and coverage | direct = 67 passed；`python -m nox -s miniqmt_execution_runtime_l2` = 473 passed/1 skipped；classifier `targeted_ci_required`/unmapped empty；coverage canonical/contracts/determinism = 94/85/97 | design_ready | none |
+| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001 / 正式复核
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified/subset/POC | pass | DTO/catalog/determinism/current-three/source receipt/import/test/rollout 全部定义；没有把三个 helper 或 mock catalog 宣称为统一架构完成 |
-| no silent error/fake success | pass | schema/hash/identity/config/source/determinism build failure 使用 aggregate receipt且零 catalog publication；route capability failure 使用独立 FAILED receipt；无 exception pass、空 catalog、固定 True ACK |
+| no simplified/subset/POC | pass | K1-A 不只生成 helper：writer/readback 均闭合 public marker、schema definition/instance、event/algo/delivery/effect identity 与 context time；K1-B/C 继续明确 not_started，没有把 K1-A 宣称为统一架构完成 |
+| no silent error/fake success | pass | same identity/different business payload、invalid schema/state/config/source key、logical-time drift 和 malformed renderer 全部直接拒绝；error evidence 保留 renderer failure type，无 exception pass、空 state/config、固定 True ACK |
 | no business semantic drift | pass | K1 shadow-only；signal/target/side/quantity/A股规则/B0/OMS/Gateway/唯一 broker route 不变；TWAP time/interval 固定 exchange-active seconds、午休不累计，legacy alias-only drift 不自动重解释；current-three parity 是切换前置证据 |
 | no unauthorized gate/approval | pass | plugin catalog 与 per-route capability 分离，单 plugin/route failure 不阻止其它 plugin；无 RBAC、审批、acknowledge、confirm-run、人工恢复、永久 enable flag |
 | no fallback/parallel route | pass | 无 LEGACY/minute/default-algo fallback，不启动第二 vn.py EventEngine/OMS/Gateway；旧 runtime 在 K3 前仍是唯一产品 authority |
-| no nondeterministic hidden state | pass | logical time、identity、ordinal、draw 明确派生；禁止 wall clock/UUID/global random/process cache |
+| no nondeterministic hidden state | pass | algo/delivery/local-order/command/timer/diagnostic/effect identity 与 logical time 均从 exact persisted/context fields 重算；ordinal/draw 明确派生，禁止 wall clock/UUID/global random/process cache |
 | production state separated | pass | design/source/DDL/DML/dependency/config/binding/broker/restart/runtime 分开；本设计所有生产 gate 为 noop |
 
 ## 17. Definition of Done / K1 完成定义
