@@ -3,7 +3,7 @@
 - 文档类型：F2 跨模块从属实现设计
 - 父级权威：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
 - 日期：2026-07-22
-- 状态：`SOURCE_MERGED_VERIFIED_RUNTIME_PENDING`
+- 状态：`SOURCE_MERGED_RUNTIME_VERIFIED`
 - 范围：QuantEvolver / Multi-Alpha combine-backtest / QE UI / PostgreSQL durable read model
 - 唯一隔离边界：仅在 QE 研究环境运行，不读写 Selection、Advisory、Paper、模拟盘、QMT 或生产交易链
 
@@ -14,7 +14,7 @@
 - 已实现规范 `/quantevolver/evolution` task-type 路由、layout-transparent shared shell、旧列表/详情 URL query-preserving redirect、正式全字段多场景创建器、场景级 submission idempotency、typed API adapter、run-scoped child/attempt grid、技术动作连接、durable event cursor API/SSE、Last-Event-ID/visibility 续传、DB events/workspace logs/commands/Archive 分区展示。
 - child/attempt 读取已在审核中从逐 child N+1 调整为单个 run-scoped join query，并以 `include_attempts=true` 一次返回；未改变 child/attempt 数据模型或控制语义。
 - 后端完整 Multi-Alpha 定向矩阵 `214 passed, 9 skipped`（9 项为未配置显式 PostgreSQL 测试 DSN 的可选集成用例），直接改动矩阵 `51 passed`，QE read nox `14 passed`；Ruff、Python compile、catalog integrity 与 CI ownership classifier 通过。新旧 Playwright 合并矩阵 `8 passed`，TypeScript 与 Next.js production build 通过。视觉基线已生成并由 Playwright 对照。
-- 本阶段没有新 DDL、依赖或非 QE 调用；没有启动实验、修改研究结果或添加科研门禁。源码已通过 PR #2593 合入，merge commit 为 `faaad2376ed381618aa66a60aa6d2740a4f42069`，并已同步到本地 `main`；运行时尚未重启验收，重启由用户执行。
+- 本阶段没有新 DDL、依赖或非 QE 调用；没有启动实验、修改研究结果或添加科研门禁。源码已通过 PR #2593 合入，merge commit 为 `faaad2376ed381618aa66a60aa6d2740a4f42069`，并已同步到本地 `main`。用户重启 backend/frontend 后，运行态验收确认 `8001/3000` 为新进程、OpenAPI 与 canonical SSR 返回 200、9/9 Next 静态资源返回 200、历史 run/child readback 正常、event cursor 返回稳定游标、SSE 终态返回 `stream_end`、不存在 run 返回结构化 404、非法游标返回 422；CLI Playwright 复用当前 frontend，以 API mock 隔离真实提交，完成 canonical/legacy route、query 保留、视觉基线、adapter、完整多场景 composer、child/attempt grid 与控制证据验证，结果 `8 passed`。全程仅 GET 真实 API，没有创建实验或数据库写入。
 
 ## 1. 背景与现有代码事实
 
