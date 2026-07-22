@@ -1,8 +1,11 @@
 {
   "actual": "Production-equivalent PostgreSQL serialization raises TypeError for mappingproxy before the atomic economic commit even though BUG-779 direct in-memory coverage passed.",
   "allowed_write_scope": [
-    "backend/services/simulation_runtime/lifecycle_scheduler.py",
+    "backend/services/simulation_runtime/scheduler.py",
     "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_repository_json_contract.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260722_BUG-824-p0-localsim-postgresql-paper-fact-serializer-rejects-immutable-mappingpr.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -53,7 +56,8 @@
   "severity": "P0",
   "status": "open",
   "suspected_modules": [
-    "simulation_runtime"
+    "simulation_runtime",
+    "paper_v2"
   ],
   "title": "[P0][LocalSIM] PostgreSQL paper fact serializer rejects immutable mappingproxy during atomic economic commit",
   "trigger_condition": {

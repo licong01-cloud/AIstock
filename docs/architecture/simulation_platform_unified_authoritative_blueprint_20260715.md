@@ -364,6 +364,10 @@ P0-B 的现行持久化 schema 固定为：
 
 生命周期 scheduler 通过 `PaperTradingV2Repository.local_sim_economic_transaction` 取得 single-writer advisory lock 和唯一写连接，Paper facts 与 `SimulationRuntimeRepository.stage_local_sim_economic_commit` 共享该连接。事务提交后必须分别 readback economic receipt/state/outbox 和 Paper facts。projection 在第二个 single-writer 事务中重放；若 projection 已提交而独立 readback 失败，保持 `PROJECTED` 事实并写 `local_sim_projection_readback_failure`，下一次自动复核 readback，禁止重写经济事实或重复 run event。
 
+Paper PostgreSQL writer 是 LocalSIM durable JSON 的最终 schema 边界，不能假设 scheduler 已计算 canonical hash 就代表原对象可被 `psycopg2.extras.Json` 序列化。`order.metadata`、`fill.metadata`、`fill_market_context`、`order_event.metadata`、`order_event.fill_json` 和同一经济事务内的 `run_event.context` 必须在 SQL execute 前递归规范化：`Mapping`/`MappingProxyType` 复制为按原生 string key 排序的普通 object，tuple/list 规范为 array，date/datetime 规范为 ISO-8601，finite Decimal 规范为精确字符串，Enum 规范为其 value；finite float、int、bool、string 和 null 保持 JSON 语义。禁止 `default=str`、未知对象字符串化、非 string key 强制转换、NaN/Infinity、静默删除字段或只修 scheduler hash payload。
+
+writer 发现非法 key、non-finite number 或未知类型时，必须在首条对应 fact INSERT 前抛出带 `reason_code/fact_type/fact_id/field/path` 的 typed failure，并由 `local_sim_economic_transaction` 回滚整批；不得泄漏裸 `TypeError`、提交半套 Paper facts 或返回成功。直接验收必须实际调用 psycopg2 JSON adapter 的 `getquoted()` 并覆盖事务 commit/rollback；仅 InMemory repository、mock-only payload hash 或 `json.dumps(default=str)` 不能作为实现证据。scheduler 的 canonical economic hash 与 writer readback JSON 必须保持字段级同义，不得为修复序列化改变策略信号、方向、数量、算法或 broker route。
+
 ### 5.6 Market mark contract
 
 账户估值只能使用与 snapshot time 对齐的权威行情：
@@ -649,6 +653,7 @@ LocalSIM `causal_bar_lag_seconds` 定义为 diagnostics observation clock 到 ac
 | LocalSIM BUY 暂无足够现金 | SELL-first，按 ledger 可负担量成交，remaining `WAITING_FOR_CAPITAL` 并自动恢复 | 计划期估价删除 BUY、BrokerRejected 整批回滚或默认现金 |
 | symbol-aware 分钟算法合法科创板数量 | 保留 order total 并按统一板块手数生成 child | 硬编码 100 股改写 201 等合法数量 |
 | LocalSIM commit 中途失败 | 事务回滚或 outbox retry，typed failure | 留下半套事实后报 PERSISTED |
+| LocalSIM immutable fact 进入 PostgreSQL JSON adapter | SQL execute 前按 strict durable JSON schema 规范化；非法值携带 fact identity/path typed fail loud 并回滚 | 依赖 InMemory 假绿、泄漏 mappingproxy/unknown-type `TypeError`、`default=str` 或部分提交 |
 | mark 缺失 | loud missing，不能生成成功快照 | 用 reference/limit/0/成本价代替 |
 | MiniQMT tick stale/invalid | 当前 symbol/revision fail closed 并可观测 | 回退 LEGACY/minute/旧缓存 |
 | MiniQMT quote 缺少 openInt | 视为可选字段缺失；存在时才校验 registered phase | 把普通股票 quote 判为 capability/tradability invalid |
@@ -692,6 +697,13 @@ LocalSIM `causal_bar_lag_seconds` 定义为 diagnostics observation clock 到 ac
 - `reference_price`、`limit_price`、`current_prices`、`price_by_symbol` 的估值 fallback 已删除；账户只接受 LocalSIM broker 从同一执行行情 provider 读取、带真实 as-of/provenance/hash 的 realtime/historical/suspended-prev-close market mark；缺失或非法 mark 使用 `LOCALSIM_MARK_*` typed failure；
 - direct tests 覆盖 PostgreSQL 单连接 commit/rollback、跨 repository 回滚、通用价格拒绝、realtime/historical/suspended mark provenance、projection readback 恢复、same-bar restart dedupe 和多分钟 partial-to-terminal generation；
 - 本项不新增 DB object，不执行生产 DDL/DML/config，不调用生产 broker，不重启服务；source merge 与正常交易日 runtime evidence 继续分开记录。
+
+`BUG-824` 补齐 `F-034` 的 PostgreSQL serializer 真实边界：
+
+- Paper repository 在 order/fill/order-event/run-event 的每个 JSON 参数进入 psycopg2 adapter 前执行 strict canonical conversion，并保留 fact type、fact identity、field 和递归 path；合法 immutable mapping、tuple、date/datetime、Decimal 和 Enum 可持久化，non-string key、non-finite number 与未知类型 typed fail loud；
+- order-event nested fill 改用 Python-mode payload 后由同一 converter 处理，避免 Pydantic JSON mode 在 mappingproxy 处先抛裸异常；transaction/single-writer/upsert/readback 语义不变，非法首 fact 触发原事务 rollback；
+- production-equivalent direct tests 调用真实 `psycopg2.extras.Json.getquoted()`，覆盖 order/fill/fill-market-context/order-event nested fill/run-event、合法 commit、未知类型 rollback 及 key/number negative matrix；既有 scheduler immutable hash 与 pre-commit truth 节点继续作为共享契约回归；
+- 本项不新增数据库对象或依赖，不执行 DDL/DML/config，不调用 broker，不启停或重启服务。source PR/CI/merge、用户部署重启和正常交易日 runtime readback 分别记录。
 
 ### P0-C：MiniQMT B0_V2 单一路径和旧路径退役
 
@@ -947,6 +959,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-039` | runtime trade date、broker raw date/time 与 TCA UTC 规范化 authority 分离；numeric/compact/time-only/ISO 不歧义猜测 |
 | `F-040` | MiniQMT Phase 1 physical generation 由同一 `data_session_key` 的 subscriber process lifecycle 单调拥有；last-lease release、failed prepare、rebuild、shutdown 后不得复用已分配或 fenced generation，迟到 callback 永久拒绝且 successor bootstrap/callback 继续由同一 single writer 接受 |
 | `F-041` | MiniQMT durable batch 以唯一 parent intent identity 关联；合法 permutation 按 request canonical order 幂等恢复，写入/readback strict schema 一致且 malformed JSON identity 的 typed diagnostics 不产生二次异常；真实 corruption fail loud，multi-slice/restart 不覆盖或重复 side effect，scheduler 保持 per-binding isolation |
+| `F-042` | LocalSIM Paper PostgreSQL durable fact writer 在 SQL execute 前对 order/fill/order-event/run-event JSON 执行与 economic hash 同义的 strict canonical conversion；合法 immutable mapping 可提交，非法 key/number/type 带 fact identity/path fail loud 并原子回滚，不得泄漏裸 serializer 异常、静默转换或形成半套事实 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -993,6 +1006,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-039` | §5.9、§9 P0-F；runtime broker time parsers；`tca_capture.py` | backend/tests/simulation_runtime/test_tca_capture.py；backend/tests/miniqmt_execution_runtime/test_runtime.py；epoch/compact/time-only/ISO and mismatch matrix | implemented_verified | none |
 | `F-040` | §4.2 MiniQMT quote ownership、§4.4 tick model、§5.9 fail-loud health；`RealtimeQuoteSubscriber._next_phase_one_generation_locked`、callback capture/fence critical section、`QuoteIngressWorker` active/fenced diagnostics | backend/tests/infra/test_realtime_quote_subscriber_leases.py last-release/reacquire、failed candidate、late callback race、multi-session isolation；backend/tests/miniqmt_execution_runtime/test_quote_ingress.py failed-candidate callback/fence linearization、same-supervisor reacquire/normalized projection/active-failure auto-clear；backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py factory close/later runtime | implemented_verified | none |
 | `F-041` | §5.8 durable batch identity contract；`_event_loop_results_from_batch`、`_event_loop_durable_identity_context`、`_canonical_event_loop_result_objects`、`_sync_event_loop_triggered_children_to_batches` | backend/tests/miniqmt_execution_runtime/test_runtime.py fifth-item permutation、arbitrary-JSON corruption diagnostics、strict pre-upsert carrier/alias validation、合法 pending/rejected/deferred、canonical serialization/replay/restart/multi-slice；backend/tests/simulation_runtime/test_lifecycle_scheduler.py exact replay failure per-binding isolation | implemented_verified | none |
+| `F-042` | §5.5 PostgreSQL durable JSON boundary；`PaperTradingV2Repository.save_order/save_fill/save_order_event/save_run_event`、`local_sim_economic_transaction` | backend/tests/paper_trading_v2/test_repository_json_contract.py real psycopg2 adapter mappingproxy commit、unknown-type rollback、non-string key/non-finite negative matrix；backend/tests/simulation_runtime/test_lifecycle_scheduler.py immutable economic payload/pre-commit truth | implemented_verified | explicitly approved production-state separation：normal trading-day PostgreSQL runtime readback remains separate |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
@@ -1054,6 +1068,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-052` | `F-004,005,024` | BUG-797 删除 scheduler release→portfolio 与 broker manifest/flat-policy fallback；LocalSIM run context 验证 persisted release snapshot exact schema/normalized hash/ID-SHA，binding admission 仍只检查 package lifecycle；Paper daemon 显式 wiring；历史 incomplete release typed fail/retire | BUG-797 / issue #2532；single/multi/model-code required/optional binding、scheduler release-over-portfolio、incomplete release no-fallback、release 顶层 ID/SHA 与 snapshot 冲突、broker missing/empty/hash/alias、daemon E2E direct tests | IMPLEMENTED_VERIFIED | 更新修复 PR 并检查 CI；合入后由用户重启并只读核对实际 release policy reason；DDL/DML/config/broker 均为 noop；BUG-795/796 已合入 |
 | `SIM-P-053` | `F-016,017,020,021,022,024,040` | BUG-806 将 Phase 1 physical generation authority 从可删除 active feed 提升为 subscriber-owned per-session high-watermark；candidate 建立前预留 generation，failed prepare/last release/rebuild/shutdown 均保留 fenced history；callback immutable capture 与 generation fence 在 subscriber 内线性化；successor generation 严格递增，旧 callback 继续 fail loud，多个 logical consumers 与 single writer 语义不变 | BUG-806 / issue #2566；subscriber last-release/reacquire、failed candidate non-reuse、late callback race、multi-session isolation；failed-candidate in-flight callback/fence serialization；same-supervisor raw/normalized capture；factory close/later runtime；worker active/fenced/current diagnostics 与 recovery auto-clear direct tests | IMPLEMENTED_VERIFIED | `source_merge=pending_pr`；`production_ddl=noop`；`production_config=noop`；`restart=pending_user_after_merge`；`binding_migration=noop`；`runtime_observation=pending_normal_trading_day`。合入并由用户重启后，按只读 diagnostics 核对实际生命周期触发的 last-release、后续 generation successor/bootstrap/callback；本 BUG 不调用 broker |
 | `SIM-P-054` | `F-020,021,024,038,041` | BUG-820 将 durable result 从 positional identity 改为唯一 parent identity association：set-equal permutation 按 request canonical order 恢复/序列化；submit、replay、child sync、restart 与 multi-slice aggregate 共用完整性检查，后续 rejected slice 保留既有 accepted broker fact。独立审核补修使任意 JSON malformed identity 的 error context 可序列化且不会二次 TypeError，并在 upsert 前拒绝非字符串 result identity、conflicting request aliases 和空白 success order ID，使 write/readback schema 完全一致。生产只读 row 为 35/35、无空值/duplicate/missing/extra、集合相同但顺序不同；repository 整体 upsert 未自行排序，submit producer 按原 parent order 覆盖了 result order。scheduler core 已证明 per-binding isolation，LocalSIM 在故障后继续 durable 推进；当前 background TypeError、reconciliation/OMS warnings 作为独立观察，不并入本修复 | BUG-820 / issue #2591；原 RED fifth-item permutation + cross-tick accepted→rejected 2 failed；审核补修 RED 5 failed/2 passed；GREEN arbitrary-JSON diagnostics、strict persistence、合法 carrier、核心 replay/scheduler nodeids 与 L2/CI/F2 evidence 在 PR 更新后刷新 | IMPLEMENTED_VERIFIED | `source_merge=pending_user_authorization`；`production_ddl=noop`；`production_config=noop`；`restart=pending_user_after_merge`；`binding_migration=noop`；`runtime_observation=pending_deploy_readback`。本 PR 不修改/重放生产 batch，不调用 broker |
+| `SIM-P-055` | `F-013,014,015,024,034,042` | BUG-824 将 LocalSIM immutable durable fact 的最终 JSON schema enforcement 落到真实 Paper PostgreSQL writer：order/fill/fill-market-context/order-event nested fill/run-event 全部在 execute 前 canonicalize；unknown type、non-string key 和 non-finite number 带完整 fact identity/path 拒绝并触发 economic transaction rollback，不再依赖 InMemory serializer 假设或泄漏 mappingproxy TypeError | BUG-824 / issue #2607；真实 psycopg2 `Json.getquoted()` RED 2 failed，修复后 direct contract matrix 8 passed，含合法 fact 已执行后后续 event schema failure 的整事务 rollback；scheduler immutable payload/pre-commit truth direct nodes 与 changed-file catalog gate 在 PR 前复核 | IMPLEMENTED_VERIFIED | `source_merge=pending_pr`；`close_sync=not_started`；`production_ddl=noop`；`production_dml=noop`；backend/frontend dependency gate `noop`；`restart=not_authorized_not_run`；`runtime_observation=pending_merge_and_user_restart`。本 BUG 不调用 broker |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -1256,6 +1271,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_business_semantic_drift` | pass | 不改变 Selection、策略信号、选股、资产、方向、数量、执行算法、B0 quote authority、broker route 或 child runtime facts；只把 durable parent projection 与 canonical identity 对齐，accepted side effect 不被后续 slice 覆盖 |
 | `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、人工恢复、execution gate、业务开关或 fallback；合法 permutation 和独立 binding 继续沿既有自动 replay/scheduler cadence 推进 |
 | `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；`production_ddl_gate=noop`、前后端 dependency gate 均为 `noop`；未执行 DDL/DML/config、未调用 broker、未启停或重启服务、未修改或人工重放生产 batch。source/CI/merge、部署重启和当前 row runtime recovery 分开记录 |
+
+`BUG-824` LocalSIM PostgreSQL durable fact serializer 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass for BUG-824 scope；platform remains open | 修复位于真实 Paper PostgreSQL writer 和 economic transaction seam，覆盖 order、fill、fill market context、order-event metadata/nested fill、run-event context、adapter commit/rollback 与 negative matrix；不是只改 hash helper、InMemory/mock-only 或捕获一个 mappingproxy 特例 |
+| `no_silent_error` | pass | unknown type、non-string key、NaN/Infinity/Decimal NaN 均以稳定 `PAPER_V2_DURABLE_FACT_JSON_*` reason、fact type/id、field/path 抛出 `DataUnavailableError` 并 rollback；没有 `except: pass`、字段删除、`default=str`、固定成功或裸 serializer TypeError |
+| `no_business_semantic_drift` | pass | canonical value 语义与 scheduler economic hash 一致；未改变 Selection、策略信号、选股、资产、方向、数量、算法、T+1、行情 authority、MiniQMT 或 broker route；Paper upsert、single-writer、receipt/outbox/readback identity 不变 |
+| `no_unrequested_gate_or_approval` | pass | 未增加 RBAC、审批、人工 acknowledge、人工恢复、业务开关或 execution gate；合法 immutable payload 沿既有自动 scheduler transaction 提交，非法数据只是既有 durability contract 的 typed failure |
+| `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；未执行 DDL/DML/config、未调用 broker、未启停或重启服务；source PR/CI/merge、用户重启和正常交易日 runtime readback 分开记录 |
 
 ## 17. Definition of Done
 
