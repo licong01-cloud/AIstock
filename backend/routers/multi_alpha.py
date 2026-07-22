@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.multi_alpha import (
@@ -27,7 +30,11 @@ from backend.services.multi_alpha.durable_control import (
     DurableMultiAlphaControlService,
 )
 from backend.services.multi_alpha.durable_recovery import DurableRecoveryService
-from backend.services.multi_alpha.durable_repository import MultiAlphaDurableRepositoryError
+from backend.services.multi_alpha.durable_repository import (
+    MultiAlphaDurableRepository,
+    MultiAlphaDurableRepositoryError,
+    TERMINAL_RUN_STATUSES,
+)
 
 
 router = APIRouter(prefix="/multi-alpha", tags=["multi-alpha"])
@@ -163,6 +170,85 @@ def _durable_command_response(result: Any) -> dict[str, Any]:
     }
 
 
+def _require_durable_run(repository: MultiAlphaDurableRepository, run_id: str) -> dict[str, Any]:
+    run = repository.get_run(run_id)
+    if run is None:
+        raise DurableControlError(
+            "durable multi-alpha run was not found",
+            reason_code="multi_alpha_entity_not_found",
+            context={"run_id": run_id},
+        )
+    return run
+
+
+def _sse_message(*, event: str, data: Any, event_id: int | None = None) -> str:
+    lines: list[str] = []
+    if event_id is not None:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    serialized = json.dumps(data, ensure_ascii=False, default=str, separators=(",", ":"))
+    lines.extend(f"data: {line}" for line in serialized.splitlines() or [""])
+    return "\n".join(lines) + "\n\n"
+
+
+def _durable_event_stream(
+    *,
+    repository: MultiAlphaDurableRepository,
+    run_id: str,
+    after_event_id: int,
+    poll_interval_seconds: float = 1.0,
+    heartbeat_seconds: float = 15.0,
+):
+    cursor = after_event_id
+    last_emit = time.monotonic()
+    while True:
+        try:
+            events = repository.list_events(run_id, after_event_id=cursor, limit=500)
+            for event in events:
+                event_id = int(event["event_id"])
+                if event_id <= cursor:
+                    raise MultiAlphaDurableRepositoryError(
+                        "durable event cursor did not advance",
+                        reason_code="multi_alpha_event_cursor_regressed",
+                        context={"run_id": run_id, "cursor": cursor, "event_id": event_id},
+                    )
+                cursor = event_id
+                last_emit = time.monotonic()
+                yield _sse_message(event="durable_event", data=event, event_id=event_id)
+
+            run = _require_durable_run(repository, run_id)
+            if str(run.get("status") or "") in TERMINAL_RUN_STATUSES and not events:
+                yield _sse_message(
+                    event="stream_end",
+                    data={"run_id": run_id, "status": run.get("status"), "last_event_id": cursor},
+                    event_id=cursor if cursor > 0 else None,
+                )
+                return
+
+            now = time.monotonic()
+            if now - last_emit >= heartbeat_seconds:
+                yield f": heartbeat run_id={run_id} after_event_id={cursor}\n\n"
+                last_emit = now
+            time.sleep(poll_interval_seconds)
+        except GeneratorExit:
+            return
+        except Exception as exc:
+            reason_code = str(getattr(exc, "reason_code", "multi_alpha_event_stream_failed"))
+            context = dict(getattr(exc, "context", {}) or {})
+            yield _sse_message(
+                event="stream_error",
+                data={
+                    "run_id": run_id,
+                    "reason_code": reason_code,
+                    "message": str(exc),
+                    "context": context,
+                    "last_event_id": cursor,
+                },
+                event_id=cursor if cursor > 0 else None,
+            )
+            return
+
+
 def _require_run_scoped_child(
     service: DurableMultiAlphaControlService,
     *,
@@ -224,9 +310,16 @@ def preview_multi_alpha_combination(request: CombinePreviewRequest) -> dict:
 
 
 @router.post("/combine-backtest/run", summary="Submit a Tier-1 multi-alpha combine-backtest job")
-def submit_multi_alpha_combine_backtest(request: CombineBacktestRunRequest, response: Response) -> dict:
+def submit_multi_alpha_combine_backtest(
+    request: CombineBacktestRunRequest,
+    response: Response,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
     try:
-        data = MultiAlphaCombineBacktestService().submit_run(request.model_dump())
+        data = MultiAlphaCombineBacktestService().submit_run(
+            request.model_dump(),
+            idempotency_key=idempotency_key,
+        )
     except DurableCombineSubmissionError as exc:
         raise HTTPException(status_code=exc.http_status_code, detail=error_payload(exc)) from exc
     except MultiAlphaCombineBacktestError as exc:
@@ -272,14 +365,101 @@ def get_multi_alpha_durable_control_capabilities(
     "/combine-backtest/runs/{run_id}/children",
     summary="List durable QE multi-alpha children with their exact selected-attempt state",
 )
-def list_multi_alpha_durable_children(run_id: str) -> dict:
+def list_multi_alpha_durable_children(
+    run_id: str,
+    include_attempts: bool = Query(default=False),
+) -> dict:
     try:
         service = DurableMultiAlphaControlService()
         service.capabilities(run_id=run_id)
         children = service.repository.list_children(run_id)
+        if include_attempts:
+            attempts_by_child: dict[str, list[dict[str, Any]]] = {}
+            for attempt in service.repository.list_attempts_for_run(run_id):
+                attempts_by_child.setdefault(str(attempt.get("child_id") or ""), []).append(attempt)
+            for child in children:
+                selected_attempt_id = child.get("selected_attempt_id")
+                child["attempts"] = [
+                    {**attempt, "selected": attempt.get("attempt_id") == selected_attempt_id}
+                    for attempt in attempts_by_child.get(str(child.get("child_id") or ""), [])
+                ]
     except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
         raise _durable_control_http_error(exc) from exc
     return {"status": "success", "data": {"children": children, "count": len(children)}}
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/events",
+    summary="List append-only durable QE multi-alpha events by stable cursor",
+)
+def list_multi_alpha_durable_events(
+    run_id: str,
+    after_event_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=500, ge=1, le=1000),
+) -> dict[str, Any]:
+    try:
+        repository = MultiAlphaDurableRepository()
+        _require_durable_run(repository, run_id)
+        rows = repository.list_events(run_id, after_event_id=after_event_id, limit=limit + 1)
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    events = rows[:limit]
+    next_event_id = int(events[-1]["event_id"]) if events else after_event_id
+    return {
+        "status": "success",
+        "data": {
+            "run_id": run_id,
+            "events": events,
+            "count": len(events),
+            "after_event_id": after_event_id,
+            "next_event_id": next_event_id,
+            "has_more": len(rows) > limit,
+        },
+    }
+
+
+@router.get(
+    "/combine-backtest/runs/{run_id}/events/stream",
+    summary="Stream durable QE multi-alpha events with cursor replay",
+)
+def stream_multi_alpha_durable_events(
+    run_id: str,
+    after_event_id: int = Query(default=0, ge=0),
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    header_cursor = 0
+    if last_event_id is not None and str(last_event_id).strip():
+        try:
+            header_cursor = int(str(last_event_id).strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": "multi_alpha_invalid_event_cursor",
+                    "message": "Last-Event-ID must be a non-negative integer",
+                    "context": {"last_event_id": last_event_id},
+                },
+            ) from exc
+        if header_cursor < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": "multi_alpha_invalid_event_cursor",
+                    "message": "Last-Event-ID must be a non-negative integer",
+                    "context": {"last_event_id": last_event_id},
+                },
+            )
+    cursor = max(after_event_id, header_cursor)
+    try:
+        repository = MultiAlphaDurableRepository()
+        _require_durable_run(repository, run_id)
+    except (DurableControlError, MultiAlphaDurableRepositoryError) as exc:
+        raise _durable_control_http_error(exc) from exc
+    return StreamingResponse(
+        _durable_event_stream(repository=repository, run_id=run_id, after_event_id=cursor),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(

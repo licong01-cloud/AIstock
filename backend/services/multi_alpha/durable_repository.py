@@ -1367,6 +1367,19 @@ class MultiAlphaDurableRepository:
             (child_id,),
         )
 
+    def list_attempts_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        return self._fetch_all(
+            """
+            SELECT attempt.*
+            FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+            JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+              ON child.child_id = attempt.child_id
+            WHERE child.run_id = %s
+            ORDER BY child.ordinal, attempt.attempt_no, attempt.attempt_id
+            """,
+            (run_id,),
+        )
+
     def get_attempt(self, attempt_id: str) -> dict[str, Any] | None:
         return self._fetch_one(
             """

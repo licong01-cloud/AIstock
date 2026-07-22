@@ -117,7 +117,7 @@ async function installMocks(
       execution_identity_evidence: { complete: false, missing: ["dataset_manifest"], acquisition_suggestions: ["publish manifest"] },
     },
   }));
-  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/children$`), route => respond(route, {
+  await page.route(new RegExp(`/api/v1/multi-alpha/combine-backtest/runs/${sourceRunId}/children(?:\\?.*)?$`), route => respond(route, {
     children: [{
       child_id: "macbc_failed_scheme",
       child_key: "scheme:equal",

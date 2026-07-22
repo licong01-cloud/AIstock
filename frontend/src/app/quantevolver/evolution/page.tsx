@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Play, Terminal, GitMerge, FileCode2,
   Activity, ArrowRight, DownloadCloud, CheckCircle2,
@@ -8,6 +8,7 @@ import {
   Square, RotateCcw, Pause, XCircle, RefreshCw, Trash2, Copy
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 
 import LogsPanel from "./components/LogsPanel";
 import LogTerminal from "../components/LogTerminal";
@@ -15,6 +16,8 @@ import ParamSchemaForm from "./components/ParamSchemaForm";
 import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
 import TopologyPanel from "./components/TopologyPanel";
 import LoopDetailPanel, { getTaskStatusInfo } from "./components/LoopDetailPanel";
+import EvolutionWorkspaceShell from "./components/EvolutionWorkspaceShell";
+import MultiAlphaEvolutionWorkspace from "./components/MultiAlphaEvolutionWorkspace";
 import type { Loop } from "./components/TopologyPanel";
 import { qeArchiveApi, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
 import {
@@ -268,7 +271,7 @@ function normalizeSummaryLoop(loop: Loop): Loop {
   };
 }
 
-export default function EvolutionDashboard() {
+function SingleAlphaEvolutionDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
   const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
@@ -4891,5 +4894,30 @@ export default function EvolutionDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+function EvolutionRouteContent() {
+  const searchParams = useSearchParams();
+  const taskType = searchParams.get("task_type");
+  if (taskType === "multi_alpha_combine") {
+    return (
+      <EvolutionWorkspaceShell taskType="multi_alpha_combine">
+        <MultiAlphaEvolutionWorkspace taskId={searchParams.get("task_id")} />
+      </EvolutionWorkspaceShell>
+    );
+  }
+  return (
+    <EvolutionWorkspaceShell taskType="single_alpha">
+      <SingleAlphaEvolutionDashboard />
+    </EvolutionWorkspaceShell>
+  );
+}
+
+export default function EvolutionDashboard() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#475569" }}>Loading QE evolution workspace...</div>}>
+      <EvolutionRouteContent />
+    </Suspense>
   );
 }
