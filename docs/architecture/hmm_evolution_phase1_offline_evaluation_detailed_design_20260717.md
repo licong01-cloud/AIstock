@@ -1,10 +1,10 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v2.6
+> **版本**：v2.7
 > **日期**：2026-07-17
 > **修订日期**：2026-07-22
 > **状态**：P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；2026-07-22 Phase 1 收官外部验收完成：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 receipt、真实 UI/Playwright 18 场景、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout），证据见 §17.4.6。Gate truth：`hmm_evolution_v1/v2` production `applied_and_verified`（历史事实）；`hmm_evolution_v3` DEV `applied_and_verified`；`hmm_evolution_v3` production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21）
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.5
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.7
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -1553,22 +1553,23 @@ v2 `runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows wo
 
 ## 24. 设计结论
 
-P1-A 的 QE 全资产只读 reader、candidate identity 与 schema v2 已完成源码、真实 dev PostgreSQL、
-生产 schema、真实 QE workspace 与重启后 runtime 外部验收。
-P1-B 已实现 pure
-evaluator、Phase 0 source manifest adapter、latest-common/交易日收益只读 repository、durable
-executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算
-路径迁移；BUG-773/BUG-774 修复了行情收益整数除法并将重放收紧为 content-verified/fail-on-drift，
-旧 market-required receipt 只读无效。P1-C 的 API/UI/worker 源码及审计硬化已完成，BUG-775/BUG-776
-补齐 durable receipt 和诚实指标语义；受控 10-case、10/9 候选性能、pre-ST-PIT compatibility、
-进程中断 fail-closed 与显式 retry receipt 已完成；严格冷热缓存分阶段 timing/RSS、长期服务监督与
-真实页面/Playwright 仍待外部验收。Phase 1 API/worker 已有受控运行证据，
-不得将其扩大表述为整个 Phase 1 verified、Phase 2/3 已启用或已接入 QE/Paper 生产链。
+P1-A 的 QE 全资产只读 reader、candidate identity 与 schema v2 已完成源码、真实 DEV PostgreSQL、
+生产 schema、真实 QE workspace 与重启后 runtime 外部验收；schema v3 已在 DEV
+`applied_and_verified`，production 仍为 `pending`。P1-B 已实现 pure evaluator、Phase 0 source
+manifest adapter、latest-common/交易日收益只读 repository、durable executor、batch-relative
+recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算路径迁移；BUG-773/BUG-774
+修复了行情收益整数除法并将重放收紧为 content-verified/fail-on-drift，旧 market-required receipt
+只读无效。P1-C 的 API/UI/worker 源码及审计硬化、受控 10-case、10/9 候选性能、pre-ST-PIT
+compatibility、进程中断 fail-closed 与显式 retry、严格冷热缓存分阶段 timing/RSS、durable worker
+监督和真实页面/Playwright 18 场景均已完成外部验收。因此 F-006～F-010A 在“实现 + DEV 外部验收”
+边界内全部 verified；这不表示 production schema v3 已应用、production runtime 已加载新版本、
+Phase 2/3 已启用，或 HMM 已接入 QE/Paper 生产链。
 
 ## 25. 变更记录
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.7 | 2026-07-22 | BUG-821：将设计权威引用更新到总体蓝图 v2.7，并修正 §24 的旧验收缺口结论，使其与顶部状态、§17.4.6 和 F-006～F-010A 验收矩阵一致；继续明确 Phase 1 verified 仅覆盖实现与 DEV 外部验收，production schema v3、production runtime activation 以及 Phase 2/3 均未据此完成。 |
 | v2.6 | 2026-07-22 | 按只读复核 NEED-FIX 修正 gate truth 与 DEV 写入事实：`hmm_evolution_v1/v2` production `applied_and_verified` 保留为历史事实；明确 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt`、`worker_runtime_status`）DEV `applied_and_verified`、production `pending`（未授权、未执行），`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21、§18 P1-A 状态）；§17.4.6 以授权时间线 + 八张 canonical relations 精确行数 + compute_nodes 遥测差异规则如实记录 DEV 种子写入，替代"DEV 只写 hmm_evolution.*"的绝对表述；登记 v3 生产 DDL 须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3`。 |
 | v2.5 | 2026-07-22 | 回填 Phase 1 收官外部验收（§17.4.6）：登记用户"Loop1 + h10 spec"fallback 裁决（canonical Loop10 workspace 无远端 manifest、trust gate 按设计 fail-closed、不扩白名单）；zerocopy 1c/10c 与 fallback cold/warm 全 benchmark matrix（分阶段 timing、peak RSS、per-artifact cache evidence、cold/warm result_hash 一致）；真实 UI/Playwright 18 场景（含 Sidebar `NEXT_PUBLIC_TDX_BACKEND_BASE` 覆盖修复）；worker 31.6 分钟 bounded soak 六类事件；F-008/F-010/F-010A 标记 verified。 |
 | v2.4 | 2026-07-21 | 登记用户批准的 Phase 1 收官裁决：execution purpose 隔离（§7.5，选项 1A，benchmark 对 succeeded logical key 开 max+1 generation、普通 create_or_get 仅见 evaluation purpose、retry 继承 purpose 不串用）；`hmm_evolution.performance_receipt`（§10.8，选项 B，batch/evaluation 两级、分阶段 CAS 写入、失败保留 partial）；逐 artifact cache evidence 语义（§13.4，zero_copy_bypass 不得标 warm、全 zero-copy 顶层 unknown、task-scoped cold cache root）；durable `worker_runtime_status` 与只读 `/workers` API（§10.9/§13.6/§14.6，freshness 推导 healthy/stale/stopped/unknown，不装系统服务）；schema v3 bootstrap DEV-first，生产 DDL 独立 pending。 |
