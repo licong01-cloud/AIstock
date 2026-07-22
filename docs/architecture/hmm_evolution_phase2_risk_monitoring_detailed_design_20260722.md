@@ -2,12 +2,12 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 状态：`FORMAL_REVIEW_REVISED_USER_CONFIRMATION_REQUIRED`
-- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.10
+- 状态：`DESIGN_READY_USER_APPROVED`
+- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.11
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：只交付正式审核修订，不实施代码、DDL、依赖安装、服务重启、日任务或生产写入；任何 PR 合入均须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；本 PR 只交付设计，不实施代码、DDL、依赖安装、服务重启、日任务或生产写入；任何后续 PR 合入仍须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -72,7 +72,7 @@ observation、posterior、state、transition、severity 或 revision 逻辑。�
 
 - 新 schema `hmm_risk`、exact bootstrap/verify、repository 和 current views。
 - candidate/model/input identity 解析、共同水位、PIT mapping/content hashes。
-- L1/L2 direct state evidence adapter、状态/transition/severity；跨层 aggregation 仅在 C-002 获用户确认后进入范围。
+- C-001-A candidate capability、C-002-A direct L1/L2 state-model-set、状态/transition/severity；禁止跨层 posterior aggregation。
 - durable daily generation job、显式失败、idempotency、lease/fencing 和迟到数据重算。
 - alerts、risk event lifecycle、retrospective report。
 - parent blueprint 定义的 overview/heatmap/alerts/timeline/event/preview/run API。
@@ -154,36 +154,49 @@ job request 必须显式提供 `candidate_id`，禁止 `latest`、display name �
 config/snapshot/candidate identity 必须互相一致。model file 缺失、hash 漂移、parser 不支持、train_end 缺失或
 `train_end > as_of_date` 均终止 job。路径只是定位信息，不进入权威 identity；identity 使用内容 hash。
 
-### 4.2 Model parser contract
+### 4.2 Candidate capability 与 model parser contract（C-001-A）
 
-不得把 Phase 2 缩减为单一 parser 或 L2-only 子集。实现前必须生成并评审
-`hmm_risk_candidate_state_evidence_matrix_v1`，逐个覆盖所有 `research_only` candidate，至少记录：
+`hmm_evolution.candidate` 的权威 artifact 全部是 `hmm_sector_coefficients`；coefficient 不等于 state。
+2026-07-22 production 只读审核覆盖全部 17 个 `research_only` candidate，并按 snapshot model 内容形成
+`hmm_risk_candidate_state_evidence_matrix_v1`：
 
-- candidate/manifest/snapshot/config/model/coefficient artifact identity；
-- 实际 source contract 和 parser contract；
-- 可直接证明的 sector level；
-- semantic state 的权威来源及其 hash；
-- `trending/neutral/fading` 映射证据；
-- observation/parser/version；
-- `SUPPORTED` 或带稳定 reason code 的未支持结论。
+| capability | candidate ids | state model evidence | approved behavior |
+|---|---|---|---|
+| `DIRECT_STATE_PRODUCER`，legacy/covfix family | `hmmc_947fdd0c87bfd59e5c9d1fab`; `hmmc_51125769a3e34f2a8dee4888`; `hmmc_2e0544a2211cfe070ca88fc5`; `hmmc_42966cb2bf4a89b7dc8e7e7e`; `hmmc_5260d6c9aa865290f281fe17`; `hmmc_6b0c45f51fda23121cf40852`; `hmmc_c43146fc5cf03b5574768c62`; `hmmc_4d0eb6a0a7467d7997e45b33`; `hmmc_9819877c675a2e9322b817cf` | L2 model SHA-256 `1b2179f3267c441c99fcdf7b514272991007f28e196e8b835b2f00c67644bf63`；131 个 L2 entry；每项含 means/covars/transmat/state_labels；labels 严格为三态 | 解析 model posterior；九个 candidate 共享同一 state-model identity，不能伪称九套不同状态 |
+| `DIRECT_STATE_PRODUCER`，autocycle family | `hmmc_7ff01b89a2cc97e101e163ac`; `hmmc_f13f7cb4f507a4907dbae049`; `hmmc_51c740b59086c181706442a3`; `hmmc_573b2dd8892f8736e624dcf5` | L2 model SHA-256 `a0f2df5b801b20e4a725adaa7df82d01de1a8c5207c84c409a382da9b0d453ad`；131 个 L2 entry；完整 emission/transition/state_labels；labels 严格为三态 | 解析 model posterior；四个 candidate 共享同一 state-model identity |
+| `COEFFICIENT_ONLY_NOT_STATE_PRODUCER` | `hmmc_646b89f809a65e1f1939f0d2`; `hmmc_fa47b5fa387cdc9862ffe01d`; `hmmc_6614b6938e0c85a6beeee32d`; `hmmc_a69ae30f0992c819cb894f8a` | pooled 4-state研究摘要，仅有 candidate/preprocess/state_utilities/transmat 等汇总，缺 startprob/means/covars，不能执行日度 posterior | API/UI 显式返回 `hmm_risk_candidate_not_state_capable`；不生成 neutral、空成功或按 coefficient/utility 猜状态 |
 
-正式审核时 production 有 17 个 `research_only` candidate、至少两类 model 结构，且多数 config 没有显式
-`sector_level`。因此不能按条目数、路径、显示名、系数大小、排名或“最新”猜测。F-011 的完成条件是
-当前全部 candidate 均有可核验 adapter，或用户逐项明确确认某 candidate 不属于 sector-state producer；
-未获确认的 unsupported candidate 会阻断整体 Phase 2 完成，不能仅在 UI 隐藏后声称完整交付。
+resolver 必须以 candidate→snapshot→model bytes 的实际 SHA-256 重新核验上述 capability，不能只信数据库路径或表格常量。
+13 个 direct candidate 实际对应两个 L2 state-model identity；UI/API 同时返回 `candidate_id`、`state_model_set_id`、
+`l2_model_sha256`，相同 model 的结果允许共享计算但保持 candidate 请求/审计 identity。四个 coefficient-only candidate
+仍保留在 candidate inventory，不隐藏、不退役、不改变 Phase 1 生命周期；它们只是不属于 Phase 2 state producer。
 
-对于 coefficient-only 或 pooled/candidate model，如何取得 semantic state 属于业务语义，不由实现自行推断。
-该选择登记为 Decision C-001；确认前不得实现默认映射、系数排序映射或 silent exclusion。
+### 4.3 Direct L1/L2 state model set（C-002-A）
 
-L1 与 L2 都优先使用 source contract 直接提供的 state evidence。任何跨层 aggregation 都属于独立业务公式，
-登记为 Decision C-002；确认前不得从 L2 派生 L1，也不得将 derived state 标为 direct HMM。
+Phase 2 不聚合 L2 posterior 生成 L1。每个可运行 family 必须先生成一个内容寻址的
+`hmm_risk_state_model_set_v1`，成对包含 direct L1 与 direct L2 model artifact：
 
-### 4.3 InputManifest
+- `state_model_set_id`、family/version、producer commit、created_at；
+- L1/L2 artifact URI、SHA-256、size、parser contract、sector level、expected sector set/hash；
+- train start/end、共同数据水位、dataset/mapping manifest/hash、feature definition/hash、preprocess、random seed；
+- 每个 sector 的 startprob/transmat/means/covars/state_labels、observation version、training row count；
+- L1 每项使用的 PIT L2 constituent set/hash；两层 semantic labels 均须严格覆盖 `trending/neutral/fading`。
+
+L2 使用上表两份已核验 model family。L1 由受控 offline artifact-preparation slice 使用现有 trainer 的 direct L1
+路径生成：按 L1 下属 L2 日度行情构造 observation 后独立训练 HMM；不得复制、平均或投票 L2 posterior。
+artifact preparation 与日常 worker 分离，daily worker 永不训练。每个 family 的 L1/L2 必须使用同一训练窗口、
+feature/preprocess family 和冻结输入 manifest；算法差异必须形成新的 model-set version，不能静默配对。
+
+只有 model set 的 L1 31/31、L2 131/131 全部通过 parser、三态、有限参数、coverage 和 causal replay contract，
+该 set 才为 `READY`。任一层缺失时 candidate 返回 `hmm_risk_state_model_set_incomplete`，不提供 L2-only 完成声明。
+L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origin。
+
+### 4.4 InputManifest
 
 `hmm_risk_input_manifest_v1` 至少包含：
 
 - request identity：candidate、trade_date policy、rule/generator/observation versions；
-- candidate/model identity 与 SHA-256；
+- candidate/coefficient artifact identity、state-model-set identity 与 L1/L2 model SHA-256；
 - `train_end`、requested/resolved `trade_date`、`as_of_date`；
 - 每个 dataset 的 max completed date、row count、content hash 和 missing evidence；
 - PIT L1/L2 mapping rows 的 canonical hash；
@@ -235,17 +248,15 @@ L2 对应多个 L1、缺 code 或空 mapping 均显式失败。历史日不得�
 - `state_confidence=max(posterior)`；`confidence_definition_version` 与 `state_origin` 由 adapter contract 固定。
   完整 posterior 与 mapping evidence 写入持久化 evidence，raw JSON 不直接展示给 UI。
 
-### 6.2 Cross-level aggregation boundary
+### 6.2 Direct L1/L2 inference
 
-当前没有获批准的 L2→L1、L1→L2 或混合层级 aggregation 公式。Decision C-002 确认前：
-
-- 只生成 source contract 可直接证明的 sector level；
-- 不创建 derived row，不把缺失层级填成 `neutral`、复制另一层结果或标记为 direct HMM；
-- UI 显示该 candidate 的真实 level compatibility 和稳定缺失 reason；
-- 不得以只支持一个层级声明 F-011/F-013 或整个 Phase 2 完成。
-
-C-002 若批准 aggregation，必须在本文新 revision 中精确定义成分全集、PIT membership、权重、缺失策略、
-归一化、tie、版本、`state_origin`、confidence 和验收样例；未经该文档修订与用户确认，不进入实现。
+- generator 从同一 `state_model_set_id` 选择请求层级的 direct model；不得跨层读取 posterior。
+- L1 observation 必须使用 model-set manifest 固化的 PIT L2 constituent set 和训练时同版本 aggregation；
+  这里聚合的是原始日度 observation，不是隐状态或 posterior。
+- L2 observation 使用模型 entry 对应的 canonical L2 行情和 feature contract。
+- 两层分别执行 causal forward-filter 并分别保存 posterior/confidence；缺任一 sector 使 run=`partial_failed`，
+  缺整个层级使 run=`failed/hmm_risk_state_model_set_incomplete`。
+- UI 显示 `direct_hmm`、model SHA 和 model-set version；禁止 derived 标签、另一层复制或 neutral 填充。
 
 ### 6.3 Transition 与 severity
 
@@ -310,6 +321,8 @@ severity 是 `hmm_risk_alert_rule_v1` 的解释标签，不改变 state，不触
 | `status` | `TEXT NOT NULL DEFAULT 'queued' CHECK` in `queued/running/succeeded/partial_failed/failed/cancel_requested/cancelled` |
 | `candidate_id` | `TEXT NOT NULL REFERENCES hmm_evolution.candidate(candidate_id) ON DELETE RESTRICT` |
 | `candidate_manifest_hash` | `CHAR(64) NOT NULL` |
+| `state_model_set_id` / `state_model_set_hash` | `TEXT NOT NULL` / `CHAR(64) NOT NULL` |
+| `l1_model_sha256` / `l2_model_sha256` | `CHAR(64) NOT NULL`；两层 direct model identity |
 | `trade_date_policy` | `TEXT NOT NULL CHECK` in `explicit/latest_common_completed` |
 | `requested_trade_date` | `DATE NULL`；policy=`explicit` 时 `NOT NULL`，否则必须 `NULL` |
 | `resolved_trade_date` / `as_of_date` | `DATE NULL`；进入 successful terminal 前必须均非空且相等 |
@@ -344,7 +357,7 @@ table CHECK 还要求 counters 不超过 expected；`succeeded` 必须 `failed_c
 | `state_confidence` | `DOUBLE PRECISION NULL CHECK BETWEEN 0 AND 1` |
 | `state_origin/confidence_definition_version` | `TEXT NOT NULL/TEXT NOT NULL`；值必须来自已核验 adapter contract，不设猜测 fallback |
 | `parser_contract/adapter_version/observation_version` | `TEXT NOT NULL` |
-| `model_artifact_sha256/input_hash/result_hash` | `CHAR(64) NOT NULL` |
+| `state_model_set_id/model_artifact_sha256/input_hash/result_hash` | `TEXT NOT NULL/CHAR(64) NOT NULL/CHAR(64) NOT NULL/CHAR(64) NOT NULL` |
 | `mapping_snapshot_hash` | `CHAR(64) NOT NULL` |
 | `generator_version/rule_version` | `TEXT NOT NULL` |
 | `transition_from/transition_kind` | `TEXT NULL/TEXT NOT NULL`；前者三值或 NULL，后者为 stable enum |
@@ -356,7 +369,7 @@ table CHECK 还要求 counters 不超过 expected；`succeeded` 必须 `failed_c
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
 
 UNIQUE 为 `(dedupe_key,revision)` 与 `(dedupe_key,input_hash)`；FK candidate、snapshot/config 的一致性由 resolver
-冻结证据和 repository precondition 双重校验。不存在 `derived_l1_from_l2_v1` 预设值；若 C-002 后续批准，须修订 CHECK/adapter registry。
+冻结证据和 repository precondition 双重校验。C-002-A 不允许任何 `derived_l1_*` state origin。
 
 ### 8.3 `hmm_risk.daily_alert`
 
@@ -413,7 +426,7 @@ resolved 必须有 resolved date/reason，open 必须二者均为空；同一 cu
 | `created_at/completed_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()/TIMESTAMPTZ NOT NULL` |
 
 UNIQUE `(candidate_id,start_trade_date,end_trade_date,sector_level,report_spec_hash,source_hash)`；同 spec/input 幂等。
-报告只读 market forward returns，不写交易表。C-003 未确认前不得创建 succeeded report。
+报告只读 market forward returns，不写交易表；只接受 §10 已批准的 exact spec。
 
 ### 8.6 Views、COMMENT 与 exact verify
 
@@ -497,22 +510,39 @@ unexpected 500。DB/schema/input error 不返回空数组成功；未知异常�
 
 报告仅由 `scripts/hmm_risk/generate_retrospective_report.py` 显式执行，required args 为 `--candidate-id`、
 `--start-trade-date`、`--end-trade-date`、`--sector-level L1|L2`、`--report-spec-file`；可选 `--preview`
-严格零写入。spec file 必须是 canonical JSON，schema 与 hash 按 C-003 确认后的 `ReportOracleSpec` 版本验证。
-C-003 未确认或 spec 任一字段缺失时，命令以非零退出并输出 compact JSON error
-`hmm_risk_report_oracle_unconfirmed`；不得采用默认 horizon/quantile。成功写入单个幂等 report row 并回读
+严格零写入。spec file 必须是 canonical JSON，且精确匹配 §10 的 `hmm_risk_retrospective_v1`。
+版本不支持或任一字段缺失时，命令以非零退出并输出 compact JSON error
+`hmm_risk_report_spec_unsupported`；不得采用默认 horizon/quantile。成功写入单个幂等 report row 并回读
 `report_id/report_spec_hash/source_hash/result_hash/sample_count`；失败只写 failed report receipt，不写 metrics 假成功。
 
 ## 10. Retrospective Report Contracts
 
-父设计要求 retrospective evidence，但没有批准 adverse outcome 的 horizon、return 口径、threshold/quantile、
-样本 universe 或缺失处理。不得由实现发明固定 5D、bottom quantile 或其它 oracle。Decision C-003 确认前，
-report generation 返回 `hmm_risk_report_oracle_unconfirmed`，UI 显示“回溯定义待确认”，不得以空图或默认统计冒充报告。
+C-003-A 已批准 `hmm_risk_retrospective_v1`：
 
-C-003 必须逐项确认并 version 化 `ReportOracleSpec`：`forward_horizons`、return price/adjustment/sector aggregation、
-`adverse_outcome_rule`、threshold/quantile、cross-sectional universe、alert/non-alert inclusion、停牌/缺价处理、
-minimum denominator、阶段切分、OPPORTUNITY 是否单独统计。确认后的新文档 revision 必须给出边界样例和 golden dataset。
-报告必须显示完整 spec、coverage、missingness 和每项 denominator；任何指标都只作解释，不得产生 pass/fail、
-candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格数据产生新 source hash，旧报告 append-only 保留。
+| field | exact approved value |
+|---|---|
+| `forward_horizons` | `[5,10,20]` trading days |
+| L2 return | canonical L2 close：`close(T+h)/close(T)-1` |
+| L1 daily return | 当日所有 PIT constituent L2 均有 canonical return 且 amount>0 时，`Σ amount_l2,d * return_l2,d / Σ amount_l2,d`；缺任一 constituent 则该 L1/date 缺失 |
+| L1 horizon return | `Π(d=T+1..T+h)(1+l1_daily_return_d)-1` |
+| benchmark | CSI300 同期 close return |
+| excess return | `sector_forward_return - csi300_forward_return` |
+| continuous metrics | HIGH/MEDIUM/NONE 分组的 count、mean、median、q20；OPPORTUNITY 独立分组，不混入 risk confusion matrix |
+| primary binary horizon | 5 trading days |
+| adverse oracle | 同 trade_date、同 sector_level 的有效 5D excess return `<= q20` |
+| quantile | NumPy `quantile(...,0.20,method='linear')`，version `cross_sectional_excess_q20_linear_v1` |
+| alert positive | severity in `HIGH/MEDIUM`；`NONE` 为 negative；OPPORTUNITY excluded |
+| confusion metrics | hit/false_positive/miss/true_negative 及 precision/recall，全部显示 numerator/denominator |
+| minimum coverage | L1 至少 28/31；L2 至少 118/131；不足则 report=`failed/hmm_risk_report_coverage_insufficient` |
+
+return source 必须与 state timeline 使用同一 trade calendar、PIT sector identity 和共同完成水位；T+h 超过报告水位、
+close/amount 非有限、L1 constituent 不全、CSI300 缺失均成为明确 missing evidence。达到 minimum coverage 时，
+缺失项仍从指标分母排除并单列 count/reason；低于阈值不输出 succeeded metrics。golden fixture 至少覆盖：
+q20 边界相等计 adverse、OPPORTUNITY 排除、L1 constituent 缺失、跨 horizon 尾部缺失、coverage 27/28 与 117/118 边界。
+
+报告必须显示完整 spec/hash、state-model-set、coverage、missingness、每项 denominator 与 source hash；任何指标都只作解释，
+不得产生 pass/fail、candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格数据产生新 source hash，
+旧 report append-only 保留。
 
 ## 11. UI Contracts
 
@@ -526,7 +556,7 @@ candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格�
 
 - 默认最近 7 个完整交易日，L1/L2 切换；候选 identity 与 level compatibility 显式。
 - cell 填充色仅表达 trending/neutral/fading；severity 用边框/角标/文本。
-- confidence 为 null 时显示“未提供”，不补 0；若 C-002 后续批准 derived state，必须显示来源与 aggregation version。
+- confidence 为 null 时显示“未提供”，不补 0；L1/L2 均显示 direct model SHA 与 state-model-set version。
 - 点击 cell 更新页面内固定详情，不用 drawer；详情含 identity、水位、state/probability/confidence、transition、
   severity、revision、source completeness 和可读 explanation。
 - 今日预警、状态分布、event 和 retrospective report 都使用真实 API。
@@ -542,8 +572,6 @@ candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格�
 - `hmm_risk_model_artifact_missing`
 - `hmm_risk_model_artifact_hash_drift`
 - `hmm_risk_model_contract_unsupported`
-- `hmm_risk_semantic_state_mapping_unconfirmed`
-- `hmm_risk_sector_level_contract_unconfirmed`
 - `hmm_risk_training_cutoff_missing_or_future`
 - `hmm_risk_common_watermark_unavailable`
 - `hmm_risk_sector_rows_inconsistent`
@@ -557,7 +585,10 @@ candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格�
 - `hmm_risk_job_timeout`
 - `hmm_risk_job_cancelled`
 - `hmm_risk_idempotency_conflict`
-- `hmm_risk_report_oracle_unconfirmed`
+- `hmm_risk_candidate_not_state_capable`
+- `hmm_risk_state_model_set_incomplete`
+- `hmm_risk_report_spec_unsupported`
+- `hmm_risk_report_coverage_insufficient`
 - `hmm_risk_schema_drift`
 - `hmm_risk_chart_renderer_unavailable`
 
@@ -587,13 +618,15 @@ Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修�
 
 - 修改三份 validation catalog，登记 `hmm.risk` ownership/module/test plans。
 - 新增 `backend/db/init_hmm_risk_schema.py` 和 exact schema tests。
+- 新增受控 state-model-set artifact preparation：为两个已批准 L2 family 生成配对 direct L1 artifact，
+  输出 `hmm_risk_state_model_set_v1` manifest；daily worker 不参与训练。
 - 仅 DEV DDL 验证；production DDL 独立 pending。
 
 ### Slice 1：identity、input、generator、repository
 
 - 新增 `models.py`、`input_resolver.py`、`market_repository.py`、`observation.py`、`state_generator.py`、
   `alert_state_machine.py`、`repository.py`。
-- 完成 C-001/C-002 经确认后的 candidate adapters、deterministic hashes、direct L1/L2、revision、late-data cascade 和 isolation tests。
+- 完成 C-001-A candidate capability resolver、C-002-A model-set adapters、deterministic hashes、direct L1/L2、revision、late-data cascade 和 isolation tests。
 - 不修改或迁移 legacy script；旧 gate 不属于本模块 changed files。
 
 ### Slice 2：durable job、worker、API、report
@@ -621,6 +654,7 @@ primary module required plan。未映射文件先修 catalog。`impact_modules`�
 
 - `python -m pytest backend/tests/hmm_risk/test_schema.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_input_resolver.py -q`
+- `python -m pytest backend/tests/hmm_risk/test_state_model_set.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_state_generator.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_alert_state_machine.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_revision_and_late_data.py -q`
@@ -654,14 +688,14 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 
 | decision | exact question | status | implementation consequence |
 |---|---|---|---|
-| C-001 | pooled/coefficient-only 等不同 candidate 如何取得可证明的 `trending/neutral/fading` semantic state，哪些 candidate 经逐项确认不属于 sector-state producer | `USER_CONFIRMATION_REQUIRED` | 未确认不得猜测 mapping、silent exclusion 或声明全 candidate coverage |
-| C-002 | L1/L2 各自的 direct source；如需跨层 aggregation，其成分、PIT 权重、缺失、confidence 与版本公式 | `USER_CONFIRMATION_REQUIRED` | 未确认只展示 direct level，F-011/F-013 不得完成 |
-| C-003 | retrospective adverse-outcome oracle 的 horizon、return、threshold/quantile、universe、缺失与 denominator | `USER_CONFIRMATION_REQUIRED` | 未确认不得生成 succeeded report 或默认统计 |
+| C-001 | pooled/coefficient-only 等不同 candidate 如何取得可证明的 `trending/neutral/fading` semantic state，哪些 candidate 经逐项确认不属于 sector-state producer | `RESOLVED_USER_APPROVED_C001_A` | 13 个 direct state producer 映射到两个 L2 model identity；4 个 coefficient-only candidate 明确非 state producer且显式报错 |
+| C-002 | L1/L2 各自的 direct source；如需跨层 aggregation，其成分、PIT 权重、缺失、confidence 与版本公式 | `RESOLVED_USER_APPROVED_C002_A` | 使用 versioned state-model-set 的独立 direct L1/L2 HMM；禁止 posterior 跨层 aggregation |
+| C-003 | retrospective adverse-outcome oracle 的 horizon、return、threshold/quantile、universe、缺失与 denominator | `RESOLVED_USER_APPROVED_C003_A` | 5/10/20 连续 return evidence；5D excess q20 次级 oracle；90% minimum coverage；OPPORTUNITY 单列 |
 | C-004 | 是否迁移、包装或退役 legacy gate | `RESOLVED_NO_MIGRATION` | Phase 2 冻结旧 producer/consumer，不运行其测试 |
 | C-005 | PR 是否可以自动合入 | `RESOLVED_PER_PR_USER_CONFIRMATION` | branch/commit/push/PR/CI 可继续；每个 PR 在 merge 前停下并取得用户明确确认 |
 
-C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时人工审批或实现者新增门禁。确认后必须先更新本文及父设计，
-再允许对应 implementation；C-005 是用户明确要求的交付控制，适用于今后每个 PR。
+C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
+C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
@@ -673,12 +707,12 @@ C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_alert_state_machine.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py`; `python -m pytest backend/tests/hmm_risk/test_schema.py -q` | pending_user_confirmation | C-001 semantic state evidence 与 C-002 level source/aggregation 未确认 |
-| F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | FORMAL_REVIEW_READY | 无 |
-| F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | pending_user_confirmation | C-002 level coverage 与 C-003 retrospective oracle 未确认 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,state_model_set,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | `backend/tests/hmm_risk/test_state_model_set.py`; `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_alert_state_machine.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py`; `python -m pytest backend/tests/hmm_risk/test_schema.py -q` | DESIGN_READY_USER_APPROVED | 无 |
+| F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | DESIGN_READY_USER_APPROVED | 无 |
+| F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | DESIGN_READY_USER_APPROVED | 无 |
 
-`pending_user_confirmation` 行不得进入对应 implementation 或被报告为设计完成；`FORMAL_REVIEW_READY` 只表示该行合同已修复，
-不表示源码、DDL、UI、runtime、生产任务或 PR 合入已完成。
+`DESIGN_READY_USER_APPROVED` 表示实现级业务合同已获批准并可进入对应 implementation；不表示源码、DDL、UI、runtime、
+生产任务或后续实现 PR 合入已完成。
 
 ## 20. Risks / Failure Modes
 
@@ -688,7 +722,7 @@ C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时�
 | candidate 与 model 漂移 | manifest/snapshot/config/model hash 全冻结；任一不一致 fail loud |
 | future leakage | train_end <= as_of；causal filter；所有 dataset watermark 固化 |
 | sector duplicate 行不一致 | 全字段 equality 检查；不使用 DISTINCT ON 静默挑选 |
-| L1/L2 来源被猜测 | C-002 前仅 direct evidence；任何 aggregation 先修订公式与验收样例 |
+| L1/L2 来源被猜测 | C-002-A 要求同一 state-model-set 中独立 direct L1/L2 model；禁止 posterior aggregation |
 | partial day 冒充完整 | run terminal `partial_failed`；UI degraded 并列 missing sectors |
 | late data 覆盖历史 | append-only revision + supersedes + forward cascade |
 | 并发生成重复 revision | advisory lock + unique keys + input-hash compare |
@@ -703,12 +737,12 @@ C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时�
 
 ### 21.1 Rollout
 
-1. 本设计修订创建 PR 后停止；未经用户对该 PR 明确确认，不执行 merge/merge-aftercare。
-2. 用户确认 C-001/C-002/C-003 后，先修订本文/父设计并再次正式审核；该修订 PR 仍需逐 PR merge 确认。
-3. 设计全部确认并合入后，Slice 0 在现有 DEV DB 验证 schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
+1. C-001-A/C-002-A/C-003-A 已获批准；本设计 PR #2616 已获本次用户明确合入授权。
+2. 合入设计后，先完成阻断 canonical sector identity 的独立 BUG，再开始 Slice 0 state-model-set/schema implementation。
+3. Slice 0 在现有 DEV DB 验证 L1/L2 artifact preparation、schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
 4. Slice 1/2 在 DEV 运行 fixture、真实只读 market input、人工 job 和 bounded worker；只写 DEV `hmm_risk.*`。
 5. Slice 3 在安全端口完成真实 API/UI acceptance；未通过前不切 `/hmm`。
-6. 每个源码 PR 均在 merge 前停止等待用户确认；源码合入后，production DDL 仍须独立目标授权、migration 和 readback。
+6. 每个后续源码 PR 均在 merge 前停止等待用户确认；源码合入后，production DDL 仍须独立目标授权、migration 和 readback。
 7. production 首次 manual worker/API activation 再独立授权；不自动启动 scheduler。
 
 ### 21.2 Rollback
@@ -733,11 +767,11 @@ C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时�
 
 - no_simplified_delivery：五张持久表/current views、全 candidate evidence matrix、direct L1/L2、唯一 generator、job/revision、API、真实 UI 与 confirmed report 均为完成边界；未决项不以子集、默认或静态页代替。
 - no_silent_error：candidate/model/watermark/mapping/sector/L1/persistence/renderer 全部有 reason code；partial 不标 success。
-- no_business_semantic_drift：移除自创 `neutral -> fading=HIGH`、weighted L2→L1 和 5D/bottom-quantile oracle；旧 gate 冻结，只产生 advisory analysis。
-- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001/C-002/C-003 是未决业务定义，C-005 是用户明确要求；保留规范要求的 production DDL/runtime 独立授权。
+- no_business_semantic_drift：预警 severity 保持父设计；C-001-A capability、C-002-A direct model set 与 C-003-A oracle 均有用户明确批准；旧 gate 冻结，只产生 advisory analysis。
+- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001-A/C-002-A/C-003-A/C-005 均来自用户明确决定；只保留规范要求的 production DDL/runtime 独立授权。
 
 ## 24. 当前完成状态与下一步
 
-本文件已完成正式审核问题修订，但 Phase 2 F2 仍因 C-001/C-002/C-003 明确标为
-`USER_CONFIRMATION_REQUIRED`，不得声称设计完成或开始相应实现。下一步仅创建/更新设计 PR 并停止在 merge 前；
-待用户逐项确认业务定义后更新设计并复审。当前没有执行代码实现、数据库 DDL/DML、依赖安装、服务重启、job 或 PR 合入。
+本文件已回填 C-001-A/C-002-A/C-003-A 用户批准，F-011/F-012/F-013 均为 `DESIGN_READY_USER_APPROVED`。
+下一步在本设计合入后先登记并修复 canonical sector identity 数据缺陷，再从 Slice 0 开始实现。当前没有执行代码实现、
+数据库 DDL/DML、依赖安装、服务重启或 job；本设计状态不表示 Phase 2 功能已实现或 runtime 已激活。
