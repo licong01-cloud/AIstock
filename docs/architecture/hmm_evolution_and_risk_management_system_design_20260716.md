@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v2.7
+> **版本**: v2.8
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-22
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）：P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；2026-07-22 收官验收：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 performance receipt、真实 UI/Playwright 18 场景（8011/3011，无 mock）、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout）；证据见 Phase 1 详细设计 §17.4.6。Gate truth：`hmm_evolution_v1/v2` production `applied_and_verified`（历史事实）；`hmm_evolution_v3` DEV `applied_and_verified`、production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§13）
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活：2026-07-22 收官验收覆盖 benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 performance receipt、真实 UI/Playwright 18 场景（8011/3011，无 mock）、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout）；同日经独立授权完成 `hmm_evolution_v3` production 单事务 DDL、exact verify 与 worker restart。Gate truth：`hmm_evolution_v1/v2/v3` production `applied_and_verified`；`production_ddl_gate=applied_verified`、`production_runtime_activation_gate=applied_verified`、dependency gates `noop`（§13）
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -26,8 +26,8 @@ HMM 板块轮动模型自 2026-04-04 修复以来，已有 2 个生产可用版�
 
 **Phase 0-3 目标与当前状态**:
 - ✅ 离线快速评估：BUG-788 后 forward-return 重试 55.4 秒完成；Loop1～Loop10 同口径单例 evaluation 各 69.3～99.3 秒，均小于 10 分钟，partial label/market evidence 以 degraded warning 显式保留。
-- 🟡 批量对比筛选：batch-relative scorer/top-3、有界并发共享输入和 durable retry 已实现；既有 10 候选 batch `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded、约 12 分 37 秒，pre-ST-PIT 兼容 batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded、约 24 分 4 秒。严格冷热缓存分阶段 timing/RSS receipt 仍待补，不能用总耗时替代。
-- 🟡 自动评估执行：独立 Windows worker service 已自动消费真实 durable queue；不创建任务、不训练 HMM、不接入 FastAPI 或 Phase 3 scheduler。进程中断验收确认 evaluation lease 过期后 fail-closed 为 `timed_out`，旧终态不原地复活，只有显式 `retry-failed` 创建新 generation；retry batch 2/2 succeeded。长期监督与服务化部署仍待完成。
+- ✅ 批量对比筛选：batch-relative scorer/top-3、有界并发共享输入和 durable retry 已实现；既有 10 候选 batch `hmmb_e2ac69e2e21a474e9044afa34a8f580b` 10/10 succeeded、约 12 分 37 秒，pre-ST-PIT 兼容 batch `hmmb_66db955297e6440283097e6fdfb927ac` 9/9 succeeded、约 24 分 4 秒；严格冷热缓存分阶段 timing/RSS receipt 已在 §17.4.6 收官验收完成。
+- ✅ 自动评估执行：独立 Windows worker service 自动消费真实 durable queue；不创建任务、不训练 HMM、不接入 FastAPI 或 Phase 3 scheduler。进程中断验收确认 evaluation lease 过期后 fail-closed 为 `timed_out`，旧终态不原地复活，只有显式 `retry-failed` 创建新 generation；retry batch 2/2 succeeded。31.6 分钟 durable supervision soak 已完成，production v3 worker 于 2026-07-22 受控重启并通过 healthy poll 验证。
 - ⬜ 风险预警可视化：每日板块风险预警 + 状态热力图由 Phase 2 交付。
 - ⬜ 滚动训练自动化：研究候选滚动训练与时效性监控由 Phase 3 交付。
 - ✅ 数据环境隔离：Phase 0 数据源、Phase 1 source manifest 与只读 market repository 已完成。
@@ -948,14 +948,14 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 - `data_write_gate`：只允许 `hmm_evolution.*`、`hmm_risk.*`；其它 schema 写入为 fail-closed。
 - `design_compliance_gate`：每个实现 PR 必须执行 DESIGN-COMPLIANCE-001，四项控制均有证据：`no_simplified_delivery`、`no_silent_error`、`no_business_semantic_drift`、`no_unrequested_gate_or_approval`。
 
-当前 gate truth（2026-07-22 只读复核 NEED-FIX 修正后）：
+当前 gate truth（2026-07-22 production v3 activation 后）：
 
 - `hmm_evolution_v1/v2` production：`applied_and_verified`（历史事实）。`hmm_evolution_v2` 于 2026-07-20 按 DEV-first 流程完成：DEV `127.0.0.1:5433/aistock_dev` 幂等 bootstrap、exact schema/comment verify 与两项真实 PostgreSQL integration 通过；生产 `127.0.0.1:5432/aistock` 在活动 batch 为 0 时单事务升级，`schema_version` v2 从 0→1，`request_payload JSONB NOT NULL DEFAULT '{}'` 与 preparation 状态约束回读正确。迁移前后 10 candidate、44 evaluation、25 batch、44 item 的受保护内容摘要保持不变，repository read smoke 通过。
-- `hmm_evolution_v3`（`offline_evaluation.execution_purpose`/`benchmark_id`、`batch_test_run.execution_purpose`/`benchmark_id`、新表 `hmm_evolution.performance_receipt` 与 `hmm_evolution.worker_runtime_status` 及配套约束/索引/COMMENT/schema_version row）：DEV `applied_and_verified`（Phase 1 详细设计 §17.4.6 全部 benchmark/UI/soak 证据均在 DEV v3 schema 上产生）；production `pending`——未授权、未执行。
-- `production_ddl_gate`：`pending`（v3 生产 DDL 未授权；v1/v2 已应用为历史事实，不改变当前 gate 状态）。
-- `production_runtime_activation_gate`：`pending`（生产 API/worker 未重启、未加载 v3 代码；既有 activation receipt 仅证明旧进程状态）。
+- `hmm_evolution_v3`（`offline_evaluation.execution_purpose`/`benchmark_id`、`batch_test_run.execution_purpose`/`benchmark_id`、新表 `hmm_evolution.performance_receipt` 与 `hmm_evolution.worker_runtime_status` 及配套约束/索引/COMMENT/schema_version row）：DEV 与 production 均为 `applied_and_verified`。Production 于活动 batch 为 0 时执行单事务 bootstrap + transaction 内 `verify_schema`，随后独立只读 exact verify 通过；17 candidate、97 evaluation、53 batch、98 item 的迁移前后受保护内容摘要分别保持一致，新表在 runtime activation 前均为 0 行。
+- `production_ddl_gate`：`applied_verified`（2026-07-22 获得精确授权 `GO PRODUCTION DDL HMM EVOLUTION V3` 后执行并回读）。
+- `production_runtime_activation_gate`：`applied_verified`（2026-07-22 获得独立 worker restart 授权后，旧 PID 37024 退出；owner `service-aistock-hmm-v3-20260722` 的新 worker 启动，`/workers` 返回 200、`health=healthy`、`runtime_status=running`、连续失败 0，活动 batch 0）。
 - dependency gates：`noop`；Phase 2/3 scheduler 仍未启用。
-- 代码合入不等于生产 DDL 已执行，也不等于生产 worker/API 已加载 v3。v3 生产 DDL 必须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3` 后才可执行。
+- 代码合入、生产 DDL 与 production runtime activation 仍是三个独立事实；本次三者均已分别取得证据，但不表示 Phase 2/3 已启用或 HMM 已接入 QE/Paper 生产链。
 
 ---
 
@@ -979,6 +979,7 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.8 | 2026-07-22 | 回填 production v3 activation receipt：经精确授权完成 `hmm_evolution_v3` 单事务 DDL 与独立 exact verify，17 candidate、97 evaluation、53 batch、98 item 的受保护内容摘要不变；随后经独立授权重启 HMM worker，durable `/workers` 状态为 healthy/running、连续失败 0、活动 batch 0。将 `production_ddl_gate` 与 `production_runtime_activation_gate` 分别更新为 `applied_verified`；dependency gates 保持 `noop`，Phase 2/3 与 QE/Paper 接入仍未启用。 |
 | v2.7 | 2026-07-22 | 按只读复核 NEED-FIX 修正 §13 gate truth：`hmm_evolution_v1/v2` production `applied_and_verified` 保留为历史事实；明确 `hmm_evolution_v3`（execution_purpose/benchmark_id 列、performance_receipt、worker_runtime_status）DEV `applied_and_verified`、production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`；登记代码合入≠生产 DDL 已执行≠生产 runtime 已加载 v3，v3 生产 DDL 须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3`。 |
 | v2.6 | 2026-07-22 | 回填 Phase 1 收官外部验收（详细设计 §17.4.6）：登记用户"Loop1 + h10 spec"fallback 裁决；zerocopy 1c/10c 与 fallback cold/warm 全 benchmark matrix（分阶段 timing/peak RSS/cache evidence/result_hash 确定性）；真实 UI/Playwright 18 场景全过；worker 31.6 分钟 bounded soak 六类事件；F-008/F-010/F-010A 标记 verified，Phase 1（F-006～F-010A）全部 verified。 |
 | v2.5 | 2026-07-21 | 回填 BUG-800/BUG-801/BUG-804 后 pre-ST-PIT 9/9 真实回执；按 Phase 1 详细设计修正 worker 中断语义为 lease 过期 fail-closed `timed_out` + 显式 retry 新 generation，并记录 3 候选中断批次与 2/2 retry；保留严格冷热缓存、长期监督和真实 UI/Playwright 缺口。 |

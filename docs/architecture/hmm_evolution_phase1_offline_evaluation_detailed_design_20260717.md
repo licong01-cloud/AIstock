@@ -1,10 +1,10 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v2.7
+> **版本**：v2.8
 > **日期**：2026-07-17
 > **修订日期**：2026-07-22
-> **状态**：P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；2026-07-22 Phase 1 收官外部验收完成：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 receipt、真实 UI/Playwright 18 场景、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout），证据见 §17.4.6。Gate truth：`hmm_evolution_v1/v2` production `applied_and_verified`（历史事实）；`hmm_evolution_v3` DEV `applied_and_verified`；`hmm_evolution_v3` production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21）
-> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.7
+> **状态**：P1-A/P1-B/P1-C 与 2026-07-22 Phase 1 收官外部验收全部完成：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 receipt、真实 UI/Playwright 18 场景、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout），证据见 §17.4.6；同日经独立授权完成 production `hmm_evolution_v3` 单事务 DDL、exact verify 和 worker restart。Gate truth：`hmm_evolution_v1/v2/v3` production `applied_and_verified`；`production_ddl_gate=applied_verified`、`production_runtime_activation_gate=applied_verified`、dependency gates `noop`（§21）
+> **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.8
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
 > **Feature tier**：F2
@@ -1428,10 +1428,10 @@ frontend/src/lib/navigation/nav-groups.ts
 - repository、batch/evaluation/item 状态机、lease/fencing/idempotency/retry/cancel；
 - worker skeleton，不启生产 runtime。
 
-当前状态：P1-A 源码与外部验收完成；P1-B 与 P1-C 源码完成，P1-C 审计硬化已覆盖共享输入并发、lease/fencing fail-closed + explicit retry、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
+当前状态：P1-A/P1-B/P1-C 源码、审计硬化与外部验收全部完成；覆盖共享输入并发、lease/fencing fail-closed + explicit retry、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
 `hmm_evolution_v1/v2` 的 `production_ddl_gate=applied_and_verified`（2026-07-20，DEV/production exact verify 与受保护数据摘要校验通过，历史事实）；
-v2 `runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows worker 已加载 schema v2 与 BUG-800/BUG-801/BUG-804 后代码；Loop1～Loop10、pre-ST-PIT 9 候选和进程中断后的显式 retry receipt 均成功，活动队列归零。既有 10 候选与 pre-ST-PIT 9 候选 batch 均在 30 分钟内完成。这不代表整个 Phase 1 已通过外部验收；严格冷热缓存分阶段 timing/RSS、长期服务监督和实机页面/Playwright 仍未完成。
-2026-07-22 更新：收官验收（§17.4.6）引入 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt` 与 `worker_runtime_status` 表及配套约束/索引/COMMENT/schema_version row）。v3 DEV `applied_and_verified`；v3 production `pending`（未授权、未执行），代码合入不等于生产 DDL 已执行，也不等于生产 worker/API 已加载 v3。
+v2 `runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows worker 已加载 schema v2 与 BUG-800/BUG-801/BUG-804 后代码；Loop1～Loop10、pre-ST-PIT 9 候选和进程中断后的显式 retry receipt 均成功，活动队列归零。既有 10 候选与 pre-ST-PIT 9 候选 batch 均在 30 分钟内完成；严格冷热缓存分阶段 timing/RSS、长期服务监督和实机页面/Playwright 已由 §17.4.6 收官验收补齐。
+2026-07-22 production v3 更新：收官验收引入的 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt` 与 `worker_runtime_status` 表及配套约束/索引/COMMENT/schema_version row）已在 DEV 和 production `applied_and_verified`。Production 在活动 batch 为 0 时执行单事务 bootstrap + transaction 内 `verify_schema`，独立只读 exact verify 通过，17 candidate、97 evaluation、53 batch、98 item 的受保护内容摘要不变；随后经独立授权重启 worker，owner `service-aistock-hmm-v3-20260722` 的 `/workers` 状态为 healthy/running、连续失败 0、活动 batch 0。代码合入、DDL 与 runtime activation 仍分别记录。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -1512,16 +1512,16 @@ v2 `runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows wo
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | v1/v2 production `applied_and_verified`（2026-07-20 历史事实，DEV-first receipt 见 §17.4.3）；v3 DEV `applied_and_verified`、v3 production `pending`（未授权、未执行） | noop | 同 P1-A：v2 已应用为历史事实；v3 生产 DDL 与 runtime restart 均独立 pending |
+| `production_ddl_gate` | noop | v1/v2 production `applied_and_verified`（2026-07-20 历史事实，DEV-first receipt 见 §17.4.3）；v3 DEV/production `applied_and_verified`（2026-07-22，单事务 DDL + exact verify） | noop | 同 P1-A：v1/v2/v3 已应用并验证；DDL 与 runtime activation 分别留证 |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
-| `production_runtime_activation_gate` | noop | v2：旧 schema worker 已受控 activation、v2 已应用（历史事实）；v3：`pending`（生产 worker/API 未重启、未加载 v3） | 同左 | 不新增业务审批流 |
+| `production_runtime_activation_gate` | noop | v2：旧 schema worker 已受控 activation（历史事实）；v3：`applied_verified`（2026-07-22 独立授权重启，durable worker healthy/running） | 同左 | 不新增业务审批流 |
 | `data_write_gate` | docs only | 仅 hmm_evolution.*（runtime 写 allowlist） | 仅评估结果 | 同左 |
 | `service_start_gate` | noop | 禁止隐式启动 | 禁止隐式启动 | 独立 service 显式启动；不得挂入 FastAPI startup，安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
 
 2026-07-20 v2 DDL 事实与数据不变量见 §17.4.3：v1/v2 生产 schema `applied_and_verified` 为历史事实；v2 API/worker 已受控 activation。
-2026-07-22 v3 事实：v3 DEV `applied_and_verified`（§17.4.6 全部 benchmark/UI/soak 证据均在 DEV v3 schema 上产生）；v3 production `pending`——未授权、未执行，`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`，dependency gates `noop`。v3 生产 DDL 必须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3` 后才可执行。
+2026-07-22 v3 事实：v3 DEV `applied_and_verified`（§17.4.6 全部 benchmark/UI/soak 证据均在 DEV v3 schema 上产生）；production 获得 `GO PRODUCTION DDL HMM EVOLUTION V3` 后完成单事务 DDL 与 exact verify，随后获得独立 worker restart 授权并完成 durable healthy/running 回读。`production_ddl_gate=applied_verified`、`production_runtime_activation_gate=applied_verified`，dependency gates `noop`；未启用 Phase 2/3 scheduler，也未接入 QE/Paper 生产链。
 
 ## 22. Design Acceptance Index（设计验收索引）
 
@@ -1562,13 +1562,13 @@ recommendation scorer，并通过 BUG-736/BUG-737 完成旧诊断唯一计算路
 只读无效。P1-C 的 API/UI/worker 源码及审计硬化、受控 10-case、10/9 候选性能、pre-ST-PIT
 compatibility、进程中断 fail-closed 与显式 retry、严格冷热缓存分阶段 timing/RSS、durable worker
 监督和真实页面/Playwright 18 场景均已完成外部验收。因此 F-006～F-010A 在“实现 + DEV 外部验收”
-边界内全部 verified；这不表示 production schema v3 已应用、production runtime 已加载新版本、
-Phase 2/3 已启用，或 HMM 已接入 QE/Paper 生产链。
+边界内全部 verified；2026-07-22 后续独立 deployment receipt 又证明 production schema v3 已应用且 production worker 已加载新版本。以上仍不表示 Phase 2/3 已启用，或 HMM 已接入 QE/Paper 生产链。
 
 ## 25. 变更记录
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.8 | 2026-07-22 | 回填 production v3 deployment receipt：经精确授权完成单事务 DDL 与独立 exact verify，17 candidate、97 evaluation、53 batch、98 item 的受保护内容摘要不变；随后经独立授权重启 HMM worker，durable `/workers` 状态为 healthy/running、连续失败 0、活动 batch 0。将 `production_ddl_gate` 与 `production_runtime_activation_gate` 分别更新为 `applied_verified`；dependency gates 保持 `noop`，Phase 2/3 与 QE/Paper 接入仍未启用。 |
 | v2.7 | 2026-07-22 | BUG-821：将设计权威引用更新到总体蓝图 v2.7，并修正 §24 的旧验收缺口结论，使其与顶部状态、§17.4.6 和 F-006～F-010A 验收矩阵一致；继续明确 Phase 1 verified 仅覆盖实现与 DEV 外部验收，production schema v3、production runtime activation 以及 Phase 2/3 均未据此完成。 |
 | v2.6 | 2026-07-22 | 按只读复核 NEED-FIX 修正 gate truth 与 DEV 写入事实：`hmm_evolution_v1/v2` production `applied_and_verified` 保留为历史事实；明确 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt`、`worker_runtime_status`）DEV `applied_and_verified`、production `pending`（未授权、未执行），`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21、§18 P1-A 状态）；§17.4.6 以授权时间线 + 八张 canonical relations 精确行数 + compute_nodes 遥测差异规则如实记录 DEV 种子写入，替代"DEV 只写 hmm_evolution.*"的绝对表述；登记 v3 生产 DDL 须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3`。 |
 | v2.5 | 2026-07-22 | 回填 Phase 1 收官外部验收（§17.4.6）：登记用户"Loop1 + h10 spec"fallback 裁决（canonical Loop10 workspace 无远端 manifest、trust gate 按设计 fail-closed、不扩白名单）；zerocopy 1c/10c 与 fallback cold/warm 全 benchmark matrix（分阶段 timing、peak RSS、per-artifact cache evidence、cold/warm result_hash 一致）；真实 UI/Playwright 18 场景（含 Sidebar `NEXT_PUBLIC_TDX_BACKEND_BASE` 覆盖修复）；worker 31.6 分钟 bounded soak 六类事件；F-008/F-010/F-010A 标记 verified。 |
