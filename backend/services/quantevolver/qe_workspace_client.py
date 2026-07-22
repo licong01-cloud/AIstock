@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import aiofiles
@@ -6,6 +7,7 @@ import re
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Any, Mapping, Optional
 import httpx
 
@@ -26,6 +28,11 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LOOP_ID_RE = re.compile(r"^Loop[1-9][0-9]*$")
 _COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,256}$")
 _ENVIRONMENT_SNAPSHOT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,256}$")
+_QELT_JOB_RECEIPT_SCHEMA = "qe_long_trend_job_receipt_v1"
+_QELT_JOB_SCHEMA = "qe_long_trend_job_v1"
+_QELT_ARTIFACT_CATALOG_SCHEMA = "qe_long_trend_node_artifact_catalog_v1"
+_QELT_JOB_STATUSES = frozenset({"queued", "starting", "running", "succeeded", "partial", "failed", "cancelled"})
+_QELT_CANCEL_STATUSES = frozenset({"signal_sent", "already_terminal"})
 
 
 class QEWorkspaceSubmissionError(RuntimeError):
@@ -134,6 +141,15 @@ class QEWorkspaceDatasetIdentityError(RuntimeError):
         self.context = dict(context or {})
 
 
+class QELongTrendWorkspaceError(RuntimeError):
+    """Typed F-014 evaluation-job transport or contract error."""
+
+    def __init__(self, message: str, *, reason_code: str, context: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.context = dict(context or {})
+
+
 @dataclass(frozen=True)
 class QEWorkspaceSubmissionReceipt:
     task_id: str
@@ -213,7 +229,39 @@ class QEWorkspaceDatasetIdentity:
     missing: tuple[str, ...]
     acquisition_suggestions: tuple[str, ...]
     dataset: dict[str, str] | None
+    long_trend_snapshot: dict[str, Any] | None = None
+    long_trend_snapshot_reason: str | None = None
     detail: str | None = None
+
+
+@dataclass(frozen=True)
+class QELongTrendJobReceipt:
+    schema_version: str
+    task_id: str
+    loop_id: str
+    evaluation_id: str
+    job_id: str
+    request_sha: str
+    status: str
+    duplicate_replay: bool
+    current_attempt_id: str | None
+    execution_environment_snapshot_id: str
+    execution_environment_manifest_sha256: str
+
+
+@dataclass(frozen=True)
+class QELongTrendJobInspection:
+    schema_version: str
+    task_id: str
+    loop_id: str
+    evaluation_id: str
+    job_id: str
+    request_sha: str
+    status: str
+    current_attempt_id: str | None
+    process_identity: dict[str, Any] | None
+    terminal_receipt: dict[str, Any] | None
+    updated_at: str
 
 
 class QELoopWorkspaceCleanupUnavailable(RuntimeError):
@@ -430,6 +478,7 @@ class QEWorkspaceClient:
         execution_identity_hash: str | None = None,
         execution_environment_snapshot_id: str | None = None,
         execution_environment_manifest_sha256: str | None = None,
+        postprocess_descriptor: Mapping[str, Any] | None = None,
     ) -> QEWorkspaceSubmissionReceipt:
         """Submit one loop and validate the durable server-side receipt.
 
@@ -457,6 +506,7 @@ class QEWorkspaceClient:
             "experiment_files": experiment_files or {},
             "wsl_command": wsl_command,
             "submission_intent_hash": normalized_intent_hash,
+            "postprocess_descriptor": dict(postprocess_descriptor) if postprocess_descriptor else None,
         }
         payload.update(execution_binding)
         if model_source:
@@ -858,6 +908,35 @@ class QEWorkspaceClient:
             ):
                 cls._validate_sha256(raw_dataset[field], field_name=f"dataset.{field}")
             dataset = {field: str(raw_dataset[field]).strip() for field in required_dataset_fields}
+            long_trend_snapshot = payload.get("long_trend_snapshot")
+            long_trend_reason = payload.get("long_trend_snapshot_reason")
+            if long_trend_snapshot is not None:
+                if not isinstance(long_trend_snapshot, Mapping):
+                    raise QEWorkspaceDatasetIdentityError(
+                        "QE Workspace long_trend_snapshot must be an object or null",
+                        reason_code="qe_workspace_dataset_identity_invalid",
+                    )
+                required_long_trend = {
+                    "snapshot_id", "manifest_sha256", "start_date", "end_date",
+                    "lineage_parent_ids", "files",
+                }
+                missing_long_trend = sorted(required_long_trend.difference(long_trend_snapshot))
+                if missing_long_trend:
+                    raise QEWorkspaceDatasetIdentityError(
+                        "QE Workspace long_trend_snapshot is incomplete",
+                        reason_code="qe_workspace_dataset_identity_invalid",
+                        context={"missing_fields": missing_long_trend},
+                    )
+                cls._validate_sha256(
+                    long_trend_snapshot["manifest_sha256"],
+                    field_name="long_trend_snapshot.manifest_sha256",
+                )
+                long_trend_snapshot = dict(long_trend_snapshot)
+            if long_trend_reason is not None and not isinstance(long_trend_reason, str):
+                raise QEWorkspaceDatasetIdentityError(
+                    "QE Workspace long_trend_snapshot_reason must be a string or null",
+                    reason_code="qe_workspace_dataset_identity_invalid",
+                )
             return QEWorkspaceDatasetIdentity(
                 schema_version="qe_dataset_identity_v1",
                 complete=True,
@@ -865,11 +944,39 @@ class QEWorkspaceClient:
                 missing=(),
                 acquisition_suggestions=(),
                 dataset=dataset,
+                long_trend_snapshot=long_trend_snapshot,
+                long_trend_snapshot_reason=long_trend_reason,
                 detail=None,
             )
         if payload.get("schema_version") != "qe_dataset_identity_evidence_v1" or raw_dataset is not None:
             raise QEWorkspaceDatasetIdentityError(
                 "QE Workspace incomplete dataset identity evidence is malformed",
+                reason_code="qe_workspace_dataset_identity_invalid",
+            )
+        long_trend_snapshot = payload.get("long_trend_snapshot")
+        long_trend_reason = payload.get("long_trend_snapshot_reason")
+        if long_trend_snapshot is not None:
+            if not isinstance(long_trend_snapshot, Mapping):
+                raise QEWorkspaceDatasetIdentityError(
+                    "QE Workspace incomplete evidence long_trend_snapshot must be an object or null",
+                    reason_code="qe_workspace_dataset_identity_invalid",
+                )
+            required_long_trend = {
+                "snapshot_id", "manifest_sha256", "start_date", "end_date", "lineage_parent_ids", "files"
+            }
+            if required_long_trend.difference(long_trend_snapshot):
+                raise QEWorkspaceDatasetIdentityError(
+                    "QE Workspace incomplete evidence long_trend_snapshot is malformed",
+                    reason_code="qe_workspace_dataset_identity_invalid",
+                )
+            cls._validate_sha256(
+                long_trend_snapshot["manifest_sha256"],
+                field_name="long_trend_snapshot.manifest_sha256",
+            )
+            long_trend_snapshot = dict(long_trend_snapshot)
+        if long_trend_reason is not None and not isinstance(long_trend_reason, str):
+            raise QEWorkspaceDatasetIdentityError(
+                "QE Workspace incomplete evidence long_trend_snapshot_reason must be a string or null",
                 reason_code="qe_workspace_dataset_identity_invalid",
             )
         return QEWorkspaceDatasetIdentity(
@@ -879,6 +986,8 @@ class QEWorkspaceClient:
             missing=tuple(raw_missing),
             acquisition_suggestions=tuple(raw_suggestions),
             dataset=None,
+            long_trend_snapshot=long_trend_snapshot,
+            long_trend_snapshot_reason=long_trend_reason,
             detail=str(payload.get("detail")) if payload.get("detail") is not None else None,
         )
 
@@ -1815,3 +1924,339 @@ class QEWorkspaceClient:
             raise RuntimeError(f"Failed to cleanup loop workspace {task_id}/{rdagent_loop_id}: {e}") from e
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to cleanup loop workspace {task_id}/{rdagent_loop_id}: {e}") from e
+
+    async def submit_long_trend_evaluation(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+        request_payload: Mapping[str, Any],
+    ) -> QELongTrendJobReceipt:
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = (
+            f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+            "/long-trend-evaluations"
+        )
+        payload = dict(request_payload)
+        if payload.get("evaluation_id") != evaluation_id:
+            raise QELongTrendWorkspaceError(
+                "long-trend request evaluation_id mismatch",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+            )
+        response_payload = await self._long_trend_json_request("POST", url, json=payload)
+        return self._parse_long_trend_job_receipt(
+            response_payload,
+            task_id=task_id,
+            loop_id=rdagent_loop_id,
+            evaluation_id=evaluation_id,
+        )
+
+    async def inspect_long_trend_evaluation(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+    ) -> QELongTrendJobInspection:
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = (
+            f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+            f"/long-trend-evaluations/{evaluation_id}"
+        )
+        payload = await self._long_trend_json_request("GET", url)
+        required = {
+            "schema_version", "task_id", "loop_id", "evaluation_id", "job_id",
+            "request_sha", "status", "updated_at",
+        }
+        missing = sorted(name for name in required if payload.get(name) in (None, ""))
+        if (
+            missing
+            or payload.get("schema_version") != _QELT_JOB_SCHEMA
+            or payload.get("task_id") != task_id
+            or payload.get("loop_id") != rdagent_loop_id
+            or payload.get("evaluation_id") != evaluation_id
+            or payload.get("status") not in _QELT_JOB_STATUSES
+        ):
+            raise QELongTrendWorkspaceError(
+                f"invalid long-trend inspection identity or fields: missing={missing}",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+                context={"url": url},
+            )
+        process_identity = payload.get("process_identity")
+        terminal = payload.get("terminal_receipt")
+        if process_identity is not None and not isinstance(process_identity, dict):
+            raise QELongTrendWorkspaceError(
+                "long-trend process_identity must be an object or null",
+                reason_code="QELT_NODE_PROCESS_IDENTITY_CONFLICT",
+            )
+        if terminal is not None and not isinstance(terminal, dict):
+            raise QELongTrendWorkspaceError(
+                "long-trend terminal_receipt must be an object or null",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+            )
+        return QELongTrendJobInspection(
+            schema_version=str(payload["schema_version"]),
+            task_id=task_id,
+            loop_id=rdagent_loop_id,
+            evaluation_id=evaluation_id,
+            job_id=str(payload["job_id"]),
+            request_sha=self._validate_sha256(payload["request_sha"], field_name="request_sha"),
+            status=str(payload["status"]),
+            current_attempt_id=str(payload["current_attempt_id"]) if payload.get("current_attempt_id") else None,
+            process_identity=dict(process_identity) if process_identity is not None else None,
+            terminal_receipt=dict(terminal) if terminal is not None else None,
+            updated_at=str(payload["updated_at"]),
+        )
+
+    async def list_long_trend_artifacts(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+    ) -> dict[str, Any]:
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = (
+            f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+            f"/long-trend-evaluations/{evaluation_id}/artifacts"
+        )
+        payload = await self._long_trend_json_request("GET", url)
+        if (
+            payload.get("schema_version") != _QELT_ARTIFACT_CATALOG_SCHEMA
+            or payload.get("evaluation_id") != evaluation_id
+            or payload.get("status") not in _QELT_JOB_STATUSES
+            or not isinstance(payload.get("artifacts"), list)
+        ):
+            raise QELongTrendWorkspaceError(
+                "invalid long-trend artifact catalog",
+                reason_code="QELT_ARTIFACT_SCHEMA_MISMATCH",
+            )
+        return payload
+
+    async def stream_long_trend_artifact(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+        artifact_path: str,
+        destination: str | Path,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> dict[str, Any]:
+        normalized_sha = self._validate_sha256(expected_sha256, field_name="expected_sha256")
+        if expected_size_bytes < 0:
+            raise ValueError("expected_size_bytes must be non-negative")
+        safe_path = str(artifact_path or "").replace("\\", "/")
+        if not safe_path or safe_path.startswith("/") or any(part in {"", ".", ".."} for part in safe_path.split("/")):
+            raise QELongTrendWorkspaceError(
+                "invalid long-trend artifact path",
+                reason_code="QELT_ARTIFACT_SCHEMA_MISMATCH",
+            )
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = (
+            f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+            f"/long-trend-evaluations/{evaluation_id}/artifacts/{safe_path}"
+        )
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".partial")
+        tmp.unlink(missing_ok=True)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            async with self.client.stream("GET", url) as response:
+                response.raise_for_status()
+                async with aiofiles.open(tmp, "wb") as handle:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        await handle.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+            actual_sha = digest.hexdigest()
+            if size != expected_size_bytes or actual_sha != normalized_sha:
+                raise QELongTrendWorkspaceError(
+                    "streamed long-trend artifact does not match node catalog",
+                    reason_code="QELT_ARTIFACT_HASH_MISMATCH",
+                    context={
+                        "artifact_path": safe_path,
+                        "expected_sha256": normalized_sha,
+                        "actual_sha256": actual_sha,
+                        "expected_size_bytes": expected_size_bytes,
+                        "actual_size_bytes": size,
+                    },
+                )
+            await self._durable_replace_stream(tmp, target)
+            return {"path": str(target), "sha256": actual_sha, "size_bytes": size}
+        except QELongTrendWorkspaceError:
+            tmp.unlink(missing_ok=True)
+            raise
+        except asyncio.CancelledError:
+            tmp.unlink(missing_ok=True)
+            raise
+        except httpx.HTTPError as exc:
+            tmp.unlink(missing_ok=True)
+            raise QELongTrendWorkspaceError(
+                f"long-trend artifact stream interrupted: {type(exc).__name__}: {exc}",
+                reason_code="QELT_ARTIFACT_STREAM_INTERRUPTED",
+                context={"url": url, "artifact_path": safe_path},
+            ) from exc
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            raise QELongTrendWorkspaceError(
+                f"long-trend artifact local publish failed: {type(exc).__name__}: {exc}",
+                reason_code="QELT_ARTIFACT_STREAM_INTERRUPTED",
+                context={"destination": str(target), "artifact_path": safe_path},
+            ) from exc
+
+    async def cancel_long_trend_evaluation(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+        expected_attempt_id: str,
+        expected_process_identity: Mapping[str, Any],
+        expected_request_sha: str,
+    ) -> dict[str, Any]:
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = (
+            f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+            f"/long-trend-evaluations/{evaluation_id}/cancel-intents"
+        )
+        payload = await self._long_trend_json_request(
+            "POST",
+            url,
+            json={
+                "expected_attempt_id": str(expected_attempt_id),
+                "expected_process_identity": dict(expected_process_identity),
+                "expected_request_sha": self._validate_sha256(expected_request_sha, field_name="expected_request_sha"),
+            },
+        )
+        if (
+            payload.get("schema_version") != "qe_long_trend_cancel_receipt_v1"
+            or payload.get("evaluation_id") != evaluation_id
+            or payload.get("status") not in _QELT_CANCEL_STATUSES
+        ):
+            raise QELongTrendWorkspaceError(
+                "invalid long-trend cancel receipt",
+                reason_code="QELT_NODE_PROCESS_IDENTITY_CONFLICT",
+            )
+        return payload
+
+    @staticmethod
+    async def _durable_replace_stream(source: Path, target: Path) -> None:
+        def replace() -> None:
+            # Windows rejects fsync on a read-only CRT descriptor.  The
+            # partial file is owned by this download path, so reopen it for
+            # update and flush the file before the write-through rename.
+            with source.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.name != "nt":
+                os.replace(source, target)
+                descriptor = os.open(target.parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                return
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            move_file_ex = kernel32.MoveFileExW
+            move_file_ex.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+            move_file_ex.restype = wintypes.BOOL
+            if not move_file_ex(str(source), str(target), 0x00000001 | 0x00000008):
+                error = ctypes.get_last_error()
+                raise OSError(error, f"MoveFileExW write-through replace failed: {source} -> {target}")
+
+        await asyncio.to_thread(replace)
+
+    async def _long_trend_json_request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        try:
+            response = await self.client.request(method, url, **kwargs)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                body = exc.response.json()
+            except ValueError:
+                body = {"body": exc.response.text[:1000]}
+            detail = body.get("detail") if isinstance(body, dict) else None
+            reason_code = (
+                str(detail.get("reason_code"))
+                if isinstance(detail, dict) and detail.get("reason_code")
+                else "QELT_NODE_JOB_REJECTED"
+            )
+            raise QELongTrendWorkspaceError(
+                "QE node rejected long-trend evaluation request",
+                reason_code=reason_code,
+                context={"url": url, "status_code": exc.response.status_code, "body": body},
+            ) from exc
+        except httpx.RequestError as exc:
+            raise QELongTrendWorkspaceError(
+                "QE node long-trend evaluation state is unknown",
+                reason_code="QELT_NODE_STATE_UNKNOWN",
+                context={"url": url, "error_type": type(exc).__name__, "message": str(exc)},
+            ) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise QELongTrendWorkspaceError(
+                "QE node returned non-JSON long-trend response",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+                context={"url": url},
+            ) from exc
+        if not isinstance(payload, dict):
+            raise QELongTrendWorkspaceError(
+                "QE node long-trend response must be an object",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+            )
+        return payload
+
+    def _parse_long_trend_job_receipt(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        task_id: str,
+        loop_id: str,
+        evaluation_id: str,
+    ) -> QELongTrendJobReceipt:
+        required = {
+            "schema_version", "task_id", "loop_id", "evaluation_id", "job_id",
+            "request_sha", "status", "duplicate_replay",
+            "execution_environment_snapshot_id", "execution_environment_manifest_sha256",
+        }
+        missing = sorted(name for name in required if payload.get(name) in (None, ""))
+        if (
+            missing
+            or payload.get("schema_version") != _QELT_JOB_RECEIPT_SCHEMA
+            or payload.get("task_id") != task_id
+            or payload.get("loop_id") != loop_id
+            or payload.get("evaluation_id") != evaluation_id
+            or payload.get("status") not in _QELT_JOB_STATUSES
+            or not isinstance(payload.get("duplicate_replay"), bool)
+        ):
+            raise QELongTrendWorkspaceError(
+                f"invalid long-trend job receipt identity or fields: missing={missing}",
+                reason_code="QELT_NODE_JOB_IDENTITY_CONFLICT",
+            )
+        return QELongTrendJobReceipt(
+            schema_version=str(payload["schema_version"]),
+            task_id=task_id,
+            loop_id=loop_id,
+            evaluation_id=evaluation_id,
+            job_id=str(payload["job_id"]),
+            request_sha=self._validate_sha256(payload["request_sha"], field_name="request_sha"),
+            status=str(payload["status"]),
+            duplicate_replay=payload["duplicate_replay"],
+            current_attempt_id=str(payload["current_attempt_id"]) if payload.get("current_attempt_id") else None,
+            execution_environment_snapshot_id=str(payload["execution_environment_snapshot_id"]),
+            execution_environment_manifest_sha256=self._validate_sha256(
+                payload["execution_environment_manifest_sha256"],
+                field_name="execution_environment_manifest_sha256",
+            ),
+        )

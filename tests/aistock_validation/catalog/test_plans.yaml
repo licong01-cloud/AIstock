@@ -64,6 +64,24 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [guardrail]
     nox_posargs: [--changed-only]
+  - plan_key: qe_long_trend_phase2_backend
+    title: QE F-014 long-trend Phase 1/2 backend contracts
+    module: qe.long_trend_evaluation
+    level: L2
+    command_key: nox_qe_long_trend_phase2_backend
+    nox_session: qe_long_trend_phase2_backend
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
   - plan_key: guardrail_changed_files
     title: Development guardrail staged/changed files gate
     module: development_guardrails

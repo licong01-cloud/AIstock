@@ -27,6 +27,16 @@ modules:
     test_plans:
       required_on_change: [l0]
       recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3, qe_mcp_backend]
+  - module_id: qe.long_trend_evaluation
+    display_name: QE long-trend evaluation
+    parent_module: qe
+    module_type: data_pipeline
+    risk_level: high
+    description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, and dedicated CAS lifecycle.
+    description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算及独立 CAS 生命周期。
+    test_plans:
+      required_on_change: [l0, qe_long_trend_phase2_backend]
+      recommended: [qe_read_backend]
   - module_id: qe.core
     display_name: QE core services
     parent_module: qe

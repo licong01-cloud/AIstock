@@ -388,6 +388,7 @@ def _l0_changed_files() -> list[str]:
         ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
         ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
         ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
+        ("ls-files", "--others", "--exclude-standard"),
     )
     for command in commands:
         result = subprocess.run(
@@ -990,6 +991,24 @@ def miniqmt_sim_trading_hours_l5(session: nox.Session) -> None:
     session.skip(
         "MiniQMT SIM L5 is a manual trading-hours gate and must use a separately approved runbook with real "
         "MiniQMT SIM evidence; this nox entry is catalog-only and never fabricates success."
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_long_trend_phase2_backend(session: nox.Session) -> None:
+    """Run only F-014 long-trend compute, orchestration, CAS, and resource contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
+        "backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
     )
 
 

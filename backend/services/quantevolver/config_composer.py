@@ -1790,6 +1790,7 @@ class ConfigComposer:
         resource_source_run_key: Optional[str] = None,
         resource_session_token: Optional[str] = None,
         phase_pipeline_enabled: bool = False,
+        long_trend_evaluation_descriptor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -2014,6 +2015,33 @@ class ConfigComposer:
 
         # 4) read_exp_res.py
         experiment_files["read_exp_res.py"] = self._get_read_exp_res_content()
+        normalized_long_trend_descriptor: Dict[str, Any] | None = None
+        if long_trend_evaluation_descriptor is not None:
+            descriptor = dict(long_trend_evaluation_descriptor)
+            if descriptor.get("schema_version") != "qe_long_trend_postprocess_descriptor_v1":
+                raise ValueError("invalid QE long-trend postprocess descriptor schema")
+            recorder_backtest_freq = "1day" if backtest_freq == "day" else str(backtest_freq)
+            requested_freq = descriptor.get("backtest_freq")
+            if requested_freq not in (None, "", recorder_backtest_freq):
+                raise ValueError(
+                    "QE long-trend requested backtest_freq conflicts with the composed Qlib Recorder frequency"
+                )
+            descriptor["backtest_freq"] = recorder_backtest_freq
+            nested_long_trend = dict(descriptor.get("long_trend_evaluation") or {})
+            nested_long_trend["backtest_freq"] = recorder_backtest_freq
+            descriptor["long_trend_evaluation"] = nested_long_trend
+            normalized_long_trend_descriptor = descriptor
+            adapter_path = Path(__file__).parent / "templates" / "long_trend_postprocess_adapter.py"
+            if not adapter_path.is_file():
+                raise FileNotFoundError(f"QE long-trend postprocess adapter is missing: {adapter_path}")
+            experiment_files["qe_long_trend_postprocess_descriptor.json"] = json.dumps(
+                descriptor,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            experiment_files["long_trend_postprocess_adapter.py"] = adapter_path.read_text(encoding="utf-8")
 
         # 4b) qrun_limit runner（分钟线/日线双模板）
         scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
@@ -2101,6 +2129,7 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2123,6 +2152,7 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2149,6 +2179,7 @@ class ConfigComposer:
             "experiment_id": experiment_id,
             "factor_count": len(factor_names),
             "has_custom_factors": has_custom_factors,
+            "long_trend_evaluation_descriptor": normalized_long_trend_descriptor,
         }
 
     # ── 内存生成辅助方法 ──
@@ -5027,6 +5058,7 @@ class ConfigComposer:
         resource_source_run_key: Optional[str] = None,
         resource_session_token: Optional[str] = None,
         phase_pipeline_enabled: bool = False,
+        long_trend_postprocess_enabled: bool = False,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -5132,6 +5164,8 @@ class ConfigComposer:
         if train_only:
             runner_cmd += " --train-only"
         core_parts.append(runner_cmd)
+        if long_trend_postprocess_enabled:
+            core_parts.append("python long_trend_postprocess_adapter.py")
         core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
@@ -5153,7 +5187,8 @@ class ConfigComposer:
                               resource_session_id: Optional[str] = None,
                               resource_source_run_key: Optional[str] = None,
                               resource_session_token: Optional[str] = None,
-                              phase_pipeline_enabled: bool = False) -> str:
+                              phase_pipeline_enabled: bool = False,
+                              long_trend_postprocess_enabled: bool = False) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -5181,6 +5216,7 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_postprocess_enabled,
         )
         env_block = "\n".join(env_lines)
 
