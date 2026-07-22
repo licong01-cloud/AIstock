@@ -311,6 +311,10 @@ feature-definition manifest/hash。
   L1 自行拟合并冻结 center/scale，不复用 L2 数值参数，也不读取验证/holdout 拟合 preprocess；
 - 两个 family 均固定 train `2022-01-01..2024-06-30`、validation `2024-07-01..2025-03-31`、
   3-state diagonal GaussianHMM、`random_seed=42` 和各自批准的 feature/preprocess family；
+- 两层共享已批准 trainer family 的拟合参数：`n_iter=300`、`min_covar=1e-3`；拟合后的 diagonal variance
+  明确 clip 到 `[1e-3,10.0]` 并记录每个 entry 的 `covariance_fixed/anomaly_count/min/max`，不能静默修正；
+  transition 先执行 `alpha=0.1` Dirichlet smoothing，再把每个 self-transition 下限约束为 `0.3` 并重归一化，
+  算法参数与结果进入 artifact/hash；
 - L1 semantic label 使用 validation-only 5/10/20D future excess utility，权重 `0.35/0.35/0.30`；三个 hidden state
   必须各有有限 utility 且可严格排序为 `fading/neutral/trending`。任何 state 无样本、tie 或非有限即失败，禁止按
   mean 第一列或 state index fallback；
