@@ -2,7 +2,9 @@
 
 > 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的 MiniQMT runtime 下位专项契约。唯一 runtime、vn.py 语义和 route ownership 继续有效；旧 A/B fallback、compiler、canary 或人工门禁描述仅作为阶段历史，不得覆盖上位蓝图的 `B0_QUOTE_V2` tick 单一路径、自动恢复和无额外审批目标。
 
-> 状态：详细设计方案 / P0 架构统一整改方案
+> 实施继承关系：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md) 是 generic dispatcher、真实 timer/session clock、`ExecutionAlgoPluginV2`、durable command outbox 和 vn.py compatibility façade 的当前下位实施契约。本文继续保留唯一 runtime、N-slot、Alpha/Execution 隔离、vn.py 语义映射和 route ownership；若插件/内核实施细节冲突，依次以上位统一蓝图和 2026-07-22 F2 实施蓝图为准，不得形成第二 runtime 或第二 broker route。
+
+> 状态：架构基础契约；插件/内核实施章节由 2026-07-22 F2 蓝图继承
 > 工作分支：`docs/miniqmt-unified-vnpy-execution-design-20260608`
 > 适用范围：AIstock MiniQMT SIM 单策略/多策略模拟盘、未来 MiniQMT Live 执行层基础、Paper v2 MiniQMT 入口、simulation_runtime MiniQMT 入口、qmt_strategy ledger/OMS、operator 清仓/撤单/重置信号入口。
 > 非目标：本设计不改造 `V25_TWO_STAGE` / `V25_1_SMALL_CAP` MiniQMT live 化，不启动独立 vn.py 服务，不在本分支改后端/前端代码，不重启生产服务，不写生产数据库。
