@@ -532,16 +532,14 @@ rules:
     priority: 95
     include:
       - backend/services/sector_data_builder.py
-      - backend/services/sector_data_repair.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py
-      - backend/tests/services/test_sector_data_repair.py
     primary_module: local_data
     impact_modules: []
     layer: data_pipeline
     risk_level: high
-    ownership_reason: The sector_data builder and fail-closed repair service, schema, PIT identity migration, and direct contract tests form one local_data materialization boundary and must select the same focused plan.
+    ownership_reason: The sector_data builder, fact-only schema, dynamic PIT retirement migration, and direct contract test form one local_data materialization boundary and must select the same focused plan.
   - rule_id: local_data_pipeline
     priority: 70
     include:

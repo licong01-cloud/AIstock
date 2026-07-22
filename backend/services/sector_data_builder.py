@@ -7,6 +7,10 @@ import logging
 from typing import List
 
 from ..db.pg_pool import get_conn
+from .stock_universe_pit_service import (
+    DEFAULT_ST_PIT_UNIVERSE_KEY,
+    IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -17,16 +21,36 @@ class SectorDataBuildContractError(RuntimeError):
 
 
 _PREFLIGHT_DAY_SQL = """\
-WITH active AS (
+WITH authoritative_universes AS (
+    SELECT universe_key
+    FROM market.stock_universe_pit_state
+    WHERE status = 'ready'
+      AND dirty = FALSE
+      AND start_date <= %(trade_date)s
+      AND end_date >= %(trade_date)s
+      AND (
+          universe_key = %(live_universe_key)s
+          OR universe_key LIKE %(qe_universe_pattern)s
+      )
+),
+eligible AS (
+    SELECT DISTINCT spans.ts_code
+    FROM market.stock_universe_pit_spans AS spans
+    JOIN authoritative_universes USING (universe_key)
+    WHERE spans.eligible_start <= %(trade_date)s
+      AND spans.eligible_end >= %(trade_date)s
+),
+active AS (
     SELECT
-        ts_code,
-        l1_code,
-        l2_code,
-        in_date,
-        MAX(in_date) OVER (PARTITION BY ts_code) AS latest_in_date
-    FROM market.sw_index_member
-    WHERE in_date <= %(trade_date)s
-      AND (out_date >= %(trade_date)s OR out_date IS NULL)
+        member.ts_code,
+        member.l1_code,
+        member.l2_code,
+        member.in_date,
+        MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
+    FROM market.sw_index_member AS member
+    JOIN eligible USING (ts_code)
+    WHERE member.in_date <= %(trade_date)s
+      AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
 ),
 latest AS (
     SELECT ts_code, l1_code, l2_code, in_date
@@ -79,6 +103,13 @@ l2_moneyflow AS (
     GROUP BY pit.l2_code
 )
 SELECT
+    (SELECT CASE WHEN EXISTS (SELECT 1 FROM authoritative_universes) THEN 0 ELSE 1 END),
+    (
+        SELECT COUNT(*)
+        FROM eligible
+        LEFT JOIN mapping_summary USING (ts_code)
+        WHERE mapping_summary.ts_code IS NULL
+    ),
     (SELECT COUNT(*) FROM mapping_summary WHERE latest_mapping_count <> 1),
     (SELECT COUNT(*) FROM mapping_summary WHERE invalid_identity_count <> 0),
     (
@@ -121,14 +152,34 @@ SELECT
 
 
 _DELETE_STALE_DAY_SQL = """\
-WITH active AS (
+WITH authoritative_universes AS (
+    SELECT universe_key
+    FROM market.stock_universe_pit_state
+    WHERE status = 'ready'
+      AND dirty = FALSE
+      AND start_date <= %(trade_date)s
+      AND end_date >= %(trade_date)s
+      AND (
+          universe_key = %(live_universe_key)s
+          OR universe_key LIKE %(qe_universe_pattern)s
+      )
+),
+eligible AS (
+    SELECT DISTINCT spans.ts_code
+    FROM market.stock_universe_pit_spans AS spans
+    JOIN authoritative_universes USING (universe_key)
+    WHERE spans.eligible_start <= %(trade_date)s
+      AND spans.eligible_end >= %(trade_date)s
+),
+active AS (
     SELECT
-        ts_code,
-        in_date,
-        MAX(in_date) OVER (PARTITION BY ts_code) AS latest_in_date
-    FROM market.sw_index_member
-    WHERE in_date <= %(trade_date)s
-      AND (out_date >= %(trade_date)s OR out_date IS NULL)
+        member.ts_code,
+        member.in_date,
+        MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
+    FROM market.sw_index_member AS member
+    JOIN eligible USING (ts_code)
+    WHERE member.in_date <= %(trade_date)s
+      AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
 ),
 pit AS (
     SELECT ts_code
@@ -146,19 +197,38 @@ WHERE target.trade_date = %(trade_date)s
 
 
 _BUILD_DAY_SQL = """\
-WITH active AS (
+WITH authoritative_universes AS (
+    SELECT universe_key
+    FROM market.stock_universe_pit_state
+    WHERE status = 'ready'
+      AND dirty = FALSE
+      AND start_date <= %(trade_date)s
+      AND end_date >= %(trade_date)s
+      AND (
+          universe_key = %(live_universe_key)s
+          OR universe_key LIKE %(qe_universe_pattern)s
+      )
+),
+eligible AS (
+    SELECT DISTINCT spans.ts_code
+    FROM market.stock_universe_pit_spans AS spans
+    JOIN authoritative_universes USING (universe_key)
+    WHERE spans.eligible_start <= %(trade_date)s
+      AND spans.eligible_end >= %(trade_date)s
+),
+active AS (
     SELECT
-        ts_code,
-        l1_code,
-        l2_code,
-        in_date,
-        MAX(in_date) OVER (PARTITION BY ts_code) AS latest_in_date
-    FROM market.sw_index_member
-    WHERE in_date <= %(trade_date)s
-      AND (out_date >= %(trade_date)s OR out_date IS NULL)
+        member.ts_code,
+        member.l2_code,
+        member.in_date,
+        MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
+    FROM market.sw_index_member AS member
+    JOIN eligible USING (ts_code)
+    WHERE member.in_date <= %(trade_date)s
+      AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
 ),
 pit AS (
-    SELECT ts_code, l1_code, l2_code, in_date
+    SELECT ts_code, l2_code
     FROM active
     WHERE in_date = latest_in_date
 ),
@@ -183,7 +253,7 @@ l2_mf AS (
     GROUP BY pit.l2_code
 )
 INSERT INTO market.sector_data (
-    trade_date, ts_code, l1_code, l2_code, mapping_in_date,
+    trade_date, ts_code,
     sw2_open, sw2_high, sw2_low, sw2_close, sw2_pct_change,
     sw2_vol, sw2_amount, sw2_pe, sw2_pb, sw2_total_mv,
     sw2_mf_buy_sm_amt, sw2_mf_sell_sm_amt,
@@ -197,9 +267,6 @@ INSERT INTO market.sector_data (
 SELECT
     %(trade_date)s,
     pit.ts_code,
-    pit.l1_code,
-    pit.l2_code,
-    pit.in_date,
     sd.open, sd.high, sd.low, sd.close, sd.pct_change,
     sd.vol, sd.amount, sd.pe, sd.pb, sd.total_mv,
     l2_mf.agg_buy_sm_amt, l2_mf.agg_sell_sm_amt,
@@ -216,9 +283,6 @@ JOIN market.sw_daily sd
 LEFT JOIN l2_mf
   ON pit.l2_code = l2_mf.l2_code
 ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-    l1_code             = EXCLUDED.l1_code,
-    l2_code             = EXCLUDED.l2_code,
-    mapping_in_date     = EXCLUDED.mapping_in_date,
     sw2_open            = EXCLUDED.sw2_open,
     sw2_high            = EXCLUDED.sw2_high,
     sw2_low             = EXCLUDED.sw2_low,
@@ -259,15 +323,24 @@ class SectorDataBuilder:
         """Build one day atomically and return the inserted or updated row count."""
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(_PREFLIGHT_DAY_SQL, {"trade_date": trade_date})
+                params = {
+                    "trade_date": trade_date,
+                    "live_universe_key": DEFAULT_ST_PIT_UNIVERSE_KEY,
+                    "qe_universe_pattern": f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+                }
+                cur.execute(_PREFLIGHT_DAY_SQL, params)
                 (
+                    universe_not_ready,
+                    missing_mapping,
                     ambiguous,
                     invalid_identity,
                     missing_sector_facts,
                     missing_moneyflow_facts,
                 ) = cur.fetchone()
                 if (
-                    ambiguous
+                    universe_not_ready
+                    or missing_mapping
+                    or ambiguous
                     or invalid_identity
                     or missing_sector_facts
                     or missing_moneyflow_facts
@@ -275,13 +348,15 @@ class SectorDataBuilder:
                     raise SectorDataBuildContractError(
                         "SECTOR_DATA_PIT_CONTRACT_INVALID: "
                         f"trade_date={trade_date}, "
+                        f"universe_not_ready={universe_not_ready}, "
+                        f"missing_pit_mappings={missing_mapping}, "
                         f"ambiguous_latest_mappings={ambiguous}, "
                         f"invalid_mapping_identities={invalid_identity}, "
                         f"missing_sw_daily_facts={missing_sector_facts}, "
                         f"missing_l2_moneyflow_facts={missing_moneyflow_facts}"
                     )
-                cur.execute(_DELETE_STALE_DAY_SQL, {"trade_date": trade_date})
-                cur.execute(_BUILD_DAY_SQL, {"trade_date": trade_date})
+                cur.execute(_DELETE_STALE_DAY_SQL, params)
+                cur.execute(_BUILD_DAY_SQL, params)
                 rows = cur.rowcount
             conn.commit()
         return rows
