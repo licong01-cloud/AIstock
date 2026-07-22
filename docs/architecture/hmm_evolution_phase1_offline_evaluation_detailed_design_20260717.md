@@ -1,9 +1,9 @@
 # HMM 演进系统 Phase 1 离线评估实验室实现级详细设计
 
-> **版本**：v2.5
+> **版本**：v2.6
 > **日期**：2026-07-17
 > **修订日期**：2026-07-22
-> **状态**：P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；2026-07-22 Phase 1 收官外部验收完成：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 receipt、真实 UI/Playwright 18 场景、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout），证据见 §17.4.6
+> **状态**：P1-A/P1-B/P1-C、schema v2 DDL 与 worker runtime 已激活；2026-07-22 Phase 1 收官外部验收完成：benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 receipt、真实 UI/Playwright 18 场景、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout），证据见 §17.4.6。Gate truth：`hmm_evolution_v1/v2` production `applied_and_verified`（历史事实）；`hmm_evolution_v3` DEV `applied_and_verified`；`hmm_evolution_v3` production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21）
 > **设计权威**：总体蓝图 `hmm_evolution_and_risk_management_system_design_20260716.md` v2.5
 > **上游运行契约**：`hmm_evolution_phase0_data_source_detailed_design_20260716.md` v2.2
 > **隔离约束**：`HMM_EVOLUTION_ISOLATION_CONSTRAINTS.md` v2.1
@@ -1338,8 +1338,25 @@ frontend/src/lib/navigation/nav-groups.ts
 - **验收环境与边界**：worktree `hmm-phase1-performance-ui-supervision-20260721`（branch
   `feature/hmm-phase1-performance-ui-supervision-20260721`）；backend 8011 + frontend 3011 +
   DEV `aistock_dev`（127.0.0.1:5433）；task-scoped cache root `F:/Dev/hmm_acceptance_20260721/`。
-  生产端口 8001/3000/19080 未启动/停止/重启；生产 HMM Evolution worker 未触碰；无生产 DDL；
-  验收写入仅限 DEV `hmm_evolution.*`。
+  生产端口 8001/3000/19080 未启动/停止/重启；生产 HMM Evolution worker 未触碰；生产 DB
+  全程只读、零 DML/DDL；`hmm_evolution_v3` DDL 仅 DEV 执行，生产 v3 `pending`（未授权、未执行）。
+- **DEV 数据写入事实**（如实记录，替代早期"DEV 只写 hmm_evolution.*"的绝对表述）：
+  初始约束仅允许 DEV `hmm_evolution.*` 验收写入；随后获得战略 session 逐项明确授权
+  （`GO DEV SEED FULL`，2026-07-21 NEED-HUMAN 批准追加 `model_train_configs` 与
+  `qe_experiments`；2026-07-22 "Loop1 + h10 spec"裁决追加 fallback loop 引用行），由
+  `scripts/dev_db/seed_hmm_benchmark_reference_20260721.py` 向 DEV 种子 benchmark 引用数据。
+  production source 全程只读（`default_transaction_read_only=on`）；仅 DEV DML（insert-only、
+  ON CONFLICT DO NOTHING、无 TRUNCATE/DELETE/DROP/DDL）。实际写入的 canonical relations 与
+  行数（2026-07-22 DEV 只读回数，`current_database()=aistock_dev` 守卫）：
+  `market.kline_daily_raw` 2,796,553 行（trade_date ≥ 2024-06-03）、`market.sw_index_member`
+  7,053 行（全表 PIT spans）、`public.model_train_configs` 10 行、
+  `public.model_train_snapshots` 10 行、`infra.compute_nodes` 2 行（wsl2-5080、rdagent-node1）、
+  `public.qe_experiments` 4 行（2026-07-21 授权 benchmark 2 行 + 2026-07-22 裁决 fallback 2 行，
+  均 NULL task_id/round_id）、`public.qe_evolution_tasks` 2 行、`public.qe_evolution_loops` 2 行。
+  `infra.compute_nodes` 遥测列按批准的差异规则处理：稳定列必须一致（divergent=list+STOP），
+  volatile 列（last_heartbeat/updated_at/status）可从只读 source 刷新并前后对照报告，DEV-owned
+  列（current_task_id/metrics_snapshot）永不从生产复制、新行置中性值。生产无任何 DML/DDL；
+  仓库未提交任何数据 dump/CSV/parquet（seed 仅含 WHERE 口径与行数估计，不含数据本体）。
 - **fallback loop 裁决登记（用户 2026-07-22 批准）**：canonical loop
   `qe_20260705_004409_4437/Loop10` 的 workspace 无任何远端 manifest（三探针全 404），且不在
   legacy 白名单，manifest trust gate 按设计 fail-closed（`DateRangeError`，非代码缺陷）；设计
@@ -1412,8 +1429,9 @@ frontend/src/lib/navigation/nav-groups.ts
 - worker skeleton，不启生产 runtime。
 
 当前状态：P1-A 源码与外部验收完成；P1-B 与 P1-C 源码完成，P1-C 审计硬化已覆盖共享输入并发、lease/fencing fail-closed + explicit retry、QE 权威节点、内容安全、全资产浏览、UI 状态机与异常可观测性；
-`production_ddl_gate=applied_and_verified`（2026-07-20，DEV/production exact verify 与受保护数据摘要校验通过）；
-`runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows worker 已加载 schema v2 与 BUG-800/BUG-801/BUG-804 后代码；Loop1～Loop10、pre-ST-PIT 9 候选和进程中断后的显式 retry receipt 均成功，活动队列归零。既有 10 候选与 pre-ST-PIT 9 候选 batch 均在 30 分钟内完成。这不代表整个 Phase 1 已通过外部验收；严格冷热缓存分阶段 timing/RSS、长期服务监督和实机页面/Playwright 仍未完成。
+`hmm_evolution_v1/v2` 的 `production_ddl_gate=applied_and_verified`（2026-07-20，DEV/production exact verify 与受保护数据摘要校验通过，历史事实）；
+v2 `runtime_activation_gate=applied_and_verified`。2026-07-21 独立 Windows worker 已加载 schema v2 与 BUG-800/BUG-801/BUG-804 后代码；Loop1～Loop10、pre-ST-PIT 9 候选和进程中断后的显式 retry receipt 均成功，活动队列归零。既有 10 候选与 pre-ST-PIT 9 候选 batch 均在 30 分钟内完成。这不代表整个 Phase 1 已通过外部验收；严格冷热缓存分阶段 timing/RSS、长期服务监督和实机页面/Playwright 仍未完成。
+2026-07-22 更新：收官验收（§17.4.6）引入 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt` 与 `worker_runtime_status` 表及配套约束/索引/COMMENT/schema_version row）。v3 DEV `applied_and_verified`；v3 production `pending`（未授权、未执行），代码合入不等于生产 DDL 已执行，也不等于生产 worker/API 已加载 v3。
 
 ### P1-B：evaluator 与 recommendation scorer
 
@@ -1494,15 +1512,16 @@ frontend/src/lib/navigation/nav-groups.ts
 
 | 门禁 | 本设计 PR | P1-A | P1-B | P1-C |
 |---|---|---|---|---|
-| `production_ddl_gate` | noop | v1/v2 production applied_and_verified；v2 DEV-first receipt 见 §17.4.3 | noop | v2 已应用，runtime restart 独立 pending |
+| `production_ddl_gate` | noop | v1/v2 production `applied_and_verified`（2026-07-20 历史事实，DEV-first receipt 见 §17.4.3）；v3 DEV `applied_and_verified`、v3 production `pending`（未授权、未执行） | noop | 同 P1-A：v2 已应用为历史事实；v3 生产 DDL 与 runtime restart 均独立 pending |
 | `production_backend_dependency_gate` | noop | noop | noop | noop |
 | `production_frontend_dependency_gate` | noop | noop | noop | noop |
-| `runtime_activation_gate` | noop | 旧 schema worker 已受控 activation；v2 已应用但尚未显式重启 | 同左 | 不新增业务审批流 |
-| `data_write_gate` | docs only | 仅 hmm_evolution.* | 仅评估结果 | 同左 |
+| `production_runtime_activation_gate` | noop | v2：旧 schema worker 已受控 activation、v2 已应用（历史事实）；v3：`pending`（生产 worker/API 未重启、未加载 v3） | 同左 | 不新增业务审批流 |
+| `data_write_gate` | docs only | 仅 hmm_evolution.*（runtime 写 allowlist） | 仅评估结果 | 同左 |
 | `service_start_gate` | noop | 禁止隐式启动 | 禁止隐式启动 | 独立 service 显式启动；不得挂入 FastAPI startup，安全验证与生产启动分离 |
 | `design_compliance_gate` | F2 validator | DESIGN-COMPLIANCE-001 | 同左 | 同左 + UI evidence |
 
-2026-07-20 DDL 事实与数据不变量见 §17.4.3；生产 schema 已 applied_and_verified，API/worker 重启与 v2 runtime receipt 仍单独 pending。
+2026-07-20 v2 DDL 事实与数据不变量见 §17.4.3：v1/v2 生产 schema `applied_and_verified` 为历史事实；v2 API/worker 已受控 activation。
+2026-07-22 v3 事实：v3 DEV `applied_and_verified`（§17.4.6 全部 benchmark/UI/soak 证据均在 DEV v3 schema 上产生）；v3 production `pending`——未授权、未执行，`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`，dependency gates `noop`。v3 生产 DDL 必须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3` 后才可执行。
 
 ## 22. Design Acceptance Index（设计验收索引）
 
@@ -1550,6 +1569,7 @@ executor、batch-relative recommendation scorer，并通过 BUG-736/BUG-737 完�
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.6 | 2026-07-22 | 按只读复核 NEED-FIX 修正 gate truth 与 DEV 写入事实：`hmm_evolution_v1/v2` production `applied_and_verified` 保留为历史事实；明确 `hmm_evolution_v3`（`execution_purpose`/`benchmark_id` 列、`performance_receipt`、`worker_runtime_status`）DEV `applied_and_verified`、production `pending`（未授权、未执行），`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`（§21、§18 P1-A 状态）；§17.4.6 以授权时间线 + 八张 canonical relations 精确行数 + compute_nodes 遥测差异规则如实记录 DEV 种子写入，替代"DEV 只写 hmm_evolution.*"的绝对表述；登记 v3 生产 DDL 须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3`。 |
 | v2.5 | 2026-07-22 | 回填 Phase 1 收官外部验收（§17.4.6）：登记用户"Loop1 + h10 spec"fallback 裁决（canonical Loop10 workspace 无远端 manifest、trust gate 按设计 fail-closed、不扩白名单）；zerocopy 1c/10c 与 fallback cold/warm 全 benchmark matrix（分阶段 timing、peak RSS、per-artifact cache evidence、cold/warm result_hash 一致）；真实 UI/Playwright 18 场景（含 Sidebar `NEXT_PUBLIC_TDX_BACKEND_BASE` 覆盖修复）；worker 31.6 分钟 bounded soak 六类事件；F-008/F-010/F-010A 标记 verified。 |
 | v2.4 | 2026-07-21 | 登记用户批准的 Phase 1 收官裁决：execution purpose 隔离（§7.5，选项 1A，benchmark 对 succeeded logical key 开 max+1 generation、普通 create_or_get 仅见 evaluation purpose、retry 继承 purpose 不串用）；`hmm_evolution.performance_receipt`（§10.8，选项 B，batch/evaluation 两级、分阶段 CAS 写入、失败保留 partial）；逐 artifact cache evidence 语义（§13.4，zero_copy_bypass 不得标 warm、全 zero-copy 顶层 unknown、task-scoped cold cache root）；durable `worker_runtime_status` 与只读 `/workers` API（§10.9/§13.6/§14.6，freshness 推导 healthy/stale/stopped/unknown，不装系统服务）；schema v3 bootstrap DEV-first，生产 DDL 独立 pending。 |
 | v2.3 | 2026-07-21 | 回填 BUG-800/BUG-801/BUG-804 后 pre-ST-PIT 9/9 真实回执；明确 worker 崩溃时 evaluation lease 过期按批准状态机进入 timed_out，显式 retry 创建 generation 2 并 2/2 succeeded，不自动复活旧终态；保留严格冷热缓存、长期监督与真实 UI/Playwright 缺口。 |
