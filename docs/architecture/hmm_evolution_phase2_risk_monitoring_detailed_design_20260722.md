@@ -2,12 +2,12 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 状态：`DESIGN_READY`
-- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.9
+- 状态：`FORMAL_REVIEW_REVISED_USER_CONFIRMATION_REQUIRED`
+- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.10
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：只交付设计，不实施代码、DDL、依赖安装、服务重启、日任务或生产写入
+- 当前边界：只交付正式审核修订，不实施代码、DDL、依赖安装、服务重启、日任务或生产写入；任何 PR 合入均须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -61,9 +61,10 @@ Design Acceptance Matrix 行全部有源码和结果证据后才能标为完成�
 
 ### 1.3 唯一权威决策
 
-Phase 2 的唯一计算入口为 `HMMRiskStateGenerator`，版本 `hmm_risk_state_generator_v1`。
-API、worker、CLI、compat exporter 和测试均调用同一纯计算服务；任何 router、页面、Selection provider、
-QE helper 或独立脚本不得复制 observation、posterior、state、transition、severity 或 revision 逻辑。
+Phase 2 新增域内的唯一计算入口为 `HMMRiskStateGenerator`，版本 `hmm_risk_state_generator_v1`。
+新 API、worker、CLI 和测试均调用同一纯计算服务；任何 router、页面或 Phase 2 独立脚本不得复制
+observation、posterior、state、transition、severity 或 revision 逻辑。旧 Selection/QE/precompute 路径保持冻结，
+不纳入本次“唯一入口”改造，也不以重构名义迁移。
 
 ## 2. Scope / 范围
 
@@ -71,18 +72,17 @@ QE helper 或独立脚本不得复制 observation、posterior、state、transiti
 
 - 新 schema `hmm_risk`、exact bootstrap/verify、repository 和 current views。
 - candidate/model/input identity 解析、共同水位、PIT mapping/content hashes。
-- L2 direct posterior、L1 versioned aggregation、状态/transition/severity。
+- L1/L2 direct state evidence adapter、状态/transition/severity；跨层 aggregation 仅在 C-002 获用户确认后进入范围。
 - durable daily generation job、显式失败、idempotency、lease/fencing 和迟到数据重算。
 - alerts、risk event lifecycle、retrospective report。
 - parent blueprint 定义的 overview/heatmap/alerts/timeline/event/preview/run API。
 - `/hmm-risk` 真实页面、两级 sector、7 日热力图、固定详情和可访问结构化证据。
-- `precompute_hmm_risk_gate.py` 迁为 canonical generator 的 v1 compatibility exporter。
 - changed-file catalog 中新增 `hmm.risk` owner、module 和直接 test plans。
 
 ### 2.2 Non-goals / 非目标与边界
 
 - 不返回或写入 `RiskDecision`、`can_buy`、order、cash、position、portfolio、profile、策略配置或 snapshot 状态。
-- 不改变旧 Selection/QE gate 的启用、protect-top、block duration 或 fallback 语义；旧消费者迁移另立任务。
+- 不修改、迁移、包装、退役或改变旧 `precompute_hmm_risk_gate.py`、Selection/QE gate 的启用、protect-top、block duration、fallback 或 artifact 语义；任何旧业务路径变化均须用户另行明确确认。
 - 不训练/重训 HMM，不挑选“最佳”candidate，不自动使用最新 snapshot，不淘汰研究方向。
 - 不新增 heat score、资金强弱、可买性或第四种 HMM state。
 - 不把 severity 当 state，不把颜色、收益或 severity 合成为伪 confidence。
@@ -108,11 +108,11 @@ HMMRiskInputResolver (read-only)
                  │ frozen InputManifest
                  v
 HMMRiskStateGenerator (pure, unique authority)
-  ├─ L2 causal posterior
-  ├─ L1 constituent-weighted posterior
+  ├─ candidate-specific direct state-evidence adapters
+  ├─ L1/L2 semantic posterior validation
   ├─ transition/severity
   └─ deterministic result hashes
-                 │ one persistence transaction
+                 │ Transaction C: successful persistence
                  v
 sector_state_timeline ─> daily_alert ─> risk_event
                  └────────────────────> retrospective_report
@@ -133,7 +133,6 @@ GET APIs ──> /hmm-risk real UI            └─ no trading consumer
 - `frontend/src/lib/hmm-risk/**`
 - `frontend/tests/hmm-risk/**`
 - `scripts/hmm_risk/**`
-- `scripts/precompute_hmm_risk_gate.py`（compat exporter ownership）
 
 `module_registry.yaml` 登记 required plan `hmm_risk_backend`，recommended plan `hmm_risk_ui`；
 `test_plans.yaml` 的两个 plan 只能包含上述模块的直接测试。
@@ -157,13 +156,27 @@ config/snapshot/candidate identity 必须互相一致。model file 缺失、hash
 
 ### 4.2 Model parser contract
 
-首版只接受 `legacy_sector_hmm_model_v1`：根对象按 sector code 索引，每项必须提供可恢复的三状态 HMM、
-确定的 `state_labels` 和与 `hmm_risk_observation_v1` 对齐的 feature contract。不能按 17/131 条目数量判断，
-不兼容 pooled/candidate 模型必须返回 `hmm_risk_model_contract_unsupported`。
+不得把 Phase 2 缩减为单一 parser 或 L2-only 子集。实现前必须生成并评审
+`hmm_risk_candidate_state_evidence_matrix_v1`，逐个覆盖所有 `research_only` candidate，至少记录：
 
-config 的 `sector_level` 缺失时，resolver 仅可使用模型 sector codes 与 as-of PIT mapping 做确定性证明：
-全部 code 必须唯一落在同一层级且与 parser contract 相符。无法唯一证明则失败，不能写回 config 或猜测。
-Phase 2 v1 的 direct model level 固定为 L2；L1 由 §6.2 的批准聚合产生。
+- candidate/manifest/snapshot/config/model/coefficient artifact identity；
+- 实际 source contract 和 parser contract；
+- 可直接证明的 sector level；
+- semantic state 的权威来源及其 hash；
+- `trending/neutral/fading` 映射证据；
+- observation/parser/version；
+- `SUPPORTED` 或带稳定 reason code 的未支持结论。
+
+正式审核时 production 有 17 个 `research_only` candidate、至少两类 model 结构，且多数 config 没有显式
+`sector_level`。因此不能按条目数、路径、显示名、系数大小、排名或“最新”猜测。F-011 的完成条件是
+当前全部 candidate 均有可核验 adapter，或用户逐项明确确认某 candidate 不属于 sector-state producer；
+未获确认的 unsupported candidate 会阻断整体 Phase 2 完成，不能仅在 UI 隐藏后声称完整交付。
+
+对于 coefficient-only 或 pooled/candidate model，如何取得 semantic state 属于业务语义，不由实现自行推断。
+该选择登记为 Decision C-001；确认前不得实现默认映射、系数排序映射或 silent exclusion。
+
+L1 与 L2 都优先使用 source contract 直接提供的 state evidence。任何跨层 aggregation 都属于独立业务公式，
+登记为 Decision C-002；确认前不得从 L2 派生 L1，也不得将 derived state 标为 direct HMM。
 
 ### 4.3 InputManifest
 
@@ -208,30 +221,31 @@ L2 对应多个 L1、缺 code 或空 mapping 均显式失败。历史日不得�
 
 ## 6. 唯一 State Generator 契约
 
-### 6.1 L2 direct state
+### 6.1 Direct state-evidence adapters
 
-- observation 唯一版本：`hmm_risk_observation_v1`；从旧 `build_legacy_observations` 抽取为 backend 纯函数，
-  并以 golden parity 固化，不由 script 和 service 各写一份。
-- inference：causal forward-filter，只使用 `<= as_of_date` 数据；禁止 smoothing 或未来 observation。
-- posterior 统一映射到 semantic `trending/neutral/fading`，每个概率有限、非负且和为 1（容差固定在代码常量）。
-- `hmm_state=argmax(posterior)`；若 semantic label 缺失/重复或出现不可判定 tie，则该 sector 失败。
-- `state_confidence=max(posterior)`，`confidence_definition_version=forward_filter_max_posterior_v1`；
-  不复用旧 `confidence_scale` 人工变换。
-- `state_origin=direct_l2_hmm`，完整 posterior 写入 evidence，不以 raw JSON 直接展示给 UI。
+- generator 只调用已经在 `hmm_risk_candidate_state_evidence_matrix_v1` 中核验为 `SUPPORTED` 的
+  candidate-specific adapter；不得从旧脚本抽取或迁移业务逻辑来填补新域合同。
+- adapter 必须返回 `candidate_id/manifest_hash/parser_contract/sector_level/sector_code/trade_date`、
+  semantic `trending/neutral/fading` posterior、semantic mapping evidence、source artifact SHA-256、
+  observation version 和 adapter version。
+- 对需要 forward-filter 的 source contract，只能 causal 使用 `<= as_of_date` observation；禁止 smoothing、
+  future observation 或从旧成功结果回退。其它 source contract 必须按其经确认的直接证据合同计算，不能套用 legacy 公式。
+- posterior 每项必须有限、非负、和为 1；`hmm_state=argmax(posterior)`。semantic label 缺失/重复、
+  mapping 无权威证据或不可判定 tie 均使该 sector 失败，不得按系数大小、数组位置或显示名猜测。
+- `state_confidence=max(posterior)`；`confidence_definition_version` 与 `state_origin` 由 adapter contract 固定。
+  完整 posterior 与 mapping evidence 写入持久化 evidence，raw JSON 不直接展示给 UI。
 
-### 6.2 L1 derived state
+### 6.2 Cross-level aggregation boundary
 
-v1 不伪造独立 L1 HMM。每个 L1 使用 as-of PIT mapping 下已完整计算的 L2 posterior 聚合：
+当前没有获批准的 L2→L1、L1→L2 或混合层级 aggregation 公式。Decision C-002 确认前：
 
-```text
-weight(l2) = count(distinct active symbols mapped to l2 at as_of_date)
-P_l1(state) = Σ weight(l2) * P_l2(state) / Σ weight(l2)
-```
+- 只生成 source contract 可直接证明的 sector level；
+- 不创建 derived row，不把缺失层级填成 `neutral`、复制另一层结果或标记为 direct HMM；
+- UI 显示该 candidate 的真实 level compatibility 和稳定缺失 reason；
+- 不得以只支持一个层级声明 F-011/F-013 或整个 Phase 2 完成。
 
-要求该 L1 下所有 canonical L2 均有成功 posterior 且权重大于 0；缺任一 L2 时不生成 L1 row，job 标记
-`partial_failed` 并列明缺口。聚合后同样要求有限、归一且无 tie。
-`state_origin=derived_l1_from_l2_v1`，
-`confidence_definition_version=l1_constituent_weighted_posterior_v1`。UI 必须显示 direct/derived 来源。
+C-002 若批准 aggregation，必须在本文新 revision 中精确定义成分全集、PIT membership、权重、缺失策略、
+归一化、tie、版本、`state_origin`、confidence 和验收样例；未经该文档修订与用户确认，不进入实现。
 
 ### 6.3 Transition 与 severity
 
@@ -239,19 +253,21 @@ transition 只比较同 candidate、sector_level、sector_code、generator/rule 
 
 - 无前态：`initial`，severity `NONE`；
 - `trending -> fading`：`HIGH`；
-- `neutral -> fading`：`HIGH`；
 - `fading -> fading`：`MEDIUM`；
 - `fading -> trending`：`OPPORTUNITY`；
 - 其它：`NONE`。
 
 severity 是 `hmm_risk_alert_rule_v1` 的解释标签，不改变 state，不触发交易动作。
+`fading -> neutral` 属于 `NONE`，但必须把已有 `fading_risk` event 解析为 closed，
+`resolution_reason=fading_exit_to_neutral`；`fading -> trending` 同样关闭该 event，
+`resolution_reason=fading_exit_to_trending`，并产生 `OPPORTUNITY` alert。解析 event 不新增 severity。
 
 ### 6.4 失败与 partial 语义
 
 - 输入级失败（candidate、model、watermark、mapping、全局 observation）使 run=`failed`，不写 state/alert/event。
-- sector 级失败允许其余 L2 写入，但 run=`partial_failed`；缺 sector 不写 neutral placeholder。
-- 受缺 L2 影响的 L1 不生成；UI 整体标为 degraded 并显示缺失 sector/reason。
-- 只有预期 sector 全部完成、L1 全部生成、alerts/events persistence 成功时 run=`succeeded`。
+- sector/level adapter 级失败允许其它已核验 sector 写入，但 run=`partial_failed`；缺 sector/level 不写 neutral placeholder。
+- 受 source 缺失或 C-001/C-002 未决影响的层级不生成；UI 标为 degraded 并显示缺失 sector/level/reason。
+- 只有 evidence matrix 声明的全部预期 candidate coverage、sector/level、alerts/events persistence 完成时，run 才可 `succeeded`。
 
 ## 7. Revision、Dedupe 与迟到数据重算
 
@@ -263,61 +279,153 @@ severity 是 `hmm_risk_alert_rule_v1` 的解释标签，不改变 state，不触
 - 相同 dedupe_key、不同 input_hash 创建 `revision=max+1` 并设置 `supersedes_*`。
 - IDs 由 kind + canonical identity hash 生成，不使用随机值冒充幂等。
 
-### 7.2 并发
+### 7.2 事务、并发与失败收敛
 
-repository 按排序后的 dedupe key 获取 transaction-scoped advisory lock；revision 分配、state、alert、event、
-run counters 和 final status 在一个 persistence transaction 内完成。唯一约束冲突必须重新读取并比较
-input_hash；不同 payload 不能被当作相同成功。
+- Transaction A（enqueue）：创建 queued run 或执行 idempotency compare；不同 request hash 返回 409。
+- Transaction B（claim）：CAS `queued -> running`，递增并返回 `fencing_token`，写 owner、lease、heartbeat 和 started time。
+- Compute（无写事务）：在已冻结、只读的 InputManifest 上完成 adapter 计算；任何 input/hash 漂移立即失败。
+- Transaction C（successful persistence）：按排序后的 dedupe key 获取 transaction-scoped advisory lock；一次完成
+  revision 分配、state、alert、event、counters 与 `succeeded/partial_failed` terminal status。唯一约束冲突必须
+  重读并比较 input_hash；不同 payload 不能被当作相同成功。
+- Transaction D（failure receipt）：Transaction C 或 compute 失败后，使用独立事务和 owner/fencing CAS 写
+  `failed/error_code/error_message/error_context/completed_at`。若 D 也失败，worker 必须 fatal log、非零退出；
+  API 以 lease expiry 推导 `stale` effective status，不得返回成功或旧结果冒充本次结果。
 
 ### 7.3 Late-data cascade
 
 迟到 market/mapping/model content 导致某日 input_hash 改变时，从最早变化交易日开始，按交易日顺序
 重算至该 candidate 已持久化的最新日期。transition、alert 和 event lifecycle 均随 state revision 追加新 revision；
-不原地 update 历史。只有 output 与 current revision 完全相同时才不新增行。失败中断时整个 cascade
-persistence transaction 回滚，run 保留 failed evidence。
+不原地 update 历史。只有 output 与 current revision 完全相同时才不新增行。失败中断时 Transaction C
+整体回滚，再由独立 Transaction D 持久化 failed evidence；不得声称同一已回滚事务保留了失败回执。
 
 ## 8. Database Contracts / Schema
 
 ### 8.1 `hmm_risk.daily_generation_run`
 
-核心字段：`run_id`、`idempotency_key`、`request_hash`、`status`、`candidate_id`、`candidate_manifest_hash`、
-`trade_date_policy/requested_trade_date/resolved_trade_date/as_of_date`、`generator_version`、`rule_version`、
-`input_manifest/input_hash`、owner/fencing/lease/heartbeat/row_version、expected/succeeded/failed/L1/L2 counts、
-`missing_evidence`、`error_code/message/context`、queued/started/completed/created/updated timestamps。
+| column | exact contract |
+|---|---|
+| `run_id` | `TEXT PRIMARY KEY`，deterministic run identity |
+| `idempotency_key` | `TEXT NOT NULL UNIQUE` |
+| `request_hash` / `request_payload` | `CHAR(64) NOT NULL` / `JSONB NOT NULL` |
+| `status` | `TEXT NOT NULL DEFAULT 'queued' CHECK` in `queued/running/succeeded/partial_failed/failed/cancel_requested/cancelled` |
+| `candidate_id` | `TEXT NOT NULL REFERENCES hmm_evolution.candidate(candidate_id) ON DELETE RESTRICT` |
+| `candidate_manifest_hash` | `CHAR(64) NOT NULL` |
+| `trade_date_policy` | `TEXT NOT NULL CHECK` in `explicit/latest_common_completed` |
+| `requested_trade_date` | `DATE NULL`；policy=`explicit` 时 `NOT NULL`，否则必须 `NULL` |
+| `resolved_trade_date` / `as_of_date` | `DATE NULL`；进入 successful terminal 前必须均非空且相等 |
+| `generator_version` / `rule_version` | `TEXT NOT NULL` |
+| `input_manifest` / `input_hash` | `JSONB NULL` / `CHAR(64) NULL`；resolution 后成对存在 |
+| `owner_id` | `TEXT NULL` |
+| `fencing_token` / `row_version` | `BIGINT NOT NULL DEFAULT 0/1 CHECK >= 0/>=1` |
+| `lease_expires_at` / `heartbeat_at` | `TIMESTAMPTZ NULL`；running/cancel_requested 时与 owner 成组存在 |
+| `max_runtime_seconds` | `INTEGER NOT NULL CHECK BETWEEN 60 AND 7200`；保存服务启动时已校验的显式配置值 |
+| `expected_count` / `succeeded_count` / `failed_count` | `INTEGER NOT NULL DEFAULT 0 CHECK >= 0` |
+| `l1_expected_count/l1_succeeded_count/l2_expected_count/l2_succeeded_count` | `INTEGER NOT NULL DEFAULT 0 CHECK >= 0` |
+| `missing_evidence` | `JSONB NOT NULL DEFAULT '[]'::jsonb`，顶层必须 array |
+| `error_code/error_message/error_context` | `TEXT NULL/TEXT NULL/JSONB NULL`；failed/cancelled 时 error_code 非空 |
+| `cancel_requested_at/cancel_requested_by` | `TIMESTAMPTZ NULL/TEXT NULL`，成对出现 |
+| `queued_at/started_at/completed_at/created_at/updated_at` | `TIMESTAMPTZ`；除 started/completed 可空外均 `NOT NULL`，DB UTC `now()` |
 
-status 只允许 `queued/running/succeeded/partial_failed/failed`。计数不得为负；succeeded 只有
-failed_count=0 且 succeeded_count=expected_count。相同 idempotency key + 相同 request hash 返回同一 run；
-不同 hash 返回 409。
+table CHECK 还要求 counters 不超过 expected；`succeeded` 必须 `failed_count=0 AND succeeded_count=expected_count`；
+`partial_failed` 必须 succeeded/failed 均大于 0；所有 terminal status 必须有 `completed_at` 且 lease/owner 清空。
+相同 idempotency key + 相同 request hash 返回同一 run，不同 hash 返回 409。
 
 ### 8.2 `hmm_risk.sector_state_timeline`
 
-保留父设计字段并增加：`run_id`、`candidate_manifest_hash`、`snapshot_id/config_id`、
-`model_artifact_sha256`、`generator_version`、`observation_version`、`sector_name`、`state_origin`、
-`state_probabilities`、`confidence_definition_version`、`input_hash`、`result_hash`。
+| column | exact contract |
+|---|---|
+| `state_id` | `TEXT PRIMARY KEY`，由 dedupe identity + revision hash 生成 |
+| `run_id` | `TEXT NOT NULL REFERENCES hmm_risk.daily_generation_run(run_id) ON DELETE RESTRICT` |
+| `candidate_id/candidate_manifest_hash/snapshot_id/config_id` | `TEXT NOT NULL/CHAR(64) NOT NULL/TEXT NOT NULL/TEXT NOT NULL` |
+| `trade_date/as_of_date` | `DATE NOT NULL` 且必须相等 |
+| `sector_level/sector_code/sector_name` | `TEXT NOT NULL`；level CHECK in `L1/L2`，code/name trim 后非空 |
+| `hmm_state` | `TEXT NOT NULL CHECK` in `trending/neutral/fading` |
+| `state_probabilities` | `JSONB NOT NULL`；model validation 要求仅三 semantic keys、有限、非负、和为 1 |
+| `state_confidence` | `DOUBLE PRECISION NULL CHECK BETWEEN 0 AND 1` |
+| `state_origin/confidence_definition_version` | `TEXT NOT NULL/TEXT NOT NULL`；值必须来自已核验 adapter contract，不设猜测 fallback |
+| `parser_contract/adapter_version/observation_version` | `TEXT NOT NULL` |
+| `model_artifact_sha256/input_hash/result_hash` | `CHAR(64) NOT NULL` |
+| `mapping_snapshot_hash` | `CHAR(64) NOT NULL` |
+| `generator_version/rule_version` | `TEXT NOT NULL` |
+| `transition_from/transition_kind` | `TEXT NULL/TEXT NOT NULL`；前者三值或 NULL，后者为 stable enum |
+| `severity` | `TEXT NOT NULL CHECK` in `NONE/HIGH/MEDIUM/OPPORTUNITY` |
+| `dedupe_key` | `CHAR(64) NOT NULL` |
+| `revision` | `INTEGER NOT NULL CHECK > 0` |
+| `supersedes_state_id` | `TEXT NULL REFERENCES hmm_risk.sector_state_timeline(state_id) ON DELETE RESTRICT` |
+| `evidence` | `JSONB NOT NULL`，含 semantic mapping source/hash，禁止 UI 原样透传 |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
 
-约束：state 三值；confidence 可空或 [0,1]；probability JSON 必须由 model 层校验；state_origin 只允许
-`direct_l2_hmm/derived_l1_from_l2_v1`；unique(dedupe_key,revision) 与 unique(dedupe_key,input_hash)。
+UNIQUE 为 `(dedupe_key,revision)` 与 `(dedupe_key,input_hash)`；FK candidate、snapshot/config 的一致性由 resolver
+冻结证据和 repository precondition 双重校验。不存在 `derived_l1_from_l2_v1` 预设值；若 C-002 后续批准，须修订 CHECK/adapter registry。
 
 ### 8.3 `hmm_risk.daily_alert`
 
-一条有 severity 的 state 对应一条 alert revision。保留父设计字段，增加 `run_id`、`generator_version`、
-`input_hash/result_hash`、`explanation_version`。severity 只允许 HIGH/MEDIUM/OPPORTUNITY；NONE 不写 alert。
+| column | exact contract |
+|---|---|
+| `alert_id` | `TEXT PRIMARY KEY` |
+| `run_id/state_id` | `TEXT NOT NULL`，分别 FK run/state，`ON DELETE RESTRICT` |
+| `candidate_id/trade_date/sector_level/sector_code` | `TEXT/DATE/TEXT/TEXT NOT NULL`，与 state identity 完全一致 |
+| `severity` | `TEXT NOT NULL CHECK` in `HIGH/MEDIUM/OPPORTUNITY`；`NONE` 不写 alert |
+| `transition_from/transition_to` | `TEXT NOT NULL CHECK` 三值 |
+| `rule_version/generator_version/explanation_version` | `TEXT NOT NULL` |
+| `explanation` | `JSONB NOT NULL`，同时含稳定 message key 与结构化证据 |
+| `input_hash/result_hash/dedupe_key` | `CHAR(64) NOT NULL` |
+| `revision` | `INTEGER NOT NULL CHECK > 0` |
+| `supersedes_alert_id` | `TEXT NULL REFERENCES hmm_risk.daily_alert(alert_id) ON DELETE RESTRICT` |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
+
+UNIQUE 为 `(dedupe_key,revision)` 与 `(dedupe_key,input_hash)`；state_id 唯一，确保一条有 severity 的 state revision
+最多一条 alert revision。
 
 ### 8.4 `hmm_risk.risk_event`
 
-事件按 candidate/level/sector/event_type/rule version 形成 dedupe scope。HIGH/MEDIUM 打开或延续
-`fading_risk`，OPPORTUNITY 解析当前 fading event 并可形成独立 recovery evidence。事件每次变化追加 revision；
-`first_alert_id/latest_alert_id/opened/last/resolved_trade_date` 必须引用同一 current chain。
+| column | exact contract |
+|---|---|
+| `event_revision_id` | `TEXT PRIMARY KEY` |
+| `event_id/dedupe_key` | `TEXT NOT NULL/CHAR(64) NOT NULL`；event_id 跨 revision 稳定 |
+| `candidate_id/sector_level/sector_code/event_type/rule_version` | `TEXT NOT NULL`；event_type v1 仅 `fading_risk` |
+| `status` | `TEXT NOT NULL CHECK` in `open/resolved` |
+| `revision` | `INTEGER NOT NULL CHECK > 0` |
+| `first_alert_id/latest_alert_id` | `TEXT NOT NULL REFERENCES hmm_risk.daily_alert(alert_id) ON DELETE RESTRICT` |
+| `opened_trade_date/last_trade_date/resolved_trade_date` | `DATE NOT NULL/DATE NOT NULL/DATE NULL` |
+| `resolution_reason` | `TEXT NULL CHECK` in `fading_exit_to_neutral/fading_exit_to_trending` when non-null |
+| `supersedes_event_revision_id` | `TEXT NULL REFERENCES hmm_risk.risk_event(event_revision_id) ON DELETE RESTRICT` |
+| `result_hash/evidence` | `CHAR(64) NOT NULL/JSONB NOT NULL` |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
+
+UNIQUE `(event_id,revision)` 与 `(event_id,result_hash)`。HIGH 打开、MEDIUM 延续；`fading -> neutral` 以 NONE state
+revision 关闭但 latest_alert_id 保持最后一条 fading alert；`fading -> trending` 以 OPPORTUNITY alert 关闭。
+resolved 必须有 resolved date/reason，open 必须二者均为空；同一 current chain 的 identity 必须一致。
 
 ### 8.5 `hmm_risk.retrospective_report`
 
-字段：`report_id`、candidate/model identity、date range、sector_level、`report_spec/report_spec_hash`、
-`source_manifest/source_hash`、metrics/evidence/result_hash、sample_count、status/error、created_at。
-同 spec/input 幂等。报告只读 market forward returns，不写交易表。
+| column | exact contract |
+|---|---|
+| `report_id` | `TEXT PRIMARY KEY` |
+| `candidate_id/candidate_manifest_hash/model_artifact_sha256` | `TEXT NOT NULL/CHAR(64) NOT NULL/CHAR(64) NOT NULL` |
+| `start_trade_date/end_trade_date/sector_level` | `DATE NOT NULL/DATE NOT NULL/TEXT NOT NULL CHECK L1/L2` |
+| `report_spec/report_spec_hash` | `JSONB NOT NULL/CHAR(64) NOT NULL` |
+| `source_manifest/source_hash` | `JSONB NOT NULL/CHAR(64) NOT NULL` |
+| `status` | `TEXT NOT NULL CHECK` in `succeeded/failed`；不允许 partial 冒充可解释报告 |
+| `metrics/evidence/result_hash` | `JSONB NULL/JSONB NOT NULL/CHAR(64) NULL`；succeeded 时 metrics/result_hash 非空 |
+| `sample_count` | `INTEGER NOT NULL DEFAULT 0 CHECK >= 0` |
+| `error_code/error_message/error_context` | `TEXT NULL/TEXT NULL/JSONB NULL`；failed 时 error_code 非空 |
+| `created_at/completed_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()/TIMESTAMPTZ NOT NULL` |
+
+UNIQUE `(candidate_id,start_trade_date,end_trade_date,sector_level,report_spec_hash,source_hash)`；同 spec/input 幂等。
+报告只读 market forward returns，不写交易表。C-003 未确认前不得创建 succeeded report。
 
 ### 8.6 Views、COMMENT 与 exact verify
 
-建立 `sector_state_current`、`daily_alert_current`、`risk_event_current` views，以 dedupe key 最大 revision 为 current。
+exact index 清单为：`idx_hmm_risk_run_claim(status,queued_at,run_id) WHERE status='queued'`、
+`idx_hmm_risk_run_lease(lease_expires_at,run_id) WHERE status IN ('running','cancel_requested')`、
+`idx_hmm_risk_state_lookup(candidate_id,sector_level,sector_code,trade_date DESC,revision DESC)`、
+`idx_hmm_risk_state_run(run_id)`、`idx_hmm_risk_alert_lookup(candidate_id,trade_date DESC,sector_level,severity)`、
+`idx_hmm_risk_event_lookup(candidate_id,status,sector_level,sector_code,last_trade_date DESC)`、
+`idx_hmm_risk_report_lookup(candidate_id,end_trade_date DESC,sector_level)`。
+
+建立 `sector_state_current`、`daily_alert_current`、`risk_event_current` views，以各 dedupe identity 的最大 revision 为 current；
+view 必须显式列名，不使用 `SELECT *`。schema COMMENT 固定 `hmm_risk_schema_v1`，由 bootstrap exact verifier 读取。
 所有 schema/table/column、constraint、index、view 必须有 COMMENT。`init_hmm_risk_schema.py` 采用单事务
 bootstrap + exact columns/types/defaults/nullability/constraints/indexes/views/comments/version verify；业务服务不隐式执行 DDL。
 
@@ -325,49 +433,86 @@ bootstrap + exact columns/types/defaults/nullability/constraints/indexes/views/c
 
 ### 9.1 Preview 与 run
 
-`POST /api/v1/hmm-risk/jobs/daily/preview`：零写入，返回 resolved identity/watermark、expected sectors、
-missing evidence、input manifest hash 和是否 runnable。preview 不是批准门禁，run 不要求先 preview。
+两个 POST 共用 exact request body：
 
-`POST /api/v1/hmm-risk/jobs/daily/run`：只在 `hmm_risk.daily_generation_run` 登记 queued job 并返回 202；
-请求含 explicit candidate、date policy、generator/rule version、idempotency key。不得同步长算、不得调用训练。
+| field | contract |
+|---|---|
+| `candidate_id` | required non-empty string；不得为 `latest`、display name 或排名 |
+| `trade_date_policy` | required enum `explicit/latest_common_completed` |
+| `requested_trade_date` | policy=`explicit` 时 required ISO date，否则必须省略/null |
+| `generator_version` | required exact `hmm_risk_state_generator_v1` |
+| `rule_version` | required exact `hmm_risk_alert_rule_v1` |
+
+未知字段返回 422。`POST /api/v1/hmm-risk/jobs/daily/preview` 零写入；200 `data` 精确包含
+`candidate_identity`、`resolved_trade_date`、`as_of_date`、`level_compatibility`、`expected_sector_counts`、
+`missing_evidence[]`、`input_manifest_hash`、`runnable`。`runnable=false` 仍是已成功完成的 preview 计算，
+但必须带稳定 reason；preview 不是批准门禁，run 不要求先 preview。
+
+`POST /api/v1/hmm-risk/jobs/daily/run` 另要求 header `Idempotency-Key`（1..128 个可打印非空字符）；
+只执行 Transaction A 并返回 202 `data={run_id,status:'queued',request_hash,queued_at}`。不得同步长算、
+不得调用训练。相同 key/body 返回同一 202；相同 key/不同 body 返回 409 `hmm_risk_idempotency_conflict`。
 
 ### 9.2 Manual-first worker
 
 `scripts/hmm_risk/run_daily_worker.py --once|--drain --max-jobs N --owner-id ...` 显式消费 queue。
 首次版本没有 `--serve` scheduler 注册；claim 使用 lease/fencing，陈旧 owner 不能提交。每次 claim 前先把
 lease 已过期的 running job 终态化为 `failed/hmm_risk_worker_lease_expired`，不自动重认领同一 run；调用方以
-新 idempotency key 显式重跑。worker 收到受控中断时尽力写 failed receipt，进程崩溃则由下次 reaper 收敛。
-worker 只调用 service，不复制 generator。首次 production run 必须另获运行授权；之后是否登记只读日任务
-属于独立发布步骤。
+新 idempotency key 显式重跑。CLI 另提供 `--reap-expired` 只执行 reaper；它是故障收敛动作，不启动 scheduler。
+
+`HMM_RISK_JOB_MAX_RUNTIME_SECONDS`、`HMM_RISK_JOB_LEASE_SECONDS`、`HMM_RISK_JOB_HEARTBEAT_SECONDS`
+是 worker/API 启动必需显式配置：max runtime 为 60..7200，lease 为 30..300，heartbeat 为正整数且
+`heartbeat * 3 < lease < max_runtime`；max runtime 写入每个 run。缺失或非法时启动/preview/run 均 fail loud，
+不采用隐藏默认值。
+到达 max runtime 时请求取消并由 Transaction D 写 `failed/hmm_risk_job_timeout`。受控中断先写
+`cancel_requested`，在当前 adapter 安全点结束并写 `cancelled/hmm_risk_job_cancelled`；进程崩溃由显式 reaper
+或下次 pre-claim reaper 收敛。
+
+`GET /jobs/{run_id}` 在 DB status=`running/cancel_requested` 且 `lease_expires_at <= db_now()` 时，必须返回
+`effective_status='stale'` 与 `hmm_risk_worker_lease_expired`，即使 reaper 尚未写终态；不能无限显示 running。
+`POST /api/v1/hmm-risk/jobs/{run_id}/cancel` 仅对 queued/running 有效：queued 直接 CAS cancelled，running 写 cancel_requested；
+terminal 重放幂等返回原状态。cancel 是技术控制，不是运行前审批。worker 只调用 service，不复制 generator。
+首次 production run 必须另获运行授权；之后是否登记只读日任务属于独立发布步骤。
 
 ### 9.3 Read APIs
 
-父设计端点保持不变，并固定响应语义：
+父设计端点保持不变，并固定 query/响应语义：所有 list query 必须显式提供 `candidate_id`；date range 为 ISO date，
+`start <= end` 且最多 366 个交易日；`sector_level` 仅 L1/L2；pagination 使用显式 `limit` 1..500 与 opaque cursor，
+不接受任意 sort expression。
 
 - `overview`：current watermark、candidate/model identity、latest run、coverage、state distribution、alerts、staleness。
 - `heatmap`：显式 candidate、level/date range；返回 cells、missing cells、run status 和 current revisions。
 - `alerts`：按 date/level/candidate 查询 current alerts；无 alert 是真实空，不等于数据缺失。
 - `timeline`：sector + candidate + level，返回 state revisions/current marker。
 - `events/{event_id}`：完整 event revision chain 和可读 evidence。
-- job status：增加 `GET /jobs/{run_id}`，供 UI/操作方查看 queued/running/terminal。
+- job status：`GET /jobs/{run_id}` 返回 persisted/effective status、lease/heartbeat、counts、missing evidence、
+  stable error 与 timestamps；另有上述 cancel endpoint。
 - report：增加 `GET /reports` 与 `GET /reports/{report_id}`；生成使用受控 job/CLI，不在普通 GET 中写入。
 
-所有响应使用 `{status,data,trace_id}`；失败保留 reason_code/message/context。DB/schema/input error 不返回空数组成功。
+成功响应 exact envelope 为 `{status:'success',data,trace_id}`；失败 exact envelope 为
+`{status:'error',error:{reason_code,message,context},trace_id}`，error 时不得出现成功 `data`。
+HTTP mapping：validation 422、not found 404、identity/hash/idempotency conflict 409、dependency unavailable 503、
+unexpected 500。DB/schema/input error 不返回空数组成功；未知异常不把 stack/secret 放入 context。
+
+### 9.4 Retrospective report generation CLI
+
+报告仅由 `scripts/hmm_risk/generate_retrospective_report.py` 显式执行，required args 为 `--candidate-id`、
+`--start-trade-date`、`--end-trade-date`、`--sector-level L1|L2`、`--report-spec-file`；可选 `--preview`
+严格零写入。spec file 必须是 canonical JSON，schema 与 hash 按 C-003 确认后的 `ReportOracleSpec` 版本验证。
+C-003 未确认或 spec 任一字段缺失时，命令以非零退出并输出 compact JSON error
+`hmm_risk_report_oracle_unconfirmed`；不得采用默认 horizon/quantile。成功写入单个幂等 report row 并回读
+`report_id/report_spec_hash/source_hash/result_hash/sample_count`；失败只写 failed report receipt，不写 metrics 假成功。
 
 ## 10. Retrospective Report Contracts
 
-`hmm_risk_retrospective_v1` 固定展示 1/3/5/10/20 交易日前向 sector return、alert 与 non-alert 分布、
-样本量、缺失率和分阶段稳定性。二元 evidence 仅用于解释：
+父设计要求 retrospective evidence，但没有批准 adverse outcome 的 horizon、return 口径、threshold/quantile、
+样本 universe 或缺失处理。不得由实现发明固定 5D、bottom quantile 或其它 oracle。Decision C-003 确认前，
+report generation 返回 `hmm_risk_report_oracle_unconfirmed`，UI 显示“回溯定义待确认”，不得以空图或默认统计冒充报告。
 
-- adverse outcome：同层级同日 5D forward return 位于 cross-sectional bottom 20%；
-- hit：HIGH/MEDIUM alert 且 adverse；
-- false positive：HIGH/MEDIUM alert 且非 adverse；
-- miss：无 HIGH/MEDIUM alert 且 adverse；
-- OPPORTUNITY 单独报告 forward-return 分布，不混入 fading alert confusion matrix。
-
-报告必须显示定义版本、quantile、horizon、coverage 和每项 denominator。20% 与 5D 是报告版本参数，不是
-交易门禁或晋级阈值；页面不以 pass/fail 决定 candidate 生命周期。迟到价格数据产生新 report input hash，
-旧 report 保留。
+C-003 必须逐项确认并 version 化 `ReportOracleSpec`：`forward_horizons`、return price/adjustment/sector aggregation、
+`adverse_outcome_rule`、threshold/quantile、cross-sectional universe、alert/non-alert inclusion、停牌/缺价处理、
+minimum denominator、阶段切分、OPPORTUNITY 是否单独统计。确认后的新文档 revision 必须给出边界样例和 golden dataset。
+报告必须显示完整 spec、coverage、missingness 和每项 denominator；任何指标都只作解释，不得产生 pass/fail、
+candidate lifecycle、Selection/QE/Paper/QMT 或交易副作用。迟到价格数据产生新 source hash，旧报告 append-only 保留。
 
 ## 11. UI Contracts
 
@@ -381,7 +526,7 @@ worker 只调用 service，不复制 generator。首次 production run 必须另
 
 - 默认最近 7 个完整交易日，L1/L2 切换；候选 identity 与 level compatibility 显式。
 - cell 填充色仅表达 trending/neutral/fading；severity 用边框/角标/文本。
-- confidence 为 null 时显示“未提供”，不补 0；derived L1 显示来源与 aggregation version。
+- confidence 为 null 时显示“未提供”，不补 0；若 C-002 后续批准 derived state，必须显示来源与 aggregation version。
 - 点击 cell 更新页面内固定详情，不用 drawer；详情含 identity、水位、state/probability/confidence、transition、
   severity、revision、source completeness 和可读 explanation。
 - 今日预警、状态分布、event 和 retrospective report 都使用真实 API。
@@ -397,40 +542,35 @@ worker 只调用 service，不复制 generator。首次 production run 必须另
 - `hmm_risk_model_artifact_missing`
 - `hmm_risk_model_artifact_hash_drift`
 - `hmm_risk_model_contract_unsupported`
+- `hmm_risk_semantic_state_mapping_unconfirmed`
+- `hmm_risk_sector_level_contract_unconfirmed`
 - `hmm_risk_training_cutoff_missing_or_future`
 - `hmm_risk_common_watermark_unavailable`
 - `hmm_risk_sector_rows_inconsistent`
 - `hmm_risk_mapping_missing_or_ambiguous`
 - `hmm_risk_observation_invalid`
 - `hmm_risk_sector_inference_failed`
-- `hmm_risk_l1_aggregation_incomplete`
 - `hmm_risk_probability_tie`
 - `hmm_risk_revision_conflict`
 - `hmm_risk_stale_fencing_token`
 - `hmm_risk_worker_lease_expired`
+- `hmm_risk_job_timeout`
+- `hmm_risk_job_cancelled`
+- `hmm_risk_idempotency_conflict`
+- `hmm_risk_report_oracle_unconfirmed`
 - `hmm_risk_schema_drift`
 - `hmm_risk_chart_renderer_unavailable`
 
 未知异常使用稳定 internal reason + trace id，详细堆栈只进入服务日志；不得转成 neutral、空成功或旧日 current。
 
-## 13. Legacy Migration / 旧 gate 迁移与退役
+## 13. Legacy Boundary / 旧 gate 冻结边界
 
-### 13.1 `precompute_hmm_risk_gate.py`
+Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修改、包装、迁移、退役或替换
+`scripts/precompute_hmm_risk_gate.py`、`hmm_risk_gate_v1` artifact、Selection/QE loader/provider 或既有消费者接线。
+新 `hmm_risk.*` 域独立实现，不要求旧脚本调用新 generator，也不让新域调用旧 gate 形成隐藏耦合。
 
-首个 backend implementation slice 将旧脚本变为 thin compatibility exporter：调用 canonical input resolver 和
-state generator，再按既有 `hmm_risk_gate_v1` transition/duration/protect 字段输出相同 schema。迁移前必须有
-golden artifact parity；不允许保留第二份 observation/inference 代码。
-
-### 13.2 Existing consumers
-
-Selection/QE loader/provider 本阶段保持原业务接线，不读取 `hmm_risk.*`，Phase 2 也不调用它们。
-v1 exporter 与 loader 在 consumer inventory 清零前保留。任何将 Selection/QE 改读 `hmm_risk.*` 的工作都是
-共享业务契约变化，必须另立 feature/BUG 和对应直接验收，不能随 Phase 2 UI 静默切换。
-
-### 13.3 Retirement condition
-
-当 repository search、runtime config inventory 和 archived experiment reproducibility 均证明没有 v1 producer
-依赖时，才可删除 exporter compute compatibility；artifact parser 可为历史 replay 保留。删除是单独 cleanup PR。
+未来若要共享 parser、切换 consumer、删除 producer 或改变 protect/block/fallback 行为，属于明确共享契约和业务逻辑迁移，
+必须另立 feature/BUG、单独详细设计、逐项验收，并在对应 PR 合入前取得用户明确确认。当前文档不预先批准该工作。
 
 ## 14. Advisory-only Isolation
 
@@ -453,8 +593,8 @@ v1 exporter 与 loader 在 consumer inventory 清零前保留。任何将 Select
 
 - 新增 `models.py`、`input_resolver.py`、`market_repository.py`、`observation.py`、`state_generator.py`、
   `alert_state_machine.py`、`repository.py`。
-- 迁移 legacy script 为 thin exporter，并加入 golden parity。
-- 完成 deterministic hashes、L2/L1、revision、late-data cascade 和 isolation tests。
+- 完成 C-001/C-002 经确认后的 candidate adapters、deterministic hashes、direct L1/L2、revision、late-data cascade 和 isolation tests。
+- 不修改或迁移 legacy script；旧 gate 不属于本模块 changed files。
 
 ### Slice 2：durable job、worker、API、report
 
@@ -488,10 +628,9 @@ primary module required plan。未映射文件先修 catalog。`impact_modules`�
 - `python -m pytest backend/tests/hmm_risk/test_api.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_retrospective_report.py -q`
 - `python -m pytest backend/tests/hmm_risk/test_isolation.py -q`
-- `python -m pytest backend/tests/hmm_risk/test_legacy_export_contract.py -q`
 
-legacy export smoke 的跨 consumer 原因必须在证据中写明：`hmm_risk_gate_v1` 是明确共享 artifact contract；
-只验证 schema/parity，不运行 QE/Selection 全模块回归。若实现不改变 v1 output contract，则不增加其它模块 suite。
+旧 gate frozen 且不在 changed files 中，因此不运行 legacy/QE/Selection 模块测试。只有未来 PR 真实修改共享 artifact
+contract 时，才能基于明确依赖边追加对应 contract smoke，并在验证证据中写明原因。
 
 ### 16.3 Direct UI evidence
 
@@ -511,23 +650,37 @@ legacy export smoke 的跨 consumer 原因必须在证据中写明：`hmm_risk_g
 
 广泛跨模块回归仅在明确 shared contract 改变时交给 CI/Validation Center/nightly，且记录具体原因。
 
-## 17. Design Acceptance Index / 设计验收索引
+## 17. Decision Index / 用户决策索引
+
+| decision | exact question | status | implementation consequence |
+|---|---|---|---|
+| C-001 | pooled/coefficient-only 等不同 candidate 如何取得可证明的 `trending/neutral/fading` semantic state，哪些 candidate 经逐项确认不属于 sector-state producer | `USER_CONFIRMATION_REQUIRED` | 未确认不得猜测 mapping、silent exclusion 或声明全 candidate coverage |
+| C-002 | L1/L2 各自的 direct source；如需跨层 aggregation，其成分、PIT 权重、缺失、confidence 与版本公式 | `USER_CONFIRMATION_REQUIRED` | 未确认只展示 direct level，F-011/F-013 不得完成 |
+| C-003 | retrospective adverse-outcome oracle 的 horizon、return、threshold/quantile、universe、缺失与 denominator | `USER_CONFIRMATION_REQUIRED` | 未确认不得生成 succeeded report 或默认统计 |
+| C-004 | 是否迁移、包装或退役 legacy gate | `RESOLVED_NO_MIGRATION` | Phase 2 冻结旧 producer/consumer，不运行其测试 |
+| C-005 | PR 是否可以自动合入 | `RESOLVED_PER_PR_USER_CONFIRMATION` | branch/commit/push/PR/CI 可继续；每个 PR 在 merge 前停下并取得用户明确确认 |
+
+C-001/C-002/C-003 是批准设计语义所需的用户决策，不是运行时人工审批或实现者新增门禁。确认后必须先更新本文及父设计，
+再允许对应 implementation；C-005 是用户明确要求的交付控制，适用于今后每个 PR。
+
+## 18. Design Acceptance Index / 设计验收索引
 
 - F-011：唯一 state generator、身份、水位、PIT mapping、L2/L1、job、revision、alert/event 和迟到数据合同。
 - F-012：advisory-only 写入与依赖隔离，不产生 Selection/Paper/QMT/QE/交易副作用。
 - F-013：真实 read API、风险 UI、失败状态、可访问证据与 retrospective report。
 
-## 18. Design Acceptance Matrix / 设计验收矩阵
+## 19. Design Acceptance Matrix / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_alert_state_machine.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py`; `python -m pytest backend/tests/hmm_risk/test_schema.py -q` | DESIGN_READY | 无 |
-| F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py`; legacy thin exporter only | `backend/tests/hmm_risk/test_isolation.py`; `python -m pytest backend/tests/hmm_risk/test_legacy_export_contract.py -q` | DESIGN_READY | 无 |
-| F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | DESIGN_READY | 无 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_alert_state_machine.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py`; `python -m pytest backend/tests/hmm_risk/test_schema.py -q` | pending_user_confirmation | C-001 semantic state evidence 与 C-002 level source/aggregation 未确认 |
+| F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | FORMAL_REVIEW_READY | 无 |
+| F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | pending_user_confirmation | C-002 level coverage 与 C-003 retrospective oracle 未确认 |
 
-`DESIGN_READY` 只表示实现级合同完整并可进入 feature implementation，不表示源码、DDL、UI、runtime 或生产任务已完成。
+`pending_user_confirmation` 行不得进入对应 implementation 或被报告为设计完成；`FORMAL_REVIEW_READY` 只表示该行合同已修复，
+不表示源码、DDL、UI、runtime、生产任务或 PR 合入已完成。
 
-## 19. Risks / Failure Modes
+## 20. Risks / Failure Modes
 
 | 风险 | 控制 |
 |---|---|
@@ -535,35 +688,38 @@ legacy export smoke 的跨 consumer 原因必须在证据中写明：`hmm_risk_g
 | candidate 与 model 漂移 | manifest/snapshot/config/model hash 全冻结；任一不一致 fail loud |
 | future leakage | train_end <= as_of；causal filter；所有 dataset watermark 固化 |
 | sector duplicate 行不一致 | 全字段 equality 检查；不使用 DISTINCT ON 静默挑选 |
-| L1 被伪装成独立 HMM | state_origin + versioned weighted posterior；缺 L2 不生成 L1 |
+| L1/L2 来源被猜测 | C-002 前仅 direct evidence；任何 aggregation 先修订公式与验收样例 |
 | partial day 冒充完整 | run terminal `partial_failed`；UI degraded 并列 missing sectors |
 | late data 覆盖历史 | append-only revision + supersedes + forward cascade |
 | 并发生成重复 revision | advisory lock + unique keys + input-hash compare |
-| 旧 gate 业务语义漂移 | v1 golden parity；消费者保持现状；迁移另立任务 |
+| 旧 gate 业务语义漂移 | Decision C-004 冻结 producer/consumer；未来迁移另立设计与逐 PR 确认 |
 | UI 用旧日/neutral 填空 | stale/failed/empty 分离；missing cell 明示 |
 | report 变成研究门禁 | 指标只解释，无 pass/fail 或 lifecycle 副作用 |
 | scheduler 意外启用 | v1 worker 只有 once/drain；无 startup/scheduler 注册 |
+| worker 崩溃永久 running | GET effective stale + 显式 reaper + pre-claim reaper + max runtime |
+| persistence 回滚后伪称有失败回执 | Transaction C rollback 后以独立 Transaction D CAS；二次失败 fatal/nonzero |
 
-## 20. Rollout / Rollback
+## 21. Rollout / Rollback
 
-### 20.1 Rollout
+### 21.1 Rollout
 
-1. 合入设计，不产生 runtime/DB 变化。
-2. Slice 0 在现有 DEV DB 验证 schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
-3. Slice 1/2 在 DEV 运行 fixture、真实只读 market input、人工 job 和 bounded worker；只写 DEV `hmm_risk.*`。
-4. Slice 3 在安全端口完成真实 API/UI acceptance；未通过前不切 `/hmm`。
-5. 源码合入后，生产 DDL 必须独立获得目标授权、执行单事务 migration 和 readback。
-6. 生产 runtime 首次 manual worker/API activation 再独立授权；不自动启动 scheduler。
+1. 本设计修订创建 PR 后停止；未经用户对该 PR 明确确认，不执行 merge/merge-aftercare。
+2. 用户确认 C-001/C-002/C-003 后，先修订本文/父设计并再次正式审核；该修订 PR 仍需逐 PR merge 确认。
+3. 设计全部确认并合入后，Slice 0 在现有 DEV DB 验证 schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
+4. Slice 1/2 在 DEV 运行 fixture、真实只读 market input、人工 job 和 bounded worker；只写 DEV `hmm_risk.*`。
+5. Slice 3 在安全端口完成真实 API/UI acceptance；未通过前不切 `/hmm`。
+6. 每个源码 PR 均在 merge 前停止等待用户确认；源码合入后，production DDL 仍须独立目标授权、migration 和 readback。
+7. production 首次 manual worker/API activation 再独立授权；不自动启动 scheduler。
 
-### 20.2 Rollback
+### 21.2 Rollback
 
 - DDL transaction 失败自动回滚；成功后不 DROP 历史表，使用 forward-fix。
 - runtime rollback 停止 manual worker/禁用 route activation，不删除 state/alert/event/report/history。
 - UI rollback 恢复 `/hmm-evolution` 默认入口，不伪造风险页成功。
 - generator/rule 新版本以新 identity 运行；旧 revision/report 保留，不原地重写。
-- legacy v1 exporter/consumer 在独立迁移完成前保留，可单独回滚 wrapper 而不切换业务消费者。
+- legacy v1 producer/consumer 完全冻结；Phase 2 rollback 不触碰其文件、artifact 或 runtime 接线。
 
-## 21. Production Gates
+## 22. Production Gates
 
 - 本设计 PR：`production_ddl_gate=noop`。
 - 本设计 PR：`production_frontend_dependency_gate=noop`。
@@ -573,14 +729,15 @@ legacy export smoke 的跨 consumer 原因必须在证据中写明：`hmm_risk_g
 - 未来源码合入不等于 API/UI/worker 激活；首次 production manual worker run 单独授权。
 - Phase 2 scheduler：未批准、未实现、未启用。
 
-## 22. DESIGN-COMPLIANCE-001 预审
+## 23. DESIGN-COMPLIANCE-001 预审
 
-- no_simplified_delivery：五张持久表/current views、唯一 generator、job/revision、API、真实 UI、report 和 legacy migration 均在范围内；不得删减为静态热力图或单表快照。
+- no_simplified_delivery：五张持久表/current views、全 candidate evidence matrix、direct L1/L2、唯一 generator、job/revision、API、真实 UI 与 confirmed report 均为完成边界；未决项不以子集、默认或静态页代替。
 - no_silent_error：candidate/model/watermark/mapping/sector/L1/persistence/renderer 全部有 reason code；partial 不标 success。
-- no_business_semantic_drift：只产生 advisory analysis，不改变任何现有 gate/交易/QE/Paper 语义。
-- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；只保留规范要求的 production DDL/runtime 独立授权。
+- no_business_semantic_drift：移除自创 `neutral -> fading=HIGH`、weighted L2→L1 和 5D/bottom-quantile oracle；旧 gate 冻结，只产生 advisory analysis。
+- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001/C-002/C-003 是未决业务定义，C-005 是用户明确要求；保留规范要求的 production DDL/runtime 独立授权。
 
-## 23. 当前完成状态与下一步
+## 24. 当前完成状态与下一步
 
-本文件完成 Phase 2 F2 实现级设计。下一步是运行 F2 validator、PR/merge 本设计；合入后从 Slice 0
-开始 feature implementation。当前没有执行代码实现、数据库 DDL/DML、依赖安装、服务重启或 job。
+本文件已完成正式审核问题修订，但 Phase 2 F2 仍因 C-001/C-002/C-003 明确标为
+`USER_CONFIRMATION_REQUIRED`，不得声称设计完成或开始相应实现。下一步仅创建/更新设计 PR 并停止在 merge 前；
+待用户逐项确认业务定义后更新设计并复审。当前没有执行代码实现、数据库 DDL/DML、依赖安装、服务重启、job 或 PR 合入。
