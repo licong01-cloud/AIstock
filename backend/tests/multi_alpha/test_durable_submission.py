@@ -161,7 +161,13 @@ class FakeDurableRepository:
             "reason": {"phase": "submitted", "progress": {}, "durable": True},
         }
         if spec.run_id in self.runs:
-            raise AssertionError("durable submission must create a unique run identity")
+            existing = self.runs[spec.run_id]
+            if existing["request_hash"] != spec.request_hash or existing["task_id"] != spec.task_id:
+                raise MultiAlphaDurableRepositoryError(
+                    "run identity maps to a different request",
+                    reason_code="multi_alpha_identity_payload_conflict",
+                )
+            return deepcopy(existing)
         self.runs[spec.run_id] = row
         return deepcopy(row)
 
@@ -274,6 +280,35 @@ def test_same_payload_at_same_clock_creates_distinct_run_records() -> None:
 
     assert first["run_id"] != second["run_id"]
     assert first["task_id"] == second["task_id"]
+
+
+def test_submission_idempotency_key_replays_same_run_and_rejects_changed_payload() -> None:
+    repository = FakeDurableRepository()
+    service = _service(repository)
+
+    first = service.submit(_payload(), idempotency_key="ui-scenario-1")
+    replay = service.submit(_payload(), idempotency_key="ui-scenario-1")
+
+    assert replay["run_id"] == first["run_id"]
+    assert len(repository.runs) == 1
+
+    changed = _payload(topk=50)
+    with pytest.raises(DurableCombineSubmissionError) as caught:
+        service.submit(changed, idempotency_key="ui-scenario-1")
+    assert caught.value.http_status_code == 409
+    assert caught.value.reason_code == "multi_alpha_identity_payload_conflict"
+
+
+@pytest.mark.parametrize("key", ["", " ", "x" * 201])
+def test_submission_rejects_invalid_idempotency_key_before_run_write(key: str) -> None:
+    repository = FakeDurableRepository()
+
+    with pytest.raises(DurableCombineSubmissionError) as caught:
+        _service(repository).submit(_payload(), idempotency_key=key)
+
+    assert caught.value.reason_code == "multi_alpha_submission_idempotency_key_invalid"
+    assert repository.tasks == {}
+    assert repository.runs == {}
 
 
 def test_explicit_task_identity_mismatch_returns_conflict() -> None:
@@ -414,15 +449,16 @@ def test_execution_reservation_schema_unavailable_returns_503_before_run_write()
 def test_default_facade_delegates_submit_without_starting_legacy_execution() -> None:
     class CapturingDurableSubmission:
         def __init__(self) -> None:
-            self.calls: list[tuple[Mapping[str, Any], bool | None]] = []
+            self.calls: list[tuple[Mapping[str, Any], bool | None, str | None]] = []
 
         def submit(
             self,
             payload: Mapping[str, Any],
             *,
             run_async_override: bool | None = None,
+            idempotency_key: str | None = None,
         ) -> dict[str, Any]:
-            self.calls.append((payload, run_async_override))
+            self.calls.append((payload, run_async_override, idempotency_key))
             return {
                 "task_id": "mact_test",
                 "run_id": "macb_test",
@@ -435,11 +471,12 @@ def test_default_facade_delegates_submit_without_starting_legacy_execution() -> 
     durable = CapturingDurableSubmission()
     facade = MultiAlphaCombineBacktestService(durable_submission_service=durable)
 
-    result = facade.submit_run(_payload(), run_async=True)
+    result = facade.submit_run(_payload(), run_async=True, idempotency_key="ui-scenario")
 
     assert result["durable"] is True
     assert result["status"] == "queued"
     assert len(durable.calls) == 1
+    assert durable.calls[0][1:] == (True, "ui-scenario")
 
 
 def test_production_facade_requires_explicit_test_flag_for_legacy_mode() -> None:
@@ -458,7 +495,7 @@ def test_production_facade_requires_explicit_test_flag_for_legacy_mode() -> None
 
 def test_submit_api_returns_202_for_bounded_wait_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     class TimedOutService:
-        def submit_run(self, _payload: Mapping[str, Any]) -> dict[str, Any]:
+        def submit_run(self, _payload: Mapping[str, Any], **_kwargs: Any) -> dict[str, Any]:
             return {
                 "task_id": "mact_test",
                 "run_id": "macb_test",
@@ -489,7 +526,7 @@ def test_submit_api_returns_202_for_bounded_wait_timeout(monkeypatch: pytest.Mon
 
 def test_submit_api_preserves_structured_durable_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
     class UnavailableService:
-        def submit_run(self, _payload: Mapping[str, Any]) -> dict[str, Any]:
+        def submit_run(self, _payload: Mapping[str, Any], **_kwargs: Any) -> dict[str, Any]:
             raise DurableCombineSubmissionError(
                 "schema unavailable",
                 reason_code="multi_alpha_durable_schema_unavailable",

@@ -3,13 +3,14 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, ArrowLeft, DownloadCloud, PackagePlus, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import LoopDetailPanel from "../../../evolution/components/LoopDetailPanel";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
 import type { DataSourceAdapter } from "../../../components/EvolutionTrajectory";
 import CombineDiagnosticsPanel, { type CombineDiagnosticsLoop } from "../components/CombineDiagnosticsPanel";
 import CombineRunOperationsPanel, { type CombineRunLoop } from "../components/CombineRunOperationsPanel";
+import { canonicalMultiAlphaEvolutionUrl } from "../../../evolution/components/multiAlphaEvolutionAdapter";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 type CombineTask = {
@@ -169,8 +170,8 @@ function combineStatusInfo(status: string): { color: string; bgColor: string; la
 
 type PageProps = { params: { taskKey: string } };
 
-function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
-  const taskKey = safeDecode(params.taskKey);
+function MultiAlphaCombineBacktestDetailWorkspace({ taskKey: rawTaskKey }: { taskKey: string }) {
+  const taskKey = safeDecode(rawTaskKey);
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
   const [detail, setDetail] = useState<CombineTaskDetail | null>(null);
@@ -311,7 +312,7 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", padding: "24px 32px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Link href="/quantevolver/multi-alpha/combine-backtest" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 6, border: "1px solid #e2e8f0", backgroundColor: "#fff", cursor: "pointer", fontSize: 13, color: "#475569", textDecoration: "none" }}>
+          <Link href={canonicalMultiAlphaEvolutionUrl()} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 6, border: "1px solid #e2e8f0", backgroundColor: "#fff", cursor: "pointer", fontSize: 13, color: "#475569", textDecoration: "none" }}>
             <ArrowLeft size={14} /> 返回
           </Link>
           <div>
@@ -531,10 +532,21 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   );
 }
 
+function MultiAlphaCombineBacktestDetailLegacyRedirect({ params }: PageProps) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    window.location.replace(canonicalMultiAlphaEvolutionUrl(safeDecode(params.taskKey), new URLSearchParams(searchParams.toString())));
+  }, [params.taskKey, searchParams]);
+  return <div style={{ padding: 24, color: "#475569" }}>正在转到规范 QE 演进页面…</div>;
+}
+
 export default function MultiAlphaCombineBacktestDetailPage({ params }: PageProps) {
+  const pathname = usePathname();
   return (
     <Suspense fallback={<div style={{ padding: 24, color: "#475569" }}>Loading combine-backtest detail...</div>}>
-      <MultiAlphaCombineBacktestDetailContent params={params} />
+      {pathname === "/quantevolver/evolution"
+        ? <MultiAlphaCombineBacktestDetailWorkspace taskKey={params.taskKey} />
+        : <MultiAlphaCombineBacktestDetailLegacyRedirect params={params} />}
     </Suspense>
   );
 }

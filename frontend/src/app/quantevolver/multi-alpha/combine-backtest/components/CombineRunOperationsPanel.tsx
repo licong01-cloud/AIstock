@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Database, FileText, PlayCircle, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
+import MultiAlphaChildGrid from "../../../evolution/components/MultiAlphaChildGrid";
 
 export type CombineRunLoop = Loop & {
   run_id?: string;
@@ -301,6 +302,7 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
   const [recoveryRetryMode, setRecoveryRetryMode] = useState("backtest_only");
   const [recoveryPreview, setRecoveryPreview] = useState<DurableRecoveryPreview | null>(null);
   const [recoveryIdempotencyKey, setRecoveryIdempotencyKey] = useState<string | null>(null);
+  const [childGridRefreshToken, setChildGridRefreshToken] = useState(0);
   const [retryDraft, setRetryDraft] = useState<RetryDraft | null>(null);
   const [retryPayloadText, setRetryPayloadText] = useState("");
   const [scenarioDraft, setScenarioDraft] = useState<RetryDraft | null>(null);
@@ -346,6 +348,7 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
     } else {
       setDurableError(null);
     }
+    setChildGridRefreshToken((current) => current + 1);
     setLoading(false);
   }, [apiBase, runId]);
 
@@ -745,23 +748,19 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
           </div>
         )}
 
-        <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Children / selected attempts</div>
-          {durableChildren.length === 0 ? (
-            <div style={{ color: "#64748b", fontSize: 11 }}>尚无 durable child 记录或正在读取。</div>
-          ) : durableChildren.map((child) => (
-            <div key={child.child_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 11 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ color: "#0f172a", fontWeight: 700, wordBreak: "break-word" }}>{child.child_key}</div>
-                <div style={{ color: "#64748b", fontFamily: "monospace", marginTop: 2 }}>status={child.status || "-"} · disposition={child.execution_disposition || "-"} · selected={child.selected_attempt_id || "-"}</div>
-              </div>
-              {child.selected_attempt_id && (
-                <button onClick={() => void cancelDurableAttempt(child.selected_attempt_id as string)} disabled={busy != null} style={{ ...buttonStyle, color: "#b91c1c", borderColor: "#fca5a5", backgroundColor: "#fef2f2", cursor: busy ? "wait" : "pointer" }}>
-                  cancel attempt
-                </button>
-              )}
-            </div>
-          ))}
+        <div style={{ marginTop: 14 }}>
+          <MultiAlphaChildGrid
+            apiBase={apiBase}
+            runId={runId}
+            refreshToken={childGridRefreshToken}
+            busy={busy != null}
+            onCancelAttempt={cancelDurableAttempt}
+            onSelectRecoveryChild={(childId) => {
+              setRecoveryTargetChildId(childId);
+              setRecoveryPreview(null);
+              setRecoveryIdempotencyKey(null);
+            }}
+          />
         </div>
 
         <div style={{ marginTop: 14, display: "grid", gap: 6 }}>

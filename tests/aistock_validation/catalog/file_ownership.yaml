@@ -300,6 +300,8 @@ rules:
       - frontend/src/app/qe-archive/**
       - frontend/tests/qe/**
       - frontend/tests/qe-archive/**
+      - frontend/tests/quantevolver/**
+      - frontend/tests/multi-alpha*.spec.ts
       - frontend/e2e/qe-label-horizon.spec.ts
     primary_module: qe.single_experiment
     impact_modules: [qe.archive, qe.enhanced_metrics, validation.center]

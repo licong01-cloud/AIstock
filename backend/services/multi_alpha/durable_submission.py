@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from datetime import datetime
@@ -104,8 +105,10 @@ class DurableCombineSubmissionService:
         payload: Mapping[str, Any],
         *,
         run_async_override: bool | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         try:
+            normalized_idempotency_key = _normalize_submission_idempotency_key(idempotency_key)
             request = parse_request(payload)
             if run_async_override is not None:
                 request = _replace_run_async(request, run_async_override)
@@ -157,6 +160,7 @@ class DurableCombineSubmissionService:
                 retry_of_run_id=retry_of_run_id,
                 execution_identity=execution_identity,
                 persist_execution_identity=p0_2_schema_health.ready,
+                idempotency_key=normalized_idempotency_key,
             )
             run = self._repository.create_run(run_spec)
         except DurableCombineSubmissionError:
@@ -270,6 +274,7 @@ class DurableCombineSubmissionService:
         retry_of_run_id: str | None,
         execution_identity: ExecutionIdentityResolution,
         persist_execution_identity: bool,
+        idempotency_key: str | None,
     ) -> DurableRunSpec:
         node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
         node_parallelism = validate_node_parallelism(
@@ -300,14 +305,18 @@ class DurableCombineSubmissionService:
             ),
             execution_identity_evidence=(execution_identity.evidence if persist_execution_identity else None),
         )
-        timestamp = self._clock()
-        base_run_id = make_run_id(
-            roster_hash=roster_hash,
-            oos_start=request.oos_start,
-            oos_end=request.oos_end,
-            ts=timestamp,
-        )
-        run_id = f"{base_run_id}_{uuid.uuid4().hex[:8]}"
+        if idempotency_key is not None:
+            identity = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+            run_id = f"macb_idem_{identity[:40]}"
+        else:
+            timestamp = self._clock()
+            base_run_id = make_run_id(
+                roster_hash=roster_hash,
+                oos_start=request.oos_start,
+                oos_end=request.oos_end,
+                ts=timestamp,
+            )
+            run_id = f"{base_run_id}_{uuid.uuid4().hex[:8]}"
         return DurableRunSpec(
             run_id=run_id,
             task_id=task_id,
@@ -461,6 +470,20 @@ def _wait_timeout_seconds(payload: Mapping[str, Any], request: CombineBacktestRe
             context={"value": value},
         )
     return value
+
+
+def _normalize_submission_idempotency_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized or len(normalized) > 200:
+        raise DurableCombineSubmissionError(
+            "Idempotency-Key must contain 1 to 200 non-whitespace characters",
+            reason_code="multi_alpha_submission_idempotency_key_invalid",
+            http_status_code=400,
+            context={"length": len(normalized)},
+        )
+    return normalized
 
 
 def _optional_prefixed_identity(value: Any, *, prefix: str, field_name: str) -> str | None:

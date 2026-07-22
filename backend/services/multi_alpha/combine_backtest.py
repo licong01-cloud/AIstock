@@ -1376,11 +1376,18 @@ class MultiAlphaCombineBacktestService:
             except Exception:
                 logger.exception("multi-alpha QE archive event capture is unavailable")
 
-    def submit_run(self, payload: Mapping[str, Any], *, run_async: bool | None = None) -> dict[str, Any]:
+    def submit_run(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        run_async: bool | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         if not self._legacy_execution_mode_for_tests:
             return self._durable_submission_service.submit(
                 payload,
                 run_async_override=run_async,
+                idempotency_key=idempotency_key,
             )
         request = parse_request(payload)
         if run_async is not None:

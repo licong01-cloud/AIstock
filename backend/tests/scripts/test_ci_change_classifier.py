@@ -164,6 +164,20 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     ]
     assert qe_multi_alpha_p0_2_payload["unmapped_code_files"] == []
 
+    qe_multi_alpha_frontend_payload = classifier.classify_changed_files(
+        [
+            "frontend/src/app/quantevolver/evolution/components/MultiAlphaChildGrid.tsx",
+            "frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts",
+            "frontend/tests/quantevolver/evolution-visual-parity.spec.ts-snapshots/multi-alpha-shared-workspace-chromium-win32.png",
+            "frontend/tests/multi-alpha-combine-backtest.spec.ts",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_multi_alpha_frontend_payload["classification"] == "targeted_ci_required"
+    assert qe_multi_alpha_frontend_payload["frontend_required"] is True
+    assert qe_multi_alpha_frontend_payload["unmapped_code_files"] == []
+
     hmm_payload = classifier.classify_changed_files(
         ["backend/services/hmm_data_source/cache_manager.py"],
         repo_root=tmp_path,

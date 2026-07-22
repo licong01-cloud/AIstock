@@ -122,6 +122,21 @@ def _run_request() -> dict[str, Any]:
     )
 
 
+def test_list_attempts_for_run_uses_one_run_scoped_join_query() -> None:
+    provider = ScriptedProvider([
+        Step(
+            contains="JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child",
+            all_rows=[{"attempt_id": "attempt_1", "child_id": "child_1"}],
+        ),
+    ])
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    rows = repository.list_attempts_for_run("macb_run")
+
+    assert rows == [{"attempt_id": "attempt_1", "child_id": "child_1"}]
+    assert provider.cursor.executions[0][1] == ("macb_run",)
+
+
 def test_task_group_collision_reuses_existing_task_and_ignores_scenario_defaults() -> None:
     group_key = implicit_task_group_key(
         roster_hash="roster",
