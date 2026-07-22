@@ -11,6 +11,8 @@ import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
+from jsonschema import exceptions as jsonschema_exceptions
+from jsonschema.validators import validator_for
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -44,6 +46,8 @@ _SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-
 _IMPLEMENTATION_REF_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _A_SHARE_SYMBOL_RE = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
+_MAX_SCHEMA_ERROR_PATH_PARTS = 64
+_MAX_SCHEMA_VIOLATIONS = 32
 
 
 def _freeze_json_field(value: Any) -> FrozenJsonValueV1:
@@ -92,6 +96,7 @@ class FrozenStrictModel(BaseModel):
         strict=True,
         validate_default=True,
         arbitrary_types_allowed=True,
+        revalidate_instances="always",
     )
 
     def canonical_payload_v1(self, *, exclude: set[str] | None = None) -> dict[str, Any]:
@@ -101,6 +106,223 @@ class FrozenStrictModel(BaseModel):
     def model_validate_json(cls, json_data: str | bytes | bytearray, **kwargs: Any) -> Self:
         validate_json_text_v1(json_data)
         return super().model_validate_json(json_data, **kwargs)
+
+
+def _json_schema_path_v1(path: Any) -> str:
+    parts: list[str] = []
+    for index, item in enumerate(path):
+        if index >= _MAX_SCHEMA_ERROR_PATH_PARTS:
+            parts.append("__path_truncated__")
+            break
+        parts.append(str(item).replace("~", "~0").replace("/", "~1"))
+    return "$" if not parts else "$/" + "/".join(parts)
+
+
+def _validate_local_schema_reference_v1(*, root: Any, reference: str, field_name: str, path: tuple[Any, ...]) -> None:
+    if reference == "#":
+        return
+    if not reference.startswith("#/"):
+        raise ValueError(f"{field_name} schema reference must use a local JSON pointer at {_json_schema_path_v1(path)}")
+    target = root
+    for raw_token in reference[2:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(target, dict) and token in target:
+            target = target[token]
+            continue
+        if isinstance(target, list) and token.isdigit() and int(token) < len(target):
+            target = target[int(token)]
+            continue
+        raise ValueError(f"{field_name} schema reference target does not exist at {_json_schema_path_v1(path)}")
+
+
+def _validate_json_schema_reference_closure_v1(
+    value: Any,
+    *,
+    field_name: str,
+    path: tuple[Any, ...] = (),
+    root: Any | None = None,
+) -> None:
+    root = value if root is None else root
+    if isinstance(value, dict):
+        for key, member_value in value.items():
+            member_path = (*path, key)
+            if key in ("$ref", "$dynamicRef"):
+                if type(member_value) is not str or not member_value.startswith("#"):
+                    raise ValueError(
+                        f"{field_name} external schema reference is forbidden at {_json_schema_path_v1(member_path)}"
+                    )
+                _validate_local_schema_reference_v1(
+                    root=root,
+                    reference=member_value,
+                    field_name=field_name,
+                    path=member_path,
+                )
+            _validate_json_schema_reference_closure_v1(
+                member_value,
+                field_name=field_name,
+                path=member_path,
+                root=root,
+            )
+    elif isinstance(value, list):
+        for index, member_value in enumerate(value):
+            _validate_json_schema_reference_closure_v1(
+                member_value,
+                field_name=field_name,
+                path=(*path, index),
+                root=root,
+            )
+
+
+def _validate_json_schema_definition_v1(schema: FrozenJsonObjectV1, *, field_name: str) -> None:
+    plain_schema = thaw_json_v1(schema)
+    _validate_json_schema_reference_closure_v1(plain_schema, field_name=field_name)
+    try:
+        schema_validator = validator_for(plain_schema)
+        schema_validator.check_schema(plain_schema)
+    except jsonschema_exceptions.SchemaError as exc:
+        raise ValueError(
+            f"{field_name} is not a valid JSON schema at {_json_schema_path_v1(exc.absolute_schema_path)}"
+        ) from exc
+
+
+def _validate_json_schema_instance_v1(
+    *,
+    schema: FrozenJsonObjectV1,
+    instance: FrozenJsonObjectV1,
+    contract_name: str,
+) -> None:
+    plain_schema = thaw_json_v1(schema)
+    plain_instance = thaw_json_v1(instance)
+    schema_validator = validator_for(plain_schema)
+    errors: list[jsonschema_exceptions.ValidationError] = []
+    violations_truncated = False
+    for error in schema_validator(plain_schema).iter_errors(plain_instance):
+        if len(errors) >= _MAX_SCHEMA_VIOLATIONS:
+            violations_truncated = True
+            break
+        errors.append(error)
+    errors.sort(
+        key=lambda item: (
+            tuple(str(part) for part in item.absolute_path),
+            str(item.validator),
+            item.message,
+        )
+    )
+    if not errors:
+        return
+    details_parts: list[str] = []
+    for error in errors:
+        details_parts.append(f"{_json_schema_path_v1(error.absolute_path)}: {error.message}")
+    details = "; ".join(details_parts)
+    if violations_truncated:
+        details += f"; additional violations omitted after limit={_MAX_SCHEMA_VIOLATIONS}"
+    raise ValueError(f"{contract_name} validation failed: {details}")
+
+
+def _prefixed_identity_v1(*, prefix: str, domain: str, payload: dict[str, Any]) -> str:
+    return prefix + hash_hex_v1(domain, payload)
+
+
+def _delivery_id_v1(*, event_id: str, algo_instance_id: str, plugin_manifest_sha256: str) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqdelivery_",
+        domain="miniqmt_algo_event_delivery_identity_v1",
+        payload={
+            "event_id": event_id,
+            "algo_instance_id": algo_instance_id,
+            "plugin_manifest_sha256": plugin_manifest_sha256,
+        },
+    )
+
+
+def _algo_instance_id_v2(
+    *,
+    runtime_id: str,
+    parent_intent_id: str,
+    strategy_slot_id: str,
+    algo_code: str,
+    plugin_id: str,
+    plugin_version: str,
+    plugin_manifest_sha256: str,
+    plugin_config_sha256: str,
+) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqalgo_",
+        domain="miniqmt_algo_instance_v2",
+        payload={
+            "runtime_id": runtime_id,
+            "parent_intent_id": parent_intent_id,
+            "strategy_slot_id": strategy_slot_id,
+            "algo_code": algo_code,
+            "plugin_id": plugin_id,
+            "plugin_version": plugin_version,
+            "plugin_manifest_sha256": plugin_manifest_sha256,
+            "plugin_config_sha256": plugin_config_sha256,
+        },
+    )
+
+
+def _submit_local_order_id_v1(
+    *,
+    runtime_id: str,
+    algo_instance_id: str,
+    parent_intent_id: str,
+    transition_id: str,
+    ordinal: int,
+    symbol: str,
+    side: "SideV1",
+    order_type: "OrderTypeV1",
+) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqlocalorder_",
+        domain="miniqmt_local_order_identity_v1",
+        payload={
+            "runtime_id": runtime_id,
+            "algo_instance_id": algo_instance_id,
+            "parent_intent_id": parent_intent_id,
+            "transition_id": transition_id,
+            "ordinal": ordinal,
+            "symbol": symbol,
+            "side": side.value,
+            "order_type": order_type.value,
+        },
+    )
+
+
+def _broker_command_id_v2(payload: dict[str, Any]) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqcommand_",
+        domain="miniqmt_broker_command_identity_v2",
+        payload=payload,
+    )
+
+
+def _timer_schedule_id_v1(*, algo_instance_id: str, timer_name: str, schedule_epoch: str) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqtimersched_",
+        domain="miniqmt_timer_schedule_identity_v1",
+        payload={
+            "algo_instance_id": algo_instance_id,
+            "timer_name": timer_name,
+            "schedule_epoch": schedule_epoch,
+        },
+    )
+
+
+def _timer_occurrence_id_v1(*, schedule_id: str, due_at_exchange_utc: str) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqtimerocc_",
+        domain="miniqmt_timer_occurrence_identity_v1",
+        payload={"schedule_id": schedule_id, "due_at_exchange_utc": due_at_exchange_utc},
+    )
+
+
+def _diagnostic_observation_id_v1(payload: dict[str, Any]) -> str:
+    return _prefixed_identity_v1(
+        prefix="mqdiag_",
+        domain="miniqmt_diagnostic_observation_identity_v1",
+        payload=payload,
+    )
 
 
 class MiniQMTPluginReasonCode(StrEnum):
@@ -479,6 +701,8 @@ class ExecutionAlgoPluginManifestV2(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_manifest(self) -> Self:
+        _validate_json_schema_definition_v1(self.config_schema, field_name="config_schema")
+        _validate_json_schema_definition_v1(self.state_schema, field_name="state_schema")
         if _PLUGIN_ID_RE.fullmatch(self.plugin_id) is None:
             raise ValueError("plugin_id must be a lowercase dotted id")
         if _ALGO_CODE_RE.fullmatch(self.algo_code) is None:
@@ -555,7 +779,17 @@ _EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] 
     EventTypeV2.ALGO_START: (
         EventSourceV2.MINIQMT_EXECUTION_KERNEL,
         "miniqmt_algo_start_v1",
-        ("algo_instance_id", "plugin_manifest_sha256", "plugin_config_sha256", "parent_intent_id"),
+        (
+            "algo_instance_id",
+            "runtime_id",
+            "parent_intent_id",
+            "strategy_slot_id",
+            "algo_code",
+            "plugin_id",
+            "plugin_version",
+            "plugin_manifest_sha256",
+            "plugin_config_sha256",
+        ),
     ),
     EventTypeV2.TICK: (EventSourceV2.B0_QUOTE_V2, "miniqmt_market_data_view_v2", ("market_data_id",)),
     EventTypeV2.TIMER: (EventSourceV2.EXCHANGE_SESSION_CLOCK, "miniqmt_timer_due_v1", ("timer_occurrence_id",)),
@@ -651,6 +885,14 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
         if self.source is not expected_source or self.payload_schema_version != expected_schema:
             raise ValueError("event/source/payload schema combination is not registered")
         identity = thaw_json_v1(self.source_identity)
+        expected_identity_fields = set(required_identity_fields)
+        actual_identity_fields = set(identity)
+        if actual_identity_fields != expected_identity_fields:
+            raise ValueError(
+                "source_identity must contain exact registered fields; "
+                f"missing={sorted(expected_identity_fields - actual_identity_fields)}, "
+                f"extra={sorted(actual_identity_fields - expected_identity_fields)}"
+            )
         missing = [
             field for field in required_identity_fields if field not in identity or identity[field] in (None, "")
         ]
@@ -674,6 +916,27 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
             raise ValueError("TIMER event requires monotonic_ns from its process timer")
         if self.event_type is EventTypeV2.EOD and identity["runtime_id"] != self.runtime_id:
             raise ValueError("EOD source_identity runtime_id conflicts with event runtime_id")
+        if self.event_type is EventTypeV2.ALGO_START and identity["runtime_id"] != self.runtime_id:
+            raise ValueError("ALGO_START source_identity runtime_id conflicts with event runtime_id")
+        if self.event_type is EventTypeV2.ALGO_START:
+            if _ALGO_CODE_RE.fullmatch(identity["algo_code"]) is None:
+                raise ValueError("ALGO_START source_identity.algo_code is invalid")
+            if _PLUGIN_ID_RE.fullmatch(identity["plugin_id"]) is None:
+                raise ValueError("ALGO_START source_identity.plugin_id is invalid")
+            if _SEMVER_RE.fullmatch(identity["plugin_version"]) is None:
+                raise ValueError("ALGO_START source_identity.plugin_version is invalid")
+            expected_algo_instance_id = _algo_instance_id_v2(
+                runtime_id=identity["runtime_id"],
+                parent_intent_id=identity["parent_intent_id"],
+                strategy_slot_id=identity["strategy_slot_id"],
+                algo_code=identity["algo_code"],
+                plugin_id=identity["plugin_id"],
+                plugin_version=identity["plugin_version"],
+                plugin_manifest_sha256=identity["plugin_manifest_sha256"],
+                plugin_config_sha256=identity["plugin_config_sha256"],
+            )
+            if identity["algo_instance_id"] != expected_algo_instance_id:
+                raise ValueError("ALGO_START algo_instance_id does not match complete source identity closure")
         expected_payload_hash = hash_hex_v1("miniqmt_runtime_event_payload_v2", thaw_json_v1(self.payload))
         if self.payload_sha256 != expected_payload_hash:
             raise ValueError("payload_sha256 does not match payload closure")
@@ -708,8 +971,60 @@ class AlgoEventDeliveryV1(FrozenStrictModel):
     created_at_utc: UtcDateTimeV1
     updated_at_utc: UtcDateTimeV1
 
+    @classmethod
+    def create(
+        cls,
+        *,
+        event: RuntimeEventEnvelopeV2,
+        algo_instance_id: str,
+        plugin_manifest_sha256: str,
+        algo_delivery_sequence: int,
+        previous_delivery_id: str | None,
+        status: DeliveryStatusV1,
+        attempt_count: int,
+        lease_owner: str | None,
+        lease_expires_at: Any | None,
+        transition_id: str | None,
+        last_error_json: dict[str, Any] | None,
+        created_at_utc: Any,
+        updated_at_utc: Any,
+    ) -> Self:
+        if not isinstance(event, RuntimeEventEnvelopeV2):
+            raise TypeError("event must be RuntimeEventEnvelopeV2")
+        if event.event_type is EventTypeV2.ALGO_START and algo_delivery_sequence != 1:
+            raise ValueError("ALGO_START must be delivery sequence 1")
+        return cls(
+            schema_version="miniqmt_algo_event_delivery_v1",
+            delivery_id=_delivery_id_v1(
+                event_id=event.event_id,
+                algo_instance_id=algo_instance_id,
+                plugin_manifest_sha256=plugin_manifest_sha256,
+            ),
+            event_id=event.event_id,
+            runtime_id=event.runtime_id,
+            algo_instance_id=algo_instance_id,
+            plugin_manifest_sha256=plugin_manifest_sha256,
+            algo_delivery_sequence=algo_delivery_sequence,
+            previous_delivery_id=previous_delivery_id,
+            status=status,
+            attempt_count=attempt_count,
+            lease_owner=lease_owner,
+            lease_expires_at=lease_expires_at,
+            transition_id=transition_id,
+            last_error_json=last_error_json,
+            created_at_utc=created_at_utc,
+            updated_at_utc=updated_at_utc,
+        )
+
     @model_validator(mode="after")
     def _validate_delivery(self) -> Self:
+        expected_delivery_id = _delivery_id_v1(
+            event_id=self.event_id,
+            algo_instance_id=self.algo_instance_id,
+            plugin_manifest_sha256=self.plugin_manifest_sha256,
+        )
+        if self.delivery_id != expected_delivery_id:
+            raise ValueError("delivery_id does not match event/algo/manifest identity closure")
         if self.algo_delivery_sequence == 1 and self.previous_delivery_id is not None:
             raise ValueError("first delivery must not have a predecessor")
         if self.algo_delivery_sequence > 1 and self.previous_delivery_id is None:
@@ -760,35 +1075,79 @@ class AlgoStateSnapshotV2(FrozenStrictModel):
     def create(
         cls,
         *,
-        algo_instance_id: str,
-        plugin_id: str,
-        plugin_version: str,
-        plugin_manifest_sha256: str,
-        state_schema_version: str,
+        plugin_manifest: ExecutionAlgoPluginManifestV2,
+        deterministic_context: "DeterministicExecutionContextV1",
         transition_sequence: int,
         last_applied_delivery_sequence: int,
         last_applied_delivery_id: str,
         last_closed_delivery_sequence: int,
         state: dict[str, Any],
         last_applied_event_id: str,
-        updated_at_utc: Any,
     ) -> Self:
-        return cls(
+        if not isinstance(plugin_manifest, ExecutionAlgoPluginManifestV2):
+            raise TypeError("plugin_manifest must be ExecutionAlgoPluginManifestV2")
+        if not isinstance(deterministic_context, DeterministicExecutionContextV1):
+            raise TypeError("deterministic_context must be DeterministicExecutionContextV1")
+        frozen_state = _freeze_json_object_field(state)
+        _validate_json_schema_instance_v1(
+            schema=plugin_manifest.state_schema,
+            instance=frozen_state,
+            contract_name="state schema",
+        )
+        snapshot = cls(
             schema_version="execution_algo_state_snapshot_v2",
-            algo_instance_id=algo_instance_id,
-            plugin_id=plugin_id,
-            plugin_version=plugin_version,
-            plugin_manifest_sha256=plugin_manifest_sha256,
-            state_schema_version=state_schema_version,
+            algo_instance_id=deterministic_context.algo_instance_id,
+            plugin_id=plugin_manifest.plugin_id,
+            plugin_version=plugin_manifest.plugin_version,
+            plugin_manifest_sha256=plugin_manifest.manifest_sha256,
+            state_schema_version=plugin_manifest.state_schema_version,
             transition_sequence=transition_sequence,
             last_applied_delivery_sequence=last_applied_delivery_sequence,
             last_applied_delivery_id=last_applied_delivery_id,
             last_closed_delivery_sequence=last_closed_delivery_sequence,
-            state=state,
-            state_sha256=hash_hex_v1("execution_algo_state_v2", state),
+            state=frozen_state,
+            state_sha256=hash_hex_v1("execution_algo_state_v2", frozen_state),
             last_applied_event_id=last_applied_event_id,
-            updated_at_utc=updated_at_utc,
+            updated_at_utc=deterministic_context.logical_time_utc,
         )
+        return snapshot.validate_against_authority_v1(
+            plugin_manifest=plugin_manifest,
+            deterministic_context=deterministic_context,
+        )
+
+    def validate_against_authority_v1(
+        self,
+        *,
+        plugin_manifest: ExecutionAlgoPluginManifestV2,
+        deterministic_context: "DeterministicExecutionContextV1",
+    ) -> Self:
+        if not isinstance(plugin_manifest, ExecutionAlgoPluginManifestV2):
+            raise TypeError("plugin_manifest must be ExecutionAlgoPluginManifestV2")
+        if not isinstance(deterministic_context, DeterministicExecutionContextV1):
+            raise TypeError("deterministic_context must be DeterministicExecutionContextV1")
+        if (
+            self.plugin_id != plugin_manifest.plugin_id
+            or self.plugin_version != plugin_manifest.plugin_version
+            or self.plugin_manifest_sha256 != plugin_manifest.manifest_sha256
+            or self.state_schema_version != plugin_manifest.state_schema_version
+        ):
+            raise ValueError("state snapshot plugin/schema identity conflicts with manifest authority")
+        if self.algo_instance_id != deterministic_context.algo_instance_id:
+            raise ValueError("state snapshot algo identity conflicts with deterministic context")
+        if self.plugin_manifest_sha256 != deterministic_context.plugin_manifest_sha256:
+            raise ValueError("state snapshot manifest hash conflicts with deterministic context")
+        if self.last_applied_event_id != deterministic_context.event_id:
+            raise ValueError("state snapshot last event identity conflicts with deterministic context")
+        if self.last_applied_delivery_id != deterministic_context.delivery_id:
+            raise ValueError("state snapshot last delivery identity conflicts with deterministic context")
+        if self.updated_at_utc != deterministic_context.logical_time_utc:
+            raise ValueError("state snapshot updated_at_utc must equal deterministic context logical time")
+        _validate_json_schema_instance_v1(
+            schema=plugin_manifest.state_schema,
+            instance=self.state,
+            contract_name="state schema",
+        )
+        return self
 
     @model_validator(mode="after")
     def _validate_snapshot(self) -> Self:
@@ -911,6 +1270,11 @@ class AlgoStartContextV1(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_start(self) -> Self:
+        _validate_json_schema_instance_v1(
+            schema=self.plugin_manifest.config_schema,
+            instance=self.plugin_config,
+            contract_name="config schema",
+        )
         if self.parent_quantity % self.volume_increment != 0:
             raise ValueError("parent_quantity must close under frozen volume_increment")
         if self.min_volume % self.volume_increment != 0:
@@ -925,6 +1289,18 @@ class AlgoStartContextV1(FrozenStrictModel):
             raise ValueError("start_event_id conflicts with deterministic context")
         if self.start_delivery_id != self.deterministic_context.delivery_id:
             raise ValueError("start_delivery_id conflicts with deterministic context")
+        expected_algo_instance_id = _algo_instance_id_v2(
+            runtime_id=self.runtime_id,
+            parent_intent_id=self.parent_intent_id,
+            strategy_slot_id=self.strategy_slot_id,
+            algo_code=self.plugin_manifest.algo_code,
+            plugin_id=self.plugin_manifest.plugin_id,
+            plugin_version=self.plugin_manifest.plugin_version,
+            plugin_manifest_sha256=self.plugin_manifest.manifest_sha256,
+            plugin_config_sha256=self.plugin_config_sha256,
+        )
+        if self.algo_instance_id != expected_algo_instance_id:
+            raise ValueError("algo_instance_id does not match frozen parent/plugin/config identity closure")
         if self.side not in self.plugin_manifest.supported_sides:
             raise ValueError("side is not supported by the frozen plugin manifest")
         projections = (
@@ -973,7 +1349,7 @@ class BrokerCommandV2(FrozenStrictModel):
         parent_intent_id: str,
         transition_id: str,
         ordinal: int,
-        local_vt_orderid: str,
+        local_vt_orderid: str | None,
         symbol: str,
         side: SideV1,
         order_type: OrderTypeV1,
@@ -982,9 +1358,27 @@ class BrokerCommandV2(FrozenStrictModel):
         owned_broker_order_id: str | None,
         reason_code: str,
         metadata: dict[str, Any],
-        command_id: str,
     ) -> Self:
         normalized_price = canonical_decimal_string_v1(price_decimal, field_name="price_decimal", allow_zero=False)
+        if command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
+            expected_local_vt_orderid = _submit_local_order_id_v1(
+                runtime_id=runtime_id,
+                algo_instance_id=algo_instance_id,
+                parent_intent_id=parent_intent_id,
+                transition_id=transition_id,
+                ordinal=ordinal,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+            )
+            if local_vt_orderid is not None and local_vt_orderid != expected_local_vt_orderid:
+                raise ValueError("SUBMIT_LIMIT local_vt_orderid conflicts with deterministic identity closure")
+            normalized_local_vt_orderid = expected_local_vt_orderid
+        else:
+            normalized_local_vt_orderid = require_identity_v1(
+                local_vt_orderid,
+                field_name="local_vt_orderid",
+            )
         payload = {
             "schema_version": "miniqmt_broker_command_v2",
             "command_type": command_type.value,
@@ -993,7 +1387,7 @@ class BrokerCommandV2(FrozenStrictModel):
             "parent_intent_id": parent_intent_id,
             "transition_id": transition_id,
             "ordinal": ordinal,
-            "local_vt_orderid": local_vt_orderid,
+            "local_vt_orderid": normalized_local_vt_orderid,
             "symbol": symbol,
             "side": side.value,
             "order_type": order_type.value,
@@ -1012,7 +1406,7 @@ class BrokerCommandV2(FrozenStrictModel):
         return cls(
             **model_payload,
             payload_sha256=hash_hex_v1("miniqmt_broker_command_payload_v2", payload),
-            command_id=command_id,
+            command_id=_broker_command_id_v2(payload),
         )
 
     def business_payload_v1(self) -> dict[str, Any]:
@@ -1031,9 +1425,25 @@ class BrokerCommandV2(FrozenStrictModel):
             raise ValueError("SUBMIT_LIMIT must not carry broker order ID")
         if self.command_type is BrokerCommandTypeV2.CANCEL_ORDER and self.owned_broker_order_id is None:
             raise ValueError("CANCEL_ORDER requires exact durable-owned broker order ID")
+        if self.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
+            expected_local_vt_orderid = _submit_local_order_id_v1(
+                runtime_id=self.runtime_id,
+                algo_instance_id=self.algo_instance_id,
+                parent_intent_id=self.parent_intent_id,
+                transition_id=self.transition_id,
+                ordinal=self.ordinal,
+                symbol=self.symbol,
+                side=self.side,
+                order_type=self.order_type,
+            )
+            if self.local_vt_orderid != expected_local_vt_orderid:
+                raise ValueError("SUBMIT_LIMIT local_vt_orderid does not match deterministic identity closure")
         expected = hash_hex_v1("miniqmt_broker_command_payload_v2", self.business_payload_v1())
         if self.payload_sha256 != expected:
             raise ValueError("payload_sha256 does not match broker command closure")
+        expected_command_id = _broker_command_id_v2(self.business_payload_v1())
+        if self.command_id != expected_command_id:
+            raise ValueError("command_id does not match deterministic business payload closure")
         return self
 
 
@@ -1052,13 +1462,82 @@ class TimerMutationV1(FrozenStrictModel):
     schedule_id: IdentityV1
     timer_occurrence_id: IdentityV1 | None
 
+    @classmethod
+    def create(
+        cls,
+        *,
+        mutation_type: TimerMutationTypeV1,
+        algo_instance_id: str,
+        transition_id: str,
+        ordinal: int,
+        timer_name: str,
+        schedule_epoch: str,
+        due_at_exchange_utc: Any | None,
+        catch_up_policy: str,
+        payload: dict[str, Any],
+    ) -> Self:
+        schedule_id = _timer_schedule_id_v1(
+            algo_instance_id=algo_instance_id,
+            timer_name=timer_name,
+            schedule_epoch=schedule_epoch,
+        )
+        normalized_due = (
+            None
+            if due_at_exchange_utc is None
+            else canonical_utc_datetime_v1(due_at_exchange_utc, field_name="due_at_exchange_utc")
+        )
+        occurrence_id = (
+            None
+            if normalized_due is None
+            else _timer_occurrence_id_v1(
+                schedule_id=schedule_id,
+                due_at_exchange_utc=normalized_due,
+            )
+        )
+        return cls(
+            schema_version="miniqmt_timer_mutation_v1",
+            mutation_type=mutation_type,
+            algo_instance_id=algo_instance_id,
+            transition_id=transition_id,
+            ordinal=ordinal,
+            timer_name=timer_name,
+            schedule_epoch=schedule_epoch,
+            due_at_exchange_utc=normalized_due,
+            catch_up_policy=catch_up_policy,
+            payload=payload,
+            payload_sha256=hash_hex_v1("miniqmt_timer_mutation_payload_v1", payload),
+            schedule_id=schedule_id,
+            timer_occurrence_id=occurrence_id,
+        )
+
+    def mutation_identity_v1(self) -> str:
+        return _prefixed_identity_v1(
+            prefix="mqtimermut_",
+            domain="miniqmt_timer_mutation_identity_v1",
+            payload=self.canonical_payload_v1(),
+        )
+
     @model_validator(mode="after")
     def _validate_timer(self) -> Self:
+        expected_schedule_id = _timer_schedule_id_v1(
+            algo_instance_id=self.algo_instance_id,
+            timer_name=self.timer_name,
+            schedule_epoch=self.schedule_epoch,
+        )
+        if self.schedule_id != expected_schedule_id:
+            raise ValueError("schedule_id does not match algo/timer/epoch identity closure")
         if self.mutation_type is TimerMutationTypeV1.CANCEL:
             if self.due_at_exchange_utc is not None or self.timer_occurrence_id is not None:
                 raise ValueError("CANCEL timer mutation must not fabricate due/occurrence identity")
         elif self.due_at_exchange_utc is None or self.timer_occurrence_id is None:
             raise ValueError("UPSERT_ONE_SHOT requires due and timer occurrence identity")
+        else:
+            expected_occurrence_id = _timer_occurrence_id_v1(
+                schedule_id=self.schedule_id,
+                due_at_exchange_utc=self.due_at_exchange_utc,
+            )
+            if self.timer_occurrence_id != expected_occurrence_id:
+                raise ValueError("timer_occurrence_id does not match schedule/due identity closure")
         expected = hash_hex_v1("miniqmt_timer_mutation_payload_v1", thaw_json_v1(self.payload))
         if self.payload_sha256 != expected:
             raise ValueError("payload_sha256 does not match timer payload closure")
@@ -1084,43 +1563,65 @@ class DiagnosticObservationV1(FrozenStrictModel):
     def create(
         cls,
         *,
-        observation_id: str,
-        runtime_id: str,
-        algo_instance_id: str,
-        event_id: str,
+        deterministic_context: DeterministicExecutionContextV1,
         transition_id: str,
         ordinal: int,
         severity: DiagnosticSeverityV1 | str,
         reason_code: str,
         message: str,
         context: dict[str, Any],
-        observed_at_logical_utc: Any,
     ) -> Self:
+        if not isinstance(deterministic_context, DeterministicExecutionContextV1):
+            raise TypeError("deterministic_context must be DeterministicExecutionContextV1")
         if type(severity) is str:
             severity = DiagnosticSeverityV1(severity)
         if not isinstance(severity, DiagnosticSeverityV1):
             raise TypeError("severity must be DiagnosticSeverityV1 or its exact value")
-        return cls(
-            schema_version="miniqmt_diagnostic_observation_v1",
-            observation_id=observation_id,
-            runtime_id=runtime_id,
-            algo_instance_id=algo_instance_id,
-            event_id=event_id,
-            transition_id=transition_id,
-            ordinal=ordinal,
-            severity=severity,
-            reason_code=reason_code,
-            message=message,
-            context=context,
-            context_sha256=hash_hex_v1("miniqmt_diagnostic_context_v1", context),
-            observed_at_logical_utc=observed_at_logical_utc,
+        context_sha256 = hash_hex_v1("miniqmt_diagnostic_context_v1", context)
+        identity_payload = {
+            "schema_version": "miniqmt_diagnostic_observation_v1",
+            "runtime_id": deterministic_context.runtime_id,
+            "algo_instance_id": deterministic_context.algo_instance_id,
+            "event_id": deterministic_context.event_id,
+            "transition_id": transition_id,
+            "ordinal": ordinal,
+            "severity": severity.value,
+            "reason_code": reason_code,
+            "message": message,
+            "context": context,
+            "context_sha256": context_sha256,
+            "observed_at_logical_utc": deterministic_context.logical_time_utc,
+        }
+        observation = cls(
+            **{**identity_payload, "severity": severity},
+            observation_id=_diagnostic_observation_id_v1(identity_payload),
         )
+        return observation.validate_against_context_v1(deterministic_context)
+
+    def identity_payload_v1(self) -> dict[str, Any]:
+        return self.canonical_payload_v1(exclude={"observation_id"})
+
+    def validate_against_context_v1(self, context: DeterministicExecutionContextV1) -> Self:
+        if not isinstance(context, DeterministicExecutionContextV1):
+            raise TypeError("context must be DeterministicExecutionContextV1")
+        if self.runtime_id != context.runtime_id:
+            raise ValueError("diagnostic runtime_id conflicts with deterministic context")
+        if self.algo_instance_id != context.algo_instance_id:
+            raise ValueError("diagnostic algo_instance_id conflicts with deterministic context")
+        if self.event_id != context.event_id:
+            raise ValueError("diagnostic event_id conflicts with deterministic context")
+        if self.observed_at_logical_utc != context.logical_time_utc:
+            raise ValueError("diagnostic observed_at_logical_utc must equal deterministic context logical time")
+        return self
 
     @model_validator(mode="after")
     def _validate_observation(self) -> Self:
         expected = hash_hex_v1("miniqmt_diagnostic_context_v1", thaw_json_v1(self.context))
         if self.context_sha256 != expected:
             raise ValueError("context_sha256 does not match diagnostic context closure")
+        expected_observation_id = _diagnostic_observation_id_v1(self.identity_payload_v1())
+        if self.observation_id != expected_observation_id:
+            raise ValueError("observation_id does not match diagnostic identity closure")
         return self
 
 
@@ -1136,9 +1637,7 @@ class _AlgoEffectBundleV1(FrozenStrictModel):
         return {
             "next_state_sha256": self.next_state.state_sha256,
             "ordered_command_ids": [item.command_id for item in self.broker_commands],
-            "ordered_timer_mutation_ids": [
-                item.timer_occurrence_id or item.schedule_id for item in self.timer_mutations
-            ],
+            "ordered_timer_mutation_ids": [item.mutation_identity_v1() for item in self.timer_mutations],
             "ordered_diagnostic_observation_ids": [item.observation_id for item in self.diagnostic_observations],
             "terminal_outcome": self.terminal_outcome.value if self.terminal_outcome is not None else None,
         }

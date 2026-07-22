@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -29,8 +29,10 @@ class FrozenJsonArrayV1(tuple):
 
     __slots__ = ()
 
-    def __new__(cls, values: Sequence["FrozenJsonValueV1"] = ()) -> "FrozenJsonArrayV1":
-        return tuple.__new__(cls, values)
+    def __new__(cls, values: Iterable[Any] = ()) -> "FrozenJsonArrayV1":
+        if isinstance(values, (str, bytes, bytearray)):
+            raise TypeError("frozen JSON array values must be an iterable of JSON values")
+        return tuple.__new__(cls, (freeze_json_v1(value) for value in values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +48,20 @@ class FrozenJsonObjectV1(tuple):
 
     __slots__ = ()
 
-    def __new__(cls, values: Sequence[FrozenJsonMemberV1] = ()) -> "FrozenJsonObjectV1":
-        return tuple.__new__(cls, values)
+    def __new__(cls, values: Iterable[FrozenJsonMemberV1] = ()) -> "FrozenJsonObjectV1":
+        normalized: list[FrozenJsonMemberV1] = []
+        seen_keys: set[str] = set()
+        for member in values:
+            if type(member) is not FrozenJsonMemberV1:
+                raise TypeError("frozen JSON object values must be FrozenJsonMemberV1")
+            if type(member.key) is not str:
+                raise TypeError("frozen JSON object member key must be str")
+            if member.key in seen_keys:
+                raise ValueError(f"frozen JSON object contains duplicate key: {member.key}")
+            seen_keys.add(member.key)
+            normalized.append(FrozenJsonMemberV1(key=member.key, value=freeze_json_v1(member.value)))
+        normalized.sort(key=lambda item: item.key)
+        return tuple.__new__(cls, normalized)
 
 
 FrozenJsonScalarV1 = None | bool | int | str
@@ -270,7 +284,19 @@ def _bounded_text(value: str) -> str:
     return value if len(value) <= _MAX_EVIDENCE_TEXT else value[:_MAX_EVIDENCE_TEXT] + "…"
 
 
-def json_safe_evidence_v1(value: Any, *, _depth: int = 0) -> Any:
+def _qualified_type_name_v1(value: Any) -> str:
+    try:
+        value_type = type(value)
+        module = value_type.__module__
+        qualname = value_type.__qualname__
+        if type(module) is str and type(qualname) is str:
+            return f"{module}.{qualname}"
+    except Exception:
+        return "<type-name-unavailable>"
+    return "<type-name-unavailable>"
+
+
+def _json_safe_evidence_impl_v1(value: Any, *, _depth: int) -> Any:
     """Convert malformed input into bounded JSON-safe diagnostic evidence.
 
     This codec never feeds malformed values into ``set``, ``Counter`` or a
@@ -329,11 +355,26 @@ def json_safe_evidence_v1(value: Any, *, _depth: int = 0) -> Any:
     if isinstance(value, (set, frozenset)):
         return {"__type__": type(value).__name__, "item_count": len(value)}
     if isinstance(value, BaseException):
+        result = {"__type__": _qualified_type_name_v1(value)}
+        try:
+            result["message"] = _bounded_text(str(value))
+        except Exception as render_error:
+            result["message"] = "<unavailable>"
+            result["message_render_error_type"] = _qualified_type_name_v1(render_error)
+        return result
+    return {"__type__": _qualified_type_name_v1(value)}
+
+
+def json_safe_evidence_v1(value: Any, *, _depth: int = 0) -> Any:
+    """Return bounded JSON-safe evidence without masking the primary failure."""
+
+    try:
+        return _json_safe_evidence_impl_v1(value, _depth=_depth)
+    except Exception as render_error:
         return {
-            "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
-            "message": _bounded_text(str(value)),
+            "__type__": _qualified_type_name_v1(value),
+            "__evidence_render_error_type__": _qualified_type_name_v1(render_error),
         }
-    return {"__type__": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
 __all__ = [

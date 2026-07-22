@@ -55,24 +55,24 @@ def test_derive_id_is_byte_stable_across_retry_and_sensitive_to_ordinal() -> Non
     business_hash = hash_hex_v1("business", {"price": "10.01", "quantity": 100})
     first = derive_id_v1(
         context=context,
-        kind=DeterministicIdKindV1.BROKER_COMMAND,
+        kind=DeterministicIdKindV1.ACTION,
         ordinal=0,
         business_payload_sha256=business_hash,
     )
     retry = derive_id_v1(
         context=DeterministicExecutionContextV1.model_validate(context.model_dump(mode="python")),
-        kind=DeterministicIdKindV1.BROKER_COMMAND,
+        kind=DeterministicIdKindV1.ACTION,
         ordinal=0,
         business_payload_sha256=business_hash,
     )
     second = derive_id_v1(
         context=context,
-        kind=DeterministicIdKindV1.BROKER_COMMAND,
+        kind=DeterministicIdKindV1.ACTION,
         ordinal=1,
         business_payload_sha256=business_hash,
     )
     assert first == retry
-    assert first.startswith("mqcommand_")
+    assert first.startswith("mqaction_")
     assert first != second
 
 
@@ -108,6 +108,10 @@ def test_context_has_no_wall_clock_uuid_or_random_defaults() -> None:
     fields = DeterministicExecutionContextV1.model_fields
     for field in fields.values():
         assert field.default_factory is None
+
+
+def test_generic_deterministic_id_kind_cannot_compete_with_persisted_dto_identities() -> None:
+    assert tuple(item.value for item in DeterministicIdKindV1) == ("ACTION",)
 
 
 def test_deterministic_helpers_reject_coercion_invalid_hash_and_range_drift() -> None:

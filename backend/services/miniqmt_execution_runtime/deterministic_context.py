@@ -14,24 +14,10 @@ from .plugin_contracts import DeterministicExecutionContextV1
 
 class DeterministicIdKindV1(StrEnum):
     ACTION = "ACTION"
-    BROKER_COMMAND = "BROKER_COMMAND"
-    LOCAL_ORDER = "LOCAL_ORDER"
-    TIMER_MUTATION = "TIMER_MUTATION"
-    TIMER_SCHEDULE = "TIMER_SCHEDULE"
-    TIMER_OCCURRENCE = "TIMER_OCCURRENCE"
-    DIAGNOSTIC = "DIAGNOSTIC"
-    TRANSITION = "TRANSITION"
 
 
 _KIND_PREFIX: dict[DeterministicIdKindV1, str] = {
     DeterministicIdKindV1.ACTION: "mqaction_",
-    DeterministicIdKindV1.BROKER_COMMAND: "mqcommand_",
-    DeterministicIdKindV1.LOCAL_ORDER: "mqlocalorder_",
-    DeterministicIdKindV1.TIMER_MUTATION: "mqtimermut_",
-    DeterministicIdKindV1.TIMER_SCHEDULE: "mqtimersched_",
-    DeterministicIdKindV1.TIMER_OCCURRENCE: "mqtimerocc_",
-    DeterministicIdKindV1.DIAGNOSTIC: "mqdiag_",
-    DeterministicIdKindV1.TRANSITION: "mqtransition_",
 }
 
 
