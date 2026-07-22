@@ -7,7 +7,7 @@
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A 已于 2026-07-23 获用户明确批准；任何后续 PR 合入仍须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A 已于 2026-07-23 获用户明确批准；任何后续 PR 合入仍须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -79,7 +79,7 @@ observation、posterior、state、transition、severity 或 revision 逻辑。�
 - 新 schema `hmm_risk`、exact bootstrap/verify、repository 和 current views。
 - candidate/model/input identity 解析、共同水位、PIT mapping/content hashes。
 - 复用现有全局股票池 PIT，并动态关联 `sw_index_member`；`sector_data` schema 保持 fact-only。
-- C-001-A candidate capability、C-002-A direct L1/L2 state-model-set、状态/transition/severity；禁止跨层 posterior aggregation。
+- C-001-A candidate capability、C-002-A direct L1/L2 state-model-set、C-007-A stock-fact-first direct L1 observation、状态/transition/severity；禁止跨层 posterior aggregation。
 - durable daily generation job、显式失败、idempotency、lease/fencing 和迟到数据重算。
 - alerts、risk event lifecycle、retrospective report。
 - parent blueprint 定义的 overview/heatmap/alerts/timeline/event/preview/run API。
@@ -90,7 +90,7 @@ observation、posterior、state、transition、severity 或 revision 逻辑。�
 
 - 不返回或写入 `RiskDecision`、`can_buy`、order、cash、position、portfolio、profile、策略配置或 snapshot 状态。
 - 不修改、迁移、包装、退役或改变旧 `precompute_hmm_risk_gate.py`、Selection/QE gate 的启用、protect-top、block duration、fallback 或 artifact 语义；任何旧业务路径变化均须用户另行明确确认。
-- 不训练/重训 HMM，不挑选“最佳”candidate，不自动使用最新 snapshot，不淘汰研究方向。
+- 日常 API/worker 不训练或重训 HMM，不挑选“最佳”candidate，不自动使用最新 snapshot，不淘汰研究方向；Slice 0 经批准的受控 offline direct L1 artifact preparation 是唯一例外，且不修改 candidate lifecycle。
 - 不新增 heat score、资金强弱、可买性或第四种 HMM state。
 - 不把 severity 当 state，不把颜色、收益或 severity 合成为伪 confidence。
 - 不自动注册 scheduler，不在 FastAPI startup 启动 worker，不自动执行首次生产日任务。
@@ -198,6 +198,127 @@ feature/preprocess family 和冻结输入 manifest；算法差异必须形成新
 该 set 才为 `READY`。任一层缺失时 candidate 返回 `hmm_risk_state_model_set_incomplete`，不提供 L2-only 完成声明。
 L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origin。
 
+### 4.3.1 Direct L1 stock-fact-first observation（C-007-A）
+
+用户于 2026-07-23 明确批准 C-007-A。`hmm_risk_l1_stock_fact_observation_v1` 是两个 family 唯一允许的
+direct L1 observation contract；禁止调用旧 `SectorHMMTrainer` 的 2-state/4 维路径，禁止平均 L2 feature、
+percentile、z-score、hidden state 或 posterior，也禁止在缺失时使用 0、neutral、上一日或另一数据源填补。
+
+#### A. PIT identity 与 canonical 31/131 sector set
+
+artifact-preparation request 必须显式给出 immutable `universe_key`、`rule_version`、训练/验证窗口和 source
+watermark，禁止默认 live/latest key。对每个交易日 `t`，eligible symbol 必须同时满足：
+
+1. `market.stock_universe_pit_state` 对应 key 为 `ready`、`dirty=false`、rule/version 和 coverage 覆盖 `t`；
+2. `market.stock_universe_pit_spans.eligible_start <= t` 且 `eligible_end IS NULL OR eligible_end >= t`；
+3. `market.sw_index_member.in_date <= t` 且 `out_date IS NULL OR out_date >= t`；
+4. mapping row 的 symbol、L1、L2、日期均非空，并且 symbol 只解析到一个 canonical `(L1,L2)` identity。
+
+历史 `sw_index_member.l1_code/l2_code` 允许保存 `industry_code` 或 `index_code` 表示；resolver 必须使用
+`market.sw_index_classify` 同 level 的唯一行，将二者规范化为 canonical `index_code`。同一 symbol/date 的多条源行
+只有在规范化后 L1/L2 完全相同才可合并为一个 identity，同时所有源行、有效期和 source-row hash 都必须进入
+mapping manifest；规范化后仍指向不同 L1/L2、classify 缺失或一对多时显式失败。禁止 `DISTINCT ON`、排序首行、
+字符串前缀或当前 mapping 回填历史日。最终 canonical sector set 必须严格为 L1 31 个、L2 131 个，并冻结
+按 date/symbol/L1/L2/source interval 排序的 mapping hash。
+
+#### B. canonical stock facts 与单位
+
+每个 eligible symbol/date 只读取以下既有事实；路径不构成 identity，表、列、row count、min/max date、内容 hash
+和单位版本构成 `hmm_risk_l1_stock_fact_source_v1`：
+
+| fact | authoritative source | canonical unit / rule |
+|---|---|---|
+| OHLC、volume、amount | `market.kline_daily_raw` | price=`*_li / 1000` 元；volume=`volume_hand * 100` 股；amount=`amount_li / 1000` 元 |
+| total/float market value | `market.daily_basic` | `total_mv/circ_mv * 10000` 元；权重只使用前一完整交易日 `circ_mv` |
+| small/medium/large/extra-large/net flow | `market.moneyflow_ts` | 所有 `*_amount * 10000` 元 |
+| exact limit price | `market.stk_limit` | `pre_close/up_limit/down_limit` 为元；`limit_up=1` iff canonical close `>= up_limit-1e-4` |
+| benchmark | `market.index_daily`, `000300.SH` | `pct_chg / 100` |
+| calendar | `market.trading_calendar` | `is_trading=true` 的升序交易日；不得用自然日 |
+
+价格、金额、成交量、市值、flow 或 limit row 的 NULL、非有限、负值、重复不一致、单位不符均记录 symbol/date/field
+并进入 missing evidence；不得 `COALESCE 0`。停牌日以 `market.suspend_d` 和无 kline 事实证明为合法 non-observed
+symbol，不进入当日 observed denominator；缺 `suspend_d` 证据的无 kline 行仍是缺失。一个 symbol/date 的重复事实
+只有全字段相同才可折叠，否则该 L1/date 失败。
+
+#### C. stock-fact-first 原始聚合
+
+令 `S(g,t)` 为 L1 `g` 在 `t` 的 PIT eligible、canonical mapping 且当日 observed 的股票集合；
+`w(i,t)=circ_mv(i,prev(t)) / sum(circ_mv(j,prev(t)))`，其中 `prev(t)` 是 calendar 中 `t` 的前一交易日。
+当日市值不参与当日权重；权重只使用前一完整交易日市值，且不使用未来数据。每个 L1/date 先计算以下原始量：
+
+- `l1_return(t) = sum_i w(i,t) * (close(i,t)/close(i,prev_observed_i)-1)`；`prev_observed_i` 必须 `< t`，
+  不得跨越该 symbol 的 listing/PIT entry 之前取值；
+- `l1_volume(t) = sum_i volume_shares(i,t)`，`l1_amount(t) = sum_i amount_cny(i,t)`，
+  `l1_total_mv(t) = sum_i total_mv_cny(i,t)`；
+- `l1_range_ratio(t) = sum_i w(i,t) * ((high(i,t)-low(i,t))/close(i,t))`；
+- `l1_true_range_ratio(t) = sum_i w(i,t) * max(high-low,abs(high-prev_close),abs(low-prev_close))/prev_close`；
+- 每个 moneyflow tier 和 `net_mf_amount` 均按 canonical CNY 直接求和；禁止平均股票 ratio；
+- `limit_up_ratio(t) = count(limit_up=1) / count(S(g,t))`；
+- breadth/dispersion 使用 `S(g,t)` 的股票 close-to-close 1/5/10 交易日 return 直接计算，分别为正收益占比、
+  `STDDEV_SAMP` 和 median/mean；历史 return 只使用该 symbol 当时已发布的 price facts。
+
+coverage 同时按 observed symbol count 与前一交易日 float-market-value weight 计算。两者均须 `>= 0.90`；
+低于阈值使该 L1/date 无 observation，高于阈值也必须把缺失 symbols、fields、count ratio、weight ratio 写入 manifest。
+任何 L1 在训练窗口少于 120 个完整 observation，或任一时点无法解析 denominator/previous weight，整个 family
+制备失败；不得只跳过该 L1 后把 model set 标为 READY。
+
+#### D. 7 维 base observation
+
+`rolling_window=3`，且每个滚动量必须具有连续三个有效交易日，不能以短窗口或 0 补齐：
+
+1. `daily_return = l1_return(t)`；
+2. `excess_return_Nd = mean_{k=t-2..t}(l1_return(k)-csi300_return(k))`；
+3. `volume_ratio = l1_volume(t) / sum_all_eligible_observed_stock_volume(t)`；分母缺失或非正时失败；
+4. `limit_up_ratio` 使用 C 节 exact limit facts；
+5. `volatility_Nd = population_std_{k=t-2..t}(l1_return(k))`，与批准 L2 family 的 `numpy.std(ddof=0)` 一致；
+6. `net_mf_ratio = sum(net_mf_amount_cny) / l1_amount(t)`；
+7. `elg_net_mf_ratio = sum(buy_elg_amount_cny-sell_elg_amount_cny) / l1_amount(t)`。
+
+分母为零、滚动窗口不完整或任一结果非有限时该 L1/date 失败，不使用旧实现中的 0 fallback。
+
+#### E. autocycle 追加的 13 维 sector-factor observation
+
+先由 C 节原始量形成 L1 panel，再按现有 `all_core` family 的同名公式重新计算；不能对 L2 已变换 feature
+做加权平均：
+
+- `sector_turnover = l1_amount / l1_total_mv * 100`；
+- `sf_turnover_pctile_250d_neg` / `120d_neg`：各 L1 自身 trailing 250/120 交易日 percentile rank 的负值，
+  `min_periods=120/60`；
+- `sf_turnover_ma5_ma20_neg = -(mean_5(sector_turnover)/mean_20(sector_turnover)-1)`，
+  `min_periods=3/10`；
+- `mf_net_ratio=sum(net_mf_amount_cny)/l1_amount`；
+  `sf_mf_net_ratio_std_5d_neg=-sample_std_5(mf_net_ratio)`，`min_periods=5, ddof=1`；
+- `small_net_ratio=sum(buy_sm_amount_cny-sell_sm_amount_cny)/l1_amount`；
+  `sf_small_net_ratio_5d=mean_5(small_net_ratio)`，`min_periods=3`；
+- `sf_intraday_range_5d_neg=-mean_5(l1_range_ratio)`，`min_periods=3`；
+- `atr14=mean_14(l1_true_range_ratio)`，`min_periods=10`；
+  `sf_atr14_pctile_250d_neg` 为各 L1 自身 trailing 250 日 `atr14` percentile rank 的负值，`min_periods=120`；
+- `sf_range_vs_market_10d=mean_10(l1_range_ratio / median_31_l1(l1_range_ratio))`，`min_periods=5`；
+- `sf_vol_vs_market_20d=sample_std_20(l1_return) / median_31_l1(sample_std_20(l1_return))`，
+  numerator/denominator `min_periods=10, ddof=1`；
+- `sf_breadth_1d`、`sf_breadth_5d` 为 C 节 stock breadth；
+- `sf_excess_breadth_5d=sf_breadth_5d-mean_31_l1(sf_breadth_5d)`；
+- `sf_dispersion_5d_neg=-STDDEV_SAMP(stock_return_5d)`。
+
+`median_31_l1/mean_31_l1` 要求该日 31 个 L1 均通过 C 节 coverage；否则该日所有相关横截面 feature 无效，
+不能从剩余行业重算市场基准。rolling percentile/rank 使用稳定 date/code 排序；tie 使用 pandas average-rank/pct
+语义并固定 `hmm_risk_l1_sector_factor_formula_v1`。所有 13 维和 7 维 base feature 按批准的 20 项顺序写入
+feature-definition manifest/hash。
+
+#### F. preprocess、训练、semantic label 与 READY
+
+- legacy/covfix family 使用 `identity` preprocess；autocycle family 使用 train-only global 1%/99% winsor 后 z-score；
+  L1 自行拟合并冻结 center/scale，不复用 L2 数值参数，也不读取验证/holdout 拟合 preprocess；
+- 两个 family 均固定 train `2022-01-01..2024-06-30`、validation `2024-07-01..2025-03-31`、
+  3-state diagonal GaussianHMM、`random_seed=42` 和各自批准的 feature/preprocess family；
+- L1 semantic label 使用 validation-only 5/10/20D future excess utility，权重 `0.35/0.35/0.30`；三个 hidden state
+  必须各有有限 utility 且可严格排序为 `fading/neutral/trending`。任何 state 无样本、tie 或非有限即失败，禁止按
+  mean 第一列或 state index fallback；
+- 每个 L1 entry 保存 constituent source rows/hash、daily coverage、training rows、preprocess、startprob/transmat/
+  means/covars/state labels。manifest 另保存 stock-fact、calendar、universe、mapping、formula 和 feature hashes；
+- causal replay 必须证明任一 `t` posterior 只依赖 `<=t` observation。只有 L1 31/31、L2 131/131 和全部 hash/
+  parser/replay 检查通过才写 `status=READY`；制备过程不写 candidate lifecycle，不注册 scheduler，不调用 daily worker。
+
 ### 4.4 InputManifest
 
 `hmm_risk_input_manifest_v1` 至少包含：
@@ -222,6 +343,8 @@ L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origi
 - `market.sector_data` 所需 sector aggregate 字段的最新完整日；
 - `market.index_daily` 中 CSI300 benchmark 的最新完整日；
 - `market.sw_daily` 的市场总量 observation 最新完整日；
+- C-007-A L1 所需 `market.kline_daily_raw/daily_basic/moneyflow_ts/stk_limit/suspend_d` 的最新共同完整日；
+- 请求指定的 `market.stock_universe_pit_state/spans` 为 ready、非 dirty 且覆盖目标日；
 - `market.sw_index_member` 在目标日可解析的 PIT L1/L2 mapping；
 - candidate coefficient coverage end 和 model `train_end` 上限。
 
@@ -235,11 +358,16 @@ L1/L2 均使用 `state_origin=direct_hmm`；不存在 `derived_l1_*` state origi
 才能折叠为一条 sector observation。任一字段不一致、非有限、单位不符或缺失时，该 sector/date 失败并
 记录 row identities；禁止 `DISTINCT ON` 静默挑一行。
 
+本节只定义 direct L2 canonical row；direct L1 不平均这里的 `sw2_*` row 或 L2 feature，而严格执行 4.3.1
+的 stock-fact-first 原始量聚合与 7/20 维重算。两层各自保留 source/hash，不得互相 fallback。
+
 ### 5.3 PIT mapping snapshot
 
-mapping 使用 `in_date <= as_of_date AND (out_date IS NULL OR out_date >= as_of_date)`；冻结
-`symbol/l1_code/l1_name/l2_code/l2_name/in_date/out_date` 的排序 canonical hash。symbol 多重 active mapping、
-L2 对应多个 L1、缺 code 或空 mapping 均显式失败。历史日不得读取当前成员关系。
+mapping 使用 `in_date <= as_of_date AND (out_date IS NULL OR out_date >= as_of_date)`；按 4.3.1 A 节通过
+`sw_index_classify` 将历史 industry/index code 表示规范化后，冻结 source 与 canonical
+`symbol/l1_code/l1_name/l2_code/l2_name/in_date/out_date` 的排序 hash。只有规范化后 identity 完全相同的多条
+source row 才可保留全部 source evidence 后折叠；非等价多重 active mapping、L2 对应多个 canonical L1、
+缺 code/classify 或空 mapping 均显式失败。历史日不得读取当前成员关系。
 mapping 只从 `sw_index_member` 动态解析，不要求或读取 `sector_data.l1_code/l2_code/mapping_in_date`。
 
 ## 6. 唯一 State Generator 契约
@@ -261,8 +389,8 @@ mapping 只从 `sw_index_member` 动态解析，不要求或读取 `sector_data.
 ### 6.2 Direct L1/L2 inference
 
 - generator 从同一 `state_model_set_id` 选择请求层级的 direct model；不得跨层读取 posterior。
-- L1 observation 必须使用 model-set manifest 固化的 PIT L2 constituent set 和训练时同版本 aggregation；
-  这里聚合的是原始日度 observation，不是隐状态或 posterior。
+- L1 observation 必须使用 model-set manifest 固化的 C-007-A formula/universe/mapping contract，并按请求日重新解析、
+  hash 当日 PIT L2 constituent set；这里聚合的是 canonical stock facts，不是 L2 feature、隐状态或 posterior。
 - L2 observation 使用模型 entry 对应的 canonical L2 行情和 feature contract。
 - 两层分别执行 causal forward-filter 并分别保存 posterior/confidence；缺任一 sector 使 run=`partial_failed`，
   缺整个层级使 run=`failed/hmm_risk_state_model_set_incomplete`。
@@ -704,9 +832,12 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-004 | 是否迁移、包装或退役 legacy gate | `RESOLVED_NO_MIGRATION` | Phase 2 冻结旧 producer/consumer，不运行其测试 |
 | C-005 | PR 是否可以自动合入 | `RESOLVED_PER_PR_USER_CONFIRMATION` | branch/commit/push/PR/CI 可继续；每个 PR 在 merge 前停下并取得用户明确确认 |
 | C-006 | `sector_data` 是否需要持久化行业 PIT identity，股票 eligibility 是否另建规则 | `RESOLVED_USER_APPROVED_C006_A` | `sector_data` 保持 22 字段事实表；先复用全局股票池 PIT，再动态关联 `sw_index_member`，mapping snapshot/hash 写入 `hmm_risk` evidence；不执行 sector identity 生产 DDL/DML |
+| C-007 | 两个 direct L1 family 如何从 PIT L2 constituent 构造全部 7/20 维 observation，并处理历史 code 表示、单位、权重、缺失和 causal rolling | `RESOLVED_USER_APPROVED_C007_A` | 使用 `hmm_risk_l1_stock_fact_observation_v1`：股票事实先聚合、L1 feature 重新计算、canonical 31/131、双 coverage evidence 和 fail-loud；禁止聚合 L2 feature/posterior或调用旧 4 维路径 |
 
 C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
 C-006-A 已于 2026-07-23 获用户明确批准并回填本文；它不新增运行时审批或第二套股票池。
+C-007-A 已于 2026-07-23 获用户明确批准并回填本文；它是 offline artifact-preparation 的固定算法版本，
+不是运行时人工确认或可调门禁。
 C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
@@ -735,6 +866,8 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 | future leakage | train_end <= as_of；causal filter；所有 dataset watermark 固化 |
 | sector duplicate 行不一致 | 全字段 equality 检查；不使用 DISTINCT ON 静默挑选 |
 | L1/L2 来源被猜测 | C-002-A 要求同一 state-model-set 中独立 direct L1/L2 model；禁止 posterior aggregation |
+| L1 observation 用旧 4 维子集或 L2 feature 平均冒充 | C-007-A 固定 stock-fact-first 7/20 维逐字段重算、PIT canonical mapping、单位和 coverage；区分性测试证明旧路径无法通过 |
+| 历史 mapping 的 industry/index code 双表示被随机选行 | classify 唯一规范化；等价 source rows 全量留 hash，非等价多映射 fail loud；禁止 `DISTINCT ON` |
 | partial day 冒充完整 | run terminal `partial_failed`；UI degraded 并列 missing sectors |
 | late data 覆盖历史 | append-only revision + supersedes + forward cascade |
 | 并发生成重复 revision | advisory lock + unique keys + input-hash compare |
@@ -749,7 +882,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ### 21.1 Rollout
 
-1. C-001-A/C-002-A/C-003-A 已获批准；本设计 PR #2616 已获本次用户明确合入授权。
+1. C-001-A/C-002-A/C-003-A 已获批准；本设计 PR #2616 已获本次用户明确合入授权；C-006-A/C-007-A 后续修订仍按 C-005 逐 PR 等待用户合入确认。
 2. BUG-832 退休 `sector_data` 持久化 identity 与 repair DML；生产 `sector_data` 已符合 fact-only 目标，无需 identity DDL/DML。
 3. Slice 0 在现有 DEV DB 验证 L1/L2 artifact preparation、schema bootstrap、exact verify 和 rollback；production DDL 保持 pending。
 4. Slice 1/2 在 DEV 运行 fixture、真实只读 market input、人工 job 和 bounded worker；只写 DEV `hmm_risk.*`。
@@ -780,11 +913,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 - no_simplified_delivery：五张持久表/current views、全 candidate evidence matrix、direct L1/L2、唯一 generator、job/revision、API、真实 UI 与 confirmed report 均为完成边界；未决项不以子集、默认或静态页代替。
 - no_silent_error：candidate/model/watermark/mapping/sector/L1/persistence/renderer 全部有 reason code；partial 不标 success。
-- no_business_semantic_drift：预警 severity 保持父设计；C-001-A capability、C-002-A direct model set、C-003-A oracle 与 C-006-A fact/universe/mapping 分层均有用户明确批准；旧 gate 冻结，只产生 advisory analysis。
-- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001-A/C-002-A/C-003-A/C-005/C-006-A 均来自用户明确决定；只保留规范要求的 production DDL/runtime 独立授权。
+- no_business_semantic_drift：预警 severity 保持父设计；C-001-A capability、C-002-A direct model set、C-003-A oracle、C-006-A fact/universe/mapping 分层与 C-007-A stock-fact-first observation 均有用户明确批准；旧 gate 冻结，只产生 advisory analysis。
+- no_unrequested_gate_or_approval：preview 不是批准步骤，普通 read 无确认；C-001-A/C-002-A/C-003-A/C-005/C-006-A/C-007-A 均来自用户明确决定；只保留规范要求的 production DDL/runtime 独立授权。
 
 ## 24. 当前完成状态与下一步
 
-本文件已回填 C-001-A/C-002-A/C-003-A/C-006-A 用户批准，F-011/F-012/F-013 均为 `DESIGN_READY_USER_APPROVED`。
+本文件已回填 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A 用户批准，F-011/F-012/F-013 均为 `DESIGN_READY_USER_APPROVED`。
 BUG-832 合入并在 DEV 完成 identity retirement readback 后，从 Slice 0 开始实现。生产 `sector_data` 不执行
 identity DDL/DML；当前仍未执行 Phase 2 代码、依赖安装、服务重启或 job，本设计状态不表示 Phase 2 功能已实现或 runtime 已激活。
