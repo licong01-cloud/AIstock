@@ -259,7 +259,8 @@ symbol，不进入当日 observed denominator；缺 `suspend_d` 证据的无 kli
 
 coverage 同时按 observed symbol count 与前一交易日 float-market-value weight 计算。两者均须 `>= 0.90`；
 低于阈值使该 L1/date 无 observation，高于阈值也必须把缺失 symbols、fields、count ratio、weight ratio 写入 manifest。
-任何 L1 在训练窗口少于 120 个完整 observation，或任一时点无法解析 denominator/previous weight，整个 family
+任一时点无法解析 denominator/previous weight 时，该 L1/date 无 observation，并须在 manifest 记录具体缺失证据；
+任何 L1 最终在训练窗口少于 120 个完整 observation，或在验证窗口少于 30 个完整 observation，则整个 family
 制备失败；不得只跳过该 L1 后把 model set 标为 READY。
 
 #### D. 7 维 base observation
