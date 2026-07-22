@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 前置交付：R1 contracts/CAS/repository、R2-A neutral selection computation、R2-B historical candidate adapter
-> 当前状态：`design_reviewed_ready_implementation_pending`
+> 当前状态：`source_implemented_local_review_passed_dev_validation_pending`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`DB_HISTORICAL`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. Background
@@ -479,7 +479,7 @@ hash(schema_version
 |---|---|---|
 | `WAITING_INPUT` | T mark/已封存输入暂缺、可恢复 DB partition unavailable | 不提交 |
 | `RETRYABLE_FAILED` | 临时 DB/WSL/CAS I/O、中断、lease expired、未知但保留诊断的运行失败 | 不提交 |
-| `FAILED` | code/list semantics mismatch、artifact tamper/collision、source revision 不可复现、结构性 candidate depth 不足、deterministic contract violation | 不提交 |
+| `FAILED` | code/list semantics mismatch、artifact tamper/collision、source/stage/universe evidence 不闭合或不可复现、deterministic contract violation | 不提交 |
 | `CANCELLED` | 显式 cancel 或旧 worker 在 cancel fencing 后被拒绝 | 不提交 |
 
 未知 exception 不得返回空成功。executor 保存稳定 `ADVISORY_HR_DAY_UNCLASSIFIED_FAILURE`、exception type 和 stage，后台输出一次有 stack 的 ERROR；用户可见 error 不包含凭据、DSN、绝对资产路径或大 payload。
@@ -947,11 +947,11 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 
 ```text
 design_document = reviewed_ready
-source_code = not_started
-r3_schema_delta = corrective_contract_defined_not_implemented
+source_code = implemented_and_locally_reviewed
+r3_schema_delta = corrective_contract_implemented_not_applied
 dev_ddl_dml = not_executed_in_this_task
 production_ddl_dml = not_executed
-service_restart = not_required_for_design
+service_restart = not_requested
 runtime_activation = none
 r3_source_merge = not_requested
 ```
