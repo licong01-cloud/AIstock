@@ -398,6 +398,8 @@ SimulationLifecycleScheduler
 
 event-loop retry 若发现同一 runtime 已持久化 parent intent，只能在 incoming request、durable batch、remark index 和 parent intent 构成完整精确所有权链，且 `broker_called=false/broker_call_pending=true` 时恢复原 batch。quote 导致的动态 preflight price 变化不得把原 batch 自身 remark 或 pending sell reservation 当成外部重复；恢复必须复用 durable request/preflight，不得再次扣减同一 strategy-slot lot。任一 parent 集合、业务字段、runtime identity、remark owner、batch link 或 submit 状态不一致必须 typed fail loud，不能放宽外部 duplicate-order 防线。
 
+event-loop durable batch 的 request/result 关联 identity 是唯一、非空的 parent intent ID，不是 JSON 数组位置。request/result cardinality 相同、两侧 identity 均唯一且集合完全相同但排列不同，属于合法 permutation：replay 必须按 identity 恢复，并按 durable request 的 canonical 顺序返回和重新持久化；禁止分别排序后 positional zip。null/empty identity、request/result duplicate、missing/extra、cardinality drift、identity alias 冲突、success 缺 `qmt_order_id`、`broker_called` 与 accepted/rejected carrier 矛盾均立即 typed fail loud，错误上下文保留 batch/runtime/binding（可获得时）、两侧完整 identity、duplicates/missing/extra 和 expected/actual。一个 parent 的多个 child slice 以 runtime child facts 为完整 authority；parent batch projection 保留首次已接受 broker identity，后续 rejected 或 accepted slice 不得抹掉、迁移或重复累计既有 side effect。restart/replay 复用同一 batch 和 child facts，不重复 broker call、child、accepted/submitted count；single-writer update 后按 request canonical order readback，持久化失败不得返回 ACK。
+
 ### 5.9 Error and health contract
 
 任何外部 payload/DB fact 的数量、状态、价格、时间解析失败必须产生：
@@ -651,6 +653,8 @@ LocalSIM `causal_bar_lag_seconds` 定义为 diagnostics observation clock 到 ac
 | MiniQMT tick stale/invalid | 当前 symbol/revision fail closed 并可观测 | 回退 LEGACY/minute/旧缓存 |
 | MiniQMT quote 缺少 openInt | 视为可选字段缺失；存在时才校验 registered phase | 把普通股票 quote 判为 capability/tradability invalid |
 | MiniQMT 单边盘口/零占位档 | 零价零量规范为空档，按交易方向消费有效对手盘 | 从 last/另一侧合成深度或把合法单边盘整体拒绝 |
+| MiniQMT durable result 仅顺序不同 | 按唯一 parent identity 重建并以 request canonical order 投影 | positional zip、分别排序后拼接或把一个 parent 结果迁移给另一个 parent |
+| MiniQMT durable identity 真冲突 | duplicate/missing/extra/alias/cardinality/broker carrier typed fail loud | 忽略不匹配、padding、过滤坏行或以 pending/fallback 掩盖 corruption |
 | MiniQMT 等价 authority refresh | 复用 compatible context/generation | 仅 observed_at/load time 变化就推进 generation 并拒绝 observation |
 | broker callback 迟到/重复 | economic hash 去重并 reconcile | 重复成交或静默丢弃冲突 |
 | scheduler 单 binding 异常 | 记录该 binding 失败，继续其它 binding | 整个调度 tick 被历史异常饿死 |
@@ -777,6 +781,7 @@ operator runbook 与同一 schema/阈值/reason 对齐；source/CI/merge、depen
 - `BUG-782`：恢复必须先把 runtime-owned broker trade snapshot 与 archived durable trade event 按 exact trade identity 合并、去重和冲突校验，再通过同一 `record_trade_event` 路径重放。BUY 原冻结按 order price 释放并写 cash/T+1 lot，SELL 写 cash/lot/realized facts；event 已 append 但 settlement/child/vn.py core update 失败时，后续同 identity retry 必须按 durable stage checkpoint 续做未完成阶段且不重复经济事实。多 fill 必须用规范化 broker time 稳定排序，同秒 fill 保留 durable event/broker snapshot 原相对顺序；`cumulative_quantity` 是 child progress 派生事实，不得纳入单笔 trade identity hash 冲突判定。缺失/非法/冲突 identity、owner、quantity、price、time 均 fail loud；
 - `BUG-783`：daily run、qmt batch、order intent 与 runtime journal 必须形成精确可重建投影。`broker_called` 必须来自 gateway ack 的 exact boolean，并同步到 child metadata、runtime event、batch result、order intent metadata 和 diagnostics；pre-broker rejection 必须保持 false，broker 调用后的 reject 保持 true，任意 rejected event 不得被事件类型本身推断为已调用 broker。order intent status 与 `broker_called/broker_call_pending/qmt_order_id` projection metadata 必须在同一 repository update 中提交；parent outcome count 与实际 child count 分离；同 parent 后续 rejected slice 不得覆盖既有 accepted broker fact；restart recovery 必须把全部 recovered child/trade 投影回原 batch/intent。read-only diagnostics 比较 runtime child/event/trade/count/hash 与 run/batch carrier，陈旧或冲突显示 `MINIQMT_RUNTIME_PROJECTION_STALE`、低基数 metric 和自动解除 alert，不自动 repair、不形成 execution gate；
 - `BUG-784`：runtime trade date 由 frozen runtime authority 决定；broker date/time 只作为原始证据及 mismatch 字段，不得反向改写 runtime identity。同一 broker trade 的 `trade_date/traded_date`、`traded_time_iso/trade_time_iso/traded_time/trade_time` 必须分别规范化并交叉校验；alias 或显式日期与规范化时间日期冲突必须以 `MINIQMT_RUNTIME_BROKER_TRADE_TIME_CONFLICT` fail loud。epoch seconds/milliseconds、14 位 compact calendar、compact fractional、HHMMSS、ISO 各自精确判型；compact/time-only 按 Asia/Shanghai exchange local 解释后转 UTC，歧义长度或非法日期必须拒绝，不得由通用 timestamp 猜测落入错误年份。
+- `BUG-820`：event-loop durable request/result 以唯一 parent intent ID 关联；set-equal permutation 安全恢复并按 request canonical order 序列化，duplicate/missing/extra/null/alias/cardinality 与 broker carrier corruption fail loud。写入与 readback 使用同一 strict schema：identity 必须为非空字符串，request aliases 在 upsert 前闭合，success order ID 必须为非空白字符串；任意 JSON 类型的 malformed identity 只进入可 JSON 序列化 diagnostics，不参与 duplicate/set/join，且不得使 error builder 产生二次异常。submit producer、durable replay、child sync、restart 和 multi-slice parent aggregate 共享同一 identity contract；后续 rejected slice 不覆盖既有 accepted broker identity，runtime evidence 保留全部 child counts。scheduler 现有 per-binding isolation 以 exact MiniQMT replay failure → later LocalSIM continuation direct test 固化，不修改 scheduler 产品语义。
 
 本 slice 的 shared batch preflight、per-symbol quote wait、broker-called truth、TCA observation-only 和 diagnostics read-only 边界必须同时成立；不得为了让测试通过而删除共享账户一致性检查、合成 tick/trade identity、吞掉 settlement failure、改写历史 run 或增加人工 acknowledge/审批。DDL/DML/config、生产 broker、服务重启均为 `noop`；source/PR/CI/merge 与正常交易日 readback 分别记录。
 
@@ -829,6 +834,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - late order/trade/fill 和 archive read path；
 - MiniQMT BUY/SELL broker fill restart replay、partial snapshot + archived union、event-before-settlement retry、cash/lot/child/algo exactly-once；
 - runtime journal 与 daily-run/batch/intent parent/child/trade count、identity/hash stale/conflict diagnostics 及自动解除。
+- MiniQMT durable request/result 第 5 项 permutation、canonical request-order serialization、重复 replay、restart、multi-slice accepted→rejected、duplicate/missing/extra/null/alias/order-id/broker-called corruption matrix；
 
 ### 10.3 Restart and trading-day tests
 
@@ -940,6 +946,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-038` | MiniQMT parent outcome、child、trade 与 daily-run/batch/intent projection 可重建；stale/conflict 只读可见且自动恢复，不自动 repair |
 | `F-039` | runtime trade date、broker raw date/time 与 TCA UTC 规范化 authority 分离；numeric/compact/time-only/ISO 不歧义猜测 |
 | `F-040` | MiniQMT Phase 1 physical generation 由同一 `data_session_key` 的 subscriber process lifecycle 单调拥有；last-lease release、failed prepare、rebuild、shutdown 后不得复用已分配或 fenced generation，迟到 callback 永久拒绝且 successor bootstrap/callback 继续由同一 single writer 接受 |
+| `F-041` | MiniQMT durable batch 以唯一 parent intent identity 关联；合法 permutation 按 request canonical order 幂等恢复，写入/readback strict schema 一致且 malformed JSON identity 的 typed diagnostics 不产生二次异常；真实 corruption fail loud，multi-slice/restart 不覆盖或重复 side effect，scheduler 保持 per-binding isolation |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -985,12 +992,13 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-038` | §7、§9 P0-F；client recovery projection、scheduler parent/child carriers、`SimulationRuntimeOpsService`、`SimulationPlatformObservability` | backend/tests/simulation_runtime/test_ops_api.py；backend/tests/simulation_runtime/test_lifecycle_scheduler.py；parent/child/trade projection stale/conflict and auto-clear | implemented_verified | explicitly approved production-state separation：diagnostics readback after merge/restart remains separate |
 | `F-039` | §5.9、§9 P0-F；runtime broker time parsers；`tca_capture.py` | backend/tests/simulation_runtime/test_tca_capture.py；backend/tests/miniqmt_execution_runtime/test_runtime.py；epoch/compact/time-only/ISO and mismatch matrix | implemented_verified | none |
 | `F-040` | §4.2 MiniQMT quote ownership、§4.4 tick model、§5.9 fail-loud health；`RealtimeQuoteSubscriber._next_phase_one_generation_locked`、callback capture/fence critical section、`QuoteIngressWorker` active/fenced diagnostics | backend/tests/infra/test_realtime_quote_subscriber_leases.py last-release/reacquire、failed candidate、late callback race、multi-session isolation；backend/tests/miniqmt_execution_runtime/test_quote_ingress.py failed-candidate callback/fence linearization、same-supervisor reacquire/normalized projection/active-failure auto-clear；backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py factory close/later runtime | implemented_verified | none |
+| `F-041` | §5.8 durable batch identity contract；`_event_loop_results_from_batch`、`_event_loop_durable_identity_context`、`_canonical_event_loop_result_objects`、`_sync_event_loop_triggered_children_to_batches` | backend/tests/miniqmt_execution_runtime/test_runtime.py fifth-item permutation、arbitrary-JSON corruption diagnostics、strict pre-upsert carrier/alias validation、合法 pending/rejected/deferred、canonical serialization/replay/restart/multi-slice；backend/tests/simulation_runtime/test_lifecycle_scheduler.py exact replay failure per-binding isolation | implemented_verified | none |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
 状态枚举：`IMPLEMENTED_VERIFIED`、`REPAIR_REQUIRED`、`EVIDENCE_REFRESH_REQUIRED`、`DESIGN_ONLY`、`HISTORICAL_RETIRED`。本表记录当前摘要；详细历史以 Git/PR/BUG/CI 为准。
 
-| Progress ID | Acceptance IDs | Current state after this PR（base `origin/main@fbf6514f`） | Evidence | Status | Next implementation slice |
+| Progress ID | Acceptance IDs | Current state after this PR（base `origin/main@cbcca337`） | Evidence | Status | Next implementation slice |
 | --- | --- | --- | --- | --- | --- |
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
@@ -1045,6 +1053,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-051` | `F-030,031,013,014,015,021,022,024` | BUG-796 将 LocalSIM economic commit 与 mark/NAV projection 解耦：明确 transient mark gap 先提交 order/fill/event/cash/state/position hashes，run 保持 `INTRADAY_RUNNING + INTRADAY_VALUATION_PENDING`；next cadence 在推进新 minute event 前必须重新证明 exact economic receipt/state/outbox 与 Paper economic facts，闭合后才恢复同 outbox/generation，mark 可用后生成 exact completion/account/performance receipt；economic/projection/readback 失败均保留显式 retry/terminal evidence且不重复经济事实 | BUG-796 / issue #2531；healthy fill + missing passive holding、restart pending/recovery、same generation/outbox、pending economic readback fault injection、account drift conflict、transient-only classifier、projection connection retry、projected readback recovery、active/stale diagnostics direct tests | IMPLEMENTED_VERIFIED | 更新修复 PR 并检查 CI；合入后由用户重启并补正常交易日只读 evidence；DDL/DML/config/broker 均为 noop；BUG-795 child sizing 已合入，BUG-797 frozen policy 仍独立追踪 |
 | `SIM-P-052` | `F-004,005,024` | BUG-797 删除 scheduler release→portfolio 与 broker manifest/flat-policy fallback；LocalSIM run context 验证 persisted release snapshot exact schema/normalized hash/ID-SHA，binding admission 仍只检查 package lifecycle；Paper daemon 显式 wiring；历史 incomplete release typed fail/retire | BUG-797 / issue #2532；single/multi/model-code required/optional binding、scheduler release-over-portfolio、incomplete release no-fallback、release 顶层 ID/SHA 与 snapshot 冲突、broker missing/empty/hash/alias、daemon E2E direct tests | IMPLEMENTED_VERIFIED | 更新修复 PR 并检查 CI；合入后由用户重启并只读核对实际 release policy reason；DDL/DML/config/broker 均为 noop；BUG-795/796 已合入 |
 | `SIM-P-053` | `F-016,017,020,021,022,024,040` | BUG-806 将 Phase 1 physical generation authority 从可删除 active feed 提升为 subscriber-owned per-session high-watermark；candidate 建立前预留 generation，failed prepare/last release/rebuild/shutdown 均保留 fenced history；callback immutable capture 与 generation fence 在 subscriber 内线性化；successor generation 严格递增，旧 callback 继续 fail loud，多个 logical consumers 与 single writer 语义不变 | BUG-806 / issue #2566；subscriber last-release/reacquire、failed candidate non-reuse、late callback race、multi-session isolation；failed-candidate in-flight callback/fence serialization；same-supervisor raw/normalized capture；factory close/later runtime；worker active/fenced/current diagnostics 与 recovery auto-clear direct tests | IMPLEMENTED_VERIFIED | `source_merge=pending_pr`；`production_ddl=noop`；`production_config=noop`；`restart=pending_user_after_merge`；`binding_migration=noop`；`runtime_observation=pending_normal_trading_day`。合入并由用户重启后，按只读 diagnostics 核对实际生命周期触发的 last-release、后续 generation successor/bootstrap/callback；本 BUG 不调用 broker |
+| `SIM-P-054` | `F-020,021,024,038,041` | BUG-820 将 durable result 从 positional identity 改为唯一 parent identity association：set-equal permutation 按 request canonical order 恢复/序列化；submit、replay、child sync、restart 与 multi-slice aggregate 共用完整性检查，后续 rejected slice 保留既有 accepted broker fact。独立审核补修使任意 JSON malformed identity 的 error context 可序列化且不会二次 TypeError，并在 upsert 前拒绝非字符串 result identity、conflicting request aliases 和空白 success order ID，使 write/readback schema 完全一致。生产只读 row 为 35/35、无空值/duplicate/missing/extra、集合相同但顺序不同；repository 整体 upsert 未自行排序，submit producer 按原 parent order 覆盖了 result order。scheduler core 已证明 per-binding isolation，LocalSIM 在故障后继续 durable 推进；当前 background TypeError、reconciliation/OMS warnings 作为独立观察，不并入本修复 | BUG-820 / issue #2591；原 RED fifth-item permutation + cross-tick accepted→rejected 2 failed；审核补修 RED 5 failed/2 passed；GREEN arbitrary-JSON diagnostics、strict persistence、合法 carrier、核心 replay/scheduler nodeids 与 L2/CI/F2 evidence 在 PR 更新后刷新 | IMPLEMENTED_VERIFIED | `source_merge=pending_user_authorization`；`production_ddl=noop`；`production_config=noop`；`restart=pending_user_after_merge`；`binding_migration=noop`；`runtime_observation=pending_deploy_readback`。本 PR 不修改/重放生产 batch，不调用 broker |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
 
@@ -1237,6 +1246,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_business_semantic_drift` | pass | 多 logical consumer 共用一个 physical feed/single writer、symbol union、bootstrap all-or-nothing、watchdog bounded rebuild、B0 controller registry、Selection/策略信号/方向数量/执行算法/LocalSIM 和唯一 event-loop broker route均未改变；未引入 LEGACY_B0、普通 quote、minute/compiler fallback |
 | `no_unrequested_gate_or_approval` | pass | 修复仅恢复自动 lifecycle successor；未新增 RBAC、审批、人工 acknowledge、人工恢复、业务开关或 runtime gate，合法下午/失败重试/次日 runtime 均沿既有 scheduler tick 自动继续 |
 | `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；`production_ddl_gate=noop`、前后端 dependency gate 均为 `noop`；未执行 DDL/DML/config、未调用 broker、未启停或重启服务。source PR/CI/merge 与用户重启后的正常交易日只读观察分开记录 |
+
+`BUG-820` durable batch identity replay 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass for BUG-820 scope；platform remains open | 不是只放宽第 5 项检查：submit producer、durable parser、canonical persistence、existing-batch replay、child sync、restart 和 multi-slice aggregate 使用同一 parent identity contract；正路径 permutation 与完整 corruption matrix 均走生产函数，scheduler isolation 走真实 `run_once` seam |
+| `no_silent_error` | pass | null/empty/object/list/number/bool、request/result duplicate、missing/extra、cardinality、alias、success/order-id 和 broker-called carrier 冲突保留 batch/stage/conflict field、两侧 identities、duplicates/missing/extra、expected/actual 及可用 runtime/binding 后 typed fail loud；diagnostics 仅对有效字符串计算 duplicate/set，context 可 JSON 序列化且 error builder 不会二次失败；未过滤、强制字符串化、padding、忽略或返回假 ACK |
+| `no_business_semantic_drift` | pass | 不改变 Selection、策略信号、选股、资产、方向、数量、执行算法、B0 quote authority、broker route 或 child runtime facts；只把 durable parent projection 与 canonical identity 对齐，accepted side effect 不被后续 slice 覆盖 |
+| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、人工恢复、execution gate、业务开关或 fallback；合法 permutation 和独立 binding 继续沿既有自动 replay/scheduler cadence 推进 |
+| `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；`production_ddl_gate=noop`、前后端 dependency gate 均为 `noop`；未执行 DDL/DML/config、未调用 broker、未启停或重启服务、未修改或人工重放生产 batch。source/CI/merge、部署重启和当前 row runtime recovery 分开记录 |
 
 ## 17. Definition of Done
 
