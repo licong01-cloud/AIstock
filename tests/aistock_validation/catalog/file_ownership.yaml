@@ -488,6 +488,23 @@ rules:
     layer: platform_configuration
     risk_level: high
     ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
+  - rule_id: hmm_risk_services
+    priority: 100
+    include:
+      - backend/services/hmm_risk/**
+      - backend/db/init_hmm_risk_schema.py
+      - backend/routers/hmm_risk.py
+      - backend/tests/hmm_risk/**
+      - frontend/src/app/hmm-risk/**
+      - frontend/src/components/hmm-risk/**
+      - frontend/src/lib/hmm-risk/**
+      - frontend/tests/hmm-risk/**
+      - scripts/hmm_risk/**
+    primary_module: hmm.risk
+    impact_modules: []
+    layer: research_data_pipeline
+    risk_level: high
+    ownership_reason: HMM Risk is an advisory-only isolated domain with direct L1/L2 model-set preparation, exact schema contracts, and dedicated backend/UI validation plans.
   - rule_id: hmm_evolution_services
     priority: 90
     include:

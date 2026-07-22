@@ -506,6 +506,16 @@ def hmm_evolution_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def hmm_risk_ui(session: nox.Session) -> None:
+    """Run only the HMM Risk frontend contract when Slice 3 owns UI files."""
+
+    target = ROOT / "frontend" / "tests" / "hmm-risk"
+    if not target.exists():
+        session.skip("frontend/tests/hmm-risk is introduced by HMM Risk Slice 3")
+    _run_mocked_frontend_target(session, "tests/hmm-risk")
+
+
+@nox.session(venv_backend="none")
 def watchlist_ui(session: nox.Session) -> None:
     """Run only the Watchlist mocked UI contract."""
 
@@ -3014,6 +3024,46 @@ def hmm_evolution_backend(session: nox.Session) -> None:
         "not integration",
         "--cov=backend.services.hmm_evolution",
         "--cov=backend.db.init_hmm_evolution_schema",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        "--cov-report=term-missing",
+        "--cov-fail-under=70",
+        "--durations=10",
+        f"--junitxml={junit_xml}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def hmm_risk_backend(session: nox.Session) -> None:
+    """Run the isolated HMM Risk schema and state-model-set contracts."""
+    evidence_dir = ROOT / "tmp" / "validation" / "hmm_risk"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = evidence_dir / "coverage.xml"
+    coverage_data = evidence_dir / ".coverage"
+    junit_xml = evidence_dir / "junit.xml"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/hmm_risk",
+        "backend/db/init_hmm_risk_schema.py",
+        "scripts/hmm_risk",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/hmm_risk",
+        "-m",
+        "not integration",
+        "--cov=backend.services.hmm_risk",
+        "--cov=backend.db.init_hmm_risk_schema",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
         "--cov-report=term-missing",
