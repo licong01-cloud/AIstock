@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import asyncio
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from pydantic import ValidationError
 
 from backend.services.quantevolver.experiment_config import LongTrendEvaluationOptIn
 from backend.services.quantevolver.config_composer import ConfigComposer
+from backend.services.quantevolver import long_trend_evaluation_phase2 as phase2_module
 from backend.services.quantevolver.long_trend_evaluation_phase2 import (
     QELongTrendControlSecretStore,
     QELongTrendPhase2Error,
@@ -27,8 +30,11 @@ from backend.services.quantevolver.qe_resource_phase_service import (
     QEResourcePhaseError,
     validate_phase_transition,
 )
-from backend.services.quantevolver.qe_workspace_client import QEWorkspaceDatasetIdentity
-from backend.services.quantevolver.qe_workspace_client import QELongTrendJobInspection
+from backend.services.quantevolver.qe_workspace_client import (
+    QELongTrendJobInspection,
+    QEWorkspaceClient,
+    QEWorkspaceDatasetIdentity,
+)
 from backend.services.quantevolver.long_trend_pickle_parser_entry import ParserContractError, _reject_secrets
 
 
@@ -152,6 +158,290 @@ def test_control_secret_store_is_idempotent_and_never_embeds_identity_drift(tmp_
             session_id="different",
             source_run_key=f"qelt:{evaluation_id}",
         )
+
+
+def test_control_secret_store_concurrent_creation_publishes_one_token(tmp_path: Path) -> None:
+    store = QELongTrendControlSecretStore(tmp_path / "secrets")
+    evaluation_id = "qelt_" + "c" * 64
+
+    def create() -> tuple[str, bool]:
+        return store.load_or_create(
+            evaluation_id,
+            session_id="qers-qelt-concurrent",
+            source_run_key=f"qelt:{evaluation_id}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _index: create(), range(16)))
+
+    assert len({token for token, _created in results}) == 1
+    assert sum(1 for _token, created in results if created) == 1
+    assert store.load(
+        evaluation_id,
+        session_id="qers-qelt-concurrent",
+        source_run_key=f"qelt:{evaluation_id}",
+    ) == results[0][0]
+
+
+def test_artifact_stream_uses_bounded_client_timeout_and_cleans_partial(tmp_path: Path) -> None:
+    payload = b"long-trend-artifact"
+    digest = hashlib.sha256(payload).hexdigest()
+    calls: list[dict[str, object]] = []
+
+    class Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        async def aiter_bytes(self, *, chunk_size: int):  # type: ignore[no-untyped-def]
+            assert chunk_size == 1024 * 1024
+            yield payload
+
+    class Stream:
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return Response()
+
+        async def __aexit__(self, *_args):  # type: ignore[no-untyped-def]
+            return False
+
+    class HttpClient:
+        def stream(self, method, url, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append({"method": method, "url": url, **kwargs})
+            return Stream()
+
+    client = QEWorkspaceClient("http://node/api/v1/qe_workspace")
+    original = client.client
+    client.client = HttpClient()  # type: ignore[assignment]
+    try:
+        result = asyncio.run(
+            client.stream_long_trend_artifact(
+                task_id="task-1",
+                loop_id="Loop1",
+                evaluation_id="qelt_" + "d" * 64,
+                artifact_path="attempts/attempt-1/artifacts/worker_terminal_receipt.json",
+                destination=tmp_path / "terminal.json",
+                expected_sha256=digest,
+                expected_size_bytes=len(payload),
+            )
+        )
+    finally:
+        asyncio.run(original.aclose())
+    assert result["sha256"] == digest
+    assert calls and "timeout" not in calls[0]
+    assert not (tmp_path / "terminal.json.partial").exists()
+
+
+def test_collection_renews_fenced_lease_until_publish_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    renewals: list[tuple[QELongTrendControlLease, int]] = []
+
+    class Repository:
+        def renew_lease(self, lease, *, lease_seconds):  # type: ignore[no-untyped-def]
+            renewals.append((lease, lease_seconds))
+
+    service = QELongTrendPhase2Service(control_repository=Repository(), owner_id="owner")  # type: ignore[arg-type]
+    lease = QELongTrendControlLease(
+        evaluation_id="qelt_" + "e" * 64,
+        owner_id="owner",
+        fencing_token=3,
+        row_version=7,
+    )
+    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
+
+    async def work() -> str:
+        for _attempt in range(100):
+            if len(renewals) >= 2:
+                return "published"
+            await asyncio.sleep(0.005)
+        pytest.fail("lease heartbeat did not run twice before the deterministic test deadline")
+
+    assert asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work())) == "published"
+    assert len(renewals) >= 2
+    assert all(seconds == phase2_module.COLLECT_LEASE_SECONDS for _lease, seconds in renewals)
+
+
+def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    cancelled = False
+
+    class Repository:
+        @staticmethod
+        def renew_lease(_lease, *, lease_seconds):  # type: ignore[no-untyped-def]
+            assert lease_seconds == phase2_module.COLLECT_LEASE_SECONDS
+            raise RuntimeError("lease owner changed")
+
+    service = QELongTrendPhase2Service(control_repository=Repository(), owner_id="owner")  # type: ignore[arg-type]
+    lease = QELongTrendControlLease(
+        evaluation_id="qelt_" + "9" * 64,
+        owner_id="owner",
+        fencing_token=8,
+        row_version=13,
+    )
+    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
+
+    async def work() -> None:
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled = True
+
+    with pytest.raises(QELongTrendPhase2Error, match="heartbeat failed"):
+        asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work()))
+    assert cancelled is True
+
+
+def test_reconcile_persists_running_state_and_releases_claim() -> None:
+    evaluation_id = "qelt_" + "f" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.transitions: list[dict[str, object]] = []
+
+        @staticmethod
+        def bind_available_archive_run(_evaluation_id):  # type: ignore[no-untyped-def]
+            return {
+                "evaluation_id": evaluation_id,
+                "parent_task_id": "task-1",
+                "parent_loop_index": 2,
+                "node_id": "node-1",
+                "job_id": "job-1",
+                "status": "submitted",
+            }
+
+        @staticmethod
+        def claim(_evaluation_id, *, owner_id, lease_seconds):  # type: ignore[no-untyped-def]
+            assert owner_id == "owner"
+            assert lease_seconds == phase2_module.COLLECT_LEASE_SECONDS
+            return {
+                "evaluation_id": evaluation_id,
+                "parent_task_id": "task-1",
+                "parent_loop_index": 2,
+                "node_id": "node-1",
+                "job_id": "job-1",
+                "status": "submitted",
+                "owner_id": "owner",
+                "fencing_token": 4,
+                "row_version": 9,
+            }
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(
+                evaluation_id=row["evaluation_id"],
+                owner_id=row["owner_id"],
+                fencing_token=row["fencing_token"],
+                row_version=row["row_version"],
+            )
+
+        def transition(self, _lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append(kwargs)
+            return {"row_version": 10, **kwargs["updates"]}
+
+    class Client:
+        @staticmethod
+        async def inspect_long_trend_evaluation(**_kwargs):  # type: ignore[no-untyped-def]
+            return QELongTrendJobInspection(
+                schema_version="qe_long_trend_job_receipt_v1",
+                task_id="task-1",
+                loop_id="Loop2",
+                evaluation_id=evaluation_id,
+                job_id="job-1",
+                request_sha="a" * 64,
+                status="running",
+                current_attempt_id="attempt-1",
+                process_identity={"pid": 123},
+                terminal_receipt=None,
+                updated_at="2026-07-22T00:00:00Z",
+            )
+
+    repository = Repository()
+    service = QELongTrendPhase2Service(control_repository=repository, owner_id="owner")  # type: ignore[arg-type]
+    result = asyncio.run(service.reconcile(row={"evaluation_id": evaluation_id}, client=Client()))  # type: ignore[arg-type]
+
+    assert result["status"] == "running"
+    assert repository.transitions[-1]["updates"]["status"] == "running"  # type: ignore[index]
+    assert repository.transitions[-1]["release_owner"] is True
+
+
+def test_backend_wires_continuous_long_trend_reconciliation() -> None:
+    source = (Path(__file__).resolve().parents[3] / "backend/main.py").read_text(encoding="utf-8")
+    assert "async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event)" in source
+    assert "while not stop_event.is_set():" in source
+    assert "results = await service.reconcile_nonterminal(limit=100)" in source
+    assert "QELongTrendPhase2Service().reconcile_nonterminal" not in source
+    assert 'name="qe-long-trend-reconciler"' in source
+
+
+def test_reconcile_node_resolution_failure_is_persisted_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluation_id = "qelt_" + "1" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.row = {
+                "evaluation_id": evaluation_id,
+                "parent_task_id": "task-1",
+                "parent_loop_index": 1,
+                "node_id": "missing-node",
+                "job_id": "job-1",
+                "status": "submitted",
+                "owner_id": None,
+                "fencing_token": 2,
+                "row_version": 5,
+            }
+            self.transitions: list[dict[str, object]] = []
+
+        def list_nonterminal(self, *, limit):  # type: ignore[no-untyped-def]
+            assert limit == 100
+            return [dict(self.row)]
+
+        def bind_available_archive_run(self, _evaluation_id):  # type: ignore[no-untyped-def]
+            return dict(self.row)
+
+        def claim(self, _evaluation_id, *, owner_id, lease_seconds):  # type: ignore[no-untyped-def]
+            self.row.update(
+                {
+                    "owner_id": owner_id,
+                    "fencing_token": 3,
+                    "row_version": 6,
+                }
+            )
+            assert lease_seconds == phase2_module.COLLECT_LEASE_SECONDS
+            return dict(self.row)
+
+        def get(self, _evaluation_id):  # type: ignore[no-untyped-def]
+            return dict(self.row)
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(
+                evaluation_id=row["evaluation_id"],
+                owner_id=row["owner_id"],
+                fencing_token=row["fencing_token"],
+                row_version=row["row_version"],
+            )
+
+        def transition(self, _lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append(kwargs)
+            self.row.update(kwargs["updates"])
+            if kwargs.get("release_owner"):
+                self.row["owner_id"] = None
+            self.row["row_version"] = int(self.row["row_version"]) + 1
+            return dict(self.row)
+
+    def fail_node_resolution(_cls, _node_id):  # type: ignore[no-untyped-def]
+        raise RuntimeError("node catalog unavailable")
+
+    repository = Repository()
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", classmethod(fail_node_resolution))
+    service = QELongTrendPhase2Service(control_repository=repository, owner_id="owner")  # type: ignore[arg-type]
+
+    results = asyncio.run(service.reconcile_nonterminal(limit=100))
+
+    assert results[0]["status"] == "platform_error"
+    assert results[0]["recovery_persisted"] is True
+    assert repository.transitions[-1]["updates"]["status"] == "remote_state_unknown"  # type: ignore[index]
+    assert repository.transitions[-1]["release_owner"] is True
 
 
 def test_normal_loop_command_orders_qrun_registration_and_read_result() -> None:

@@ -275,7 +275,8 @@ class QELongTrendEvaluationControlRepository:
                     f"""
                     SELECT * FROM {TABLE_NAME}
                     WHERE status <> ALL(%s)
-                    ORDER BY created_at, evaluation_id
+                      AND (owner_id IS NULL OR lease_expires_at < clock_timestamp())
+                    ORDER BY updated_at, evaluation_id
                     LIMIT %s
                     """,
                     (list(TERMINAL_STATUSES), bounded),
@@ -371,7 +372,7 @@ class QELongTrendEvaluationControlRepository:
                     SELECT evaluation_id FROM {TABLE_NAME}
                     WHERE status <> ALL(%s)
                       AND (owner_id IS NULL OR lease_expires_at < clock_timestamp())
-                    ORDER BY created_at, evaluation_id
+                    ORDER BY updated_at, evaluation_id
                     FOR UPDATE SKIP LOCKED LIMIT 1
                     """,
                     (list(TERMINAL_STATUSES),),
@@ -395,6 +396,45 @@ class QELongTrendEvaluationControlRepository:
                 row = cur.fetchone()
             conn.commit()
         return dict(row)
+
+    def renew_lease(
+        self,
+        lease: QELongTrendControlLease,
+        *,
+        lease_seconds: int = 300,
+    ) -> None:
+        """Extend one active fenced lease without invalidating its row-version CAS."""
+
+        if int(lease_seconds) < 10:
+            raise ValueError("renew_lease requires lease_seconds >= 10")
+        with self._connection(transactional=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {TABLE_NAME}
+                    SET lease_expires_at = clock_timestamp() + (%s * interval '1 second')
+                    WHERE evaluation_id = %s
+                      AND owner_id = %s
+                      AND fencing_token = %s
+                      AND row_version = %s
+                      AND status <> ALL(%s)
+                    RETURNING evaluation_id
+                    """,
+                    (
+                        int(lease_seconds),
+                        lease.evaluation_id,
+                        lease.owner_id,
+                        lease.fencing_token,
+                        lease.row_version,
+                        list(TERMINAL_STATUSES),
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise QELongTrendControlRepositoryError(
+                        "control lease heartbeat lost owner/fencing/row-version CAS"
+                    )
+            conn.commit()
 
     def claim(self, evaluation_id: str, *, owner_id: str, lease_seconds: int = 120) -> dict[str, Any]:
         if not str(owner_id or "").strip() or int(lease_seconds) < 10:

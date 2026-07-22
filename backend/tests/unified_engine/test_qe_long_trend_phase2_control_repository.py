@@ -34,6 +34,8 @@ class _Cursor:
             self.row = ("qe_archive.run_evaluation",)
         elif "FROM information_schema.columns" in normalized:
             self.rows = [(name,) for name in self.state["columns"]]  # type: ignore[index]
+        elif normalized.startswith("SELECT * FROM qe_archive.run_evaluation WHERE status <> ALL"):
+            self.rows = [dict(self.state["row"])]  # type: ignore[arg-type]
         elif normalized.startswith("UPDATE qe_archive.run_evaluation SET"):
             self.row = dict(self.state["row"])  # type: ignore[arg-type]
         else:
@@ -127,6 +129,44 @@ def test_control_repository_rejects_unknown_mutation_and_identity_drift() -> Non
         {"evaluation_id": lease.evaluation_id, "run_id": "qe-archive-run-1"},
         {"evaluation_id": lease.evaluation_id, "run_id": None},
     )
+
+
+def test_reconcile_candidates_skip_live_leases_and_rotate_by_updated_at() -> None:
+    state = _state()
+    repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(state))
+
+    rows = repository.list_nonterminal(limit=25)
+
+    assert len(rows) == 1
+    select_sql = next(
+        sql
+        for sql, _params in state["executed"]  # type: ignore[index]
+        if sql.startswith("SELECT * FROM qe_archive.run_evaluation WHERE status <> ALL")
+    )
+    assert "owner_id IS NULL OR lease_expires_at < clock_timestamp()" in select_sql
+    assert "ORDER BY updated_at, evaluation_id" in select_sql
+
+
+def test_lease_heartbeat_preserves_row_version_cas() -> None:
+    state = _state()
+    repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(state))
+    lease = QELongTrendControlLease(
+        evaluation_id="qelt_" + "a" * 64,
+        owner_id="owner-1",
+        fencing_token=7,
+        row_version=11,
+    )
+
+    repository.renew_lease(lease, lease_seconds=300)
+
+    update_sql = next(
+        sql
+        for sql, _params in state["executed"]  # type: ignore[index]
+        if sql.startswith("UPDATE qe_archive.run_evaluation SET lease_expires_at")
+    )
+    assert "row_version = %s" in update_sql
+    assert "fencing_token = %s" in update_sql
+    assert "row_version = row_version + 1" not in update_sql
 
 
 def test_phase2_migration_is_additive_guarded_and_keeps_research_out_of_approval_state() -> None:

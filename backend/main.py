@@ -462,27 +462,43 @@ async def _lifespan(app: FastAPI):
         name="qe-execution-reservation-reconciler",
     )
 
-    async def _qe_long_trend_startup_reconcile():
+    async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event):
         from .services.quantevolver.long_trend_evaluation_phase2 import QELongTrendPhase2Service
 
-        try:
-            results = await QELongTrendPhase2Service().reconcile_nonterminal(limit=100)
-            logging.getLogger("aistock.qe_long_trend_phase2").info(
-                "QELT_STARTUP_RECONCILE_COMPLETED count=%s results=%s",
-                len(results),
-                results,
-            )
-        except Exception as exc:
-            logging.getLogger("aistock.qe_long_trend_phase2").error(
-                "QELT_STARTUP_RECONCILE_FAILED reason_code=%s error=%s",
-                getattr(exc, "reason_code", type(exc).__name__),
-                exc,
-                exc_info=True,
-            )
+        service = QELongTrendPhase2Service()
+        logger = logging.getLogger("aistock.qe_long_trend_phase2")
+        while not stop_event.is_set():
+            try:
+                results = await service.reconcile_nonterminal(limit=100)
+                failures = [
+                    item
+                    for item in results
+                    if item.get("status") in {"platform_error", "remote_state_unknown"}
+                    or item.get("recovery_persisted") is False
+                ]
+                if results:
+                    logger.info(
+                        "QELT_RECONCILE_COMPLETED count=%s failures=%s results=%s",
+                        len(results),
+                        len(failures),
+                        results,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "QELT_RECONCILE_FAILED reason_code=%s error=%s",
+                    getattr(exc, "reason_code", type(exc).__name__),
+                    exc,
+                    exc_info=True,
+                )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=15)
+                break
+            except asyncio.TimeoutError:
+                continue
 
-    qe_long_trend_startup_task = asyncio.create_task(
-        _qe_long_trend_startup_reconcile(),
-        name="qe-long-trend-startup-reconcile",
+    qe_long_trend_reconcile_task = asyncio.create_task(
+        _qe_long_trend_reconcile_loop(shutdown_event),
+        name="qe-long-trend-reconciler",
     )
 
     qe_archive_worker_task = None
@@ -535,10 +551,10 @@ async def _lifespan(app: FastAPI):
                 qe_reservation_reconcile_task,
                 task_name="qe-execution-reservation-reconciler",
             )
-        if qe_long_trend_startup_task is not None:
+        if qe_long_trend_reconcile_task is not None:
             await _cancel_background_task(
-                qe_long_trend_startup_task,
-                task_name="qe-long-trend-startup-reconcile",
+                qe_long_trend_reconcile_task,
+                task_name="qe-long-trend-reconciler",
             )
         if qe_archive_worker_task is not None:
             await _cancel_background_task(qe_archive_worker_task, task_name="qe-archive-worker")

@@ -99,7 +99,7 @@ F-014 Phase 1 已证明长期趋势指标、删失、episode、portfolio 和 ent
 - 不创建 `run_evaluation_metric/run_evaluation_artifact` 两张明细表；Phase 2 必须创建父设计已有的 `run_evaluation` 控制表，不另建临时/影子状态表；
 - 不新增公共 FastAPI route、MCP tool 或 frontend 页面；
 - 不执行 R8–R11 全量历史补算；只允许一个已完成 Loop 的显式 canary；
-- 不注册周期 cron 或平行 global scheduler，不扫描全部 Archive；只在现有 QE runtime startup reconciliation 中枚举 `run_evaluation` 非终态行，并由 RD QE API startup dispatcher 发现其本地 queued job；
+- 不注册外部 cron、不扫描全部 Archive；在现有 backend lifespan 内运行单一 QE F-014 reconciler，按短周期、有限批次枚举 `run_evaluation` 可接管的非终态行。该 reconciler 复用 owner/lease/fencing/row-version CAS，负责正常提交后的持续 inspect/collect，也负责租约到期后的重启恢复；RD 侧 dispatcher 与 registration replayer 使用持久单例身份和 OS lock，API 重启只唤醒既有 spool，不创建新 evaluation；
 - 不改变训练、标签、因子、回测、策略、TopK、成本或执行公式；
 - 不修改通用 Prediction Store、`qe_archive.run_metric/run_artifact/raw_payload` writer；
 - 不模拟订单队列、撤单、涨跌停成交或分钟级执行；
@@ -140,6 +140,9 @@ F-014 Phase 1 已证明长期趋势指标、删失、episode、portfolio 和 ent
 | F-320 | 节点 execution-environment snapshot/hash 进入 evaluation identity、request、attempt receipt 与 CAS manifest；依赖能力不满足时形成结构化平台状态，不替换环境或改变科研方向。 |
 | F-321 | Recorder resolver 从冻结 backtest frequency 解析 `indicators_normal_{freq}.pkl` 与 `indicators_normal_{freq}_obj.pkl`；后者是 `amount/deal_amount/ffr` 权威来源，二者不得互相替代。 |
 | F-322 | normal Loop 严格执行 `qrun -> register/submit -> read_exp_res`；registration/worker/published receipt 分阶段同 identity，原 Loop及时释放 reservation，评价失败不改写训练/回测终态。 |
+| F-323 | 正常提交与重启恢复共用持续 reconciler；扫描跳过有效租约、按 `updated_at/evaluation_id` 轮转有限批次，失败原因和恢复持久化结果必须显式，不能依赖下一次后端重启。 |
+| F-324 | control secret 创建使用跨进程互斥和锁内二次检查；streaming collect 使用 HTTP read timeout 与 fenced lease heartbeat；任一 heartbeat/CAS 失败均结构化返回。 |
+| F-325 | dispatcher 使用持久 process identity 保证单例唤醒；typed cancel 在核对 attempt/PID/start_ticks/command hash 后终止该 worker 的独立进程组，使 parser 子进程不能成为孤儿；registration pending 在 RD API 存活期间持续回放。 |
 
 ## 6. End-to-End Architecture / 端到端架构
 
@@ -339,7 +342,7 @@ POST /tasks/{task_id}/loops/{loop_id}/long-trend-evaluations/{evaluation_id}/can
 - 每节点一个 `long_trend_eval` OS slot lock，由 supervisor 从 claim 前持有到 terminal receipt fsync 完成，不能只保护队列扫描；
 - POST 原子写 queued job 后返回，不因槽位占用返回研究失败；
 - dispatcher 在 OS lock 内按 `created_at/evaluation_id` 排序，使用独占 `claim.json` 将唯一 queued job 原子推进为 starting；同 attempt 已有 claim 时只 inspect，不创建第二进程；
-- 显式 submission、inspect、AIstock reconcile 和 RD QE API startup spool recovery 都可唤醒 node dispatcher；startup 只发现既有 queued/running job，不创建新 evaluation，不注册周期 cron；
+- 显式 submission、inspect、AIstock reconcile 和 RD QE API startup spool recovery 都可唤醒 node dispatcher；spawn lock 与 durable dispatcher process identity 保证并发 POST/API restart 只保留一个活跃 dispatcher，不为每个 POST 留下等待 slot 的进程；startup 只发现既有 queued/running job，不创建新 evaluation；
 - 外部 subprocess 与 RD API 生命周期解耦，API 重启不杀 worker；
 - stale running 必须核对 PID、start time、command hash、evaluation/request/environment identity 与 claim owner，再决定仍运行、已终止或可重试；PID 不匹配不能发送信号；
 - worker supervisor 与 evaluator 分离：supervisor 持有 slot/resource secret并负责 outbox，evaluator/parser 不获得 secret；
@@ -347,7 +350,7 @@ POST /tasks/{task_id}/loops/{loop_id}/long-trend-evaluations/{evaluation_id}/can
 
 ### 9.4 typed cancel
 
-cancel intent 必须携带 expected `attempt_id/process_identity/request_sha`。匹配后只终止 evaluator subprocess；若 terminal receipt 已存在返回 already-terminal。已发布成功 CAS 不删除，正在 staging 的临时文件保留为失败证据或由同 attempt 清理，不触碰训练/回测进程。
+cancel intent 必须携带 expected `attempt_id/process_identity/request_sha`。匹配 PID、start ticks、command hash 后，还必须确认 worker 是 `start_new_session=True` 创建的独立 process-group leader，再向该精确进程组发送 SIGTERM，使 worker 与其 parser 子进程共同退出；process group 不匹配时 fail-closed，不退化为 PID-only kill。若 terminal receipt 已存在返回 already-terminal。已发布成功 CAS 不删除，正在 staging 的临时文件保留为失败证据或由同 attempt 清理，不触碰训练/回测进程。
 
 ## 10. AIstock Phase 2 Service / AIstock 编排服务
 
@@ -371,8 +374,9 @@ cancel_attempt(...)
 4. 在同一事务创建或幂等读取 `run_evaluation(status=queued)`，再创建独立 resource session；DB 事务提交前不得远端 POST；
 5. 使用 control row fencing 将 queued 推进为 submitting，提交 node job并保存 job/request/attempt identity；
 6. normal 模式在 RD 接受 job 后立即返回 registration receipt，`read_exp_res.py` 只挂载该生命周期指针；historical 模式同样返回 queued，由相同 reconcile 继续；
-7. inspect terminal status 后 streaming collect；
-8. 原子发布 CAS、生成 published compact receipt，并以 owner/fencing/row_version CAS 更新 control row。
+7. backend lifespan 内的单一 F-014 reconciler 持续枚举可接管非终态行；有效租约跳过、过期租约恢复、有限批次按最近协调时间轮转，running/remote-unknown/恢复持久化状态均写回 control row；
+8. inspect terminal status 后 streaming collect；HTTP 使用明确 read timeout，长传输期间按固定间隔续期同一 owner/fencing/row-version lease，heartbeat 失败立即取消传输并保留结构化错误；
+9. 原子发布 CAS、生成 published compact receipt，并以 owner/fencing/row_version CAS 更新 control row。
 
 Phase 2 不增加用户可调用的 public 创建/查询 API，但在现有 `quantevolver_evolution.py` QE webhook 信任边界下增加一个 authenticated internal postprocess-registration endpoint，供 normal Loop adapter 在 qrun 产出真实 Recorder 后调用。Phase 3 的用户 POST/GET API直接调用同一 service，不再实现第二套编排。
 
@@ -494,6 +498,7 @@ required 集合按 worker 的真实 family status 冻结，不能由 collector �
 6. manifest 成功后才把 CAS platform status 标为 published；
 7. retry 只重传缺失 blob或重建 published compact receipt，不重新计算成功 family；
 8. published receipt/manifest 与 control row 使用同一 owner/fencing/row_version CAS；DB 更新失败保留已发布 immutable manifest并进入 reconcile，不删除 CAS。
+9. streaming client 不得覆盖为 `timeout=None`；使用 QE Workspace client 的 connect/read/write/pool timeout。collect 持有 300 秒 fenced lease，并在长传输期间续期而不改变 row-version；取消或超时删除 `.partial`，不发布残缺 blob。
 
 ## 13. Compact Receipt Contract / 紧凑回执
 
@@ -667,13 +672,16 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 | F-313 | immutable success manifest | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py` | implemented_local_verified | none |
 | F-314 | registration/worker/published staged receipt adapter | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-315 | worker terminal receipt | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
-| F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest -q test/app/test_qe_long_trend_evaluation_api.py`（与 recovery 文件合计 12 passed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q`（15 passed，含精确 process-group 与非 leader fail-closed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; DDL、两端重启与真实已完成 Loop canary 尚未执行且不冒充本地测试证据 | implemented_local_verified | none |
 | F-318 | ownership/import/route/schema diff | `python scripts/aistock_module_ownership_scan.py --changed-only --include-untracked --fail-on-unmapped --fail-on-ambiguous`; `python -m nox -s validation_catalog_integrity validation_module_registry_l0`; 32 个初始变更文件与后续 BUG-829 文件均重新执行目录路由 | implemented_local_verified | none |
 | F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests；DDL 未应用并作为生产状态单独报告 | implemented_local_verified | none |
 | F-320 | execution-environment identity binding | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py`; deployment restart state is separately reported | implemented_local_verified | none |
 | F-321 | frequency-aware summary/`_obj.pkl` resolver | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
 | F-322 | normal nonblocking adapter + internal registration + staged receipts | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD pending replay tests；real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
+| F-323 | continuous reconciler、lease-aware candidate rotation 与持久化恢复结果 | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `python -m nox -s qe_long_trend_phase2_backend`（94 passed） | implemented_local_verified | none |
+| F-324 | secret single-writer、bounded streaming 与 fenced lease heartbeat | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`（并发创建、bounded stream、heartbeat、row-version CAS 直接测试） | implemented_local_verified | none |
+| F-325 | durable dispatcher singleton、process-group cancel、continuous registration replay | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q` -> 15 passed（singleton、精确 process-group、非 leader fail-closed、持续 replay） | implemented_local_verified | none |
 
 ## 19. Rollout and Rollback / 发布与回滚
 
@@ -700,7 +708,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 |---|---|---|
 | 历史 Recorder catalog 不完整 | 某些 family 无法解析 | 保存 partial catalog、尝试路径和 data action；其他 family 继续 |
 | remote job 与 backend 状态短暂分离 | 重复启动或错误终态 | job/attempt/process identity + inspect/reconcile，不可达标记 unknown |
-| queued job 在 AIstock/RD 重启窗口丢失 | 永久排队或重复 worker | queued-before-POST control row + node spool/claim + 双端 startup reconciliation |
+| queued job 在 AIstock/RD 重启窗口丢失 | 永久排队或重复 worker | queued-before-POST control row + node spool/claim + AIstock continuous reconciliation + RD durable singleton dispatcher/replayer |
 | H5/Parquet 内存峰值 | 节点卡顿或 OOM | 单 CPU 槽、signal-date chunk、streaming collect、父对象及时释放 |
 | CAS 中途失败 | 结果已算但未发布 | 保留 terminal receipt，只重传缺失 blob，不重算成功 family |
 | evaluator bundle 漂移 | 同 identity 结果不可复算 | source/bundle/file hash 进入 identity，冲突 fail-fast |
@@ -715,7 +723,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | 项目 | 状态 |
 |---|---|
-| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 23/23、路由本地测试与跨仓库定向测试通过） |
+| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 26/26、AIstock 94 passed、RD-Agent 15 passed、路由本地测试通过） |
 | Phase 1 core | `MERGED_VERIFIED` |
 | AIstock Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |
 | RD-Agent Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |

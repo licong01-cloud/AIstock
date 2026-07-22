@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import secrets
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Awaitable, Mapping, TypeVar
 
 from backend.services.quantevolver.experiment_config import LongTrendEvaluationOptIn
 from backend.services.quantevolver.long_trend_artifact_resolver import (
@@ -32,6 +34,7 @@ from backend.services.quantevolver.long_trend_evaluation_contract import (
     typed_null,
 )
 from backend.services.quantevolver.long_trend_evaluation_control_repository import (
+    QELongTrendControlLease,
     QELongTrendEvaluationControlRepository,
     QELongTrendEvaluationControlSpec,
 )
@@ -47,6 +50,10 @@ from backend.services.quantevolver.qe_workspace_client import (
 from backend.services.quantevolver.results_only_retry import ResultsOnlyGateError, load_authoritative_recorder_ref
 
 CONTROL_SECRET_ROOT_ENV = "QE_LONG_TREND_CONTROL_SECRET_ROOT"
+COLLECT_LEASE_SECONDS = 300
+COLLECT_LEASE_HEARTBEAT_SECONDS = 60
+COLLECT_LEASE_RENEW_TIMEOUT_SECONDS = 30
+_T = TypeVar("_T")
 WORKER_INPUT_ARTIFACTS = frozenset(
     {
         "prediction",
@@ -85,27 +92,25 @@ class QELongTrendControlSecretStore:
 
     def load_or_create(self, evaluation_id: str, *, session_id: str, source_run_key: str) -> tuple[str, bool]:
         path = self._path(evaluation_id)
-        if path.is_file():
-            payload = _read_json(path)
-            if payload.get("session_id") != session_id or payload.get("source_run_key") != source_run_key:
-                raise QELongTrendPhase2Error(
-                    "persisted qelt resource secret belongs to a different control identity",
-                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
-                )
-            token = str(payload.get("token") or "")
-            if not token:
-                raise QELongTrendPhase2Error(
-                    "persisted qelt resource secret has no token",
-                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
-                )
-            return token, False
-        token = secrets.token_urlsafe(32)
-        _atomic_json(
-            path,
-            {"evaluation_id": evaluation_id, "session_id": session_id, "source_run_key": source_run_key, "token": token},
-            mode=0o600,
-        )
-        return token, True
+        with _exclusive_file_lock(path.with_name(path.name + ".lock")):
+            if path.is_file():
+                return self._validated_token(
+                    path,
+                    session_id=session_id,
+                    source_run_key=source_run_key,
+                ), False
+            token = secrets.token_urlsafe(32)
+            _atomic_json(
+                path,
+                {
+                    "evaluation_id": evaluation_id,
+                    "session_id": session_id,
+                    "source_run_key": source_run_key,
+                    "token": token,
+                },
+                mode=0o600,
+            )
+            return token, True
 
     def _path(self, evaluation_id: str) -> Path:
         if not evaluation_id.startswith("qelt_") or "/" in evaluation_id or "\\" in evaluation_id:
@@ -119,6 +124,14 @@ class QELongTrendControlSecretStore:
                 "durable qelt resource secret is missing during recovery",
                 reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
             )
+        return self._validated_token(
+            path,
+            session_id=session_id,
+            source_run_key=source_run_key,
+        )
+
+    @staticmethod
+    def _validated_token(path: Path, *, session_id: str, source_run_key: str) -> str:
         payload = _read_json(path)
         if payload.get("session_id") != session_id or payload.get("source_run_key") != source_run_key:
             raise QELongTrendPhase2Error(
@@ -422,10 +435,11 @@ class QELongTrendPhase2Service:
         task_id: str,
         loop_index: int,
         client: QEWorkspaceClient,
+        _claimed_row: Mapping[str, Any] | None = None,
     ) -> QELongTrendJobReceipt | None:
         if not prepared.ready_for_node or prepared.request_payload is None:
             return None
-        row = prepared.control_row
+        row = dict(_claimed_row or prepared.control_row)
         if row["status"] in {"submitted", "running", "collecting", "succeeded", "partial", "failed", "cancelled"} and row.get("job_id"):
             inspection = await client.inspect_long_trend_evaluation(
                 task_id=task_id,
@@ -445,7 +459,11 @@ class QELongTrendPhase2Service:
                 execution_environment_snapshot_id=str(row["execution_environment_snapshot_id"]),
                 execution_environment_manifest_sha256=str(row["execution_environment_manifest_sha256"]),
             )
-        claimed = self.control_repository.claim(prepared.evaluation_id, owner_id=self.owner_id)
+        claimed = (
+            dict(_claimed_row)
+            if _claimed_row is not None
+            else self.control_repository.claim(prepared.evaluation_id, owner_id=self.owner_id)
+        )
         lease = self.control_repository.lease_from(claimed)
         submitting = self.control_repository.transition(
             lease,
@@ -535,6 +553,7 @@ class QELongTrendPhase2Service:
         loop_index: int,
         client: QEWorkspaceClient,
         artifact_store: QELongTrendArtifactStore | None = None,
+        _claimed_row: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         inspection = await self.inspect(
             evaluation_id=evaluation_id,
@@ -544,7 +563,15 @@ class QELongTrendPhase2Service:
         )
         if inspection.status not in {"succeeded", "partial", "failed", "cancelled"}:
             return {"status": "awaiting_worker", "evaluation_id": evaluation_id, "remote_status": inspection.status}
-        claimed = self.control_repository.claim(evaluation_id, owner_id=self.owner_id, lease_seconds=300)
+        claimed = (
+            dict(_claimed_row)
+            if _claimed_row is not None
+            else self.control_repository.claim(
+                evaluation_id,
+                owner_id=self.owner_id,
+                lease_seconds=COLLECT_LEASE_SECONDS,
+            )
+        )
         lease = self.control_repository.lease_from(claimed)
         collecting = self.control_repository.transition(
             lease,
@@ -553,25 +580,47 @@ class QELongTrendPhase2Service:
         )
         lease = self.control_repository.lease_from(collecting)
         try:
-            worker_terminal, manifest, published, published_meta, by_type = await self._publish_remote_artifacts(
-                evaluation_id=evaluation_id,
-                task_id=task_id,
-                loop_index=loop_index,
-                client=client,
-                artifact_store=artifact_store,
+            worker_terminal, manifest, published, published_meta, by_type = await self._await_with_lease_heartbeat(
+                lease=lease,
+                awaitable=self._publish_remote_artifacts(
+                    evaluation_id=evaluation_id,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    client=client,
+                    artifact_store=artifact_store,
+                ),
             )
         except Exception as exc:
-            self.control_repository.transition(
-                lease,
-                expected_statuses=("collecting",),
-                updates={
-                    "status": "remote_state_unknown",
-                    "reason_code": getattr(exc, "reason_code", QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value),
-                    "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
-                    "platform_delivery_status_json": {"worker": inspection.status, "cas": "collect_failed"},
-                },
-                release_owner=True,
-            )
+            try:
+                self.control_repository.transition(
+                    lease,
+                    expected_statuses=("collecting",),
+                    updates={
+                        "status": "remote_state_unknown",
+                        "reason_code": getattr(
+                            exc,
+                            "reason_code",
+                            QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+                        ),
+                        "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
+                        "platform_delivery_status_json": {
+                            "worker": inspection.status,
+                            "cas": "collect_failed",
+                        },
+                    },
+                    release_owner=True,
+                )
+            except Exception as persist_exc:
+                raise QELongTrendPhase2Error(
+                    "artifact collection failed and recoverable control state could not be persisted",
+                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+                    context={
+                        "collection_error_type": type(exc).__name__,
+                        "collection_error": str(exc),
+                        "persistence_error_type": type(persist_exc).__name__,
+                        "persistence_error": str(persist_exc),
+                    },
+                ) from exc
             raise
         terminal_status = str(worker_terminal.get("status") or "failed")
         if terminal_status not in {"succeeded", "partial", "failed", "cancelled"}:
@@ -603,6 +652,63 @@ class QELongTrendPhase2Service:
             "artifact_manifest_sha256": manifest["artifact_manifest_sha256"],
             "control_row_version": updated["row_version"],
         }
+
+    async def _await_with_lease_heartbeat(
+        self,
+        *,
+        lease: QELongTrendControlLease,
+        awaitable: Awaitable[_T],
+    ) -> _T:
+        stop_heartbeat = asyncio.Event()
+
+        async def heartbeat() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(
+                        stop_heartbeat.wait(),
+                        timeout=COLLECT_LEASE_HEARTBEAT_SECONDS,
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.control_repository.renew_lease,
+                            lease,
+                            lease_seconds=COLLECT_LEASE_SECONDS,
+                        ),
+                        timeout=COLLECT_LEASE_RENEW_TIMEOUT_SECONDS,
+                    )
+
+        work_task = asyncio.create_task(awaitable, name=f"qelt-collect-{lease.evaluation_id}")
+        heartbeat_task = asyncio.create_task(
+            heartbeat(),
+            name=f"qelt-lease-heartbeat-{lease.evaluation_id}",
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {work_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                heartbeat_error = heartbeat_task.exception()
+                if heartbeat_error is None:
+                    raise QELongTrendPhase2Error(
+                        "control lease heartbeat stopped before artifact collection completed",
+                        reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+                    )
+                raise QELongTrendPhase2Error(
+                    f"control lease heartbeat failed: {type(heartbeat_error).__name__}: {heartbeat_error}",
+                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+                ) from heartbeat_error
+            result = await work_task
+            stop_heartbeat.set()
+            await heartbeat_task
+            return result
+        finally:
+            stop_heartbeat.set()
+            if not work_task.done():
+                work_task.cancel()
+            await asyncio.gather(work_task, heartbeat_task, return_exceptions=True)
 
     async def _publish_remote_artifacts(
         self,
@@ -640,7 +746,8 @@ class QELongTrendPhase2Service:
                 )
                 files[artifact_type] = target
             worker_terminal = _read_json(files["worker_terminal_receipt"])
-            manifest = store.publish(
+            manifest = await asyncio.to_thread(
+                store.publish,
                 evaluation_id=evaluation_id,
                 worker_terminal=worker_terminal,
                 artifact_files=files,
@@ -659,7 +766,8 @@ class QELongTrendPhase2Service:
                     "cas": "published",
                 },
             }
-            published_meta = store.publish_compact_receipt(
+            published_meta = await asyncio.to_thread(
+                store.publish_compact_receipt,
                 evaluation_id=evaluation_id,
                 receipt=published,
             )
@@ -698,11 +806,37 @@ class QELongTrendPhase2Service:
     async def reconcile(self, *, row: Mapping[str, Any], client: QEWorkspaceClient) -> dict[str, Any]:
         evaluation_id = str(row["evaluation_id"])
         row = self.control_repository.bind_available_archive_run(evaluation_id)
+        claimed = self.control_repository.claim(
+            evaluation_id,
+            owner_id=self.owner_id,
+            lease_seconds=COLLECT_LEASE_SECONDS,
+        )
+        return await self._reconcile_claimed(row=claimed, client=client)
+
+    async def _reconcile_claimed(
+        self,
+        *,
+        row: Mapping[str, Any],
+        client: QEWorkspaceClient,
+    ) -> dict[str, Any]:
+        evaluation_id = str(row["evaluation_id"])
         task_id = str(row["parent_task_id"])
         loop_index = int(row["parent_loop_index"])
         if not row.get("job_id") and row.get("status") in {"queued", "submitting", "remote_state_unknown"}:
             request = dict(row.get("request_json") or {})
             if request.get("schema_version") != "qe_long_trend_job_request_v1":
+                lease = self.control_repository.lease_from(row)
+                self.control_repository.transition(
+                    lease,
+                    expected_statuses=(str(row["status"]),),
+                    updates={
+                        "platform_delivery_status_json": {
+                            "worker": "not_submitted",
+                            "cas": "awaiting_data",
+                        }
+                    },
+                    release_owner=True,
+                )
                 return {"status": "awaiting_data", "evaluation_id": evaluation_id}
             token = self.secret_store.load(
                 evaluation_id,
@@ -723,6 +857,7 @@ class QELongTrendPhase2Service:
                 task_id=task_id,
                 loop_index=loop_index,
                 client=client,
+                _claimed_row=row,
             )
             return {"status": receipt.status if receipt else "awaiting_data", "evaluation_id": evaluation_id}
         inspection = await self.inspect(
@@ -737,30 +872,93 @@ class QELongTrendPhase2Service:
                 task_id=task_id,
                 loop_index=loop_index,
                 client=client,
+                _claimed_row=row,
             )
+        lease = self.control_repository.lease_from(row)
+        local_status = "running" if inspection.status == "running" else "submitted"
+        self.control_repository.transition(
+            lease,
+            expected_statuses=(str(row["status"]),),
+            updates={
+                "status": local_status,
+                "current_attempt_id": inspection.current_attempt_id,
+                "platform_delivery_status_json": {
+                    "worker": inspection.status,
+                    "cas": "awaiting_worker",
+                },
+                "reason_code": None,
+                "reason_json": {},
+            },
+            release_owner=True,
+        )
         return {"status": inspection.status, "evaluation_id": evaluation_id}
 
     async def reconcile_nonterminal(self, *, limit: int = 100) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for row in self.control_repository.list_nonterminal(limit=limit):
             try:
-                async with QEWorkspaceClient.for_node(str(row["node_id"])) as client:
-                    results.append(await self.reconcile(row=row, client=client))
+                bound = self.control_repository.bind_available_archive_run(str(row["evaluation_id"]))
+                claimed = self.control_repository.claim(
+                    str(bound["evaluation_id"]),
+                    owner_id=self.owner_id,
+                    lease_seconds=COLLECT_LEASE_SECONDS,
+                )
+                async with QEWorkspaceClient.for_node(str(claimed["node_id"])) as client:
+                    results.append(await self._reconcile_claimed(row=claimed, client=client))
             except QELongTrendWorkspaceError as exc:
+                recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 if exc.reason_code != QELongTrendReason.NODE_STATE_UNKNOWN.value:
-                    results.append({"evaluation_id": row["evaluation_id"], "status": "platform_error", "reason_code": exc.reason_code})
+                    results.append({"evaluation_id": row["evaluation_id"], "status": "platform_error", "reason_code": exc.reason_code, **recovery})
                 else:
-                    results.append({"evaluation_id": row["evaluation_id"], "status": "remote_state_unknown"})
+                    results.append({"evaluation_id": row["evaluation_id"], "status": "remote_state_unknown", **recovery})
             except Exception as exc:
+                recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 results.append(
                     {
                         "evaluation_id": row["evaluation_id"],
                         "status": "platform_error",
                         "reason_code": getattr(exc, "reason_code", type(exc).__name__),
                         "message": str(exc),
+                        **recovery,
                     }
                 )
         return results
+
+    def _persist_reconcile_failure(self, evaluation_id: str, exc: BaseException) -> dict[str, Any]:
+        try:
+            current = self.control_repository.get(evaluation_id)
+            if current is None or str(current.get("owner_id") or "") != self.owner_id:
+                return {"recovery_persisted": False, "recovery_persist_reason": "lease_not_owned"}
+            lease = self.control_repository.lease_from(current)
+            reason_code = str(
+                getattr(exc, "reason_code", None)
+                or QELongTrendReason.NODE_STATE_UNKNOWN.value
+            )
+            self.control_repository.transition(
+                lease,
+                expected_statuses=(str(current["status"]),),
+                updates={
+                    "status": "remote_state_unknown",
+                    "reason_code": reason_code,
+                    "reason_json": {
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "recovery": "continuous_reconcile_retry",
+                    },
+                    "platform_delivery_status_json": {
+                        "worker": "remote_state_unknown",
+                        "cas": "reconcile_retry_pending",
+                    },
+                },
+                release_owner=True,
+            )
+            return {"recovery_persisted": True}
+        except Exception as persist_exc:
+            return {
+                "recovery_persisted": False,
+                "recovery_persist_reason": type(persist_exc).__name__,
+                "recovery_persist_message": str(persist_exc),
+            }
 
     def _request_payload(self, **values: Any) -> dict[str, Any]:
         inventory: RecorderArtifactInventory = values["inventory"]
@@ -1053,6 +1251,34 @@ def _require_frozen_identity(
             reason_code=QELongTrendReason.EXECUTION_ENVIRONMENT_MISMATCH.value,
             context={"frozen": actual, "current": expected},
         )
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if path.stat().st_size == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -2066,7 +2066,7 @@ class QEWorkspaceClient:
         digest = hashlib.sha256()
         size = 0
         try:
-            async with self.client.stream("GET", url, timeout=None) as response:
+            async with self.client.stream("GET", url) as response:
                 response.raise_for_status()
                 async with aiofiles.open(tmp, "wb") as handle:
                     async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
@@ -2091,6 +2091,9 @@ class QEWorkspaceClient:
             await self._durable_replace_stream(tmp, target)
             return {"path": str(target), "sha256": actual_sha, "size_bytes": size}
         except QELongTrendWorkspaceError:
+            tmp.unlink(missing_ok=True)
+            raise
+        except asyncio.CancelledError:
             tmp.unlink(missing_ok=True)
             raise
         except httpx.HTTPError as exc:
