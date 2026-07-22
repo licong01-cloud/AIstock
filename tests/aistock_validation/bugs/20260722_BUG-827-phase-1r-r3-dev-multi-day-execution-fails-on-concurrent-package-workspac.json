@@ -1,5 +1,5 @@
 {
-  "actual": "Both first days became RETRYABLE_FAILED; batch reconciliation violated advisory_historical_range_batch_check21; retryable operation failed typed readback because fencing_token remained; package-owned factor assets raced during concurrent materialization.",
+  "actual": "Both first days became RETRYABLE_FAILED; batch reconciliation violated advisory_historical_range_batch_check21; retryable operation failed typed readback because fencing_token remained; package-owned factor assets raced during concurrent materialization. After the initial fixes, resuming the preserved 13-day DEV batch still failed because claim_next_day changed a RETRYABLE_FAILED day to RUNNING without refreshing the run child aggregate in the same transaction, causing ADVISORY_HISTORICAL_RANGE_RUN_CHILD_AGGREGATE_INVALID. After that constraint failure was repaired, HistoricalRangeSourceInputUnavailable was still persisted as ADVISORY_HR_DAY_UNCLASSIFIED_FAILURE/RETRYABLE_FAILED instead of preserving its source reason as WAITING_INPUT.",
   "allowed_write_scope": [
     "backend/services/advisory_historical_range/repository.py",
     "backend/services/strategy_package/live_inference.py",
@@ -27,20 +27,32 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-22T07:48:44.001551Z",
-  "description": "Both first days became RETRYABLE_FAILED; batch reconciliation violated advisory_historical_range_batch_check21; retryable operation failed typed readback because fencing_token remained; package-owned factor assets raced during concurrent materialization.",
+  "description": "The real multi-day DEV flow exposed package workspace races, invalid terminal state persistence, and a retry-resume aggregate mismatch. The preserved 13-day batch reproduced the remaining mismatch when claim_next_day transitioned a retryable day without synchronizing the parent run aggregate before commit.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260722-f9e58df04c4d",
       "timestamp": "2026-07-22T07:48:44.001542Z"
+    },
+    {
+      "action": "reproduce_remaining_retry_resume_failure",
+      "actor": "codex",
+      "note": "Formal resume of ahrb_f925f1b84ee19aa8e3f0bc67afd9d568 failed at claim_next_day with ADVISORY_HISTORICAL_RANGE_RUN_CHILD_AGGREGATE_INVALID; repository did not refresh the run aggregate after changing the retryable day state.",
+      "timestamp": "2026-07-22T16:04:19.2132541Z"
+    },
+    {
+      "action": "verify_retry_resume_and_visible_source_wait",
+      "actor": "codex",
+      "note": "After the repository and classifier fixes, formal resume reached WAITING_INPUT for both Programs with ADVISORY_HR_SOURCE_REVISION_MISMATCH; current DEV PIT spans do not cover the frozen 2026-06-16 to 2026-07-03 range.",
+      "timestamp": "2026-07-22T16:10:47.8086780Z"
     }
   ],
   "evidence_uris": [
     "F:\\Dev\\AIstock_artifacts\\advisory_phase1r_dev_validation_20260722\\r3-multiday-v1",
     "F:\\Dev\\AIstock_artifacts\\advisory_phase1r_dev_validation_20260722\\r3-multiday-v6"
   ],
-  "expected": "A sealed historical batch can prefetch two days per Program without package workspace races; retryable/waiting states persist valid batch and operation identities; domain error reason/context remains visible.",
+  "expected": "A sealed historical batch can prefetch and execute multiple days per Program without package workspace races; retryable/waiting states persist valid batch, run, day and operation aggregates; formal resume can reclaim a retryable day without violating child aggregate constraints; domain error reason/context remains visible.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -182,7 +194,7 @@
   "fixed_at": null,
   "github_issue_number": 2621,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2621",
-  "last_seen_at": "2026-07-22T07:48:44.001551Z",
+  "last_seen_at": "2026-07-22T16:10:47.8086780Z",
   "module": "advisory_historical_range",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
