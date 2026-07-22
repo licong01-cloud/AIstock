@@ -507,16 +507,6 @@ def hmm_evolution_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
-def hmm_risk_ui(session: nox.Session) -> None:
-    """Run only the HMM Risk frontend contract when Slice 3 owns UI files."""
-
-    target = ROOT / "frontend" / "tests" / "hmm-risk"
-    if not target.exists():
-        session.skip("frontend/tests/hmm-risk is introduced by HMM Risk Slice 3")
-    _run_mocked_frontend_target(session, "tests/hmm-risk")
-
-
-@nox.session(venv_backend="none")
 def watchlist_ui(session: nox.Session) -> None:
     """Run only the Watchlist mocked UI contract."""
 
