@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v2.8
+> **版本**: v2.9
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-22
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活：2026-07-22 收官验收覆盖 benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 performance receipt、真实 UI/Playwright 18 场景（8011/3011，无 mock）、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout）；同日经独立授权完成 `hmm_evolution_v3` production 单事务 DDL、exact verify 与 worker restart。Gate truth：`hmm_evolution_v1/v2/v3` production `applied_and_verified`；`production_ddl_gate=applied_verified`、`production_runtime_activation_gate=applied_verified`、dependency gates `noop`（§13）
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活：2026-07-22 收官验收覆盖 benchmark purpose 隔离下 zerocopy 1c/10c 与 fallback（Loop1 + h10 spec，用户裁决）cold/warm 全 matrix 分阶段 performance receipt、真实 UI/Playwright 18 场景（8011/3011，无 mock）、worker 31.6 分钟 bounded soak（idle/claim/success/failure/retry/timeout）；同日经独立授权完成 `hmm_evolution_v3` production 单事务 DDL、exact verify 与 worker restart。Phase 2 独立 F2 实现级详细设计已完成并通过 validator，状态 `DESIGN_READY`；Phase 2 源码、DDL、API/UI、job/runtime 仍未实施。Gate truth：`hmm_evolution_v1/v2/v3` production `applied_and_verified`；`production_ddl_gate=applied_verified`、`production_runtime_activation_gate=applied_verified`、dependency gates `noop`（§13）
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -338,11 +338,12 @@ POST /api/v1/hmm-evolution/batches/{batch_id}/retry-failed
 
 **目标**: 按最新完成交易日生成可解释风险预警和板块状态视图，不接入任何交易决策。
 
-**实现前置（未完成，不得直接编码）**：Phase 2 必须先形成独立 F2 实现级详细设计，明确唯一的
-versioned sector-state generator、候选/系数身份、行情与行业映射共同水位、freshness/revision/dedupe
-contract、迟到数据重算以及 `scripts/precompute_hmm_risk_gate.py` 与现有只读 gate loader 的迁移/退役关系。
-当前 `hmm_risk_gate.py` 只读取预计算 gate，不能被误报为日度 state generator。该前置不新增产品审批流，
-只是防止在计算权威未定义时开发静态热力图、重复计算路径或 silent neutral fallback。
+**实现前置（设计已完成，源码未实施）**：独立 F2 实现级详细设计
+`docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md` 已明确唯一的
+versioned sector-state generator、候选/模型/系数身份、行情与行业映射共同水位、freshness/revision/dedupe
+contract、迟到数据重算以及 `scripts/precompute_hmm_risk_gate.py` 与现有只读 gate loader 的迁移/退役关系，
+并通过 F2 validator。当前 `hmm_risk_gate.py` 仍只读取预计算 gate，不能被误报为日度 state generator；
+设计完成不等于 schema/backend/API/UI/runtime 已交付。
 
 **数据库 Schema**:
 ```sql
@@ -878,7 +879,7 @@ docs/
    BUG-788、BUG-798、BUG-800 和 BUG-804 补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据、
    逐日状态、内容校验重放和 pre-ST-PIT allowlisted compatibility；F-007/F-009 已验证。
 6. **P1-C API/UI（外部验收已完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；schema v2 worker、10-case、10/9 候选性能、进程中断 fail-closed 与显式 retry receipt 已完成；2026-07-22 严格冷热缓存分段 timing/RSS benchmark matrix、真实 UI/Playwright 18 场景与 worker bounded soak 全部完成（Phase 1 详细设计 §17.4.6）。
-7. **P2 风险分析**：依次交付 F-011/F-012/F-013；不得触碰交易 provider 接线。
+7. **P2 风险分析**：独立 F2 实现级详细设计已完成；下一步按 Slice 0→3 依次交付 F-011/F-012/F-013，不得触碰交易 provider 接线。
 8. **P3 研究训练**：先交付 F-014；F-015 自动调度部分等待独立语义批准。
 
 每个实现 PR 只承担一个可验证子集，并在 PR body 中列设计项、实现引用、验证证据、生产门禁与未批准缺口。Phase 0 BUG 修复走 issue workflow；Phase 1-3 新能力走 feature workflow。
@@ -921,9 +922,9 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | Phase 2 独立 F2 详细设计目标：versioned state generator + alert state machine | `backend/tests/hmm_risk/test_state_generator.py`、`backend/tests/hmm_risk/test_alert_state_machine.py`（目标路径，PR 实现前不得标完成） | approved_by_user_for_implementation | 先完成唯一计算权威、watermark/dedupe/revision/freshness 详细设计 |
-| F-012 | Phase 2 advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | approved_by_user_for_implementation | 实现证据由 Phase 2 PR 回填 |
-| F-013 | 本文 §2.2/Phase 2 UI 契约；risk evidence/report + `/hmm-risk` 默认首页 | `frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：L1/L2/7 日 heatmap、固定详情、预警、renderer/error） | approved_by_user_for_implementation | Phase 2 F2 设计与真实 API/UI 未完成；不新增交易 heat score |
+| F-011 | Phase 2 F2 详细设计 §4～§9：versioned state generator + alert state machine | `backend/tests/hmm_risk/test_state_generator.py`、`backend/tests/hmm_risk/test_alert_state_machine.py`（目标路径，PR 实现前不得标完成） | design_ready | 源码与结果证据由 Phase 2 implementation PR 回填 |
+| F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | design_ready | 源码与结果证据由 Phase 2 implementation PR 回填 |
+| F-013 | Phase 2 F2 详细设计 §9～§11：risk evidence/report + `/hmm-risk` 默认首页 | `frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：L1/L2/7 日 heatmap、固定详情、预警、renderer/error） | design_ready | 真实 API/UI 尚未实施；不新增交易 heat score |
 | F-014 | 本文 Phase 3 UI/隔离契约；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径） | approved_by_user_for_implementation | 实现证据由 Phase 3 PR 回填 |
 | F-015 | manual-first scheduler contract | `backend/tests/hmm_training/test_scheduler_contract.py`（目标路径：ownership/misfire/reentry/disable） | approved_by_user_for_implementation | 自动调度实现仍需独立用户批准 |
 | F-016 | 全阶段 isolation guard | `tests/aistock_validation/test_hmm_evolution_isolation.py`（目标路径：scope/production-gate/side-effect） | approved_by_user_for_implementation | 实现证据由各阶段 PR 回填 |
@@ -979,6 +980,7 @@ validator；这是防止简化版和业务语义偏移的设计完整性要求�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.9 | 2026-07-22 | 完成 Phase 2 独立 F2 实现级详细设计并通过 feature validator：固化唯一 state generator、candidate/model/input identity、共同水位、PIT mapping、L2 direct/L1 derived posterior、revision/dedupe/late-data cascade、durable job、advisory-only isolation、真实 API/UI/report、legacy v1 migration 与四个 implementation slices；F-011/F-012/F-013 更新为 `design_ready`，但源码、DDL、UI、runtime 仍未实施。 |
 | v2.8 | 2026-07-22 | 回填 production v3 activation receipt：经精确授权完成 `hmm_evolution_v3` 单事务 DDL 与独立 exact verify，17 candidate、97 evaluation、53 batch、98 item 的受保护内容摘要不变；随后经独立授权重启 HMM worker，durable `/workers` 状态为 healthy/running、连续失败 0、活动 batch 0。将 `production_ddl_gate` 与 `production_runtime_activation_gate` 分别更新为 `applied_verified`；dependency gates 保持 `noop`，Phase 2/3 与 QE/Paper 接入仍未启用。 |
 | v2.7 | 2026-07-22 | 按只读复核 NEED-FIX 修正 §13 gate truth：`hmm_evolution_v1/v2` production `applied_and_verified` 保留为历史事实；明确 `hmm_evolution_v3`（execution_purpose/benchmark_id 列、performance_receipt、worker_runtime_status）DEV `applied_and_verified`、production `pending`（未授权、未执行）；`production_ddl_gate=pending`、`production_runtime_activation_gate=pending`、dependency gates `noop`；登记代码合入≠生产 DDL 已执行≠生产 runtime 已加载 v3，v3 生产 DDL 须单独获得 `GO PRODUCTION DDL HMM EVOLUTION V3`。 |
 | v2.6 | 2026-07-22 | 回填 Phase 1 收官外部验收（详细设计 §17.4.6）：登记用户"Loop1 + h10 spec"fallback 裁决；zerocopy 1c/10c 与 fallback cold/warm 全 benchmark matrix（分阶段 timing/peak RSS/cache evidence/result_hash 确定性）；真实 UI/Playwright 18 场景全过；worker 31.6 分钟 bounded soak 六类事件；F-008/F-010/F-010A 标记 verified，Phase 1（F-006～F-010A）全部 verified。 |
