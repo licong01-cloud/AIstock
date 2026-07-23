@@ -24,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260723-22105de49157",
       "timestamp": "2026-07-23T05:02:24.871745Z"
+    },
+    {
+      "action": "fix_commit_recorded",
+      "actor": "Codex",
+      "note": "Commit 47c4f02905ee5ce8c5281b03a7cd046153f4c1ca atomically requeues only definitive QELT_BUNDLE_INVALID pre-job failures with no remote or resource-event evidence. Targeted matrix: 34 passed; l0 and validation_module_registry_l0 passed.",
+      "timestamp": "2026-07-23T05:18:30.805531Z"
     }
   ],
   "evidence_uris": [
@@ -117,8 +123,8 @@
     ]
   },
   "first_seen_at": "2026-07-23T05:02:24.871751Z",
-  "fix_branch": null,
-  "fix_commit": null,
+  "fix_branch": "bug/BUG-838-f-014-pre-job-terminal-failure-cannot-resume-det-20260723",
+  "fix_commit": "47c4f02905ee5ce8c5281b03a7cd046153f4c1ca",
   "fixed_at": null,
   "github_issue_number": 2652,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2652",
@@ -138,7 +144,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -192,7 +198,7 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "verification_run_id": null,
+  "verification_run_id": "local-20260723-bug838-qe-long-trend-prejob-recovery",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
