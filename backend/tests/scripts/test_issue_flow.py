@@ -813,6 +813,7 @@ def test_pr_check_p1_evidence_gate_passes_with_evidence(
         "scope_passed": True,
         "validation_evidence": True,
         "production_gates": True,
+        "production_gate_consistency": True,
     }
 
 
@@ -871,6 +872,7 @@ def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
         "scope_passed": True,
         "validation_evidence": True,
         "production_gates": True,
+        "production_gate_consistency": True,
     }
 
 
@@ -1112,7 +1114,11 @@ def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     dedicated_steps = semgrep_workflow["jobs"]["semgrep"]["steps"]
     run_step = next(step for step in dedicated_steps if step.get("name") == "Run Semgrep")
     run = str(run_step["run"])
-    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "python scripts/ci_changed_files.py" in run
+    assert '--base-ref "${BASE_REF}"' in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--head-sha "${HEAD_SHA}"' in run
+    assert "--diff-filter ACMRT" in run
     assert "tmp/validation/semgrep/semgrep_changed_files.txt" in run
     assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
@@ -1189,8 +1195,11 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert len(semgrep_steps) == 1
 
     run = str(semgrep_steps[0]["run"])
-    assert "git diff --name-only --diff-filter=ACMRT" in run
-    assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRT" in run
+    assert "python scripts/ci_changed_files.py" in run
+    assert '--base-ref "${BASE_REF}"' in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--head-sha "${HEAD_SHA}"' in run
+    assert "--diff-filter ACMRT" in run
     assert "semgrep_changed_files.txt" in run
     assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
@@ -1203,7 +1212,11 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 
-    assert 'git diff --name-only --diff-filter=ACMRT "$base_sha...$HEAD_SHA"' in runs
+    assert "python scripts/ci_changed_files.py" in runs
+    assert '--base-ref "${BASE_REF}"' in runs
+    assert '--base-sha "${BASE_SHA}"' in runs
+    assert '--head-sha "${HEAD_SHA}"' in runs
+    assert "--diff-filter ACMRT" in runs
     assert 'selection_args+=(--changed-file "$file")' in runs
     assert "--changed-file requirements.txt" not in runs
     assert 'python -m pip install --dry-run -r "$file"' in runs

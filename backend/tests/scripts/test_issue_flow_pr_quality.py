@@ -14,6 +14,18 @@ def _write_bug_record(root: Path, payload: dict[str, object]) -> str:
     return rel_path
 
 
+def _validation_receipt() -> dict[str, str]:
+    return {
+        "schema_version": "aistock_validation_receipt_v1",
+        "receipt_id": "0123456789abcdef",
+        "commit": "abcdef0",
+        "evidence_kind": "pytest",
+        "status": "passed",
+        "command": "pytest targeted_test.py -q",
+        "result": "1 passed",
+    }
+
+
 def test_large_feature_pr_infers_non_t0_tier_and_complexity_scope(monkeypatch) -> None:
     monkeypatch.setenv("AISTOCK_PR_TITLE", "feat(qe): support runtime-first pending tasks")
     monkeypatch.setenv(
@@ -112,6 +124,113 @@ def test_p0p1_gate_still_blocks_real_bug_json_fix_without_evidence(
     assert gate["high_risk_evidence"]["changed_bug_json"] is True
     assert "validation_evidence" in gate["blocking"]
     assert "production_gates" in gate["blocking"]
+
+
+def test_p0p1_gate_blocks_bug_gate_that_conflicts_with_migration_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_rel_path = _write_bug_record(
+        tmp_path,
+        {
+            "bug_id": "BUG-700",
+            "github_issue_number": 1700,
+            "severity": "P1",
+            "module": "validation",
+            "allowed_write_scope": ["backend/db/migrations/example.sql", "tests/aistock_validation/bugs/**"],
+            "validation_evidence": [_validation_receipt()],
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    )
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix(validation): enforce production gate consistency")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Closes #1700")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-700 P1")
+
+    summary = flow.build_pr_quality(
+        base="origin/main",
+        head="HEAD",
+        changed_files=["backend/db/migrations/example.sql", bug_rel_path],
+        enforce_p0_p1_evidence=True,
+    )
+
+    consistency = summary["production_gate_consistency"]
+    assert consistency["workflow_gate"] == "blocked"
+    assert consistency["mismatches"] == [
+        {
+            "bug_id": "BUG-700",
+            "field": "production_ddl_gate",
+            "derived": "required",
+            "recorded": "noop",
+        }
+    ]
+    assert "production_gate_consistency" in summary["p0p1_evidence_gate"]["blocking"]
+
+
+def test_p0p1_gate_accepts_pending_gate_for_migration_change(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_rel_path = _write_bug_record(
+        tmp_path,
+        {
+            "bug_id": "BUG-700",
+            "github_issue_number": 1700,
+            "severity": "P1",
+            "module": "validation",
+            "allowed_write_scope": ["backend/db/migrations/example.sql", "tests/aistock_validation/bugs/**"],
+            "validation_evidence": [_validation_receipt()],
+            "production_ddl_gate": "pending",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    )
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix(validation): preserve pending production gate")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Closes #1700")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-700 P1")
+
+    summary = flow.build_pr_quality(
+        base="origin/main",
+        head="HEAD",
+        changed_files=["backend/db/migrations/example.sql", bug_rel_path],
+        enforce_p0_p1_evidence=True,
+    )
+
+    assert summary["production_gate_consistency"]["workflow_gate"] == "passed"
+    assert summary["production_gate_consistency"]["mismatches"] == []
+    assert summary["p0p1_evidence_gate"]["workflow_gate"] == "passed"
+
+
+def test_close_sync_metadata_does_not_rederive_source_pr_production_gate(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_rel_path = _write_bug_record(
+        tmp_path,
+        {
+            "bug_id": "BUG-700",
+            "github_issue_number": 1700,
+            "severity": "P1",
+            "module": "validation",
+            "status": "fixed",
+            "allowed_write_scope": ["tests/aistock_validation/bugs/**"],
+            "validation_evidence": [_validation_receipt()],
+            "production_ddl_gate": "pending",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    )
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "chore(issue): close-sync BUG-700")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Persist fixed metadata after the source PR merge.")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "close-sync BUG-700")
+
+    summary = flow.build_pr_quality(
+        base="origin/main",
+        head="HEAD",
+        changed_files=[bug_rel_path],
+        enforce_p0_p1_evidence=True,
+    )
+
+    assert summary["production_gate_consistency"]["workflow_gate"] == "not_applicable"
+    assert summary["p0p1_evidence_gate"]["workflow_gate"] == "passed"
 
 
 def test_p0p1_gate_still_blocks_closing_bug_issue_without_evidence(
