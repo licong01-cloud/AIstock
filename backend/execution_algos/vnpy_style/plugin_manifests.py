@@ -52,8 +52,6 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginCreationBindingV1,
     PluginProcessBindingsV2,
     PluginRegistrationDescriptorV2,
-    callable_ref_v1,
-    callable_signature_sha256_v1,
 )
 
 from .attribution import (
@@ -93,25 +91,43 @@ _ALGO_FACTS = MappingProxyType(
     {
         "BEST_LIMIT_MINIQMT": (
             "aistock.vnpy.best_limit",
-            BestLimitMiniQMTCore,
+            "backend.execution_algos.vnpy_style.best_limit_core:BestLimitMiniQMTCore",
+            "2e69ca1b505dcdd6f75728f1a61d38ccbb2a71fcfdd4776986fd8b3bbefcd3f7",
             "best_limit_state_v2",
             "vnpy_algotrading/algos/best_limit_algo.py",
             "backend/execution_algos/vnpy_style/best_limit_core.py",
         ),
         "SNIPER_MINIQMT": (
             "aistock.vnpy.sniper",
-            SniperMiniQMTCore,
+            "backend.execution_algos.vnpy_style.sniper_core:SniperMiniQMTCore",
+            "c89e8de34dd0b3f5814354003db9fa335c1d8a6a14dfc0a928c44053ec374b9f",
             "sniper_state_v2",
             "vnpy_algotrading/algos/sniper_algo.py",
             "backend/execution_algos/vnpy_style/sniper_core.py",
         ),
         "TWAP_LITE_MINIQMT": (
             "aistock.vnpy.twap_lite",
-            TwapLiteMiniQMTCore,
+            "backend.execution_algos.vnpy_style.twap_lite_core:TwapLiteMiniQMTCore",
+            "c89e8de34dd0b3f5814354003db9fa335c1d8a6a14dfc0a928c44053ec374b9f",
             "twap_lite_state_v2",
             "vnpy_algotrading/algos/twap_algo.py",
             "backend/execution_algos/vnpy_style/twap_lite_core.py",
         ),
+    }
+)
+_PROCESS_FACTORIES = MappingProxyType(
+    {
+        "BEST_LIMIT_MINIQMT": BestLimitMiniQMTCore,
+        "SNIPER_MINIQMT": SniperMiniQMTCore,
+        "TWAP_LITE_MINIQMT": TwapLiteMiniQMTCore,
+    }
+)
+_PROCESS_VALIDATOR_FACTS = MappingProxyType(
+    {
+        "config_validator_ref": "backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_config_v2",
+        "config_validator_signature_sha256": "487a83b73a7d94a2d0ee6e43fb00b0337ab928fdf7bddcb54098db8c626daa58",
+        "state_codec_ref": "backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_state_v2",
+        "state_codec_signature_sha256": "487a83b73a7d94a2d0ee6e43fb00b0337ab928fdf7bddcb54098db8c626daa58",
     }
 )
 
@@ -408,7 +424,7 @@ def _file_hash(path: str) -> FileHashV1:
 
 
 def _source_attribution(algo_code: str) -> SourceAttributionV1:
-    _, _, _, upstream_algo_path, core_path = _ALGO_FACTS[algo_code]
+    _, _, _, _, upstream_algo_path, core_path = _ALGO_FACTS[algo_code]
     upstream_files = tuple(
         FileHashV1(path=path, sha256=_UPSTREAM_HASHES[path])
         for path in sorted(
@@ -449,7 +465,7 @@ def _source_attribution(algo_code: str) -> SourceAttributionV1:
 
 
 def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> VnpyCompatibilityRequirementV1:
-    _, _, _, upstream_algo_path, _ = _ALGO_FACTS[algo_code]
+    _, _, _, _, upstream_algo_path, _ = _ALGO_FACTS[algo_code]
     source_files = tuple(
         FileHashV1(path=path, sha256=_UPSTREAM_HASHES[path])
         for path in sorted(
@@ -570,7 +586,7 @@ def _market_requirements(algo_code: str) -> tuple[MarketDataRequirementV1, ...]:
 
 
 def _manifest(algo_code: str) -> ExecutionAlgoPluginManifestV2:
-    plugin_id, factory, state_version, _, _ = _ALGO_FACTS[algo_code]
+    plugin_id, implementation_ref, _, state_version, _, _ = _ALGO_FACTS[algo_code]
     config_schema = _config_schema(algo_code)
     state_schema = _state_schema(algo_code)
     characterization = thaw_json_v1(CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2)[algo_code]
@@ -624,7 +640,7 @@ def _manifest(algo_code: str) -> ExecutionAlgoPluginManifestV2:
         "algo_code": algo_code,
         "plugin_version": _PLUGIN_VERSION,
         "provider": PluginProviderV2.AISTOCK_DERIVED.value,
-        "implementation_ref": callable_ref_v1(factory),
+        "implementation_ref": implementation_ref,
         "config_schema_version": f"{algo_code.lower()}_config_v2",
         "config_schema": config_schema,
         "config_schema_sha256": hash_hex_v1("miniqmt_plugin_config_schema_v1", config_schema),
@@ -932,21 +948,21 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
 def current_three_descriptors_v2() -> tuple[PluginRegistrationDescriptorV2, ...]:
     descriptors = []
     for manifest in current_three_manifests_v2():
-        _, factory, _, _, _ = _ALGO_FACTS[manifest.algo_code]
+        _, implementation_ref, factory_signature_sha256, _, _, _ = _ALGO_FACTS[manifest.algo_code]
         prefix = manifest.plugin_id
         descriptors.append(
             PluginRegistrationDescriptorV2(
                 schema_version="plugin_registration_descriptor_v2",
                 manifest=manifest,
                 factory_binding_id=f"{prefix}.factory",
-                factory_callable_ref=callable_ref_v1(factory),
-                factory_signature_sha256=callable_signature_sha256_v1(factory),
+                factory_callable_ref=implementation_ref,
+                factory_signature_sha256=factory_signature_sha256,
                 config_validator_binding_id=f"{prefix}.config_validator",
-                config_validator_callable_ref=callable_ref_v1(validate_current_three_config_v2),
-                config_validator_signature_sha256=callable_signature_sha256_v1(validate_current_three_config_v2),
+                config_validator_callable_ref=_PROCESS_VALIDATOR_FACTS["config_validator_ref"],
+                config_validator_signature_sha256=_PROCESS_VALIDATOR_FACTS["config_validator_signature_sha256"],
                 state_codec_binding_id=f"{prefix}.state_codec",
-                state_codec_callable_ref=callable_ref_v1(validate_current_three_state_v2),
-                state_codec_signature_sha256=callable_signature_sha256_v1(validate_current_three_state_v2),
+                state_codec_callable_ref=_PROCESS_VALIDATOR_FACTS["state_codec_ref"],
+                state_codec_signature_sha256=_PROCESS_VALIDATOR_FACTS["state_codec_signature_sha256"],
             )
         )
     return tuple(descriptors)
@@ -962,9 +978,8 @@ def current_three_creation_bindings_v1() -> tuple[PluginCreationBindingV1, ...]:
 def current_three_process_bindings_v2() -> PluginProcessBindingsV2:
     bindings: dict[str, Any] = {}
     for manifest in current_three_manifests_v2():
-        _, factory, _, _, _ = _ALGO_FACTS[manifest.algo_code]
         prefix = manifest.plugin_id
-        bindings[f"{prefix}.factory"] = factory
+        bindings[f"{prefix}.factory"] = _PROCESS_FACTORIES[manifest.algo_code]
         bindings[f"{prefix}.config_validator"] = validate_current_three_config_v2
         bindings[f"{prefix}.state_codec"] = validate_current_three_state_v2
     return PluginProcessBindingsV2(bindings)

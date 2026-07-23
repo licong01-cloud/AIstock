@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from backend.execution_algos.vnpy_style import plugin_manifests as manifest_module
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     current_three_creation_bindings_v1,
     current_three_descriptors_v2,
@@ -17,7 +19,9 @@ from backend.execution_algos.vnpy_style.plugin_manifests import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_json_bytes_v1,
+    freeze_json_v1,
     hash_hex_v1,
+    json_safe_evidence_v1,
     thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -36,6 +40,8 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginCatalogSnapshotV1,
     PluginCreationBindingV1,
     PluginKeyV1,
+    PluginRouteCompatibilityFailureV1,
+    PluginRouteCompatibilityReceiptV1,
     VnpyCompatibilityFailureV1,
     VnpyCompatibilityReceiptV1,
     build_plugin_catalog_v2,
@@ -92,16 +98,24 @@ def _gateway(
     *,
     quote_source: str = "B0_QUOTE_V2",
     exact_order_id_cancel: bool = True,
+    route_id: str = "route.sim.primary",
+    gateway_backend: str = "minqmt_sim",
+    order_types: tuple[OrderTypeV1, ...] = (OrderTypeV1.LIMIT,),
+    session_phases: tuple[SessionPhaseV1, ...] = (
+        SessionPhaseV1.CONTINUOUS_AM,
+        SessionPhaseV1.CONTINUOUS_PM,
+    ),
+    idempotent_submit_by_client_ref: bool = False,
 ) -> GatewayCapabilityCatalogV1:
     payload = {
         "schema_version": "miniqmt_gateway_capability_catalog_v1",
-        "route_id": "route.sim.primary",
+        "route_id": route_id,
         "quote_source": quote_source,
-        "gateway_backend": "minqmt_sim",
-        "order_types": (OrderTypeV1.LIMIT,),
+        "gateway_backend": gateway_backend,
+        "order_types": order_types,
         "market_data_capabilities": capabilities,
-        "session_phases": (SessionPhaseV1.CONTINUOUS_AM, SessionPhaseV1.CONTINUOUS_PM),
-        "idempotent_submit_by_client_ref": False,
+        "session_phases": session_phases,
+        "idempotent_submit_by_client_ref": idempotent_submit_by_client_ref,
         "exact_order_id_cancel": exact_order_id_cancel,
     }
     payload["catalog_sha256"] = hash_hex_v1(
@@ -112,6 +126,36 @@ def _gateway(
         },
     )
     return GatewayCapabilityCatalogV1(**payload)
+
+
+def _hash_correct_route_receipt(
+    receipt: PluginRouteCompatibilityReceiptV1,
+    **updates: object,
+) -> PluginRouteCompatibilityReceiptV1:
+    candidate = receipt.model_copy(update=updates)
+    return candidate.model_copy(
+        update={
+            "receipt_sha256": hash_hex_v1(
+                "miniqmt_plugin_route_compatibility_receipt_v1",
+                candidate.canonical_payload_v1(exclude={"receipt_sha256"}),
+            )
+        }
+    )
+
+
+def _structural_route_readback(
+    receipt: PluginRouteCompatibilityReceiptV1,
+) -> PluginRouteCompatibilityReceiptV1:
+    return PluginRouteCompatibilityReceiptV1.model_validate(receipt.model_dump(mode="python"), strict=True)
+
+
+def _all_gateway_capabilities() -> tuple[MarketDataCapabilityV1, ...]:
+    return (MarketDataCapabilityV1.L1_BID, MarketDataCapabilityV1.L1_ASK)
+
+
+def _descriptor_for(runtime: object, algo_code: str) -> object:
+    plugin_key = runtime.plugin_key_for_new_instance(algo_code)  # type: ignore[attr-defined]
+    return next(item for item in runtime.snapshot.registration_descriptors if item.plugin_key == plugin_key)  # type: ignore[attr-defined]
 
 
 def test_catalog_snapshot_is_byte_identical_for_all_input_permutations() -> None:
@@ -612,7 +656,7 @@ def test_route_gateway_writer_readback_identity_and_decision_are_exact() -> None
     assert writer_receipt == readback_receipt
 
 
-def test_route_receipt_readback_rejects_incomplete_b0_and_exact_cancel_evaluation() -> None:
+def test_route_receipt_authority_readback_rejects_incomplete_b0_and_exact_cancel_evaluation() -> None:
     runtime = _build()
     gateway = _gateway((MarketDataCapabilityV1.L1_BID, MarketDataCapabilityV1.L1_ASK))
     plugin_key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
@@ -622,25 +666,35 @@ def test_route_receipt_readback_rejects_incomplete_b0_and_exact_cancel_evaluatio
         gateway_catalog=gateway,
     )
 
-    wrong_quote = passed.model_copy(update={"observed_quote_source": "LEGACY_OR_SYNTHETIC"})
-    with pytest.raises(ValueError, match="B0 quote authority"):
-        type(passed).model_validate(wrong_quote.model_dump(mode="python"), strict=True)
+    wrong_quote = _hash_correct_route_receipt(passed, observed_quote_source="LEGACY_OR_SYNTHETIC")
+    with pytest.raises(ValueError, match="authority closure"):
+        _structural_route_readback(wrong_quote).validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=gateway,
+        )
 
-    no_exact_cancel = passed.model_copy(update={"observed_exact_order_id_cancel": False})
-    with pytest.raises(ValueError, match="exact order-id cancellation"):
-        type(passed).model_validate(no_exact_cancel.model_dump(mode="python"), strict=True)
+    no_exact_cancel = _hash_correct_route_receipt(passed, observed_exact_order_id_cancel=False)
+    with pytest.raises(ValueError, match="authority closure"):
+        _structural_route_readback(no_exact_cancel).validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=gateway,
+        )
 
+    failed_gateway = _gateway(
+        (MarketDataCapabilityV1.L1_BID, MarketDataCapabilityV1.L1_ASK),
+        quote_source="LEGACY_OR_SYNTHETIC",
+    )
     failed = evaluate_plugin_route_compatibility_v1(
         catalog_snapshot=runtime.snapshot,
         plugin_key=plugin_key,
-        gateway_catalog=_gateway(
-            (MarketDataCapabilityV1.L1_BID, MarketDataCapabilityV1.L1_ASK),
-            quote_source="LEGACY_OR_SYNTHETIC",
-        ),
+        gateway_catalog=failed_gateway,
     )
-    stale_failure = failed.model_copy(update={"observed_quote_source": "B0_QUOTE_V2"})
-    with pytest.raises(ValueError, match="quote authority fact"):
-        type(failed).model_validate(stale_failure.model_dump(mode="python"), strict=True)
+    stale_failure = _hash_correct_route_receipt(failed, observed_quote_source="B0_QUOTE_V2")
+    with pytest.raises(ValueError, match="authority closure"):
+        _structural_route_readback(stale_failure).validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=failed_gateway,
+        )
 
     failure = failed.ordered_failures[0]
     incomplete_context = thaw_json_v1(failure.context)
@@ -680,3 +734,235 @@ def test_route_failure_isolated_from_catalog_and_other_plugins() -> None:
     assert best.status is CompatibilityStatusV1.PASSED
     assert runtime.snapshot.catalog_sha256 == _build().snapshot.catalog_sha256
     assert type(sniper).model_validate_json(sniper.model_dump_json()) == sniper
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutated_value"),
+    (
+        ("algo_code", "FORGED_ALGO"),
+        ("plugin_manifest_sha256", "1" * 64),
+        ("catalog_sha256", "2" * 64),
+        ("required_order_types", ()),
+        ("supported_order_types", ()),
+        ("required_market_capabilities", freeze_json_v1([])),
+        ("supported_market_capabilities", ()),
+    ),
+)
+def test_route_receipt_authority_rejects_hash_correct_descriptor_and_catalog_drift(
+    field_name: str,
+    mutated_value: object,
+) -> None:
+    runtime = _build()
+    gateway = _gateway(_all_gateway_capabilities())
+    plugin_key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
+    receipt = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=plugin_key,
+        gateway_catalog=gateway,
+    )
+    updates: dict[str, object] = {field_name: mutated_value}
+    if field_name == "plugin_manifest_sha256":
+        updates["plugin_key"] = plugin_key.model_copy(update={"manifest_sha256": mutated_value})
+    tampered = _hash_correct_route_receipt(receipt, **updates)
+
+    structural = _structural_route_readback(tampered)
+    with pytest.raises(ValueError, match="authority|closure") as error:
+        structural.validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=gateway,
+        )
+    json.dumps(error.value.context, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutated_value"),
+    (
+        ("gateway_route_id", "route.forged"),
+        ("gateway_capability_catalog_sha256", "3" * 64),
+        ("observed_quote_source", "LEGACY_OR_SYNTHETIC"),
+        ("observed_gateway_backend", "forged_backend"),
+        ("observed_session_phases", (SessionPhaseV1.CONTINUOUS_AM.value,)),
+        ("observed_exact_order_id_cancel", False),
+        ("observed_idempotent_submit_by_client_ref", True),
+    ),
+)
+def test_route_receipt_authority_rejects_hash_correct_gateway_fact_drift(
+    field_name: str,
+    mutated_value: object,
+) -> None:
+    runtime = _build()
+    gateway = _gateway(_all_gateway_capabilities())
+    receipt = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=runtime.plugin_key_for_new_instance("SNIPER_MINIQMT"),
+        gateway_catalog=gateway,
+    )
+    tampered = _hash_correct_route_receipt(receipt, **{field_name: mutated_value})
+
+    with pytest.raises(ValueError, match="authority|closure") as error:
+        _structural_route_readback(tampered).validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=gateway,
+        )
+    json.dumps(error.value.context, allow_nan=False)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra", "duplicate", "context"))
+def test_route_receipt_authority_rejects_missing_extra_duplicate_or_forged_failures(mutation: str) -> None:
+    runtime = _build()
+    plugin_key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
+    gateway = _gateway((MarketDataCapabilityV1.L1_BID,))
+    failed = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=plugin_key,
+        gateway_catalog=gateway,
+    )
+    assert failed.status is CompatibilityStatusV1.FAILED
+    assert failed.ordered_failures
+
+    if mutation == "missing":
+        failures: tuple[PluginRouteCompatibilityFailureV1, ...] = ()
+        status = CompatibilityStatusV1.PASSED
+    elif mutation == "extra":
+        descriptor = _descriptor_for(runtime, "SNIPER_MINIQMT")
+        fabricated = PluginRouteCompatibilityFailureV1.create(
+            descriptor=descriptor,
+            gateway_catalog=gateway,
+            field_path="order_types",
+            requirement="SUPPORTED_ORDER_TYPES",
+            required=[OrderTypeV1.LIMIT.value],
+            supported=[OrderTypeV1.LIMIT.value],
+        )
+        failures = tuple(sorted((*failed.ordered_failures, fabricated), key=lambda item: item.sort_key_v1()))
+        status = CompatibilityStatusV1.FAILED
+    elif mutation == "duplicate":
+        failures = tuple(
+            sorted((*failed.ordered_failures, failed.ordered_failures[0]), key=lambda item: item.sort_key_v1())
+        )
+        status = CompatibilityStatusV1.FAILED
+    else:
+        original = failed.ordered_failures[0]
+        context = thaw_json_v1(original.context)
+        context["requirement"] = "FORGED_REQUIREMENT"
+        forged = original.model_copy(
+            update={
+                "context": freeze_json_v1(context),
+                "context_sha256": hash_hex_v1("miniqmt_plugin_route_failure_context_v1", context),
+            }
+        )
+        failures = tuple(sorted((forged, *failed.ordered_failures[1:]), key=lambda item: item.sort_key_v1()))
+        status = CompatibilityStatusV1.FAILED
+    tampered = _hash_correct_route_receipt(failed, ordered_failures=failures, status=status)
+
+    with pytest.raises(ValueError, match="authority|closure|duplicate") as error:
+        _structural_route_readback(tampered).validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=gateway,
+        )
+    evidence = error.value.context if hasattr(error.value, "context") else error.value.errors()
+    json.dumps(json_safe_evidence_v1(evidence), allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "gateway",
+    (
+        _gateway(_all_gateway_capabilities(), idempotent_submit_by_client_ref=False),
+        _gateway((MarketDataCapabilityV1.L1_BID,), idempotent_submit_by_client_ref=False),
+    ),
+)
+def test_route_receipt_writer_structural_readback_and_authority_validation_are_exact(
+    gateway: GatewayCapabilityCatalogV1,
+) -> None:
+    runtime = _build()
+    plugin_key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
+    written = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=plugin_key,
+        gateway_catalog=gateway,
+    )
+    structural = PluginRouteCompatibilityReceiptV1.model_validate_json(written.model_dump_json())
+
+    validated = structural.validate_against_authority_v1(
+        catalog_snapshot=runtime.snapshot,
+        gateway_catalog=gateway,
+    )
+    retried = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=plugin_key,
+        gateway_catalog=GatewayCapabilityCatalogV1.model_validate_json(gateway.model_dump_json()),
+    )
+    assert validated == written == retried
+    assert canonical_json_bytes_v1(validated) == canonical_json_bytes_v1(retried)
+    assert validated.observed_gateway_backend == gateway.gateway_backend
+    assert validated.observed_session_phases == tuple(item.value for item in gateway.session_phases)
+    assert validated.observed_idempotent_submit_by_client_ref is False
+    assert "failures" not in inspect.signature(PluginRouteCompatibilityReceiptV1.create).parameters
+
+
+@pytest.mark.parametrize(
+    ("binding_kind", "mutation_kind"),
+    (
+        ("factory", "ref"),
+        ("factory", "signature"),
+        ("config_validator", "ref"),
+        ("config_validator", "signature"),
+        ("state_codec", "ref"),
+        ("state_codec", "signature"),
+    ),
+)
+def test_code_owned_descriptor_is_immutable_and_live_binding_drift_fails_loud(
+    binding_kind: str,
+    mutation_kind: str,
+) -> None:
+    runtime_before = _build()
+    manifests_before = canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
+    descriptors_before = canonical_json_bytes_v1(
+        [item.canonical_payload_v1() for item in current_three_descriptors_v2()]
+    )
+    descriptor = _descriptor_for(runtime_before, "BEST_LIMIT_MINIQMT")
+    source_before = descriptor.manifest.source_attribution
+    if binding_kind == "factory":
+        target = manifest_module.BestLimitMiniQMTCore
+    elif binding_kind == "config_validator":
+        target = manifest_module.validate_current_three_config_v2
+    else:
+        target = manifest_module.validate_current_three_state_v2
+
+    original_qualname = target.__qualname__
+    had_signature = hasattr(target, "__signature__")
+    original_signature = getattr(target, "__signature__", None)
+    try:
+        if mutation_kind == "ref":
+            target.__qualname__ = f"Forged{original_qualname}"
+        else:
+            target.__signature__ = inspect.Signature(
+                parameters=(inspect.Parameter("forged", inspect.Parameter.POSITIONAL_ONLY),)
+            )
+
+        assert (
+            canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
+            == manifests_before
+        )
+        assert (
+            canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_descriptors_v2()])
+            == descriptors_before
+        )
+        assert _descriptor_for(runtime_before, "BEST_LIMIT_MINIQMT").manifest.source_attribution == source_before
+        with pytest.raises(PluginCatalogBuildError) as error:
+            _build()
+        binding_failures = [
+            item
+            for item in error.value.receipt.ordered_failures
+            if item.stage is CatalogBuildStageV1.PROCESS_BINDING
+            and item.reason_code is MiniQMTPluginReasonCode.BINDING_INVALID
+        ]
+        assert binding_failures
+        json.dumps(error.value.receipt.canonical_payload_v1(), allow_nan=False)
+    finally:
+        target.__qualname__ = original_qualname
+        if had_signature:
+            target.__signature__ = original_signature
+        elif hasattr(target, "__signature__"):
+            del target.__signature__
+
+    assert _build().snapshot == runtime_before.snapshot

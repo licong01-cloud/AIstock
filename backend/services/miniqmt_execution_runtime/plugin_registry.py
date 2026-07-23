@@ -600,14 +600,19 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
     catalog_sha256: Sha256V1
     gateway_capability_catalog_sha256: Sha256V1
     gateway_route_id: IdentityV1
+    required_facade_methods: tuple[IdentityV1, ...]
+    required_gateway_backends: tuple[IdentityV1, ...]
+    observed_gateway_backend: IdentityV1
     required_quote_source: Literal["B0_QUOTE_V2"]
     observed_quote_source: IdentityV1
     requires_exact_order_id_cancel: StrictBool
     observed_exact_order_id_cancel: StrictBool
+    observed_idempotent_submit_by_client_ref: StrictBool
     required_order_types: tuple[str, ...]
     supported_order_types: tuple[str, ...]
     required_market_capabilities: FrozenJsonFieldV1
     supported_market_capabilities: tuple[str, ...]
+    observed_session_phases: tuple[str, ...]
     status: CompatibilityStatusV1
     ordered_failures: tuple[PluginRouteCompatibilityFailureV1, ...]
     broker_called: Literal[False]
@@ -617,71 +622,60 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
     def create(
         cls,
         *,
-        descriptor: PluginRegistrationDescriptorV2,
-        catalog_sha256: str,
+        catalog_snapshot: PluginCatalogSnapshotV1,
+        plugin_key: PluginKeyV1,
         gateway_catalog: GatewayCapabilityCatalogV1,
-        failures: list[PluginRouteCompatibilityFailureV1],
     ) -> Self:
-        manifest = descriptor.manifest
-        ordered = tuple(sorted(failures, key=lambda item: item.sort_key_v1()))
-        requires_exact_cancel = "cancel_order" in manifest.required_facade_methods
-        payload = {
-            "schema_version": "plugin_route_compatibility_receipt_v1",
-            "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
-            "algo_code": manifest.algo_code,
-            "plugin_manifest_sha256": manifest.manifest_sha256,
-            "catalog_sha256": catalog_sha256,
-            "gateway_capability_catalog_sha256": gateway_catalog.catalog_sha256,
-            "gateway_route_id": gateway_catalog.route_id,
-            "required_quote_source": "B0_QUOTE_V2",
-            "observed_quote_source": gateway_catalog.quote_source,
-            "requires_exact_order_id_cancel": requires_exact_cancel,
-            "observed_exact_order_id_cancel": gateway_catalog.exact_order_id_cancel,
-            "required_order_types": [item.value for item in manifest.supported_order_types],
-            "supported_order_types": [item.value for item in gateway_catalog.order_types],
-            "required_market_capabilities": [item.canonical_payload_v1() for item in manifest.market_data_requirements],
-            "supported_market_capabilities": [item.value for item in gateway_catalog.market_data_capabilities],
-            "status": (CompatibilityStatusV1.FAILED if ordered else CompatibilityStatusV1.PASSED).value,
-            "ordered_failures": [item.canonical_payload_v1() for item in ordered],
-            "broker_called": False,
-        }
-        return cls(
-            **{
-                **payload,
-                "required_order_types": tuple(payload["required_order_types"]),
-                "supported_order_types": tuple(payload["supported_order_types"]),
-                "supported_market_capabilities": tuple(payload["supported_market_capabilities"]),
-                "status": CompatibilityStatusV1.FAILED if ordered else CompatibilityStatusV1.PASSED,
-                "ordered_failures": ordered,
-            },
-            receipt_sha256=hash_hex_v1("miniqmt_plugin_route_compatibility_receipt_v1", payload),
+        snapshot = _strict_catalog_snapshot_for_route_v1(catalog_snapshot, plugin_key=plugin_key)
+        gateway = _strict_gateway_catalog_for_route_v1(gateway_catalog, plugin_key=plugin_key)
+        descriptor = _route_descriptor_v1(snapshot, plugin_key=plugin_key, gateway_catalog=gateway)
+        return _derive_plugin_route_compatibility_v1(
+            catalog_snapshot=snapshot,
+            descriptor=descriptor,
+            gateway_catalog=gateway,
         )
+
+    def validate_against_authority_v1(
+        self,
+        *,
+        catalog_snapshot: PluginCatalogSnapshotV1,
+        gateway_catalog: GatewayCapabilityCatalogV1,
+    ) -> Self:
+        try:
+            expected = type(self).create(
+                catalog_snapshot=catalog_snapshot,
+                plugin_key=self.plugin_key,
+                gateway_catalog=gateway_catalog,
+            )
+        except (MiniQMTPluginContractError, ValidationError, TypeError, ValueError, KeyError) as exc:
+            raise _route_receipt_authority_error_v1(
+                self,
+                requirement="ROUTE_COMPATIBILITY_AUTHORITY_REBUILD",
+                expected="exact registered plugin key and strict catalog authorities",
+                actual=exc,
+            ) from exc
+        if canonical_json_bytes_v1(self) != canonical_json_bytes_v1(expected):
+            raise _route_receipt_authority_error_v1(
+                self,
+                requirement="ROUTE_COMPATIBILITY_EXACT_RECEIPT_CLOSURE",
+                expected=expected.canonical_payload_v1(),
+                actual=self.canonical_payload_v1(),
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> Self:
         ordered = tuple(sorted(self.ordered_failures, key=lambda item: item.sort_key_v1()))
         if self.ordered_failures != ordered:
             raise ValueError("route failures must be stable sorted")
+        failure_identities = tuple((item.field_path, item.context_sha256) for item in self.ordered_failures)
+        if len(failure_identities) != len(set(failure_identities)):
+            raise ValueError("route failures must not contain duplicates")
         expected_status = CompatibilityStatusV1.FAILED if ordered else CompatibilityStatusV1.PASSED
         if self.status is not expected_status:
             raise ValueError("route compatibility status does not match failures")
         if self.plugin_manifest_sha256 != self.plugin_key.manifest_sha256:
             raise ValueError("route receipt plugin manifest identity mismatch")
-        if self.status is CompatibilityStatusV1.PASSED and self.observed_quote_source != self.required_quote_source:
-            raise ValueError("PASSED route receipt requires exact B0 quote authority")
-        if (
-            self.status is CompatibilityStatusV1.PASSED
-            and self.requires_exact_order_id_cancel
-            and not self.observed_exact_order_id_cancel
-        ):
-            raise ValueError("PASSED route receipt requires exact order-id cancellation capability")
-        failure_paths = {failure.field_path for failure in self.ordered_failures}
-        quote_requirement_failed = self.observed_quote_source != self.required_quote_source
-        if quote_requirement_failed != ("quote_source" in failure_paths):
-            raise ValueError("route receipt quote authority fact does not close over its exact failure")
-        cancel_requirement_failed = self.requires_exact_order_id_cancel and not self.observed_exact_order_id_cancel
-        if cancel_requirement_failed != ("exact_order_id_cancel" in failure_paths):
-            raise ValueError("route receipt exact-cancel fact does not close over its exact failure")
         for failure in self.ordered_failures:
             context = thaw_json_v1(failure.context)
             if (
@@ -1331,13 +1325,47 @@ def build_plugin_catalog_v2(
     return PluginCatalogRuntimeV2(snapshot=snapshot, process_bindings=process_bindings)
 
 
-def evaluate_plugin_route_compatibility_v1(
-    *,
+def _route_catalog_identity_v1(gateway_catalog: Any) -> dict[str, Any] | None:
+    if isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
+        return {
+            "route_id": gateway_catalog.route_id,
+            "catalog_sha256": gateway_catalog.catalog_sha256,
+        }
+    if isinstance(gateway_catalog, Mapping):
+        return {
+            "route_id": gateway_catalog.get("route_id"),
+            "catalog_sha256": gateway_catalog.get("catalog_sha256"),
+        }
+    return None
+
+
+def _strict_catalog_snapshot_for_route_v1(
     catalog_snapshot: PluginCatalogSnapshotV1,
+    *,
     plugin_key: PluginKeyV1,
+) -> PluginCatalogSnapshotV1:
+    try:
+        return PluginCatalogSnapshotV1.model_validate(catalog_snapshot.model_dump(mode="python"), strict=True)
+    except (AttributeError, ValidationError, TypeError, ValueError) as exc:
+        raise MiniQMTPluginContractError(
+            MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID,
+            "plugin catalog snapshot authority readback is invalid",
+            context={
+                "plugin": json_safe_evidence_v1(plugin_key),
+                "route": None,
+                "requirement": "PLUGIN_CATALOG_SNAPSHOT_STRICT_READBACK",
+                "expected": "canonical schema, identity and catalog_sha256 closure",
+                "actual": json_safe_evidence_v1(exc),
+                "gateway_catalog_identity": None,
+            },
+        ) from exc
+
+
+def _strict_gateway_catalog_for_route_v1(
     gateway_catalog: GatewayCapabilityCatalogV1,
-) -> PluginRouteCompatibilityReceiptV1:
-    catalog_snapshot = PluginCatalogSnapshotV1.model_validate(catalog_snapshot.model_dump(mode="python"), strict=True)
+    *,
+    plugin_key: PluginKeyV1,
+) -> GatewayCapabilityCatalogV1:
     if not isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
         raise MiniQMTPluginContractError(
             MiniQMTPluginReasonCode.GATEWAY_CAPABILITY_CATALOG_INVALID,
@@ -1364,18 +1392,46 @@ def evaluate_plugin_route_compatibility_v1(
                 "requirement": "GATEWAY_CAPABILITY_CATALOG_STRICT_READBACK",
                 "expected": "canonical schema, identity, field and catalog_sha256 closure",
                 "actual": json_safe_evidence_v1(exc),
-                "gateway_catalog_identity": {
-                    "route_id": gateway_payload.get("route_id"),
-                    "catalog_sha256": gateway_payload.get("catalog_sha256"),
-                },
+                "gateway_catalog_identity": _route_catalog_identity_v1(gateway_payload),
             },
         ) from exc
+    return gateway_catalog
+
+
+def _route_descriptor_v1(
+    catalog_snapshot: PluginCatalogSnapshotV1,
+    *,
+    plugin_key: PluginKeyV1,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+) -> PluginRegistrationDescriptorV2:
     descriptor = next(
         (item for item in catalog_snapshot.registration_descriptors if item.plugin_key == plugin_key),
         None,
     )
     if descriptor is None:
-        raise KeyError(plugin_key)
+        raise MiniQMTPluginContractError(
+            MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID,
+            "route compatibility plugin key is not registered in the exact catalog snapshot",
+            context={
+                "plugin": plugin_key.canonical_payload_v1(),
+                "route": gateway_catalog.route_id,
+                "requirement": "EXACT_REGISTERED_PLUGIN_KEY",
+                "expected": [
+                    item.plugin_key.canonical_payload_v1() for item in catalog_snapshot.registration_descriptors
+                ],
+                "actual": plugin_key.canonical_payload_v1(),
+                "gateway_catalog_identity": _route_catalog_identity_v1(gateway_catalog),
+            },
+        )
+    return descriptor
+
+
+def _derive_plugin_route_compatibility_v1(
+    *,
+    catalog_snapshot: PluginCatalogSnapshotV1,
+    descriptor: PluginRegistrationDescriptorV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+) -> PluginRouteCompatibilityReceiptV1:
     manifest = descriptor.manifest
     failures: list[PluginRouteCompatibilityFailureV1] = []
     if gateway_catalog.quote_source != "B0_QUOTE_V2":
@@ -1449,9 +1505,84 @@ def evaluate_plugin_route_compatibility_v1(
                     supported=[item.value for item in gateway_catalog.session_phases],
                 )
             )
+    ordered = tuple(sorted(failures, key=lambda item: item.sort_key_v1()))
+    requires_exact_cancel = "cancel_order" in manifest.required_facade_methods
+    payload = {
+        "schema_version": "plugin_route_compatibility_receipt_v1",
+        "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
+        "algo_code": manifest.algo_code,
+        "plugin_manifest_sha256": manifest.manifest_sha256,
+        "catalog_sha256": catalog_snapshot.catalog_sha256,
+        "gateway_capability_catalog_sha256": gateway_catalog.catalog_sha256,
+        "gateway_route_id": gateway_catalog.route_id,
+        "required_facade_methods": list(manifest.required_facade_methods),
+        "required_gateway_backends": list(manifest.supported_broker_backends),
+        "observed_gateway_backend": gateway_catalog.gateway_backend,
+        "required_quote_source": "B0_QUOTE_V2",
+        "observed_quote_source": gateway_catalog.quote_source,
+        "requires_exact_order_id_cancel": requires_exact_cancel,
+        "observed_exact_order_id_cancel": gateway_catalog.exact_order_id_cancel,
+        "observed_idempotent_submit_by_client_ref": gateway_catalog.idempotent_submit_by_client_ref,
+        "required_order_types": [item.value for item in manifest.supported_order_types],
+        "supported_order_types": [item.value for item in gateway_catalog.order_types],
+        "required_market_capabilities": [item.canonical_payload_v1() for item in manifest.market_data_requirements],
+        "supported_market_capabilities": [item.value for item in gateway_catalog.market_data_capabilities],
+        "observed_session_phases": [item.value for item in gateway_catalog.session_phases],
+        "status": (CompatibilityStatusV1.FAILED if ordered else CompatibilityStatusV1.PASSED).value,
+        "ordered_failures": [item.canonical_payload_v1() for item in ordered],
+        "broker_called": False,
+    }
+    return PluginRouteCompatibilityReceiptV1(
+        **{
+            **payload,
+            "required_facade_methods": tuple(payload["required_facade_methods"]),
+            "required_gateway_backends": tuple(payload["required_gateway_backends"]),
+            "required_order_types": tuple(payload["required_order_types"]),
+            "supported_order_types": tuple(payload["supported_order_types"]),
+            "supported_market_capabilities": tuple(payload["supported_market_capabilities"]),
+            "observed_session_phases": tuple(payload["observed_session_phases"]),
+            "status": CompatibilityStatusV1.FAILED if ordered else CompatibilityStatusV1.PASSED,
+            "ordered_failures": ordered,
+        },
+        receipt_sha256=hash_hex_v1("miniqmt_plugin_route_compatibility_receipt_v1", payload),
+    )
+
+
+def _route_receipt_authority_error_v1(
+    receipt: PluginRouteCompatibilityReceiptV1,
+    *,
+    requirement: str,
+    expected: Any,
+    actual: Any,
+) -> MiniQMTPluginContractError:
+    return MiniQMTPluginContractError(
+        MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID,
+        "route compatibility receipt authority closure does not match exact catalog authorities",
+        context={
+            "plugin": {
+                "algo_code": receipt.algo_code,
+                "plugin_key": receipt.plugin_key.canonical_payload_v1(),
+            },
+            "route": receipt.gateway_route_id,
+            "requirement": requirement,
+            "expected": json_safe_evidence_v1(expected),
+            "actual": json_safe_evidence_v1(actual),
+            "gateway_catalog_identity": {
+                "route_id": receipt.gateway_route_id,
+                "catalog_sha256": receipt.gateway_capability_catalog_sha256,
+            },
+        },
+    )
+
+
+def evaluate_plugin_route_compatibility_v1(
+    *,
+    catalog_snapshot: PluginCatalogSnapshotV1,
+    plugin_key: PluginKeyV1,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+) -> PluginRouteCompatibilityReceiptV1:
     return PluginRouteCompatibilityReceiptV1.create(
-        descriptor=descriptor,
-        catalog_sha256=catalog_snapshot.catalog_sha256,
+        catalog_snapshot=catalog_snapshot,
+        plugin_key=plugin_key,
         gateway_catalog=gateway_catalog,
-        failures=failures,
     )

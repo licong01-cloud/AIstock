@@ -210,15 +210,19 @@ sys.stdout.buffer.write(canonical_json_bytes_v1([item.canonical_payload_v1() for
 def test_all_code_owned_manifest_build_tables_are_immutable() -> None:
     assert isinstance(manifest_module._UPSTREAM_HASHES, MappingProxyType)
     assert isinstance(manifest_module._ALGO_FACTS, MappingProxyType)
+    assert isinstance(manifest_module._PROCESS_VALIDATOR_FACTS, MappingProxyType)
     assert isinstance(manifest_module._PLUGIN_FIELDS, MappingProxyType)
     assert isinstance(manifest_module._LEGACY_DEFAULTS, FrozenJsonObjectV1)
     assert isinstance(manifest_module._CONTROL_FIELDS, frozenset)
     assert all(isinstance(fields, frozenset) for fields in manifest_module._PLUGIN_FIELDS.values())
+    assert not any(callable(value) for facts in manifest_module._ALGO_FACTS.values() for value in facts)
 
     with pytest.raises(TypeError):
         manifest_module._UPSTREAM_HASHES["unexpected"] = "f" * 64  # type: ignore[index]
     with pytest.raises(TypeError):
         manifest_module._ALGO_FACTS["unexpected"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest_module._PROCESS_VALIDATOR_FACTS["unexpected"] = "forged"  # type: ignore[index]
     with pytest.raises(TypeError):
         manifest_module._PLUGIN_FIELDS["SNIPER_MINIQMT"] = frozenset()  # type: ignore[index]
     with pytest.raises(AttributeError):
