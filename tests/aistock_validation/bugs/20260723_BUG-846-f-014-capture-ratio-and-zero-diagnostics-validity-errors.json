@@ -2,7 +2,9 @@
   "actual": "R8B/R11B Phase 2 receipts show episode_capture_ratio divides negative returns by 1e-12 when MFE is non-positive, producing extreme negative means, while all-zero cost/turnover Recorder diagnostics are treated as 100% covered COMPUTED evidence. Fix the metric denominator validity and mark zero-filled diagnostics as explicit limitations/data actions without blocking QE research or altering original experiments.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260723_BUG-846-f-014-capture-ratio-and-zero-diagnostics-validity-errors.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/long_trend_evaluation.py",
+    "backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-846",
