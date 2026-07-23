@@ -41,7 +41,9 @@
       "timestamp": "2026-07-23T07:49:59.8554450Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/2641#issuecomment-5055860257"
+  ],
   "expected": "The approved C-007-A stock-fact-first contract and C-008-B3-DESIGN define both 7-feature and 20-feature direct L1 families without fallback: deterministic train-only family-global restart selection, explicit likelihood/covariance/occupancy acceptance, hard semantic calibration, untouched holdout, complete model identity, and fail-closed two-family READY semantics.",
   "file_scope_contract": {
     "added_files": [],
