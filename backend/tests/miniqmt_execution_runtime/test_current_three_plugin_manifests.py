@@ -65,6 +65,7 @@ def _active_order(
     cumulative_filled_quantity: int = 100,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
+        "parent_intent_id": "parent_1",
         "local_vt_orderid": "vord_1",
         "submit_command_id": "mqcommand_1",
         "broker_order_id": "broker_1",
@@ -77,6 +78,7 @@ def _active_order(
         "remaining_quantity": requested_quantity - cumulative_filled_quantity,
         "last_order_event_id": "mqrtevt_order_1",
         "last_trade_event_id": "mqrtevt_trade_1",
+        "market_data_lineage": _lineage(),
     }
     payload["mapping_sha256"] = hash_hex_v1("miniqmt_plugin_active_order_state_v1", payload)
     return payload
@@ -86,6 +88,7 @@ def _state(algo_code: str) -> dict[str, object]:
     state: dict[str, object] = {
         "algo_name": f"{algo_code}_stable",
         "algo_code": algo_code,
+        "parent_intent_id": "parent_1",
         "symbol": "600000.SH",
         "side": "BUY",
         "offset": "NONE",
@@ -217,6 +220,13 @@ def test_state_codec_requires_restart_and_active_order_lineage(algo_code: str) -
         validate_current_three_state_v2(_manifest(algo_code), state)
 
 
+def test_active_order_schema_requires_parent_and_market_data_lineage() -> None:
+    state_schema = thaw_json_v1(_manifest("BEST_LIMIT_MINIQMT").state_schema)
+    active_order_schema = state_schema["properties"]["active_orders"]["items"]
+
+    assert {"parent_intent_id", "market_data_lineage"}.issubset(active_order_schema["required"])
+
+
 def test_state_codec_rejects_cross_field_restart_conflicts() -> None:
     malformed_states: list[tuple[str, dict[str, object]]] = []
 
@@ -271,6 +281,8 @@ def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage()
     state.update(
         {
             "active_orders": [active],
+            "traded_quantity": active["cumulative_filled_quantity"],
+            "traded_price_decimal": active["requested_price_decimal"],
             "vt_orderid": active["local_vt_orderid"],
             "order_price_decimal": active["requested_price_decimal"],
             "variables": {
@@ -285,6 +297,7 @@ def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage()
     for field, value in (
         ("requested_price_decimal", "10.00"),
         ("remaining_quantity", 201),
+        ("parent_intent_id", "parent_other"),
         ("symbol", "000001.SZ"),
         ("side", "SELL"),
     ):
@@ -298,6 +311,8 @@ def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage()
         malformed.update(
             {
                 "active_orders": [malformed_active],
+                "traded_quantity": malformed_active["cumulative_filled_quantity"],
+                "traded_price_decimal": "10",
                 "vt_orderid": malformed_active["local_vt_orderid"],
                 "order_price_decimal": "10",
                 "variables": {
@@ -320,12 +335,61 @@ def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage()
         validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), mismatched_price)
 
 
+def test_active_child_cumulative_fill_must_close_over_parent_traded_quantity() -> None:
+    state = _state("BEST_LIMIT_MINIQMT")
+    active = _active_order(cumulative_filled_quantity=100)
+    state.update(
+        {
+            "active_orders": [active],
+            "vt_orderid": active["local_vt_orderid"],
+            "order_price_decimal": active["requested_price_decimal"],
+            "variables": {
+                "next_draw_ordinal": 0,
+                "order_price_decimal": active["requested_price_decimal"],
+                "vt_orderid": active["local_vt_orderid"],
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="cumulative.*traded|parent traded"):
+        validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), state)
+
+
+def test_active_order_same_hash_cannot_cover_different_identity_or_market_data_payload() -> None:
+    for field, value in (
+        ("broker_order_id", "broker_other"),
+        ("market_data_lineage", {**_lineage(), "market_data_id": "md_other"}),
+    ):
+        state = _state("BEST_LIMIT_MINIQMT")
+        active = _active_order(cumulative_filled_quantity=100)
+        active[field] = value
+        state.update(
+            {
+                "active_orders": [active],
+                "traded_quantity": 100,
+                "traded_price_decimal": "10",
+                "vt_orderid": active["local_vt_orderid"],
+                "order_price_decimal": active["requested_price_decimal"],
+                "variables": {
+                    "next_draw_ordinal": 0,
+                    "order_price_decimal": active["requested_price_decimal"],
+                    "vt_orderid": active["local_vt_orderid"],
+                },
+            }
+        )
+
+        with pytest.raises(ValueError, match="mapping_sha256"):
+            validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), state)
+
+
 def test_sniper_active_order_price_must_equal_frozen_limit_price() -> None:
     state = _state("SNIPER_MINIQMT")
     active = _active_order(price="11")
     state.update(
         {
             "active_orders": [active],
+            "traded_quantity": active["cumulative_filled_quantity"],
+            "traded_price_decimal": active["requested_price_decimal"],
             "vt_orderid": active["local_vt_orderid"],
             "variables": {"vt_orderid": active["local_vt_orderid"]},
         }

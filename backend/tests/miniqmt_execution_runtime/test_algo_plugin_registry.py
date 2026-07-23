@@ -170,6 +170,48 @@ def test_catalog_snapshot_readback_rejects_hash_correct_duplicate_registration()
         PluginCatalogSnapshotV1.model_validate(payload, strict=True)
 
 
+def test_catalog_snapshot_readback_rejects_incomplete_compatibility_component_closure() -> None:
+    snapshot = _build().snapshot
+    receipt = snapshot.pinned_compatibility_receipts[0]
+    receipt_fields = {
+        "requirement_sha256": receipt.requirement_sha256,
+        "surface_sha256": receipt.surface_sha256,
+        "source_lock_sha256": receipt.source_lock_sha256,
+        "method_signature_sha256": receipt.method_signature_sha256,
+        "object_field_sha256": receipt.object_field_sha256,
+        "characterization_sha256": receipt.characterization_sha256,
+    }
+    for corrupted_field in receipt_fields:
+        corrupted_fields = {**receipt_fields, corrupted_field: "f" * 64}
+        corrupted = VnpyCompatibilityReceiptV1.create(
+            plugin_id=receipt.plugin_id,
+            plugin_version=receipt.plugin_version,
+            manifest_sha256=receipt.manifest_sha256,
+            **corrupted_fields,
+            status=CompatibilityStatusV1.PASSED,
+            ordered_failures=(),
+        )
+        receipts = (corrupted, *snapshot.pinned_compatibility_receipts[1:])
+        payload = {
+            "schema_version": "plugin_catalog_snapshot_v1",
+            "registration_descriptors": snapshot.registration_descriptors,
+            "pinned_compatibility_receipts": receipts,
+            "creation_bindings": snapshot.creation_bindings,
+        }
+        payload["catalog_sha256"] = hash_hex_v1(
+            "miniqmt_plugin_catalog_snapshot_v1",
+            {
+                "schema_version": payload["schema_version"],
+                "registration_descriptors": [item.canonical_payload_v1() for item in snapshot.registration_descriptors],
+                "pinned_compatibility_receipts": [item.canonical_payload_v1() for item in receipts],
+                "creation_bindings": [item.canonical_payload_v1() for item in snapshot.creation_bindings],
+            },
+        )
+
+        with pytest.raises(ValueError, match="compatibility.*closure|component"):
+            PluginCatalogSnapshotV1.model_validate(payload, strict=True)
+
+
 def test_snapshot_has_no_callable_and_process_mapping_is_sealed() -> None:
     bindings = current_three_process_bindings_v2()
     original = bindings.resolve("aistock.vnpy.sniper.factory")

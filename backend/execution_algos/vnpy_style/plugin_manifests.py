@@ -247,6 +247,7 @@ def _lineage_schema() -> dict[str, Any]:
 def _active_order_schema() -> dict[str, Any]:
     return _object_schema(
         {
+            "parent_intent_id": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "local_vt_orderid": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "submit_command_id": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "broker_order_id": {
@@ -285,9 +286,11 @@ def _active_order_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "market_data_lineage": _lineage_schema(),
             "mapping_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         },
         (
+            "parent_intent_id",
             "local_vt_orderid",
             "submit_command_id",
             "broker_order_id",
@@ -300,6 +303,7 @@ def _active_order_schema() -> dict[str, Any]:
             "remaining_quantity",
             "last_order_event_id",
             "last_trade_event_id",
+            "market_data_lineage",
             "mapping_sha256",
         ),
     )
@@ -347,6 +351,7 @@ def _state_schema(algo_code: str) -> dict[str, Any]:
     properties = {
         "algo_name": {"type": "string", "minLength": 1},
         "algo_code": {"const": algo_code},
+        "parent_intent_id": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
         "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(?:SH|SZ|BJ)$"},
         "side": {"enum": ["BUY", "SELL"]},
         "offset": {"const": "NONE"},
@@ -367,6 +372,7 @@ def _state_schema(algo_code: str) -> dict[str, Any]:
     required = (
         "algo_name",
         "algo_code",
+        "parent_intent_id",
         "symbol",
         "side",
         "offset",
@@ -761,10 +767,13 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
         raise ValueError("FINISHED status requires and exclusively owns finished_reason")
     if not _trim_stable_identity(state["algo_name"]):
         raise ValueError("algo_name must be a trim-stable identity")
+    if not _trim_stable_identity(state["parent_intent_id"]):
+        raise ValueError("parent_intent_id must be a trim-stable identity")
     if state["finished_reason"] is not None and not _trim_stable_identity(state["finished_reason"]):
         raise ValueError("finished_reason must be a trim-stable identity")
     _validate_lineage(state["last_tick_lineage"], field_name="last_tick_lineage")
     active_ids: list[str] = []
+    active_cumulative_filled = 0
     active_remaining = 0
     for active in state["active_orders"]:
         if active["status"] in {"CANCELLED", "FILLED", "REJECTED"}:
@@ -779,11 +788,16 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
             raise ValueError("active child cumulative quantity exceeds requested quantity")
         if active["remaining_quantity"] != active["requested_quantity"] - active["cumulative_filled_quantity"]:
             raise ValueError("active child remaining quantity does not close over requested and filled quantity")
-        if active["symbol"] != state["symbol"] or active["side"] != state["side"]:
-            raise ValueError("active child symbol and side must equal frozen algo state")
+        if (
+            active["parent_intent_id"] != state["parent_intent_id"]
+            or active["symbol"] != state["symbol"]
+            or active["side"] != state["side"]
+        ):
+            raise ValueError("active child parent, symbol and side must equal frozen algo state")
         if not _canonical_decimal(active["requested_price_decimal"], positive=True):
             raise ValueError("active child requested price must be a positive canonical decimal")
         for identity_field in (
+            "parent_intent_id",
             "local_vt_orderid",
             "submit_command_id",
             "broker_order_id",
@@ -792,6 +806,12 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
         ):
             if active[identity_field] is not None and not _trim_stable_identity(active[identity_field]):
                 raise ValueError(f"active child {identity_field} must be a trim-stable identity")
+        _validate_lineage(active["market_data_lineage"], field_name="active child market_data_lineage")
+        if active["market_data_lineage"]["session_phase"] not in {
+            SessionPhaseV1.CONTINUOUS_AM.value,
+            SessionPhaseV1.CONTINUOUS_PM.value,
+        }:
+            raise ValueError("active child market data lineage must come from a continuous-session native quote")
         expected = hash_hex_v1(
             "miniqmt_plugin_active_order_state_v1",
             {key: item for key, item in active.items() if key != "mapping_sha256"},
@@ -799,11 +819,14 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
         if active["mapping_sha256"] != expected:
             raise ValueError("active child mapping_sha256 mismatch")
         active_ids.append(active["local_vt_orderid"])
+        active_cumulative_filled += active["cumulative_filled_quantity"]
         active_remaining += active["remaining_quantity"]
     if active_ids != sorted(set(active_ids)):
         raise ValueError("active_orders must have unique ascending local_vt_orderid")
     if active_remaining > state["parent_quantity"] - state["traded_quantity"]:
         raise ValueError("active child remaining quantity exceeds parent remaining quantity")
+    if active_cumulative_filled > state["traded_quantity"]:
+        raise ValueError("active child cumulative fills exceed parent traded quantity")
     if manifest.algo_code in ("SNIPER_MINIQMT", "BEST_LIMIT_MINIQMT"):
         vt_orderid = state["vt_orderid"]
         if (vt_orderid is None and active_ids) or (vt_orderid is not None and active_ids != [vt_orderid]):

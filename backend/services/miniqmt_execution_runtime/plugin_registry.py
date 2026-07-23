@@ -470,6 +470,10 @@ class PluginCatalogSnapshotV1(FrozenStrictModel):
             raise ValueError("published catalog cannot contain a failed compatibility receipt")
 
         descriptors_by_key = {item.plugin_key: item for item in self.registration_descriptors}
+        receipts_by_key = {item.plugin_key: item for item in self.pinned_compatibility_receipts}
+        for plugin_key, descriptor in descriptors_by_key.items():
+            if _compatibility_receipt_mismatch_v1(descriptor, receipts_by_key[plugin_key]) is not None:
+                raise ValueError("compatibility receipt component closure does not match descriptor")
         creation_counts = Counter(item.algo_code for item in self.creation_bindings)
         descriptor_algo_codes = {item.manifest.algo_code for item in self.registration_descriptors}
         if set(creation_counts) != descriptor_algo_codes or any(count != 1 for count in creation_counts.values()):
@@ -736,6 +740,43 @@ def compatibility_component_hashes_v1(requirement: VnpyCompatibilityRequirementV
     return {
         **surface_payload,
         "surface_sha256": hash_hex_v1("miniqmt_vnpy_compatibility_surface_v1", surface_payload),
+    }
+
+
+def _compatibility_receipt_mismatch_v1(
+    descriptor: PluginRegistrationDescriptorV2,
+    receipt: VnpyCompatibilityReceiptV1,
+) -> dict[str, Any] | None:
+    manifest = descriptor.manifest
+    expected_components = compatibility_component_hashes_v1(manifest.compatibility_requirement)
+    expected_receipt_sha256 = hash_hex_v1(
+        "miniqmt_vnpy_compatibility_receipt_v1",
+        receipt.canonical_payload_v1(exclude={"receipt_sha256"}),
+    )
+    mismatched_components = {
+        field: {"expected": expected, "actual": getattr(receipt, field)}
+        for field, expected in expected_components.items()
+        if getattr(receipt, field) != expected
+    }
+    if (
+        receipt.plugin_key == descriptor.plugin_key
+        and receipt.status is CompatibilityStatusV1.PASSED
+        and receipt.receipt_sha256 == expected_receipt_sha256
+        and receipt.requirement_sha256 == manifest.compatibility_requirement.requirement_sha256
+        and receipt.characterization_sha256 == manifest.compatibility_requirement.characterization_sha256
+        and not mismatched_components
+    ):
+        return None
+    return {
+        "status": receipt.status.value,
+        "plugin_key_matches": receipt.plugin_key == descriptor.plugin_key,
+        "receipt_sha256": receipt.receipt_sha256,
+        "expected_receipt_sha256": expected_receipt_sha256,
+        "requirement_sha256": receipt.requirement_sha256,
+        "expected_requirement_sha256": manifest.compatibility_requirement.requirement_sha256,
+        "characterization_sha256": receipt.characterization_sha256,
+        "expected_characterization_sha256": manifest.compatibility_requirement.characterization_sha256,
+        "mismatched_components": mismatched_components,
     }
 
 
@@ -1089,32 +1130,15 @@ def build_plugin_catalog_v2(
             )
             continue
         receipt = receipts[0]
-        manifest = descriptor.manifest
-        expected_components = compatibility_component_hashes_v1(manifest.compatibility_requirement)
-        expected_receipt_sha256 = hash_hex_v1(
-            "miniqmt_vnpy_compatibility_receipt_v1",
-            receipt.canonical_payload_v1(exclude={"receipt_sha256"}),
-        )
-        if (
-            receipt.status is not CompatibilityStatusV1.PASSED
-            or receipt.receipt_sha256 != expected_receipt_sha256
-            or receipt.requirement_sha256 != manifest.compatibility_requirement.requirement_sha256
-            or receipt.characterization_sha256 != manifest.compatibility_requirement.characterization_sha256
-            or any(getattr(receipt, field) != expected for field, expected in expected_components.items())
-        ):
+        mismatch = _compatibility_receipt_mismatch_v1(descriptor, receipt)
+        if mismatch is not None:
             _failure(
                 failures,
                 stage=CatalogBuildStageV1.PINNED_COMPATIBILITY,
                 descriptor=descriptor,
                 field_path="pinned_compatibility_receipt",
                 reason_code=MiniQMTPluginReasonCode.VNPY_COMPAT_SURFACE_UNSUPPORTED,
-                context={
-                    "status": receipt.status.value,
-                    "requirement_sha256": receipt.requirement_sha256,
-                    "characterization_sha256": receipt.characterization_sha256,
-                    "expected_components": expected_components,
-                    "actual_components": {field: getattr(receipt, field) for field in expected_components},
-                },
+                context=mismatch,
             )
 
     key_counts = Counter(item.plugin_key for item in parsed_descriptors)
