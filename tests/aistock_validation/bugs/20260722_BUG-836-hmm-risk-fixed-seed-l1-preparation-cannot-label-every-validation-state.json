@@ -23,10 +23,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260722-928875f35623",
       "timestamp": "2026-07-22T20:36:34.926245Z"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-D1 and C-008-B1: update the design without merge, then run full diagnostic-only soft posterior, covariance, and convergence evidence; B2/B3 remain unapproved.",
+      "timestamp": "2026-07-23T05:47:48.2012041Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "C-008-A produces a deterministic seeds 42-49 diagnostic report for both 31-sector L1 families from one immutable PIT input load, records convergence history, hard-state counts and utility labelability, performs no seed selection, and never writes a READY artifact.",
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5054376238"
+  ],
+  "expected": "C-008-B1 reuses the immutable C-008-A PIT input, both 31-sector L1 families and seeds 42-49 to record train/validation hard occupancy, filtered-posterior mass/ESS/utility/stability, complete convergence deltas and raw/bounded covariance evidence. It applies no formal acceptance threshold, preserves the approved hard-state semantic authority, performs no seed selection, writes no model or READY artifact, and does not implement B2/B3.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -71,7 +79,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_",
+  "reproduce_command": "python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_ --c008-b1-diagnostic-output tmp/validation/hmm_risk/c008_b1_soft_evidence.json",
   "required_verification": [
     "l0",
     "hmm_risk_backend"

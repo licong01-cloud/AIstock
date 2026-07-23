@@ -191,23 +191,65 @@ def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -
 
     def fake_fit(item, *, preprocess, feature_count, random_seed):
         del preprocess, feature_count, random_seed
+        train = np.asarray(item.train_observations, dtype=np.float64)
         validation = np.asarray(item.validation_observations, dtype=np.float64)
         posteriors = np.zeros((validation.shape[0], 3), dtype=np.float64)
         posteriors[:20, 0] = 1.0
         posteriors[20:40, 1] = 1.0
         posteriors[40:, 2] = 1.0
+        covars = np.ones((3, 7), dtype=np.float64)
+        monitor_diagnostic = {
+            "converged": True,
+            "reason": "monitor_delta_below_tolerance",
+            "iterations": 3,
+            "maximum_iterations": 300,
+            "tolerance": 0.01,
+            "history": [-100.0, -90.0, -91.0],
+            "deltas": [
+                {
+                    "history_index": 1,
+                    "previous": -100.0,
+                    "current": -90.0,
+                    "absolute_delta": 10.0,
+                    "relative_delta": 0.1,
+                    "negative": False,
+                    "terminal": False,
+                },
+                {
+                    "history_index": 2,
+                    "previous": -90.0,
+                    "current": -91.0,
+                    "absolute_delta": -1.0,
+                    "relative_delta": -1.0 / 90.0,
+                    "negative": True,
+                    "terminal": True,
+                },
+            ],
+            "negative_delta_count": 1,
+            "minimum_absolute_delta": -1.0,
+            "minimum_relative_delta": -1.0 / 90.0,
+            "negative_delta_terminal_count": 1,
+        }
         return subject._L1FitEvidence(
-            train=np.asarray(item.train_observations, dtype=np.float64),
+            train=train,
             validation=validation,
             startprob=np.asarray([1.0, 0.0, 0.0]),
             transmat=np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
             means=np.asarray([[-2.0] * 7, [0.0] * 7, [2.0] * 7]),
-            covars=np.ones((3, 7), dtype=np.float64),
+            raw_covars=covars,
+            covars=covars,
             posteriors=posteriors,
             covariance_anomaly_count=0,
+            covariance_diagnostic={
+                **subject._covariance_diagnostic(covars, expected_shape=(3, 7)),
+                "clip_performed": False,
+                "bounded_min": 1.0,
+                "bounded_max": 1.0,
+            },
             monitor_converged=True,
             monitor_iterations=3,
             monitor_history=(-100.0, -90.0, -91.0),
+            monitor_diagnostic=monitor_diagnostic,
         )
 
     monkeypatch.setattr(subject, "_fit_l1_evidence", fake_fit)
@@ -227,6 +269,25 @@ def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -
         assert seed_result["semantic_unlabelable_count"] == 0
         assert seed_result["negative_likelihood_delta_sector_count"] == 31
 
+    b1_report = subject.diagnose_l1_seed_grid_b1(
+        series,
+        feature_names=subject.BASE_FEATURES,
+        preprocess_family="identity",
+    )
+    assert "diagnostic_algorithm_version" not in report
+    assert b1_report["diagnostic_contract"] == "C-008-B1"
+    assert b1_report["diagnostic_algorithm_version"] == subject.C008_B1_DIAGNOSTIC_VERSION
+    b1_sector = b1_report["seed_results"]["42"]["sectors"]["L1-00"]
+    assert sum(
+        state["posterior_mass"] for state in b1_sector["train_posterior_evidence"]["states"].values()
+    ) == pytest.approx(150.0)
+    assert b1_sector["validation_posterior_evidence"]["states"]["1"]["effective_sample_size"] == pytest.approx(
+        20.0
+    )
+    assert b1_sector["validation_time_segment_evidence"][2]["end_row_inclusive"] == 59
+    assert b1_sector["convergence_evidence"]["negative_delta_terminal_count"] == 1
+    assert b1_sector["covariance_evidence"]["clip_performed"] is False
+
     with pytest.raises(subject.StateModelSetError, match="must be exactly"):
         subject.diagnose_l1_seed_grid(
             series,
@@ -234,6 +295,48 @@ def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -
             preprocess_family="identity",
             seeds=(42,),
         )
+
+
+def test_c008_b1_soft_evidence_exposes_mass_when_hard_state_is_missing() -> None:
+    posteriors = np.asarray(
+        [
+            [0.6, 0.4, 0.0],
+            [0.6, 0.4, 0.0],
+            [0.0, 0.4, 0.6],
+        ],
+        dtype=np.float64,
+    )
+    utility = np.asarray([-1.0, 0.0, 1.0], dtype=np.float64)
+
+    evidence = subject._posterior_state_evidence(posteriors, utility)
+
+    assert evidence["states"]["1"]["hard_count"] == 0
+    assert evidence["states"]["1"]["posterior_mass"] == pytest.approx(1.2)
+    assert evidence["states"]["1"]["effective_sample_size"] == pytest.approx(3.0)
+    assert evidence["states"]["1"]["posterior_weighted_utility"] == pytest.approx(0.0)
+    assert evidence["row_sum_max_abs_error"] == pytest.approx(0.0)
+    assert evidence["posterior_weighted_utility_pair_separation"]["0-2"] > 0.0
+
+
+def test_c008_b1_covariance_diagnostic_separates_raw_failure_dimensions() -> None:
+    raw = np.asarray(
+        [
+            [0.0, np.nan, 11.0],
+            [1e-4, 0.5, 1.0],
+            [0.1, 0.2, 0.3],
+        ],
+        dtype=np.float64,
+    )
+
+    evidence = subject._covariance_diagnostic(raw, expected_shape=(3, 3))
+
+    assert evidence["shape_valid"] is True
+    assert evidence["non_finite_count"] == 1
+    assert evidence["non_positive_count"] == 1
+    assert evidence["lower_bound_anomaly_count"] == 2
+    assert evidence["upper_bound_anomaly_count"] == 1
+    assert evidence["valid_for_bounding"] is False
+    assert len(evidence["anomaly_mask_sha256"]) == 64
 
 
 def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> None:

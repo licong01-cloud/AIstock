@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
+import platform
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -27,6 +30,7 @@ HMM_MAX_COVAR = 10.0
 HMM_TRANSITION_ALPHA = 0.1
 HMM_MIN_SELF_TRANSITION = 0.3
 C008_DIAGNOSTIC_SEEDS = tuple(range(42, 50))
+C008_B1_DIAGNOSTIC_VERSION = "hmm_risk_c008_b1_soft_evidence_v1"
 BASE_FEATURES = (
     "daily_return",
     "excess_return_Nd",
@@ -60,6 +64,15 @@ class StateModelSetError(RuntimeError):
     """Raised when model-set preparation cannot prove the approved contract."""
 
 
+class _L1FitDiagnosticError(StateModelSetError):
+    """Preserve the exact failed fit stage and numeric evidence for C-008-B1."""
+
+    def __init__(self, message: str, *, stage: str, evidence: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.evidence = dict(evidence)
+
+
 class _DuplicateKeyError(ValueError):
     pass
 
@@ -89,6 +102,20 @@ def sha256_bytes(value: bytes) -> str:
 
 def canonical_sha256(value: Any) -> str:
     return sha256_bytes(canonical_json_bytes(value))
+
+
+def diagnostic_runtime_versions() -> dict[str, str]:
+    try:
+        hmmlearn_version = importlib.metadata.version("hmmlearn")
+    except importlib.metadata.PackageNotFoundError:
+        hmmlearn_version = "not-installed"
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "python_executable_name": Path(sys.executable).name,
+        "numpy_version": np.__version__,
+        "hmmlearn_version": hmmlearn_version,
+    }
 
 
 def _require_sha256(value: str, field: str) -> str:
@@ -386,6 +413,92 @@ def _bounded_diag_covariance(covars: np.ndarray) -> tuple[np.ndarray, int]:
     return bounded, int(anomaly_mask.sum())
 
 
+def _covariance_diagnostic(value: Any, *, expected_shape: tuple[int, int]) -> dict[str, Any]:
+    """Describe raw fitted covariance without treating clipping as acceptance."""
+
+    try:
+        values = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        return {
+            "conversion_error": f"{type(exc).__name__}: {exc}",
+            "expected_shape": list(expected_shape),
+            "actual_shape": None,
+            "valid_for_bounding": False,
+        }
+    finite = np.isfinite(values)
+    finite_values = values[finite]
+    non_finite_count = int((~finite).sum())
+    non_positive_count = int(((values <= 0) & finite).sum())
+    lower_mask = (values < HMM_MIN_COVAR) & finite
+    upper_mask = (values > HMM_MAX_COVAR) & finite
+    anomaly_mask = lower_mask | upper_mask
+    shape_valid = values.shape == expected_shape
+    per_state = anomaly_mask.sum(axis=1).astype(int).tolist() if values.ndim == 2 else None
+    per_feature = anomaly_mask.sum(axis=0).astype(int).tolist() if values.ndim == 2 else None
+    return {
+        "expected_shape": list(expected_shape),
+        "actual_shape": list(values.shape),
+        "shape_valid": shape_valid,
+        "finite_count": int(finite.sum()),
+        "non_finite_count": non_finite_count,
+        "non_positive_count": non_positive_count,
+        "raw_min_finite": float(finite_values.min()) if finite_values.size else None,
+        "raw_max_finite": float(finite_values.max()) if finite_values.size else None,
+        "lower_bound_anomaly_count": int(lower_mask.sum()),
+        "upper_bound_anomaly_count": int(upper_mask.sum()),
+        "anomaly_count": int(anomaly_mask.sum()),
+        "anomaly_count_by_state": per_state,
+        "anomaly_count_by_feature": per_feature,
+        "anomaly_mask_sha256": canonical_sha256(anomaly_mask.astype(np.uint8).tolist()),
+        "min_covar": HMM_MIN_COVAR,
+        "max_covar": HMM_MAX_COVAR,
+        "valid_for_bounding": bool(shape_valid and non_finite_count == 0 and non_positive_count == 0),
+    }
+
+
+def _monitor_diagnostic(model: Any) -> dict[str, Any]:
+    history = tuple(float(value) for value in model.monitor_.history)
+    deltas: list[dict[str, Any]] = []
+    for index in range(1, len(history)):
+        previous = history[index - 1]
+        current = history[index]
+        absolute = current - previous
+        deltas.append(
+            {
+                "history_index": index,
+                "previous": previous,
+                "current": current,
+                "absolute_delta": absolute,
+                "relative_delta": absolute / max(abs(previous), np.finfo(np.float64).eps),
+                "negative": absolute < 0.0,
+                "terminal": index == len(history) - 1,
+            }
+        )
+    converged = bool(model.monitor_.converged)
+    iterations = int(model.monitor_.iter)
+    tolerance = float(model.monitor_.tol)
+    if not converged:
+        reason = "not_converged"
+    elif iterations >= int(model.monitor_.n_iter):
+        reason = "maximum_iterations_reached"
+    else:
+        reason = "monitor_delta_below_tolerance"
+    negative = [item for item in deltas if item["negative"]]
+    return {
+        "converged": converged,
+        "reason": reason,
+        "iterations": iterations,
+        "maximum_iterations": int(model.monitor_.n_iter),
+        "tolerance": tolerance,
+        "history": list(history),
+        "deltas": deltas,
+        "negative_delta_count": len(negative),
+        "minimum_absolute_delta": min((item["absolute_delta"] for item in negative), default=None),
+        "minimum_relative_delta": min((item["relative_delta"] for item in negative), default=None),
+        "negative_delta_terminal_count": sum(bool(item["terminal"]) for item in negative),
+    }
+
+
 def _smooth_transition_matrix(transmat: np.ndarray) -> np.ndarray:
     values = _transition_matrix(transmat, "fitted transmat", 3)
     smoothed = (values + HMM_TRANSITION_ALPHA) / (1.0 + HMM_TRANSITION_ALPHA * 3.0)
@@ -417,6 +530,112 @@ def _validation_state_statistics(posteriors: np.ndarray, utility: np.ndarray) ->
     return counts, scores
 
 
+def _posterior_state_evidence(posteriors: np.ndarray, utility: np.ndarray | None = None) -> dict[str, Any]:
+    """Return diagnostic-only hard/soft state evidence without applying pass thresholds."""
+
+    probabilities = np.asarray(posteriors, dtype=np.float64)
+    if probabilities.ndim != 2 or probabilities.shape[1] != 3 or probabilities.shape[0] == 0:
+        raise StateModelSetError("C-008-B1 posterior evidence requires non-empty Nx3 posteriors")
+    finite_mask = np.isfinite(probabilities)
+    row_sums = probabilities.sum(axis=1)
+    hard_states = probabilities.argmax(axis=1)
+    utility_values: np.ndarray | None = None
+    if utility is not None:
+        utility_values = np.asarray(utility, dtype=np.float64)
+        if utility_values.shape != (probabilities.shape[0],):
+            raise StateModelSetError("C-008-B1 utility rows must match posterior rows")
+
+    states: dict[str, Any] = {}
+    soft_utilities: dict[str, float | None] = {}
+    hard_utilities: dict[str, float | None] = {}
+    for state in range(3):
+        weights = probabilities[:, state]
+        mass = float(weights.sum())
+        squared_mass = float(np.square(weights).sum())
+        effective_sample_size = mass * mass / squared_mass if squared_mass > 0.0 else 0.0
+        hard_values = utility_values[hard_states == state] if utility_values is not None else None
+        hard_utility = (
+            float(hard_values.mean())
+            if hard_values is not None and hard_values.size and np.isfinite(hard_values).all()
+            else None
+        )
+        weighted_utility: float | None = None
+        weighted_variance: float | None = None
+        standard_error: float | None = None
+        if utility_values is not None and mass > 0.0 and np.isfinite(weights).all() and np.isfinite(utility_values).all():
+            weighted_utility = float(np.dot(weights, utility_values) / mass)
+            weighted_variance = float(np.dot(weights, np.square(utility_values - weighted_utility)) / mass)
+            standard_error = (
+                math.sqrt(max(weighted_variance, 0.0) / effective_sample_size)
+                if effective_sample_size > 0.0
+                else None
+            )
+        key = str(state)
+        states[key] = {
+            "hard_count": int((hard_states == state).sum()),
+            "posterior_mass": mass,
+            "normalized_mass_ratio": mass / probabilities.shape[0],
+            "effective_sample_size": effective_sample_size,
+            "hard_utility": hard_utility,
+            "posterior_weighted_utility": weighted_utility,
+            "posterior_weighted_variance": weighted_variance,
+            "posterior_weighted_standard_error": standard_error,
+            "hard_soft_utility_delta": (
+                weighted_utility - hard_utility
+                if weighted_utility is not None and hard_utility is not None
+                else None
+            ),
+        }
+        soft_utilities[key] = weighted_utility
+        hard_utilities[key] = hard_utility
+
+    pair_separation: dict[str, float | None] = {}
+    for left, right in ((0, 1), (0, 2), (1, 2)):
+        left_value = soft_utilities[str(left)]
+        right_value = soft_utilities[str(right)]
+        pair_separation[f"{left}-{right}"] = (
+            abs(left_value - right_value) if left_value is not None and right_value is not None else None
+        )
+    safe_probabilities = np.clip(probabilities, np.finfo(np.float64).tiny, 1.0)
+    entropy = -np.sum(probabilities * np.log(safe_probabilities), axis=1)
+    ordered = np.sort(probabilities, axis=1)
+    margins = ordered[:, -1] - ordered[:, -2]
+    return {
+        "row_count": int(probabilities.shape[0]),
+        "posterior_non_finite_count": int((~finite_mask).sum()),
+        "posterior_negative_count": int((probabilities < 0.0).sum()),
+        "row_sum_max_abs_error": float(np.max(np.abs(row_sums - 1.0))),
+        "row_sum_mean_abs_error": float(np.mean(np.abs(row_sums - 1.0))),
+        "entropy": {
+            "min": float(entropy.min()),
+            "max": float(entropy.max()),
+            "mean": float(entropy.mean()),
+        },
+        "top1_top2_margin": {
+            "min": float(margins.min()),
+            "max": float(margins.max()),
+            "mean": float(margins.mean()),
+        },
+        "states": states,
+        "posterior_weighted_utility_pair_separation": pair_separation,
+    }
+
+
+def _posterior_time_segment_evidence(posteriors: np.ndarray, utility: np.ndarray) -> list[dict[str, Any]]:
+    indices = np.array_split(np.arange(np.asarray(posteriors).shape[0]), 3)
+    output: list[dict[str, Any]] = []
+    for segment_number, segment in enumerate(indices, start=1):
+        output.append(
+            {
+                "segment": segment_number,
+                "start_row": int(segment[0]),
+                "end_row_inclusive": int(segment[-1]),
+                "evidence": _posterior_state_evidence(posteriors[segment], utility[segment]),
+            }
+        )
+    return output
+
+
 def _labels_from_validation(posteriors: np.ndarray, utility: np.ndarray, sector_code: str) -> tuple[dict[str, str], dict[str, float]]:
     counts, raw_scores = _validation_state_statistics(posteriors, utility)
     scores: dict[int, float] = {}
@@ -440,12 +659,15 @@ class _L1FitEvidence:
     startprob: np.ndarray
     transmat: np.ndarray
     means: np.ndarray
+    raw_covars: np.ndarray
     covars: np.ndarray
     posteriors: np.ndarray
     covariance_anomaly_count: int
+    covariance_diagnostic: dict[str, Any]
     monitor_converged: bool
     monitor_iterations: int
     monitor_history: tuple[float, ...]
+    monitor_diagnostic: dict[str, Any]
 
 
 def _fit_l1_evidence(
@@ -473,48 +695,80 @@ def _fit_l1_evidence(
     try:
         model.fit(train)
     except Exception as exc:
-        raise StateModelSetError(f"L1 model training failed for {code}: {exc}") from exc
-    monitor_converged = bool(model.monitor_.converged)
-    monitor_history = tuple(float(value) for value in model.monitor_.history)
+        raise _L1FitDiagnosticError(
+            f"L1 model training failed for {code}: {exc}",
+            stage="model_fit",
+            evidence={"error_type": type(exc).__name__, "error": str(exc)},
+        ) from exc
+    monitor_diagnostic = _monitor_diagnostic(model)
+    monitor_converged = bool(monitor_diagnostic["converged"])
+    monitor_history = tuple(float(value) for value in monitor_diagnostic["history"])
     if not monitor_converged:
-        raise StateModelSetError(f"L1 model training did not converge for {code}")
-    covars = np.asarray(model._covars_, dtype=np.float64)
-    if covars.shape != (3, feature_count) or not np.isfinite(covars).all() or np.any(covars <= 0):
-        raise StateModelSetError(f"L1 model covariance is invalid for {code}")
-    covars, covariance_anomaly_count = _bounded_diag_covariance(covars)
-    startprob = _probability_vector(model.startprob_, f"{code}.startprob", 3)
-    transmat = _smooth_transition_matrix(model.transmat_)
-    means = _finite_array(model.means_, f"{code}.means", ndim=2)
-    posteriors = causal_forward_posteriors(
-        validation,
-        startprob=startprob,
-        transmat=transmat,
-        means=means,
-        covars=covars,
-    )
+        raise _L1FitDiagnosticError(
+            f"L1 model training did not converge for {code}",
+            stage="monitor_not_converged",
+            evidence={"monitor": monitor_diagnostic},
+        )
+    raw_covariance_source = model._covars_
+    covariance_diagnostic = _covariance_diagnostic(raw_covariance_source, expected_shape=(3, feature_count))
+    if not covariance_diagnostic["valid_for_bounding"]:
+        raise _L1FitDiagnosticError(
+            f"L1 model covariance is invalid for {code}",
+            stage="raw_covariance_validation",
+            evidence={"monitor": monitor_diagnostic, "covariance": covariance_diagnostic},
+        )
+    raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
+    covars, covariance_anomaly_count = _bounded_diag_covariance(raw_covars)
+    covariance_diagnostic = {
+        **covariance_diagnostic,
+        "clip_performed": covariance_anomaly_count > 0,
+        "bounded_min": float(covars.min()),
+        "bounded_max": float(covars.max()),
+    }
+    try:
+        startprob = _probability_vector(model.startprob_, f"{code}.startprob", 3)
+        transmat = _smooth_transition_matrix(model.transmat_)
+        means = _finite_array(model.means_, f"{code}.means", ndim=2)
+        posteriors = causal_forward_posteriors(
+            validation,
+            startprob=startprob,
+            transmat=transmat,
+            means=means,
+            covars=covars,
+        )
+    except StateModelSetError as exc:
+        raise _L1FitDiagnosticError(
+            str(exc),
+            stage="parameter_or_posterior_validation",
+            evidence={"monitor": monitor_diagnostic, "covariance": covariance_diagnostic},
+        ) from exc
     return _L1FitEvidence(
         train=train,
         validation=validation,
         startprob=startprob,
         transmat=transmat,
         means=means,
+        raw_covars=raw_covars,
         covars=covars,
         posteriors=posteriors,
         covariance_anomaly_count=covariance_anomaly_count,
+        covariance_diagnostic=covariance_diagnostic,
         monitor_converged=monitor_converged,
         monitor_iterations=int(model.monitor_.iter),
         monitor_history=monitor_history,
+        monitor_diagnostic=monitor_diagnostic,
     )
 
 
-def diagnose_l1_seed_grid(
+def _diagnose_l1_seed_grid(
     series: Mapping[str, L1TrainingSeries],
     *,
     feature_names: Sequence[str],
     preprocess_family: str,
     seeds: Sequence[int] = C008_DIAGNOSTIC_SEEDS,
+    include_b1_evidence: bool,
 ) -> dict[str, Any]:
-    """Record C-008-A seed facts without choosing a seed or building an artifact."""
+    """Record the fixed C-008 grid without choosing a seed or building an artifact."""
 
     expected_codes = tuple(sorted(series))
     if len(expected_codes) != EXPECTED_L1_COUNT:
@@ -524,7 +778,7 @@ def diagnose_l1_seed_grid(
         raise StateModelSetError("L1 diagnostic feature definition is not an approved 7/20-dimensional family")
     diagnostic_seeds = tuple(int(seed) for seed in seeds)
     if diagnostic_seeds != C008_DIAGNOSTIC_SEEDS:
-        raise StateModelSetError(f"C-008-A diagnostic seeds must be exactly {C008_DIAGNOSTIC_SEEDS}")
+        raise StateModelSetError(f"C-008 diagnostic seeds must be exactly {C008_DIAGNOSTIC_SEEDS}")
     for item in series.values():
         item.validate(len(features))
     preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
@@ -542,12 +796,20 @@ def diagnose_l1_seed_grid(
                     random_seed=seed,
                 )
             except StateModelSetError as exc:
-                sectors[code] = {
+                failure = {
                     "status": "fit_failed",
                     "error": str(exc),
                     "training_rows": int(item.train_observations.shape[0]),
                     "validation_rows": int(item.validation_observations.shape[0]),
                 }
+                if include_b1_evidence:
+                    failure.update(
+                        {
+                            "failure_stage": getattr(exc, "stage", "unclassified_state_model_set_error"),
+                            "failure_evidence": getattr(exc, "evidence", {}),
+                        }
+                    )
+                sectors[code] = failure
                 continue
             counts, raw_utilities = _validation_state_statistics(
                 evidence.posteriors,
@@ -569,7 +831,7 @@ def diagnose_l1_seed_grid(
                 for index in range(1, len(evidence.monitor_history))
             ]
             negative_deltas = [value for value in deltas if value < 0.0]
-            sectors[code] = {
+            sector_record = {
                 "status": "labelable" if semantic_error is None else "semantic_unlabelable",
                 "semantic_error": semantic_error,
                 "state_counts": counts,
@@ -588,6 +850,32 @@ def diagnose_l1_seed_grid(
                 "covariance_min_after": float(evidence.covars.min()),
                 "covariance_max_after": float(evidence.covars.max()),
             }
+            if include_b1_evidence:
+                sector_record.update(
+                    {
+                        "diagnostic_algorithm_version": C008_B1_DIAGNOSTIC_VERSION,
+                        "train_posterior_evidence": _posterior_state_evidence(
+                            causal_forward_posteriors(
+                                evidence.train,
+                                startprob=evidence.startprob,
+                                transmat=evidence.transmat,
+                                means=evidence.means,
+                                covars=evidence.covars,
+                            )
+                        ),
+                        "validation_posterior_evidence": _posterior_state_evidence(
+                            evidence.posteriors,
+                            item.validation_future_utility,
+                        ),
+                        "validation_time_segment_evidence": _posterior_time_segment_evidence(
+                            evidence.posteriors,
+                            item.validation_future_utility,
+                        ),
+                        "convergence_evidence": evidence.monitor_diagnostic,
+                        "covariance_evidence": evidence.covariance_diagnostic,
+                    }
+                )
+            sectors[code] = sector_record
         values = list(sectors.values())
         seed_results[str(seed)] = {
             "seed": seed,
@@ -600,9 +888,11 @@ def diagnose_l1_seed_grid(
             ),
             "sectors": sectors,
         }
-    return {
-        "schema_version": "hmm_risk_l1_seed_diagnostic_v1",
-        "diagnostic_contract": "C-008-A",
+    report = {
+        "schema_version": (
+            "hmm_risk_l1_seed_diagnostic_b1_v1" if include_b1_evidence else "hmm_risk_l1_seed_diagnostic_v1"
+        ),
+        "diagnostic_contract": "C-008-B1" if include_b1_evidence else "C-008-A",
         "seeds": list(diagnostic_seeds),
         "selection_performed": False,
         "artifact_write_performed": False,
@@ -611,6 +901,45 @@ def diagnose_l1_seed_grid(
         "expected_sector_set_hash": canonical_sha256(expected_codes),
         "seed_results": seed_results,
     }
+    if include_b1_evidence:
+        report["diagnostic_algorithm_version"] = C008_B1_DIAGNOSTIC_VERSION
+    return report
+
+
+def diagnose_l1_seed_grid(
+    series: Mapping[str, L1TrainingSeries],
+    *,
+    feature_names: Sequence[str],
+    preprocess_family: str,
+    seeds: Sequence[int] = C008_DIAGNOSTIC_SEEDS,
+) -> dict[str, Any]:
+    """Record C-008-A seed facts without choosing a seed or building an artifact."""
+
+    return _diagnose_l1_seed_grid(
+        series,
+        feature_names=feature_names,
+        preprocess_family=preprocess_family,
+        seeds=seeds,
+        include_b1_evidence=False,
+    )
+
+
+def diagnose_l1_seed_grid_b1(
+    series: Mapping[str, L1TrainingSeries],
+    *,
+    feature_names: Sequence[str],
+    preprocess_family: str,
+    seeds: Sequence[int] = C008_DIAGNOSTIC_SEEDS,
+) -> dict[str, Any]:
+    """Record approved C-008-B1 soft/numeric evidence without changing hard-label semantics."""
+
+    return _diagnose_l1_seed_grid(
+        series,
+        feature_names=feature_names,
+        preprocess_family=preprocess_family,
+        seeds=seeds,
+        include_b1_evidence=True,
+    )
 
 
 def train_l1_models(

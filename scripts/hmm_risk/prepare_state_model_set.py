@@ -27,7 +27,9 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     build_state_model_set,
     canonical_json_bytes,
     canonical_sha256,
+    diagnostic_runtime_versions,
     diagnose_l1_seed_grid,
+    diagnose_l1_seed_grid_b1,
     parse_l2_artifact,
     train_l1_models,
     write_state_model_set,
@@ -318,8 +320,8 @@ def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, 
     }
 
 
-def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
-    """Run the user-approved C-008-A grid without selecting or writing models."""
+def _diagnose_c008(request: dict[str, Any], *, db_prefix: str, include_b1_evidence: bool) -> dict[str, Any]:
+    """Load one immutable PIT input and run the requested non-selecting C-008 diagnostic."""
 
     producer_commit = _git_commit()
     if str(request.get("producer_commit") or "") != producer_commit:
@@ -357,17 +359,21 @@ def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
                 "family": spec.family,
                 "family_version": spec.family_version,
                 "candidate_ids": list(spec.candidate_ids),
-                "diagnostic": diagnose_l1_seed_grid(
+                "diagnostic": (diagnose_l1_seed_grid_b1 if include_b1_evidence else diagnose_l1_seed_grid)(
                     series,
                     feature_names=feature_names,
                     preprocess_family=spec.preprocess_family,
                 ),
             }
         )
-    return {
-        "schema_version": "hmm_risk_c008_seed_diagnostic_report_v1",
+    report = {
+        "schema_version": (
+            "hmm_risk_c008_b1_soft_evidence_report_v1"
+            if include_b1_evidence
+            else "hmm_risk_c008_seed_diagnostic_report_v1"
+        ),
         "status": "diagnostic_complete",
-        "diagnostic_contract": "C-008-A",
+        "diagnostic_contract": "C-008-B1" if include_b1_evidence else "C-008-A",
         "producer_commit": producer_commit,
         "database": inputs["database"],
         "universe_key": source_spec.universe_key,
@@ -379,6 +385,23 @@ def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
         "ready_artifact_write_performed": False,
         "families": families,
     }
+    if include_b1_evidence:
+        report["runtime_versions"] = diagnostic_runtime_versions()
+        report["formal_acceptance_thresholds_applied"] = False
+        report["hard_semantic_authority_changed"] = False
+    return report
+
+
+def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run the user-approved C-008-A grid without selecting or writing models."""
+
+    return _diagnose_c008(request, db_prefix=db_prefix, include_b1_evidence=False)
+
+
+def diagnose_c008_b1(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run approved C-008-B1 evidence expansion without changing model semantics."""
+
+    return _diagnose_c008(request, db_prefix=db_prefix, include_b1_evidence=True)
 
 
 def _write_diagnostic_report(path: Path, report: dict[str, Any]) -> str:
@@ -411,9 +434,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", required=True, help="Output root for content-addressed READY sets.")
     parser.add_argument("--env-file", required=True, help="Credential-location file; secret values are never printed.")
     parser.add_argument("--db-env-prefix", required=True, help="Environment prefix such as TDX_DB_ or TDX_DB_DEV_.")
-    parser.add_argument(
+    diagnostic_group = parser.add_mutually_exclusive_group()
+    diagnostic_group.add_argument(
         "--c008-diagnostic-output",
-        help="Run only the approved seeds 42-49 diagnostic and atomically write its JSON report.",
+        help="Reproduce the approved C-008-A seeds 42-49 diagnostic report.",
+    )
+    diagnostic_group.add_argument(
+        "--c008-b1-diagnostic-output",
+        help="Run approved C-008-B1 soft/numeric evidence diagnostics without selection or model writes.",
     )
     return parser.parse_args()
 
@@ -423,19 +451,34 @@ def main() -> int:
     try:
         _read_env_file(Path(args.env_file).resolve())
         request = _load_request(Path(args.request).resolve())
-        if args.c008_diagnostic_output:
-            report_path = Path(args.c008_diagnostic_output).resolve()
-            report = diagnose_c008(request, db_prefix=str(args.db_env_prefix))
+        if args.c008_diagnostic_output or args.c008_b1_diagnostic_output:
+            include_b1 = bool(args.c008_b1_diagnostic_output)
+            report_path = Path(args.c008_b1_diagnostic_output or args.c008_diagnostic_output).resolve()
+            report = (
+                diagnose_c008_b1(request, db_prefix=str(args.db_env_prefix))
+                if include_b1
+                else diagnose_c008(request, db_prefix=str(args.db_env_prefix))
+            )
             report_sha256 = _write_diagnostic_report(report_path, report)
             receipt = {
-                "schema_version": "hmm_risk_c008_seed_diagnostic_receipt_v1",
+                "schema_version": (
+                    "hmm_risk_c008_b1_soft_evidence_receipt_v1"
+                    if include_b1
+                    else "hmm_risk_c008_seed_diagnostic_receipt_v1"
+                ),
                 "status": "diagnostic_complete",
+                "diagnostic_contract": "C-008-B1" if include_b1 else "C-008-A",
                 "report_path": str(report_path),
                 "report_sha256": report_sha256,
                 "selection_performed": False,
                 "ready_artifact_write_performed": False,
+                "formal_acceptance_thresholds_applied": False if include_b1 else None,
+                "hard_semantic_authority_changed": False if include_b1 else None,
                 "family_count": len(report["families"]),
             }
+            if not include_b1:
+                receipt.pop("formal_acceptance_thresholds_applied")
+                receipt.pop("hard_semantic_authority_changed")
         else:
             receipt = prepare(
                 request,
