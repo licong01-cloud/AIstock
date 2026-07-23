@@ -20,10 +20,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260723-063803c97851",
       "timestamp": "2026-07-23T04:28:35.929318Z"
+    },
+    {
+      "action": "companion_fix_pr_ready",
+      "actor": "Codex",
+      "note": "RD-Agent commit 4133d052 fixes the zero-byte size contract without relaxing SHA-256 or exact-size verification; companion PR https://github.com/licong01-cloud/RD-Agent/pull/8 is open and unmerged. Targeted RD validation: 21 passed; critical Ruff and diff checks passed.",
+      "timestamp": "2026-07-23T04:43:24.887531Z"
     }
   ],
   "evidence_uris": [
-    "qe_archive.run_evaluation:qelt_45b14e475c6d8fddd90c1ae085529635c33a6b3e23328e8a272bfa7728ddecef"
+    "qe_archive.run_evaluation:qelt_45b14e475c6d8fddd90c1ae085529635c33a6b3e23328e8a272bfa7728ddecef",
+    "https://github.com/licong01-cloud/RD-Agent/pull/8",
+    "git:licong01-cloud/RD-Agent@4133d052"
   ],
   "expected": "The immutable bundle verifier must accept manifest-declared zero-byte allowlisted files when SHA-256 and exact size both match, while continuing to reject missing, negative, non-integer, or mismatched sizes and hashes.",
   "file_scope_contract": {
@@ -41,7 +49,7 @@
     "scope_files": []
   },
   "first_seen_at": "2026-07-23T04:28:35.929323Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-837-rd-f-014-bundle-verifier-rejects-legitimate-zero-20260723",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2650,
@@ -62,7 +70,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
