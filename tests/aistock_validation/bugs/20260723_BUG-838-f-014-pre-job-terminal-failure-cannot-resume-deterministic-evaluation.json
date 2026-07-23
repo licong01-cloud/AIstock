@@ -30,10 +30,17 @@
       "actor": "Codex",
       "note": "Commit 47c4f02905ee5ce8c5281b03a7cd046153f4c1ca atomically requeues only definitive QELT_BUNDLE_INVALID pre-job failures with no remote or resource-event evidence. Targeted matrix: 34 passed; l0 and validation_module_registry_l0 passed.",
       "timestamp": "2026-07-23T05:18:30.805531Z"
+    },
+    {
+      "action": "fix_pr_ready",
+      "actor": "Codex",
+      "note": "Fix PR https://github.com/licong01-cloud/AIstock/pull/2654 is open and unmerged pending explicit user confirmation.",
+      "timestamp": "2026-07-23T05:22:20.723001Z"
     }
   ],
   "evidence_uris": [
-    "qe_archive.run_evaluation:qelt_45b14e475c6d8fddd90c1ae085529635c33a6b3e23328e8a272bfa7728ddecef"
+    "qe_archive.run_evaluation:qelt_45b14e475c6d8fddd90c1ae085529635c33a6b3e23328e8a272bfa7728ddecef",
+    "https://github.com/licong01-cloud/AIstock/pull/2654"
   ],
   "expected": "A definitively rejected pre-job submission must be recoverable under the same evaluation_id and immutable request identity, with an atomic reset of its unused resource session; ambiguous or post-job failures must remain non-retryable through this path.",
   "file_scope_contract": {
