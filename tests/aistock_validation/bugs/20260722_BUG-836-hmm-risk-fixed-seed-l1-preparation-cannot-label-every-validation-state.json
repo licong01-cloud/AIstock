@@ -35,10 +35,17 @@
       "actor": "codex",
       "note": "The first full C-008-B1 run failed closed during canonical JSON serialization because covariance-invalid fits exposed non-finite monitor history. No report, model, READY artifact, database write, or runtime change occurred. The repair preserves the fact as null plus history_non_finite_count and adds a distinguishing test.",
       "timestamp": "2026-07-23T06:39:21.9121065Z"
+    },
+    {
+      "action": "record_validation_evidence",
+      "actor": "codex",
+      "note": "C-008-B1 completed 496 diagnostic fits with canonical report SHA-256 4728e75e8c059d38688bcd969d19379d71b2ad5e9cd5e07ff69138c184462722. It selected no seed, applied no formal threshold, preserved hard semantic authority, and wrote no model or READY artifact. Evidence does not support B2; B3 remains a recommendation pending user decision.",
+      "timestamp": "2026-07-23T07:26:14.1580765Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5054376238"
+    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5054376238",
+    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5055624035"
   ],
   "expected": "C-008-B1 reuses the immutable C-008-A PIT input, both 31-sector L1 families and seeds 42-49 to record train/validation hard occupancy, filtered-posterior mass/ESS/utility/stability, complete convergence deltas and raw/bounded covariance evidence. It applies no formal acceptance threshold, preserves the approved hard-state semantic authority, performs no seed selection, writes no model or READY artifact, and does not implement B2/B3.",
   "file_scope_contract": {
