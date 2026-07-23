@@ -11,14 +11,18 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from typing import Any
 
 import psycopg2.extras
 
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256, canonicalize
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
+from backend.services.advisory_historical_range.source_roles import select_day_source_roles
 from backend.services.advisory_historical_range.models import (
     DAY_TRANSITIONS,
+    DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION,
+    DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
     OPERATION_TRANSITIONS,
     PROGRAM_TRANSITIONS,
     REASON_DAY_PLAN_CONFLICT,
@@ -36,12 +40,23 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeDatePlanV1,
     HistoricalRangeHMMBindingSetV1,
     HistoricalRangeDayAttemptV1,
+    HistoricalRangeDayAttemptReceiptPayloadV1,
+    HistoricalRangeDayReceiptPayloadV2,
+    HistoricalRangeDecisionMarkSetV1,
+    HistoricalRangeClaimedDayV1,
+    HistoricalRangeExecutionBatchV1,
+    HistoricalRangeExecutionRunV1,
+    HistoricalRangeExecutionOperationV1,
+    HistoricalRangeExecutionOperationReceiptV1,
+    HistoricalRangeExecutionOperationAttemptReceiptV1,
+    HistoricalRangePredecessorStateV1,
     HistoricalRangeDayPlanEntryV1,
     HistoricalRangeDayStatus,
     HistoricalRangeEpisodeSnapshotFactV1,
     HistoricalRangeListItemFactV1,
     HistoricalRangeListVersionFactV1,
     HistoricalRangeOperationAttemptV1,
+    HistoricalRangeOperationCancelledDayResultV1,
     HistoricalRangeOperationRequestV1,
     HistoricalRangeOperationStatus,
     HistoricalRangeOperationType,
@@ -49,6 +64,8 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeProgramStatus,
     HistoricalRangePlanningArtifactBindingsV1,
     HistoricalRangeResolvedRequestArtifactPayloadV1,
+    HistoricalRangeRunExecutionReceiptV1,
+    HistoricalRangeSuccessfulDayReadbackV1,
     HistoricalRangeSourceRequirementPlanV1,
     HistoricalRangeSourceCatalogCheckpointV1,
     HistoricalRangeCatalogPhase,
@@ -57,9 +74,11 @@ from backend.services.advisory_historical_range.models import (
     ResolvedHistoricalRangeRequestV1,
     build_candidate_input_hash,
     build_day_input_hash,
+    build_day_input_hash_v3,
     build_catalog_member_chain_hash,
     append_catalog_member_chain_hash,
     build_day_receipt_payload,
+    build_day_receipt_payload_v2,
     derive_day_run_id,
     derive_list_content_hash,
     derive_prefixed_id,
@@ -103,6 +122,40 @@ class DayCommitResult:
     list_version_id: str
     day_receipt_hash: str
     idempotent: bool
+
+
+@dataclass(frozen=True)
+class HistoricalRangeRunFinalizationFacts:
+    run: HistoricalRangeExecutionRunV1
+    resolved_request_hash: str
+    total_day_count: int
+    successful_days: tuple[HistoricalRangeSuccessfulDayReadbackV1, ...]
+    blocking_day_run_id: str | None
+    blocking_ordinal: int | None
+    blocking_trade_date: date | None
+    blocking_status: HistoricalRangeDayStatus | None
+    blocking_attempt_receipt_ref: HistoricalRangeArtifactRefV1 | None
+    unexecuted_day_count: int
+    cancelled_from_ordinal: int | None
+
+
+@dataclass(frozen=True)
+class HistoricalRangeCancellationDayContext:
+    batch_id: str
+    range_run_id: str
+    research_program_id: str
+    day_run_id: str
+    ordinal: int
+    row_version: int
+    status: HistoricalRangeDayStatus
+    attempt_no: int
+    worker_id: str | None
+    lease_token: str | None
+    fencing_token: int | None
+    resolved_request_hash: str
+    request_ref: HistoricalRangeArtifactRefV1
+    previous_list_hash: str | None
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None
 
 
 @dataclass(frozen=True)
@@ -632,6 +685,352 @@ class PostgresHistoricalRangeRepository:
                 created_row = dict(created)
                 self._assert_operation_matches(created_row, request)
                 return created_row, not inserted
+
+    def load_execution_operation(self, *, operation_id: str) -> HistoricalRangeExecutionOperationV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT operation.*, batch.request_payload_sha256 AS batch_resolved_request_hash,
+                           (operation.lease_expires_at IS NOT NULL
+                            AND operation.lease_expires_at <= clock_timestamp()) AS lease_expired
+                    FROM app.advisory_historical_range_operation AS operation
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = operation.batch_id
+                    WHERE operation.operation_id = %s
+                    """,
+                    (operation_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise self._repository_error("execution operation does not exist", operation_id=operation_id)
+        return self._execution_operation_from_row(dict(row))
+
+    def list_operation_attempt_receipt_refs(
+        self,
+        *,
+        operation_id: str,
+    ) -> tuple[HistoricalRangeArtifactRefV1, ...]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT attempt_receipt_ref
+                    FROM app.advisory_historical_range_operation_attempt
+                    WHERE operation_id = %s AND attempt_receipt_ref IS NOT NULL
+                    ORDER BY attempt_no
+                    """,
+                    (operation_id,),
+                )
+                return tuple(
+                    HistoricalRangeArtifactRefV1.model_validate(row["attempt_receipt_ref"])
+                    for row in cur.fetchall()
+                )
+
+    def claim_execution_operation(
+        self,
+        *,
+        operation_id: str,
+        expected_row_version: int,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+        expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
+    ) -> HistoricalRangeExecutionOperationV1:
+        if not 1 <= lease_seconds <= 86_400:
+            raise ValueError("operation lease_seconds must be between 1 and 86400")
+        worker_id = str(worker_id or "").strip()
+        lease_token = str(lease_token or "").strip()
+        if not worker_id or not lease_token:
+            raise ValueError("execution operation claim requires worker_id and lease_token")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                operation = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_operation",
+                    key_name="operation_id",
+                    key_value=operation_id,
+                )
+                self._require_row_version(operation, expected_row_version, entity="operation", identity=operation_id)
+                if str(operation["operation_type"]) not in {
+                    HistoricalRangeOperationType.RESUME.value,
+                    HistoricalRangeOperationType.CANCEL.value,
+                }:
+                    raise ValueError("claim_execution_operation accepts only RESUME or CANCEL")
+                status = HistoricalRangeOperationStatus(str(operation["status"]))
+                if status is HistoricalRangeOperationStatus.RUNNING:
+                    cur.execute("SELECT clock_timestamp() AS now")
+                    db_now = cur.fetchone()["now"]
+                    if operation["lease_expires_at"] is None or operation["lease_expires_at"] > db_now:
+                        raise HistoricalRangeContractError(
+                            REASON_ROW_VERSION_CONFLICT,
+                            "execution operation is already owned by an unexpired worker",
+                            context={"operation_id": operation_id},
+                        )
+                    self._require_expired_operation_attempt(current=operation, attempt=expired_attempt)
+                    self._validate_execution_operation_attempt_receipt(
+                        operation=operation,
+                        attempt=expired_attempt,
+                    )
+                    self._insert_operation_attempt(cur=cur, attempt=expired_attempt)
+                elif status not in {
+                    HistoricalRangeOperationStatus.QUEUED,
+                    HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+                    HistoricalRangeOperationStatus.WAITING_INPUT,
+                }:
+                    raise self._repository_error(
+                        "execution operation is not claimable",
+                        operation_id=operation_id,
+                        status=status.value,
+                    )
+                elif expired_attempt is not None:
+                    raise ValueError("expired_attempt is accepted only for a RUNNING takeover")
+                next_attempt = int(operation["attempt_no"]) + 1
+                next_fencing = int(operation["fencing_token"] or 0) + 1
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET status = 'RUNNING', row_version = row_version + 1,
+                        attempt_no = %s, worker_id = %s, lease_token = %s,
+                        lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                        fencing_token = %s, result_row_version = NULL,
+                        result_status = NULL, result_ref = NULL, result_hash = NULL,
+                        error_json = NULL, started_at = COALESCE(started_at, clock_timestamp()),
+                        finished_at = NULL
+                    WHERE operation_id = %s AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        next_attempt,
+                        worker_id,
+                        lease_token,
+                        lease_seconds,
+                        next_fencing,
+                        operation_id,
+                        expected_row_version,
+                    ),
+                )
+                claimed = cur.fetchone()
+                if claimed is None:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "execution operation changed while being claimed",
+                        context={"operation_id": operation_id},
+                    )
+        return self.load_execution_operation(operation_id=operation_id)
+
+    def finish_execution_operation(
+        self,
+        *,
+        claimed_operation: HistoricalRangeExecutionOperationV1,
+        receipt: HistoricalRangeExecutionOperationReceiptV1,
+        receipt_ref: HistoricalRangeArtifactRefV1,
+        attempt: HistoricalRangeOperationAttemptV1,
+    ) -> HistoricalRangeExecutionOperationV1:
+        if (
+            receipt.operation_id != claimed_operation.operation_id
+            or receipt.operation_type != claimed_operation.operation_type
+            or receipt.operation_idempotency_key != claimed_operation.operation_idempotency_key
+            or receipt.idempotency_payload_hash != claimed_operation.idempotency_payload_hash
+            or receipt.starting_batch_row_version != claimed_operation.expected_row_version
+            or receipt.attempt_no != claimed_operation.attempt_no
+            or receipt.fencing_token != claimed_operation.fencing_token
+            or attempt.operation_id != claimed_operation.operation_id
+            or attempt.attempt_no != claimed_operation.attempt_no
+            or attempt.fencing_token != claimed_operation.fencing_token
+            or attempt.worker_id != claimed_operation.worker_id
+            or attempt.lease_token != claimed_operation.lease_token
+            or attempt.attempt_receipt_ref != receipt_ref
+            or attempt.status != HistoricalRangeOperationStatus.COMPLETED.value
+            or attempt.input_hash != claimed_operation.idempotency_payload_hash
+            or attempt.result_hash != receipt_ref.semantic_content_hash
+            or canonicalize(attempt.result_cursor_json) != canonicalize(receipt.stable_cursor)
+            or attempt.reason_codes
+            or attempt.error_json is not None
+        ):
+            raise ValueError("terminal execution operation receipt/attempt differs from its durable claim")
+        batch = self.load_execution_batch(batch_id=claimed_operation.batch_id)
+        runs = self.list_all_execution_runs(batch_id=claimed_operation.batch_id)
+        actual_program_results = tuple(
+            (
+                run.range_run_id,
+                run.research_program_id,
+                run.status.value,
+                run.row_version,
+                run.final_receipt_ref,
+            )
+            for run in sorted(runs, key=lambda item: item.research_program_id)
+        )
+        receipt_program_results = tuple(
+            (
+                item.range_run_id,
+                item.research_program_id,
+                item.status.value,
+                item.row_version,
+                item.final_receipt_ref,
+            )
+            for item in receipt.program_results
+        )
+        if (
+            batch.row_version != receipt.ending_batch_row_version
+            or batch.status is not receipt.result_status
+            or actual_program_results != receipt_program_results
+            or self.load_cancelled_day_results(batch_id=claimed_operation.batch_id)
+            != receipt.cancelled_day_results
+        ):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "execution operation receipt differs from current batch/Program results",
+                context={"operation_id": claimed_operation.operation_id},
+            )
+        envelope = self._load_artifact(
+            receipt_ref,
+            expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+            resolved_request_hash=claimed_operation.resolved_request_hash,
+            expected_payload=receipt.model_dump(mode="json"),
+        )
+        upstream = tuple(
+            item.final_receipt_ref
+            for item in receipt.program_results
+            if item.final_receipt_ref is not None
+        ) + tuple(
+            item.attempt_receipt_ref for item in receipt.cancelled_day_results
+        ) + receipt.prior_nonterminal_attempt_receipt_refs
+        expected_upstream = tuple(
+            sorted(upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
+        )
+        if tuple(envelope.upstream_refs) != expected_upstream:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "execution operation receipt upstream set differs from its typed payload",
+                context={"operation_id": claimed_operation.operation_id},
+            )
+        self.transition_operation(
+            operation_id=claimed_operation.operation_id,
+            expected_row_version=claimed_operation.row_version,
+            target_status=HistoricalRangeOperationStatus.COMPLETED,
+            attempt_no=claimed_operation.attempt_no,
+            worker_id=None,
+            lease_token=None,
+            lease_expires_at=None,
+            fencing_token=claimed_operation.fencing_token,
+            stable_keyset_cursor_json=receipt.stable_cursor,
+            result_row_version=receipt.ending_batch_row_version,
+            result_status=receipt.result_status.value,
+            result_ref=receipt_ref,
+            attempt=attempt,
+        )
+        return self.load_execution_operation(operation_id=claimed_operation.operation_id)
+
+    def finish_execution_operation_failure(
+        self,
+        *,
+        claimed_operation: HistoricalRangeExecutionOperationV1,
+        attempt: HistoricalRangeOperationAttemptV1,
+    ) -> HistoricalRangeExecutionOperationV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_operation WHERE operation_id = %s",
+                    (claimed_operation.operation_id,),
+                )
+                current = cur.fetchone()
+        if current is None:
+            raise self._repository_error(
+                "execution operation does not exist",
+                operation_id=claimed_operation.operation_id,
+            )
+        self._validate_execution_operation_attempt_receipt(
+            operation=dict(current),
+            attempt=attempt,
+        )
+        self.transition_operation(
+            operation_id=claimed_operation.operation_id,
+            expected_row_version=claimed_operation.row_version,
+            target_status=HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+            attempt_no=claimed_operation.attempt_no,
+            worker_id=None,
+            lease_token=None,
+            lease_expires_at=None,
+            fencing_token=claimed_operation.fencing_token,
+            stable_keyset_cursor_json=claimed_operation.stable_keyset_cursor_json,
+            error_json=attempt.error_json,
+            attempt=attempt,
+        )
+        return self.load_execution_operation(operation_id=claimed_operation.operation_id)
+
+    def heartbeat_execution_operation(
+        self,
+        *,
+        claimed_operation: HistoricalRangeExecutionOperationV1,
+        lease_seconds: int,
+    ) -> HistoricalRangeExecutionOperationV1:
+        if not 1 <= lease_seconds <= 86_400:
+            raise ValueError("operation lease_seconds must be between 1 and 86400")
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET row_version = row_version + 1,
+                        lease_expires_at = clock_timestamp() + make_interval(secs => %s)
+                    WHERE operation_id = %s AND status = 'RUNNING'
+                      AND row_version = %s AND attempt_no = %s
+                      AND worker_id = %s AND lease_token = %s AND fencing_token = %s
+                    """,
+                    (
+                        lease_seconds,
+                        claimed_operation.operation_id,
+                        claimed_operation.row_version,
+                        claimed_operation.attempt_no,
+                        claimed_operation.worker_id,
+                        claimed_operation.lease_token,
+                        claimed_operation.fencing_token,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "execution operation heartbeat lost durable ownership",
+                        context={"operation_id": claimed_operation.operation_id},
+                    )
+        return self.load_execution_operation(operation_id=claimed_operation.operation_id)
+
+    def _validate_execution_operation_attempt_receipt(
+        self,
+        *,
+        operation: Mapping[str, Any],
+        attempt: HistoricalRangeOperationAttemptV1,
+    ) -> None:
+        if attempt.attempt_receipt_ref is None:
+            raise ValueError("expired execution operation attempt requires a receipt ref")
+        envelope = self._load_artifact(
+            attempt.attempt_receipt_ref,
+            expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+            resolved_request_hash=self._get_operation_artifact_identity(str(operation["operation_id"])),
+        )
+        payload = HistoricalRangeExecutionOperationAttemptReceiptV1.model_validate(envelope.payload)
+        if (
+            payload.operation_id != operation["operation_id"]
+            or payload.operation_type != operation["operation_type"]
+            or payload.attempt_no != int(operation["attempt_no"])
+            or payload.fencing_token != int(operation["fencing_token"])
+            or payload.worker_id != operation["worker_id"]
+            or payload.lease_token_hash != sha256(str(operation["lease_token"]).encode("utf-8")).hexdigest()
+            or payload.status != attempt.status
+            or payload.input_hash != attempt.input_hash
+            or payload.starting_batch_row_version != int(operation["expected_row_version"])
+            or canonicalize(payload.stable_cursor)
+            != canonicalize(attempt.result_cursor_json or attempt.input_cursor_json or {})
+            or payload.reason_codes != attempt.reason_codes
+            or canonicalize(payload.sanitized_error) != canonicalize(attempt.error_json)
+            or (
+                payload.lease_expired_at is not None
+                and payload.lease_expired_at != operation["lease_expires_at"]
+            )
+            or attempt.result_hash != attempt.attempt_receipt_ref.semantic_content_hash
+        ):
+            raise ValueError("execution operation attempt receipt differs from durable ownership")
+        self._require_exact_upstream_refs(envelope=envelope, expected_refs=())
 
     def claim_catalog_operation(
         self,
@@ -1452,8 +1851,1273 @@ class PostgresHistoricalRangeRepository:
                     exhausted=stop == len(date_plan.ordered_trade_dates),
                 )
 
+    def load_execution_batch(self, *, batch_id: str) -> HistoricalRangeExecutionBatchV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT batch_id, status, row_version, request_payload_sha256,
+                           request_artifact_ref, date_plan_ref, artifact_root_identity_hash
+                    FROM app.advisory_historical_range_batch
+                    WHERE batch_id = %s
+                    """,
+                    (batch_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise self._repository_error("execution batch does not exist", batch_id=batch_id)
+        payload = dict(row)
+        if payload["request_payload_sha256"] is None or payload["request_artifact_ref"] is None or payload["date_plan_ref"] is None:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "execution requires a sealed historical-range batch",
+                context={"batch_id": batch_id, "status": payload.get("status")},
+            )
+        return HistoricalRangeExecutionBatchV1(
+            batch_id=str(payload["batch_id"]),
+            status=HistoricalRangeBatchStatus(str(payload["status"])),
+            row_version=int(payload["row_version"]),
+            resolved_request_hash=str(payload["request_payload_sha256"]),
+            request_ref=HistoricalRangeArtifactRefV1.model_validate(payload["request_artifact_ref"]),
+            date_plan_ref=HistoricalRangeArtifactRefV1.model_validate(payload["date_plan_ref"]),
+            artifact_root_identity_hash=str(payload["artifact_root_identity_hash"]),
+        )
+
+    def list_execution_runs(
+        self,
+        *,
+        batch_id: str,
+        stable_after_research_program_id: str | None = None,
+        limit: int = 500,
+    ) -> tuple[HistoricalRangeExecutionRunV1, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT batch_id, range_run_id, research_program_id, status, row_version,
+                           materialized_day_count, day_plan_cursor_ordinal,
+                           final_receipt_ref, final_receipt_hash
+                    FROM app.advisory_historical_range_run
+                    WHERE batch_id = %s
+                      AND (%s IS NULL OR research_program_id > %s)
+                    ORDER BY research_program_id, range_run_id
+                    LIMIT %s
+                    """,
+                    (batch_id, stable_after_research_program_id, stable_after_research_program_id, limit),
+                )
+                rows = cur.fetchall()
+        return tuple(
+            HistoricalRangeExecutionRunV1(
+                batch_id=str(row["batch_id"]),
+                range_run_id=str(row["range_run_id"]),
+                research_program_id=str(row["research_program_id"]),
+                status=HistoricalRangeProgramStatus(str(row["status"])),
+                row_version=int(row["row_version"]),
+                materialized_day_count=int(row["materialized_day_count"]),
+                day_plan_cursor_ordinal=int(row["day_plan_cursor_ordinal"]),
+                final_receipt_ref=(
+                    HistoricalRangeArtifactRefV1.model_validate(row["final_receipt_ref"])
+                    if row["final_receipt_ref"] is not None
+                    else None
+                ),
+                final_receipt_hash=str(row["final_receipt_hash"]) if row["final_receipt_hash"] is not None else None,
+            )
+            for row in rows
+        )
+
+    def list_all_execution_runs(self, *, batch_id: str) -> tuple[HistoricalRangeExecutionRunV1, ...]:
+        """Read the complete Program set using the stable keyset page contract."""
+
+        page_size = 500
+        stable_after: str | None = None
+        rows: list[HistoricalRangeExecutionRunV1] = []
+        while True:
+            page = self.list_execution_runs(
+                batch_id=batch_id,
+                stable_after_research_program_id=stable_after,
+                limit=page_size,
+            )
+            if page and stable_after is not None and page[0].research_program_id <= stable_after:
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "execution repository returned a non-advancing Program page",
+                    context={"batch_id": batch_id, "stable_after_research_program_id": stable_after},
+                )
+            rows.extend(page)
+            if len(page) < page_size:
+                return tuple(rows)
+            next_stable_after = page[-1].research_program_id
+            if next_stable_after == stable_after:
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "execution repository Program cursor did not advance",
+                    context={"batch_id": batch_id, "stable_after_research_program_id": stable_after},
+                )
+            stable_after = next_stable_after
+
+    def claim_next_day(
+        self,
+        *,
+        batch_id: str,
+        range_run_id: str,
+        expected_run_row_version: int,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> HistoricalRangeClaimedDayV1 | None:
+        """Atomically assign only the earliest non-success day of one Program."""
+
+        if expected_run_row_version < 1:
+            raise ValueError("expected_run_row_version must be positive")
+        if not str(worker_id or "").strip() or not str(lease_token or "").strip():
+            raise ValueError("worker_id and lease_token are required")
+        if not 1 <= lease_seconds <= 86_400:
+            raise ValueError("lease_seconds must be between 1 and 86400")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT run.*, batch.status AS batch_status,
+                           batch.request_payload_sha256, batch.request_artifact_ref,
+                           batch.list_semantics_version, batch.list_semantics_hash
+                    FROM app.advisory_historical_range_run AS run
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    WHERE run.range_run_id = %s AND run.batch_id = %s
+                    FOR UPDATE OF run, batch
+                    """,
+                    (range_run_id, batch_id),
+                )
+                run = cur.fetchone()
+                if run is None:
+                    raise self._repository_error(
+                        "execution range run does not belong to batch",
+                        batch_id=batch_id,
+                        range_run_id=range_run_id,
+                    )
+                run_data = dict(run)
+                self._require_row_version(run_data, expected_run_row_version, entity="run", identity=range_run_id)
+                if str(run_data["status"]) != HistoricalRangeProgramStatus.RUNNING.value:
+                    return None
+                if str(run_data["batch_status"]) not in {
+                    HistoricalRangeBatchStatus.RUNNING.value,
+                    HistoricalRangeBatchStatus.PARTIAL.value,
+                }:
+                    return None
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM app.advisory_historical_range_day_run
+                    WHERE range_run_id = %s
+                      AND status NOT IN ('COMPLETE', 'VALID_NO_CANDIDATE')
+                    ORDER BY ordinal
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (range_run_id,),
+                )
+                day_row = cur.fetchone()
+                if day_row is None:
+                    return None
+                day_data = dict(day_row)
+                day_status = HistoricalRangeDayStatus(str(day_data["status"]))
+                if day_status in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED, HistoricalRangeDayStatus.RUNNING}:
+                    return None
+                if day_status not in {
+                    HistoricalRangeDayStatus.PENDING,
+                    HistoricalRangeDayStatus.WAITING_INPUT,
+                    HistoricalRangeDayStatus.RETRYABLE_FAILED,
+                    HistoricalRangeDayStatus.WAITING_PREVIOUS_DAY,
+                }:
+                    raise self._repository_error(
+                        "next execution day has an unsupported non-success state",
+                        day_run_id=str(day_data["day_run_id"]),
+                        status=day_status.value,
+                    )
+                if day_status is not HistoricalRangeDayStatus.WAITING_PREVIOUS_DAY:
+                    cur.execute(
+                        """
+                        UPDATE app.advisory_historical_range_day_run
+                        SET status = 'WAITING_PREVIOUS_DAY', row_version = row_version + 1
+                        WHERE day_run_id = %s AND row_version = %s
+                        RETURNING *
+                        """,
+                        (day_data["day_run_id"], day_data["row_version"]),
+                    )
+                    waiting = cur.fetchone()
+                    if waiting is None:
+                        raise HistoricalRangeContractError(
+                            REASON_ROW_VERSION_CONFLICT,
+                            "day changed while entering predecessor-wait state",
+                            context={"day_run_id": day_data["day_run_id"]},
+                        )
+                    day_data = dict(waiting)
+                predecessor = self._locked_predecessor_for_claim(cur=cur, day=day_data)
+                fencing_token = int(day_data.get("current_fencing_token") or 0) + 1
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_day_run
+                    SET status = 'RUNNING',
+                        row_version = row_version + 1,
+                        attempt_no = attempt_no + 1,
+                        worker_id = %s,
+                        lease_token = %s,
+                        lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                        current_fencing_token = %s,
+                        previous_day_run_hash = %s,
+                        previous_list_version_id = %s,
+                        previous_list_version_hash = %s,
+                        reason_codes_json = '[]'::jsonb,
+                        error_json = NULL,
+                        started_at = COALESCE(started_at, clock_timestamp())
+                    WHERE day_run_id = %s AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        worker_id,
+                        lease_token,
+                        lease_seconds,
+                        fencing_token,
+                        predecessor["day_receipt_hash"],
+                        predecessor["list_version_id"],
+                        predecessor["list_version_hash"],
+                        day_data["day_run_id"],
+                        day_data["row_version"],
+                    ),
+                )
+                claimed = cur.fetchone()
+                if claimed is None:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "day changed while being claimed",
+                        context={"day_run_id": day_data["day_run_id"]},
+                    )
+                self._sync_run_aggregate(cur=cur, range_run_id=range_run_id)
+                return self._claimed_day_from_row(
+                    row=dict(claimed),
+                    batch_id=batch_id,
+                    research_program_id=str(run_data["research_program_id"]),
+                    resolved_request_hash=str(run_data["request_payload_sha256"]),
+                    request_ref=HistoricalRangeArtifactRefV1.model_validate(run_data["request_artifact_ref"]),
+                    list_semantics_version=str(run_data["list_semantics_version"]),
+                    list_semantics_hash=str(run_data["list_semantics_hash"]),
+                    predecessor=predecessor,
+                )
+
+    def heartbeat_day(
+        self,
+        *,
+        claimed_day: HistoricalRangeClaimedDayV1,
+        lease_seconds: int,
+    ) -> HistoricalRangeClaimedDayV1:
+        if not 1 <= lease_seconds <= 86_400:
+            raise ValueError("lease_seconds must be between 1 and 86400")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_day_run AS day
+                    SET row_version = day.row_version + 1,
+                        lease_expires_at = clock_timestamp() + make_interval(secs => %s)
+                    FROM app.advisory_historical_range_run AS run
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    WHERE day.day_run_id = %s
+                      AND day.range_run_id = run.range_run_id
+                      AND run.batch_id = %s
+                      AND day.status = 'RUNNING'
+                      AND day.row_version = %s
+                      AND day.attempt_no = %s
+                      AND day.worker_id = %s
+                      AND day.lease_token = %s
+                      AND day.current_fencing_token = %s
+                    RETURNING day.*, run.research_program_id, batch.request_payload_sha256,
+                              batch.request_artifact_ref, batch.list_semantics_version,
+                              batch.list_semantics_hash
+                    """,
+                    (
+                        lease_seconds,
+                        claimed_day.day_run_id,
+                        claimed_day.batch_id,
+                        claimed_day.row_version,
+                        claimed_day.attempt_no,
+                        claimed_day.worker_id,
+                        claimed_day.lease_token,
+                        claimed_day.fencing_token,
+                    ),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise HistoricalRangeContractError(
+                REASON_ROW_VERSION_CONFLICT,
+                "day heartbeat lost its durable worker/lease/fencing ownership",
+                context={"day_run_id": claimed_day.day_run_id},
+            )
+        return self._claimed_day_from_row(
+            row=dict(row),
+            batch_id=claimed_day.batch_id,
+            research_program_id=str(row["research_program_id"]),
+            resolved_request_hash=str(row["request_payload_sha256"]),
+            request_ref=HistoricalRangeArtifactRefV1.model_validate(row["request_artifact_ref"]),
+            list_semantics_version=str(row["list_semantics_version"]),
+            list_semantics_hash=str(row["list_semantics_hash"]),
+            predecessor={
+                "day_receipt_ref": claimed_day.previous_day_receipt_ref.model_dump(mode="json")
+                if claimed_day.previous_day_receipt_ref is not None
+                else None,
+                "day_receipt_hash": claimed_day.previous_day_receipt_ref.semantic_content_hash
+                if claimed_day.previous_day_receipt_ref is not None
+                else None,
+                "list_version_id": claimed_day.previous_list_version_id,
+                "list_version_hash": claimed_day.previous_list_hash,
+            },
+        )
+
+    def load_expired_claimable_day(
+        self,
+        *,
+        batch_id: str,
+        range_run_id: str,
+    ) -> HistoricalRangeClaimedDayV1 | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT day.*, run.research_program_id, run.status AS run_status,
+                           batch.status AS batch_status, batch.request_payload_sha256,
+                           batch.request_artifact_ref, batch.list_semantics_version,
+                           batch.list_semantics_hash
+                    FROM app.advisory_historical_range_day_run AS day
+                    JOIN app.advisory_historical_range_run AS run ON run.range_run_id = day.range_run_id
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    WHERE run.batch_id = %s AND run.range_run_id = %s
+                      AND day.status NOT IN ('COMPLETE', 'VALID_NO_CANDIDATE')
+                    ORDER BY day.ordinal
+                    LIMIT 1
+                    """,
+                    (batch_id, range_run_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                day = dict(row)
+                if str(day["status"]) != HistoricalRangeDayStatus.RUNNING.value:
+                    return None
+                cur.execute("SELECT clock_timestamp() AS now")
+                db_now = cur.fetchone()["now"]
+                if day["lease_expires_at"] is None or day["lease_expires_at"] > db_now:
+                    return None
+                if str(day["run_status"]) != HistoricalRangeProgramStatus.RUNNING.value or str(
+                    day["batch_status"]
+                ) not in {HistoricalRangeBatchStatus.RUNNING.value, HistoricalRangeBatchStatus.PARTIAL.value}:
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "expired day belongs to a non-running Program/batch",
+                        context={"day_run_id": day["day_run_id"]},
+                    )
+                predecessor = self._locked_predecessor_for_claim(cur=cur, day=day)
+        return self._claimed_day_from_row(
+            row=day,
+            batch_id=batch_id,
+            research_program_id=str(day["research_program_id"]),
+            resolved_request_hash=str(day["request_payload_sha256"]),
+            request_ref=HistoricalRangeArtifactRefV1.model_validate(day["request_artifact_ref"]),
+            list_semantics_version=str(day["list_semantics_version"]),
+            list_semantics_hash=str(day["list_semantics_hash"]),
+            predecessor=predecessor,
+        )
+
+    def take_over_expired_day(
+        self,
+        *,
+        expired_claim: HistoricalRangeClaimedDayV1,
+        expired_attempt: HistoricalRangeDayAttemptV1,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> HistoricalRangeClaimedDayV1:
+        if not 1 <= lease_seconds <= 86_400:
+            raise ValueError("lease_seconds must be between 1 and 86400")
+        worker_id = str(worker_id or "").strip()
+        lease_token = str(lease_token or "").strip()
+        if not worker_id or not lease_token:
+            raise ValueError("day takeover requires worker_id and lease_token")
+        self._validate_day_attempt_artifacts(
+            attempt=expired_attempt,
+            range_run_id=expired_claim.range_run_id,
+            resolved_request_hash=expired_claim.resolved_request_hash,
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                current = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_day_run",
+                    key_name="day_run_id",
+                    key_value=expired_claim.day_run_id,
+                )
+                if (
+                    str(current["status"]) != HistoricalRangeDayStatus.RUNNING.value
+                    or int(current["row_version"]) != expired_claim.row_version
+                    or int(current["attempt_no"]) != expired_claim.attempt_no
+                    or current["worker_id"] != expired_claim.worker_id
+                    or current["lease_token"] != expired_claim.lease_token
+                    or int(current["current_fencing_token"] or 0) != expired_claim.fencing_token
+                ):
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "expired day ownership changed before takeover",
+                        context={"day_run_id": expired_claim.day_run_id},
+                    )
+                cur.execute("SELECT clock_timestamp() AS now")
+                db_now = cur.fetchone()["now"]
+                if current["lease_expires_at"] is None or current["lease_expires_at"] > db_now:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "day takeover requires a DB-clock expired lease",
+                        context={"day_run_id": expired_claim.day_run_id},
+                    )
+                self._require_expired_day_attempt(current=current, attempt=expired_attempt)
+                self._insert_day_attempt(cur=cur, attempt=expired_attempt)
+                next_attempt = int(current["attempt_no"]) + 1
+                next_fencing = int(current["current_fencing_token"]) + 1
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_day_run
+                    SET row_version = row_version + 1,
+                        attempt_no = %s, worker_id = %s, lease_token = %s,
+                        lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                        current_fencing_token = %s,
+                        reason_codes_json = '[]'::jsonb, error_json = NULL
+                    WHERE day_run_id = %s AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        next_attempt,
+                        worker_id,
+                        lease_token,
+                        lease_seconds,
+                        next_fencing,
+                        expired_claim.day_run_id,
+                        expired_claim.row_version,
+                    ),
+                )
+                claimed = cur.fetchone()
+                if claimed is None:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "expired day changed during takeover",
+                        context={"day_run_id": expired_claim.day_run_id},
+                    )
+                predecessor = self._locked_predecessor_for_claim(cur=cur, day=dict(claimed))
+        return self._claimed_day_from_row(
+            row=dict(claimed),
+            batch_id=expired_claim.batch_id,
+            research_program_id=expired_claim.research_program_id,
+            resolved_request_hash=expired_claim.resolved_request_hash,
+            request_ref=expired_claim.request_ref,
+            list_semantics_version=expired_claim.list_semantics_version,
+            list_semantics_hash=expired_claim.list_semantics_hash,
+            predecessor=predecessor,
+        )
+
+    def load_predecessor_state(self, *, day_run_id: str) -> HistoricalRangePredecessorStateV1:
+        """Load and fully verify only the immediately preceding committed day."""
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT previous_day_run_id
+                    FROM app.advisory_historical_range_day_run
+                    WHERE day_run_id = %s
+                    """,
+                    (day_run_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise self._repository_error("day run does not exist", day_run_id=day_run_id)
+        predecessor_day_run_id = row["previous_day_run_id"]
+        if predecessor_day_run_id is None:
+            return HistoricalRangePredecessorStateV1(day_run_id=day_run_id)
+        readback = self.full_readback_successful_day(day_run_id=str(predecessor_day_run_id))
+        active = tuple(
+            item
+            for item in readback.receipt.episode_snapshots
+            if item.recommendation_state in {"ACTIVE", "ACTIVE_AT_RANGE_END"}
+        )
+        return HistoricalRangePredecessorStateV1(
+            day_run_id=day_run_id,
+            list_version=readback.receipt.list_version,
+            active_episodes=active,
+            day_receipt_ref=readback.receipt_ref,
+        )
+
+    def full_readback_successful_day(self, *, day_run_id: str) -> HistoricalRangeSuccessfulDayReadbackV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT day.*, run.research_program_id, batch.request_payload_sha256
+                    FROM app.advisory_historical_range_day_run AS day
+                    JOIN app.advisory_historical_range_run AS run ON run.range_run_id = day.range_run_id
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    WHERE day.day_run_id = %s
+                    """,
+                    (day_run_id,),
+                )
+                day_row = cur.fetchone()
+                if day_row is None:
+                    raise self._repository_error("day run does not exist", day_run_id=day_run_id)
+                day = dict(day_row)
+                if day["status"] not in {
+                    HistoricalRangeDayStatus.COMPLETE.value,
+                    HistoricalRangeDayStatus.VALID_NO_CANDIDATE.value,
+                }:
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "full readback requires a successful day",
+                        context={"day_run_id": day_run_id, "status": day["status"]},
+                    )
+                if any(
+                    day.get(field) is None
+                    for field in (
+                        "day_input_hash",
+                        "candidate_artifact_ref",
+                        "list_version_id",
+                        "day_receipt_ref",
+                    )
+                ):
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "successful day has incomplete canonical refs",
+                        context={"day_run_id": day_run_id},
+                    )
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_list_version WHERE list_version_id = %s",
+                    (day["list_version_id"],),
+                )
+                list_row = cur.fetchone()
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_list_item WHERE list_version_id = %s ORDER BY symbol, action",
+                    (day["list_version_id"],),
+                )
+                item_rows = tuple(dict(item) for item in cur.fetchall())
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_episode_snapshot WHERE list_version_id = %s ORDER BY symbol, episode_id",
+                    (day["list_version_id"],),
+                )
+                episode_rows = tuple(dict(item) for item in cur.fetchall())
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_candidate WHERE day_run_id = %s ORDER BY symbol",
+                    (day_run_id,),
+                )
+                candidate_rows = tuple(dict(item) for item in cur.fetchall())
+                cur.execute(
+                    "SELECT * FROM app.advisory_historical_range_day_attempt WHERE day_run_id = %s AND attempt_no = %s",
+                    (day_run_id, day["attempt_no"]),
+                )
+                attempt_row = cur.fetchone()
+        if list_row is None or attempt_row is None:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "successful day lacks its canonical list or final attempt",
+                context={"day_run_id": day_run_id},
+            )
+        list_version = self._list_version_fact_from_row(dict(list_row))
+        items = tuple(self._list_item_fact_from_row(item) for item in item_rows)
+        episodes = tuple(self._episode_fact_from_row(item) for item in episode_rows)
+        candidates = tuple(self._candidate_fact_from_row(item) for item in candidate_rows)
+        attempt = self._day_attempt_from_row(dict(attempt_row))
+        receipt_ref = HistoricalRangeArtifactRefV1.model_validate(day["day_receipt_ref"])
+        candidate_ref = HistoricalRangeArtifactRefV1.model_validate(day["candidate_artifact_ref"])
+        if (
+            receipt_ref.semantic_content_hash != day["day_receipt_hash"]
+            or candidate_ref.semantic_content_hash != day["candidate_artifact_hash"]
+            or list_version.list_content_hash != day["list_version_hash"]
+            or list_version.list_version_id != day["list_version_id"]
+        ):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "successful day ref/hash columns do not close their canonical facts",
+                context={"day_run_id": day_run_id},
+            )
+        receipt_envelope = self._load_artifact(
+            receipt_ref,
+            expected_kind=HistoricalRangeArtifactKind.DAY_RECEIPT,
+            resolved_request_hash=str(day["request_payload_sha256"]),
+            range_run_id=str(day["range_run_id"]),
+            day_run_id=day_run_id,
+            allow_direct_predecessor_day_run_id=(
+                str(day["previous_day_run_id"]) if day["previous_day_run_id"] is not None else None
+            ),
+            validate_recursive_upstream=False,
+        )
+        receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(receipt_envelope.payload)
+        expected_receipt = build_day_receipt_payload_v2(
+            range_run_id=str(day["range_run_id"]),
+            day_run_id=day_run_id,
+            terminal_status=HistoricalRangeDayStatus(str(day["status"])),
+            day_input_hash=str(day["day_input_hash"]),
+            candidate_artifact_ref=candidate_ref,
+            decision_mark_set_ref=receipt.decision_mark_set_ref,
+            previous_day_receipt_ref=receipt.previous_day_receipt_ref,
+            list_version=list_version,
+            items=items,
+            episodes=episodes,
+        )
+        if canonicalize(receipt.model_dump(mode="json")) != canonicalize(expected_receipt):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "successful DAY_RECEIPT differs from DB list facts",
+                context={"day_run_id": day_run_id},
+            )
+        expected_upstream = (receipt.candidate_artifact_ref, receipt.decision_mark_set_ref) + (
+            (receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ()
+        )
+        if tuple(receipt_envelope.upstream_refs) != tuple(
+            sorted(expected_upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
+        ):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "successful DAY_RECEIPT upstream set differs from its typed payload",
+                context={"day_run_id": day_run_id},
+            )
+        candidate_envelope = self._load_artifact(
+            receipt.candidate_artifact_ref,
+            expected_kind=HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
+            resolved_request_hash=str(day["request_payload_sha256"]),
+            range_run_id=str(day["range_run_id"]),
+            day_run_id=day_run_id,
+        )
+        candidate_payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(candidate_envelope.payload)
+        if tuple(sorted(candidate_payload.candidates, key=lambda item: item.symbol)) != candidates:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "candidate DB facts differ from the exact candidate artifact",
+                context={"day_run_id": day_run_id},
+            )
+        mark_envelope = self._load_artifact(
+            receipt.decision_mark_set_ref,
+            expected_kind=HistoricalRangeArtifactKind.DECISION_MARK_SET,
+            resolved_request_hash=str(day["request_payload_sha256"]),
+            range_run_id=str(day["range_run_id"]),
+            day_run_id=day_run_id,
+            allow_direct_predecessor_day_run_id=(
+                str(day["previous_day_run_id"]) if day["previous_day_run_id"] is not None else None
+            ),
+            validate_recursive_upstream=False,
+        )
+        mark_set = HistoricalRangeDecisionMarkSetV1.model_validate(mark_envelope.payload)
+        if mark_set.predecessor_day_receipt_ref != receipt.previous_day_receipt_ref:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "decision mark predecessor differs from the successful day receipt",
+                context={"day_run_id": day_run_id},
+            )
+        expected_mark_upstream = (mark_set.upstream_request_ref,) + (
+            (mark_set.predecessor_day_receipt_ref,)
+            if mark_set.predecessor_day_receipt_ref is not None
+            else ()
+        )
+        if tuple(mark_envelope.upstream_refs) != tuple(
+            sorted(
+                expected_mark_upstream,
+                key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path),
+            )
+        ):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "decision mark upstream set differs from its typed direct lineage",
+                context={"day_run_id": day_run_id},
+            )
+        if attempt.attempt_receipt_ref != receipt_ref or attempt.status != str(day["status"]):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "successful day final attempt differs from the canonical receipt",
+                context={"day_run_id": day_run_id},
+            )
+        return HistoricalRangeSuccessfulDayReadbackV1(
+            ordinal=int(day["ordinal"]),
+            decision_trade_date=day["decision_trade_date"],
+            receipt_ref=receipt_ref,
+            receipt=receipt,
+            candidate_payload=candidate_payload,
+            decision_mark_set=mark_set,
+            attempt=attempt,
+        )
+
+    def load_episode_entry_sequences(self, *, range_run_id: str) -> dict[str, int]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT symbol, MAX(entry_sequence) AS entry_sequence
+                    FROM app.advisory_historical_range_episode_snapshot
+                    WHERE range_run_id = %s
+                    GROUP BY symbol
+                    """,
+                    (range_run_id,),
+                )
+                return {str(row["symbol"]): int(row["entry_sequence"]) for row in cur.fetchall()}
+
+    def load_reusable_candidate_ref(self, *, day_run_id: str) -> HistoricalRangeArtifactRefV1 | None:
+        """Return only the latest durable non-success attempt's exact candidate ref."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT day.status AS day_status, attempt.candidate_artifact_ref
+                    FROM app.advisory_historical_range_day_run AS day
+                    LEFT JOIN LATERAL (
+                        SELECT candidate_artifact_ref
+                        FROM app.advisory_historical_range_day_attempt
+                        WHERE day_run_id = day.day_run_id
+                          AND status IN ('WAITING_INPUT', 'RETRYABLE_FAILED')
+                          AND candidate_artifact_ref IS NOT NULL
+                        ORDER BY attempt_no DESC
+                        LIMIT 1
+                    ) AS attempt ON TRUE
+                    WHERE day.day_run_id = %s
+                    """,
+                    (day_run_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise self._repository_error("day run does not exist", day_run_id=day_run_id)
+        if str(row["day_status"]) != HistoricalRangeDayStatus.RUNNING.value:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "candidate reuse requires a currently claimed RUNNING day",
+                context={"day_run_id": day_run_id, "status": row["day_status"]},
+            )
+        if row["candidate_artifact_ref"] is None:
+            return None
+        return HistoricalRangeArtifactRefV1.model_validate(row["candidate_artifact_ref"])
+
+    def load_cancellation_day_contexts(
+        self,
+        *,
+        batch_id: str,
+    ) -> tuple[HistoricalRangeCancellationDayContext, ...]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT day.*, run.research_program_id,
+                           batch.request_payload_sha256, batch.request_artifact_ref,
+                           predecessor.day_receipt_ref AS previous_day_receipt_ref,
+                           predecessor.list_version_hash AS previous_list_hash
+                    FROM app.advisory_historical_range_day_run AS day
+                    JOIN app.advisory_historical_range_run AS run ON run.range_run_id = day.range_run_id
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    LEFT JOIN app.advisory_historical_range_day_run AS predecessor
+                      ON predecessor.day_run_id = day.previous_day_run_id
+                     AND predecessor.status IN ('COMPLETE', 'VALID_NO_CANDIDATE')
+                    WHERE run.batch_id = %s
+                      AND day.status NOT IN ('COMPLETE', 'VALID_NO_CANDIDATE', 'FAILED', 'CANCELLED')
+                    ORDER BY run.research_program_id, day.ordinal
+                    """,
+                    (batch_id,),
+                )
+                rows = tuple(dict(item) for item in cur.fetchall())
+        return tuple(
+            HistoricalRangeCancellationDayContext(
+                batch_id=batch_id,
+                range_run_id=str(row["range_run_id"]),
+                research_program_id=str(row["research_program_id"]),
+                day_run_id=str(row["day_run_id"]),
+                ordinal=int(row["ordinal"]),
+                row_version=int(row["row_version"]),
+                status=HistoricalRangeDayStatus(str(row["status"])),
+                attempt_no=int(row["attempt_no"]),
+                worker_id=(str(row["worker_id"]) if row.get("worker_id") is not None else None),
+                lease_token=(str(row["lease_token"]) if row.get("lease_token") is not None else None),
+                fencing_token=(
+                    int(row["current_fencing_token"])
+                    if row.get("current_fencing_token") is not None
+                    else None
+                ),
+                resolved_request_hash=str(row["request_payload_sha256"]),
+                request_ref=HistoricalRangeArtifactRefV1.model_validate(row["request_artifact_ref"]),
+                previous_list_hash=(str(row["previous_list_hash"]) if row["previous_list_hash"] else None),
+                previous_day_receipt_ref=(
+                    HistoricalRangeArtifactRefV1.model_validate(row["previous_day_receipt_ref"])
+                    if row["previous_day_receipt_ref"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        )
+
+    def load_cancelled_day_results(
+        self,
+        *,
+        batch_id: str,
+    ) -> tuple[HistoricalRangeOperationCancelledDayResultV1, ...]:
+        """Read every materialized cancelled day and its exact terminal attempt."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT run.research_program_id, day.range_run_id, day.day_run_id,
+                           day.ordinal, day.row_version, day.attempt_no,
+                           day.current_fencing_token, attempt.attempt_no AS receipt_attempt_no,
+                           attempt.fencing_token AS receipt_fencing_token,
+                           attempt.attempt_receipt_ref
+                    FROM app.advisory_historical_range_day_run AS day
+                    JOIN app.advisory_historical_range_run AS run
+                      ON run.range_run_id = day.range_run_id
+                    LEFT JOIN LATERAL (
+                        SELECT terminal.attempt_no, terminal.fencing_token,
+                               terminal.attempt_receipt_ref
+                        FROM app.advisory_historical_range_day_attempt AS terminal
+                        WHERE terminal.day_run_id = day.day_run_id
+                          AND terminal.status = 'CANCELLED'
+                        ORDER BY terminal.attempt_no DESC
+                        LIMIT 1
+                    ) AS attempt ON TRUE
+                    WHERE run.batch_id = %s AND day.status = 'CANCELLED'
+                    ORDER BY run.research_program_id, day.ordinal, day.day_run_id
+                    """,
+                    (batch_id,),
+                )
+                rows = tuple(dict(item) for item in cur.fetchall())
+        results: list[HistoricalRangeOperationCancelledDayResultV1] = []
+        for row in rows:
+            if (
+                row["attempt_receipt_ref"] is None
+                or row["receipt_attempt_no"] is None
+                or row["receipt_fencing_token"] is None
+                or int(row["receipt_attempt_no"]) != int(row["attempt_no"])
+                or int(row["receipt_fencing_token"]) != int(row["current_fencing_token"] or 0)
+            ):
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "cancelled day lacks its exact terminal attempt receipt",
+                    context={"batch_id": batch_id, "day_run_id": row["day_run_id"]},
+                )
+            results.append(
+                HistoricalRangeOperationCancelledDayResultV1(
+                    range_run_id=str(row["range_run_id"]),
+                    research_program_id=str(row["research_program_id"]),
+                    day_run_id=str(row["day_run_id"]),
+                    ordinal=int(row["ordinal"]),
+                    row_version=int(row["row_version"]),
+                    attempt_no=int(row["attempt_no"]),
+                    fencing_token=int(row["current_fencing_token"]),
+                    attempt_receipt_ref=HistoricalRangeArtifactRefV1.model_validate(
+                        row["attempt_receipt_ref"]
+                    ),
+                )
+            )
+        return tuple(results)
+
+    def cancel_execution_batch(
+        self,
+        *,
+        batch_id: str,
+        expected_batch_row_version: int,
+        attempts: Mapping[str, HistoricalRangeDayAttemptV1],
+    ) -> tuple[str, ...]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                batch = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_batch",
+                    key_name="batch_id",
+                    key_value=batch_id,
+                )
+                self._require_row_version(batch, expected_batch_row_version, entity="batch", identity=batch_id)
+                if str(batch["status"]) not in {
+                    HistoricalRangeBatchStatus.QUEUED.value,
+                    HistoricalRangeBatchStatus.RUNNING.value,
+                    HistoricalRangeBatchStatus.PARTIAL.value,
+                    HistoricalRangeBatchStatus.WAITING_INPUT.value,
+                }:
+                    raise self._repository_error(
+                        "historical execution batch is not cancellable",
+                        batch_id=batch_id,
+                        status=batch["status"],
+                    )
+                cur.execute(
+                    """
+                    SELECT day.*
+                    FROM app.advisory_historical_range_day_run AS day
+                    JOIN app.advisory_historical_range_run AS run ON run.range_run_id = day.range_run_id
+                    WHERE run.batch_id = %s
+                      AND day.status NOT IN ('COMPLETE', 'VALID_NO_CANDIDATE', 'FAILED', 'CANCELLED')
+                    ORDER BY day.range_run_id, day.ordinal
+                    FOR UPDATE OF day
+                    """,
+                    (batch_id,),
+                )
+                days = tuple(dict(item) for item in cur.fetchall())
+                if set(attempts) != {str(item["day_run_id"]) for item in days}:
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "cancel attempt set differs from current nonterminal day set",
+                        context={"batch_id": batch_id},
+                    )
+                touched_runs: set[str] = set()
+                for day in days:
+                    attempt = attempts[str(day["day_run_id"])]
+                    self._validate_day_attempt_artifacts(
+                        attempt=attempt,
+                        range_run_id=str(day["range_run_id"]),
+                        resolved_request_hash=str(batch["request_payload_sha256"]),
+                    )
+                    expected_attempt = int(day["attempt_no"]) if day["status"] == "RUNNING" else int(day["attempt_no"]) + 1
+                    expected_fencing = (
+                        int(day["current_fencing_token"])
+                        if day["status"] == "RUNNING"
+                        else int(day["current_fencing_token"] or 0) + 1
+                    )
+                    if (
+                        attempt.attempt_no != expected_attempt
+                        or attempt.fencing_token != expected_fencing
+                        or attempt.status != HistoricalRangeDayStatus.CANCELLED.value
+                    ):
+                        raise ValueError("cancel attempt differs from the current day ownership/state")
+                    if day["status"] == "RUNNING" and (
+                        attempt.worker_id != day["worker_id"] or attempt.lease_token != day["lease_token"]
+                    ):
+                        raise ValueError("RUNNING day cancel attempt must fence its current worker/lease")
+                    self._insert_day_attempt(cur=cur, attempt=attempt)
+                    cur.execute(
+                        """
+                        UPDATE app.advisory_historical_range_day_run
+                        SET status = 'CANCELLED', row_version = row_version + 1,
+                            attempt_no = %s, current_fencing_token = %s,
+                            worker_id = NULL, lease_token = NULL, lease_expires_at = NULL,
+                            reason_codes_json = %s, error_json = %s,
+                            started_at = COALESCE(started_at, %s), finished_at = %s
+                        WHERE day_run_id = %s AND row_version = %s
+                        """,
+                        (
+                            attempt.attempt_no,
+                            attempt.fencing_token,
+                            psycopg2.extras.Json(list(attempt.reason_codes)),
+                            psycopg2.extras.Json(attempt.error_json),
+                            attempt.started_at,
+                            attempt.finished_at,
+                            day["day_run_id"],
+                            day["row_version"],
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise HistoricalRangeContractError(
+                            REASON_ROW_VERSION_CONFLICT,
+                            "day changed while being cancelled",
+                            context={"day_run_id": day["day_run_id"]},
+                        )
+                    touched_runs.add(str(day["range_run_id"]))
+                cur.execute(
+                    "SELECT range_run_id, day_plan_cursor_ordinal FROM app.advisory_historical_range_run WHERE batch_id = %s",
+                    (batch_id,),
+                )
+                run_rows = tuple(dict(item) for item in cur.fetchall())
+                total = int(batch["trade_date_count"])
+                for run in run_rows:
+                    if int(run["day_plan_cursor_ordinal"]) < total:
+                        cur.execute(
+                            """
+                            UPDATE app.advisory_historical_range_run
+                            SET cancelled_from_ordinal = COALESCE(cancelled_from_ordinal, %s),
+                                row_version = row_version + 1
+                            WHERE range_run_id = %s
+                            """,
+                            (int(run["day_plan_cursor_ordinal"]) + 1, run["range_run_id"]),
+                        )
+                    touched_runs.add(str(run["range_run_id"]))
+                for range_run_id in sorted(touched_runs):
+                    self._sync_run_aggregate(cur=cur, range_run_id=range_run_id)
+                aggregate = self._batch_aggregate(cur=cur, batch_id=batch_id)
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_batch
+                    SET status = 'CANCELLING', row_version = row_version + 1,
+                        successful_day_count = %s, terminal_failed_day_count = %s,
+                        completed_program_count = %s, failed_program_count = %s,
+                        waiting_program_count = %s, retryable_program_count = %s,
+                        partial_program_count = %s, recoverable_program_count = %s,
+                        started_at = COALESCE(started_at, clock_timestamp())
+                    WHERE batch_id = %s AND row_version = %s
+                    """,
+                    (
+                        aggregate["successful_day_count"],
+                        aggregate["terminal_failed_day_count"],
+                        aggregate["completed_program_count"],
+                        aggregate["failed_program_count"],
+                        aggregate["waiting_program_count"],
+                        aggregate["retryable_program_count"],
+                        aggregate["partial_program_count"],
+                        aggregate["recoverable_program_count"],
+                        batch_id,
+                        expected_batch_row_version,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "batch changed while committing CANCELLING aggregate",
+                        context={"batch_id": batch_id},
+                    )
+        return tuple(sorted(touched_runs))
+
+    def load_run_finalization_facts(self, *, range_run_id: str) -> HistoricalRangeRunFinalizationFacts:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT run.batch_id, run.range_run_id, run.research_program_id,
+                           run.status, run.row_version, run.materialized_day_count,
+                           run.day_plan_cursor_ordinal, run.final_receipt_ref,
+                           run.final_receipt_hash, run.cancelled_from_ordinal,
+                           batch.request_payload_sha256,
+                           batch.trade_date_count
+                    FROM app.advisory_historical_range_run AS run
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = run.batch_id
+                    WHERE run.range_run_id = %s
+                    """,
+                    (range_run_id,),
+                )
+                run_row = cur.fetchone()
+                if run_row is None:
+                    raise self._repository_error("range run does not exist", range_run_id=range_run_id)
+                run_data = dict(run_row)
+                cur.execute(
+                    """
+                    SELECT day_run_id, ordinal, decision_trade_date, status
+                    FROM app.advisory_historical_range_day_run
+                    WHERE range_run_id = %s
+                    ORDER BY ordinal
+                    """,
+                    (range_run_id,),
+                )
+                day_rows = tuple(dict(item) for item in cur.fetchall())
+        run = HistoricalRangeExecutionRunV1(
+            batch_id=str(run_data["batch_id"]),
+            range_run_id=str(run_data["range_run_id"]),
+            research_program_id=str(run_data["research_program_id"]),
+            status=HistoricalRangeProgramStatus(str(run_data["status"])),
+            row_version=int(run_data["row_version"]),
+            materialized_day_count=int(run_data["materialized_day_count"]),
+            day_plan_cursor_ordinal=int(run_data["day_plan_cursor_ordinal"]),
+            final_receipt_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(run_data["final_receipt_ref"])
+                if run_data["final_receipt_ref"] is not None
+                else None
+            ),
+            final_receipt_hash=(str(run_data["final_receipt_hash"]) if run_data["final_receipt_hash"] else None),
+        )
+        successful: list[HistoricalRangeSuccessfulDayReadbackV1] = []
+        blocking: dict[str, Any] | None = None
+        success_statuses = {
+            HistoricalRangeDayStatus.COMPLETE.value,
+            HistoricalRangeDayStatus.VALID_NO_CANDIDATE.value,
+        }
+        for expected_ordinal, day in enumerate(day_rows, start=1):
+            if int(day["ordinal"]) != expected_ordinal:
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "materialized day ordinals are not contiguous",
+                    context={"range_run_id": range_run_id},
+                )
+            if blocking is None and str(day["status"]) in success_statuses:
+                readback = self.full_readback_successful_day(day_run_id=str(day["day_run_id"]))
+                if successful:
+                    previous = successful[-1]
+                    if (
+                        readback.receipt.previous_day_receipt_ref != previous.receipt_ref
+                        or readback.receipt.list_version.previous_list_version_id
+                        != previous.receipt.list_version.list_version_id
+                        or readback.receipt.list_version.previous_list_hash
+                        != previous.receipt.list_version.list_content_hash
+                        or readback.receipt.list_version.previous_day_receipt_hash
+                        != previous.receipt_ref.semantic_content_hash
+                    ):
+                        raise HistoricalRangeContractError(
+                            REASON_REPOSITORY_CONFLICT,
+                            "successful day receipt chain has a non-exact predecessor edge",
+                            context={"range_run_id": range_run_id, "ordinal": expected_ordinal},
+                        )
+                elif (
+                    readback.receipt.previous_day_receipt_ref is not None
+                    or readback.receipt.list_version.previous_list_version_id is not None
+                ):
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "first successful day unexpectedly carries predecessor state",
+                        context={"range_run_id": range_run_id},
+                    )
+                successful.append(readback)
+                continue
+            if blocking is None:
+                blocking = day
+            elif str(day["status"]) in success_statuses:
+                raise HistoricalRangeContractError(
+                    REASON_REPOSITORY_CONFLICT,
+                    "range run contains a successful day after a blocking ordinal",
+                    context={"range_run_id": range_run_id, "ordinal": expected_ordinal},
+                )
+        blocking_ref: HistoricalRangeArtifactRefV1 | None = None
+        blocking_status: HistoricalRangeDayStatus | None = None
+        blocking_ordinal: int | None = None
+        blocking_day_run_id: str | None = None
+        if blocking is not None:
+            blocking_day_run_id = str(blocking["day_run_id"])
+            blocking_ordinal = int(blocking["ordinal"])
+            blocking_status = HistoricalRangeDayStatus(str(blocking["status"]))
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT attempt_receipt_ref
+                        FROM app.advisory_historical_range_day_attempt
+                        WHERE day_run_id = %s AND status = %s
+                        ORDER BY attempt_no DESC
+                        LIMIT 1
+                        """,
+                        (blocking_day_run_id, blocking_status.value),
+                    )
+                    attempt_row = cur.fetchone()
+            if attempt_row is not None and attempt_row["attempt_receipt_ref"] is not None:
+                blocking_ref = HistoricalRangeArtifactRefV1.model_validate(attempt_row["attempt_receipt_ref"])
+        executed_count = len(successful) + (
+            1
+            if blocking_status
+            in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED}
+            else 0
+        )
+        total_day_count = int(run_data["trade_date_count"])
+        return HistoricalRangeRunFinalizationFacts(
+            run=run,
+            resolved_request_hash=str(run_data["request_payload_sha256"]),
+            total_day_count=total_day_count,
+            successful_days=tuple(successful),
+            blocking_day_run_id=blocking_day_run_id,
+            blocking_ordinal=blocking_ordinal,
+            blocking_trade_date=(blocking["decision_trade_date"] if blocking is not None else None),
+            blocking_status=blocking_status,
+            blocking_attempt_receipt_ref=blocking_ref,
+            unexecuted_day_count=max(total_day_count - executed_count, 0),
+            cancelled_from_ordinal=(
+                int(run_data["cancelled_from_ordinal"])
+                if run_data["cancelled_from_ordinal"] is not None
+                else None
+            ),
+        )
+
+    def finish_failed_day(
+        self,
+        *,
+        claimed_day: HistoricalRangeClaimedDayV1,
+        target_status: HistoricalRangeDayStatus,
+        attempt: HistoricalRangeDayAttemptV1,
+        reason_codes: Sequence[str],
+        error_json: dict[str, Any],
+    ) -> dict[str, Any]:
+        if target_status not in {
+            HistoricalRangeDayStatus.WAITING_INPUT,
+            HistoricalRangeDayStatus.RETRYABLE_FAILED,
+            HistoricalRangeDayStatus.FAILED,
+            HistoricalRangeDayStatus.CANCELLED,
+        }:
+            raise ValueError("finish_failed_day requires a non-success terminal or recoverable status")
+        day_identity = self._get_day_artifact_identity(claimed_day.day_run_id)
+        range_run_id = day_identity["range_run_id"]
+        resolved_request_hash = claimed_day.resolved_request_hash
+        if str(range_run_id) != claimed_day.range_run_id:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "claimed day range identity differs from durable state",
+                context={"day_run_id": claimed_day.day_run_id},
+            )
+        self._validate_day_attempt_artifacts(
+            attempt=attempt,
+            range_run_id=claimed_day.range_run_id,
+            resolved_request_hash=resolved_request_hash,
+        )
+        if (
+            attempt.day_run_id != claimed_day.day_run_id
+            or attempt.attempt_no != claimed_day.attempt_no
+            or attempt.worker_id != claimed_day.worker_id
+            or attempt.lease_token != claimed_day.lease_token
+            or attempt.fencing_token != claimed_day.fencing_token
+            or attempt.status != target_status.value
+            or attempt.reason_codes != tuple(sorted(reason_codes))
+            or canonicalize(attempt.error_json) != canonicalize(error_json)
+        ):
+            raise ValueError("failed day attempt does not close the claimed worker/fencing/error identity")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                day = self._lock_row(
+                    cur,
+                    table="advisory_historical_range_day_run",
+                    key_name="day_run_id",
+                    key_value=claimed_day.day_run_id,
+                )
+                self._require_row_version(day, claimed_day.row_version, entity="day", identity=claimed_day.day_run_id)
+                if (
+                    str(day["status"]) != HistoricalRangeDayStatus.RUNNING.value
+                    or int(day.get("attempt_no") or 0) != claimed_day.attempt_no
+                    or day.get("worker_id") != claimed_day.worker_id
+                    or day.get("lease_token") != claimed_day.lease_token
+                    or int(day.get("current_fencing_token") or 0) != claimed_day.fencing_token
+                ):
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "failed day commit lost its active worker/lease/fencing ownership",
+                        context={"day_run_id": claimed_day.day_run_id},
+                    )
+                self._insert_day_attempt(cur=cur, attempt=attempt)
+                terminal = target_status in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED}
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_day_run
+                    SET status = %s,
+                        row_version = row_version + 1,
+                        worker_id = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        reason_codes_json = %s,
+                        error_json = %s,
+                        finished_at = CASE WHEN %s THEN clock_timestamp() ELSE NULL END
+                    WHERE day_run_id = %s
+                      AND row_version = %s
+                      AND current_fencing_token = %s
+                      AND worker_id = %s
+                      AND lease_token = %s
+                    RETURNING *
+                    """,
+                    (
+                        target_status.value,
+                        psycopg2.extras.Json(list(reason_codes)),
+                        psycopg2.extras.Json(error_json),
+                        terminal,
+                        claimed_day.day_run_id,
+                        claimed_day.row_version,
+                        claimed_day.fencing_token,
+                        claimed_day.worker_id,
+                        claimed_day.lease_token,
+                    ),
+                )
+                updated = cur.fetchone()
+                if updated is None:
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "failed day update lost its fencing ownership",
+                        context={"day_run_id": claimed_day.day_run_id},
+                    )
+                self._sync_run_aggregate(cur=cur, range_run_id=claimed_day.range_run_id)
+                self._sync_batch_aggregate(cur=cur, batch_id=claimed_day.batch_id)
+                return dict(updated)
+
     def append_day_attempt(self, attempt: HistoricalRangeDayAttemptV1) -> bool:
-        range_run_id, resolved_request_hash = self._get_day_artifact_identity(attempt.day_run_id)
+        day_identity = self._get_day_artifact_identity(attempt.day_run_id)
+        range_run_id = str(day_identity["range_run_id"])
+        resolved_request_hash = str(day_identity["request_payload_sha256"])
         self._validate_day_attempt_artifacts(
             attempt=attempt,
             range_run_id=range_run_id,
@@ -1524,6 +3188,7 @@ class PostgresHistoricalRangeRepository:
                     """
                     UPDATE app.advisory_historical_range_batch
                     SET status = %s,
+                        waiting_stage = %s,
                         row_version = row_version + 1,
                         successful_day_count = %s,
                         terminal_failed_day_count = %s,
@@ -1541,6 +3206,7 @@ class PostgresHistoricalRangeRepository:
                     """,
                     (
                         target_status.value,
+                        "DAY_INPUT" if target_status is HistoricalRangeBatchStatus.WAITING_INPUT else None,
                         aggregate["successful_day_count"],
                         aggregate["terminal_failed_day_count"],
                         aggregate["completed_program_count"],
@@ -1575,7 +3241,7 @@ class PostgresHistoricalRangeRepository:
             HistoricalRangeProgramStatus.COMPLETED,
             HistoricalRangeProgramStatus.FAILED,
             HistoricalRangeProgramStatus.CANCELLED,
-        }
+        } or (target_status is HistoricalRangeProgramStatus.PARTIAL and final_receipt_ref is not None)
         range_run_id_from_db, resolved_request_hash = self._get_run_artifact_identity(range_run_id)
         if terminal:
             if final_receipt_ref is None:
@@ -1602,6 +3268,12 @@ class PostgresHistoricalRangeRepository:
                     key_value=range_run_id,
                 )
                 self._require_row_version(current, expected_row_version, entity="run", identity=range_run_id)
+                if (
+                    str(current["status"]) == HistoricalRangeProgramStatus.PARTIAL.value
+                    and current["finished_at"] is not None
+                    and current["final_receipt_ref"] is not None
+                ):
+                    raise self._repository_error("finished PARTIAL range run is immutable", range_run_id=range_run_id)
                 require_state_transition(
                     HistoricalRangeProgramStatus(str(current["status"])),
                     target_status,
@@ -1609,16 +3281,9 @@ class PostgresHistoricalRangeRepository:
                     entity="Program range run",
                 )
                 aggregate = self._run_aggregate(cur=cur, range_run_id=range_run_id)
-                if (
-                    target_status
-                    in {
-                        HistoricalRangeProgramStatus.FAILED,
-                        HistoricalRangeProgramStatus.CANCELLED,
-                    }
-                    and aggregate["nonterminal_day_count"] != 0
-                ):
+                if terminal and aggregate["active_nonterminal_day_count"] != 0:
                     raise self._repository_error(
-                        "terminal range run still contains non-terminal materialized days",
+                        "terminal range run still contains active non-terminal materialized days",
                         range_run_id=range_run_id,
                     )
                 now = datetime.now(UTC)
@@ -1666,6 +3331,43 @@ class PostgresHistoricalRangeRepository:
                 self._sync_batch_aggregate(cur=cur, batch_id=str(current["batch_id"]))
                 return updated
 
+    def finish_range_run(
+        self,
+        *,
+        range_run_id: str,
+        expected_row_version: int,
+        target_status: HistoricalRangeProgramStatus,
+        receipt: HistoricalRangeRunExecutionReceiptV1,
+        final_receipt_ref: HistoricalRangeArtifactRefV1,
+    ) -> dict[str, Any]:
+        if receipt.range_run_id != range_run_id or receipt.status != target_status.value:
+            raise ValueError("run execution receipt differs from the requested terminal transition")
+        envelope = self._load_artifact(
+            final_receipt_ref,
+            expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+            resolved_request_hash=receipt.resolved_request_hash,
+            range_run_id=range_run_id,
+            expected_payload=receipt.model_dump(mode="json"),
+        )
+        expected_upstream = receipt.ordered_success_day_receipt_refs + (
+            (receipt.blocking_attempt_receipt_ref,) if receipt.blocking_attempt_receipt_ref is not None else ()
+        )
+        expected_upstream = tuple(
+            sorted(expected_upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
+        )
+        if tuple(envelope.upstream_refs) != expected_upstream:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "RANGE_RECEIPT upstream set differs from the typed run receipt payload",
+                context={"range_run_id": range_run_id},
+            )
+        return self.transition_run(
+            range_run_id=range_run_id,
+            expected_row_version=expected_row_version,
+            target_status=target_status,
+            final_receipt_ref=final_receipt_ref,
+        )
+
     def transition_day(
         self,
         *,
@@ -1673,6 +3375,8 @@ class PostgresHistoricalRangeRepository:
         expected_row_version: int,
         target_status: HistoricalRangeDayStatus,
         attempt_no: int,
+        worker_id: str | None = None,
+        lease_token: str | None = None,
         lease_expires_at: datetime | None = None,
         fencing_token: int | None = None,
         previous_day_run_hash: str | None = None,
@@ -1690,7 +3394,16 @@ class PostgresHistoricalRangeRepository:
             HistoricalRangeDayStatus.VALID_NO_CANDIDATE,
         }:
             raise ValueError("successful day states must use commit_successful_day")
-        range_run_id, resolved_request_hash = self._get_day_artifact_identity(day_run_id)
+        if target_status is HistoricalRangeDayStatus.RUNNING:
+            worker_id = str(worker_id or "").strip()
+            lease_token = str(lease_token or "").strip()
+            if not worker_id or not lease_token:
+                raise ValueError("RUNNING day transition requires worker_id and lease_token")
+        elif worker_id is not None or lease_token is not None:
+            raise ValueError("non-running day transition cannot retain worker_id or lease_token")
+        day_identity = self._get_day_artifact_identity(day_run_id)
+        range_run_id = str(day_identity["range_run_id"])
+        resolved_request_hash = str(day_identity["request_payload_sha256"])
         for evidence in (attempt, expired_attempt):
             if evidence is not None:
                 self._validate_day_attempt_artifacts(
@@ -1717,6 +3430,8 @@ class PostgresHistoricalRangeRepository:
                         entity="day",
                     )
                     if current_status is HistoricalRangeDayStatus.RUNNING and attempt_no == int(current["attempt_no"]):
+                        if worker_id != current.get("worker_id") or lease_token != current.get("lease_token"):
+                            raise ValueError("day heartbeat cannot change worker/lease identity")
                         if attempt is not None or expired_attempt is not None:
                             raise ValueError("day heartbeat cannot append an attempt receipt")
                     elif current_status is HistoricalRangeDayStatus.RUNNING:
@@ -1772,6 +3487,8 @@ class PostgresHistoricalRangeRepository:
                     SET status = %s,
                         row_version = row_version + 1,
                         attempt_no = %s,
+                        worker_id = %s,
+                        lease_token = %s,
                         lease_expires_at = %s,
                         current_fencing_token = COALESCE(%s, current_fencing_token),
                         previous_day_run_hash = COALESCE(previous_day_run_hash, %s),
@@ -1787,6 +3504,8 @@ class PostgresHistoricalRangeRepository:
                     (
                         target_status.value,
                         attempt_no,
+                        worker_id,
+                        lease_token,
                         lease_expires_at,
                         fencing_token,
                         previous_day_run_hash,
@@ -1868,6 +3587,8 @@ class PostgresHistoricalRangeRepository:
                     if current_status is HistoricalRangeOperationStatus.RUNNING and attempt_no == int(
                         current["attempt_no"]
                     ):
+                        if worker_id != current.get("worker_id") or lease_token != current.get("lease_token"):
+                            raise ValueError("operation heartbeat cannot change worker/lease identity")
                         if attempt is not None or expired_attempt is not None:
                             raise ValueError("operation heartbeat cannot append an attempt receipt")
                     elif current_status is HistoricalRangeOperationStatus.RUNNING:
@@ -1959,6 +3680,8 @@ class PostgresHistoricalRangeRepository:
         terminal_status: HistoricalRangeDayStatus,
         day_input_hash: str,
         candidate_artifact_ref: HistoricalRangeArtifactRefV1,
+        decision_mark_set_ref: HistoricalRangeArtifactRefV1 | None = None,
+        previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None,
         day_receipt_ref: HistoricalRangeArtifactRefV1,
         list_version: HistoricalRangeListVersionFactV1,
         candidates: Sequence[HistoricalRangeCandidateFactV1],
@@ -2072,13 +3795,25 @@ class PostgresHistoricalRangeRepository:
         if candidate_payload.calendar_identity_hash != catalog.calendar_identity_hash:
             raise ValueError("candidate artifact calendar identity differs from the sealed catalog")
         component_ids = {item.component_id for item in frozen_program.admitted_package_projection.components}
-        expected_members = tuple(
-            member
-            for member in catalog.members
-            if member.decision_trade_date in {None, candidate_payload.decision_trade_date}
-            and member.package_id in {None, frozen_program.package_id}
-            and member.component_id in {None, *component_ids}
-        )
+        r3_evidence = decision_mark_set_ref is not None
+        source_role_selection = None
+        if r3_evidence:
+            source_role_selection = select_day_source_roles(
+                catalog=catalog,
+                research_program_id=frozen_program.research_program_id,
+                package_id=frozen_program.package_id,
+                component_ids=component_ids,
+                decision_trade_date=candidate_payload.decision_trade_date,
+            )
+            expected_members = source_role_selection.candidate_members
+        else:
+            expected_members = tuple(
+                member
+                for member in catalog.members
+                if member.decision_trade_date in {None, candidate_payload.decision_trade_date}
+                and member.package_id in {None, frozen_program.package_id}
+                and member.component_id in {None, *component_ids}
+            )
         expected_refs = {
             (str(item.revision_id), str(item.revision_hash))
             for item in expected_members
@@ -2086,6 +3821,43 @@ class PostgresHistoricalRangeRepository:
         candidate_refs = {(item.revision_id, item.revision_hash) for item in candidate_payload.source_revision_refs}
         if not expected_refs or candidate_refs != expected_refs:
             raise ValueError("candidate artifact source refs do not equal the sealed Program/day catalog members")
+        mark_payload: HistoricalRangeDecisionMarkSetV1 | None = None
+        if decision_mark_set_ref is not None:
+            if source_role_selection is None:
+                raise AssertionError("R3 mark evidence requires an exact source-role selection")
+            mark_envelope = self._load_artifact(
+                decision_mark_set_ref,
+                expected_kind=HistoricalRangeArtifactKind.DECISION_MARK_SET,
+                resolved_request_hash=resolved_request_hash,
+                range_run_id=range_run_id,
+                day_run_id=day_run_id,
+                exact_upstream_refs=(
+                    request_ref,
+                    *((previous_day_receipt_ref,) if previous_day_receipt_ref is not None else ()),
+                ),
+                allow_direct_predecessor_day_run_id=(
+                    str(day_identity.get("previous_day_run_id"))
+                    if day_identity.get("previous_day_run_id") is not None
+                    else None
+                ),
+            )
+            mark_payload = HistoricalRangeDecisionMarkSetV1.model_validate(mark_envelope.payload)
+            expected_mark_refs = {
+                (item.revision_id, item.revision_hash)
+                for item in source_role_selection.decision_mark_members
+            }
+            actual_mark_refs = {(item.revision_id, item.revision_hash) for item in mark_payload.source_revision_refs}
+            if (
+                mark_payload.range_run_id != range_run_id
+                or mark_payload.day_run_id != day_run_id
+                or mark_payload.decision_trade_date != candidate_payload.decision_trade_date
+                or mark_payload.source_revision_refs != mark_envelope.source_revision_refs
+                or not expected_mark_refs
+                or actual_mark_refs != expected_mark_refs
+                or mark_payload.upstream_request_ref != request_ref
+                or mark_payload.predecessor_day_receipt_ref != previous_day_receipt_ref
+            ):
+                raise ValueError("decision-mark artifact does not close the exact R3 Program/day evidence")
         expected_candidate_input_hash = build_candidate_input_hash(
             range_run_id=range_run_id,
             research_program_id=candidate_payload.research_program_id,
@@ -2101,35 +3873,96 @@ class PostgresHistoricalRangeRepository:
         )
         if candidate_payload.candidate_input_hash != expected_candidate_input_hash:
             raise ValueError("candidate_input_hash does not close the sealed Program/day inputs")
-        expected_day_input_hash = build_day_input_hash(
-            candidate_input_hash=candidate_payload.candidate_input_hash,
-            candidate_artifact_ref=candidate_artifact_ref,
-            previous_list_hash=list_version.previous_list_hash,
-            previous_day_receipt_hash=list_version.previous_day_receipt_hash,
-            list_semantics_hash=str(day_identity["list_semantics_hash"]),
-        )
+        if r3_evidence:
+            if decision_mark_set_ref.artifact_kind is not HistoricalRangeArtifactKind.DECISION_MARK_SET:
+                raise ValueError("decision_mark_set_ref must reference DECISION_MARK_SET")
+            predecessor_receipt_hash = (
+                previous_day_receipt_ref.semantic_content_hash if previous_day_receipt_ref else None
+            )
+            if list_version.previous_day_receipt_hash != predecessor_receipt_hash:
+                raise ValueError("R3 predecessor receipt hash must equal the exact predecessor receipt ref")
+            if (previous_day_receipt_ref is None) != (list_version.previous_list_hash is None):
+                raise ValueError("R3 predecessor list/receipt refs must be supplied together")
+            expected_day_input_hash = build_day_input_hash_v3(
+                candidate_input_hash=candidate_payload.candidate_input_hash,
+                candidate_artifact_ref=candidate_artifact_ref,
+                decision_mark_set_ref=decision_mark_set_ref,
+                decision_mark_policy_hash=str(mark_payload.mark_policy_hash),
+                previous_list_hash=list_version.previous_list_hash,
+                previous_day_receipt_ref=previous_day_receipt_ref,
+                list_semantics_version=str(day_identity["list_semantics_version"]),
+                list_semantics_hash=str(day_identity["list_semantics_hash"]),
+            )
+        else:
+            if previous_day_receipt_ref is not None:
+                raise ValueError("legacy successful-day commit cannot supply an R3 predecessor receipt ref")
+            expected_day_input_hash = build_day_input_hash(
+                candidate_input_hash=candidate_payload.candidate_input_hash,
+                candidate_artifact_ref=candidate_artifact_ref,
+                previous_list_hash=list_version.previous_list_hash,
+                previous_day_receipt_hash=list_version.previous_day_receipt_hash,
+                list_semantics_hash=str(day_identity["list_semantics_hash"]),
+            )
         if day_input_hash != expected_day_input_hash:
             raise ValueError("day_input_hash does not derive from the candidate artifact and list predecessor")
-        day_receipt_payload = build_day_receipt_payload(
-            range_run_id=range_run_id,
-            day_run_id=day_run_id,
-            terminal_status=terminal_status,
-            day_input_hash=day_input_hash,
-            candidate_artifact_ref=candidate_artifact_ref,
-            list_version=list_version,
-            items=items,
-            episodes=episodes,
-            reason_codes=reason_codes,
-        )
-        self._load_artifact(
+        if r3_evidence:
+            day_receipt_payload = build_day_receipt_payload_v2(
+                range_run_id=range_run_id,
+                day_run_id=day_run_id,
+                terminal_status=terminal_status,
+                day_input_hash=day_input_hash,
+                candidate_artifact_ref=candidate_artifact_ref,
+                decision_mark_set_ref=decision_mark_set_ref,
+                previous_day_receipt_ref=previous_day_receipt_ref,
+                list_version=list_version,
+                items=items,
+                episodes=episodes,
+                reason_codes=reason_codes,
+            )
+        else:
+            day_receipt_payload = build_day_receipt_payload(
+                range_run_id=range_run_id,
+                day_run_id=day_run_id,
+                terminal_status=terminal_status,
+                day_input_hash=day_input_hash,
+                candidate_artifact_ref=candidate_artifact_ref,
+                list_version=list_version,
+                items=items,
+                episodes=episodes,
+                reason_codes=reason_codes,
+            )
+        required_day_receipt_upstream = (candidate_artifact_ref,)
+        if r3_evidence:
+            required_day_receipt_upstream = (
+                candidate_artifact_ref,
+                decision_mark_set_ref,
+                *((previous_day_receipt_ref,) if previous_day_receipt_ref is not None else ()),
+            )
+        day_receipt_envelope = self._load_artifact(
             day_receipt_ref,
             expected_kind=HistoricalRangeArtifactKind.DAY_RECEIPT,
             resolved_request_hash=resolved_request_hash,
             range_run_id=range_run_id,
             day_run_id=day_run_id,
             expected_payload=day_receipt_payload,
-            required_upstream_refs=(candidate_artifact_ref,),
+            required_upstream_refs=required_day_receipt_upstream,
+            exact_upstream_refs=required_day_receipt_upstream if r3_evidence else None,
+            allow_direct_predecessor_day_run_id=(
+                str(day_identity.get("previous_day_run_id"))
+                if r3_evidence and day_identity.get("previous_day_run_id") is not None
+                else None
+            ),
+            validate_recursive_upstream=not r3_evidence,
         )
+        if r3_evidence:
+            parsed_receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(day_receipt_envelope.payload)
+            if (
+                parsed_receipt.candidate_artifact_ref != candidate_artifact_ref
+                or parsed_receipt.decision_mark_set_ref != decision_mark_set_ref
+                or parsed_receipt.previous_day_receipt_ref != previous_day_receipt_ref
+                or parsed_receipt.day_input_hash != day_input_hash
+            ):
+                raise ValueError("R3 successful day receipt does not close its exact candidate/mark/predecessor edges")
         self._validate_day_attempt_artifacts(
             attempt=attempt,
             range_run_id=range_run_id,
@@ -2202,6 +4035,14 @@ class PostgresHistoricalRangeRepository:
                         "day fencing token differs from the active attempt",
                         context={"day_run_id": day_run_id},
                     )
+                if r3_evidence and (
+                    day.get("worker_id") != attempt.worker_id or day.get("lease_token") != attempt.lease_token
+                ):
+                    raise HistoricalRangeContractError(
+                        REASON_ROW_VERSION_CONFLICT,
+                        "successful day attempt worker/lease differs from the active durable claim",
+                        context={"day_run_id": day_run_id},
+                    )
                 if attempt.attempt_no != int(day["attempt_no"]):
                     raise ValueError("successful day attempt_no differs from the active day attempt")
                 if list_version.range_run_id != str(day["range_run_id"]):
@@ -2229,6 +4070,8 @@ class PostgresHistoricalRangeRepository:
                     UPDATE app.advisory_historical_range_day_run
                     SET status = %s,
                         row_version = row_version + 1,
+                        worker_id = NULL,
+                        lease_token = NULL,
                         lease_expires_at = NULL,
                         day_input_hash = %s,
                         candidate_artifact_ref = %s,
@@ -2457,10 +4300,11 @@ class PostgresHistoricalRangeRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT day.range_run_id, day.decision_trade_date,
+                    SELECT day.range_run_id, day.decision_trade_date, day.previous_day_run_id,
                            run.research_program_id,
                            batch.request_payload_sha256,
                            batch.request_artifact_ref,
+                           batch.list_semantics_version,
                            batch.list_semantics_hash
                     FROM app.advisory_historical_range_day_run AS day
                     JOIN app.advisory_historical_range_run AS run
@@ -2583,6 +4427,8 @@ class PostgresHistoricalRangeRepository:
         range_run_id: str,
         resolved_request_hash: str,
     ) -> None:
+        day_identity = self._get_day_artifact_identity(attempt.day_run_id)
+        request_ref = HistoricalRangeArtifactRefV1.model_validate(day_identity["request_artifact_ref"])
         if attempt.candidate_artifact_ref is not None:
             self._load_artifact(
                 attempt.candidate_artifact_ref,
@@ -2592,15 +4438,67 @@ class PostgresHistoricalRangeRepository:
                 day_run_id=attempt.day_run_id,
             )
         if attempt.attempt_receipt_ref is not None:
-            required = (attempt.candidate_artifact_ref,) if attempt.candidate_artifact_ref is not None else ()
-            self._load_artifact(
+            receipt_header = self._artifact_store.load(attempt.attempt_receipt_ref)
+            envelope = self._load_artifact(
                 attempt.attempt_receipt_ref,
                 expected_kind=HistoricalRangeArtifactKind.DAY_RECEIPT,
                 resolved_request_hash=resolved_request_hash,
                 range_run_id=range_run_id,
                 day_run_id=attempt.day_run_id,
-                required_upstream_refs=required,
+                allow_direct_predecessor_day_run_id=(
+                    str(day_identity["previous_day_run_id"])
+                    if day_identity.get("previous_day_run_id") is not None
+                    else None
+                ),
+                validate_recursive_upstream=receipt_header.payload_schema_version
+                not in {
+                    DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION,
+                    DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
+                },
             )
+            if envelope.payload_schema_version == DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION:
+                receipt = HistoricalRangeDayAttemptReceiptPayloadV1.model_validate(envelope.payload)
+                if (
+                    receipt.day_run_id != attempt.day_run_id
+                    or receipt.attempt_no != attempt.attempt_no
+                    or receipt.fencing_token != attempt.fencing_token
+                    or receipt.worker_id != attempt.worker_id
+                    or receipt.lease_token_hash != sha256(attempt.lease_token.encode("utf-8")).hexdigest()
+                    or receipt.status != attempt.status
+                    or receipt.attempt_input_hash != attempt.input_hash
+                    or receipt.candidate_artifact_ref != attempt.candidate_artifact_ref
+                    or receipt.reason_codes != attempt.reason_codes
+                    or canonicalize(receipt.sanitized_error) != canonicalize(attempt.error_json)
+                ):
+                    raise ValueError("typed day failure receipt differs from its attempt row")
+                expected_upstream = (request_ref,) + (
+                    (attempt.candidate_artifact_ref,) if attempt.candidate_artifact_ref is not None else ()
+                ) + ((receipt.decision_mark_set_ref,) if receipt.decision_mark_set_ref is not None else ()) + (
+                    (receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ()
+                )
+                self._require_exact_upstream_refs(envelope=envelope, expected_refs=expected_upstream)
+            elif envelope.payload_schema_version == DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
+                receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(envelope.payload)
+                if (
+                    receipt.day_run_id != attempt.day_run_id
+                    or receipt.terminal_status != attempt.status
+                    or receipt.day_input_hash != attempt.input_hash
+                    or receipt.candidate_artifact_ref != attempt.candidate_artifact_ref
+                    or attempt.result_hash != attempt.attempt_receipt_ref.semantic_content_hash
+                ):
+                    raise ValueError("typed R3 successful day receipt differs from its attempt row")
+                self._require_exact_upstream_refs(
+                    envelope=envelope,
+                    expected_refs=(receipt.candidate_artifact_ref, receipt.decision_mark_set_ref)
+                    + ((receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ()),
+                )
+            elif attempt.candidate_artifact_ref is not None:
+                # Retained R1 receipt compatibility; R3 paths must use one of
+                # the typed receipt schemas above.
+                self._require_exact_upstream_refs(
+                    envelope=envelope,
+                    expected_refs=(attempt.candidate_artifact_ref,),
+                )
 
     def _validate_operation_attempt_artifacts(
         self,
@@ -2761,6 +4659,8 @@ class PostgresHistoricalRangeRepository:
             or attempt.day_run_id != current["day_run_id"]
             or attempt.attempt_no != int(current["attempt_no"])
             or attempt.fencing_token != int(current["current_fencing_token"] or 0)
+            or attempt.worker_id != current.get("worker_id")
+            or attempt.lease_token != current.get("lease_token")
             or attempt.status != HistoricalRangeDayStatus.RETRYABLE_FAILED.value
         ):
             raise ValueError("day takeover requires the expired attempt's RETRYABLE_FAILED receipt")
@@ -2781,6 +4681,13 @@ class PostgresHistoricalRangeRepository:
             or attempt.attempt_no != attempt_no
             or attempt.fencing_token != expected_fencing
             or attempt.status != target_status.value
+            or (
+                str(current["status"]) == HistoricalRangeDayStatus.RUNNING.value
+                and (
+                    attempt.worker_id != current.get("worker_id")
+                    or attempt.lease_token != current.get("lease_token")
+                )
+            )
         ):
             raise ValueError("day transition requires the exact final attempt receipt")
 
@@ -2832,7 +4739,10 @@ class PostgresHistoricalRangeRepository:
                    COUNT(*) FILTER (WHERE status = 'RETRYABLE_FAILED')::INTEGER AS retryable_day_count,
                    COUNT(*) FILTER (
                        WHERE status IN ('PENDING', 'WAITING_PREVIOUS_DAY', 'RUNNING', 'WAITING_INPUT', 'RETRYABLE_FAILED')
-                   )::INTEGER AS nonterminal_day_count
+                   )::INTEGER AS nonterminal_day_count,
+                   COUNT(*) FILTER (
+                       WHERE status IN ('RUNNING', 'WAITING_INPUT', 'RETRYABLE_FAILED')
+                   )::INTEGER AS active_nonterminal_day_count
             FROM app.advisory_historical_range_day_run
             WHERE range_run_id = %s
             """,
@@ -2859,7 +4769,8 @@ class PostgresHistoricalRangeRepository:
                 COUNT(DISTINCT run.range_run_id) FILTER (WHERE run.status = 'PARTIAL')::INTEGER
                     AS partial_program_count,
                 COUNT(DISTINCT run.range_run_id) FILTER (
-                    WHERE run.status IN ('QUEUED', 'RUNNING', 'WAITING_INPUT', 'RETRYABLE_FAILED', 'PARTIAL')
+                    WHERE run.status IN ('QUEUED', 'RUNNING', 'WAITING_INPUT', 'RETRYABLE_FAILED')
+                       OR (run.status = 'PARTIAL' AND run.finished_at IS NULL)
                 )::INTEGER AS recoverable_program_count
             FROM app.advisory_historical_range_run AS run
             LEFT JOIN app.advisory_historical_range_day_run AS day
@@ -2924,6 +4835,20 @@ class PostgresHistoricalRangeRepository:
         )
 
     def _sync_batch_aggregate(self, *, cur: Any, batch_id: str) -> None:
+        # Serialize aggregate refreshes for runs in the same batch. Without
+        # this lock, another run can commit between the aggregate SELECT and
+        # UPDATE, so the batch trigger observes a newer child snapshot than
+        # the values being written.
+        cur.execute(
+            "SELECT batch_id FROM app.advisory_historical_range_batch WHERE batch_id = %s FOR UPDATE",
+            (batch_id,),
+        )
+        if cur.fetchone() is None:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "historical-range batch does not exist",
+                context={"batch_id": batch_id},
+            )
         aggregate = self._batch_aggregate(cur=cur, batch_id=batch_id)
         cur.execute(
             """
@@ -3458,7 +5383,10 @@ class PostgresHistoricalRangeRepository:
         day_run_id: str | None = None,
         expected_payload: dict[str, Any] | None = None,
         required_upstream_refs: Sequence[HistoricalRangeArtifactRefV1] = (),
+        exact_upstream_refs: Sequence[HistoricalRangeArtifactRefV1] | None = None,
         allow_ancestor_identity: bool = False,
+        allow_direct_predecessor_day_run_id: str | None = None,
+        validate_recursive_upstream: bool = True,
     ) -> HistoricalRangeArtifactEnvelopeV1:
         if ref.artifact_kind is not expected_kind:
             raise ValueError(f"artifact ref must reference {expected_kind.value}")
@@ -3480,13 +5408,37 @@ class PostgresHistoricalRangeRepository:
             identity = (required.artifact_kind, required.semantic_content_hash, required.relative_path)
             if identity not in upstream_by_identity:
                 raise ValueError("artifact upstream closure omits a required exact ref")
-        self._load_upstream_closure(
-            envelope=envelope,
-            resolved_request_hash=resolved_request_hash,
-            range_run_id=range_run_id,
-            day_run_id=day_run_id,
-            visited={ref.semantic_content_hash},
-        )
+        if exact_upstream_refs is not None:
+            expected_upstream = tuple(
+                sorted(
+                    (
+                        (item.artifact_kind.value, item.semantic_content_hash, item.relative_path)
+                        for item in exact_upstream_refs
+                    ),
+                )
+            )
+            actual_upstream = tuple(sorted((kind.value, semantic_hash, path) for kind, semantic_hash, path in upstream_by_identity))
+            if actual_upstream != expected_upstream:
+                raise ValueError("artifact upstream closure does not equal the required exact ref set")
+        if validate_recursive_upstream:
+            self._load_upstream_closure(
+                envelope=envelope,
+                resolved_request_hash=resolved_request_hash,
+                range_run_id=range_run_id,
+                day_run_id=day_run_id,
+                visited={ref.semantic_content_hash},
+                allow_direct_predecessor_day_run_id=allow_direct_predecessor_day_run_id,
+            )
+        else:
+            allowed_day_ids = {None, day_run_id, allow_direct_predecessor_day_run_id}
+            for upstream_ref in envelope.upstream_refs:
+                upstream = self._artifact_store.load(upstream_ref)
+                if upstream.resolved_request_hash != resolved_request_hash:
+                    raise ValueError("direct upstream resolved_request_hash differs from its consumer")
+                if range_run_id is not None and upstream.range_run_id not in {None, range_run_id}:
+                    raise ValueError("direct upstream belongs to a different range run")
+                if day_run_id is not None and upstream.day_run_id not in allowed_day_ids:
+                    raise ValueError("direct upstream belongs to a different day run")
         return envelope
 
     def _load_upstream_closure(
@@ -3497,6 +5449,7 @@ class PostgresHistoricalRangeRepository:
         range_run_id: str | None,
         day_run_id: str | None,
         visited: set[str],
+        allow_direct_predecessor_day_run_id: str | None = None,
     ) -> None:
         for upstream_ref in envelope.upstream_refs:
             if upstream_ref.semantic_content_hash in visited:
@@ -3507,15 +5460,54 @@ class PostgresHistoricalRangeRepository:
                 raise ValueError("upstream artifact resolved_request_hash differs from its consumer")
             if range_run_id is not None and upstream.range_run_id not in {None, range_run_id}:
                 raise ValueError("upstream artifact belongs to a different range run")
-            if day_run_id is not None and upstream.day_run_id not in {None, day_run_id}:
+            allowed_day_ids = {None, day_run_id}
+            if allow_direct_predecessor_day_run_id is not None:
+                allowed_day_ids.add(allow_direct_predecessor_day_run_id)
+            if day_run_id is not None and upstream.day_run_id not in allowed_day_ids:
                 raise ValueError("upstream artifact belongs to a different day run")
+            next_day_run_id = day_run_id
+            next_predecessor_day_run_id: str | None = None
+            if upstream_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT and upstream.day_run_id is not None:
+                range_receipt_to_day = day_run_id is None
+                cross_day = day_run_id is not None and upstream.day_run_id != day_run_id
+                if cross_day and upstream.payload_schema_version != DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
+                    raise ValueError("cross-day ancestor must be a typed successful DAY_RECEIPT")
+                if range_receipt_to_day or cross_day:
+                    next_day_run_id = str(upstream.day_run_id)
+                    if upstream.payload_schema_version == DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
+                        typed_receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(upstream.payload)
+                        if typed_receipt.previous_day_receipt_ref is not None:
+                            predecessor = self._artifact_store.load(typed_receipt.previous_day_receipt_ref)
+                            if (
+                                predecessor.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+                                or predecessor.range_run_id != upstream.range_run_id
+                                or predecessor.day_run_id is None
+                            ):
+                                raise ValueError("typed predecessor receipt has an invalid range/day identity")
+                            next_predecessor_day_run_id = str(predecessor.day_run_id)
             self._load_upstream_closure(
                 envelope=upstream,
                 resolved_request_hash=resolved_request_hash,
                 range_run_id=range_run_id,
-                day_run_id=day_run_id,
+                day_run_id=next_day_run_id,
                 visited=visited,
+                allow_direct_predecessor_day_run_id=next_predecessor_day_run_id,
             )
+
+    @staticmethod
+    def _require_exact_upstream_refs(
+        *,
+        envelope: HistoricalRangeArtifactEnvelopeV1,
+        expected_refs: Sequence[HistoricalRangeArtifactRefV1],
+    ) -> None:
+        actual = tuple(
+            sorted((item.artifact_kind.value, item.semantic_content_hash, item.relative_path) for item in envelope.upstream_refs)
+        )
+        expected = tuple(
+            sorted((item.artifact_kind.value, item.semantic_content_hash, item.relative_path) for item in expected_refs)
+        )
+        if actual != expected:
+            raise ValueError("artifact upstream closure does not equal the typed receipt direct refs")
 
     @staticmethod
     def _insert_operation(*, cur: Any, request: HistoricalRangeOperationRequestV1) -> bool:
@@ -3699,6 +5691,245 @@ class PostgresHistoricalRangeRepository:
                 context={"entity": table, "identity": key_value},
             )
         return dict(row)
+
+    def _locked_predecessor_for_claim(self, *, cur: Any, day: dict[str, Any]) -> dict[str, Any]:
+        if int(day["ordinal"]) == 1:
+            return {
+                "day_receipt_ref": None,
+                "day_receipt_hash": None,
+                "list_version_id": None,
+                "list_version_hash": None,
+            }
+        cur.execute(
+            """
+            SELECT day_run_id, range_run_id, ordinal, status,
+                   day_receipt_ref, day_receipt_hash, list_version_id, list_version_hash
+            FROM app.advisory_historical_range_day_run
+            WHERE day_run_id = %s
+            FOR KEY SHARE
+            """,
+            (day["previous_day_run_id"],),
+        )
+        predecessor = cur.fetchone()
+        if predecessor is None:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "non-first day predecessor does not exist",
+                context={"day_run_id": day["day_run_id"]},
+            )
+        row = dict(predecessor)
+        if (
+            row["range_run_id"] != day["range_run_id"]
+            or int(row["ordinal"]) != int(day["ordinal"]) - 1
+            or str(row["status"])
+            not in {HistoricalRangeDayStatus.COMPLETE.value, HistoricalRangeDayStatus.VALID_NO_CANDIDATE.value}
+            or row["day_receipt_ref"] is None
+            or row["day_receipt_hash"] is None
+            or row["list_version_id"] is None
+            or row["list_version_hash"] is None
+        ):
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "non-first day predecessor is not an exact successful list/receipt state",
+                context={"day_run_id": day["day_run_id"], "previous_day_run_id": day["previous_day_run_id"]},
+            )
+        return row
+
+
+    @staticmethod
+    def _candidate_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeCandidateFactV1:
+        return HistoricalRangeCandidateFactV1(
+            candidate_id=str(row["candidate_id"]),
+            day_run_id=str(row["day_run_id"]),
+            symbol=str(row["symbol"]),
+            membership_status=str(row["membership_status"]),
+            alpha_raw_rank=row["alpha_raw_rank"],
+            alpha_raw_score=row["alpha_raw_score"],
+            hmm_adjusted_rank=row["hmm_adjusted_rank"],
+            hmm_adjusted_score=row["hmm_adjusted_score"],
+            risk_policy_adjusted_rank=row["risk_policy_adjusted_rank"],
+            risk_policy_adjusted_score=row["risk_policy_adjusted_score"],
+            selection_effective_rank=row["selection_effective_rank"],
+            selection_effective_score=row["selection_effective_score"],
+            advisory_model_rank=row["advisory_model_rank"],
+            advisory_model_score=row["advisory_model_score"],
+            component_lineage_json=dict(row["component_lineage_json"]),
+            component_lineage_hash=str(row["component_lineage_hash"]),
+            candidate_content_hash=str(row["candidate_content_hash"]),
+        )
+
+    @staticmethod
+    def _list_version_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeListVersionFactV1:
+        return HistoricalRangeListVersionFactV1(
+            list_version_id=str(row["list_version_id"]),
+            day_run_id=str(row["day_run_id"]),
+            range_run_id=str(row["range_run_id"]),
+            previous_list_version_id=(
+                str(row["previous_list_version_id"]) if row["previous_list_version_id"] else None
+            ),
+            previous_list_hash=(str(row["previous_list_hash"]) if row["previous_list_hash"] else None),
+            previous_day_receipt_hash=(
+                str(row["previous_day_receipt_hash"]) if row["previous_day_receipt_hash"] else None
+            ),
+            target_count=int(row["target_count"]),
+            active_count=int(row["active_count"]),
+            enter_count=int(row["enter_count"]),
+            hold_count=int(row["hold_count"]),
+            exit_count=int(row["exit_count"]),
+            watch_count=int(row["watch_count"]),
+            price_timing_policy=str(row["price_timing_policy"]),
+            summary_json=dict(row["summary_json"]),
+            list_content_hash=str(row["list_content_hash"]),
+        )
+
+    @staticmethod
+    def _list_item_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeListItemFactV1:
+        return HistoricalRangeListItemFactV1(
+            list_item_id=str(row["list_item_id"]),
+            list_version_id=str(row["list_version_id"]),
+            symbol=str(row["symbol"]),
+            action=str(row["action"]),
+            rank=row["rank"],
+            score=row["score"],
+            reason_codes=tuple(row["reason_codes_json"]),
+            episode_id=(str(row["episode_id"]) if row["episode_id"] else None),
+            rule_guidance_json=dict(row["rule_guidance_json"]),
+            intended_execution_trade_date=row["intended_execution_trade_date"],
+            intended_execution_basis=(
+                str(row["intended_execution_basis"]) if row["intended_execution_basis"] else None
+            ),
+            execution_status=str(row["execution_status"]),
+            evidence_hash=str(row["evidence_hash"]),
+        )
+
+    @staticmethod
+    def _episode_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeEpisodeSnapshotFactV1:
+        return HistoricalRangeEpisodeSnapshotFactV1(
+            episode_snapshot_id=str(row["episode_snapshot_id"]),
+            range_run_id=str(row["range_run_id"]),
+            list_version_id=str(row["list_version_id"]),
+            episode_id=str(row["episode_id"]),
+            symbol=str(row["symbol"]),
+            decision_trade_date=row["decision_trade_date"],
+            entry_sequence=int(row["entry_sequence"]),
+            enter_decision_trade_date=row["enter_decision_trade_date"],
+            exit_decision_trade_date=row["exit_decision_trade_date"],
+            recommendation_state=str(row["recommendation_state"]),
+            action=str(row["action"]),
+            execution_status=str(row["execution_status"]),
+            price_quality=str(row["price_quality"]),
+            weak_rank_confirmation_count=int(row["weak_rank_confirmation_count"]),
+            mark_json=dict(row["mark_json"]),
+            evidence_hash=str(row["evidence_hash"]),
+        )
+
+    @staticmethod
+    def _day_attempt_from_row(row: Mapping[str, Any]) -> HistoricalRangeDayAttemptV1:
+        return HistoricalRangeDayAttemptV1(
+            attempt_id=str(row["attempt_id"]),
+            day_run_id=str(row["day_run_id"]),
+            attempt_no=int(row["attempt_no"]),
+            worker_id=str(row["worker_id"]),
+            lease_token=str(row["lease_token"]),
+            fencing_token=int(row["fencing_token"]),
+            status=str(row["status"]),
+            input_hash=str(row["input_hash"]),
+            result_hash=(str(row["result_hash"]) if row["result_hash"] else None),
+            candidate_artifact_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(row["candidate_artifact_ref"])
+                if row["candidate_artifact_ref"] is not None
+                else None
+            ),
+            attempt_receipt_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(row["attempt_receipt_ref"])
+                if row["attempt_receipt_ref"] is not None
+                else None
+            ),
+            reason_codes=tuple(row["reason_codes_json"]),
+            error_json=(dict(row["error_json"]) if row["error_json"] is not None else None),
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+        )
+
+    @staticmethod
+    def _execution_operation_from_row(row: Mapping[str, Any]) -> HistoricalRangeExecutionOperationV1:
+        return HistoricalRangeExecutionOperationV1(
+            operation_id=str(row["operation_id"]),
+            batch_id=str(row["batch_id"]),
+            operation_type=str(row["operation_type"]),
+            operation_idempotency_key=str(row["operation_idempotency_key"]),
+            idempotency_payload_hash=str(row["request_payload_sha256"]),
+            resolved_request_hash=str(row["batch_resolved_request_hash"]),
+            expected_row_version=int(row["expected_row_version"]),
+            status=HistoricalRangeOperationStatus(str(row["status"])),
+            row_version=int(row["row_version"]),
+            attempt_no=int(row["attempt_no"]),
+            worker_id=(str(row["worker_id"]) if row["worker_id"] is not None else None),
+            lease_token=(str(row["lease_token"]) if row["lease_token"] is not None else None),
+            lease_expires_at=row["lease_expires_at"],
+            lease_expired=bool(row.get("lease_expired", False)),
+            fencing_token=(int(row["fencing_token"]) if row["fencing_token"] is not None else None),
+            stable_keyset_cursor_json=(
+                dict(row["stable_keyset_cursor_json"])
+                if row["stable_keyset_cursor_json"] is not None
+                else None
+            ),
+            result_row_version=(int(row["result_row_version"]) if row["result_row_version"] else None),
+            result_status=(str(row["result_status"]) if row["result_status"] is not None else None),
+            result_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(row["result_ref"])
+                if row["result_ref"] is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _claimed_day_from_row(
+        *,
+        row: dict[str, Any],
+        batch_id: str,
+        research_program_id: str,
+        resolved_request_hash: str,
+        request_ref: HistoricalRangeArtifactRefV1,
+        list_semantics_version: str,
+        list_semantics_hash: str,
+        predecessor: Mapping[str, Any],
+    ) -> HistoricalRangeClaimedDayV1:
+        if row.get("lease_expires_at") is None or row.get("current_fencing_token") is None:
+            raise HistoricalRangeContractError(
+                REASON_REPOSITORY_CONFLICT,
+                "claimed day has incomplete durable lease/fencing fields",
+                context={"day_run_id": row.get("day_run_id")},
+            )
+        predecessor_ref = predecessor.get("day_receipt_ref")
+        return HistoricalRangeClaimedDayV1(
+            batch_id=batch_id,
+            range_run_id=str(row["range_run_id"]),
+            research_program_id=research_program_id,
+            day_run_id=str(row["day_run_id"]),
+            decision_trade_date=row["decision_trade_date"],
+            ordinal=int(row["ordinal"]),
+            row_version=int(row["row_version"]),
+            attempt_no=int(row["attempt_no"]),
+            worker_id=str(row["worker_id"]),
+            lease_token=str(row["lease_token"]),
+            fencing_token=int(row["current_fencing_token"]),
+            lease_expires_at=row["lease_expires_at"],
+            resolved_request_hash=resolved_request_hash,
+            request_ref=request_ref,
+            list_semantics_version=list_semantics_version,
+            list_semantics_hash=list_semantics_hash,
+            previous_day_run_id=(str(row["previous_day_run_id"]) if row["previous_day_run_id"] is not None else None),
+            previous_day_receipt_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(predecessor_ref) if predecessor_ref is not None else None
+            ),
+            previous_list_version_id=(
+                str(predecessor["list_version_id"]) if predecessor.get("list_version_id") is not None else None
+            ),
+            previous_list_hash=(
+                str(predecessor["list_version_hash"]) if predecessor.get("list_version_hash") is not None else None
+            ),
+        )
 
     @staticmethod
     def _require_row_version(

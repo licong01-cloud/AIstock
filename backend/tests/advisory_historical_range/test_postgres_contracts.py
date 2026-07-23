@@ -197,7 +197,7 @@ def _create_running_day(
         expected_row_version=1,
         worker_id="catalog-worker-1",
         lease_token="test-1",
-        lease_expires_at=lease_expires_at,
+        lease_expires_at=max(lease_expires_at, datetime.now(UTC) + timedelta(minutes=5)),
     )
     member_chain_hash = build_catalog_member_chain_hash(
         members=(member,),
@@ -314,6 +314,8 @@ def _create_running_day(
         expected_row_version=2,
         target_status=HistoricalRangeDayStatus.RUNNING,
         attempt_no=1,
+        worker_id="worker-expired",
+        lease_token=digest("lease-expired"),
         lease_expires_at=lease_expires_at,
         fencing_token=1,
     )
@@ -324,6 +326,10 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
     store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r")
     repository = PostgresHistoricalRangeRepository(conn_factory=_connection_factory, artifact_store=store)
     now = datetime.now(UTC)
+    run_namespace = str(os.environ.get("AISTOCK_PHASE1R_TEST_RUN_ID") or "").strip()
+
+    def client_key(value: str) -> str:
+        return f"{value}-{run_namespace}" if run_namespace else value
     assert (
         _scalar(
             """
@@ -345,7 +351,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
     resolved, _, created, range_run_id, day_run_id, catalog = _create_running_day(
         repository=repository,
         store=store,
-        client_key="pg-positive",
+        client_key=client_key("pg-positive"),
         lease_expires_at=now + timedelta(minutes=5),
     )
 
@@ -613,7 +619,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
     _, _, spoofed, spoofed_run_id, spoofed_day_id, _ = _create_running_day(
         repository=repository,
         store=store,
-        client_key="pg-spoofed-aggregate",
+        client_key=client_key("pg-spoofed-aggregate"),
         lease_expires_at=now + timedelta(minutes=5),
     )
     with pytest.raises(psycopg2.Error) as aggregate_error, _connection_factory() as connection:
@@ -706,7 +712,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
     takeover_resolved, _, _, takeover_run_id, takeover_day_id, _ = _create_running_day(
         repository=repository,
         store=store,
-        client_key="pg-takeover",
+        client_key=client_key("pg-takeover"),
         lease_expires_at=now - timedelta(seconds=5),
     )
     takeover_receipt = store.publish_payload(
@@ -737,6 +743,8 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
         expected_row_version=3,
         target_status=HistoricalRangeDayStatus.RUNNING,
         attempt_no=2,
+        worker_id="worker-takeover",
+        lease_token=digest("lease-takeover"),
         lease_expires_at=now + timedelta(minutes=5),
         fencing_token=2,
         expired_attempt=expired_attempt,

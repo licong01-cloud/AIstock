@@ -784,8 +784,14 @@ class QEExperimentRuntimeAssetResolver:
         model_asset: ModelAsset,
         factor_set: list[FactorAsset],
         runtime_assets: RuntimeAssetManifest | None,
+        cache_namespace: str | None = None,
     ) -> QEExperimentRuntimeSource:
         """Resolve one MULTI_ALPHA leg strictly from parent package-owned assets."""
+
+        leg_namespace = f"leg_{_safe_cache_component(leg_id)}"
+        requested_namespace = _safe_cache_component(cache_namespace or "")
+        if requested_namespace:
+            leg_namespace = f"{leg_namespace}__{requested_namespace}"
 
         return self._source_from_package_assets(
             manifest,
@@ -793,7 +799,7 @@ class QEExperimentRuntimeAssetResolver:
             model_asset_override=model_asset,
             factor_set_override=factor_set,
             runtime_assets_override=runtime_assets,
-            cache_namespace=f"leg_{_safe_cache_component(leg_id)}",
+            cache_namespace=leg_namespace,
         )
 
     def load_frozen_source_for_strategy_package(
@@ -801,10 +807,15 @@ class QEExperimentRuntimeAssetResolver:
         *,
         manifest: StrategyPackageManifest,
         package_id: str,
+        cache_namespace: str | None = None,
     ) -> QEExperimentRuntimeSource:
         """Materialize the declared package assets without QE-source fallback or pre-admission checks."""
 
-        return self._source_from_package_assets(manifest, package_id=package_id)
+        return self._source_from_package_assets(
+            manifest,
+            package_id=package_id,
+            cache_namespace=cache_namespace,
+        )
 
     def _source_from_package_assets(
         self,
@@ -2922,6 +2933,7 @@ class WslStrategyPackageInferenceProvider:
                 raise DataUnavailableError(
                     "WSL live QE model inference failed",
                     context={
+                        "reason_code": "strategy_package_wsl_inference_failed",
                         "returncode": completed.returncode,
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
@@ -2937,6 +2949,7 @@ class WslStrategyPackageInferenceProvider:
                 raise DataUnavailableError(
                     "WSL live QE model inference did not write output JSON",
                     context={
+                        "reason_code": "strategy_package_wsl_output_missing",
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
                         "output_path": str(output_path),

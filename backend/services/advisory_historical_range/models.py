@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import uuid4
@@ -34,6 +34,17 @@ SOURCE_REVISION_CATALOG_SCHEMA_VERSION = "advisory_historical_range_source_revis
 SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION = "advisory_historical_range_source_catalog_checkpoint_v1"
 HMM_BINDING_SET_SCHEMA_VERSION = "advisory_historical_range_hmm_binding_set_v1"
 CANDIDATE_ARTIFACT_PAYLOAD_SCHEMA_VERSION = "advisory_historical_range_candidate_artifact_payload_v2"
+DECISION_MARK_SET_PAYLOAD_SCHEMA_VERSION = "advisory_historical_range_decision_mark_set_v1"
+DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION = "advisory_historical_range_day_attempt_receipt_v1"
+DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2 = "advisory_historical_range_day_receipt_payload_v2"
+RUN_EXECUTION_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_run_execution_receipt_v1"
+EXECUTION_OPERATION_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_execution_operation_receipt_v1"
+EXECUTION_OPERATION_ATTEMPT_RECEIPT_SCHEMA_VERSION = (
+    "advisory_historical_range_execution_operation_attempt_receipt_v1"
+)
+LIST_SUMMARY_SCHEMA_VERSION_V2 = "advisory_historical_range_list_summary_v2"
+RULE_GUIDANCE_SCHEMA_VERSION_V2 = "advisory_historical_range_rule_guidance_v2"
+EPISODE_MARK_SCHEMA_VERSION_V2 = "advisory_historical_range_episode_mark_v2"
 
 HISTORICAL_RANGE_DATA_SOURCE = "DB_HISTORICAL"
 HISTORICAL_RANGE_ORIGIN = "HISTORICAL_RANGE_RESEARCH"
@@ -271,6 +282,7 @@ class HistoricalRangeArtifactKind(str, Enum):
     DATE_PLAN = "DATE_PLAN"
     FROZEN_PROGRAM = "FROZEN_PROGRAM"
     CANDIDATE_ARTIFACT = "CANDIDATE_ARTIFACT"
+    DECISION_MARK_SET = "DECISION_MARK_SET"
     DAY_RECEIPT = "DAY_RECEIPT"
     RANGE_RECEIPT = "RANGE_RECEIPT"
     OUTCOME = "OUTCOME"
@@ -1536,6 +1548,7 @@ class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
         }
         day_kinds = {
             HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
+            HistoricalRangeArtifactKind.DECISION_MARK_SET,
             HistoricalRangeArtifactKind.DAY_RECEIPT,
         }
         if self.artifact_kind in {HistoricalRangeArtifactKind.REQUEST, HistoricalRangeArtifactKind.DATE_PLAN}:
@@ -1670,6 +1683,135 @@ class HistoricalRangeDayAttemptV1(_StrictContract):
         return self
 
 
+class HistoricalRangeClaimedDayV1(_StrictContract):
+    """Durable ownership of one ordered R3 day attempt."""
+
+    batch_id: str = Field(min_length=1, max_length=160)
+    range_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    ordinal: int = Field(ge=1)
+    row_version: int = Field(ge=1)
+    attempt_no: int = Field(ge=1)
+    worker_id: str = Field(min_length=1, max_length=160)
+    lease_token: str = Field(min_length=1, max_length=200)
+    fencing_token: int = Field(ge=1)
+    lease_expires_at: datetime
+    resolved_request_hash: str = Field(min_length=64, max_length=64)
+    request_ref: HistoricalRangeArtifactRefV1
+    list_semantics_version: str = Field(min_length=1, max_length=160)
+    list_semantics_hash: str = Field(min_length=64, max_length=64)
+    previous_day_run_id: str | None = Field(default=None, min_length=1, max_length=160)
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    previous_list_version_id: str | None = Field(default=None, min_length=1, max_length=160)
+    previous_list_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("resolved_request_hash", "list_semantics_hash", "previous_list_hash")
+    @classmethod
+    def _claim_hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @field_validator("lease_expires_at")
+    @classmethod
+    def _lease_expiry(cls, value: datetime) -> datetime:
+        return _aware_utc(value, field_name="lease_expires_at")
+
+    @model_validator(mode="after")
+    def _claim_predecessor(self) -> "HistoricalRangeClaimedDayV1":
+        if self.request_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST:
+            raise ValueError("claimed day request_ref must be REQUEST")
+        first = self.ordinal == 1
+        present = (
+            self.previous_day_run_id,
+            self.previous_day_receipt_ref,
+            self.previous_list_version_id,
+            self.previous_list_hash,
+        )
+        if first and any(item is not None for item in present):
+            raise ValueError("first claimed day cannot carry predecessor state")
+        if not first and any(item is None for item in present):
+            raise ValueError("non-first claimed day requires exact predecessor state")
+        if (
+            self.previous_day_receipt_ref is not None
+            and self.previous_day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+        ):
+            raise ValueError("claimed day predecessor receipt must be DAY_RECEIPT")
+        return self
+
+
+class HistoricalRangeExecutionBatchV1(_StrictContract):
+    batch_id: str = Field(min_length=1, max_length=160)
+    status: HistoricalRangeBatchStatus
+    row_version: int = Field(ge=1)
+    resolved_request_hash: str = Field(min_length=64, max_length=64)
+    request_ref: HistoricalRangeArtifactRefV1
+    date_plan_ref: HistoricalRangeArtifactRefV1
+    artifact_root_identity_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("resolved_request_hash", "artifact_root_identity_hash")
+    @classmethod
+    def _execution_batch_hashes(cls, value: str) -> str:
+        return require_sha256(value, field_name="execution_batch_hash")
+
+    @model_validator(mode="after")
+    def _execution_batch_refs(self) -> "HistoricalRangeExecutionBatchV1":
+        if self.request_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST:
+            raise ValueError("execution batch request_ref must be REQUEST")
+        if self.date_plan_ref.artifact_kind is not HistoricalRangeArtifactKind.DATE_PLAN:
+            raise ValueError("execution batch date_plan_ref must be DATE_PLAN")
+        return self
+
+
+class HistoricalRangeExecutionRunV1(_StrictContract):
+    batch_id: str = Field(min_length=1, max_length=160)
+    range_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    status: HistoricalRangeProgramStatus
+    row_version: int = Field(ge=1)
+    materialized_day_count: int = Field(ge=0)
+    day_plan_cursor_ordinal: int = Field(ge=0)
+    final_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    final_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("final_receipt_hash")
+    @classmethod
+    def _execution_run_hash(cls, value: str | None) -> str | None:
+        return require_sha256(value, field_name="final_receipt_hash") if value is not None else None
+
+    @model_validator(mode="after")
+    def _execution_run_receipt(self) -> "HistoricalRangeExecutionRunV1":
+        if (self.final_receipt_ref is None) != (self.final_receipt_hash is None):
+            raise ValueError("execution run final receipt ref/hash must be supplied together")
+        if self.final_receipt_ref is not None:
+            if self.final_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.RANGE_RECEIPT:
+                raise ValueError("execution run final receipt must be RANGE_RECEIPT")
+            if self.final_receipt_ref.semantic_content_hash != self.final_receipt_hash:
+                raise ValueError("execution run final receipt hash differs from the ref")
+        return self
+
+
+class HistoricalRangePredecessorStateV1(_StrictContract):
+    day_run_id: str = Field(min_length=1, max_length=160)
+    list_version: HistoricalRangeListVersionFactV1 | None = None
+    active_episodes: tuple[HistoricalRangeEpisodeSnapshotFactV1, ...] = ()
+    day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+
+    @model_validator(mode="after")
+    def _predecessor_state(self) -> "HistoricalRangePredecessorStateV1":
+        if self.list_version is None:
+            if self.active_episodes or self.day_receipt_ref is not None:
+                raise ValueError("empty predecessor state cannot carry list evidence")
+            return self
+        if self.day_receipt_ref is None or self.day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT:
+            raise ValueError("predecessor list state requires a DAY_RECEIPT ref")
+        if any(item.list_version_id != self.list_version.list_version_id for item in self.active_episodes):
+            raise ValueError("predecessor active episode belongs to a different list version")
+        if any(item.recommendation_state not in {"ACTIVE", "ACTIVE_AT_RANGE_END"} for item in self.active_episodes):
+            raise ValueError("predecessor state can expose only active episode snapshots")
+        return self
+
+
 class HistoricalRangeOperationRequestV1(_StrictContract):
     operation_id: str = Field(min_length=1, max_length=160)
     batch_id: str = Field(min_length=1, max_length=160)
@@ -1786,6 +1928,19 @@ class HistoricalRangeCandidateFactV1(_StrictContract):
     @classmethod
     def _symbol(cls, value: str) -> str:
         return _nonblank(value, field_name="symbol").upper()
+
+    @field_validator(
+        "alpha_raw_score",
+        "hmm_adjusted_score",
+        "risk_policy_adjusted_score",
+        "selection_effective_score",
+        "advisory_model_score",
+    )
+    @classmethod
+    def _persisted_score_precision(cls, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        return value.quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_UP)
 
     @field_validator("component_lineage_hash", "candidate_content_hash")
     @classmethod
@@ -2018,6 +2173,407 @@ class HistoricalRangeCandidateProductionResultV1(_StrictContract):
         return self
 
 
+class HistoricalRangeExecutionOperationV1(_StrictContract):
+    operation_id: str = Field(min_length=1, max_length=160)
+    batch_id: str = Field(min_length=1, max_length=160)
+    operation_type: Literal["RESUME", "CANCEL"]
+    operation_idempotency_key: str = Field(min_length=1, max_length=200)
+    idempotency_payload_hash: str = Field(min_length=64, max_length=64)
+    resolved_request_hash: str = Field(min_length=64, max_length=64)
+    expected_row_version: int = Field(ge=1)
+    status: HistoricalRangeOperationStatus
+    row_version: int = Field(ge=1)
+    attempt_no: int = Field(ge=0)
+    worker_id: str | None = Field(default=None, min_length=1, max_length=160)
+    lease_token: str | None = Field(default=None, min_length=1, max_length=200)
+    lease_expires_at: datetime | None = None
+    lease_expired: bool = False
+    fencing_token: int | None = Field(default=None, ge=1)
+    stable_keyset_cursor_json: dict[str, Any] | None = None
+    result_row_version: int | None = Field(default=None, ge=1)
+    result_status: str | None = None
+    result_ref: HistoricalRangeArtifactRefV1 | None = None
+
+    @field_validator("idempotency_payload_hash", "resolved_request_hash")
+    @classmethod
+    def _request_hash(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @field_validator("lease_expires_at")
+    @classmethod
+    def _operation_lease(cls, value: datetime | None) -> datetime | None:
+        return _aware_utc(value, field_name="lease_expires_at") if value is not None else None
+
+    @model_validator(mode="after")
+    def _running_identity(self) -> "HistoricalRangeExecutionOperationV1":
+        lease_fields = (self.worker_id, self.lease_token, self.lease_expires_at)
+        if self.status is HistoricalRangeOperationStatus.RUNNING:
+            if any(item is None for item in lease_fields) or self.fencing_token is None or self.attempt_no < 1:
+                raise ValueError("RUNNING execution operation requires complete lease identity")
+            if self.lease_expired and self.lease_expires_at is None:
+                raise ValueError("expired execution operation requires lease_expires_at")
+        elif any(item is not None for item in lease_fields) or self.lease_expired:
+            raise ValueError("non-running execution operation cannot retain lease identity")
+        if self.result_ref is not None and self.result_ref.artifact_kind is not HistoricalRangeArtifactKind.RANGE_RECEIPT:
+            raise ValueError("execution operation result_ref must be RANGE_RECEIPT")
+        return self
+
+
+class HistoricalRangeExecutionOperationAttemptReceiptV1(_StrictContract):
+    schema_version: Literal[EXECUTION_OPERATION_ATTEMPT_RECEIPT_SCHEMA_VERSION] = (
+        EXECUTION_OPERATION_ATTEMPT_RECEIPT_SCHEMA_VERSION
+    )
+    operation_id: str = Field(min_length=1, max_length=160)
+    operation_type: Literal["RESUME", "CANCEL"]
+    attempt_no: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+    worker_id: str = Field(min_length=1, max_length=160)
+    lease_token_hash: str = Field(min_length=64, max_length=64)
+    status: Literal["RETRYABLE_FAILED"] = "RETRYABLE_FAILED"
+    input_hash: str = Field(min_length=64, max_length=64)
+    starting_batch_row_version: int = Field(ge=1)
+    stable_cursor: dict[str, Any]
+    reason_codes: tuple[str, ...]
+    sanitized_error: dict[str, Any]
+    lease_expired_at: datetime | None = None
+
+    @field_validator("lease_token_hash", "input_hash")
+    @classmethod
+    def _attempt_hashes(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @field_validator("lease_expired_at")
+    @classmethod
+    def _expired_at(cls, value: datetime | None) -> datetime | None:
+        return _aware_utc(value, field_name="lease_expired_at") if value is not None else None
+
+
+class HistoricalRangeDecisionMarkV2(_StrictContract):
+    """One T-cutoff recommendation mark, never an execution price."""
+
+    schema_version: Literal["advisory_historical_range_decision_mark_v2"] = "advisory_historical_range_decision_mark_v2"
+    symbol: str = Field(min_length=1, max_length=32)
+    decision_trade_date: date
+    availability: Literal["AVAILABLE", "MARKET_STATE_NO_QUOTE", "DATA_UNAVAILABLE"]
+    raw_reference_yuan: Decimal | None = Field(default=None, gt=0)
+    adjustment_factor_as_of_t: Decimal | None = Field(default=None, gt=0)
+    normalized_reference_mark: Decimal | None = Field(default=None, gt=0)
+    mark_quality: Literal["T_CLOSE", "SUSPENDED_CARRY_FORWARD", "TERMINAL_CARRY_FORWARD", "UNAVAILABLE"]
+    tradability_status: str = Field(min_length=1, max_length=120)
+    source_revision_refs: tuple[HistoricalRangeSourceRevisionRefV1, ...] = Field(min_length=1)
+    source_evidence_hash: str = Field(min_length=64, max_length=64)
+    fact_effective_at: datetime
+    decision_cutoff: datetime
+    source_observed_at: datetime
+    revision_admissibility: HistoricalRangeRevisionAdmissibility
+
+    @field_validator("symbol")
+    @classmethod
+    def _symbol(cls, value: str) -> str:
+        return _nonblank(value, field_name="symbol").upper()
+
+    @field_validator("source_evidence_hash")
+    @classmethod
+    def _source_hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="source_evidence_hash")
+
+    @field_validator("fact_effective_at", "decision_cutoff", "source_observed_at")
+    @classmethod
+    def _timestamps(cls, value: datetime, info: Any) -> datetime:
+        return _aware_utc(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _close_mark(self) -> "HistoricalRangeDecisionMarkV2":
+        refs = tuple(sorted(self.source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash)))
+        if len(refs) != len({item.revision_id for item in refs}):
+            raise ValueError("decision mark source_revision_refs must be unique")
+        values = (self.raw_reference_yuan, self.adjustment_factor_as_of_t, self.normalized_reference_mark)
+        if self.availability == "AVAILABLE":
+            if any(value is None for value in values) or self.mark_quality != "T_CLOSE":
+                raise ValueError("available decision marks require a complete T_CLOSE mark")
+        elif self.availability == "MARKET_STATE_NO_QUOTE":
+            if self.mark_quality not in {"SUSPENDED_CARRY_FORWARD", "TERMINAL_CARRY_FORWARD"}:
+                raise ValueError("market-state no-quote marks require a carry-forward quality")
+            if any(value is None for value in values):
+                raise ValueError("carry-forward decision marks require raw, adjustment, and normalized values")
+        elif any(value is not None for value in values) or self.mark_quality != "UNAVAILABLE":
+            raise ValueError("unavailable decision marks cannot contain a price")
+        if self.raw_reference_yuan is not None and self.adjustment_factor_as_of_t is not None:
+            expected = self.raw_reference_yuan * self.adjustment_factor_as_of_t
+            if self.normalized_reference_mark != expected:
+                raise ValueError("normalized_reference_mark must equal raw_reference_yuan * adjustment_factor_as_of_t")
+        if self.fact_effective_at > self.decision_cutoff:
+            raise ValueError("decision mark fact_effective_at cannot exceed decision_cutoff")
+        object.__setattr__(self, "source_revision_refs", refs)
+        return self
+
+
+class HistoricalRangeDecisionMarkSetV1(_StrictContract):
+    schema_version: Literal[DECISION_MARK_SET_PAYLOAD_SCHEMA_VERSION] = DECISION_MARK_SET_PAYLOAD_SCHEMA_VERSION
+    range_run_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    subject_set_hash: str = Field(min_length=64, max_length=64)
+    mark_policy_version: str = Field(min_length=1, max_length=160)
+    mark_policy_hash: str = Field(min_length=64, max_length=64)
+    source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    source_revision_refs: tuple[HistoricalRangeSourceRevisionRefV1, ...] = Field(min_length=1)
+    upstream_request_ref: HistoricalRangeArtifactRefV1
+    predecessor_day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    marks: tuple[HistoricalRangeDecisionMarkV2, ...] = ()
+    mark_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("subject_set_hash", "mark_policy_hash", "source_revision_set_hash", "mark_set_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_set(self) -> "HistoricalRangeDecisionMarkSetV1":
+        if self.upstream_request_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST:
+            raise ValueError("decision mark set upstream_request_ref must be REQUEST")
+        if (
+            self.predecessor_day_receipt_ref is not None
+            and self.predecessor_day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+        ):
+            raise ValueError("decision mark set predecessor must be DAY_RECEIPT")
+        refs = tuple(sorted(self.source_revision_refs, key=lambda item: (item.revision_id, item.revision_hash)))
+        if len(refs) != len({item.revision_id for item in refs}):
+            raise ValueError("decision mark set source refs must be unique")
+        marks = tuple(sorted(self.marks, key=lambda item: item.symbol))
+        if len(marks) != len({item.symbol for item in marks}):
+            raise ValueError("decision mark set symbols must be unique")
+        if any(item.decision_trade_date != self.decision_trade_date for item in marks):
+            raise ValueError("decision mark set contains a mark for another trade date")
+        expected_subject_hash = canonical_json_sha256([item.symbol for item in marks])
+        if self.subject_set_hash != expected_subject_hash:
+            raise ValueError("decision mark subject_set_hash does not match ordered mark symbols")
+        payload = self.model_dump(mode="json", exclude={"mark_set_hash"})
+        digest = canonical_json_sha256(payload)
+        if self.mark_set_hash is not None and self.mark_set_hash != digest:
+            raise ValueError("decision mark set hash does not match typed payload")
+        object.__setattr__(self, "source_revision_refs", refs)
+        object.__setattr__(self, "marks", marks)
+        object.__setattr__(self, "mark_set_hash", digest)
+        return self
+
+
+class HistoricalRangeActiveRankObservationV2(_StrictContract):
+    schema_version: Literal["advisory_historical_range_active_rank_observation_v2"] = (
+        "advisory_historical_range_active_rank_observation_v2"
+    )
+    symbol: str = Field(min_length=1, max_length=32)
+    classification: Literal[
+        "INCLUDED_SELECTION_RANK",
+        "EXCLUDED_BY_STAGE",
+        "ABSENT_FROM_RAW_SIGNAL",
+        "OUTSIDE_PIT_UNIVERSE",
+        "VALID_EMPTY_NO_SIGNAL",
+    ]
+    review_rank: int | None = Field(default=None, ge=1)
+    review_score: Decimal | None = None
+    increments_weak_confirmation: bool
+    evidence_hash: str = Field(min_length=64, max_length=64)
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("symbol")
+    @classmethod
+    def _symbol(cls, value: str) -> str:
+        return _nonblank(value, field_name="symbol").upper()
+
+    @field_validator("evidence_hash")
+    @classmethod
+    def _evidence_hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="evidence_hash")
+
+    @model_validator(mode="after")
+    def _rank_contract(self) -> "HistoricalRangeActiveRankObservationV2":
+        if self.classification == "VALID_EMPTY_NO_SIGNAL":
+            if self.review_rank is not None or self.review_score is not None or self.increments_weak_confirmation:
+                raise ValueError("valid empty rank observation cannot supply or increment a review rank")
+        elif self.review_rank is None:
+            raise ValueError("non-empty active rank observation requires review_rank")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.reason_codes))
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("rank observation reason_codes must be unique")
+        object.__setattr__(self, "reason_codes", reasons)
+        return self
+
+
+class HistoricalRangeRankObservationV2(_StrictContract):
+    schema_version: Literal["advisory_historical_range_rank_observation_v2"] = "advisory_historical_range_rank_observation_v2"
+    status: Literal["COMPLETE", "VALID_EMPTY_NO_SIGNAL", "DATA_UNAVAILABLE"]
+    observed_max_selection_rank: int = Field(ge=0)
+    rank_exit_threshold: int = Field(ge=1)
+    active_observations: tuple[HistoricalRangeActiveRankObservationV2, ...] = ()
+    source_stage_closure_hash: str = Field(min_length=64, max_length=64)
+    universe_evidence_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("source_stage_closure_hash", "universe_evidence_hash")
+    @classmethod
+    def _hashes(cls, value: str) -> str:
+        return require_sha256(value, field_name="rank observation hash")
+
+    @property
+    def synthetic_missing_rank(self) -> int:
+        return self.observed_max_selection_rank + 1
+
+    @model_validator(mode="after")
+    def _close_observation(self) -> "HistoricalRangeRankObservationV2":
+        observations = tuple(sorted(self.active_observations, key=lambda item: item.symbol))
+        if len(observations) != len({item.symbol for item in observations}):
+            raise ValueError("active rank observations must be unique by symbol")
+        if self.status == "VALID_EMPTY_NO_SIGNAL" and self.observed_max_selection_rank != 0:
+            raise ValueError("valid empty rank observation requires observed_max_selection_rank=0")
+        if self.status == "DATA_UNAVAILABLE" and observations:
+            raise ValueError("data unavailable rank observation cannot manufacture active ranks")
+        object.__setattr__(self, "active_observations", observations)
+        return self
+
+
+class HistoricalRangeListSummaryV2(_StrictContract):
+    schema_version: Literal[LIST_SUMMARY_SCHEMA_VERSION_V2] = LIST_SUMMARY_SCHEMA_VERSION_V2
+    candidate_outcome: Literal["CANDIDATES_AVAILABLE", "VALID_NO_CANDIDATE"]
+    stage_closure_hash: str = Field(min_length=64, max_length=64)
+    enter_count: int = Field(ge=0)
+    hold_count: int = Field(ge=0)
+    exit_count: int = Field(ge=0)
+    watch_count: int = Field(ge=0)
+    active_count: int = Field(ge=0)
+    overlap_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    turnover_rate: Decimal = Field(ge=0)
+    replacement_budget_used: int = Field(ge=0)
+    replacement_budget_remaining: int = Field(ge=0)
+    rank_observation_status: Literal["COMPLETE", "VALID_EMPTY_NO_SIGNAL", "DATA_UNAVAILABLE"]
+    observed_max_selection_rank: int = Field(ge=0)
+    price_timing_policy: Literal[HISTORICAL_RANGE_PRICE_TIMING_POLICY] = HISTORICAL_RANGE_PRICE_TIMING_POLICY
+    mark_policy_version: str = Field(min_length=1, max_length=160)
+    mark_policy_hash: str = Field(min_length=64, max_length=64)
+    decision_mark_set_ref: HistoricalRangeArtifactRefV1
+    previous_list_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    previous_day_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    guidance_capability: Literal["RULE_DEFAULT"] = "RULE_DEFAULT"
+
+    @model_validator(mode="after")
+    def _summary_contract(self) -> "HistoricalRangeListSummaryV2":
+        if self.active_count != self.enter_count + self.hold_count:
+            raise ValueError("list summary active_count must equal enter_count + hold_count")
+        if (self.previous_list_hash is None) != (self.previous_day_receipt_hash is None):
+            raise ValueError("summary predecessor list/day hashes must be supplied together")
+        if self.decision_mark_set_ref.artifact_kind is not HistoricalRangeArtifactKind.DECISION_MARK_SET:
+            raise ValueError("list summary requires a DECISION_MARK_SET ref")
+        return self
+
+
+class HistoricalRangeRuleGuidanceV2(_StrictContract):
+    schema_version: Literal[RULE_GUIDANCE_SCHEMA_VERSION_V2] = RULE_GUIDANCE_SCHEMA_VERSION_V2
+    action: HistoricalRangeListAction
+    intended_execution_trade_date: date | None = None
+    intended_execution_basis: str | None = Field(default=None, min_length=1, max_length=80)
+    execution_status: Literal["NOT_DUE", "NOT_APPLICABLE"]
+    market_state_reason: str | None = Field(default=None, min_length=1, max_length=160)
+    requested_execution_basis: str | None = Field(default=None, min_length=1, max_length=80)
+    range_end_reason: Literal["NEXT_SESSION_OUTSIDE_FROZEN_DATE_PLAN"] | None = None
+
+    @model_validator(mode="after")
+    def _guidance_contract(self) -> "HistoricalRangeRuleGuidanceV2":
+        pair = (self.intended_execution_trade_date is None, self.intended_execution_basis is None)
+        if pair[0] != pair[1]:
+            raise ValueError("guidance intended date/basis must be supplied together")
+        if self.action in {HistoricalRangeListAction.HOLD, HistoricalRangeListAction.WATCH}:
+            if self.execution_status != "NOT_APPLICABLE" or self.intended_execution_basis is not None:
+                raise ValueError("HOLD/WATCH guidance must be NOT_APPLICABLE without intended execution")
+        elif self.execution_status != "NOT_DUE":
+            raise ValueError("ENTER/EXIT guidance must be NOT_DUE")
+        if self.range_end_reason is not None:
+            if self.intended_execution_basis is not None or self.requested_execution_basis is None:
+                raise ValueError("outside-plan guidance keeps requested basis only")
+        return self
+
+
+class HistoricalRangeEpisodeMarkV2(_StrictContract):
+    schema_version: Literal[EPISODE_MARK_SCHEMA_VERSION_V2] = EPISODE_MARK_SCHEMA_VERSION_V2
+    recommendation_anchor: Decimal = Field(gt=0)
+    current_raw_reference_yuan: Decimal | None = Field(default=None, gt=0)
+    current_adjustment_factor: Decimal | None = Field(default=None, gt=0)
+    current_normalized_mark: Decimal | None = Field(default=None, gt=0)
+    holding_trading_days: int = Field(ge=0)
+    runup_bps: Decimal | None = None
+    drawdown_bps: Decimal | None = None
+    rank_classification: str = Field(min_length=1, max_length=80)
+    review_rank: int | None = Field(default=None, ge=1)
+    review_score: Decimal | None = None
+    weak_rank_confirmation_count: int = Field(ge=0)
+    decision_cutoff: datetime
+    tradability_status: str = Field(min_length=1, max_length=120)
+    mark_quality: Literal["T_CLOSE", "SUSPENDED_CARRY_FORWARD", "TERMINAL_CARRY_FORWARD", "UNAVAILABLE"]
+    source_evidence_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("decision_cutoff")
+    @classmethod
+    def _cutoff(cls, value: datetime) -> datetime:
+        return _aware_utc(value, field_name="decision_cutoff")
+
+    @model_validator(mode="after")
+    def _mark_contract(self) -> "HistoricalRangeEpisodeMarkV2":
+        values = (self.current_raw_reference_yuan, self.current_adjustment_factor, self.current_normalized_mark)
+        if self.mark_quality == "UNAVAILABLE":
+            if any(value is not None for value in values):
+                raise ValueError("unavailable episode mark cannot include price values")
+        elif any(value is None for value in values):
+            raise ValueError("available episode mark requires raw, adjustment, and normalized values")
+        elif self.current_normalized_mark != self.current_raw_reference_yuan * self.current_adjustment_factor:
+            raise ValueError("episode normalized mark does not close raw * adjustment")
+        return self
+
+
+class HistoricalRangeDayAttemptReceiptPayloadV1(_StrictContract):
+    schema_version: Literal[DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION] = DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION
+    day_run_id: str = Field(min_length=1, max_length=160)
+    attempt_no: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+    worker_id: str = Field(min_length=1, max_length=160)
+    lease_token_hash: str = Field(min_length=64, max_length=64)
+    status: Literal["WAITING_INPUT", "RETRYABLE_FAILED", "FAILED", "CANCELLED"]
+    attempt_input_hash: str = Field(min_length=64, max_length=64)
+    input_hash_kind: Literal["CLAIM_INPUT", "CANDIDATE_BOUND_INPUT", "DAY_INPUT"]
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1 | None = None
+    decision_mark_set_ref: HistoricalRangeArtifactRefV1 | None = None
+    previous_list_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    stage: str = Field(min_length=1, max_length=120)
+    reason_codes: tuple[str, ...] = ()
+    sanitized_error: dict[str, Any] | None = None
+    lease_expired_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _receipt_contract(self) -> "HistoricalRangeDayAttemptReceiptPayloadV1":
+        candidate_present = self.candidate_artifact_ref is not None
+        mark_present = self.decision_mark_set_ref is not None
+        if candidate_present and self.candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+            raise ValueError("attempt receipt candidate ref must be CANDIDATE_ARTIFACT")
+        if mark_present and self.decision_mark_set_ref.artifact_kind is not HistoricalRangeArtifactKind.DECISION_MARK_SET:
+            raise ValueError("attempt receipt mark ref must be DECISION_MARK_SET")
+        if self.input_hash_kind == "CLAIM_INPUT" and (candidate_present or mark_present):
+            raise ValueError("claim-input receipt cannot contain downstream refs")
+        if self.input_hash_kind == "CANDIDATE_BOUND_INPUT" and (not candidate_present or mark_present):
+            raise ValueError("candidate-bound receipt requires candidate only")
+        if self.input_hash_kind == "DAY_INPUT" and (not candidate_present or not mark_present):
+            raise ValueError("day-input receipt requires candidate and mark refs")
+        if (self.previous_list_hash is None) != (self.previous_day_receipt_ref is None):
+            raise ValueError("attempt predecessor list hash/ref must be supplied together")
+        if (
+            self.previous_day_receipt_ref is not None
+            and self.previous_day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+        ):
+            raise ValueError("attempt predecessor must be DAY_RECEIPT")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.reason_codes))
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("attempt receipt reason_codes must be unique")
+        object.__setattr__(self, "reason_codes", reasons)
+        return self
+
+
 class HistoricalRangeListVersionFactV1(_StrictContract):
     list_version_id: str = Field(min_length=1, max_length=160)
     day_run_id: str = Field(min_length=1, max_length=160)
@@ -2068,6 +2624,13 @@ class HistoricalRangeListItemFactV1(_StrictContract):
     @classmethod
     def _symbol(cls, value: str) -> str:
         return _nonblank(value, field_name="symbol").upper()
+
+    @field_validator("score")
+    @classmethod
+    def _persisted_score_precision(cls, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        return value.quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_UP)
 
     @field_validator("evidence_hash")
     @classmethod
@@ -2241,6 +2804,248 @@ class HistoricalRangeSummaryFactV1(_StrictContract):
         return self
 
 
+class HistoricalRangeDayReceiptPayloadV2(_StrictContract):
+    """Typed successful-day receipt for the R3 candidate/mark/list closure."""
+
+    schema_version: Literal[DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2] = DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2
+    range_run_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    terminal_status: Literal["COMPLETE", "VALID_NO_CANDIDATE"]
+    day_input_hash: str = Field(min_length=64, max_length=64)
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1
+    decision_mark_set_ref: HistoricalRangeArtifactRefV1
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    list_version: HistoricalRangeListVersionFactV1
+    items: tuple[HistoricalRangeListItemFactV1, ...]
+    episode_snapshots: tuple[HistoricalRangeEpisodeSnapshotFactV1, ...]
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("day_input_hash")
+    @classmethod
+    def _day_input_hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="day_input_hash")
+
+    @model_validator(mode="after")
+    def _receipt_closure(self) -> "HistoricalRangeDayReceiptPayloadV2":
+        if self.candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+            raise ValueError("R3 day receipt candidate_artifact_ref must be CANDIDATE_ARTIFACT")
+        if self.decision_mark_set_ref.artifact_kind is not HistoricalRangeArtifactKind.DECISION_MARK_SET:
+            raise ValueError("R3 day receipt decision_mark_set_ref must be DECISION_MARK_SET")
+        if (
+            self.previous_day_receipt_ref is not None
+            and self.previous_day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+        ):
+            raise ValueError("R3 day receipt predecessor must be DAY_RECEIPT")
+        predecessor_present = self.previous_day_receipt_ref is not None
+        if predecessor_present != (self.list_version.previous_list_version_id is not None):
+            raise ValueError("R3 day receipt predecessor ref/list identity must be supplied together")
+        if predecessor_present and (
+            self.list_version.previous_day_receipt_hash
+            != self.previous_day_receipt_ref.semantic_content_hash
+            or self.list_version.previous_list_hash is None
+        ):
+            raise ValueError("R3 day receipt predecessor hashes differ from the exact predecessor ref")
+        if self.list_version.day_run_id != self.day_run_id or self.list_version.range_run_id != self.range_run_id:
+            raise ValueError("R3 day receipt list version identity differs from the day")
+        if any(item.list_version_id != self.list_version.list_version_id for item in self.items):
+            raise ValueError("R3 day receipt item belongs to a different list version")
+        if any(item.list_version_id != self.list_version.list_version_id for item in self.episode_snapshots):
+            raise ValueError("R3 day receipt episode belongs to a different list version")
+        if self.list_version.list_content_hash != derive_list_content_hash(
+            self.list_version,
+            self.items,
+            self.episode_snapshots,
+        ):
+            raise ValueError("R3 day receipt list content hash does not close the projected facts")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.reason_codes))
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("R3 day receipt reason_codes must be duplicate-free")
+        object.__setattr__(self, "reason_codes", reasons)
+        return self
+
+
+class HistoricalRangeSuccessfulDayReadbackV1(_StrictContract):
+    ordinal: int = Field(ge=1)
+    decision_trade_date: date
+    receipt_ref: HistoricalRangeArtifactRefV1
+    receipt: HistoricalRangeDayReceiptPayloadV2
+    candidate_payload: HistoricalRangeCandidateArtifactPayloadV2
+    decision_mark_set: HistoricalRangeDecisionMarkSetV1
+    attempt: HistoricalRangeDayAttemptV1
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeSuccessfulDayReadbackV1":
+        if self.receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT:
+            raise ValueError("successful day readback requires a DAY_RECEIPT ref")
+        if self.receipt_ref.semantic_content_hash != self.attempt.result_hash:
+            raise ValueError("successful day attempt result hash differs from the DAY_RECEIPT ref")
+        if self.receipt.day_run_id != self.candidate_payload.day_run_id:
+            raise ValueError("successful day candidate identity differs from its receipt")
+        if self.receipt.day_run_id != self.decision_mark_set.day_run_id:
+            raise ValueError("successful day mark identity differs from its receipt")
+        return self
+
+
+class HistoricalRangeRunExecutionReceiptV1(_StrictContract):
+    schema_version: Literal[RUN_EXECUTION_RECEIPT_SCHEMA_VERSION] = RUN_EXECUTION_RECEIPT_SCHEMA_VERSION
+    range_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    status: Literal["COMPLETED", "FAILED", "PARTIAL", "CANCELLED"]
+    resolved_request_hash: str = Field(min_length=64, max_length=64)
+    ordered_success_day_receipt_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    blocking_attempt_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+    first_list_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    latest_list_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    successful_day_count: int = Field(ge=0)
+    failed_day_count: int = Field(ge=0)
+    unexecuted_day_count: int = Field(ge=0)
+    blocking_day_run_id: str | None = Field(default=None, min_length=1, max_length=160)
+    blocking_ordinal: int | None = Field(default=None, ge=1)
+
+    @field_validator("resolved_request_hash", "first_list_hash", "latest_list_hash")
+    @classmethod
+    def _receipt_hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _closure(self) -> "HistoricalRangeRunExecutionReceiptV1":
+        refs = self.ordered_success_day_receipt_refs
+        if any(ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT for ref in refs):
+            raise ValueError("run receipt success refs must all be DAY_RECEIPT artifacts")
+        identities = tuple(ref.semantic_content_hash for ref in refs)
+        if len(identities) != len(set(identities)):
+            raise ValueError("run receipt success refs must be unique")
+        if len(refs) != self.successful_day_count:
+            raise ValueError("run receipt successful_day_count differs from its ordered refs")
+        if self.blocking_attempt_receipt_ref is not None and (
+            self.blocking_attempt_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+        ):
+            raise ValueError("run receipt blocking attempt must be a DAY_RECEIPT artifact")
+        if (self.first_list_hash is None) != (self.latest_list_hash is None):
+            raise ValueError("run receipt first/latest list hashes must be supplied together")
+        if (self.successful_day_count == 0) != (self.first_list_hash is None):
+            raise ValueError("run receipt list hashes must match successful day presence")
+        blocking = (self.blocking_attempt_receipt_ref, self.blocking_day_run_id, self.blocking_ordinal)
+        if any(item is None for item in blocking) and any(item is not None for item in blocking):
+            raise ValueError("run receipt blocking attempt/day/ordinal must be supplied together")
+        if self.status == "COMPLETED" and (
+            self.failed_day_count != 0 or self.unexecuted_day_count != 0 or any(item is not None for item in blocking)
+        ):
+            raise ValueError("completed run receipt cannot contain failed, unexecuted, or blocking state")
+        if self.status in {"FAILED", "PARTIAL"} and (
+            self.failed_day_count != 1 or any(item is None for item in blocking)
+        ):
+            raise ValueError("failed/partial run receipt requires exactly one blocking failed day")
+        if self.status == "FAILED" and self.successful_day_count != 0:
+            raise ValueError("failed run receipt cannot contain successful days")
+        if self.status == "PARTIAL" and self.successful_day_count == 0:
+            raise ValueError("partial run receipt requires a successful prefix")
+        return self
+
+
+class HistoricalRangeOperationProgramResultV1(_StrictContract):
+    range_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    status: HistoricalRangeProgramStatus
+    row_version: int = Field(ge=1)
+    final_receipt_ref: HistoricalRangeArtifactRefV1 | None = None
+
+    @model_validator(mode="after")
+    def _result_ref(self) -> "HistoricalRangeOperationProgramResultV1":
+        receipt_required = self.status in {
+            HistoricalRangeProgramStatus.COMPLETED,
+            HistoricalRangeProgramStatus.FAILED,
+            HistoricalRangeProgramStatus.CANCELLED,
+        }
+        if receipt_required and self.final_receipt_ref is None:
+            raise ValueError("terminal Program result requires exactly one final range receipt")
+        if self.status not in {
+            HistoricalRangeProgramStatus.COMPLETED,
+            HistoricalRangeProgramStatus.FAILED,
+            HistoricalRangeProgramStatus.CANCELLED,
+            HistoricalRangeProgramStatus.PARTIAL,
+        } and self.final_receipt_ref is not None:
+            raise ValueError("nonterminal Program result cannot carry a final range receipt")
+        if self.final_receipt_ref is not None and (
+            self.final_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.RANGE_RECEIPT
+        ):
+            raise ValueError("Program final receipt must be RANGE_RECEIPT")
+        return self
+
+
+class HistoricalRangeOperationCancelledDayResultV1(_StrictContract):
+    range_run_id: str = Field(min_length=1, max_length=160)
+    research_program_id: str = Field(min_length=1, max_length=160)
+    day_run_id: str = Field(min_length=1, max_length=160)
+    ordinal: int = Field(ge=1)
+    row_version: int = Field(ge=1)
+    attempt_no: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+    attempt_receipt_ref: HistoricalRangeArtifactRefV1
+
+    @model_validator(mode="after")
+    def _cancelled_day_receipt(self) -> "HistoricalRangeOperationCancelledDayResultV1":
+        if self.attempt_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT:
+            raise ValueError("cancelled day result requires a DAY_RECEIPT attempt ref")
+        return self
+
+
+class HistoricalRangeExecutionOperationReceiptV1(_StrictContract):
+    schema_version: Literal[EXECUTION_OPERATION_RECEIPT_SCHEMA_VERSION] = EXECUTION_OPERATION_RECEIPT_SCHEMA_VERSION
+    operation_id: str = Field(min_length=1, max_length=160)
+    operation_type: Literal["RESUME", "CANCEL"]
+    operation_idempotency_key: str = Field(min_length=1, max_length=200)
+    idempotency_payload_hash: str = Field(min_length=64, max_length=64)
+    attempt_no: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+    starting_batch_row_version: int = Field(ge=1)
+    ending_batch_row_version: int = Field(ge=1)
+    result_status: HistoricalRangeBatchStatus
+    executed_day_count: int = Field(ge=0)
+    successful_day_count: int = Field(ge=0)
+    waiting_day_count: int = Field(ge=0)
+    retryable_day_count: int = Field(ge=0)
+    failed_day_count: int = Field(ge=0)
+    blocking_day_run_ids: tuple[str, ...] = ()
+    program_results: tuple[HistoricalRangeOperationProgramResultV1, ...]
+    cancelled_day_results: tuple[HistoricalRangeOperationCancelledDayResultV1, ...] = ()
+    prior_nonterminal_attempt_receipt_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    stable_cursor: dict[str, Any]
+
+    @field_validator("idempotency_payload_hash")
+    @classmethod
+    def _payload_hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="idempotency_payload_hash")
+
+    @model_validator(mode="after")
+    def _operation_closure(self) -> "HistoricalRangeExecutionOperationReceiptV1":
+        program_ids = tuple(item.research_program_id for item in self.program_results)
+        if tuple(sorted(program_ids)) != program_ids or len(program_ids) != len(set(program_ids)):
+            raise ValueError("operation Program results must be unique and ordered by research_program_id")
+        cancelled_day_keys = tuple(
+            (item.research_program_id, item.ordinal, item.day_run_id)
+            for item in self.cancelled_day_results
+        )
+        if tuple(sorted(cancelled_day_keys)) != cancelled_day_keys or len(cancelled_day_keys) != len(
+            set(cancelled_day_keys)
+        ):
+            raise ValueError("cancelled day results must be unique and ordered by Program/ordinal/day")
+        if self.operation_type != "CANCEL" and self.cancelled_day_results:
+            raise ValueError("only CANCEL operation receipts may contain cancelled day results")
+        if any(
+            ref.artifact_kind is not HistoricalRangeArtifactKind.RANGE_RECEIPT
+            for ref in self.prior_nonterminal_attempt_receipt_refs
+        ):
+            raise ValueError("prior operation attempt receipts must be RANGE_RECEIPT artifacts")
+        if self.ending_batch_row_version < self.starting_batch_row_version:
+            raise ValueError("operation ending batch row version cannot precede its starting version")
+        blocking = tuple(sorted(_nonblank(item, field_name="blocking_day_run_id") for item in self.blocking_day_run_ids))
+        if len(blocking) != len(set(blocking)):
+            raise ValueError("operation blocking day ids must be unique")
+        object.__setattr__(self, "blocking_day_run_ids", blocking)
+        return self
+
+
 def derive_list_content_hash(
     list_version: HistoricalRangeListVersionFactV1,
     items: Sequence[HistoricalRangeListItemFactV1],
@@ -2385,6 +3190,58 @@ def build_day_input_hash(
     )
 
 
+def build_day_input_hash_v3(
+    *,
+    candidate_input_hash: str,
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1,
+    decision_mark_set_ref: HistoricalRangeArtifactRefV1,
+    decision_mark_policy_hash: str,
+    previous_list_hash: str | None,
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None,
+    list_semantics_version: str,
+    list_semantics_hash: str,
+) -> str:
+    """Close every R3 day input without changing the retained R1/R2 hash contract."""
+    if candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+        raise ValueError("candidate_artifact_ref must reference CANDIDATE_ARTIFACT")
+    if decision_mark_set_ref.artifact_kind is not HistoricalRangeArtifactKind.DECISION_MARK_SET:
+        raise ValueError("decision_mark_set_ref must reference DECISION_MARK_SET")
+    if (previous_list_hash is None) != (previous_day_receipt_ref is None):
+        raise ValueError("previous list/day receipt inputs must be supplied together")
+    if (
+        previous_day_receipt_ref is not None
+        and previous_day_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+    ):
+        raise ValueError("previous_day_receipt_ref must reference DAY_RECEIPT")
+    return canonical_json_sha256(
+        {
+            "schema_version": "advisory_historical_range_day_input_v3",
+            "candidate_input_hash": require_sha256(candidate_input_hash, field_name="candidate_input_hash"),
+            "candidate_artifact_ref": candidate_artifact_ref.model_dump(mode="json"),
+            "decision_mark_set_ref": decision_mark_set_ref.model_dump(mode="json"),
+            "decision_mark_policy_hash": require_sha256(
+                decision_mark_policy_hash,
+                field_name="decision_mark_policy_hash",
+            ),
+            "previous_list_hash": (
+                require_sha256(previous_list_hash, field_name="previous_list_hash")
+                if previous_list_hash is not None
+                else None
+            ),
+            "previous_day_receipt_ref": (
+                previous_day_receipt_ref.model_dump(mode="json")
+                if previous_day_receipt_ref is not None
+                else None
+            ),
+            "list_semantics_version": _nonblank(
+                list_semantics_version,
+                field_name="list_semantics_version",
+            ),
+            "list_semantics_hash": require_sha256(list_semantics_hash, field_name="list_semantics_hash"),
+        }
+    )
+
+
 def build_catalog_member_chain_hash(
     *,
     members: Sequence[HistoricalRangeSourceRevisionMemberV1],
@@ -2464,6 +3321,41 @@ def build_day_receipt_payload(
     }
 
 
+def build_day_receipt_payload_v2(
+    *,
+    range_run_id: str,
+    day_run_id: str,
+    terminal_status: HistoricalRangeDayStatus,
+    day_input_hash: str,
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1,
+    decision_mark_set_ref: HistoricalRangeArtifactRefV1,
+    previous_day_receipt_ref: HistoricalRangeArtifactRefV1 | None,
+    list_version: HistoricalRangeListVersionFactV1,
+    items: Sequence[HistoricalRangeListItemFactV1],
+    episodes: Sequence[HistoricalRangeEpisodeSnapshotFactV1],
+    reason_codes: Sequence[str] = (),
+) -> dict[str, Any]:
+    if terminal_status not in {
+        HistoricalRangeDayStatus.COMPLETE,
+        HistoricalRangeDayStatus.VALID_NO_CANDIDATE,
+    }:
+        raise ValueError("R3 day receipt terminal_status must be a successful day state")
+    payload = HistoricalRangeDayReceiptPayloadV2(
+        range_run_id=range_run_id,
+        day_run_id=day_run_id,
+        terminal_status=terminal_status.value,
+        day_input_hash=day_input_hash,
+        candidate_artifact_ref=candidate_artifact_ref,
+        decision_mark_set_ref=decision_mark_set_ref,
+        previous_day_receipt_ref=previous_day_receipt_ref,
+        list_version=list_version,
+        items=tuple(items),
+        episode_snapshots=tuple(episodes),
+        reason_codes=tuple(reason_codes),
+    )
+    return payload.model_dump(mode="json")
+
+
 def _topological_requirement_order(
     requirements: Sequence[HistoricalRangeSourceRequirementV1],
 ) -> tuple[HistoricalRangeSourceRequirementV1, ...]:
@@ -2505,7 +3397,11 @@ BATCH_TRANSITIONS: dict[HistoricalRangeBatchStatus, frozenset[HistoricalRangeBat
         }
     ),
     HistoricalRangeBatchStatus.QUEUED: frozenset(
-        {HistoricalRangeBatchStatus.RUNNING, HistoricalRangeBatchStatus.CANCELLED}
+        {
+            HistoricalRangeBatchStatus.RUNNING,
+            HistoricalRangeBatchStatus.CANCELLING,
+            HistoricalRangeBatchStatus.CANCELLED,
+        }
     ),
     HistoricalRangeBatchStatus.RUNNING: frozenset(
         {
@@ -2521,6 +3417,7 @@ BATCH_TRANSITIONS: dict[HistoricalRangeBatchStatus, frozenset[HistoricalRangeBat
             HistoricalRangeBatchStatus.RUNNING,
             HistoricalRangeBatchStatus.COMPLETED,
             HistoricalRangeBatchStatus.FAILED,
+            HistoricalRangeBatchStatus.CANCELLING,
             HistoricalRangeBatchStatus.CANCELLED,
         }
     ),
@@ -2529,6 +3426,7 @@ BATCH_TRANSITIONS: dict[HistoricalRangeBatchStatus, frozenset[HistoricalRangeBat
             HistoricalRangeBatchStatus.PLANNING,
             HistoricalRangeBatchStatus.RUNNING,
             HistoricalRangeBatchStatus.FAILED,
+            HistoricalRangeBatchStatus.CANCELLING,
             HistoricalRangeBatchStatus.CANCELLED,
         }
     ),

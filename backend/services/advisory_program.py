@@ -23,6 +23,18 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_quality import generate_quality_report
+from backend.services.advisory_list_transition import (
+    ACTION_ENTER as TRANSITION_ACTION_ENTER,
+    ACTION_EXIT as TRANSITION_ACTION_EXIT,
+    ACTION_HOLD as TRANSITION_ACTION_HOLD,
+    ACTION_WAITING as TRANSITION_ACTION_WAITING,
+    ACTION_WATCH as TRANSITION_ACTION_WATCH,
+    AdvisoryListTransitionEngine,
+    AdvisoryTransitionCandidateV1,
+    AdvisoryTransitionEpisodeV1,
+    AdvisoryTransitionPolicyV1,
+    AdvisoryTransitionRankObservationV1,
+)
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
@@ -2606,122 +2618,269 @@ class AdvisoryProgramService:
         active_episodes: list[AdvisoryEpisode],
         preview: bool,
     ) -> AdvisoryReviewResult:
+        """Project current Advisory inputs through the shared lifecycle engine.
+
+        Current readiness and persistence remain in this wrapper.  The engine
+        owns only the lifecycle order; this mapping preserves the existing
+        dataclasses, random current IDs, price basis, and metric contract.
+        """
+
         evidence_by_symbol = {row.symbol: row for row in candidates}
+        transition_candidates: list[AdvisoryTransitionCandidateV1] = []
+
+        def candidate_port(evidence: AdvisoryCandidate) -> AdvisoryTransitionCandidateV1:
+            entry_price = _price_for_basis(
+                market_by_symbol.get(evidence.symbol), evidence, program.entry_price_basis
+            )
+            exit_price = _price_for_basis(
+                market_by_symbol.get(evidence.symbol), evidence, program.exit_price_basis
+            )
+            return AdvisoryTransitionCandidateV1(
+                symbol=evidence.symbol,
+                rank=evidence.rank,
+                score=evidence.score,
+                entry_mark=entry_price,
+                exit_mark=exit_price,
+                entry_mark_available=entry_price is not None,
+                exit_mark_available=exit_price is not None,
+                stock_name=evidence.stock_name,
+                source_run_id=evidence.source_run_id,
+                reason_code=_candidate_reason_code(evidence),
+                evidence=_candidate_evidence(evidence, program),
+            )
+
+        transition_candidates.extend(candidate_port(item) for item in candidates)
         synthetic_missing_rank = _not_in_current_topk_rank(candidates)
+        for episode in active_episodes:
+            if episode.symbol in evidence_by_symbol:
+                continue
+            synthetic = _not_in_current_topk_candidate(
+                episode,
+                rank=synthetic_missing_rank,
+                trade_date=trade_date,
+                candidate_count=len(candidates),
+            )
+            evidence_by_symbol[episode.symbol] = synthetic
+            transition_candidates.append(candidate_port(synthetic))
+
+        policy = AdvisoryTransitionPolicyV1(
+            target_count=program.target_count,
+            rank_enter_threshold=int(program.review_policy["rank_enter_threshold"]),
+            rank_exit_threshold=int(program.review_policy["rank_exit_threshold"]),
+            rank_exit_confirm_days=int(program.review_policy["rank_exit_confirm_days"]),
+            daily_replacement_budget=int(program.review_policy["daily_replacement_budget"]),
+            stop_loss_bps=int(program.review_policy["stop_loss_bps"]),
+            take_profit_bps=int(program.review_policy["take_profit_bps"]),
+            trailing_stop_bps=int(program.review_policy["trailing_stop_bps"]),
+            time_stop_days=int(program.review_policy["time_stop_days"]),
+            take_profit_mode=str(program.review_policy.get("take_profit_mode") or "trailing"),
+        )
+        core_episodes = tuple(
+            AdvisoryTransitionEpisodeV1(
+                episode_id=episode.episode_id,
+                symbol=episode.symbol,
+                entry_signal_date=episode.signal_date,
+                effective_entry_date=episode.effective_entry_date,
+                entry_price=episode.entry_price,
+                entry_rank=episode.entry_rank,
+                entry_score=episode.entry_score,
+                current_rank=episode.current_rank,
+                current_score=episode.current_score,
+                holding_trading_days=episode.holding_trading_days,
+                return_bps=episode.return_bps,
+                max_runup_bps=episode.max_runup_bps,
+                max_drawdown_bps=episode.max_drawdown_bps,
+                still_active_mark_price=episode.still_active_mark_price,
+                weak_rank_confirm_days=episode.weak_rank_confirm_days,
+                stock_name=episode.stock_name,
+                source_run_id=episode.source_run_id,
+                evidence=episode.evidence_json,
+            )
+            for episode in active_episodes
+        )
+        transition = AdvisoryListTransitionEngine().transition(
+            policy=policy,
+            decision_trade_date=trade_date,
+            candidates=tuple(transition_candidates),
+            active_episodes=core_episodes,
+            rank_observation=AdvisoryTransitionRankObservationV1(
+                status="COMPLETE",
+                observed_max_selection_rank=max((item.rank for item in candidates), default=0),
+                active_rank_by_symbol={item.symbol: evidence_by_symbol[item.symbol].rank for item in active_episodes},
+            ),
+            episode_identity_allocator=lambda _candidate: f"advep_{uuid4().hex}",
+            effective_entry_date=lambda candidate: self._effective_trade_date(
+                trade_date,
+                program.entry_price_basis,
+                candidate=evidence_by_symbol[candidate.symbol],
+            ),
+            effective_exit_date=lambda _episode: self._effective_trade_date(trade_date, program.exit_price_basis),
+            defer_stop_before_effective_entry=True,
+            historical_mode=False,
+            entry_mark_unavailable_action=TRANSITION_ACTION_WAITING,
+        )
+        if transition.blocking_diagnostics:
+            raise RuntimeConfigInvalidError(
+                "shared Advisory transition returned an unexpected current blocking diagnostic",
+                context={"diagnostics": list(transition.blocking_diagnostics)},
+            )
+
+        previous_by_episode = {item.episode_id: item for item in active_episodes}
         decisions: list[AdvisoryReviewDecision] = []
         snapshots: list[AdvisoryEpisode] = []
         review_status = REVIEW_STATUS_SUCCEEDED
-        replacement_budget = int(program.review_policy["daily_replacement_budget"])
-        rank_drop_candidates: list[AdvisoryEpisode] = []
 
-        for episode in active_episodes:
-            evidence = evidence_by_symbol.get(episode.symbol)
-            if evidence is None:
-                evidence = _not_in_current_topk_candidate(
-                    episode,
-                    rank=synthetic_missing_rank,
-                    trade_date=trade_date,
-                    candidate_count=len(candidates),
-                )
-                evidence_by_symbol[episode.symbol] = evidence
-            price = _price_for_basis(market_by_symbol.get(episode.symbol), evidence, program.exit_price_basis)
-            if price is None:
-                review_status = REVIEW_STATUS_WAITING_DATA
-                kept = replace(
-                    episode,
-                    current_rank=evidence.rank,
-                    current_score=evidence.score,
-                    price_quality_status=REVIEW_REASON_WAITING_PRICE,
-                    evidence_json=_candidate_evidence(evidence, program),
-                    updated_at=_utcnow(),
-                )
-                snapshots.append(kept)
-                decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_WAITING, REVIEW_REASON_WAITING_PRICE, REVIEW_STATUS_WAITING_DATA, kept, evidence))
-                continue
-            marked = _episode_with_mark(episode, evidence=evidence, price=price, program=program)
-            exit_reason = _exit_reason(marked, evidence=evidence, program=program)
-            if exit_reason == EXIT_ALPHA_RANK_DROP and marked.weak_rank_confirm_days < int(program.review_policy["rank_exit_confirm_days"]):
-                exit_reason = None
-            if exit_reason == EXIT_STOP_LOSS and trade_date < marked.effective_entry_date:
-                deferred = replace(
-                    marked,
-                    return_bps=None,
-                    is_win=None,
-                    win_rate_inclusion_status=WIN_EXCLUDED,
-                    price_quality_status=EXIT_STOP_LOSS_DEFERRED_T1,
-                    updated_at=_utcnow(),
-                )
-                snapshots.append(deferred)
-                decisions.append(self._decision(program, trade_date, deferred.symbol, ACTION_WAITING, EXIT_STOP_LOSS_DEFERRED_T1, REVIEW_STATUS_SUCCEEDED, deferred, evidence))
-                continue
-            if exit_reason == EXIT_ALPHA_RANK_DROP:
-                rank_drop_candidates.append(marked)
-                continue
-            if exit_reason:
-                exited = _episode_exited(marked, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=exit_reason, calendar_provider=self.calendar_provider)
-                snapshots.append(exited)
-                decisions.append(self._decision(program, trade_date, exited.symbol, ACTION_EXIT, exit_reason, REVIEW_STATUS_SUCCEEDED, exited, evidence))
-                continue
-            snapshots.append(marked)
-            decisions.append(self._decision(program, trade_date, marked.symbol, ACTION_HOLD, _hold_reason(evidence), REVIEW_STATUS_SUCCEEDED, marked, evidence))
-
-        rank_drop_candidates.sort(key=lambda row: (row.current_rank or 0, row.symbol), reverse=True)
-        for index, episode in enumerate(rank_drop_candidates):
-            evidence = evidence_by_symbol[episode.symbol]
-            price = _price_for_basis(market_by_symbol.get(episode.symbol), evidence, program.exit_price_basis) or episode.still_active_mark_price or episode.entry_price
-            if index < replacement_budget:
-                exited = _episode_exited(episode, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=EXIT_ALPHA_RANK_DROP, calendar_provider=self.calendar_provider)
-                snapshots.append(exited)
-                decisions.append(self._decision(program, trade_date, exited.symbol, ACTION_EXIT, EXIT_ALPHA_RANK_DROP, REVIEW_STATUS_SUCCEEDED, exited, evidence))
-            else:
-                kept = replace(episode, evidence_json={**episode.evidence_json, "replacement_budget_state": EXIT_REPLACEMENT_BUDGET})
-                snapshots.append(kept)
-                decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_HOLD, EXIT_REPLACEMENT_BUDGET, REVIEW_STATUS_SUCCEEDED, kept, evidence))
-
-        active_symbols = {row.symbol for row in snapshots if row.status == EPISODE_STATUS_ACTIVE}
-        exited_symbols = {row.symbol for row in decisions if row.action == ACTION_EXIT}
-        slots = max(program.target_count - len(active_symbols), 0)
-        entry_limit = slots if not active_episodes else min(slots, replacement_budget)
-        entered = 0
-        for candidate in sorted(candidates, key=lambda row: (row.rank, row.symbol)):
-            if entered >= entry_limit:
-                break
-            if (
-                candidate.rank > int(program.review_policy["rank_enter_threshold"])
-                or candidate.symbol in active_symbols
-                or candidate.symbol in exited_symbols
-            ):
-                continue
-            entry_price = _price_for_basis(market_by_symbol.get(candidate.symbol), candidate, program.entry_price_basis)
-            if entry_price is None:
-                review_status = REVIEW_STATUS_WAITING_DATA
-                decisions.append(self._decision(program, trade_date, candidate.symbol, ACTION_WAITING, "MISSING_ENTRY_PRICE", REVIEW_STATUS_WAITING_DATA, None, candidate))
-                continue
-            episode = AdvisoryEpisode(
-                episode_id=f"advep_{uuid4().hex}",
-                program_id=program.program_id,
-                program_version=program.version,
-                symbol=candidate.symbol,
-                status=EPISODE_STATUS_ACTIVE,
-                signal_date=trade_date,
-                effective_entry_date=self._effective_trade_date(trade_date, program.entry_price_basis, candidate=candidate),
-                entry_price=entry_price,
-                entry_price_basis=program.entry_price_basis,
-                entry_rank=candidate.rank,
-                stock_name=candidate.stock_name,
-                entry_score=candidate.score,
-                current_rank=candidate.rank,
-                current_score=candidate.score,
-                still_active_mark_price=entry_price,
-                max_runup_bps=0.0,
-                max_drawdown_bps=0.0,
-                source_run_id=candidate.source_run_id,
-                evidence_json=_candidate_evidence(candidate, program),
+        def map_active(
+            generic: AdvisoryTransitionEpisodeV1,
+            evidence: AdvisoryCandidate,
+        ) -> AdvisoryEpisode:
+            base = previous_by_episode[generic.episode_id]
+            return_bps = generic.return_bps
+            return replace(
+                base,
+                current_rank=generic.current_rank,
+                current_score=generic.current_score,
+                holding_trading_days=generic.holding_trading_days,
+                return_bps=return_bps,
+                is_win=(return_bps > 0) if return_bps is not None else base.is_win,
+                max_runup_bps=generic.max_runup_bps,
+                max_drawdown_bps=generic.max_drawdown_bps,
+                still_active_mark_price=generic.still_active_mark_price,
+                weak_rank_confirm_days=generic.weak_rank_confirm_days,
+                evidence_json=_candidate_evidence(evidence, program),
+                updated_at=_utcnow(),
             )
-            snapshots.append(episode)
-            active_symbols.add(candidate.symbol)
-            entered += 1
-            decisions.append(self._decision(program, trade_date, candidate.symbol, ACTION_ENTER, ACTION_ENTER, REVIEW_STATUS_SUCCEEDED, episode, candidate, entry_price=entry_price))
+
+        for decision in transition.decisions:
+            if decision.action == TRANSITION_ACTION_WATCH:
+                # The current wrapper intentionally does not persist WATCH;
+                # Phase 1R projects it as a separate historical list item.
+                continue
+            evidence = evidence_by_symbol[decision.symbol]
+            if decision.action == TRANSITION_ACTION_ENTER:
+                generic = decision.episode
+                if generic is None or decision.entry_price is None:
+                    raise RuntimeConfigInvalidError("shared transition ENTER lacks episode or price")
+                episode = AdvisoryEpisode(
+                    episode_id=generic.episode_id,
+                    program_id=program.program_id,
+                    program_version=program.version,
+                    symbol=generic.symbol,
+                    status=EPISODE_STATUS_ACTIVE,
+                    signal_date=trade_date,
+                    effective_entry_date=generic.effective_entry_date,
+                    entry_price=decision.entry_price,
+                    entry_price_basis=program.entry_price_basis,
+                    entry_rank=generic.entry_rank,
+                    stock_name=evidence.stock_name,
+                    entry_score=generic.entry_score,
+                    current_rank=generic.current_rank,
+                    current_score=generic.current_score,
+                    still_active_mark_price=generic.still_active_mark_price,
+                    max_runup_bps=generic.max_runup_bps,
+                    max_drawdown_bps=generic.max_drawdown_bps,
+                    source_run_id=evidence.source_run_id,
+                    evidence_json=_candidate_evidence(evidence, program),
+                )
+                snapshots.append(episode)
+                decisions.append(
+                    self._decision(
+                        program,
+                        trade_date,
+                        episode.symbol,
+                        ACTION_ENTER,
+                        ACTION_ENTER,
+                        REVIEW_STATUS_SUCCEEDED,
+                        episode,
+                        evidence,
+                        entry_price=decision.entry_price,
+                    )
+                )
+                continue
+            if decision.action == TRANSITION_ACTION_WAITING and decision.episode is None:
+                review_status = REVIEW_STATUS_WAITING_DATA
+                decisions.append(
+                    self._decision(
+                        program,
+                        trade_date,
+                        decision.symbol,
+                        ACTION_WAITING,
+                        decision.reason_code,
+                        REVIEW_STATUS_WAITING_DATA,
+                        None,
+                        evidence,
+                    )
+                )
+                continue
+            if decision.episode is None:
+                raise RuntimeConfigInvalidError("shared transition active decision lacks an episode")
+            mapped = map_active(decision.episode, evidence)
+            if decision.action == TRANSITION_ACTION_WAITING:
+                if decision.reason_code == REVIEW_REASON_WAITING_PRICE:
+                    review_status = REVIEW_STATUS_WAITING_DATA
+                if decision.reason_code == EXIT_STOP_LOSS_DEFERRED_T1:
+                    mapped = replace(
+                        mapped,
+                        return_bps=None,
+                        is_win=None,
+                        win_rate_inclusion_status=WIN_EXCLUDED,
+                        price_quality_status=EXIT_STOP_LOSS_DEFERRED_T1,
+                    )
+                else:
+                    mapped = replace(mapped, price_quality_status=REVIEW_REASON_WAITING_PRICE)
+                snapshots.append(mapped)
+                decisions.append(
+                    self._decision(
+                        program,
+                        trade_date,
+                        mapped.symbol,
+                        ACTION_WAITING,
+                        decision.reason_code,
+                        REVIEW_STATUS_WAITING_DATA if decision.reason_code == REVIEW_REASON_WAITING_PRICE else REVIEW_STATUS_SUCCEEDED,
+                        mapped,
+                        evidence,
+                    )
+                )
+            elif decision.action == TRANSITION_ACTION_EXIT:
+                if decision.exit_price is None:
+                    raise RuntimeConfigInvalidError("shared transition EXIT lacks a price")
+                exited = _episode_exited(
+                    mapped,
+                    trade_date=trade_date,
+                    exit_price=decision.exit_price,
+                    exit_basis=program.exit_price_basis,
+                    exit_reason=decision.reason_code,
+                    calendar_provider=self.calendar_provider,
+                )
+                snapshots.append(exited)
+                decisions.append(
+                    self._decision(
+                        program,
+                        trade_date,
+                        exited.symbol,
+                        ACTION_EXIT,
+                        decision.reason_code,
+                        REVIEW_STATUS_SUCCEEDED,
+                        exited,
+                        evidence,
+                    )
+                )
+            elif decision.action == TRANSITION_ACTION_HOLD:
+                snapshots.append(mapped)
+                decisions.append(
+                    self._decision(
+                        program,
+                        trade_date,
+                        mapped.symbol,
+                        ACTION_HOLD,
+                        decision.reason_code,
+                        REVIEW_STATUS_SUCCEEDED,
+                        mapped,
+                        evidence,
+                    )
+                )
+            else:
+                raise RuntimeConfigInvalidError("shared transition returned an unsupported current action")
 
         latest = _latest_by_episode_id(snapshots)
         status_program = replace(program, last_review_status=review_status, latest_review_trade_date=trade_date)

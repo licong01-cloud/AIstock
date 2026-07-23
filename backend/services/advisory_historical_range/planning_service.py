@@ -36,6 +36,7 @@ from .repository import (
 )
 from .request_resolver import HistoricalRangeProgramResolver
 from .requirement_planner import HistoricalRangeSourceRequirementPlanner
+from .semantics import HistoricalRangeListSemanticsV2, canonical_list_semantics_v2
 
 
 PLANNING_PRODUCER_CONTRACT_VERSION = "phase1r_r2b"
@@ -60,8 +61,11 @@ class HistoricalRangePlanningService:
         artifact_store: HistoricalRangeArtifactStore,
         selection_semantics_version: str,
         selection_semantics_hash: str,
-        list_semantics_version: str,
-        list_semantics_hash: str,
+        list_semantics: HistoricalRangeListSemanticsV2 | None = None,
+        # Retained for the already-sealed R2-B planning path. R3 validates its
+        # canonical identity at the isolated execution boundary.
+        list_semantics_version: str | None = None,
+        list_semantics_hash: str | None = None,
     ) -> None:
         dependencies = (
             program_resolver,
@@ -83,8 +87,27 @@ class HistoricalRangePlanningService:
         self._artifact_store = artifact_store
         self._selection_semantics_version = selection_semantics_version
         self._selection_semantics_hash = selection_semantics_hash
-        self._list_semantics_version = list_semantics_version
-        self._list_semantics_hash = list_semantics_hash
+        if list_semantics is not None:
+            if (
+                list_semantics_version is not None and list_semantics_version != list_semantics.schema_version
+            ) or (list_semantics_hash is not None and list_semantics_hash != list_semantics.semantics_hash):
+                raise HistoricalRangeContractError(
+                    "ADVISORY_HR_LIST_SEMANTICS_CALLER_OVERRIDE_REJECTED",
+                    "explicit list semantics payload and caller-supplied identity differ",
+                )
+            self._list_semantics_version = list_semantics.schema_version
+            self._list_semantics_hash = list_semantics.semantics_hash
+        elif list_semantics_version is not None and list_semantics_hash is not None:
+            # R2-B planning remains a separate sealed artifact path. The R3
+            # executor rejects a non-canonical frozen list identity at execution.
+            self._list_semantics_version = list_semantics_version
+            self._list_semantics_hash = list_semantics_hash
+        elif list_semantics_version is None and list_semantics_hash is None:
+            canonical_semantics = canonical_list_semantics_v2()
+            self._list_semantics_version = canonical_semantics.schema_version
+            self._list_semantics_hash = canonical_semantics.semantics_hash
+        else:
+            raise ValueError("list_semantics_version and list_semantics_hash must be supplied together")
 
     def create(self, request: HistoricalRangeResearchBatchRequestV1) -> CreatedHistoricalRangePlanningBatch:
         release = self._code_release_resolver.resolve()
