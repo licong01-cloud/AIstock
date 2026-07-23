@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import numpy as np
@@ -132,7 +132,9 @@ def _training_series(feature_count: int = 7) -> dict[str, subject.L1TrainingSeri
             sector_code=code,
             sector_name=f"L1 Sector {index}",
             train_observations=train,
+            train_dates=tuple(date(2022, 1, 1) + timedelta(days=row) for row in range(train.shape[0])),
             validation_observations=validation,
+            validation_dates=tuple(date(2024, 7, 1) + timedelta(days=row) for row in range(validation.shape[0])),
             validation_future_utility=utility,
             pit_l2_constituents=constituents,
             pit_constituent_manifest_hash=subject.canonical_sha256(constituents),
@@ -282,9 +284,7 @@ def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -
     assert sum(
         state["posterior_mass"] for state in b1_sector["train_posterior_evidence"]["states"].values()
     ) == pytest.approx(150.0)
-    assert b1_sector["validation_posterior_evidence"]["states"]["1"]["effective_sample_size"] == pytest.approx(
-        20.0
-    )
+    assert b1_sector["validation_posterior_evidence"]["states"]["1"]["effective_sample_size"] == pytest.approx(20.0)
     assert b1_sector["validation_time_segment_evidence"][2]["end_row_inclusive"] == 59
     assert b1_sector["convergence_evidence"]["negative_delta_terminal_count"] == 1
     assert b1_sector["covariance_evidence"]["clip_performed"] is False
@@ -359,6 +359,169 @@ def test_c008_b1_monitor_diagnostic_serializes_non_finite_failure_history() -> N
     assert evidence["deltas"][0]["absolute_delta"] is None
     assert evidence["negative_delta_count"] == 0
     subject.canonical_json_bytes(evidence)
+
+
+def test_c008_b3_diag02_manual_initialization_is_explicit_and_seeded() -> None:
+    rng = np.random.default_rng(20260723)
+    train = np.vstack(
+        [
+            rng.normal(-2.0, 0.1, size=(20, 2)),
+            rng.normal(0.0, 0.1, size=(20, 2)),
+            rng.normal(2.0, 0.1, size=(20, 2)),
+        ]
+    )
+
+    startprob, transmat, means, covars, evidence = subject._manual_b3_diag02_initialization(
+        train,
+        random_seed=42,
+    )
+
+    assert startprob == pytest.approx([1 / 3, 1 / 3, 1 / 3])
+    assert transmat.sum(axis=1) == pytest.approx([1.0, 1.0, 1.0])
+    assert np.all(np.diag(transmat) >= subject.HMM_MIN_SELF_TRANSITION)
+    assert means.shape == covars.shape == (3, 2)
+    assert sorted(evidence["cluster_counts"]) == [20, 20, 20]
+    assert evidence["kmeans_parameters"]["n_init"] == 1
+    profile = subject.c008_b3_diag02_parameter_profile()
+    assert profile["gaussian_hmm"]["init_params"] == ""
+    assert profile["numeric_contract_status"] == "DIAGNOSTIC_ONLY_NOT_APPROVED"
+
+
+def test_c008_b3_diag02_fixed_environment_rejects_thread_drift(monkeypatch) -> None:
+    import threadpoolctl
+
+    for key in subject.C008_B3_DIAG02_FIXED_THREAD_ENV:
+        monkeypatch.setenv(key, "1")
+    monkeypatch.setattr(
+        threadpoolctl,
+        "threadpool_info",
+        lambda: [{"user_api": "blas", "internal_api": "openblas", "num_threads": 1}],
+    )
+
+    evidence = subject.c008_b3_diag02_fixed_numeric_environment()
+
+    assert evidence["scope"] == "same_host_same_fixed_numeric_environment_only"
+    assert evidence["thread_pools"][0]["num_threads"] == 1
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "2")
+    with pytest.raises(subject.StateModelSetError, match="requires fixed thread env value 1"):
+        subject.c008_b3_diag02_fixed_numeric_environment()
+
+
+def test_c008_b3_diag02_explicit_hmm_fit_preserves_raw_parameters() -> None:
+    item = next(iter(_training_series().values()))
+    preprocess = subject._fit_preprocess({item.sector_code: item}, preprocess_family="identity")
+    family_variance = np.var(item.train_observations, axis=0, ddof=0)
+
+    evidence = subject._fit_l1_b3_diag02_evidence(
+        item,
+        preprocess=preprocess,
+        feature_count=len(subject.BASE_FEATURES),
+        family_feature_variance=family_variance,
+        random_seed=42,
+    )
+
+    assert evidence.train_posteriors.shape == (150, 3)
+    assert evidence.validation_posteriors.shape == (60, 3)
+    assert evidence.covariance_evidence["postfit_projection_performed"] is False
+    assert evidence.covariance_evidence["formal_bounds_applied"] is False
+    assert len(evidence.model_numeric_payload_sha256) == 64
+
+
+def test_c008_b3_diag02_records_full_grid_without_selection(monkeypatch) -> None:
+    series = _training_series()
+
+    def fake_fit(item, *, preprocess, feature_count, family_feature_variance, random_seed):
+        del preprocess, family_feature_variance, random_seed
+        train = np.asarray(item.train_observations, dtype=np.float64)
+        validation = np.asarray(item.validation_observations, dtype=np.float64)
+        train_posteriors = np.zeros((train.shape[0], 3), dtype=np.float64)
+        validation_posteriors = np.zeros((validation.shape[0], 3), dtype=np.float64)
+        for state, indices in enumerate(np.array_split(np.arange(train.shape[0]), 3)):
+            train_posteriors[indices, state] = 1.0
+        for state, indices in enumerate(np.array_split(np.arange(validation.shape[0]), 3)):
+            validation_posteriors[indices, state] = 1.0
+        covars = np.ones((3, feature_count), dtype=np.float64)
+        monitor = {
+            "converged": True,
+            "reason": "monitor_delta_below_tolerance",
+            "iterations": 2,
+            "maximum_iterations": 300,
+            "tolerance": 0.01,
+            "history": [-100.0, -90.0],
+            "history_non_finite_count": 0,
+            "deltas": [],
+            "negative_delta_count": 0,
+            "minimum_absolute_delta": None,
+            "minimum_relative_delta": None,
+            "negative_delta_terminal_count": 0,
+        }
+        return subject._B3Diag02FitEvidence(
+            train=train,
+            validation=validation,
+            train_posteriors=train_posteriors,
+            validation_posteriors=validation_posteriors,
+            startprob=np.asarray([1 / 3, 1 / 3, 1 / 3]),
+            transmat=np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            means=np.zeros((3, feature_count)),
+            raw_covars=covars,
+            initialization_evidence={"thresholds_applied": False},
+            monitor_evidence=monitor,
+            covariance_evidence={"formal_bounds_applied": False},
+            model_numeric_payload_sha256="a" * 64,
+        )
+
+    monkeypatch.setattr(subject, "_fit_l1_b3_diag02_evidence", fake_fit)
+    report = subject.diagnose_l1_seed_grid_b3_diag02(
+        series,
+        feature_names=subject.BASE_FEATURES,
+        preprocess_family="identity",
+    )
+
+    assert report["diagnostic_contract"] == "C-008-B3-DIAG-02"
+    assert report["seeds"] == list(range(42, 50))
+    assert report["all_restarts_completed"] is True
+    assert report["selection_performed"] is False
+    assert report["formal_acceptance_thresholds_applied"] is False
+    assert report["hard_semantic_authority_changed"] is False
+    assert report["d4_exact_contract_approved"] is False
+    assert report["d5_01_exact_contract_approved"] is False
+    assert report["d6_exact_contract_approved"] is False
+    for seed in report["seed_results"].values():
+        assert seed["sector_count"] == 31
+        assert seed["fit_completed_count"] == 31
+        assert seed["family_candidate_eligibility_evaluated"] is False
+        assert seed["selection_performed"] is False
+    sector = report["seed_results"]["42"]["sectors"]["L1-00"]
+    assert sector["train_hard_sequence_evidence"]["states"]["0"]["contiguous_run_count"] == 1
+    assert sector["validation_hard_sequence_evidence"]["states"]["0"]["calendar_month_count"] >= 1
+
+
+def test_c008_b3_diag02_repeated_runner_requires_bitwise_canonical_equality(monkeypatch, tmp_path) -> None:
+    payload = subject.canonical_json_bytes(
+        {"schema_version": "single", "status": "diagnostic_complete", "families": []}
+    )
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"warning\n")
+
+    monkeypatch.setattr(preparation.subprocess, "run", fake_run)
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        artifact_root=str(tmp_path / "artifacts"),
+        output_root=str(tmp_path / "output"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+    )
+
+    report, reproducible = preparation._run_c008_b3_diag02_repeated(args)
+
+    assert reproducible is True
+    assert len(calls) == 2
+    assert report["reproducibility"]["fresh_process_repeat_count"] == 2
+    assert report["reproducibility"]["canonical_payload_bitwise_equal"] is True
+    assert report["reproducibility"]["numeric_tolerance_used_for_acceptance"] is False
 
 
 def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> None:

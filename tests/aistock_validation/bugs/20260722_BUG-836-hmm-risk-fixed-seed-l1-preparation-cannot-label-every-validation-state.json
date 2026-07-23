@@ -2,8 +2,10 @@
   "actual": "The approved C-007-A full preparation at feature commit 2b8bc2b1898a1909faa3cc4f6787d8ba27ceb88e read the complete PIT stock-fact source and failed closed before publishing artifacts: 801110.SI semantic label evidence is missing for hidden state 2. The same run emitted multiple hmmlearn likelihood-decrease non-convergence warnings. No READY artifact was written. The fixed single random_seed=42, hard validation-state sample labeling, convergence acceptance, and no-fallback requirements need a user-approved exact contract that remains deterministic and does not fabricate semantic labels.",
   "allowed_write_scope": [
     "backend/services/hmm_risk/state_model_set.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
     "scripts/hmm_risk/prepare_state_model_set.py",
     "backend/tests/hmm_risk/test_state_model_set.py",
+    "requirements.txt",
     "tests/aistock_validation/bugs/20260722_BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-every-validation-state.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -41,6 +43,12 @@
       "actor": "codex",
       "note": "C-008-B1 completed 496 diagnostic fits with canonical report SHA-256 4728e75e8c059d38688bcd969d19379d71b2ad5e9cd5e07ff69138c184462722. It selected no seed, applied no formal threshold, preserved hard semantic authority, and wrote no model or READY artifact. Evidence does not support B2; B3 remains a recommendation pending user decision.",
       "timestamp": "2026-07-23T07:26:14.1580765Z"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-B3-STRUCTURAL-A and C-008-B3-DIAG-02: D3-01-A, D3-02-B, D5-02-B only in the same fixed numerical environment, and D7-01-A. D3-03 is approved only for explicit full parameters and manual initialization, not proposed numeric values. DIAG-02 may run seeds 42-49 for both 31-sector families without seed selection, model or READY writes, hard-semantic changes, database writes, or runtime actions. D4, D5-01, and D6 exact contracts remain pending, and every PR merge requires separate user approval.",
+      "timestamp": "2026-07-23T23:28:08.8251873+08:00"
     }
   ],
   "evidence_uris": [
@@ -52,14 +60,18 @@
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/state_model_set.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
       "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_state_model_set.py"
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "requirements.txt"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/state_model_set.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
-        "backend/tests/hmm_risk/test_state_model_set.py"
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "requirements.txt"
       ],
       "impacted_modules": ["hmm.risk"],
       "matched_rules": ["hmm_risk_services"],
@@ -72,11 +84,13 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": [
-      "backend/services/hmm_risk/state_model_set.py",
-      "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_state_model_set.py"
-    ]
+      "scope_files": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "requirements.txt"
+      ]
   },
   "first_seen_at": "2026-07-22T20:36:34.926250Z",
   "fix_branch": null,
@@ -89,7 +103,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "production_backend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "pending",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_ --c008-b1-diagnostic-output tmp/validation/hmm_risk/c008_b1_soft_evidence.json",
