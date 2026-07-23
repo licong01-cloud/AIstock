@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     StateModelSetError,
     StateModelSetSpec,
     build_state_model_set,
+    canonical_json_bytes,
+    canonical_sha256,
+    diagnose_l1_seed_grid,
     parse_l2_artifact,
     train_l1_models,
     write_state_model_set,
@@ -183,12 +187,7 @@ def _family_spec(
     )
 
 
-def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
-    producer_commit = _git_commit()
-    if str(request.get("producer_commit") or "") != producer_commit:
-        raise StateModelSetError(
-            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
-        )
+def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
     source = request["source"]
     source_spec = StockFactSourceSpec(
         universe_key=str(source.get("universe_key") or ""),
@@ -223,6 +222,31 @@ def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, 
         "stock_facts": stock_fact_manifest,
         "calendar_benchmark": benchmark_manifest,
     }
+    return {
+        "source_spec": source_spec,
+        "database": db_identity,
+        "mapping_manifest": mapping_manifest,
+        "constituents": constituents,
+        "panel": panel,
+        "feature_definition": feature_definition,
+        "dataset_manifest": dataset_manifest,
+    }
+
+
+def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    db_identity = inputs["database"]
+    mapping_manifest = inputs["mapping_manifest"]
+    constituents = inputs["constituents"]
+    panel = inputs["panel"]
+    feature_definition = inputs["feature_definition"]
+    dataset_manifest = inputs["dataset_manifest"]
     expected_l2_codes = tuple(
         sorted({code for item in constituents.values() for code in item["l2_codes"]})
     )
@@ -294,6 +318,92 @@ def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, 
     }
 
 
+def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run the user-approved C-008-A grid without selecting or writing models."""
+
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    families: list[dict[str, Any]] = []
+    for family in request["families"]:
+        feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+        if feature_names not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+            raise StateModelSetError("family feature_names must exactly match the approved 7/20-dimensional order")
+        spec = _family_spec(
+            family,
+            request=request,
+            producer_commit=producer_commit,
+            source_l2_uri=f"configured://{str(family.get('l2_relative_path') or '').replace('\\', '/')}",
+            source_l2_sha256=str(family.get("l2_artifact_sha256") or ""),
+            dataset_manifest=inputs["dataset_manifest"],
+            mapping_manifest=inputs["mapping_manifest"],
+            feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
+        )
+        series = build_l1_training_series(
+            inputs["panel"],
+            feature_names=feature_names,
+            train_start=spec.train_start,
+            train_end=spec.train_end,
+            validation_start=spec.validation_start,
+            validation_end=spec.validation_end,
+            constituent_manifest_by_l1=inputs["constituents"],
+        )
+        families.append(
+            {
+                "family": spec.family,
+                "family_version": spec.family_version,
+                "candidate_ids": list(spec.candidate_ids),
+                "diagnostic": diagnose_l1_seed_grid(
+                    series,
+                    feature_names=feature_names,
+                    preprocess_family=spec.preprocess_family,
+                ),
+            }
+        )
+    return {
+        "schema_version": "hmm_risk_c008_seed_diagnostic_report_v1",
+        "status": "diagnostic_complete",
+        "diagnostic_contract": "C-008-A",
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "universe_key": source_spec.universe_key,
+        "dataset_manifest": inputs["dataset_manifest"],
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest": inputs["mapping_manifest"],
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "selection_performed": False,
+        "ready_artifact_write_performed": False,
+        "families": families,
+    }
+
+
+def _write_diagnostic_report(path: Path, report: dict[str, Any]) -> str:
+    payload = canonical_json_bytes(report) + b"\n"
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise StateModelSetError(f"diagnostic report collision: {path}")
+        return canonical_sha256(report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return canonical_sha256(report)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True, help="Explicit preparation request JSON.")
@@ -301,6 +411,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", required=True, help="Output root for content-addressed READY sets.")
     parser.add_argument("--env-file", required=True, help="Credential-location file; secret values are never printed.")
     parser.add_argument("--db-env-prefix", required=True, help="Environment prefix such as TDX_DB_ or TDX_DB_DEV_.")
+    parser.add_argument(
+        "--c008-diagnostic-output",
+        help="Run only the approved seeds 42-49 diagnostic and atomically write its JSON report.",
+    )
     return parser.parse_args()
 
 
@@ -309,12 +423,26 @@ def main() -> int:
     try:
         _read_env_file(Path(args.env_file).resolve())
         request = _load_request(Path(args.request).resolve())
-        receipt = prepare(
-            request,
-            artifact_root=Path(args.artifact_root).resolve(),
-            output_root=Path(args.output_root).resolve(),
-            db_prefix=str(args.db_env_prefix),
-        )
+        if args.c008_diagnostic_output:
+            report_path = Path(args.c008_diagnostic_output).resolve()
+            report = diagnose_c008(request, db_prefix=str(args.db_env_prefix))
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_seed_diagnostic_receipt_v1",
+                "status": "diagnostic_complete",
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "selection_performed": False,
+                "ready_artifact_write_performed": False,
+                "family_count": len(report["families"]),
+            }
+        else:
+            receipt = prepare(
+                request,
+                artifact_root=Path(args.artifact_root).resolve(),
+                output_root=Path(args.output_root).resolve(),
+                db_prefix=str(args.db_env_prefix),
+            )
     except Exception as exc:
         error = {
             "schema_version": "hmm_risk_state_model_set_preparation_error_v1",

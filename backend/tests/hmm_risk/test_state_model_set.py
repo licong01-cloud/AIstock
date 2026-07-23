@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from backend.services.hmm_risk import state_model_set as subject
+from scripts.hmm_risk import prepare_state_model_set as preparation
 
 
 def _l2_payload(*, include_startprob: bool, feature_names=subject.BASE_FEATURES) -> tuple[bytes, tuple[str, ...]]:
@@ -183,6 +184,75 @@ def test_train_l1_models_rejects_partial_layer_and_semantic_tie() -> None:
             random_seed=42,
             observation_version="hmm_risk_l1_stock_fact_observation_v1",
         )
+
+
+def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -> None:
+    series = _training_series()
+
+    def fake_fit(item, *, preprocess, feature_count, random_seed):
+        del preprocess, feature_count, random_seed
+        validation = np.asarray(item.validation_observations, dtype=np.float64)
+        posteriors = np.zeros((validation.shape[0], 3), dtype=np.float64)
+        posteriors[:20, 0] = 1.0
+        posteriors[20:40, 1] = 1.0
+        posteriors[40:, 2] = 1.0
+        return subject._L1FitEvidence(
+            train=np.asarray(item.train_observations, dtype=np.float64),
+            validation=validation,
+            startprob=np.asarray([1.0, 0.0, 0.0]),
+            transmat=np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            means=np.asarray([[-2.0] * 7, [0.0] * 7, [2.0] * 7]),
+            covars=np.ones((3, 7), dtype=np.float64),
+            posteriors=posteriors,
+            covariance_anomaly_count=0,
+            monitor_converged=True,
+            monitor_iterations=3,
+            monitor_history=(-100.0, -90.0, -91.0),
+        )
+
+    monkeypatch.setattr(subject, "_fit_l1_evidence", fake_fit)
+    report = subject.diagnose_l1_seed_grid(
+        series,
+        feature_names=subject.BASE_FEATURES,
+        preprocess_family="identity",
+    )
+
+    assert report["seeds"] == list(range(42, 50))
+    assert report["selection_performed"] is False
+    assert report["artifact_write_performed"] is False
+    assert set(report["seed_results"]) == {str(seed) for seed in range(42, 50)}
+    for seed_result in report["seed_results"].values():
+        assert seed_result["sector_count"] == 31
+        assert seed_result["labelable_count"] == 31
+        assert seed_result["semantic_unlabelable_count"] == 0
+        assert seed_result["negative_likelihood_delta_sector_count"] == 31
+
+    with pytest.raises(subject.StateModelSetError, match="must be exactly"):
+        subject.diagnose_l1_seed_grid(
+            series,
+            feature_names=subject.BASE_FEATURES,
+            preprocess_family="identity",
+            seeds=(42,),
+        )
+
+
+def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> None:
+    report = {
+        "schema_version": "hmm_risk_c008_seed_diagnostic_report_v1",
+        "status": "diagnostic_complete",
+        "selection_performed": False,
+        "ready_artifact_write_performed": False,
+        "families": [],
+    }
+    path = tmp_path / "diagnostic.json"
+
+    digest = preparation._write_diagnostic_report(path, report)
+    repeated = preparation._write_diagnostic_report(path, report)
+
+    assert repeated == digest == subject.canonical_sha256(report)
+    assert json.loads(path.read_text(encoding="utf-8")) == report
+    with pytest.raises(subject.StateModelSetError, match="diagnostic report collision"):
+        preparation._write_diagnostic_report(path, {**report, "status": "different"})
 
 
 def _spec(source_sha: str) -> subject.StateModelSetSpec:

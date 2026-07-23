@@ -26,6 +26,7 @@ HMM_MIN_COVAR = 1e-3
 HMM_MAX_COVAR = 10.0
 HMM_TRANSITION_ALPHA = 0.1
 HMM_MIN_SELF_TRANSITION = 0.3
+C008_DIAGNOSTIC_SEEDS = tuple(range(42, 50))
 BASE_FEATURES = (
     "daily_return",
     "excess_return_Nd",
@@ -404,20 +405,212 @@ def _smooth_transition_matrix(transmat: np.ndarray) -> np.ndarray:
     return _transition_matrix(smoothed, "smoothed transmat", 3)
 
 
-def _labels_from_validation(posteriors: np.ndarray, utility: np.ndarray, sector_code: str) -> tuple[dict[str, str], dict[str, float]]:
+def _validation_state_statistics(posteriors: np.ndarray, utility: np.ndarray) -> tuple[dict[str, int], dict[str, float | None]]:
     states = np.asarray(posteriors, dtype=np.float64).argmax(axis=1)
+    utility_values = np.asarray(utility, dtype=np.float64)
+    counts: dict[str, int] = {}
+    scores: dict[str, float | None] = {}
+    for state in range(3):
+        values = utility_values[states == state]
+        counts[str(state)] = int(values.size)
+        scores[str(state)] = float(values.mean()) if values.size and np.isfinite(values).all() else None
+    return counts, scores
+
+
+def _labels_from_validation(posteriors: np.ndarray, utility: np.ndarray, sector_code: str) -> tuple[dict[str, str], dict[str, float]]:
+    counts, raw_scores = _validation_state_statistics(posteriors, utility)
     scores: dict[int, float] = {}
     for state in range(3):
-        values = np.asarray(utility, dtype=np.float64)[states == state]
-        if values.size == 0 or not np.isfinite(values).all():
+        value = raw_scores[str(state)]
+        if counts[str(state)] == 0 or value is None:
             raise StateModelSetError(f"{sector_code} semantic label evidence is missing for hidden state {state}")
-        scores[state] = float(values.mean())
+        scores[state] = value
     ordered = sorted(scores, key=lambda state: scores[state])
     ordered_values = [scores[state] for state in ordered]
     if not ordered_values[0] < ordered_values[1] < ordered_values[2]:
         raise StateModelSetError(f"{sector_code} semantic utility tie is not labelable without fallback")
     labels = {str(ordered[0]): "fading", str(ordered[1]): "neutral", str(ordered[2]): "trending"}
     return labels, {str(state): scores[state] for state in range(3)}
+
+
+@dataclass(frozen=True)
+class _L1FitEvidence:
+    train: np.ndarray
+    validation: np.ndarray
+    startprob: np.ndarray
+    transmat: np.ndarray
+    means: np.ndarray
+    covars: np.ndarray
+    posteriors: np.ndarray
+    covariance_anomaly_count: int
+    monitor_converged: bool
+    monitor_iterations: int
+    monitor_history: tuple[float, ...]
+
+
+def _fit_l1_evidence(
+    item: L1TrainingSeries,
+    *,
+    preprocess: Mapping[str, Any],
+    feature_count: int,
+    random_seed: int,
+) -> _L1FitEvidence:
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError as exc:  # pragma: no cover - production dependency gate reports this explicitly.
+        raise StateModelSetError("hmmlearn is required for controlled L1 artifact preparation") from exc
+
+    code = item.sector_code
+    train = _apply_preprocess(item.train_observations, preprocess)
+    validation = _apply_preprocess(item.validation_observations, preprocess)
+    model = GaussianHMM(
+        n_components=3,
+        covariance_type="diag",
+        n_iter=HMM_N_ITER,
+        min_covar=HMM_MIN_COVAR,
+        random_state=random_seed,
+    )
+    try:
+        model.fit(train)
+    except Exception as exc:
+        raise StateModelSetError(f"L1 model training failed for {code}: {exc}") from exc
+    monitor_converged = bool(model.monitor_.converged)
+    monitor_history = tuple(float(value) for value in model.monitor_.history)
+    if not monitor_converged:
+        raise StateModelSetError(f"L1 model training did not converge for {code}")
+    covars = np.asarray(model._covars_, dtype=np.float64)
+    if covars.shape != (3, feature_count) or not np.isfinite(covars).all() or np.any(covars <= 0):
+        raise StateModelSetError(f"L1 model covariance is invalid for {code}")
+    covars, covariance_anomaly_count = _bounded_diag_covariance(covars)
+    startprob = _probability_vector(model.startprob_, f"{code}.startprob", 3)
+    transmat = _smooth_transition_matrix(model.transmat_)
+    means = _finite_array(model.means_, f"{code}.means", ndim=2)
+    posteriors = causal_forward_posteriors(
+        validation,
+        startprob=startprob,
+        transmat=transmat,
+        means=means,
+        covars=covars,
+    )
+    return _L1FitEvidence(
+        train=train,
+        validation=validation,
+        startprob=startprob,
+        transmat=transmat,
+        means=means,
+        covars=covars,
+        posteriors=posteriors,
+        covariance_anomaly_count=covariance_anomaly_count,
+        monitor_converged=monitor_converged,
+        monitor_iterations=int(model.monitor_.iter),
+        monitor_history=monitor_history,
+    )
+
+
+def diagnose_l1_seed_grid(
+    series: Mapping[str, L1TrainingSeries],
+    *,
+    feature_names: Sequence[str],
+    preprocess_family: str,
+    seeds: Sequence[int] = C008_DIAGNOSTIC_SEEDS,
+) -> dict[str, Any]:
+    """Record C-008-A seed facts without choosing a seed or building an artifact."""
+
+    expected_codes = tuple(sorted(series))
+    if len(expected_codes) != EXPECTED_L1_COUNT:
+        raise StateModelSetError(f"L1 diagnostic requires exactly 31 sectors; actual={len(expected_codes)}")
+    features = tuple(str(item) for item in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("L1 diagnostic feature definition is not an approved 7/20-dimensional family")
+    diagnostic_seeds = tuple(int(seed) for seed in seeds)
+    if diagnostic_seeds != C008_DIAGNOSTIC_SEEDS:
+        raise StateModelSetError(f"C-008-A diagnostic seeds must be exactly {C008_DIAGNOSTIC_SEEDS}")
+    for item in series.values():
+        item.validate(len(features))
+    preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
+
+    seed_results: dict[str, Any] = {}
+    for seed in diagnostic_seeds:
+        sectors: dict[str, Any] = {}
+        for code in expected_codes:
+            item = series[code]
+            try:
+                evidence = _fit_l1_evidence(
+                    item,
+                    preprocess=preprocess,
+                    feature_count=len(features),
+                    random_seed=seed,
+                )
+            except StateModelSetError as exc:
+                sectors[code] = {
+                    "status": "fit_failed",
+                    "error": str(exc),
+                    "training_rows": int(item.train_observations.shape[0]),
+                    "validation_rows": int(item.validation_observations.shape[0]),
+                }
+                continue
+            counts, raw_utilities = _validation_state_statistics(
+                evidence.posteriors,
+                item.validation_future_utility,
+            )
+            labels: dict[str, str] | None = None
+            utilities: dict[str, float] | None = None
+            semantic_error: str | None = None
+            try:
+                labels, utilities = _labels_from_validation(
+                    evidence.posteriors,
+                    item.validation_future_utility,
+                    code,
+                )
+            except StateModelSetError as exc:
+                semantic_error = str(exc)
+            deltas = [
+                evidence.monitor_history[index] - evidence.monitor_history[index - 1]
+                for index in range(1, len(evidence.monitor_history))
+            ]
+            negative_deltas = [value for value in deltas if value < 0.0]
+            sectors[code] = {
+                "status": "labelable" if semantic_error is None else "semantic_unlabelable",
+                "semantic_error": semantic_error,
+                "state_counts": counts,
+                "state_utilities": raw_utilities,
+                "state_labels": labels,
+                "strict_state_utilities": utilities,
+                "monitor_converged": evidence.monitor_converged,
+                "monitor_iterations": evidence.monitor_iterations,
+                "monitor_history": list(evidence.monitor_history),
+                "negative_likelihood_delta_count": len(negative_deltas),
+                "minimum_likelihood_delta": min(negative_deltas) if negative_deltas else None,
+                "final_training_log_likelihood": evidence.monitor_history[-1] if evidence.monitor_history else None,
+                "training_rows": int(evidence.train.shape[0]),
+                "validation_rows": int(evidence.validation.shape[0]),
+                "covariance_anomaly_count": evidence.covariance_anomaly_count,
+                "covariance_min_after": float(evidence.covars.min()),
+                "covariance_max_after": float(evidence.covars.max()),
+            }
+        values = list(sectors.values())
+        seed_results[str(seed)] = {
+            "seed": seed,
+            "sector_count": len(sectors),
+            "fit_failed_count": sum(item["status"] == "fit_failed" for item in values),
+            "semantic_unlabelable_count": sum(item["status"] == "semantic_unlabelable" for item in values),
+            "labelable_count": sum(item["status"] == "labelable" for item in values),
+            "negative_likelihood_delta_sector_count": sum(
+                int(item.get("negative_likelihood_delta_count") or 0) > 0 for item in values
+            ),
+            "sectors": sectors,
+        }
+    return {
+        "schema_version": "hmm_risk_l1_seed_diagnostic_v1",
+        "diagnostic_contract": "C-008-A",
+        "seeds": list(diagnostic_seeds),
+        "selection_performed": False,
+        "artifact_write_performed": False,
+        "feature_names": list(features),
+        "preprocess": preprocess,
+        "expected_sector_set_hash": canonical_sha256(expected_codes),
+        "seed_results": seed_results,
+    }
 
 
 def train_l1_models(
@@ -440,52 +633,28 @@ def train_l1_models(
         item.validate(len(features))
     preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
 
-    try:
-        from hmmlearn.hmm import GaussianHMM
-    except ImportError as exc:  # pragma: no cover - production dependency gate reports this explicitly.
-        raise StateModelSetError("hmmlearn is required for controlled L1 artifact preparation") from exc
-
     models: dict[str, Any] = {}
     for code in expected_codes:
         item = series[code]
-        train = _apply_preprocess(item.train_observations, preprocess)
-        validation = _apply_preprocess(item.validation_observations, preprocess)
-        model = GaussianHMM(
-            n_components=3,
-            covariance_type="diag",
-            n_iter=HMM_N_ITER,
-            min_covar=HMM_MIN_COVAR,
-            random_state=random_seed,
+        evidence = _fit_l1_evidence(
+            item,
+            preprocess=preprocess,
+            feature_count=len(features),
+            random_seed=random_seed,
         )
-        try:
-            model.fit(train)
-        except Exception as exc:
-            raise StateModelSetError(f"L1 model training failed for {code}: {exc}") from exc
-        if not bool(model.monitor_.converged):
-            raise StateModelSetError(f"L1 model training did not converge for {code}")
-        covars = np.asarray(model._covars_, dtype=np.float64)
-        if covars.shape != (3, len(features)) or not np.isfinite(covars).all() or np.any(covars <= 0):
-            raise StateModelSetError(f"L1 model covariance is invalid for {code}")
-        covars, covariance_anomaly_count = _bounded_diag_covariance(covars)
-        startprob = _probability_vector(model.startprob_, f"{code}.startprob", 3)
-        transmat = _smooth_transition_matrix(model.transmat_)
-        means = _finite_array(model.means_, f"{code}.means", ndim=2)
-        posteriors = causal_forward_posteriors(
-            validation,
-            startprob=startprob,
-            transmat=transmat,
-            means=means,
-            covars=covars,
+        labels, utilities = _labels_from_validation(
+            evidence.posteriors,
+            item.validation_future_utility,
+            code,
         )
-        labels, utilities = _labels_from_validation(posteriors, item.validation_future_utility, code)
         prefix = causal_forward_posteriors(
-            validation[:-1],
-            startprob=startprob,
-            transmat=transmat,
-            means=means,
-            covars=covars,
+            evidence.validation[:-1],
+            startprob=evidence.startprob,
+            transmat=evidence.transmat,
+            means=evidence.means,
+            covars=evidence.covars,
         )
-        if not np.allclose(prefix, posteriors[:-1], atol=1e-12, rtol=0):
+        if not np.allclose(prefix, evidence.posteriors[:-1], atol=1e-12, rtol=0):
             raise StateModelSetError(f"causal prefix replay differs for {code}")
         models[code] = {
             "sector_code": code,
@@ -495,19 +664,19 @@ def train_l1_models(
             "n_states": 3,
             "covariance_type": "diag",
             "feature_names": list(features),
-            "startprob": startprob.tolist(),
-            "transmat": transmat.tolist(),
-            "means": means.tolist(),
-            "covars": covars.tolist(),
-            "covariance_fixed": covariance_anomaly_count > 0,
-            "covariance_anomaly_count": covariance_anomaly_count,
-            "covariance_min_after": float(covars.min()),
-            "covariance_max_after": float(covars.max()),
+            "startprob": evidence.startprob.tolist(),
+            "transmat": evidence.transmat.tolist(),
+            "means": evidence.means.tolist(),
+            "covars": evidence.covars.tolist(),
+            "covariance_fixed": evidence.covariance_anomaly_count > 0,
+            "covariance_anomaly_count": evidence.covariance_anomaly_count,
+            "covariance_min_after": float(evidence.covars.min()),
+            "covariance_max_after": float(evidence.covars.max()),
             "state_labels": labels,
             "state_validation_utilities": utilities,
             "observation_version": observation_version,
-            "training_rows": int(train.shape[0]),
-            "validation_rows": int(validation.shape[0]),
+            "training_rows": int(evidence.train.shape[0]),
+            "validation_rows": int(evidence.validation.shape[0]),
             "pit_l2_constituents": list(item.pit_l2_constituents),
             "pit_constituent_manifest_hash": item.pit_constituent_manifest_hash,
             "observation_manifest_hash": item.observation_manifest_hash,
