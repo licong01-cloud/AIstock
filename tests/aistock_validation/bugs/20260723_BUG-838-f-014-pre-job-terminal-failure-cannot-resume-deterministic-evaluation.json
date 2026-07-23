@@ -137,7 +137,7 @@
   },
   "first_seen_at": "2026-07-23T05:02:24.871751Z",
   "fix_branch": "bug/BUG-838-f-014-pre-job-terminal-failure-cannot-resume-det-20260723",
-  "fix_commit": "47c4f02905ee5ce8c5281b03a7cd046153f4c1ca",
+  "fix_commit": "2a2cfcb820a6279016da4dab0beb29925e23259a",
   "fixed_at": null,
   "github_issue_number": 2652,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2652",
