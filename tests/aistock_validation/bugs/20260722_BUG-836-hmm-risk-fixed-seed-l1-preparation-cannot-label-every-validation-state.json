@@ -29,6 +29,12 @@
       "actor": "user",
       "note": "User approved C-008-D1 and C-008-B1: update the design without merge, then run full diagnostic-only soft posterior, covariance, and convergence evidence; B2/B3 remain unapproved.",
       "timestamp": "2026-07-23T05:47:48.2012041Z"
+    },
+    {
+      "action": "record_validation_failure",
+      "actor": "codex",
+      "note": "The first full C-008-B1 run failed closed during canonical JSON serialization because covariance-invalid fits exposed non-finite monitor history. No report, model, READY artifact, database write, or runtime change occurred. The repair preserves the fact as null plus history_non_finite_count and adds a distinguishing test.",
+      "timestamp": "2026-07-23T06:39:21.9121065Z"
     }
   ],
   "evidence_uris": [

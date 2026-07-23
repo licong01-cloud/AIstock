@@ -462,15 +462,19 @@ def _monitor_diagnostic(model: Any) -> dict[str, Any]:
     for index in range(1, len(history)):
         previous = history[index - 1]
         current = history[index]
-        absolute = current - previous
+        comparable = math.isfinite(previous) and math.isfinite(current)
+        absolute = current - previous if comparable else None
         deltas.append(
             {
                 "history_index": index,
-                "previous": previous,
-                "current": current,
+                "previous": previous if math.isfinite(previous) else None,
+                "current": current if math.isfinite(current) else None,
                 "absolute_delta": absolute,
-                "relative_delta": absolute / max(abs(previous), np.finfo(np.float64).eps),
-                "negative": absolute < 0.0,
+                "relative_delta": (
+                    absolute / max(abs(previous), np.finfo(np.float64).eps) if absolute is not None else None
+                ),
+                "comparable": comparable,
+                "negative": bool(absolute is not None and absolute < 0.0),
                 "terminal": index == len(history) - 1,
             }
         )
@@ -490,7 +494,8 @@ def _monitor_diagnostic(model: Any) -> dict[str, Any]:
         "iterations": iterations,
         "maximum_iterations": int(model.monitor_.n_iter),
         "tolerance": tolerance,
-        "history": list(history),
+        "history": [value if math.isfinite(value) else None for value in history],
+        "history_non_finite_count": sum(not math.isfinite(value) for value in history),
         "deltas": deltas,
         "negative_delta_count": len(negative),
         "minimum_absolute_delta": min((item["absolute_delta"] for item in negative), default=None),
@@ -702,7 +707,7 @@ def _fit_l1_evidence(
         ) from exc
     monitor_diagnostic = _monitor_diagnostic(model)
     monitor_converged = bool(monitor_diagnostic["converged"])
-    monitor_history = tuple(float(value) for value in monitor_diagnostic["history"])
+    monitor_history = tuple(float(value) for value in model.monitor_.history)
     if not monitor_converged:
         raise _L1FitDiagnosticError(
             f"L1 model training did not converge for {code}",
@@ -840,10 +845,16 @@ def _diagnose_l1_seed_grid(
                 "strict_state_utilities": utilities,
                 "monitor_converged": evidence.monitor_converged,
                 "monitor_iterations": evidence.monitor_iterations,
-                "monitor_history": list(evidence.monitor_history),
+                "monitor_history": [
+                    value if math.isfinite(value) else None for value in evidence.monitor_history
+                ],
                 "negative_likelihood_delta_count": len(negative_deltas),
                 "minimum_likelihood_delta": min(negative_deltas) if negative_deltas else None,
-                "final_training_log_likelihood": evidence.monitor_history[-1] if evidence.monitor_history else None,
+                "final_training_log_likelihood": (
+                    evidence.monitor_history[-1]
+                    if evidence.monitor_history and math.isfinite(evidence.monitor_history[-1])
+                    else None
+                ),
                 "training_rows": int(evidence.train.shape[0]),
                 "validation_rows": int(evidence.validation.shape[0]),
                 "covariance_anomaly_count": evidence.covariance_anomaly_count,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -337,6 +338,27 @@ def test_c008_b1_covariance_diagnostic_separates_raw_failure_dimensions() -> Non
     assert evidence["upper_bound_anomaly_count"] == 1
     assert evidence["valid_for_bounding"] is False
     assert len(evidence["anomaly_mask_sha256"]) == 64
+
+
+def test_c008_b1_monitor_diagnostic_serializes_non_finite_failure_history() -> None:
+    model = SimpleNamespace(
+        monitor_=SimpleNamespace(
+            history=(-100.0, float("nan")),
+            converged=True,
+            iter=2,
+            n_iter=300,
+            tol=0.01,
+        )
+    )
+
+    evidence = subject._monitor_diagnostic(model)
+
+    assert evidence["history"] == [-100.0, None]
+    assert evidence["history_non_finite_count"] == 1
+    assert evidence["deltas"][0]["comparable"] is False
+    assert evidence["deltas"][0]["absolute_delta"] is None
+    assert evidence["negative_delta_count"] == 0
+    subject.canonical_json_bytes(evidence)
 
 
 def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> None:
