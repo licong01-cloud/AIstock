@@ -148,6 +148,38 @@ def test_control_repository_rejects_unknown_mutation_and_identity_drift() -> Non
     )
 
 
+def test_control_repository_compares_request_json_by_canonical_json_value() -> None:
+    repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(_state()))
+    persisted = {
+        "evaluation_id": "qelt_" + "a" * 64,
+        "request_json": {
+            "feature_snapshot": {"lineage_parent_ids": []},
+            "artifact_paths": {"prediction": "pred.pkl"},
+        },
+    }
+    prepared = {
+        "evaluation_id": "qelt_" + "a" * 64,
+        "request_json": {
+            "artifact_paths": {"prediction": "pred.pkl"},
+            "feature_snapshot": {"lineage_parent_ids": ()},
+        },
+    }
+
+    repository._require_same_identity(persisted, prepared)
+
+    with pytest.raises(QELongTrendControlRepositoryError, match="different immutable content"):
+        repository._require_same_identity(
+            persisted,
+            {
+                **prepared,
+                "request_json": {
+                    **prepared["request_json"],
+                    "feature_snapshot": {"lineage_parent_ids": ("different-parent",)},
+                },
+            },
+        )
+
+
 def test_reconcile_candidates_skip_live_leases_and_rotate_by_updated_at() -> None:
     state = _state()
     repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(state))
