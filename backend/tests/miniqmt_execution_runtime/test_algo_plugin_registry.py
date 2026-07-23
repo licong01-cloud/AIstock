@@ -27,6 +27,7 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginCatalogBuildError,
     PluginCatalogBuildFailureReceiptV1,
     PluginCatalogBuildFailureV1,
+    PluginCatalogSnapshotV1,
     PluginCreationBindingV1,
     PluginKeyV1,
     VnpyCompatibilityFailureV1,
@@ -43,12 +44,16 @@ def _receipts(failed_plugin_id: str | None = None) -> tuple[VnpyCompatibilityRec
         components = compatibility_component_hashes_v1(manifest.compatibility_requirement)
         failed = manifest.plugin_id == failed_plugin_id
         failures = (
-            VnpyCompatibilityFailureV1.create(
-                field_path="required_method_signatures",
-                reason_code="TEST_PINNED_SURFACE_MISMATCH",
-                context={"plugin_id": manifest.plugin_id},
-            ),
-        ) if failed else ()
+            (
+                VnpyCompatibilityFailureV1.create(
+                    field_path="required_method_signatures",
+                    reason_code="TEST_PINNED_SURFACE_MISMATCH",
+                    context={"plugin_id": manifest.plugin_id},
+                ),
+            )
+            if failed
+            else ()
+        )
         result.append(
             VnpyCompatibilityReceiptV1.create(
                 plugin_id=manifest.plugin_id,
@@ -111,6 +116,58 @@ def test_catalog_snapshot_is_byte_identical_for_all_input_permutations() -> None
         )
         assert runtime.snapshot.catalog_sha256 == expected.catalog_sha256
         assert canonical_json_bytes_v1(runtime.snapshot.canonical_payload_v1()) == expected_bytes
+
+
+def test_catalog_snapshot_readback_rejects_noncanonical_registration_order() -> None:
+    snapshot = _build().snapshot
+    descriptors = tuple(reversed(snapshot.registration_descriptors))
+    hash_payload = {
+        "schema_version": "plugin_catalog_snapshot_v1",
+        "registration_descriptors": [item.canonical_payload_v1() for item in descriptors],
+        "pinned_compatibility_receipts": [
+            item.canonical_payload_v1() for item in snapshot.pinned_compatibility_receipts
+        ],
+        "creation_bindings": [item.canonical_payload_v1() for item in snapshot.creation_bindings],
+    }
+    payload = {
+        "schema_version": "plugin_catalog_snapshot_v1",
+        "registration_descriptors": descriptors,
+        "pinned_compatibility_receipts": snapshot.pinned_compatibility_receipts,
+        "creation_bindings": snapshot.creation_bindings,
+    }
+    payload["catalog_sha256"] = hash_hex_v1(
+        "miniqmt_plugin_catalog_snapshot_v1",
+        hash_payload,
+    )
+
+    with pytest.raises(ValueError, match="canonical|sorted"):
+        PluginCatalogSnapshotV1.model_validate(payload, strict=True)
+
+
+def test_catalog_snapshot_readback_rejects_hash_correct_duplicate_registration() -> None:
+    snapshot = _build().snapshot
+    descriptors = (snapshot.registration_descriptors[0], *snapshot.registration_descriptors)
+    hash_payload = {
+        "schema_version": "plugin_catalog_snapshot_v1",
+        "registration_descriptors": [item.canonical_payload_v1() for item in descriptors],
+        "pinned_compatibility_receipts": [
+            item.canonical_payload_v1() for item in snapshot.pinned_compatibility_receipts
+        ],
+        "creation_bindings": [item.canonical_payload_v1() for item in snapshot.creation_bindings],
+    }
+    payload = {
+        "schema_version": "plugin_catalog_snapshot_v1",
+        "registration_descriptors": descriptors,
+        "pinned_compatibility_receipts": snapshot.pinned_compatibility_receipts,
+        "creation_bindings": snapshot.creation_bindings,
+    }
+    payload["catalog_sha256"] = hash_hex_v1(
+        "miniqmt_plugin_catalog_snapshot_v1",
+        hash_payload,
+    )
+
+    with pytest.raises(ValueError, match="duplicate|unique"):
+        PluginCatalogSnapshotV1.model_validate(payload, strict=True)
 
 
 def test_snapshot_has_no_callable_and_process_mapping_is_sealed() -> None:
@@ -185,6 +242,44 @@ def test_catalog_aggregates_failures_and_never_publishes_partial_state() -> None
     assert error.value.partial_catalog is None
 
 
+def test_malformed_descriptor_is_aggregated_without_hiding_later_failures() -> None:
+    descriptors = current_three_descriptors_v2()
+    malformed = descriptors[0].model_copy(update={"manifest": "malformed"})
+    process = current_three_process_bindings_v2().without("aistock.vnpy.best_limit.state_codec")
+
+    with pytest.raises(PluginCatalogBuildError) as error:
+        build_plugin_catalog_v2(
+            descriptors=(malformed, *descriptors[1:]),
+            creation_bindings=current_three_creation_bindings_v1(),
+            process_bindings=process,
+            pinned_compatibility_receipts=_receipts(),
+        )
+
+    stages = {item.stage for item in error.value.receipt.ordered_failures}
+    assert CatalogBuildStageV1.STRICT_PARSE in stages
+    assert CatalogBuildStageV1.PROCESS_BINDING in stages
+    assert error.value.partial_catalog is None
+
+
+def test_failure_receipt_is_input_order_independent_for_semantic_conflicts() -> None:
+    creation = current_three_creation_bindings_v1()
+    duplicate = PluginCreationBindingV1(algo_code=creation[0].algo_code, plugin_key=creation[0].plugin_key)
+    receipts = []
+    for ordered_creation in (creation + (duplicate,), (duplicate,) + creation):
+        with pytest.raises(PluginCatalogBuildError) as error:
+            build_plugin_catalog_v2(
+                descriptors=current_three_descriptors_v2(),
+                creation_bindings=ordered_creation,
+                process_bindings=current_three_process_bindings_v2(),
+                pinned_compatibility_receipts=_receipts(),
+            )
+        receipts.append(error.value.receipt)
+
+    assert receipts[0].build_input_sha256 == receipts[1].build_input_sha256
+    assert receipts[0].failure_set_sha256 == receipts[1].failure_set_sha256
+    assert receipts[0].receipt_sha256 == receipts[1].receipt_sha256
+
+
 def test_empty_catalog_and_orphan_receipt_fail_without_partial_publication() -> None:
     with pytest.raises(PluginCatalogBuildError) as empty_error:
         build_plugin_catalog_v2(
@@ -213,14 +308,18 @@ def test_empty_catalog_and_orphan_receipt_fail_without_partial_publication() -> 
     )
     with pytest.raises(PluginCatalogBuildError) as orphan_error:
         _build((*_receipts(), orphan))
-    assert any("orphan_receipt" in str(item.canonical_payload_v1()) for item in orphan_error.value.receipt.ordered_failures)
+    assert any(
+        "orphan_receipt" in str(item.canonical_payload_v1()) for item in orphan_error.value.receipt.ordered_failures
+    )
 
 
 def test_missing_or_failed_pinned_receipt_cannot_be_defaulted_to_passed() -> None:
     for receipts in (_receipts()[:-1], _receipts("aistock.vnpy.sniper")):
         with pytest.raises(PluginCatalogBuildError) as error:
             _build(receipts)
-        assert any(item.stage is CatalogBuildStageV1.PINNED_COMPATIBILITY for item in error.value.receipt.ordered_failures)
+        assert any(
+            item.stage is CatalogBuildStageV1.PINNED_COMPATIBILITY for item in error.value.receipt.ordered_failures
+        )
 
 
 def test_pinned_receipt_component_hash_mismatch_fails_loud() -> None:
@@ -265,7 +364,36 @@ def test_aggregate_failure_receipt_is_bounded_and_hashes_omitted_set() -> None:
     assert receipt.failures_truncated is True
     assert len(receipt.ordered_failures) == 256
     assert receipt.omitted_failure_set_sha256 is not None
-    assert any(item.field_path == "__failure_set__" for item in receipt.ordered_failures)
+    assert receipt.ordered_failures[-1].field_path == "__failure_set__"
+
+
+def test_failure_receipt_rejects_unreported_nontruncated_failures() -> None:
+    failure = PluginCatalogBuildFailureV1.create(
+        stage=CatalogBuildStageV1.SNAPSHOT_FREEZE,
+        descriptor=None,
+        field_path="failure_001",
+        reason_code=MiniQMTPluginReasonCode.REGISTRATION_CONFLICT,
+        context={"index": 1},
+    )
+    failure_payload = {
+        "total_failure_count": 2,
+        "failures_truncated": False,
+        "ordered_failures": [failure.canonical_payload_v1()],
+        "omitted_failure_set_sha256": None,
+    }
+    payload = {
+        "schema_version": "plugin_catalog_build_failure_receipt_v1",
+        "build_input_sha256": "a" * 64,
+        "ordered_descriptor_keys": [],
+        **failure_payload,
+        "failure_set_sha256": hash_hex_v1("miniqmt_plugin_catalog_failure_set_v1", failure_payload),
+    }
+    payload["receipt_sha256"] = hash_hex_v1("miniqmt_plugin_catalog_build_failure_receipt_v1", payload)
+    payload["ordered_descriptor_keys"] = ()
+    payload["ordered_failures"] = (failure,)
+
+    with pytest.raises(ValueError, match="total_failure_count"):
+        PluginCatalogBuildFailureReceiptV1.model_validate(payload, strict=True)
 
 
 def test_route_failure_isolated_from_catalog_and_other_plugins() -> None:

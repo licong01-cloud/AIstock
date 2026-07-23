@@ -15,6 +15,7 @@ from typing import Any, Literal, Self
 from pydantic import StrictBool, ValidationError, model_validator
 
 from .plugin_canonical import (
+    canonical_json_bytes_v1,
     hash_hex_v1,
     json_safe_evidence_v1,
     thaw_json_v1,
@@ -218,7 +219,8 @@ class VnpyCompatibilityReceiptV1(FrozenStrictModel):
     @model_validator(mode="after")
     def _validate_receipt(self) -> Self:
         ordered = tuple(sorted(self.ordered_failures, key=lambda item: item.sort_key_v1()))
-        object.__setattr__(self, "ordered_failures", ordered)
+        if self.ordered_failures != ordered:
+            raise ValueError("compatibility receipt failures must be stable sorted")
         if self.status is CompatibilityStatusV1.PASSED and ordered:
             raise ValueError("PASSED compatibility receipt cannot contain failures")
         if self.status is CompatibilityStatusV1.FAILED and not ordered:
@@ -325,7 +327,6 @@ class PluginCatalogBuildFailureReceiptV1(FrozenStrictModel):
                     context={"omitted_count": len(omitted), "omitted_failure_set_sha256": omitted_hash},
                 )
             )
-            ordered.sort(key=lambda item: item.sort_key_v1())
         failure_payload = {
             "total_failure_count": total,
             "failures_truncated": total > _MAX_BUILD_FAILURES,
@@ -353,7 +354,12 @@ class PluginCatalogBuildFailureReceiptV1(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> Self:
-        if self.ordered_failures != tuple(sorted(self.ordered_failures, key=lambda item: item.sort_key_v1())):
+        if self.ordered_descriptor_keys != tuple(
+            sorted(self.ordered_descriptor_keys, key=lambda item: item.sort_key_v1())
+        ):
+            raise ValueError("ordered_descriptor_keys must be stable sorted")
+        comparable_failures = self.ordered_failures[:-1] if self.failures_truncated else self.ordered_failures
+        if comparable_failures != tuple(sorted(comparable_failures, key=lambda item: item.sort_key_v1())):
             raise ValueError("catalog build failures must be stable sorted")
         if self.total_failure_count < len(self.ordered_failures):
             raise ValueError("total_failure_count cannot be smaller than returned failures")
@@ -362,10 +368,24 @@ class PluginCatalogBuildFailureReceiptV1(FrozenStrictModel):
         if self.failures_truncated:
             if len(self.ordered_failures) != _MAX_BUILD_FAILURES or self.omitted_failure_set_sha256 is None:
                 raise ValueError("truncated failure receipt must carry 256 entries and omitted hash")
-            if not any(item.field_path == "__failure_set__" for item in self.ordered_failures):
+            if self.ordered_failures[-1].field_path != "__failure_set__":
                 raise ValueError("truncated failure receipt is missing the bounded marker")
-        elif self.omitted_failure_set_sha256 is not None:
-            raise ValueError("non-truncated failure receipt cannot carry omitted hash")
+            markers = [item for item in self.ordered_failures if item.field_path == "__failure_set__"]
+            marker_context = thaw_json_v1(markers[0].context) if len(markers) == 1 else None
+            if (
+                len(markers) != 1
+                or markers[0].stage is not CatalogBuildStageV1.SNAPSHOT_FREEZE
+                or markers[0].reason_code is not MiniQMTPluginReasonCode.REGISTRATION_CONFLICT
+                or not isinstance(marker_context, dict)
+                or marker_context.get("omitted_count") != self.total_failure_count - (_MAX_BUILD_FAILURES - 1)
+                or marker_context.get("omitted_failure_set_sha256") != self.omitted_failure_set_sha256
+            ):
+                raise ValueError("truncated failure receipt marker does not close over omitted failures")
+        else:
+            if self.omitted_failure_set_sha256 is not None:
+                raise ValueError("non-truncated failure receipt cannot carry omitted hash")
+            if self.total_failure_count != len(self.ordered_failures):
+                raise ValueError("total_failure_count must equal returned failures when not truncated")
         failure_payload = {
             "total_failure_count": self.total_failure_count,
             "failures_truncated": self.failures_truncated,
@@ -400,7 +420,9 @@ class PluginCatalogSnapshotV1(FrozenStrictModel):
     ) -> Self:
         descriptors = tuple(sorted(descriptors, key=_descriptor_sort_key))
         receipts = tuple(sorted(receipts, key=lambda item: item.plugin_key.sort_key_v1()))
-        creation_bindings = tuple(sorted(creation_bindings, key=lambda item: (item.algo_code, item.plugin_key.sort_key_v1())))
+        creation_bindings = tuple(
+            sorted(creation_bindings, key=lambda item: (item.algo_code, item.plugin_key.sort_key_v1()))
+        )
         payload = {
             "schema_version": "plugin_catalog_snapshot_v1",
             "registration_descriptors": [item.canonical_payload_v1() for item in descriptors],
@@ -421,6 +443,52 @@ class PluginCatalogSnapshotV1(FrozenStrictModel):
     def _validate_snapshot(self) -> Self:
         if not self.registration_descriptors:
             raise ValueError("plugin catalog snapshot must not be empty")
+        canonical_descriptors = tuple(sorted(self.registration_descriptors, key=_descriptor_sort_key))
+        canonical_receipts = tuple(
+            sorted(self.pinned_compatibility_receipts, key=lambda item: item.plugin_key.sort_key_v1())
+        )
+        canonical_bindings = tuple(
+            sorted(self.creation_bindings, key=lambda item: (item.algo_code, item.plugin_key.sort_key_v1()))
+        )
+        if self.registration_descriptors != canonical_descriptors:
+            raise ValueError("registration_descriptors must use canonical sorted order")
+        if self.pinned_compatibility_receipts != canonical_receipts:
+            raise ValueError("pinned_compatibility_receipts must use canonical sorted order")
+        if self.creation_bindings != canonical_bindings:
+            raise ValueError("creation_bindings must use canonical sorted order")
+
+        descriptor_keys = [item.plugin_key for item in self.registration_descriptors]
+        version_keys = [
+            (item.manifest.plugin_id, item.manifest.plugin_version) for item in self.registration_descriptors
+        ]
+        if len(descriptor_keys) != len(set(descriptor_keys)) or len(version_keys) != len(set(version_keys)):
+            raise ValueError("registration descriptors must have unique plugin keys and versions")
+        receipt_keys = [item.plugin_key for item in self.pinned_compatibility_receipts]
+        if len(receipt_keys) != len(set(receipt_keys)) or set(receipt_keys) != set(descriptor_keys):
+            raise ValueError("compatibility receipts must map one-to-one to registration descriptors")
+        if any(item.status is not CompatibilityStatusV1.PASSED for item in self.pinned_compatibility_receipts):
+            raise ValueError("published catalog cannot contain a failed compatibility receipt")
+
+        descriptors_by_key = {item.plugin_key: item for item in self.registration_descriptors}
+        creation_counts = Counter(item.algo_code for item in self.creation_bindings)
+        descriptor_algo_codes = {item.manifest.algo_code for item in self.registration_descriptors}
+        if set(creation_counts) != descriptor_algo_codes or any(count != 1 for count in creation_counts.values()):
+            raise ValueError("creation bindings must map every algo code exactly once")
+        for binding in self.creation_bindings:
+            descriptor = descriptors_by_key.get(binding.plugin_key)
+            if descriptor is None or descriptor.manifest.algo_code != binding.algo_code:
+                raise ValueError("creation binding must reference the exact registered plugin key and algo code")
+
+        for descriptor in self.registration_descriptors:
+            try:
+                PluginRegistrationDescriptorV2.model_validate(descriptor.model_dump(mode="python"), strict=True)
+            except (ValidationError, TypeError, ValueError) as exc:
+                raise ValueError("snapshot descriptor closure is invalid") from exc
+        for receipt in self.pinned_compatibility_receipts:
+            try:
+                VnpyCompatibilityReceiptV1.model_validate(receipt.model_dump(mode="python"), strict=True)
+            except (ValidationError, TypeError, ValueError) as exc:
+                raise ValueError("snapshot compatibility receipt closure is invalid") from exc
         expected = hash_hex_v1(
             "miniqmt_plugin_catalog_snapshot_v1",
             self.canonical_payload_v1(exclude={"catalog_sha256"}),
@@ -682,14 +750,23 @@ def _build_input_hash(
     process_bindings: PluginProcessBindingsV2,
     receipts: tuple[Any, ...],
 ) -> str:
-    evidence = json_safe_evidence_v1(
-        {
-            "descriptors": [item.model_dump(mode="json") if isinstance(item, FrozenStrictModel) else item for item in descriptors],
-            "creation_bindings": [item.model_dump(mode="json") if isinstance(item, FrozenStrictModel) else item for item in creation_bindings],
-            "process_binding_ids": process_bindings.binding_ids,
-            "pinned_compatibility_receipts": [item.model_dump(mode="json") if isinstance(item, FrozenStrictModel) else item for item in receipts],
-        }
-    )
+    def _ordered_evidence(values: tuple[Any, ...], domain: str) -> list[Any]:
+        items = [
+            json_safe_evidence_v1(
+                item.model_dump(mode="json", warnings=False) if isinstance(item, FrozenStrictModel) else item
+            )
+            for item in values
+        ]
+        return sorted(items, key=lambda item: (hash_hex_v1(domain, item), canonical_json_bytes_v1(item)))
+
+    evidence = {
+        "descriptors": _ordered_evidence(descriptors, "miniqmt_plugin_catalog_descriptor_input_v1"),
+        "creation_bindings": _ordered_evidence(creation_bindings, "miniqmt_plugin_catalog_creation_binding_input_v1"),
+        "process_binding_ids": list(process_bindings.binding_ids),
+        "pinned_compatibility_receipts": _ordered_evidence(
+            receipts, "miniqmt_plugin_catalog_compatibility_receipt_input_v1"
+        ),
+    }
     return hash_hex_v1("miniqmt_plugin_catalog_build_input_v1", evidence)
 
 
@@ -722,7 +799,20 @@ def _parse_models(
     parsed = []
     for index, value in enumerate(values):
         try:
-            parsed.append(model_type.model_validate(value, strict=True))
+            candidate = model_type.model_validate(value, strict=True)
+            if model_type is PluginRegistrationDescriptorV2 and not isinstance(
+                candidate.manifest, ExecutionAlgoPluginManifestV2
+            ):
+                raise TypeError("descriptor manifest must be ExecutionAlgoPluginManifestV2")
+            if model_type is PluginCreationBindingV1 and not isinstance(candidate.plugin_key, PluginKeyV1):
+                raise TypeError("creation binding plugin_key must be PluginKeyV1")
+            if model_type is VnpyCompatibilityReceiptV1 and (
+                not isinstance(candidate.status, CompatibilityStatusV1)
+                or type(candidate.ordered_failures) is not tuple
+                or any(not isinstance(item, VnpyCompatibilityFailureV1) for item in candidate.ordered_failures)
+            ):
+                raise TypeError("compatibility receipt nested closure is invalid")
+            parsed.append(candidate)
         except (ValidationError, TypeError, ValueError) as exc:
             _failure(
                 failures,
@@ -751,7 +841,11 @@ def build_plugin_catalog_v2(
     process_bindings: PluginProcessBindingsV2,
     pinned_compatibility_receipts: tuple[Any, ...],
 ) -> PluginCatalogRuntimeV2:
-    if type(descriptors) is not tuple or type(creation_bindings) is not tuple or type(pinned_compatibility_receipts) is not tuple:
+    if (
+        type(descriptors) is not tuple
+        or type(creation_bindings) is not tuple
+        or type(pinned_compatibility_receipts) is not tuple
+    ):
         raise TypeError("catalog sequence inputs must be strict tuples")
     if not isinstance(process_bindings, PluginProcessBindingsV2):
         raise TypeError("process_bindings must be PluginProcessBindingsV2")
@@ -784,9 +878,7 @@ def build_plugin_catalog_v2(
 
     # Preserve the design's stage boundary even when a deliberately corrupted
     # frozen model was constructed without validation for negative testing.
-    for raw_descriptor in descriptors:
-        if not isinstance(raw_descriptor, PluginRegistrationDescriptorV2):
-            continue
+    for raw_descriptor in parsed_descriptors:
         manifest = raw_descriptor.manifest
         serialized = manifest.canonical_payload_v1()
         expected_config = hash_hex_v1("miniqmt_plugin_config_schema_v1", thaw_json_v1(manifest.config_schema))
@@ -845,6 +937,29 @@ def build_plugin_catalog_v2(
             )
 
     for descriptor in parsed_descriptors:
+        binding_ids = (
+            descriptor.factory_binding_id,
+            descriptor.config_validator_binding_id,
+            descriptor.state_codec_binding_id,
+        )
+        callable_refs = (
+            descriptor.factory_callable_ref,
+            descriptor.config_validator_callable_ref,
+            descriptor.state_codec_callable_ref,
+        )
+        if (
+            descriptor.factory_callable_ref != descriptor.manifest.implementation_ref
+            or len(binding_ids) != len(set(binding_ids))
+            or any(_CALLABLE_REF_SEPARATOR not in item for item in callable_refs)
+        ):
+            _failure(
+                failures,
+                stage=CatalogBuildStageV1.PROCESS_BINDING,
+                descriptor=descriptor,
+                field_path="descriptor",
+                reason_code=MiniQMTPluginReasonCode.BINDING_INVALID,
+                context={"condition": "descriptor_binding_closure_invalid"},
+            )
         manifest_files = {item.path: item.sha256 for item in descriptor.manifest.source_attribution.aistock_files}
         for item in descriptor.manifest.source_attribution.aistock_files:
             path = Path(__file__).resolve().parents[3] / item.path
@@ -859,14 +974,24 @@ def build_plugin_catalog_v2(
                     context={"expected": item.sha256, "actual": actual},
                 )
         binding_specs = (
-            ("factory", descriptor.factory_binding_id, descriptor.factory_callable_ref, descriptor.factory_signature_sha256),
+            (
+                "factory",
+                descriptor.factory_binding_id,
+                descriptor.factory_callable_ref,
+                descriptor.factory_signature_sha256,
+            ),
             (
                 "config_validator",
                 descriptor.config_validator_binding_id,
                 descriptor.config_validator_callable_ref,
                 descriptor.config_validator_signature_sha256,
             ),
-            ("state_codec", descriptor.state_codec_binding_id, descriptor.state_codec_callable_ref, descriptor.state_codec_signature_sha256),
+            (
+                "state_codec",
+                descriptor.state_codec_binding_id,
+                descriptor.state_codec_callable_ref,
+                descriptor.state_codec_signature_sha256,
+            ),
         )
         for name, binding_id, expected_ref, expected_signature in binding_specs:
             value = process_bindings.resolve(binding_id)
@@ -966,8 +1091,13 @@ def build_plugin_catalog_v2(
         receipt = receipts[0]
         manifest = descriptor.manifest
         expected_components = compatibility_component_hashes_v1(manifest.compatibility_requirement)
+        expected_receipt_sha256 = hash_hex_v1(
+            "miniqmt_vnpy_compatibility_receipt_v1",
+            receipt.canonical_payload_v1(exclude={"receipt_sha256"}),
+        )
         if (
             receipt.status is not CompatibilityStatusV1.PASSED
+            or receipt.receipt_sha256 != expected_receipt_sha256
             or receipt.requirement_sha256 != manifest.compatibility_requirement.requirement_sha256
             or receipt.characterization_sha256 != manifest.compatibility_requirement.characterization_sha256
             or any(getattr(receipt, field) != expected for field, expected in expected_components.items())
@@ -990,7 +1120,10 @@ def build_plugin_catalog_v2(
     key_counts = Counter(item.plugin_key for item in parsed_descriptors)
     version_counts = Counter((item.manifest.plugin_id, item.manifest.plugin_version) for item in parsed_descriptors)
     for descriptor in parsed_descriptors:
-        if key_counts[descriptor.plugin_key] > 1 or version_counts[(descriptor.manifest.plugin_id, descriptor.manifest.plugin_version)] > 1:
+        if (
+            key_counts[descriptor.plugin_key] > 1
+            or version_counts[(descriptor.manifest.plugin_id, descriptor.manifest.plugin_version)] > 1
+        ):
             _failure(
                 failures,
                 stage=CatalogBuildStageV1.REGISTRATION_CREATION,
@@ -1053,11 +1186,28 @@ def build_plugin_catalog_v2(
                 failures=failures,
             )
         )
-    snapshot = PluginCatalogSnapshotV1.create(
-        descriptors=tuple(parsed_descriptors),
-        receipts=tuple(parsed_receipts),
-        creation_bindings=tuple(parsed_creation),
-    )
+    try:
+        snapshot = PluginCatalogSnapshotV1.create(
+            descriptors=tuple(parsed_descriptors),
+            receipts=tuple(parsed_receipts),
+            creation_bindings=tuple(parsed_creation),
+        )
+    except (ValidationError, TypeError, ValueError) as exc:
+        _failure(
+            failures,
+            stage=CatalogBuildStageV1.SNAPSHOT_FREEZE,
+            descriptor=None,
+            field_path="catalog_snapshot",
+            reason_code=MiniQMTPluginReasonCode.REGISTRATION_CONFLICT,
+            context=exc,
+        )
+        raise PluginCatalogBuildError(
+            PluginCatalogBuildFailureReceiptV1.create(
+                build_input_sha256=build_input_sha256,
+                descriptor_keys=tuple(item.plugin_key for item in parsed_descriptors),
+                failures=failures,
+            )
+        ) from exc
     return PluginCatalogRuntimeV2(snapshot=snapshot, process_bindings=process_bindings)
 
 
@@ -1067,6 +1217,7 @@ def evaluate_plugin_route_compatibility_v1(
     plugin_key: PluginKeyV1,
     gateway_catalog: GatewayCapabilityCatalogV1,
 ) -> PluginRouteCompatibilityReceiptV1:
+    catalog_snapshot = PluginCatalogSnapshotV1.model_validate(catalog_snapshot.model_dump(mode="python"), strict=True)
     descriptor = next(
         (item for item in catalog_snapshot.registration_descriptors if item.plugin_key == plugin_key),
         None,

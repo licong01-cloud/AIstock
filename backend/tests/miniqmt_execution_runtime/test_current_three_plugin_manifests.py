@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from backend.execution_algos.vnpy_style import registry as legacy_registry
+from backend.execution_algos.vnpy_style.models import VnpyActionType, VnpyTick
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2,
     LegacyProjectionDriftV1,
@@ -25,6 +28,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     DeterministicExecutionContextV1,
     EventTypeV2,
     MarketDataCapabilityV1,
+    PluginProviderV2,
     SessionPhaseV1,
     SideV1,
 )
@@ -50,6 +54,32 @@ def _lineage() -> dict[str, object]:
         "exchange_time_utc": "2026-07-23T02:00:00.000000Z",
         "session_phase": "CONTINUOUS_AM",
     }
+
+
+def _active_order(
+    *,
+    symbol: str = "600000.SH",
+    side: str = "BUY",
+    price: str = "10",
+    requested_quantity: int = 300,
+    cumulative_filled_quantity: int = 100,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "local_vt_orderid": "vord_1",
+        "submit_command_id": "mqcommand_1",
+        "broker_order_id": "broker_1",
+        "symbol": symbol,
+        "side": side,
+        "status": "PARTIALLY_FILLED",
+        "requested_price_decimal": price,
+        "requested_quantity": requested_quantity,
+        "cumulative_filled_quantity": cumulative_filled_quantity,
+        "remaining_quantity": requested_quantity - cumulative_filled_quantity,
+        "last_order_event_id": "mqrtevt_order_1",
+        "last_trade_event_id": "mqrtevt_trade_1",
+    }
+    payload["mapping_sha256"] = hash_hex_v1("miniqmt_plugin_active_order_state_v1", payload)
+    return payload
 
 
 def _state(algo_code: str) -> dict[str, object]:
@@ -125,6 +155,14 @@ def test_current_three_identity_hash_and_creation_binding_closure() -> None:
     }
 
 
+def test_current_three_are_aistock_derived_and_require_exact_delivery_callbacks() -> None:
+    required_callbacks = {"update_tick", "update_timer", "update_order", "update_trade"}
+    for manifest in current_three_manifests_v2():
+        assert manifest.provider is PluginProviderV2.AISTOCK_DERIVED
+        assert required_callbacks.issubset(manifest.required_facade_methods)
+        assert manifest.compatibility_requirement.mode == "DERIVED_SOURCE_EXACT_CHARACTERIZATION"
+
+
 @pytest.mark.parametrize(
     ("algo_code", "config"),
     [
@@ -157,7 +195,9 @@ def test_strict_configs_fail_without_alias_or_coercion(algo_code: str, config: d
 
 def test_market_requirements_match_actual_side_consumption() -> None:
     sniper = _manifest("SNIPER_MINIQMT")
-    required = {(item.capability, item.applicable_sides): item.required_fields for item in sniper.market_data_requirements}
+    required = {
+        (item.capability, item.applicable_sides): item.required_fields for item in sniper.market_data_requirements
+    }
     assert required[(MarketDataCapabilityV1.L1_ASK, (SideV1.BUY,))] == ("price", "volume")
     assert required[(MarketDataCapabilityV1.L1_BID, (SideV1.SELL,))] == ("price", "volume")
     for algo_code in ("BEST_LIMIT_MINIQMT", "TWAP_LITE_MINIQMT"):
@@ -225,6 +265,101 @@ def test_state_codec_rejects_cross_field_restart_conflicts() -> None:
             validate_current_three_state_v2(_manifest(algo_code), state)
 
 
+def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage() -> None:
+    state = _state("BEST_LIMIT_MINIQMT")
+    active = _active_order()
+    state.update(
+        {
+            "active_orders": [active],
+            "vt_orderid": active["local_vt_orderid"],
+            "order_price_decimal": active["requested_price_decimal"],
+            "variables": {
+                "next_draw_ordinal": 0,
+                "order_price_decimal": active["requested_price_decimal"],
+                "vt_orderid": active["local_vt_orderid"],
+            },
+        }
+    )
+    assert thaw_json_v1(validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), state)) == state
+
+    for field, value in (
+        ("requested_price_decimal", "10.00"),
+        ("remaining_quantity", 201),
+        ("symbol", "000001.SZ"),
+        ("side", "SELL"),
+    ):
+        malformed = _state("BEST_LIMIT_MINIQMT")
+        malformed_active = _active_order()
+        malformed_active[field] = value
+        malformed_active["mapping_sha256"] = hash_hex_v1(
+            "miniqmt_plugin_active_order_state_v1",
+            {key: item for key, item in malformed_active.items() if key != "mapping_sha256"},
+        )
+        malformed.update(
+            {
+                "active_orders": [malformed_active],
+                "vt_orderid": malformed_active["local_vt_orderid"],
+                "order_price_decimal": "10",
+                "variables": {
+                    "next_draw_ordinal": 0,
+                    "order_price_decimal": "10",
+                    "vt_orderid": malformed_active["local_vt_orderid"],
+                },
+            }
+        )
+        with pytest.raises(ValueError):
+            validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), malformed)
+
+    mismatched_price = {**state, "order_price_decimal": "11"}
+    mismatched_price["variables"] = {
+        "next_draw_ordinal": 0,
+        "order_price_decimal": "11",
+        "vt_orderid": active["local_vt_orderid"],
+    }
+    with pytest.raises(ValueError, match="price"):
+        validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), mismatched_price)
+
+
+def test_sniper_active_order_price_must_equal_frozen_limit_price() -> None:
+    state = _state("SNIPER_MINIQMT")
+    active = _active_order(price="11")
+    state.update(
+        {
+            "active_orders": [active],
+            "vt_orderid": active["local_vt_orderid"],
+            "variables": {"vt_orderid": active["local_vt_orderid"]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="Sniper|limit price"):
+        validate_current_three_state_v2(_manifest("SNIPER_MINIQMT"), state)
+
+
+def test_state_codec_rejects_invalid_market_data_time_and_twap_terminal_drift() -> None:
+    invalid_time = _state("SNIPER_MINIQMT")
+    invalid_time["last_tick_lineage"] = {**_lineage(), "exchange_time_utc": "not-a-time"}
+    with pytest.raises(ValueError, match="exchange_time_utc"):
+        validate_current_three_state_v2(_manifest("SNIPER_MINIQMT"), invalid_time)
+
+    exhausted = _state("TWAP_LITE_MINIQMT")
+    exhausted["active_elapsed_seconds"] = exhausted["duration_seconds"]
+    exhausted["variables"] = {
+        **exhausted["variables"],  # type: ignore[arg-type]
+        "active_elapsed_seconds": exhausted["duration_seconds"],
+    }
+    with pytest.raises(ValueError, match="duration|terminal|FINISHED"):
+        validate_current_three_state_v2(_manifest("TWAP_LITE_MINIQMT"), exhausted)
+
+    divergent_view = _state("TWAP_LITE_MINIQMT")
+    divergent_view["last_market_data_lineage"] = {**_lineage(), "market_data_id": "md_other"}
+    divergent_view["variables"] = {
+        **divergent_view["variables"],  # type: ignore[arg-type]
+        "last_market_data_lineage": divergent_view["last_market_data_lineage"],
+    }
+    with pytest.raises(ValueError, match="market data|lineage"):
+        validate_current_three_state_v2(_manifest("TWAP_LITE_MINIQMT"), divergent_view)
+
+
 def test_twap_behavior_is_exchange_active_timer_only_and_restart_safe() -> None:
     behavior = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2["TWAP_LITE_MINIQMT"]
     assert behavior["duration_unit"] == behavior["interval_unit"] == "EXCHANGE_ACTIVE_SECONDS"
@@ -236,6 +371,81 @@ def test_twap_behavior_is_exchange_active_timer_only_and_restart_safe() -> None:
     assert behavior["restart_replays_consumed_timer"] is False
     assert behavior["eod_outcome"] == "EXPLICIT_TERMINAL_OR_RESIDUAL_EVIDENCE"
     assert behavior["auction_native_synthesis"] is False
+    assert behavior["zero_slice_diagnostic_reason"] == "TWAP_SLICE_VOLUME_ROUNDED_ZERO"
+
+
+def test_behavior_characterization_vectors_match_current_core_traces() -> None:
+    tick = VnpyTick(
+        symbol="600000.SH",
+        datetime=datetime(2026, 7, 23, 9, 30, tzinfo=UTC),
+        bid_price_1=9.88,
+        bid_volume_1=500,
+        ask_price_1=9.99,
+        ask_volume_1=250,
+    )
+    actual: dict[str, dict[str, object]] = {}
+
+    sniper = legacy_registry.create_vnpy_style_core(
+        algo_code="SNIPER_MINIQMT",
+        symbol="600000.SH",
+        side="BUY",
+        price=10,
+        volume=1000,
+        algo_name="characterization_sniper",
+    )
+    sniper.start()
+    sniper_submit = next(item for item in sniper.update_tick(tick) if item.action_type is VnpyActionType.SUBMIT)
+    actual["SNIPER_MINIQMT"] = {
+        "action_type": sniper_submit.action_type.value,
+        "price_decimal": format(Decimal(str(sniper_submit.price)).normalize(), "f"),
+        "quantity": sniper_submit.volume,
+        "reason": sniper_submit.reason,
+    }
+
+    best = legacy_registry.create_vnpy_style_core(
+        algo_code="BEST_LIMIT_MINIQMT",
+        symbol="600000.SH",
+        side="BUY",
+        price=10,
+        volume=1000,
+        algo_config={"min_volume": 100, "max_volume": 500},
+        algo_name="characterization_best_limit",
+        random_volume_provider=lambda _minimum, _maximum: 350,
+    )
+    best.start()
+    best_submit = next(item for item in best.update_tick(tick) if item.action_type is VnpyActionType.SUBMIT)
+    actual["BEST_LIMIT_MINIQMT"] = {
+        "action_type": best_submit.action_type.value,
+        "price_decimal": format(Decimal(str(best_submit.price)).normalize(), "f"),
+        "quantity": best_submit.volume,
+        "reason": best_submit.reason,
+    }
+
+    twap = legacy_registry.create_vnpy_style_core(
+        algo_code="TWAP_LITE_MINIQMT",
+        symbol="600000.SH",
+        side="BUY",
+        price=10,
+        volume=1000,
+        algo_config={"time": 4, "interval": 2},
+        algo_name="characterization_twap",
+    )
+    twap.start()
+    twap.update_tick(tick)
+    assert not [item for item in twap.update_timer() if item.action_type is VnpyActionType.SUBMIT]
+    twap_submit = next(item for item in twap.update_timer() if item.action_type is VnpyActionType.SUBMIT)
+    actual["TWAP_LITE_MINIQMT"] = {
+        "action_type": twap_submit.action_type.value,
+        "price_decimal": format(Decimal(str(twap_submit.price)).normalize(), "f"),
+        "quantity": twap_submit.volume,
+        "reason": twap_submit.reason,
+    }
+
+    for algo_code, observed in actual.items():
+        characterization = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2[algo_code]
+        assert characterization["schema_version"] == "current_three_behavior_characterization_v2"
+        assert characterization["algo_code"] == algo_code
+        assert characterization["trace_vectors"] == [{"vector_id": "legacy_core_primary_submit", "expected": observed}]
 
 
 def test_best_limit_binds_raw_digest_u53_and_strict_ordinal() -> None:
@@ -271,9 +481,7 @@ def test_legacy_projection_preserves_conflict_drift_unknown_and_invalid_values()
         "TWAP_LITE_MINIQMT",
         {"time": 600, "duration_seconds": 1200, "interval": 60, "interval_seconds": 60},
     )
-    alias_only = project_legacy_vnpy_policy_v1(
-        "TWAP_LITE_MINIQMT", {"duration_seconds": 1200, "interval_seconds": 120}
-    )
+    alias_only = project_legacy_vnpy_policy_v1("TWAP_LITE_MINIQMT", {"duration_seconds": 1200, "interval_seconds": 120})
     malformed = project_legacy_vnpy_policy_v1(
         "BEST_LIMIT_MINIQMT",
         {"min_volume": True, "max_volume": math.inf, "mystery": "  ", "timer_iterations": 3},
@@ -292,11 +500,9 @@ def test_legacy_projection_uses_defaults_but_never_hides_unknown_fields() -> Non
     defaulted = project_legacy_vnpy_policy_v1("SNIPER_MINIQMT", {})
     unknown = project_legacy_vnpy_policy_v1("SNIPER_MINIQMT", {"unowned_control": 1})
     assert defaulted.drift_classification is LegacyProjectionDriftV1.NO_DRIFT
-    assert thaw_json_v1(defaulted.candidate_canonical_config) == {
-        "price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"
-    }
+    assert thaw_json_v1(defaulted.candidate_canonical_config) == {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
     assert unknown.drift_classification is LegacyProjectionDriftV1.INVALID_INPUT_VISIBLE
-    assert unknown.candidate_canonical_config is None
+    assert thaw_json_v1(unknown.candidate_canonical_config) == {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
     assert {item.field for item in unknown.unknown_fields} == {"unowned_control"}
 
 
@@ -313,6 +519,36 @@ def test_legacy_projection_covers_equivalent_alias_and_candidate_range_failure()
     assert invalid_range.drift_classification is LegacyProjectionDriftV1.INVALID_INPUT_VISIBLE
     assert invalid_range.candidate_canonical_config is None
     assert {item.field for item in invalid_range.invalid_fields} == {"__candidate__"}
+
+
+@pytest.mark.parametrize(
+    ("algo_code", "raw_config"),
+    [
+        ("SNIPER_MINIQMT", {"mystery": 7, "timer_iterations": 3}),
+        ("BEST_LIMIT_MINIQMT", {"min_volume": "100", "max_volume": "1000", "timer_iterations": 2}),
+        ("TWAP_LITE_MINIQMT", {"duration_seconds": 600, "interval_seconds": 60}),
+    ],
+)
+def test_legacy_projection_preserves_actual_legacy_effective_config(
+    algo_code: str, raw_config: dict[str, object]
+) -> None:
+    projection = project_legacy_vnpy_policy_v1(algo_code, raw_config)
+    assert thaw_json_v1(projection.legacy_effective_config) == legacy_registry.validate_vnpy_style_config(
+        algo_code, raw_config
+    )
+    assert projection.observation_only is True
+    assert projection.runtime_effect_applied is False
+
+
+def test_alias_only_default_equivalence_and_conflict_priority_are_explicit() -> None:
+    equivalent = project_legacy_vnpy_policy_v1("TWAP_LITE_MINIQMT", {"duration_seconds": 600, "interval_seconds": 60})
+    conflict = project_legacy_vnpy_policy_v1(
+        "TWAP_LITE_MINIQMT",
+        {"time": 600, "duration_seconds": 1200, "interval": 60, "unknown": 1},
+    )
+    assert equivalent.drift_classification is LegacyProjectionDriftV1.ALIAS_EQUIVALENT
+    assert conflict.drift_classification is LegacyProjectionDriftV1.CONFLICT
+    assert {item.field for item in conflict.unknown_fields} == {"unknown"}
 
 
 def test_k1b_remains_shadow_only_without_runtime_wiring() -> None:
