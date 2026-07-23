@@ -933,6 +933,7 @@ jobs:
       - name: Build Nightly failure issue context
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
+          GH_TOKEN: ${{ github.token }}
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}

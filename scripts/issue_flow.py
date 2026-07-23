@@ -1329,11 +1329,13 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     record_has_gates = all(issue_record.get(key) for key in production_gate_keys)
     body_has_gates = bool(inferred.get("pr_body_production_gates"))
     bug_record_has_gates = bool(inferred.get("bug_record_production_gates"))
+    gate_consistency = summary.get("production_gate_consistency") or {}
     checks = {
         "linked_issue": bool(summary.get("linked_issues")),
         "scope_passed": scope.get("status") == "passed",
         "validation_evidence": validation_evidence_present,
         "production_gates": record_has_gates or body_has_gates or bug_record_has_gates,
+        "production_gate_consistency": gate_consistency.get("workflow_gate") != "blocked",
     }
     missing = [name for name, passed in checks.items() if not passed]
     if not is_high_risk:
@@ -1359,6 +1361,53 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
         "checks": checks,
         "blocking": missing if gate == "blocked" else [],
         "warnings": missing if gate == "warning" else [],
+    }
+
+
+def evaluate_production_gate_consistency(
+    *,
+    changed_files: list[str],
+    production_gates: dict[str, Any],
+    issue_record: dict[str, Any] | None,
+    bug_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Block only unsafe under-reporting; non-noop operational states remain valid."""
+
+    records = [issue_record] if issue_record else list(bug_records)
+    implementation_files = [
+        path for path in changed_files if not path.startswith("tests/aistock_validation/bugs/")
+    ]
+    if not records or not implementation_files:
+        return {
+            "schema_version": "aistock_production_gate_consistency_v1",
+            "workflow_gate": "not_applicable",
+            "mismatches": [],
+        }
+
+    field_map = {
+        "production_ddl_gate": "ddl",
+        "production_frontend_dependency_gate": "frontend_dependency",
+        "production_backend_dependency_gate": "backend_dependency",
+    }
+    mismatches: list[dict[str, str]] = []
+    for record in records:
+        bug_id = str(record.get("bug_id") or record.get("candidate_id") or "unknown")
+        for field, derived_key in field_map.items():
+            derived = str(production_gates.get(derived_key) or "noop")
+            recorded = str(record.get(field) or "").strip()
+            if derived == "required" and recorded.lower() == "noop":
+                mismatches.append(
+                    {
+                        "bug_id": bug_id,
+                        "field": field,
+                        "derived": derived,
+                        "recorded": recorded,
+                    }
+                )
+    return {
+        "schema_version": "aistock_production_gate_consistency_v1",
+        "workflow_gate": "blocked" if mismatches else "passed",
+        "mismatches": mismatches,
     }
 
 
@@ -1478,6 +1527,12 @@ def build_pr_quality(
         + _as_list((issue_record or {}).get("candidate_id"))
         + inferred["linked_issues"]
     )
+    production_gate_consistency = evaluate_production_gate_consistency(
+        changed_files=changed_files,
+        production_gates=validation["production_gates"],
+        issue_record=issue_record,
+        bug_records=inferred["bug_records"],
+    )
     summary = {
         "schema_version": "aistock_pr_quality_summary_v1",
         "base": base,
@@ -1519,6 +1574,7 @@ def build_pr_quality(
         "docs_lite_validation": validation.get("docs_lite_validation"),
         "validation_results": "version_change_record_only" if validation.get("docs_lite") else "not_run_by_pr_quality_dry_run",
         "data_acceptance": "not_required",
+        "production_gate_consistency": production_gate_consistency,
         "production_ddl_gate": validation["production_gates"]["ddl"],
         "production_frontend_dependency_gate": validation["production_gates"]["frontend_dependency"],
         "production_backend_dependency_gate": validation["production_gates"]["backend_dependency"],
@@ -1536,6 +1592,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
     selected_validation = summary.get("selected_validation") or {}
     required_validation = selected_validation.get("required_plans") or []
     gates = [
+        f"- production_gate_consistency: `{(summary.get('production_gate_consistency') or {}).get('workflow_gate')}`",
         f"- production_ddl_gate: `{summary.get('production_ddl_gate')}`",
         f"- production_frontend_dependency_gate: `{summary.get('production_frontend_dependency_gate')}`",
         f"- production_backend_dependency_gate: `{summary.get('production_backend_dependency_gate')}`",

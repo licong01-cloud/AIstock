@@ -1299,10 +1299,13 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
 
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["full-summary"]["steps"]
+    build_step = next(step for step in steps if step.get("name") == "Build Nightly failure issue context")
     script = next(step for step in steps if step.get("name") == "Auto-register failure as actionable GitHub Issue")[
         "with"
     ]["script"]
 
+    assert build_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert workflow["jobs"]["full-summary"]["permissions"]["actions"] == "read"
     assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "No actionable Nightly issue created." in script
