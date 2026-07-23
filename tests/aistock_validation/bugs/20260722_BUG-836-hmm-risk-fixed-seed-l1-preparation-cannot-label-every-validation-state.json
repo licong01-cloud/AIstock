@@ -49,6 +49,12 @@
       "actor": "user",
       "note": "User approved C-008-B3-STRUCTURAL-A and C-008-B3-DIAG-02: D3-01-A, D3-02-B, D5-02-B only in the same fixed numerical environment, and D7-01-A. D3-03 is approved only for explicit full parameters and manual initialization, not proposed numeric values. DIAG-02 may run seeds 42-49 for both 31-sector families without seed selection, model or READY writes, hard-semantic changes, database writes, or runtime actions. D4, D5-01, and D6 exact contracts remain pending, and every PR merge requires separate user approval.",
       "timestamp": "2026-07-23T23:28:08.8251873+08:00"
+    },
+    {
+      "action": "record_validation_evidence",
+      "actor": "codex",
+      "note": "C-008-B3-DIAG-02 completed two fresh-process passes (992 fits total) under the same fixed single-thread environment for both 31-sector families and seeds 42-49. Canonical payload hashes matched bitwise: 899dcbb53dbaf041d05eaf1abe7b9f02f002039adedb9118dd537ae3b9706d30. Final diagnostic report canonical hash: bd09380c74cce480489dcc6fee8a4ee739841c4a486a21a6a8deb894180ad5b2. No seed selection, D4/D5-01/D6 threshold application, model write, READY write, database write, or runtime action occurred.",
+      "timestamp": "2026-07-24T01:29:49.3396697+08:00"
     }
   ],
   "evidence_uris": [
