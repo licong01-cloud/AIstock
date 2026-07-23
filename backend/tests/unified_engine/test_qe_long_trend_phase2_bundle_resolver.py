@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import asyncio
+import hashlib
+import importlib
+import importlib.util
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -14,6 +18,7 @@ from backend.services.quantevolver.long_trend_evaluation_bundle import (
     build_long_trend_evaluator_bundle,
 )
 from backend.services.quantevolver.long_trend_evaluation_contract import (
+    QEDatasetSnapshotIdentity,
     QELongTrendError,
     QELongTrendReason,
 )
@@ -83,6 +88,47 @@ def test_bundle_is_exact_allowlisted_environment_bound_and_deterministic() -> No
             execution_environment={**_environment(), "execution_environment_manifest_sha256": "bad"},
         )
     assert exc_info.value.reason_code == QELongTrendReason.EXECUTION_ENVIRONMENT_MISMATCH.value
+
+
+def test_worker_snapshot_identity_normalizes_json_lineage_without_weakening_content_check(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    worker_module = "backend.services.quantevolver.long_trend_worker_entry"
+    if importlib.util.find_spec("resource") is None:
+        monkeypatch.setitem(sys.modules, "resource", types.ModuleType("resource"))
+        request.addfinalizer(lambda: sys.modules.pop(worker_module, None))
+    worker_entry = importlib.import_module(worker_module)
+    actual = QEDatasetSnapshotIdentity(
+        snapshot_id="snapshot-v1",
+        manifest_sha256="a" * 64,
+        start_date="2018-08-01",
+        end_date="2026-06-30",
+        lineage_parent_ids=(),
+    )
+    expected = {
+        "snapshot_id": "snapshot-v1",
+        "manifest_sha256": "a" * 64,
+        "start_date": "2018-08-01",
+        "end_date": "2026-06-30",
+        "lineage_parent_ids": [],
+    }
+
+    worker_entry._require_snapshot_identity(expected, actual, "feature")
+
+    with pytest.raises(ValueError, match="snapshot identity differs"):
+        worker_entry._require_snapshot_identity(
+            {**expected, "lineage_parent_ids": ["different-parent"]},
+            actual,
+            "feature",
+        )
+
+    with pytest.raises(ValueError, match="lineage_parent_ids must be an array"):
+        worker_entry._require_snapshot_identity(
+            {**expected, "lineage_parent_ids": "not-an-array"},
+            actual,
+            "feature",
+        )
 
 
 def test_resolver_freezes_frequency_and_keeps_summary_and_object_distinct() -> None:
