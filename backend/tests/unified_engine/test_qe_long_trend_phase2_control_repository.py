@@ -36,6 +36,23 @@ class _Cursor:
             self.rows = [(name,) for name in self.state["columns"]]  # type: ignore[index]
         elif normalized.startswith("SELECT * FROM qe_archive.run_evaluation WHERE status <> ALL"):
             self.rows = [dict(self.state["row"])]  # type: ignore[arg-type]
+        elif normalized.startswith("SELECT e.*, s.status AS resource_status"):
+            self.row = dict(self.state["row"])  # type: ignore[arg-type]
+        elif normalized.startswith("UPDATE qe_archive.run_resource_session SET status = 'reserved'"):
+            self.row = (self.state["row"]["resource_session_id"],)  # type: ignore[index]
+        elif normalized.startswith("UPDATE qe_archive.run_evaluation SET status = 'queued'"):
+            recovered = dict(self.state["row"])  # type: ignore[arg-type]
+            recovered.update(
+                {
+                    "status": "queued",
+                    "reason_code": None,
+                    "reason_json": {},
+                    "owner_id": None,
+                    "row_version": int(recovered["row_version"]) + 1,
+                }
+            )
+            self.state["row"] = recovered
+            self.row = recovered
         elif normalized.startswith("UPDATE qe_archive.run_evaluation SET"):
             self.row = dict(self.state["row"])  # type: ignore[arg-type]
         else:
@@ -167,6 +184,98 @@ def test_lease_heartbeat_preserves_row_version_cas() -> None:
     assert "row_version = %s" in update_sql
     assert "fencing_token = %s" in update_sql
     assert "row_version = row_version + 1" not in update_sql
+
+
+def test_definitive_prejob_failure_requeues_control_and_unused_resource_atomically() -> None:
+    state = _state()
+    row = state["row"]
+    assert isinstance(row, dict)
+    row.update(
+        {
+            "status": "failed",
+            "request_sha": "b" * 64,
+            "reason_code": "QELT_BUNDLE_INVALID",
+            "reason_json": {"message": "zero-byte bundle rejected"},
+            "job_id": None,
+            "current_attempt_id": None,
+            "worker_terminal_sha256": None,
+            "artifact_manifest_sha256": None,
+            "resource_session_id": "qers-qelt-1",
+            "resource_status": "failed",
+            "resource_current_phase": "failed",
+            "resource_last_sequence_no": 0,
+            "resource_has_events": False,
+            "owner_id": None,
+        }
+    )
+    repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(state))
+
+    recovered = repository.requeue_definitive_prejob_failure(
+        str(row["evaluation_id"]),
+        expected_request_sha="b" * 64,
+        allowed_reason_codes=("QELT_BUNDLE_INVALID",),
+    )
+
+    assert recovered["evaluation_id"] == row["evaluation_id"]
+    assert recovered["status"] == "queued"
+    assert recovered["reason_code"] is None
+    statements = [sql for sql, _params in state["executed"]]  # type: ignore[index]
+    resource_update = next(sql for sql in statements if sql.startswith("UPDATE qe_archive.run_resource_session"))
+    control_update = next(
+        sql for sql in statements if sql.startswith("UPDATE qe_archive.run_evaluation SET status = 'queued'")
+    )
+    assert "last_sequence_no = 0" in resource_update
+    assert "job_id IS NULL" in control_update
+    assert "current_attempt_id IS NULL" in control_update
+    assert "request_sha = %s" in control_update
+    assert "reason_code = ANY(%s)" in control_update
+    assert "row_version = %s" in control_update
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"job_id": "job-1"}, "remote execution or published evidence"),
+        ({"current_attempt_id": "attempt-1"}, "remote execution or published evidence"),
+        ({"worker_terminal_sha256": "c" * 64}, "remote execution or published evidence"),
+        ({"resource_has_events": True}, "zero emitted phase events"),
+        ({"resource_last_sequence_no": 1}, "zero emitted phase events"),
+        ({"reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT"}, "not a definitive rejection"),
+    ],
+)
+def test_prejob_recovery_rejects_any_remote_execution_evidence(
+    override: dict[str, object],
+    message: str,
+) -> None:
+    state = _state()
+    row = state["row"]
+    assert isinstance(row, dict)
+    row.update(
+        {
+            "status": "failed",
+            "request_sha": "b" * 64,
+            "reason_code": "QELT_BUNDLE_INVALID",
+            "job_id": None,
+            "current_attempt_id": None,
+            "worker_terminal_sha256": None,
+            "artifact_manifest_sha256": None,
+            "resource_session_id": "qers-qelt-1",
+            "resource_status": "failed",
+            "resource_current_phase": "failed",
+            "resource_last_sequence_no": 0,
+            "resource_has_events": False,
+            "owner_id": None,
+            **override,
+        }
+    )
+    repository = QELongTrendEvaluationControlRepository(connection_provider=lambda: _Connection(state))
+
+    with pytest.raises(QELongTrendControlRepositoryError, match=message):
+        repository.requeue_definitive_prejob_failure(
+            str(row["evaluation_id"]),
+            expected_request_sha="b" * 64,
+            allowed_reason_codes=("QELT_BUNDLE_INVALID",),
+        )
 
 
 def test_phase2_migration_is_additive_guarded_and_keeps_research_out_of_approval_state() -> None:
