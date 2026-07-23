@@ -13,12 +13,13 @@ from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal, Self
 
-from jsonschema import Draft202012Validator
 from pydantic import model_validator
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
+    FrozenJsonObjectV1,
     canonical_utc_datetime_v1,
     freeze_json_v1,
     hash_hex_v1,
@@ -35,6 +36,8 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     FrozenStrictModel,
     MarketDataCapabilityV1,
     MarketDataRequirementV1,
+    MiniQMTPluginContractError,
+    MiniQMTPluginReasonCode,
     ObjectFieldRequirementV1,
     OrderTypeV1,
     PluginProviderV2,
@@ -43,6 +46,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     SideV1,
     SourceAttributionV1,
     VnpyCompatibilityRequirementV1,
+    validate_json_schema_instance_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginCreationBindingV1,
@@ -75,111 +79,117 @@ _COMMON_EVENTS = (
     EventTypeV2.TICK,
     EventTypeV2.TRADE,
 )
-_UPSTREAM_HASHES = {
-    "vnpy_algotrading/algos/best_limit_algo.py": "b35227b932a160c2f786d3202283b61656d9f16631fb42f596a9d376765617e9",
-    "vnpy_algotrading/algos/sniper_algo.py": "fbf84d2c61f8200079fe1f8da3b3412a036e5a7ffb6c601f9e4614ad110c8c76",
-    "vnpy_algotrading/algos/twap_algo.py": "aeabb067ef79d48182f357b8d4736f8a90f6a4ecb77bc82506a3244575a6cd0f",
-    "vnpy_algotrading/base.py": "8416653d8cf61ab45e26b593eea06417dd6fa21b331bba6c60a2bbb8bccf8f93",
-    "vnpy_algotrading/engine.py": "2c73e1c093cabcd5768954f1129451877a82afd204790fb07e4f305b64c5e68d",
-    "vnpy_algotrading/template.py": "b21fa36a8a2c347ab92379df1cd9f81ec69bc922233ec4096d75dbbade7454b8",
-}
-_ALGO_FACTS = {
-    "BEST_LIMIT_MINIQMT": (
-        "aistock.vnpy.best_limit",
-        BestLimitMiniQMTCore,
-        "best_limit_state_v2",
-        "vnpy_algotrading/algos/best_limit_algo.py",
-        "backend/execution_algos/vnpy_style/best_limit_core.py",
-    ),
-    "SNIPER_MINIQMT": (
-        "aistock.vnpy.sniper",
-        SniperMiniQMTCore,
-        "sniper_state_v2",
-        "vnpy_algotrading/algos/sniper_algo.py",
-        "backend/execution_algos/vnpy_style/sniper_core.py",
-    ),
-    "TWAP_LITE_MINIQMT": (
-        "aistock.vnpy.twap_lite",
-        TwapLiteMiniQMTCore,
-        "twap_lite_state_v2",
-        "vnpy_algotrading/algos/twap_algo.py",
-        "backend/execution_algos/vnpy_style/twap_lite_core.py",
-    ),
-}
+_UPSTREAM_HASHES = MappingProxyType(
+    {
+        "vnpy_algotrading/algos/best_limit_algo.py": "b35227b932a160c2f786d3202283b61656d9f16631fb42f596a9d376765617e9",
+        "vnpy_algotrading/algos/sniper_algo.py": "fbf84d2c61f8200079fe1f8da3b3412a036e5a7ffb6c601f9e4614ad110c8c76",
+        "vnpy_algotrading/algos/twap_algo.py": "aeabb067ef79d48182f357b8d4736f8a90f6a4ecb77bc82506a3244575a6cd0f",
+        "vnpy_algotrading/base.py": "8416653d8cf61ab45e26b593eea06417dd6fa21b331bba6c60a2bbb8bccf8f93",
+        "vnpy_algotrading/engine.py": "2c73e1c093cabcd5768954f1129451877a82afd204790fb07e4f305b64c5e68d",
+        "vnpy_algotrading/template.py": "b21fa36a8a2c347ab92379df1cd9f81ec69bc922233ec4096d75dbbade7454b8",
+    }
+)
+_ALGO_FACTS = MappingProxyType(
+    {
+        "BEST_LIMIT_MINIQMT": (
+            "aistock.vnpy.best_limit",
+            BestLimitMiniQMTCore,
+            "best_limit_state_v2",
+            "vnpy_algotrading/algos/best_limit_algo.py",
+            "backend/execution_algos/vnpy_style/best_limit_core.py",
+        ),
+        "SNIPER_MINIQMT": (
+            "aistock.vnpy.sniper",
+            SniperMiniQMTCore,
+            "sniper_state_v2",
+            "vnpy_algotrading/algos/sniper_algo.py",
+            "backend/execution_algos/vnpy_style/sniper_core.py",
+        ),
+        "TWAP_LITE_MINIQMT": (
+            "aistock.vnpy.twap_lite",
+            TwapLiteMiniQMTCore,
+            "twap_lite_state_v2",
+            "vnpy_algotrading/algos/twap_algo.py",
+            "backend/execution_algos/vnpy_style/twap_lite_core.py",
+        ),
+    }
+)
 
-CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2: dict[str, dict[str, Any]] = {
-    "SNIPER_MINIQMT": {
-        "schema_version": "current_three_behavior_characterization_v2",
-        "algo_code": "SNIPER_MINIQMT",
-        "trace_vectors": [
-            {
-                "vector_id": "legacy_core_primary_submit",
-                "expected": {
-                    "action_type": "SUBMIT",
-                    "price_decimal": "10",
-                    "quantity": 200,
-                    "reason": "sniper_ask_crossed_limit",
-                },
-            }
-        ],
-        "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
-        "buy_quote": "L1_ASK_PRICE_AND_VOLUME",
-        "sell_quote": "L1_BID_PRICE_AND_VOLUME",
-        "replace_policy": "CANCEL_ACTIVE_CHILD_BEFORE_REQUOTE",
-        "restart_source": "FROZEN_PLUGIN_KEY_AND_DURABLE_STATE_SNAPSHOT",
-        "auction_native_synthesis": False,
-    },
-    "BEST_LIMIT_MINIQMT": {
-        "schema_version": "current_three_behavior_characterization_v2",
-        "algo_code": "BEST_LIMIT_MINIQMT",
-        "trace_vectors": [
-            {
-                "vector_id": "legacy_core_primary_submit",
-                "expected": {
-                    "action_type": "SUBMIT",
-                    "price_decimal": "9.88",
-                    "quantity": 300,
-                    "reason": "best_limit_buy_at_bid_price_1",
-                },
-            }
-        ],
-        "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
-        "buy_quote": "L1_BID_PRICE_ONLY",
-        "sell_quote": "L1_ASK_PRICE_ONLY",
-        "draw_formula": "RAW_DIGEST_U53",
-        "draw_ordinal": "STRICT_CONTIGUOUS_DURABLE_STATE",
-        "restart_source": "FROZEN_PLUGIN_KEY_AND_DURABLE_STATE_SNAPSHOT",
-        "auction_native_synthesis": False,
-    },
-    "TWAP_LITE_MINIQMT": {
-        "schema_version": "current_three_behavior_characterization_v2",
-        "algo_code": "TWAP_LITE_MINIQMT",
-        "trace_vectors": [
-            {
-                "vector_id": "legacy_core_primary_submit",
-                "expected": {
-                    "action_type": "SUBMIT",
-                    "price_decimal": "10",
-                    "quantity": 500,
-                    "reason": "twap_lite_interval_buy",
-                },
-            }
-        ],
-        "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
-        "duration_unit": "EXCHANGE_ACTIVE_SECONDS",
-        "interval_unit": "EXCHANGE_ACTIVE_SECONDS",
-        "counted_session_phases": ["CONTINUOUS_AM", "CONTINUOUS_PM"],
-        "non_counted_session_phases": ["OPEN_AUCTION", "LUNCH_BREAK", "CLOSE_AUCTION", "CLOSED"],
-        "timer_reads_wall_clock": False,
-        "timer_market_data_source": "DURABLE_LATEST_MARKET_DATA_VIEW",
-        "timer_market_data_fallbacks": [],
-        "catch_up_burst": False,
-        "restart_replays_consumed_timer": False,
-        "eod_outcome": "EXPLICIT_TERMINAL_OR_RESIDUAL_EVIDENCE",
-        "zero_slice_diagnostic_reason": "TWAP_SLICE_VOLUME_ROUNDED_ZERO",
-        "auction_native_synthesis": False,
-    },
-}
+CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2: FrozenJsonObjectV1 = freeze_json_v1(
+    {
+        "SNIPER_MINIQMT": {
+            "schema_version": "current_three_behavior_characterization_v2",
+            "algo_code": "SNIPER_MINIQMT",
+            "trace_vectors": [
+                {
+                    "vector_id": "legacy_core_primary_submit",
+                    "expected": {
+                        "action_type": "SUBMIT",
+                        "price_decimal": "10",
+                        "quantity": 200,
+                        "reason": "sniper_ask_crossed_limit",
+                    },
+                }
+            ],
+            "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
+            "buy_quote": "L1_ASK_PRICE_AND_VOLUME",
+            "sell_quote": "L1_BID_PRICE_AND_VOLUME",
+            "replace_policy": "CANCEL_ACTIVE_CHILD_BEFORE_REQUOTE",
+            "restart_source": "FROZEN_PLUGIN_KEY_AND_DURABLE_STATE_SNAPSHOT",
+            "auction_native_synthesis": False,
+        },
+        "BEST_LIMIT_MINIQMT": {
+            "schema_version": "current_three_behavior_characterization_v2",
+            "algo_code": "BEST_LIMIT_MINIQMT",
+            "trace_vectors": [
+                {
+                    "vector_id": "legacy_core_primary_submit",
+                    "expected": {
+                        "action_type": "SUBMIT",
+                        "price_decimal": "9.88",
+                        "quantity": 300,
+                        "reason": "best_limit_buy_at_bid_price_1",
+                    },
+                }
+            ],
+            "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
+            "buy_quote": "L1_BID_PRICE_ONLY",
+            "sell_quote": "L1_ASK_PRICE_ONLY",
+            "draw_formula": "RAW_DIGEST_U53",
+            "draw_ordinal": "STRICT_CONTIGUOUS_DURABLE_STATE",
+            "restart_source": "FROZEN_PLUGIN_KEY_AND_DURABLE_STATE_SNAPSHOT",
+            "auction_native_synthesis": False,
+        },
+        "TWAP_LITE_MINIQMT": {
+            "schema_version": "current_three_behavior_characterization_v2",
+            "algo_code": "TWAP_LITE_MINIQMT",
+            "trace_vectors": [
+                {
+                    "vector_id": "legacy_core_primary_submit",
+                    "expected": {
+                        "action_type": "SUBMIT",
+                        "price_decimal": "10",
+                        "quantity": 500,
+                        "reason": "twap_lite_interval_buy",
+                    },
+                }
+            ],
+            "active_child_identity": "EXACT_LOCAL_VT_ORDERID_TO_DURABLE_COMMAND_CHILD_OMS_JOIN",
+            "duration_unit": "EXCHANGE_ACTIVE_SECONDS",
+            "interval_unit": "EXCHANGE_ACTIVE_SECONDS",
+            "counted_session_phases": ["CONTINUOUS_AM", "CONTINUOUS_PM"],
+            "non_counted_session_phases": ["OPEN_AUCTION", "LUNCH_BREAK", "CLOSE_AUCTION", "CLOSED"],
+            "timer_reads_wall_clock": False,
+            "timer_market_data_source": "DURABLE_LATEST_MARKET_DATA_VIEW",
+            "timer_market_data_fallbacks": [],
+            "catch_up_burst": False,
+            "restart_replays_consumed_timer": False,
+            "eod_outcome": "EXPLICIT_TERMINAL_OR_RESIDUAL_EVIDENCE",
+            "zero_slice_diagnostic_reason": "TWAP_SLICE_VOLUME_ROUNDED_ZERO",
+            "auction_native_synthesis": False,
+        },
+    }
+)
 
 
 def _object_schema(properties: dict[str, Any], required: tuple[str, ...]) -> dict[str, Any]:
@@ -563,7 +573,7 @@ def _manifest(algo_code: str) -> ExecutionAlgoPluginManifestV2:
     plugin_id, factory, state_version, _, _ = _ALGO_FACTS[algo_code]
     config_schema = _config_schema(algo_code)
     state_schema = _state_schema(algo_code)
-    characterization = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2[algo_code]
+    characterization = thaw_json_v1(CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2)[algo_code]
     characterization_sha256 = hash_hex_v1("miniqmt_plugin_behavior_characterization_v2", characterization)
     source = _source_attribution(algo_code)
     compatibility = _compatibility_requirement(algo_code, characterization_sha256)
@@ -683,15 +693,35 @@ def current_three_manifests_v2() -> tuple[ExecutionAlgoPluginManifestV2, ...]:
 def _validate_schema(schema: Any, value: Mapping[str, Any], contract: str) -> dict[str, Any]:
     if type(value) is not dict:
         raise ValueError(f"{contract} must be a strict object")
-    errors = sorted(
-        Draft202012Validator(thaw_json_v1(schema)).iter_errors(value),
-        key=lambda item: (tuple(str(part) for part in item.absolute_path), item.message),
-    )
-    if errors:
-        rendered = str(
-            [{"path": [str(part) for part in item.absolute_path], "message": item.message} for item in errors[:32]]
+    try:
+        frozen_value = freeze_json_v1(value)
+    except (TypeError, ValueError) as exc:
+        reason_code = (
+            MiniQMTPluginReasonCode.CONFIG_SCHEMA_INVALID
+            if "config" in contract.lower()
+            else MiniQMTPluginReasonCode.STATE_SCHEMA_INVALID
         )
-        raise ValueError(f"{contract} validation failed: {rendered}")
+        raise MiniQMTPluginContractError(
+            reason_code,
+            f"{contract} contains a non-canonical JSON carrier",
+            context={
+                "schema_version": "miniqmt_json_schema_failure_evidence_v1",
+                "contract_name": contract,
+                "violations_truncated": False,
+                "retained_violation_count": 1,
+                "observed_violation_count_lower_bound": 1,
+                "ordered_violations": [
+                    {"path": [], "validator": "canonical_json_carrier", "message": json_safe_evidence_v1(exc)}
+                ],
+            },
+        ) from exc
+    if not isinstance(frozen_value, FrozenJsonObjectV1):
+        raise TypeError(f"{contract} must freeze as a JSON object")
+    validate_json_schema_instance_v1(
+        schema=schema,
+        instance=frozen_value,
+        contract_name=contract,
+    )
     return dict(value)
 
 
@@ -1002,24 +1032,30 @@ class LegacyVnpyPolicyProjectionV1(FrozenStrictModel):
         return self
 
 
-_CONTROL_FIELDS = {
-    "timer_iterations",
-    "time_in_force_seconds",
-    "max_cancel_replace",
-    "marketable_limit_cross_ticks",
-    "marketable_limit_protection_band_pct",
-    "price_tick",
-}
-_PLUGIN_FIELDS = {
-    "SNIPER_MINIQMT": {"price_mode"},
-    "BEST_LIMIT_MINIQMT": {"min_volume", "max_volume"},
-    "TWAP_LITE_MINIQMT": {"time", "interval"},
-}
-_LEGACY_DEFAULTS = {
-    "SNIPER_MINIQMT": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
-    "BEST_LIMIT_MINIQMT": {"min_volume": 100, "max_volume": 1000},
-    "TWAP_LITE_MINIQMT": {"time": 600, "interval": 60},
-}
+_CONTROL_FIELDS = frozenset(
+    {
+        "timer_iterations",
+        "time_in_force_seconds",
+        "max_cancel_replace",
+        "marketable_limit_cross_ticks",
+        "marketable_limit_protection_band_pct",
+        "price_tick",
+    }
+)
+_PLUGIN_FIELDS = MappingProxyType(
+    {
+        "SNIPER_MINIQMT": frozenset({"price_mode"}),
+        "BEST_LIMIT_MINIQMT": frozenset({"min_volume", "max_volume"}),
+        "TWAP_LITE_MINIQMT": frozenset({"time", "interval"}),
+    }
+)
+_LEGACY_DEFAULTS: FrozenJsonObjectV1 = freeze_json_v1(
+    {
+        "SNIPER_MINIQMT": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+        "BEST_LIMIT_MINIQMT": {"min_volume": 100, "max_volume": 1000},
+        "TWAP_LITE_MINIQMT": {"time": 600, "interval": 60},
+    }
+)
 
 
 def _invalid_value(value: Any) -> bool:
@@ -1036,7 +1072,7 @@ def _legacy_effective_config_v1(
     raw_config: dict[Any, Any],
     invalid: list[LegacyProjectionObservationV1],
 ) -> dict[Any, Any]:
-    effective: dict[Any, Any] = dict(_LEGACY_DEFAULTS[algo_code])
+    effective: dict[Any, Any] = dict(thaw_json_v1(_LEGACY_DEFAULTS)[algo_code])
     effective.update(raw_config)
     numeric_fields: tuple[str, ...]
     if algo_code == "BEST_LIMIT_MINIQMT":
@@ -1089,7 +1125,7 @@ def project_legacy_vnpy_policy_v1(algo_code: str, raw_legacy_config: Mapping[Any
     conflict = False
     alias_only_drift = False
     alias_equivalent = False
-    candidate_input = dict(_LEGACY_DEFAULTS[algo_code])
+    candidate_input = dict(thaw_json_v1(_LEGACY_DEFAULTS)[algo_code])
     candidate_input.update({field: raw_dict[field] for field in known if field in raw_dict})
     legacy_effective = _legacy_effective_config_v1(
         algo_code=algo_code,

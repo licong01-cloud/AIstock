@@ -185,11 +185,12 @@ def _validate_json_schema_definition_v1(schema: FrozenJsonObjectV1, *, field_nam
         ) from exc
 
 
-def _validate_json_schema_instance_v1(
+def validate_json_schema_instance_v1(
     *,
     schema: FrozenJsonObjectV1,
     instance: FrozenJsonObjectV1,
     contract_name: str,
+    reason_code: MiniQMTPluginReasonCode | None = None,
 ) -> None:
     plain_schema = thaw_json_v1(schema)
     plain_instance = thaw_json_v1(instance)
@@ -210,13 +211,42 @@ def _validate_json_schema_instance_v1(
     )
     if not errors:
         return
-    details_parts: list[str] = []
-    for error in errors:
-        details_parts.append(f"{_json_schema_path_v1(error.absolute_path)}: {error.message}")
-    details = "; ".join(details_parts)
+    ordered_violations = [
+        {
+            "path": [str(part) for part in tuple(error.absolute_path)[:_MAX_SCHEMA_ERROR_PATH_PARTS]],
+            "validator": str(error.validator),
+            "message": json_safe_evidence_v1(error.message),
+        }
+        for error in errors
+    ]
+    observed_lower_bound = len(errors) + (1 if violations_truncated else 0)
+    context = {
+        "schema_version": "miniqmt_json_schema_failure_evidence_v1",
+        "contract_name": contract_name,
+        "violations_truncated": violations_truncated,
+        "retained_violation_count": len(errors),
+        "observed_violation_count_lower_bound": observed_lower_bound,
+        "ordered_violations": ordered_violations,
+    }
+    details = f"{contract_name} validation failed"
     if violations_truncated:
         details += f"; additional violations omitted after limit={_MAX_SCHEMA_VIOLATIONS}"
-    raise ValueError(f"{contract_name} validation failed: {details}")
+    if reason_code is None:
+        reason_code = (
+            MiniQMTPluginReasonCode.CONFIG_SCHEMA_INVALID
+            if "config" in contract_name.lower()
+            else MiniQMTPluginReasonCode.STATE_SCHEMA_INVALID
+        )
+    raise MiniQMTPluginContractError(reason_code, details, context=context)
+
+
+def _validate_json_schema_instance_v1(
+    *,
+    schema: FrozenJsonObjectV1,
+    instance: FrozenJsonObjectV1,
+    contract_name: str,
+) -> None:
+    validate_json_schema_instance_v1(schema=schema, instance=instance, contract_name=contract_name)
 
 
 def _prefixed_identity_v1(*, prefix: str, domain: str, payload: dict[str, Any]) -> str:
@@ -333,6 +363,7 @@ class MiniQMTPluginReasonCode(StrEnum):
     CONFIG_SCHEMA_INVALID = "MINIQMT_PLUGIN_CONFIG_SCHEMA_INVALID"
     STATE_SCHEMA_INVALID = "MINIQMT_PLUGIN_STATE_SCHEMA_INVALID"
     CAPABILITY_UNSUPPORTED = "MINIQMT_PLUGIN_CAPABILITY_UNSUPPORTED"
+    GATEWAY_CAPABILITY_CATALOG_INVALID = "MINIQMT_GATEWAY_CAPABILITY_CATALOG_INVALID"
     VNPY_COMPAT_SURFACE_UNSUPPORTED = "MINIQMT_VNPY_COMPAT_SURFACE_UNSUPPORTED"
     DETERMINISM_CONFLICT = "MINIQMT_PLUGIN_DETERMINISM_CONFLICT"
     RUNTIME_EVENT_SCHEMA_INVALID = "MINIQMT_RUNTIME_EVENT_SCHEMA_INVALID"
@@ -1726,4 +1757,5 @@ __all__ = [
     "TimerMutationTypeV1",
     "TimerMutationV1",
     "VnpyCompatibilityRequirementV1",
+    "validate_json_schema_instance_v1",
 ]

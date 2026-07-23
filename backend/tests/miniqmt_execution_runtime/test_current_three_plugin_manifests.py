@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import math
+import subprocess
+import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
 from backend.execution_algos.vnpy_style import registry as legacy_registry
+from backend.execution_algos.vnpy_style import plugin_manifests as manifest_module
 from backend.execution_algos.vnpy_style.models import VnpyActionType, VnpyTick
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2,
@@ -22,7 +27,13 @@ from backend.execution_algos.vnpy_style.plugin_manifests import (
     validate_current_three_state_v2,
 )
 from backend.services.miniqmt_execution_runtime.deterministic_context import best_limit_quantity_v1
-from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
+from backend.services.miniqmt_execution_runtime.plugin_canonical import (
+    FrozenJsonArrayV1,
+    FrozenJsonObjectV1,
+    canonical_json_bytes_v1,
+    hash_hex_v1,
+    thaw_json_v1,
+)
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
     DeterministicExecutionContextV1,
@@ -42,6 +53,10 @@ EXPECTED = {
 
 def _manifest(algo_code: str):
     return next(item for item in current_three_manifests_v2() if item.algo_code == algo_code)
+
+
+def _behavior_characterization(algo_code: str) -> dict[str, object]:
+    return thaw_json_v1(CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2)[algo_code]
 
 
 def _lineage() -> dict[str, object]:
@@ -156,6 +171,113 @@ def test_current_three_identity_hash_and_creation_binding_closure() -> None:
     assert {item.algo_code: item.plugin_key.manifest_sha256 for item in current_three_creation_bindings_v1()} == {
         item.algo_code: item.manifest_sha256 for item in manifests
     }
+
+
+def test_code_owned_behavior_characterizations_are_recursively_immutable() -> None:
+    before = canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
+    authority = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2
+    assert isinstance(authority, FrozenJsonObjectV1)
+
+    with pytest.raises(TypeError):
+        authority[0] = authority[0]  # type: ignore[index]
+    twap = next(member.value for member in authority if member.key == "TWAP_LITE_MINIQMT")
+    assert isinstance(twap, FrozenJsonObjectV1)
+    with pytest.raises(TypeError):
+        twap[0] = twap[0]  # type: ignore[index]
+    counted = next(member.value for member in twap if member.key == "counted_session_phases")
+    assert isinstance(counted, FrozenJsonArrayV1)
+    with pytest.raises(AttributeError):
+        counted.append("CLOSED")  # type: ignore[attr-defined]
+
+    after = canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
+    assert after == before
+
+    script = """
+from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
+from backend.services.miniqmt_execution_runtime.plugin_canonical import canonical_json_bytes_v1
+import sys
+sys.stdout.buffer.write(canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[3],
+        check=True,
+        capture_output=True,
+    )
+    assert result.stdout == after
+
+
+def test_all_code_owned_manifest_build_tables_are_immutable() -> None:
+    assert isinstance(manifest_module._UPSTREAM_HASHES, MappingProxyType)
+    assert isinstance(manifest_module._ALGO_FACTS, MappingProxyType)
+    assert isinstance(manifest_module._PLUGIN_FIELDS, MappingProxyType)
+    assert isinstance(manifest_module._LEGACY_DEFAULTS, FrozenJsonObjectV1)
+    assert isinstance(manifest_module._CONTROL_FIELDS, frozenset)
+    assert all(isinstance(fields, frozenset) for fields in manifest_module._PLUGIN_FIELDS.values())
+
+    with pytest.raises(TypeError):
+        manifest_module._UPSTREAM_HASHES["unexpected"] = "f" * 64  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest_module._ALGO_FACTS["unexpected"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest_module._PLUGIN_FIELDS["SNIPER_MINIQMT"] = frozenset()  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        manifest_module._PLUGIN_FIELDS["SNIPER_MINIQMT"].add("unexpected")  # type: ignore[attr-defined]
+
+
+def _state_with_schema_violations(count: int) -> dict[str, object]:
+    state = _state("TWAP_LITE_MINIQMT")
+    active_orders: list[dict[str, object]] = []
+    for index in range(count):
+        active = _active_order()
+        active["local_vt_orderid"] = f"vord_{index:04d}"
+        active["submit_command_id"] = f"mqcommand_{index:04d}"
+        active["broker_order_id"] = f"broker_{index:04d}"
+        active["last_order_event_id"] = f"mqrtevt_order_{index:04d}"
+        active["last_trade_event_id"] = f"mqrtevt_trade_{index:04d}"
+        active["mapping_sha256"] = hash_hex_v1(
+            "miniqmt_plugin_active_order_state_v1",
+            {key: value for key, value in active.items() if key != "mapping_sha256"},
+        )
+        active["unexpected_schema_field"] = index
+        active_orders.append(active)
+    state["active_orders"] = active_orders
+    return state
+
+
+def _schema_failure_context(count: int) -> dict[str, object]:
+    with pytest.raises(ValueError) as error:
+        validate_current_three_state_v2(
+            _manifest("TWAP_LITE_MINIQMT"),
+            _state_with_schema_violations(count),
+        )
+    context = getattr(error.value, "context", None)
+    assert isinstance(context, dict)
+    json.dumps(context, allow_nan=False)
+    return context
+
+
+def test_current_three_schema_failures_are_bounded_explicit_and_stable() -> None:
+    below = _schema_failure_context(31)
+    assert below["violations_truncated"] is False
+    assert below["retained_violation_count"] == 31
+    assert below["observed_violation_count_lower_bound"] == 31
+
+    exact = _schema_failure_context(32)
+    assert exact["violations_truncated"] is False
+    assert exact["retained_violation_count"] == 32
+    assert exact["observed_violation_count_lower_bound"] == 32
+
+    over = _schema_failure_context(500)
+    assert over["violations_truncated"] is True
+    assert over["retained_violation_count"] == 32
+    assert over["observed_violation_count_lower_bound"] == 33
+    assert len(over["ordered_violations"]) == 32  # type: ignore[arg-type]
+    assert len(json.dumps(over, sort_keys=True)) < 20_000
+    assert over == _schema_failure_context(500)
+
+    valid = _state("TWAP_LITE_MINIQMT")
+    assert thaw_json_v1(validate_current_three_state_v2(_manifest("TWAP_LITE_MINIQMT"), valid)) == valid
 
 
 def test_current_three_are_aistock_derived_and_require_exact_delivery_callbacks() -> None:
@@ -425,7 +547,7 @@ def test_state_codec_rejects_invalid_market_data_time_and_twap_terminal_drift() 
 
 
 def test_twap_behavior_is_exchange_active_timer_only_and_restart_safe() -> None:
-    behavior = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2["TWAP_LITE_MINIQMT"]
+    behavior = _behavior_characterization("TWAP_LITE_MINIQMT")
     assert behavior["duration_unit"] == behavior["interval_unit"] == "EXCHANGE_ACTIVE_SECONDS"
     assert behavior["counted_session_phases"] == ["CONTINUOUS_AM", "CONTINUOUS_PM"]
     assert behavior["non_counted_session_phases"] == ["OPEN_AUCTION", "LUNCH_BREAK", "CLOSE_AUCTION", "CLOSED"]
@@ -506,14 +628,14 @@ def test_behavior_characterization_vectors_match_current_core_traces() -> None:
     }
 
     for algo_code, observed in actual.items():
-        characterization = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2[algo_code]
+        characterization = _behavior_characterization(algo_code)
         assert characterization["schema_version"] == "current_three_behavior_characterization_v2"
         assert characterization["algo_code"] == algo_code
         assert characterization["trace_vectors"] == [{"vector_id": "legacy_core_primary_submit", "expected": observed}]
 
 
 def test_best_limit_binds_raw_digest_u53_and_strict_ordinal() -> None:
-    behavior = CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2["BEST_LIMIT_MINIQMT"]
+    behavior = _behavior_characterization("BEST_LIMIT_MINIQMT")
     assert behavior["draw_formula"] == "RAW_DIGEST_U53"
     assert behavior["draw_ordinal"] == "STRICT_CONTIGUOUS_DURABLE_STATE"
     context = DeterministicExecutionContextV1.create(

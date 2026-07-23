@@ -23,9 +23,11 @@ from .plugin_canonical import (
 from .plugin_contracts import (
     ExecutionAlgoPluginManifestV2,
     FrozenJsonFieldV1,
+    FrozenJsonObjectFieldV1,
     FrozenStrictModel,
     GatewayCapabilityCatalogV1,
     IdentityV1,
+    MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
     Sha256V1,
     VnpyCompatibilityRequirementV1,
@@ -310,6 +312,16 @@ class PluginCatalogBuildFailureReceiptV1(FrozenStrictModel):
     ) -> Self:
         ordered = sorted(failures, key=lambda item: item.sort_key_v1())
         total = len(ordered)
+        if total == 0:
+            raise MiniQMTPluginContractError(
+                MiniQMTPluginReasonCode.REGISTRATION_CONFLICT,
+                "catalog build failure receipt requires at least one real failure",
+                context={
+                    "total_failure_count": 0,
+                    "retained_failure_count": 0,
+                    "failures_truncated": False,
+                },
+            )
         omitted_hash: str | None = None
         if total > _MAX_BUILD_FAILURES:
             omitted = ordered[_MAX_BUILD_FAILURES - 1 :]
@@ -354,6 +366,16 @@ class PluginCatalogBuildFailureReceiptV1(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> Self:
+        if self.total_failure_count == 0 or not self.ordered_failures:
+            raise MiniQMTPluginContractError(
+                MiniQMTPluginReasonCode.REGISTRATION_CONFLICT,
+                "catalog build failure receipt requires at least one real failure",
+                context={
+                    "total_failure_count": self.total_failure_count,
+                    "retained_failure_count": len(self.ordered_failures),
+                    "failures_truncated": self.failures_truncated,
+                },
+            )
         if self.ordered_descriptor_keys != tuple(
             sorted(self.ordered_descriptor_keys, key=lambda item: item.sort_key_v1())
         ):
@@ -507,16 +529,40 @@ class PluginRouteCompatibilityFailureV1(FrozenStrictModel):
     field_path: IdentityV1
     required: FrozenJsonFieldV1
     supported: FrozenJsonFieldV1
+    context: FrozenJsonObjectFieldV1
     context_sha256: Sha256V1
 
     @classmethod
-    def create(cls, *, field_path: str, required: Any, supported: Any) -> Self:
-        context = {"field_path": field_path, "required": required, "supported": supported}
+    def create(
+        cls,
+        *,
+        descriptor: PluginRegistrationDescriptorV2,
+        gateway_catalog: GatewayCapabilityCatalogV1,
+        field_path: str,
+        requirement: str,
+        required: Any,
+        supported: Any,
+    ) -> Self:
+        context = {
+            "plugin": {
+                "algo_code": descriptor.manifest.algo_code,
+                "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
+            },
+            "route": gateway_catalog.route_id,
+            "requirement": requirement,
+            "expected": required,
+            "actual": supported,
+            "gateway_catalog_identity": {
+                "route_id": gateway_catalog.route_id,
+                "catalog_sha256": gateway_catalog.catalog_sha256,
+            },
+        }
         return cls(
             kind="STATIC_UNSUPPORTED",
             field_path=field_path,
             required=required,
             supported=supported,
+            context=context,
             context_sha256=hash_hex_v1("miniqmt_plugin_route_failure_context_v1", context),
         )
 
@@ -525,11 +571,22 @@ class PluginRouteCompatibilityFailureV1(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_context_hash(self) -> Self:
-        context = {
-            "field_path": self.field_path,
-            "required": thaw_json_v1(self.required),
-            "supported": thaw_json_v1(self.supported),
-        }
+        context = thaw_json_v1(self.context)
+        if set(context) != {
+            "plugin",
+            "route",
+            "requirement",
+            "expected",
+            "actual",
+            "gateway_catalog_identity",
+        }:
+            raise ValueError("route failure context must contain the exact evidence key set")
+        if type(context["requirement"]) is not str or not context["requirement"].strip():
+            raise ValueError("route failure requirement must be a non-empty strict string")
+        if context.get("expected") != thaw_json_v1(self.required) or context.get("actual") != thaw_json_v1(
+            self.supported
+        ):
+            raise ValueError("route failure expected/actual context does not match required/supported closure")
         if self.context_sha256 != hash_hex_v1("miniqmt_plugin_route_failure_context_v1", context):
             raise ValueError("route failure context hash mismatch")
         return self
@@ -542,6 +599,11 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
     plugin_manifest_sha256: Sha256V1
     catalog_sha256: Sha256V1
     gateway_capability_catalog_sha256: Sha256V1
+    gateway_route_id: IdentityV1
+    required_quote_source: Literal["B0_QUOTE_V2"]
+    observed_quote_source: IdentityV1
+    requires_exact_order_id_cancel: StrictBool
+    observed_exact_order_id_cancel: StrictBool
     required_order_types: tuple[str, ...]
     supported_order_types: tuple[str, ...]
     required_market_capabilities: FrozenJsonFieldV1
@@ -562,6 +624,7 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
     ) -> Self:
         manifest = descriptor.manifest
         ordered = tuple(sorted(failures, key=lambda item: item.sort_key_v1()))
+        requires_exact_cancel = "cancel_order" in manifest.required_facade_methods
         payload = {
             "schema_version": "plugin_route_compatibility_receipt_v1",
             "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
@@ -569,6 +632,11 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
             "plugin_manifest_sha256": manifest.manifest_sha256,
             "catalog_sha256": catalog_sha256,
             "gateway_capability_catalog_sha256": gateway_catalog.catalog_sha256,
+            "gateway_route_id": gateway_catalog.route_id,
+            "required_quote_source": "B0_QUOTE_V2",
+            "observed_quote_source": gateway_catalog.quote_source,
+            "requires_exact_order_id_cancel": requires_exact_cancel,
+            "observed_exact_order_id_cancel": gateway_catalog.exact_order_id_cancel,
             "required_order_types": [item.value for item in manifest.supported_order_types],
             "supported_order_types": [item.value for item in gateway_catalog.order_types],
             "required_market_capabilities": [item.canonical_payload_v1() for item in manifest.market_data_requirements],
@@ -599,6 +667,34 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
             raise ValueError("route compatibility status does not match failures")
         if self.plugin_manifest_sha256 != self.plugin_key.manifest_sha256:
             raise ValueError("route receipt plugin manifest identity mismatch")
+        if self.status is CompatibilityStatusV1.PASSED and self.observed_quote_source != self.required_quote_source:
+            raise ValueError("PASSED route receipt requires exact B0 quote authority")
+        if (
+            self.status is CompatibilityStatusV1.PASSED
+            and self.requires_exact_order_id_cancel
+            and not self.observed_exact_order_id_cancel
+        ):
+            raise ValueError("PASSED route receipt requires exact order-id cancellation capability")
+        failure_paths = {failure.field_path for failure in self.ordered_failures}
+        quote_requirement_failed = self.observed_quote_source != self.required_quote_source
+        if quote_requirement_failed != ("quote_source" in failure_paths):
+            raise ValueError("route receipt quote authority fact does not close over its exact failure")
+        cancel_requirement_failed = self.requires_exact_order_id_cancel and not self.observed_exact_order_id_cancel
+        if cancel_requirement_failed != ("exact_order_id_cancel" in failure_paths):
+            raise ValueError("route receipt exact-cancel fact does not close over its exact failure")
+        for failure in self.ordered_failures:
+            context = thaw_json_v1(failure.context)
+            if (
+                context.get("plugin")
+                != {"algo_code": self.algo_code, "plugin_key": self.plugin_key.canonical_payload_v1()}
+                or context.get("route") != self.gateway_route_id
+                or context.get("gateway_catalog_identity")
+                != {
+                    "route_id": self.gateway_route_id,
+                    "catalog_sha256": self.gateway_capability_catalog_sha256,
+                }
+            ):
+                raise ValueError("route failure context conflicts with receipt plugin/route/catalog identity")
         expected = hash_hex_v1(
             "miniqmt_plugin_route_compatibility_receipt_v1",
             self.canonical_payload_v1(exclude={"receipt_sha256"}),
@@ -1242,6 +1338,38 @@ def evaluate_plugin_route_compatibility_v1(
     gateway_catalog: GatewayCapabilityCatalogV1,
 ) -> PluginRouteCompatibilityReceiptV1:
     catalog_snapshot = PluginCatalogSnapshotV1.model_validate(catalog_snapshot.model_dump(mode="python"), strict=True)
+    if not isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
+        raise MiniQMTPluginContractError(
+            MiniQMTPluginReasonCode.GATEWAY_CAPABILITY_CATALOG_INVALID,
+            "gateway capability catalog readback requires GatewayCapabilityCatalogV1",
+            context={
+                "plugin": plugin_key.canonical_payload_v1(),
+                "route": None,
+                "requirement": "GATEWAY_CAPABILITY_CATALOG_STRICT_READBACK",
+                "expected": "GatewayCapabilityCatalogV1",
+                "actual": json_safe_evidence_v1(gateway_catalog),
+                "gateway_catalog_identity": None,
+            },
+        )
+    gateway_payload = gateway_catalog.model_dump(mode="python")
+    try:
+        gateway_catalog = GatewayCapabilityCatalogV1.model_validate(gateway_payload, strict=True)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise MiniQMTPluginContractError(
+            MiniQMTPluginReasonCode.GATEWAY_CAPABILITY_CATALOG_INVALID,
+            "gateway capability catalog_sha256/readback closure is invalid",
+            context={
+                "plugin": plugin_key.canonical_payload_v1(),
+                "route": gateway_payload.get("route_id"),
+                "requirement": "GATEWAY_CAPABILITY_CATALOG_STRICT_READBACK",
+                "expected": "canonical schema, identity, field and catalog_sha256 closure",
+                "actual": json_safe_evidence_v1(exc),
+                "gateway_catalog_identity": {
+                    "route_id": gateway_payload.get("route_id"),
+                    "catalog_sha256": gateway_payload.get("catalog_sha256"),
+                },
+            },
+        ) from exc
     descriptor = next(
         (item for item in catalog_snapshot.registration_descriptors if item.plugin_key == plugin_key),
         None,
@@ -1250,18 +1378,48 @@ def evaluate_plugin_route_compatibility_v1(
         raise KeyError(plugin_key)
     manifest = descriptor.manifest
     failures: list[PluginRouteCompatibilityFailureV1] = []
+    if gateway_catalog.quote_source != "B0_QUOTE_V2":
+        failures.append(
+            PluginRouteCompatibilityFailureV1.create(
+                descriptor=descriptor,
+                gateway_catalog=gateway_catalog,
+                field_path="quote_source",
+                requirement="K1_B0_QUOTE_AUTHORITY",
+                required="B0_QUOTE_V2",
+                supported=gateway_catalog.quote_source,
+            )
+        )
+    if "cancel_order" in manifest.required_facade_methods and not gateway_catalog.exact_order_id_cancel:
+        failures.append(
+            PluginRouteCompatibilityFailureV1.create(
+                descriptor=descriptor,
+                gateway_catalog=gateway_catalog,
+                field_path="exact_order_id_cancel",
+                requirement="REQUIRED_FACADE_METHOD_CANCEL_ORDER_EXACT_IDENTITY",
+                required=True,
+                supported=gateway_catalog.exact_order_id_cancel,
+            )
+        )
     required_orders = {item.value for item in manifest.supported_order_types}
     supported_orders = {item.value for item in gateway_catalog.order_types}
     if not required_orders.issubset(supported_orders):
         failures.append(
             PluginRouteCompatibilityFailureV1.create(
-                field_path="order_types", required=sorted(required_orders), supported=sorted(supported_orders)
+                descriptor=descriptor,
+                gateway_catalog=gateway_catalog,
+                field_path="order_types",
+                requirement="SUPPORTED_ORDER_TYPES",
+                required=sorted(required_orders),
+                supported=sorted(supported_orders),
             )
         )
     if gateway_catalog.gateway_backend not in manifest.supported_broker_backends:
         failures.append(
             PluginRouteCompatibilityFailureV1.create(
+                descriptor=descriptor,
+                gateway_catalog=gateway_catalog,
                 field_path="gateway_backend",
+                requirement="SUPPORTED_GATEWAY_BACKEND",
                 required=list(manifest.supported_broker_backends),
                 supported=gateway_catalog.gateway_backend,
             )
@@ -1272,7 +1430,10 @@ def evaluate_plugin_route_compatibility_v1(
         if requirement.capability not in supported_capabilities:
             failures.append(
                 PluginRouteCompatibilityFailureV1.create(
+                    descriptor=descriptor,
+                    gateway_catalog=gateway_catalog,
                     field_path=f"market_data_capabilities.{requirement.capability.value}",
+                    requirement="MARKET_DATA_CAPABILITY",
                     required=requirement.canonical_payload_v1(),
                     supported=[item.value for item in gateway_catalog.market_data_capabilities],
                 )
@@ -1280,7 +1441,10 @@ def evaluate_plugin_route_compatibility_v1(
         if not set(requirement.session_phases).issubset(supported_phases):
             failures.append(
                 PluginRouteCompatibilityFailureV1.create(
+                    descriptor=descriptor,
+                    gateway_catalog=gateway_catalog,
                     field_path=f"session_phases.{requirement.capability.value}",
+                    requirement="MARKET_DATA_SESSION_PHASES",
                     required=[item.value for item in requirement.session_phases],
                     supported=[item.value for item in gateway_catalog.session_phases],
                 )
