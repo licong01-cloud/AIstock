@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-837",
-  "closed_at": null,
+  "closed_at": "2026-07-23T07:14:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -50,8 +50,8 @@
   },
   "first_seen_at": "2026-07-23T04:28:35.929323Z",
   "fix_branch": "bug/BUG-837-rd-f-014-bundle-verifier-rejects-legitimate-zero-20260723",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5ecba87f76cddc087dab9e37c9f422b66a9e54de",
+  "fixed_at": "2026-07-23T07:40:49.545447Z",
   "github_issue_number": 2650,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2650",
   "last_seen_at": "2026-07-23T04:28:35.929323Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/RD-Agent/pull/8",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -70,7 +71,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -79,6 +80,9 @@
     "fingerprint": "063803c9785143002eee2d4b",
     "source_event_id": "FE-20260723-063803c97851"
   },
+  "validation_evidence": [
+    "python -m pytest test/app/test_qe_long_trend_evaluation_api.py -q -p no:cacheprovider -> 13 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
