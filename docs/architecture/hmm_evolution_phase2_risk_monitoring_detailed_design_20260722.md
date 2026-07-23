@@ -2,7 +2,7 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 状态：`DESIGN_READY_USER_APPROVED`
+- 状态：`APPROVED_BY_USER_BLOCKED_C008_CONTRACT_AMENDMENT`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.11
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
@@ -369,6 +369,24 @@ C-008-B1 只扩展只读诊断证据，不改变 hard-state 业务语义、不�
 
 B1 不定义或应用 posterior mass、ESS、utility separation、negative likelihood delta、covariance anomaly 的正式通过阈值；
 这些指标只用于决定后续是否提交 B2 或 B3 设计。B1 报告完成不使 F-011、任何 entry 或 family model set 变为 READY。
+
+C-008-B1 已在 producer commit `3b37fe2b2d5d45a2d9e5f888273fd52f74db31cb` 完成第二次全量运行；
+canonical report SHA-256 为 `4728e75e8c059d38688bcd969d19379d71b2ad5e9cd5e07ff69138c184462722`，
+dataset/mapping hashes 与 C-008-A 一致，runtime evidence 为 CPython 3.13.5、NumPy 2.3.3、hmmlearn 0.3.3。
+报告再次明确 `selection_performed=false`、`formal_acceptance_thresholds_applied=false`、
+`hard_semantic_authority_changed=false`、`ready_artifact_write_performed=false`，模型输出文件数为 0。
+
+B1 证明 `801780.SI` 在 legacy family 的每个 seed 中，train hard occupancy 与 validation hard occupancy 均至少缺一态；
+每个 seed 至少有一个缺失态的 validation normalized posterior mass 不超过 `0.0013361`。即使个别另一缺失态达到
+`0.032652..0.040817`，同一 fit 仍存在接近零的第三态；缺失态 posterior-weighted utility 在三个 validation time
+segment 中反复变号，standard error 常与 utility 或 state-pair separation 同量级。该证据不支持直接批准 B2，
+也不支持把问题解释为仅 validation hard-argmax 丢失信息。
+
+数值证据同时确认：237 个 legacy 成功 fit 中 183 个有一次 terminal negative likelihood delta；237/237 均执行
+covariance clip，包含 3560 个 lower-bound 与 77 个 upper-bound cell。11 个失败 fit 均在
+`raw_covariance_validation` 发现 21 个 non-finite covariance cell；其 monitor history 合计含 3025 个 non-finite entry。
+因此 F-011-B/F-011-C/F-011-D 继续 blocked。B1 完成后的推荐方向是提交 B3 详细设计；该推荐不等于用户批准，
+B3 仍不得实现。
 
 #### C. 未批准方向
 
@@ -914,7 +932,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-007 | 两个 direct L1 family 如何从 PIT L2 constituent 构造全部 7/20 维 observation，并处理历史 code 表示、单位、权重、缺失和 causal rolling | `RESOLVED_USER_APPROVED_C007_A` | 使用 `hmm_risk_l1_stock_fact_observation_v1`：股票事实先聚合、L1 feature 重新计算、canonical 31/131、双 coverage evidence 和 fail-loud；禁止聚合 L2 feature/posterior或调用旧 4 维路径 |
 | C-008-A | 固定 seed 42 失败后，是否先用同一冻结输入对 seeds 42..49 做不选 seed、不写 artifact 的完整事实诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | 496 次拟合报告完成；legacy 无 31/31 seed，autocycle 局部成功不构成两-family READY；canonical report hash 固化于 4.3.2 |
 | C-008-D1 | 是否按 C-008-A 新证据修订详细设计并阻塞 F-011 的实现就绪结论 | `RESOLVED_USER_APPROVED_C008_D1` | 回填证据、拆分独立状态与 READY 合取；本次仅更新设计，不合入、不改变 runtime |
-| C-008-B1 | 是否补充 soft posterior、covariance 与 convergence 的只读诊断证据 | `RESOLVED_USER_APPROVED_DIAGNOSTIC_ONLY_C008_B1` | 同一冻结输入与 seeds 42..49；不定义正式阈值、不改变 hard semantic authority、不选择 seed、不写 READY artifact |
+| C-008-B1 | 是否补充 soft posterior、covariance 与 convergence 的只读诊断证据 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | canonical report `4728e75e8c059d38688bcd969d19379d71b2ad5e9cd5e07ff69138c184462722`；同一冻结输入与 seeds 42..49；未定义正式阈值、未改变 hard semantic authority、未选择 seed、未写 READY artifact |
 | C-008-B2 | 是否采用 posterior-weighted semantic authority | `PENDING_USER_DECISION` | 未批准、未实现；须在 B1 证据后另行定义 mass/ESS/utility separation/tie/holdout 合同 |
 | C-008-B3 | 是否保留 hard semantic authority并重构 initialization/restart/occupancy/selection | `PENDING_USER_DECISION` | 未批准、未实现；须另行定义 train-only selection、统一 family identity、holdout 与数值验收合同 |
 
@@ -942,12 +960,12 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,state_model_set,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_seed_diagnostic.json`; `backend/tests/hmm_risk/test_state_model_set.py` | USER_APPROVED_BLOCKED_C008_CONTRACT_AMENDMENT | 用户明确批准 C-008-D1：现有 fixed-seed/hard-label/数值验收合同不能完成 legacy 31/31；不得以 autocycle-only 或部分 sector 交付 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,state_model_set,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_seed_diagnostic.json`; `backend/tests/hmm_risk/test_state_model_set.py` | APPROVED_BY_USER_BLOCKED_C008_CONTRACT_AMENDMENT | 用户明确批准 C-008-D1：现有 fixed-seed/hard-label/数值验收合同不能完成 legacy 31/31；不得以 autocycle-only 或部分 sector 交付 |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{market_repository,observation}.py`; C-007-A formulas | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_seed_diagnostic.json` | DESIGN_READY_USER_APPROVED | 无 |
-| F-011-B fit/convergence/covariance | `backend/services/hmm_risk/state_model_set.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_seed_diagnostic.json` | USER_APPROVED_BLOCKED_C008 | 用户明确批准当前阻塞：monitor、negative delta、raw/clip covariance 尚无正式 acceptance threshold |
-| F-011-C semantic/selection/holdout | `backend/services/hmm_risk/state_model_set.py` preparation boundary | `backend/tests/hmm_risk/test_state_model_set.py`; C-008-B1 full diagnostic receipt | USER_APPROVED_BLOCKED_DECISION_PENDING | 用户明确批准 B1 只诊断；B2/B3 未批准，hard authority 不变 |
-| F-011-D two-family READY | content-addressed L1/L2 model-set artifact | `backend/tests/hmm_risk/test_state_model_set.py`; C-008-B1 full diagnostic receipt | USER_APPROVED_BLOCKED_DEPENDENCY | 用户明确批准当前阻塞：READY artifact 数为 0；legacy seeds 42..49 无 31/31 |
-| F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | USER_APPROVED_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
+| F-011-B fit/convergence/covariance | `backend/services/hmm_risk/state_model_set.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_b1_soft_evidence.json` | APPROVED_BY_USER_BLOCKED_C008 | 用户明确批准当前阻塞：B1 已量化 monitor/negative delta/raw/clip covariance，但正式 acceptance threshold 仍未批准 |
+| F-011-C semantic/selection/holdout | `backend/services/hmm_risk/state_model_set.py` preparation boundary | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_b1_soft_evidence.json` | APPROVED_BY_USER_BLOCKED_DECISION_PENDING | B1 已完成且不支持直接采用 B2；B3 仅为推荐、未批准，hard authority 不变 |
+| F-011-D two-family READY | content-addressed L1/L2 model-set artifact | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_b1_soft_evidence.json` | APPROVED_BY_USER_BLOCKED_DEPENDENCY | READY artifact 数为 0；legacy seeds 42..49 无 31/31，B1 不改变该状态 |
+| F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
 | F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | DESIGN_READY_USER_APPROVED | 无 |
 | F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | USER_APPROVED_PENDING_UPSTREAM_MODEL_SET | 用户明确批准 C-008-D1：API/UI 合同未被否定，但真实验收依赖可证明的 READY model set |
 
@@ -1023,9 +1041,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 本文件已回填 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1 用户批准。C-008-A 是
 `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT`；F-011 parent 当前为 `BLOCKED_C008_CONTRACT_AMENDMENT`，
-F-012 保持 `DESIGN_READY_USER_APPROVED`，F-013 为 `PENDING_UPSTREAM_MODEL_SET`。C-008-B1 是下一步只读诊断，
-不改变 hard semantic authority，不实施 B2/B3，不使任何 model set READY。
+F-012 保持 `DESIGN_READY_USER_APPROVED`，F-013 为 `PENDING_UPSTREAM_MODEL_SET`。C-008-B1 已完成为
+`VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT`，不改变 hard semantic authority，不使任何 model set READY；
+B1 证据不支持直接采用 B2，B3 是下一步推荐设计方向但仍为 `PENDING_USER_DECISION`。
 
 生产 `sector_data` 不执行 identity DDL/DML；当前设计修订未安装依赖、未启停服务、未运行 job、未写数据库，也未激活
-Phase 2 runtime。C-008-B1 完成后必须基于 soft posterior、covariance 与 convergence 事实另行提交 B2 或 B3 设计决定，
-不得由本次诊断自动推导正式模型演进已可开始。
+Phase 2 runtime。下一步必须另行提交 B3 的 deterministic initialization/restart、train occupancy、covariance、
+train-only selection、model identity 与 untouched semantic validation/holdout 详细设计，并取得用户批准；不得由 B1
+诊断自动推导 B3 已批准或正式模型演进已可开始。
