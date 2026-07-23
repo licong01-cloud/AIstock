@@ -53,6 +53,7 @@ CONTROL_SECRET_ROOT_ENV = "QE_LONG_TREND_CONTROL_SECRET_ROOT"
 COLLECT_LEASE_SECONDS = 300
 COLLECT_LEASE_HEARTBEAT_SECONDS = 60
 COLLECT_LEASE_RENEW_TIMEOUT_SECONDS = 30
+RETRYABLE_PREJOB_REJECTION_REASONS = frozenset({QELongTrendReason.BUNDLE_INVALID.value})
 _T = TypeVar("_T")
 WORKER_INPUT_ARTIFACTS = frozenset(
     {
@@ -395,6 +396,11 @@ class QELongTrendPhase2Service:
                 "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
             },
         )
+        row = self._recover_definitive_prejob_failure(
+            row,
+            evaluation_id=evaluation_id,
+            request_sha=request_sha,
+        )
         if request_payload is None and row["status"] not in {"partial", "failed", "cancelled", "succeeded"}:
             claimed = self.control_repository.claim(evaluation_id, owner_id=self.owner_id)
             lease = self.control_repository.lease_from(claimed)
@@ -428,6 +434,26 @@ class QELongTrendPhase2Service:
             data_action_plan=actions,
         )
 
+    def _recover_definitive_prejob_failure(
+        self,
+        row: Mapping[str, Any],
+        *,
+        evaluation_id: str,
+        request_sha: str,
+    ) -> dict[str, Any]:
+        current = dict(row)
+        if (
+            current.get("status") == "failed"
+            and not current.get("job_id")
+            and current.get("reason_code") in RETRYABLE_PREJOB_REJECTION_REASONS
+        ):
+            return self.control_repository.requeue_definitive_prejob_failure(
+                evaluation_id,
+                expected_request_sha=request_sha,
+                allowed_reason_codes=RETRYABLE_PREJOB_REJECTION_REASONS,
+            )
+        return current
+
     async def submit(
         self,
         *,
@@ -458,6 +484,16 @@ class QELongTrendPhase2Service:
                 current_attempt_id=inspection.current_attempt_id,
                 execution_environment_snapshot_id=str(row["execution_environment_snapshot_id"]),
                 execution_environment_manifest_sha256=str(row["execution_environment_manifest_sha256"]),
+            )
+        if row["status"] in {"succeeded", "partial", "failed", "cancelled"}:
+            raise QELongTrendPhase2Error(
+                "terminal long-trend evaluation without a remote job cannot be submitted",
+                reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+                context={
+                    "evaluation_id": prepared.evaluation_id,
+                    "status": row["status"],
+                    "reason_code": row.get("reason_code"),
+                },
             )
         claimed = (
             dict(_claimed_row)

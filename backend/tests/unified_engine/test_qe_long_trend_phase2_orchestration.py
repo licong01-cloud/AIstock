@@ -453,6 +453,88 @@ def test_reconcile_persists_running_state_and_releases_claim() -> None:
     assert repository.transitions[-1]["release_owner"] is True
 
 
+def test_prepare_requeues_only_definitive_bundle_rejection_without_remote_job() -> None:
+    evaluation_id = "qelt_" + "d" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def requeue_definitive_prejob_failure(self, value, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls.append({"evaluation_id": value, **kwargs})
+            return {"evaluation_id": value, "status": "queued", "reason_code": None}
+
+    repository = Repository()
+    service = QELongTrendPhase2Service(control_repository=repository, owner_id="owner")  # type: ignore[arg-type]
+    recovered = service._recover_definitive_prejob_failure(
+        {
+            "evaluation_id": evaluation_id,
+            "status": "failed",
+            "job_id": None,
+            "reason_code": "QELT_BUNDLE_INVALID",
+        },
+        evaluation_id=evaluation_id,
+        request_sha="a" * 64,
+    )
+
+    assert recovered["status"] == "queued"
+    assert repository.calls == [
+        {
+            "evaluation_id": evaluation_id,
+            "expected_request_sha": "a" * 64,
+            "allowed_reason_codes": phase2_module.RETRYABLE_PREJOB_REJECTION_REASONS,
+        }
+    ]
+
+    for row in (
+        {"status": "failed", "job_id": "job-1", "reason_code": "QELT_BUNDLE_INVALID"},
+        {"status": "failed", "job_id": None, "reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT"},
+        {"status": "remote_state_unknown", "job_id": None, "reason_code": "QELT_NODE_STATE_UNKNOWN"},
+    ):
+        unchanged = service._recover_definitive_prejob_failure(
+            row,
+            evaluation_id=evaluation_id,
+            request_sha="a" * 64,
+        )
+        assert unchanged == row
+    assert len(repository.calls) == 1
+
+
+def test_submit_reports_terminal_no_job_state_instead_of_failing_repository_claim() -> None:
+    evaluation_id = "qelt_" + "e" * 64
+    prepared = phase2_module.PreparedLongTrendEvaluation(
+        evaluation_id=evaluation_id,
+        control_row={
+            "evaluation_id": evaluation_id,
+            "status": "failed",
+            "job_id": None,
+            "reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT",
+        },
+        request_payload={"schema_version": "qe_long_trend_job_request_v1"},
+        resource_token="secret",
+        ready_for_node=True,
+        data_action_plan=(),
+    )
+    service = QELongTrendPhase2Service(owner_id="owner")
+
+    with pytest.raises(QELongTrendPhase2Error) as exc_info:
+        asyncio.run(
+            service.submit(
+                prepared=prepared,
+                task_id="task-1",
+                loop_index=1,
+                client=object(),  # type: ignore[arg-type]
+            )
+        )
+
+    assert exc_info.value.reason_code == "QELT_CONTROL_STATE_CONFLICT"
+    assert exc_info.value.context == {
+        "evaluation_id": evaluation_id,
+        "status": "failed",
+        "reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT",
+    }
+
+
 def test_backend_wires_continuous_long_trend_reconciliation() -> None:
     source = (Path(__file__).resolve().parents[3] / "backend/main.py").read_text(encoding="utf-8")
     assert "async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event)" in source

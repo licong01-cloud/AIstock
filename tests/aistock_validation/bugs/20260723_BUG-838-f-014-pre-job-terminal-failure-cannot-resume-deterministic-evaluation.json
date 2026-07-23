@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/long_trend_evaluation_phase2.py",
     "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
+    "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
     "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
     "tests/aistock_validation/bugs/20260723_BUG-838-f-014-pre-job-terminal-failure-cannot-resume-deterministic-evaluation.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -34,12 +35,14 @@
     "changed_files": [
       "backend/services/quantevolver/long_trend_evaluation_phase2.py",
       "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/long_trend_evaluation_phase2.py",
         "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
         "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
       ],
       "impacted_modules": [
@@ -72,6 +75,17 @@
           "rule_id": "qe_long_trend_evaluation_phase2"
         },
         {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        },
+        {
           "file": "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
           "impact_modules": [
             "qe.core",
@@ -89,6 +103,7 @@
       "suggested_scope": [
         "backend/services/quantevolver/long_trend_evaluation_phase2.py",
         "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
         "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
       ],
       "unmatched_files": []
@@ -97,6 +112,7 @@
     "scope_files": [
       "backend/services/quantevolver/long_trend_evaluation_phase2.py",
       "backend/services/quantevolver/long_trend_evaluation_control_repository.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
     ]
   },

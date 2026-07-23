@@ -266,6 +266,149 @@ class QELongTrendEvaluationControlRepository:
                 row = cur.fetchone()
         return dict(row) if row else None
 
+    def requeue_definitive_prejob_failure(
+        self,
+        evaluation_id: str,
+        *,
+        expected_request_sha: str,
+        allowed_reason_codes: Sequence[str],
+    ) -> dict[str, Any]:
+        """Atomically reopen a definitively rejected submission with no remote job.
+
+        The deterministic evaluation and resource-session identities are preserved.  The
+        session may only be reused when it never emitted a phase event, so this path cannot
+        mask an accepted or partially executed remote attempt.
+        """
+
+        reasons = tuple(sorted({str(item).strip() for item in allowed_reason_codes if str(item).strip()}))
+        if not reasons:
+            raise ValueError("pre-job recovery requires at least one allowed reason code")
+        if not str(expected_request_sha or "").strip():
+            raise ValueError("pre-job recovery requires the immutable request SHA")
+        self.ensure_schema_ready()
+        with self._connection(transactional=True) as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT e.*,
+                           s.status AS resource_status,
+                           s.current_phase AS resource_current_phase,
+                           s.last_sequence_no AS resource_last_sequence_no,
+                           EXISTS (
+                               SELECT 1
+                               FROM qe_archive.run_resource_phase p
+                               WHERE p.session_id = s.session_id
+                           ) AS resource_has_events
+                    FROM {TABLE_NAME} e
+                    JOIN qe_archive.run_resource_session s
+                      ON s.session_id = e.resource_session_id
+                    WHERE e.evaluation_id = %s
+                    FOR UPDATE OF e, s
+                    """,
+                    (evaluation_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise QELongTrendControlRepositoryError(
+                        "pre-job recovery requires an existing evaluation and resource session"
+                    )
+                current = dict(row)
+                if str(current.get("request_sha") or "") != str(expected_request_sha):
+                    raise QELongTrendControlRepositoryError(
+                        "pre-job recovery request SHA differs from immutable control identity"
+                    )
+                if current.get("status") != "failed":
+                    if current.get("status") in {
+                        "queued", "submitting", "submitted", "running", "collecting",
+                        "succeeded", "partial",
+                    }:
+                        return current
+                    raise QELongTrendControlRepositoryError(
+                        f"pre-job recovery does not accept evaluation status={current.get('status')!r}"
+                    )
+                unsafe = {
+                    "job_id": current.get("job_id"),
+                    "current_attempt_id": current.get("current_attempt_id"),
+                    "worker_terminal_sha256": current.get("worker_terminal_sha256"),
+                    "artifact_manifest_sha256": current.get("artifact_manifest_sha256"),
+                }
+                if any(value is not None for value in unsafe.values()):
+                    raise QELongTrendControlRepositoryError(
+                        f"pre-job recovery found remote execution or published evidence: {unsafe}"
+                    )
+                if str(current.get("reason_code") or "") not in reasons:
+                    raise QELongTrendControlRepositoryError(
+                        f"pre-job recovery reason is not a definitive rejection: {current.get('reason_code')!r}"
+                    )
+                if current.get("owner_id") is not None:
+                    raise QELongTrendControlRepositoryError("pre-job recovery found an active control owner")
+                if (
+                    current.get("resource_status") != "failed"
+                    or int(current.get("resource_last_sequence_no") or 0) != 0
+                    or bool(current.get("resource_has_events"))
+                ):
+                    raise QELongTrendControlRepositoryError(
+                        "pre-job recovery requires a failed resource session with zero emitted phase events"
+                    )
+
+                cur.execute(
+                    """
+                    UPDATE qe_archive.run_resource_session
+                    SET status = 'reserved',
+                        current_phase = 'created',
+                        terminal_reason_code = NULL,
+                        completed_at = NULL,
+                        updated_at = clock_timestamp()
+                    WHERE session_id = %s
+                      AND status = 'failed'
+                      AND last_sequence_no = 0
+                    RETURNING session_id
+                    """,
+                    (current["resource_session_id"],),
+                )
+                if cur.fetchone() is None:
+                    raise QELongTrendControlRepositoryError(
+                        "resource session changed while pre-job recovery held its row lock"
+                    )
+                cur.execute(
+                    f"""
+                    UPDATE {TABLE_NAME}
+                    SET status = 'queued',
+                        platform_delivery_status_json = %s,
+                        reason_code = NULL,
+                        reason_json = %s,
+                        completed_at = NULL,
+                        owner_id = NULL,
+                        lease_expires_at = NULL,
+                        fencing_token = fencing_token + 1,
+                        row_version = row_version + 1,
+                        updated_at = clock_timestamp()
+                    WHERE evaluation_id = %s
+                      AND status = 'failed'
+                      AND job_id IS NULL
+                      AND current_attempt_id IS NULL
+                      AND request_sha = %s
+                      AND reason_code = ANY(%s)
+                      AND row_version = %s
+                    RETURNING *
+                    """,
+                    (
+                        Json({"worker": "queued", "cas": "awaiting_worker"}),
+                        Json({}),
+                        evaluation_id,
+                        expected_request_sha,
+                        list(reasons),
+                        current["row_version"],
+                    ),
+                )
+                recovered = cur.fetchone()
+                if recovered is None:
+                    raise QELongTrendControlRepositoryError(
+                        "control row changed while pre-job recovery held its row lock"
+                    )
+            conn.commit()
+        return dict(recovered)
+
     def list_nonterminal(self, *, limit: int = 100) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 500))
         self.ensure_schema_ready()
