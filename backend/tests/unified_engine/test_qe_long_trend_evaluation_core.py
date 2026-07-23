@@ -624,6 +624,43 @@ def test_episode_reconstruction_handles_exit_reentry_open_and_false_exit() -> No
     assert pd.isna(stock_b.iloc[0]["episode_close_return_qfq"])
 
 
+def test_episode_capture_ratio_requires_positive_excursion_denominator() -> None:
+    dates = pd.date_range("2026-01-05", periods=6, freq="B")
+    positions = pd.DataFrame(
+        {
+            "datetime": dates,
+            "instrument": ["000001.SZ"] * len(dates),
+            "amount": [0, 1, 1, 0, 0, 0],
+        }
+    )
+    closes = [10.0, 10.0, 9.0, 8.0, 7.5, 7.0]
+    prices = pd.DataFrame(
+        {
+            "datetime": dates,
+            "instrument": ["000001.SZ"] * len(dates),
+            "close_qfq": closes,
+            "high_qfq": closes,
+            "low_qfq": [value - 0.1 for value in closes],
+        }
+    ).set_index(["datetime", "instrument"])
+
+    episodes = reconstruct_holding_episodes(
+        positions=positions,
+        prices=prices,
+        evaluation_asof=dates[-1],
+        profile=QE_LONG_TREND_PROFILE_V1,
+    )
+
+    assert len(episodes) == 1
+    assert episodes.loc[0, "episode_mfe"] <= 0.0
+    assert episodes.loc[0, "extended_mfe_180"] <= 0.0
+    assert pd.isna(episodes.loc[0, "episode_capture_ratio"])
+    assert pd.isna(episodes.loc[0, "extended_capture_ratio"])
+    flags = set(str(episodes.loc[0, "episode_quality_flags"]).split("|"))
+    assert "episode_capture_denominator_non_positive" in flags
+    assert "extended_capture_denominator_non_positive" in flags
+
+
 def test_zero_overlap_label_and_missing_high_low_are_explicit_limitations() -> None:
     prices = _price_frame()
     predictions = _prediction_frame().iloc[:2]
@@ -1125,7 +1162,12 @@ def test_registered_profile_and_authoritative_portfolio_report_contract() -> Non
     )
     metrics = compute_portfolio_metrics(report)
     assert metrics[0]["metric_scope"] == "portfolio_result"
+    assert metrics[0]["quality_flag"] == "ok"
     assert metrics[0]["value_json"]["trading_day_count"] == 3
+    assert metrics[0]["value_json"]["cost_diagnostic_quality"] == "observed"
+    assert metrics[0]["value_json"]["turnover_diagnostic_quality"] == "observed"
+    assert metrics[0]["value_json"]["total_cost"] == pytest.approx(0.003)
+    assert metrics[0]["value_json"]["average_turnover"] == pytest.approx(0.2)
 
     partial_metrics = compute_portfolio_metrics(report.loc[:, ["return"]])
     assert partial_metrics[0]["quality_flag"] == "computed_with_limitations"
@@ -1138,6 +1180,29 @@ def test_registered_profile_and_authoritative_portfolio_report_contract() -> Non
     )
     assert partial_result.family_status["portfolio_result"].status == FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS
     assert partial_result.family_status["portfolio_result"].coverage["cost_coverage"] == 0.0
+
+    zero_diagnostics = report.assign(cost=0.0, turnover=0.0)
+    zero_metrics = compute_portfolio_metrics(zero_diagnostics)
+    zero_summary = zero_metrics[0]["value_json"]
+    assert zero_metrics[0]["quality_flag"] == "computed_with_limitations"
+    assert zero_summary["cost_diagnostic_quality"] == "zero_only"
+    assert zero_summary["turnover_diagnostic_quality"] == "zero_only"
+    assert zero_summary["total_cost"] is None
+    assert zero_summary["average_turnover"] is None
+    assert zero_summary["observed_cost_sum"] == 0.0
+    assert zero_summary["observed_average_turnover"] == 0.0
+    zero_result = QELongTrendEvaluationEngine().evaluate(
+        context=_evaluation_context(prices),
+        predictions=None,
+        prices=prices,
+        portfolio_report=zero_diagnostics,
+    )
+    zero_status = zero_result.family_status["portfolio_result"]
+    assert zero_status.status == FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS
+    assert zero_status.coverage["cost_diagnostic_quality"] == "zero_only"
+    assert zero_status.coverage["turnover_diagnostic_quality"] == "zero_only"
+    assert zero_status.reason_codes == (QELongTrendReason.PORTFOLIO_DIAGNOSTICS_INCOMPLETE.value,)
+    assert zero_status.data_actions[0]["action"] == "restore_portfolio_cost_and_turnover_diagnostics"
 
     empty = report.iloc[0:0]
     with pytest.raises(QELongTrendError) as exc_info:
