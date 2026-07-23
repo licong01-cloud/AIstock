@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-838",
-  "closed_at": null,
+  "closed_at": "2026-07-23T07:29:42Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -137,8 +137,8 @@
   },
   "first_seen_at": "2026-07-23T05:02:24.871751Z",
   "fix_branch": "bug/BUG-838-f-014-pre-job-terminal-failure-cannot-resume-det-20260723",
-  "fix_commit": "2a2cfcb820a6279016da4dab0beb29925e23259a",
-  "fixed_at": null,
+  "fix_commit": "ec05740205736de3df7090cd84cfc2506fc6460b",
+  "fixed_at": "2026-07-23T07:43:35.318764Z",
   "github_issue_number": 2652,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2652",
   "last_seen_at": "2026-07-23T05:02:24.871751Z",
@@ -146,6 +146,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2654",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,7 +158,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -166,6 +167,11 @@
     "fingerprint": "22105de49157886a3dc60c08",
     "source_event_id": "FE-20260723-22105de49157"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_long_trend_phase2_backend -> 108 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
