@@ -5,6 +5,7 @@
     "scripts/issue_flow.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_issue_flow_pr_quality.py",
+    "backend/tests/scripts/test_issue_flow.py",
     "tests/aistock_validation/bugs/20260723_BUG-840-nightly-failure-diagnostics-and-pr-production-gate-consistency-are-incom.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -37,14 +38,16 @@
       ".github/workflows/nightly.yml",
       "scripts/issue_flow.py",
       "backend/tests/scripts/test_ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_issue_flow_pr_quality.py"
+      "backend/tests/scripts/test_issue_flow_pr_quality.py",
+      "backend/tests/scripts/test_issue_flow.py"
     ],
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
         "scripts/issue_flow.py",
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_issue_flow_pr_quality.py"
+        "backend/tests/scripts/test_issue_flow_pr_quality.py",
+        "backend/tests/scripts/test_issue_flow.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -103,6 +106,19 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/scripts/test_issue_flow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
         }
       ],
       "risk_levels": [
@@ -113,7 +129,8 @@
         ".github/workflows/nightly.yml",
         "scripts/issue_flow.py",
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_issue_flow_pr_quality.py"
+        "backend/tests/scripts/test_issue_flow_pr_quality.py",
+        "backend/tests/scripts/test_issue_flow.py"
       ],
       "unmatched_files": []
     },
@@ -122,7 +139,8 @@
       ".github/workflows/nightly.yml",
       "scripts/issue_flow.py",
       "backend/tests/scripts/test_ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_issue_flow_pr_quality.py"
+      "backend/tests/scripts/test_issue_flow_pr_quality.py",
+      "backend/tests/scripts/test_issue_flow.py"
     ]
   },
   "first_seen_at": "2026-07-23T05:52:16.788559Z",
