@@ -84,6 +84,33 @@ def _prediction_frame() -> pd.DataFrame:
     return pd.DataFrame({"score": [0.5, 0.5, 0.9, 0.1]}, index=index)
 
 
+def test_family_data_action_supports_default_and_explicit_time_ranges() -> None:
+    default_action = long_trend_module._family_data_action(
+        "restore_default_evidence",
+        "position_episode",
+        required_fields=("position_date",),
+    )
+    assert default_action["time_range"] == {
+        "start": "run_signal_start",
+        "end": "evaluation_asof",
+    }
+
+    explicit_action = long_trend_module._family_data_action(
+        "restore_pre_window_qe_position_history",
+        "position_episode",
+        required_fields=("position_date", "instrument", "amount"),
+        source_candidates=("qe_recorder_position_artifact", "qe_archive_position_rows"),
+        time_range={
+            "start": "available_pre_run_position_history",
+            "end": "first_archived_position_snapshot",
+        },
+    )
+    assert explicit_action["time_range"] == {
+        "start": "available_pre_run_position_history",
+        "end": "first_archived_position_snapshot",
+    }
+
+
 def _evaluation_context(prices: pd.DataFrame) -> QELongTrendEvaluationContext:
     dates = prices.index.get_level_values("datetime")
     start = pd.Timestamp(dates.min()).date().isoformat()
