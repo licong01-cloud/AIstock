@@ -1,7 +1,7 @@
 # Advisory Phase 1R R3 源码、DEV 与生产历史范围验收记录
 
 > 更新日期：2026-07-23
-> 当前状态：`source_dev_and_authorized_production_15_day_validated`
+> 当前状态：`merged_closed_synced_dev_and_authorized_production_15_day_validated`
 > 详细设计：`docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`
 
 ## 1. 验收边界
@@ -158,7 +158,8 @@ design_document = reviewed_ready
 source_code = implemented_and_reviewed
 source_commit = 18e44db35f6930ef38a42d7813436a90a87ebfa2
 branch_head_before_production_acceptance_update = a7d2dd8de9c4513f758933f6064b60c0477f0f87
-source_merge = not_requested
+source_merge = merged_pr_2633_commit_9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe
+bug_close_sync = merged_pr_2658_commit_dfae5c793604aa72cabc0756e9dda856e242414f
 r3_schema_delta = dev_and_production_applied_verified
 dev_phase1r_dml = executed_for_validation
 dev_single_alpha_two_day_e2e = passed
@@ -172,4 +173,4 @@ service_restart = not_requested
 runtime_activation = none
 ```
 
-当前结论：R3 源码直接依赖、DEV PostgreSQL 合同、DEV 双日执行、生产历史库 15 日完整执行、真实 replacement、WAITING/RETRYABLE 恢复、精确重试和跨模块隔离均已通过。DEV PIT span 不覆盖旧 13 日冻结区间仍作为环境事实保留，但不再构成必须复制生产数据到 DEV 的人为门禁。R3 已满足本设计的源码与数据库验收条件；源码合入仍需用户单独确认，服务重启和运行时激活均未发生。
+当前结论：R3 源码直接依赖、DEV PostgreSQL 合同、DEV 双日执行、生产历史库 15 日完整执行、真实 replacement、WAITING/RETRYABLE 恢复、精确重试和跨模块隔离均已通过。DEV PIT span 不覆盖旧 13 日冻结区间仍作为环境事实保留，但不再构成必须复制生产数据到 DEV 的人为门禁。R3 源码、BUG close-sync 与生产 migration 状态均已闭合；服务重启和运行时激活均未发生。下一批次为 R4 outcome、summary 与 Phase 1 retrospective bridge。

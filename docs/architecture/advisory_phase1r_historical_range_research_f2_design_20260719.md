@@ -5,7 +5,7 @@
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_r2a_r2b_merged_r2b_real_dev_accepted_r3_design_reviewed_ready`；R1 已由 PR `#2481` 合入（merge commit `6d400b40dec3be1d9a97c4bf361fc88d00b55af7`），R2-A 已完成中性 computation core、严格 evidence contract 与现有 Selection wrapper 无损接入；R2-B 已按 `docs/architecture/advisory_phase1r_r2b_historical_candidate_adapter_f2_design_20260720.md` 完成源码、DEV migration 和 `2026-07-03` 单/原生多 Alpha candidate E2E，验收见 `docs/architecture/advisory_phase1r_r2b_source_delivery_acceptance_20260720.md`。修复 PR `#2545/#2549/#2557/#2558` 已合入；R3 实施级子设计已完成正式审核并冻结于 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`，源码和 R3 corrective migration 尚未实现。production DDL 未执行、运行时未激活；R4-R5、API、UI 和完整范围任务仍未实现
+> 当前状态：`r1_through_r3_merged_r3_dev_production_15_day_accepted_r4_design_reviewed_ready`；R1 已由 PR `#2481` 合入，R2-A/R2-B 已完成中性计算、历史 candidate adapter、DEV migration 和单/原生多 Alpha candidate E2E。R3 已按 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 完整实现并由 PR `#2633` 合入（merge commit `9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe`），BUG-827 close-sync 已由 PR `#2658` 合入。R3 corrective migration 已在 DEV 和 production apply/verify；单 Alpha 与原生多 Alpha 父包已直接使用生产历史库完成 15 个交易日、30/30 package-day E2E，覆盖真实 replacement、恢复、exact retry 和跨模块隔离。R4 唯一实施级设计 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 已完成正式审核；R4 源码/DDL 与 R5 API/UI 仍未实现，运行时未激活，完整 Phase 1R 尚未完成
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -239,7 +239,7 @@ input_warmup_contract_hash
 - 两种来源都只接受一个单 Alpha 包或一个原生多 Alpha 父包。
 - `alpha_mode`、package version、manifest 和 component identity 全部由 admitted package projection 推导，客户端不得提交或覆盖这些派生字段。`package_version` 精确沿用 `StrategyPackageRecord.package_version` 的字符串值，Phase 1R model/DB 列使用 string/`TEXT`，不得转换为整数或用 Program version 替代。
 - `review_schedule` 是 legacy 当前运行 metadata，不参与范围请求、hash 或执行；范围日期只来自显式 start/end 和冻结交易日集合。
-- style profile 缺失不阻断候选与列表执行，但必须显式记录 `STYLE_PROFILE_NOT_AVAILABLE`，并只使用冻结 `LabelPolicyBundle` 的默认 outcome horizons；不得静默猜测策略风格。
+- style profile 缺失不阻断候选与列表执行，但必须显式记录 `STYLE_PROFILE_NOT_AVAILABLE`，并只使用冻结 `HistoricalRangeOutcomePolicyBundleV1` 的默认 outcome horizons；不得静默猜测策略风格或伪造 Phase 0A policy identity。
 - package 读取仅确认请求 identity 与当前 admitted record 一致；不调用 package preflight、health、asset closure 或 model retest。
 
 ### 6.3 日期与日历身份
@@ -526,8 +526,8 @@ day_receipt_hash = hash(day_input_hash_v3 + list_content_hash + exact upstream r
 
 ### 10.2 结果层级
 
-1. Candidate horizon outcome：全候选按冻结 `LabelPolicyBundle` 生成 horizon set。短周期默认集合为 1/3/5/10/20 交易日，长趋势默认集合为 20/40/60/120/180 交易日；启用哪一组或两组由显式 policy/style mapping 决定，style 缺失时使用 bundle 中声明的默认集合并记录原因，不在运行时猜测。
-2. Episode outcome：分别保存 `RECOMMENDATION` projection 与 `EXECUTABLE` projection。前者按冻结 guidance/mark 评价 ENTER 到 EXIT 或 range-end mark，后者只在实际 entry/exit evidence 闭合后计算可执行收益、最大回撤、最大有利波动和持有交易日；二者不得混成一个默认收益字段。
+1. Candidate horizon outcome：全候选按冻结 `HistoricalRangeOutcomePolicyBundleV1` 生成 horizon set。该 range-native bundle复用 Phase 1 policy components，但不要求或伪造 Phase 0A handoff/admission。短周期默认集合为 1/3/5/10/20 交易日，长趋势默认集合为 20/40/60/120/180 交易日；启用哪一组或两组由显式 policy/style mapping 决定，style 缺失时使用 bundle 中声明的默认集合并记录原因，不在运行时猜测。
+2. Episode outcome：分别保存 `RECOMMENDATION` projection 与 `EXECUTABLE` projection，使用 `evaluation_window_type=EPISODE_LIFECYCLE` 和非期限 sentinel `horizon_trade_days=0`。前者按 R3 exact guidance/decision-mark identity评价 ENTER 到真实 EXIT 或 range-end mark，后者只在实际 next-open entry/exit evidence 闭合后计算可执行收益、最大回撤、最大有利波动和持有交易日；open episode 必须 right-censored，二者不得混成一个默认收益字段或用固定 horizon 近似。
 3. List-version outcome：每日 active/entered cohort 的等权研究收益、换手、行业集中和覆盖。
 4. Range summary：胜率、赔率、平均/中位收益、回撤、换手、持股期、策略/conditional Recall@K 和分市场阶段结果。
 
@@ -686,7 +686,7 @@ UNIQUE(batch_id, operation_idempotency_key)
 - `app.advisory_historical_range_list_version`：一成功 day 只能有一个 canonical version，`UNIQUE(day_run_id)`；保存 previous list/day hash、目标/active/enter/hold/exit/watch 数、price timing policy 和 summary，`active_count <= target_count`。
 - `app.advisory_historical_range_list_item`：`UNIQUE(list_version_id,symbol)`；action 仅 `ENTER|HOLD|EXIT|WATCH`，保存 rank/score/reason/episode、rule guidance、intended execution date/basis 和 immutable evidence hash。`WATCH` 必须 episode_id 为空且不计 active。
 - `app.advisory_historical_range_episode_snapshot`：自然键 `(range_run_id,episode_id,decision_trade_date)`；`episode_id` 由 `(range_run_id,symbol,enter_decision_trade_date,entry_sequence)` 确定性派生，允许同一股票退出后在后续日期重新进入但不会复活旧 episode。保存 recommendation state、entry/exit decision、execution status、price quality、弱排名确认、收益/回撤 mark。
-- `app.advisory_historical_range_outcome`：subject type 为 `CANDIDATE|EPISODE|LIST_VERSION|RANGE`，projection 为 `RECOMMENDATION|EXECUTABLE`。`outcome_logical_id` 由 `(subject_type,subject_id,projection,horizon_trade_days,label_policy_hash)` 派生；每次新 label-as-of/source revision 追加 `(outcome_logical_id,outcome_version,source_revision_set_hash)`，保存 predecessor hash、maturity、next refresh trade date、entry/exit execution evidence、benchmark/cost/corporate-action hashes 和 calculation evidence。exact 同 revision 重试返回原版本，不 UPDATE 旧版本。
+- `app.advisory_historical_range_outcome`：subject type 为 `CANDIDATE|EPISODE|LIST_VERSION|RANGE`，projection 为 `RECOMMENDATION|EXECUTABLE`。`outcome_logical_id` 由 `(subject_type,subject_id,projection,evaluation_window_type,horizon_trade_days,historical_range_policy_bundle_hash)` 派生；`FIXED_HORIZON` 要求 horizon 至少为 1，`EPISODE_LIFECYCLE` 只允许 episode 且使用 sentinel 0。每次新 label-as-of/source revision 追加 `(outcome_logical_id,outcome_version,source_revision_set_hash)`，保存 predecessor hash、maturity、next refresh trade date、entry/exit execution evidence、benchmark/cost/corporate-action hashes 和 calculation evidence。exact 同 revision 重试返回原版本，不 UPDATE 旧版本。
 - `app.advisory_historical_range_summary`：自然键 `(range_run_id,summary_version)`，`summary_content_hash` 唯一；outcome 新成熟时追加新版本，不覆盖旧版本，并记录 covered outcome set hash。
 
 这些表不引用普通 review/list/episode rows，也不改变普通表唯一键。
@@ -1300,9 +1300,14 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 ```text
 phase1r_r1_code_merge = merged_pr_2481_commit_6d400b40
 phase1r_r1_r2b_dev_schema = applied_verified_exact_reapplied
-r3_design = ready
-r3_source_and_corrective_migration = not_implemented
-production_ddl = not_executed
+r3_design = reviewed_implemented
+r3_source_merge = merged_pr_2633_commit_9b9b97c2
+r3_corrective_migration = dev_and_production_applied_verified
+r3_historical_e2e = production_history_15_days_30_of_30_passed
+r4_design = reviewed_ready
+r4_source = not_implemented
+r5_source = not_implemented
+production_ddl = r3_applied_verified_r4_not_created
 production_frontend_dependency = noop unless implementation adds a declared dependency
 production_backend_dependency = noop unless implementation adds a declared dependency
 production_runtime_activation = none
@@ -1336,4 +1341,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1、R2-A 与 R2-B 已完成源码合入；R2-B 已在真实 DEV 集成源码闭包完成可恢复 catalog planning、历史 candidate adapter、单/原生多 Alpha WSL 推理、candidate artifact v2 和跨模块零写入验收。R3 详细设计已形成，下一任务固定为按 `advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 实现共享列表 transition 接入、逐日有序 executor、candidate/list/episode/day receipt 原子提交和失败恢复；R3 源码、corrective migration 和 DEV 多日验收仍未完成。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实多日 E2E、恢复或隔离证据时不得声明 R3 完成，缺少 R5 UI 证据时不得声明 Phase 1R 完成。
+R1-R3 已完成源码合入；R3 已完成 DEV PostgreSQL 合同、DEV 双日执行、生产历史库 15 日单/原生多 Alpha 完整执行、真实 replacement、WAITING/RETRYABLE 恢复、exact retry 和跨模块隔离。下一任务固定为按 `advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 实现 candidate/episode/list/range outcome、maturity refresh、append-only summary version、Phase 1 retrospective lineage/selector 和 SEALED snapshot bridge。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少 outcome 成熟、summary、bridge exact retry 或隔离证据时不得声明 R4 完成，缺少 R5 API/UI 证据时不得声明 Phase 1R 完成。
