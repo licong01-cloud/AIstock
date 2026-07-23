@@ -20,7 +20,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-827",
-  "closed_at": null,
+  "closed_at": "2026-07-23T06:20:14Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -190,8 +190,8 @@
   },
   "first_seen_at": "2026-07-22T07:48:44.001551Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe",
+  "fixed_at": "2026-07-23T06:28:11.299302Z",
   "github_issue_number": 2621,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2621",
   "last_seen_at": "2026-07-22T16:10:47.8086780Z",
@@ -199,8 +199,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2633",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_repository.py backend/tests/strategy_package/test_selection_signal_preparation.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -p no:cacheprovider",
   "required_verification": [
@@ -212,7 +213,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -221,6 +222,9 @@
     "fingerprint": "f9e58df04c4ddb5b097dd954",
     "source_event_id": "FE-20260722-f9e58df04c4d"
   },
+  "validation_evidence": [
+    "F:\\Dev\\AIstock\\docs\\architecture\\advisory_phase1r_r3_source_delivery_acceptance_20260722.md"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
