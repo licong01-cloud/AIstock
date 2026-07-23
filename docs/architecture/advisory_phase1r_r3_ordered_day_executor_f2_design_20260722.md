@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 前置交付：R1 contracts/CAS/repository、R2-A neutral selection computation、R2-B historical candidate adapter
-> 当前状态：`source_implemented_local_review_passed_dev_validation_pending`
+> 当前状态：`merged_dev_and_authorized_production_15_day_accepted`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`DB_HISTORICAL`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. Background
@@ -955,7 +955,8 @@ dev_ddl_dml = applied_reapplied_verified
 production_ddl_dml = authorized_phase1r_schema_and_15_day_validation_applied_and_verified
 service_restart = not_requested
 runtime_activation = none
-r3_source_merge = not_requested
+r3_source_merge = merged_pr_2633_commit_9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe
+bug_close_sync = merged_pr_2658_commit_dfae5c793604aa72cabc0756e9dda856e242414f
 ```
 
 ## 23. DESIGN-COMPLIANCE-001 Review
@@ -991,4 +992,4 @@ R3 代码阶段只有同时满足以下条件才能报告可合入：
 6. 无简化版、静默错误、业务语义偏移或未经确认的门禁/审批；
 7. 用户确认后才执行提交与合入。
 
-R3 完成后下一固定批次为 R4 outcome、summary 与 Phase 1 bridge；R3 不提前实现或声称模型训练、收益预测、持股周期或价格区间能力。
+R3 已完成并合入。下一固定批次为 R4 outcome、summary 与 Phase 1 bridge，实施权威为 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md`；R3 不声称模型训练、收益预测、持股周期或价格区间能力。
