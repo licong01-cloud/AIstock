@@ -2266,6 +2266,7 @@ def _family_data_action(
     *,
     required_fields: tuple[str, ...],
     source_candidates: tuple[str, ...] = ("qe_recorder", "qe_archive", "qe_only_cas"),
+    time_range: Mapping[str, Any] | None = None,
     historical_backfill: bool = True,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -2274,7 +2275,11 @@ def _family_data_action(
         recoverable_family=family,
         source_candidates=source_candidates,
         required_fields=required_fields,
-        time_range={"start": "run_signal_start", "end": "evaluation_asof"},
+        time_range=(
+            time_range
+            if time_range is not None
+            else {"start": "run_signal_start", "end": "evaluation_asof"}
+        ),
         historical_backfill=historical_backfill,
         **extra,
     )
