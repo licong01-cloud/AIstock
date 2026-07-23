@@ -217,7 +217,7 @@
   "first_seen_at": "2026-07-22T15:57:42.651300Z",
   "fix_branch": null,
   "fix_commit": "56001b809e4386393f64a407f30bdf42a8c9be6d",
-  "fixed_at": "2026-07-22T19:02:17.967942Z",
+  "fixed_at": "2026-07-23T06:41:06.127752Z",
   "github_issue_number": 2635,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2635",
   "last_seen_at": "2026-07-22T15:57:42.651300Z",
@@ -227,7 +227,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2630",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
   "required_verification": [
@@ -251,7 +251,8 @@
     "python -m nox -s l0 -> passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
     "python -m nox -s qe_long_trend_phase2_backend -> 96 passed",
-    "python -m nox -s qe_read_backend -> 14 passed"
+    "python -m nox -s qe_read_backend -> 14 passed",
+    "DEV and production qe_archive.run_evaluation schema readback -> applied_and_verified"
   ],
   "verification_budget": {
     "budget": "standard",
