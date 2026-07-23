@@ -37,6 +37,7 @@ def artifact_ref(kind: HistoricalRangeArtifactKind, seed: str) -> HistoricalRang
         HistoricalRangeArtifactKind.DATE_PLAN: "date-plans",
         HistoricalRangeArtifactKind.FROZEN_PROGRAM: "frozen-programs",
         HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT: "candidate-artifacts",
+        HistoricalRangeArtifactKind.DECISION_MARK_SET: "decision-mark-sets",
         HistoricalRangeArtifactKind.DAY_RECEIPT: "day-receipts",
         HistoricalRangeArtifactKind.RANGE_RECEIPT: "range-receipts",
         HistoricalRangeArtifactKind.OUTCOME: "outcomes",
