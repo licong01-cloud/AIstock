@@ -143,6 +143,12 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "validation_receipts": [
+    "validation-receipt: id=e57e3311333070bb commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md tests/aistock_validation/bugs/20260722_BUG-833-hmm-risk-direct-l1-model-set-aggregation-contract-is-incomplete.json` result=`passed`",
+    "validation-receipt: id=19db91d7276a3d68 commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=8f103988480d80b9 commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2` result=`passed: 3 design items, 8 acceptance rows, 0 warnings`",
+    "validation-receipt: id=1396ef4a31b2bd8d commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
