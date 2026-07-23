@@ -1,10 +1,10 @@
 # QE 长期趋势评价 F-014 Phase 2：计算节点、专属 CAS 与恢复编排 F2 设计
 
 - 文档类型：F2 跨仓库从属实现设计
-- 日期：2026-07-22
-- 状态：`IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`
+- 日期：2026-07-22（当前实施事实更新：2026-07-23）
+- 状态：`SOURCE_MERGED_DDL_APPLIED_RUNTIME_ACTIVE_CANARY_PREJOB_FAILED`
 - 父级权威：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` v1.6
-- 上位研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.7
+- 上位研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.9
 - 代码范围：AIstock QuantEvolver / QE Workspace Client / QE Resource Phase / RD-Agent QE Workspace
 - 唯一硬边界：QE-only；不得读取、修改或触发 Selection、Advisory、Paper、模拟盘、荐股、QMT、StrategyPackage 或其他非 QE 链路
 
@@ -33,6 +33,20 @@ Phase 2 的完成不会宣称 F-014 平台整体完成。Phase 2 只提前交付
 4. control-row 创建前 AIstock 不可达时，adapter 同时保存 Loop 内 typed pending receipt 和专属无密钥 pending index。RD startup replayer 只枚举该专属 index，校验 task/Loop/descriptor/adapter/pending hashes 后固定重放 adapter；不扫描 Archive 或全部 workspace，不执行请求提供的任意命令。
 
 以上是实现正确性修订，不是科研准入、审批或方向淘汰门禁。
+
+### 0.2 2026-07-23 当前实施与真实 canary 事实
+
+- AIstock Phase 2 source 已通过 PR #2630 合入，merge commit `56001b809e4386393f64a407f30bdf42a8c9be6d`；BUG-831 close-sync PR #2643 已合入。
+- RD-Agent Phase 2 source 已通过 PR #7 合入，merge commit `9bd608ce6569722b80067426f703b0d328b8d179`；9000 当前运行在该不可变 release。
+- `qe_archive.run_evaluation` migration 已分别在现有 DEV 与生产数据库应用并完成 42 列、9 个约束、4 个索引及 comment/readback 核验；`production_ddl_gate=applied_and_verified`。Phase 3 的 `run_evaluation_metric/run_evaluation_artifact` 仍未创建。
+- AIstock 8001 与 RD-Agent 9000 已加载 Phase 2 routes；AIstock startup continuous reconciler 已激活。该事实不代表 worker/CAS 成功 canary 已完成。
+- 2026-07-23 12:23，对 `qe_20260715_104922_001d / Loop4` 的首次真实 `long_trend_only` canary 创建了 control row 与独立 qelt resource session，evaluation ID 为 `qelt_45b14e475c6d8fddd90c1ae085529635c33a6b3e23328e8a272bfa7728ddecef`。
+- 该请求在 RD durable job 创建前因 `QELT_BUNDLE_INVALID` 失败：合法零字节 `backend/__init__.py` 的 `size_bytes=0` 被旧 verifier 的 falsy 表达式误转为 `-1`。因此 `job_id/current_attempt_id/worker_terminal_sha256/artifact_manifest_sha256` 均为空，RD job/artifact GET 为 404，资源 phase/outbox 为 0。
+- 该缺陷已登记为 BUG-837 / AIstock Issue #2650；RD-Agent PR #8 修复零字节 bundle 校验。BUG-838 / AIstock Issue #2652 与 PR #2654补充同 evaluation ID 的确定性提交前恢复，并让 `platform_delivery_status_json` 如实区分 rejected、remote-state-unknown 与 identity-conflict。两项修复当前均未合入或加载到生产运行时。
+- 本次失败是平台交付失败，不是 LSTM、h60、指标族、Alpha 或研究方向失败；没有训练、回测、worker、CAS、GPU telemetry 或非 QE 模块副作用。
+- 当前长期趋势 CAS 未进入 publish。无显式环境覆盖时，AIstock 默认根目录解析为 `F:\Dev\AIstock\rdagent_assets\long_trend_evaluation_store`，与 Prediction Store 分离且不在 `E:`；首次 publish 由 `ensure_ready()` 创建目录。部署时继续记录实际解析根目录与来源。
+
+成功 canary 后才能把真实 RD job/attempt/terminal、family 分布、artifact matrix、CAS manifest、幂等 replay 及重启恢复写成运行证据。当前只允许表述为“source/DDL/routes 已激活，首次真实 canary 在 pre-job 阶段失败”。
 
 ## 1. Background / 背景
 
@@ -397,7 +411,7 @@ Phase 2 migration 创建父设计已经定义的 `qe_archive.run_evaluation`，�
 
 repository 使用 `FOR UPDATE SKIP LOCKED` claim 非终态 row；heartbeat、remote identity、receipt、CAS 和 terminal 更新必须匹配 `owner_id + fencing_token + row_version`。lease 过期只允许新 owner claim/reconcile，不能直接把远端未知任务标失败。相同 evaluation identity 和相同 request 返回已有 row；相同 identity 不同 request/environment/bundle 返回结构化 conflict。
 
-Phase 2 migration 必须同时提供 forward/preflight/guarded rollback 与 schema/comment/readback 测试。设计修订不执行 DDL；未来 DEV 与生产应用分别遵循现有授权边界，不要求数据库导出、额外备份或研究审批。Phase 3 只新增 `run_evaluation_metric/run_evaluation_artifact`，继续引用本表主键。
+Phase 2 migration 已同时提供 forward/preflight/guarded rollback 与 schema/comment/readback 测试，并已在 DEV 与生产应用、回读。执行过程没有要求数据库导出或额外备份。Phase 3 只新增 `run_evaluation_metric/run_evaluation_artifact`，继续引用本表主键，当前仍待后续独立 DDL。
 
 ### 10.2 normal 与 historical 的精确时序
 
@@ -657,7 +671,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-014 | parent Phase 2 scope linkage | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md --tier F2`; source implementation is locally verified while merge/DDL/runtime/canary remain separately reported operational facts | implemented_local_verified | none |
+| F-014 | parent Phase 2 scope linkage | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md --tier F2`; PR #2630/#2643、RD-Agent #7、DEV/生产 DDL readback、8001/9000 route 与首次真实 canary control receipt；worker/CAS 成功证据待 BUG-837/838 修复部署后复核 | source_merged_runtime_active_canary_prejob_failed | none |
 | F-301 | `backend/services/quantevolver/long_trend_evaluation_phase2.py` QE identity validation | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py` | implemented_local_verified | none |
 | F-302 | shared bundle/resolver/engine/store | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real canary remains an activation receipt rather than a source-design exception | implemented_local_verified | none |
 | F-303 | bundle builder + environment-bound RD allowlist extractor | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD evaluation API/capability tests | implemented_local_verified | none |
@@ -674,9 +688,9 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 | F-314 | registration/worker/published staged receipt adapter | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
 | F-315 | worker terminal receipt | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_evaluation_api.py` | implemented_local_verified | none |
 | F-316 | typed cancel | validation-receipt: RD-Agent `python -m pytest test/app/test_qe_long_trend_evaluation_api.py test/app/test_qe_long_trend_worker_recovery.py -q`（20 passed，含 intent-before-signal、delivery_failed、幂等发送、精确 process-group 与非 leader fail-closed）；live-PID canary is separately tracked as activation evidence | implemented_local_verified | none |
-| F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; DDL、两端重启与真实已完成 Loop canary 尚未执行且不冒充本地测试证据 | implemented_local_verified | none |
+| F-317 | cross-repo parity/restart/failure/memory matrix | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD `test/app/test_qe_long_trend_worker_recovery.py`; DEV/生产 DDL 与两端 route 已激活；R8B Loop4 canary 已尝试但在 durable job 前失败；restart recovery、worker/CAS 与成功 replay 仍需真实 canary | runtime_routes_verified_canary_prejob_failed | none |
 | F-318 | ownership/import/route/schema diff | `python scripts/aistock_module_ownership_scan.py --changed-only --include-untracked --fail-on-unmapped --fail-on-ambiguous`; `python -m nox -s validation_catalog_integrity validation_module_registry_l0`; 32 个初始变更文件与后续 BUG-829 文件均重新执行目录路由 | implemented_local_verified | none |
-| F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests；DDL 未应用并作为生产状态单独报告 | implemented_local_verified | none |
+| F-319 | `long_trend_evaluation_control_repository.py` + Phase 2 migration | `backend/tests/unified_engine/test_qe_long_trend_phase2_control_repository.py`; restart injection tests；DEV/生产均已 applied/readback，生产现有 1 条失败 control row；Phase 3 metric/artifact tables 属后续范围 | applied_and_verified | none |
 | F-320 | execution-environment identity binding | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; RD `test/app/test_qe_long_trend_evaluation_api.py`; deployment restart state is separately reported | implemented_local_verified | none |
 | F-321 | frequency-aware summary/`_obj.pkl` resolver | `backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`; `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py` | implemented_local_verified | none |
 | F-322 | normal nonblocking adapter + internal registration + staged receipts | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`; RD pending replay tests；real normal Loop canary is separately tracked as activation evidence | implemented_local_verified | none |
@@ -688,12 +702,12 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 ### 19.1 Rollout
 
-1. AIstock 与 RD-Agent 分别使用独立 feature branch/PR；
-2. RD 先交付 API/worker/capability；AIstock 在提交前读取 immutable environment capability，旧 RD 返回结构化 `QELT_NODE_CAPABILITY_UNAVAILABLE`，只影响显式评价请求，不影响普通 Loop；
-3. AIstock 合入 control migration/repository、typed client/orchestrator/adapter；未启用 profile 时 normal Loop 无命令或状态变化；
-4. 未来执行实现时先在现有 DEV DB 应用/readback Phase 2 control migration；生产 DDL、AIstock backend 与 WSL/远端 QE API 重启分别由用户明确授权，不以数据库导出或额外备份为前置条件；
-5. 重启后先跑 deterministic fixture，再显式选择一个已完成 Loop 执行 `long_trend_only` canary；
-6. canary 只写 `run_evaluation` 控制行、QE Phase 2 job/resource event 和专属 CAS，不写 metric/artifact 表。
+1. AIstock PR #2630/#2643 与 RD-Agent PR #7 已合入；DEV/生产 control DDL 和 8001/9000 routes 已激活。
+2. 首次 R8B Loop4 canary 已在 pre-job bundle 校验阶段失败；保留原 control/resource row，不删除、不覆盖、不把平台失败解释为研究失败。
+3. 合入并部署 BUG-837/838 后重新读取 Recorder、dataset、environment、bundle、input 与 request identity；不把首次失败尝试的 hash 硬编码为新预期。
+4. 使用同一 deterministic evaluation identity 执行受控恢复，验证只有一个 RD durable job/attempt；不得通过新 evaluation ID 绕过失败记录。
+5. worker terminal 后核对六个 family、required artifact、CAS manifest、published compact receipt 与 control/resource/RD identity；缺失证据只影响依赖 family。
+6. canary 只写 `run_evaluation` 控制行、QE Phase 2 job/resource event 和专属 CAS，不写 Phase 3 metric/artifact 表，不触发训练、回测、GPU telemetry 或非 QE 模块。
 
 ### 19.2 Rollback
 
@@ -702,6 +716,7 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 - CAS 内容按 hash immutable，rollback 不删除历史 receipt；
 - 回滚 AIstock/RD code 不修改训练、回测或 Archive 既有结果；
 - control migration rollback 仅在 `run_evaluation` 为空且无引用时允许；已有评价证据时保留 additive table并回滚 writer/route，禁止删除历史 control/receipt。修复采用 forward migration。
+- 生产当前已有一条失败 control row，因此 guarded rollback 的“表为空”条件已不成立；不得 drop `qe_archive.run_evaluation`。
 
 ## 20. Risks and Mitigations / 风险与应对
 
@@ -724,15 +739,17 @@ Phase 2 不修改 frontend、MCP、Selection/Advisory/Paper/模拟盘/QMT/Strate
 
 | 项目 | 状态 |
 |---|---|
-| design | `IMPLEMENTED_LOCAL_VERIFIED_NOT_ACTIVATED`（F2 validator 26/26、AIstock 96 passed、RD-Agent 20 passed、路由本地测试通过） |
+| design | `SOURCE_MERGED_DDL_APPLIED_RUNTIME_ACTIVE_CANARY_PREJOB_FAILED` |
 | Phase 1 core | `MERGED_VERIFIED` |
-| AIstock Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |
-| RD-Agent Phase 2 source | `IMPLEMENTED_LOCAL_NOT_MERGED` |
-| production_ddl_gate | `pending`（forward/preflight/guarded rollback 已开发并做静态/合同测试，未应用 DEV 或生产 DDL） |
+| AIstock Phase 2 source | `MERGED`（PR #2630，close-sync #2643） |
+| RD-Agent Phase 2 source | `MERGED`（PR #7，runtime release `9bd608ce...`） |
+| production_ddl_gate | `applied_and_verified`（DEV/生产均已 schema/comment/readback） |
 | production_frontend_dependency_gate | `noop` |
 | production_backend_dependency_gate | `noop` |
-| runtime | `UNTOUCHED_BY_IMPLEMENTATION` |
-| DB/data/experiments | `UNTOUCHED_BY_IMPLEMENTATION` |
+| runtime | `ACTIVE_AT_PHASE2_BASELINE`（8001/9000 routes 与 reconciler 已加载；BUG-837/838 修复尚未加载） |
+| DB/data/experiments | `ONE_PREJOB_FAILED_CONTROL_ROW`（无 worker/CAS、训练、回测或非 QE 副作用） |
+| successful canary | `pending_after_bug_837_838_deployment` |
+| Phase 3–5 | `pending`（metric/artifact tables、公共 API、MCP、UI、批量历史重评） |
 | research gates/approvals | `NONE_ADDED` |
 
 ## 22. DESIGN-COMPLIANCE-001 Review / 设计符合性复核
