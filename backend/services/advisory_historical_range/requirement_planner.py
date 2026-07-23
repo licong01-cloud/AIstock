@@ -117,6 +117,40 @@ class HistoricalRangeSourceRequirementPlanner:
                 missing_reason_code="ADVISORY_HR_TRADING_CALENDAR_UNAVAILABLE",
                 decision_trade_date=trade_date,
             )
+            # Decision marks are one canonical market/state source per date.  They
+            # deliberately do not inherit a package/component lookback or the
+            # positive PIT universe used by candidate inference.
+            self._add(
+                requirements,
+                source_role="decision_mark_daily_market",
+                dataset_id="market.kline_daily_raw",
+                query_template_id="historical_decision_mark_daily_market",
+                parameters={
+                    "trade_date": date_text,
+                    "adjustment_basis": "corporate_action_normalized_from_raw",
+                    "raw_price_unit": "yuan",
+                },
+                partition_ref=f"decision-mark-daily-market:{date_text}",
+                required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
+                missing_reason_code="ADVISORY_HR_DECISION_MARK_MARKET_UNAVAILABLE",
+                decision_trade_date=trade_date,
+                dependencies=(calendar_id,),
+            )
+            self._add(
+                requirements,
+                source_role="decision_mark_market_state",
+                dataset_id="market.decision_mark_market_state",
+                query_template_id="historical_decision_mark_market_state",
+                parameters={
+                    "trade_date": date_text,
+                    "state_fields": ("suspend", "listing", "delist", "st", "pit_universe"),
+                },
+                partition_ref=f"decision-mark-market-state:{date_text}",
+                required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
+                missing_reason_code="ADVISORY_HR_DECISION_MARK_STATE_UNAVAILABLE",
+                decision_trade_date=trade_date,
+                dependencies=(calendar_id,),
+            )
             for program in frozen_programs:
                 runtime_profile = parse_selection_runtime_profile_for_computation(program.runtime_config)
                 provider_dependencies = (universe_id, calendar_id, package_requirement_ids[program.package_id])

@@ -27,6 +27,7 @@ from backend.services.advisory_historical_range.models import (
     derive_day_run_id,
     derive_prefixed_id,
 )
+from backend.services.advisory_historical_range.source_roles import CANDIDATE_SOURCE_ROLES_V2
 from backend.services.strategy_package.selection_computation import (
     SelectionMode,
     StrategyPackageSelectionComputation,
@@ -57,6 +58,7 @@ class HistoricalRangeSourceRevisionVerifier(Protocol):
         package_id: str,
         component_ids: set[str],
         decision_trade_date: date,
+        source_roles: frozenset[str] | None = None,
     ) -> tuple[HistoricalRangeSourceRevisionRefV1, ...]: ...
 
 
@@ -121,6 +123,7 @@ class HistoricalRangeCandidateProducer:
             package_id=program.package_id,
             component_ids=component_ids,
             decision_trade_date=decision_trade_date,
+            source_roles=CANDIDATE_SOURCE_ROLES_V2,
         )
         runtime_config = _resolved_runtime_config_for_day(
             program=program,
@@ -241,6 +244,7 @@ class HistoricalRangeCandidateProducer:
             package_id=program.package_id,
             component_ids=component_ids,
             decision_trade_date=decision_trade_date,
+            source_roles=CANDIDATE_SOURCE_ROLES_V2,
         )
         if final_refs != source_refs:
             raise ArtifactGenerationFailedError("historical source refs changed during candidate computation")

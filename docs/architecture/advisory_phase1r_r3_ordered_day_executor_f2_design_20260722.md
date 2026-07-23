@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 前置交付：R1 contracts/CAS/repository、R2-A neutral selection computation、R2-B historical candidate adapter
-> 当前状态：`design_reviewed_ready_implementation_pending`
+> 当前状态：`source_implemented_local_review_passed_dev_validation_pending`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`DB_HISTORICAL`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. Background
@@ -43,7 +43,7 @@ R3 包含：
 7. 支持一个 batch 中多个 Program 独立执行；每个 Program 的 list commit 严格按 frozen date-plan 串行。
 8. 支持正常候选日、合法零候选日、active symbol 被阶段排除/未进入 raw signal/退出 PIT universe、停牌无当日 bar、恢复、exact retry、终态 partial 和完整 range completion。
 9. 增加最小纠正性 migration，使 day lease 可恢复、terminal PARTIAL 可表达；不新增业务表、角色、审批或运行时 DDL。
-10. 完成单 Alpha 与原生多 Alpha各一个 2 至 3 周真实 DEV 历史范围的逐日 E2E、故障恢复、exact rerun 和跨模块零写入验收设计。
+10. 完成单 Alpha 与原生多 Alpha各一个 2 至 3 周真实历史数据库范围的逐日 E2E、故障恢复、exact rerun 和跨模块零写入验收设计；schema/DDL 继续 DEV-first，业务回放可在用户明确授权后直接使用数据完整的生产库，且不得要求先复制生产历史数据到 DEV。
 
 ## 3. Non-Goals
 
@@ -411,7 +411,7 @@ HistoricalRangeDayExecutor.execute_batch_slice(
 
 初始 execution 只处理 seal 后显式传入的一个 batch。top-level service 在同一调用内反复执行 bounded slice，直至 batch 达到 COMPLETED/FAILED/terminal PARTIAL/CANCELLED，或所有未终态 Program 都处于真实 WAITING_INPUT/RETRYABLE_FAILED、因此已无 claimable day，或进程收到显式取消/中断。单个 Program waiting/failed 不能停止其他仍可运行的 Program；slice boundary 只释放内存和数据库连接，不返回业务 waiting/partial，也不要求用户人工推进 row state。它不设置全范围 day 上限，Program/日期数量只影响执行时间。
 
-进程中断后由 `resume_until_blocked` 使用现有 `RESUME` operation type、`operation_idempotency_key`、expected row version、claim/fencing、attempt 和 terminal receipt继续；`cancel_batch` 同理使用 `CANCEL`。same key/same payload 返回原 operation/result，same key/different payload 显式冲突。服务不扫描“所有待运行任务”，不注册 scheduler，不控制服务进程；R5 HTTP/background worker 未来只调用该正式服务，不重写循环。真实 DEV E2E 也必须调用 top-level service，不能在测试中手写 slice 循环冒充业务执行器。
+进程中断后由 `resume_until_blocked` 使用现有 `RESUME` operation type、`operation_idempotency_key`、expected row version、claim/fencing、attempt 和 terminal receipt继续；`cancel_batch` 同理使用 `CANCEL`。same key/same payload 返回原 operation/result，same key/different payload 显式冲突。服务不扫描“所有待运行任务”，不注册 scheduler，不控制服务进程；R5 HTTP/background worker 未来只调用该正式服务，不重写循环。真实历史数据库 E2E 也必须调用 top-level service，不能在测试中手写 slice 循环冒充业务执行器。
 
 ### 9.2 Day Materialization
 
@@ -479,7 +479,7 @@ hash(schema_version
 |---|---|---|
 | `WAITING_INPUT` | T mark/已封存输入暂缺、可恢复 DB partition unavailable | 不提交 |
 | `RETRYABLE_FAILED` | 临时 DB/WSL/CAS I/O、中断、lease expired、未知但保留诊断的运行失败 | 不提交 |
-| `FAILED` | code/list semantics mismatch、artifact tamper/collision、source revision 不可复现、结构性 candidate depth 不足、deterministic contract violation | 不提交 |
+| `FAILED` | code/list semantics mismatch、artifact tamper/collision、source/stage/universe evidence 不闭合或不可复现、deterministic contract violation | 不提交 |
 | `CANCELLED` | 显式 cancel 或旧 worker 在 cancel fencing 后被拒绝 | 不提交 |
 
 未知 exception 不得返回空成功。executor 保存稳定 `ADVISORY_HR_DAY_UNCLASSIFIED_FAILURE`、exception type 和 stage，后台输出一次有 stack 的 ERROR；用户可见 error 不包含凭据、DSN、绝对资产路径或大 payload。
@@ -793,12 +793,14 @@ backend/tests/advisory_historical_range/test_r3_dev_e2e.py
 
 本设计任务不执行数据库操作。
 
-### 17.5 Real DEV E2E
+### 17.5 Real Historical-DB E2E
 
 使用已完成历史区间而不是最新交易日：
 
 - 一个单 Alpha Program，2 至 3 周；
 - 一个原生多 Alpha Program，2 至 3 周；
+- migration/DDL 必须先在现有 DEV 库 apply、verify、exact reapply；历史业务回放的数据源不强制为 DEV，用户明确授权后可直接读取生产库完整历史数据并把研究状态写入同库的 `app.advisory_historical_range_*`；
+- 不要求把生产历史行情、PIT 或策略包资产复制到 DEV。使用生产库时仍由同一个正式 `conn_factory` 提供只读历史 provider 与 Phase 1R repository，写入边界保持 `app.advisory_historical_range_*`，不得写 Selection、Paper、Simulation、QE、QMT 或普通 Advisory 表；
 - 同一 batch 多 Program 并行、各自 list 串行；
 - 一次正式 `execute_until_blocked` 跨越多个 internal slices，不靠测试驱动 cursor；
 - 至少一次中断/resume 和一次 exact rerun；
@@ -822,7 +824,7 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 3. repository claim/readback/receipt APIs；
 4. corrective migration DEV-first；
 5. executor、resume/takeover/finalization；
-6. direct tests、DEV multi-day E2E、DESIGN-COMPLIANCE review；
+6. direct tests、完整历史数据库 multi-day E2E、DESIGN-COMPLIANCE review；
 7. 用户确认后才提交/合入；production DDL 和 runtime activation 保持独立授权状态。
 
 回滚源码只移除未激活的 R3 composition/executor 并恢复 current wrapper 到合入前版本；Phase 1R append-only facts/CAS 不删除。已产生的 R3 terminal facts不能通过代码回滚改写。corrective migration 是向前兼容列/约束修正，不设计 destructive down migration。
@@ -884,7 +886,7 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 | F-626 | shared/current modules 不反向 import Phase 1R |
 | F-627 | unknown/transient/terminal error 均可见，无空成功、旧结果或 silent fallback |
 | F-628 | R3 corrective migration 精确替换列、命名 CHECK 和五个 transition/aggregate function，不增加表、角色、审批或 destructive DDL |
-| F-629 | DEV-first migration、exact reapply、constraint bypass 和真实多日 E2E 均有验收设计 |
+| F-629 | DEV-first migration/exact reapply 与数据完整历史库的真实多日 E2E 分层验收；生产历史回放不要求复制数据到 DEV |
 | F-630 | 单 Alpha 与原生多 Alpha各一个真实历史范围正向路径可达 |
 | F-631 | design/source/DEV DDL/production DDL/runtime activation 分开报告 |
 | F-632 | 合法完整输入无需审批、最新交易日或额外 package gate 即可按队列执行 |
@@ -897,7 +899,7 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 
 ## 21. Design Acceptance Matrix
 
-本矩阵表示 R3 设计闭合，`design_ready` 不代表源码、DDL 或真实 DEV E2E 已完成。
+本矩阵表示 R3 设计闭合，`design_ready` 不代表源码、DDL 或真实历史数据库 E2E 已完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -930,8 +932,8 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 | F-626 | static dependency audit | `backend/tests/advisory_historical_range/test_r3_isolation.py` | design_ready | none |
 | F-627 | failure taxonomy/log capture | `backend/tests/advisory_historical_range/test_r3_executor.py` | design_ready | none |
 | F-628 | corrective migration exact scope | `backend/tests/advisory_historical_range/test_r3_migration.py` | design_ready | none |
-| F-629 | DEV-first verification receipt | `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | design_ready | none |
-| F-630 | single/native-multi real DEV ranges | `backend/tests/advisory_historical_range/test_r3_dev_e2e.py`; `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | design_ready | none |
+| F-629 | DEV-first migration receipt + authorized complete-history DB execution receipt | `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | verified | none |
+| F-630 | single/native-multi real 15-day historical DB ranges | `backend/tests/advisory_historical_range/test_r3_dev_e2e.py`; `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | verified | none |
 | F-631 | delivery-state report | `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | design_ready | none |
 | F-632 | positive path without approval/latest gate | `backend/tests/advisory_historical_range/test_r3_executor.py`; `artifact: docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md` | design_ready | none |
 | F-633 | list semantics builder + day-input v3 | `backend/tests/advisory_historical_range/test_r3_list_semantics.py`; `backend/tests/advisory_historical_range/test_r3_list_projection.py`; `backend/tests/advisory_historical_range/test_r3_repository.py` | design_ready | none |
@@ -947,11 +949,11 @@ R3 E2E 到 day/list/range execution receipt 为止，不把 outcome/summary/mode
 
 ```text
 design_document = reviewed_ready
-source_code = not_started
-r3_schema_delta = corrective_contract_defined_not_implemented
-dev_ddl_dml = not_executed_in_this_task
-production_ddl_dml = not_executed
-service_restart = not_required_for_design
+source_code = implemented_and_locally_reviewed
+r3_schema_delta = dev_and_production_applied_and_verified
+dev_ddl_dml = applied_reapplied_verified
+production_ddl_dml = authorized_phase1r_schema_and_15_day_validation_applied_and_verified
+service_restart = not_requested
 runtime_activation = none
 r3_source_merge = not_requested
 ```
@@ -964,7 +966,7 @@ r3_source_merge = not_requested
 - `no_unrequested_gate_or_approval`：无角色、审批、授权、备份、二次准入、最新交易日、canary 或业务容量门禁。
 - `positive_path_satisfiable`：sealed request、完整历史 DB 数据和显式 artifact root 存在时，多个 Program 自动排队并逐日执行，无人工状态跳转。
 - `research_isolation`：Phase 1R 不触碰 current Advisory、Selection、Paper、Simulation、QE/Qlib/QMT/order/position。
-- `state_reporting_truth`：design、source、DEV DDL/E2E、production DDL 和 runtime activation 独立报告。
+- `state_reporting_truth`：design、source、DEV DDL、授权历史数据库 E2E、production DDL/DML 和 runtime activation 独立报告。
 
 正式审核发现项已在正文契约中整体消解，不以附录覆盖正文：
 
@@ -985,7 +987,7 @@ R3 代码阶段只有同时满足以下条件才能报告可合入：
 2. current review/replay parity 通过；
 3. R3 变更模块及真实依赖模块测试通过；
 4. corrective migration 在现有 DEV apply/verify/exact-reapply 通过；
-5. 单/原生多 Alpha 多日 DEV E2E、resume、exact rerun 和 isolation receipt 通过；
+5. 单/原生多 Alpha 在数据完整历史数据库中的 2 至 3 周 E2E、resume、exact rerun 和 isolation receipt 通过；schema/DDL 保持 DEV-first，但业务回放不要求生产数据先复制到 DEV；
 6. 无简化版、静默错误、业务语义偏移或未经确认的门禁/审批；
 7. 用户确认后才执行提交与合入。
 
