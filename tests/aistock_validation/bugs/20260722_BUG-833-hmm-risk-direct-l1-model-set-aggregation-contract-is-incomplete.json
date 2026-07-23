@@ -37,14 +37,20 @@
     {
       "action": "approve_design_decision",
       "actor": "user",
-      "note": "User approved C-008-B3-DESIGN only: preserve hard semantic authority and define deterministic initialization/restarts, train-only family-global selection, numeric and occupancy acceptance, frozen semantic calibration, untouched holdout, and model identity. B3 implementation, artifact generation, PR merge, runtime, and database changes remain unapproved.",
+      "note": "User approved C-008-B3-DESIGN direction only: preserve hard semantic authority, use train-only family-global restart selection, require both families, and prohibit validation-driven or per-sector seed selection. The later-authored exact parameters, thresholds, validation split, and holdout were not separately confirmed. B3 implementation, artifact generation, runtime, and database changes remain unapproved.",
       "timestamp": "2026-07-23T07:49:59.8554450Z"
+    },
+    {
+      "action": "approve_design_audit_repair_and_merge",
+      "actor": "user",
+      "note": "User authorized correcting the audited detailed-design errors, committing the document update, and merging PR #2642 after required validation. The repair must remove false approval of unvalidated B3 parameters, thresholds, validation split, and holdout; preserve the approved single hard-semantic validation behavior; keep exact B3 contracts and implementation pending; and leave BUG-833/GitHub Issue #2641 open.",
+      "timestamp": "2026-07-23T08:32:51.9593613Z"
     }
   ],
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/2641#issuecomment-5055860257"
   ],
-  "expected": "The approved C-007-A stock-fact-first contract and C-008-B3-DESIGN define both 7-feature and 20-feature direct L1 families without fallback: deterministic train-only family-global restart selection, explicit likelihood/covariance/occupancy acceptance, hard semantic calibration, untouched holdout, complete model identity, and fail-closed two-family READY semantics.",
+  "expected": "The approved C-007-A stock-fact-first contract defines both 7-feature and 20-feature direct L1 families without fallback. C-008-B3-DESIGN preserves hard semantic authority, the approved single validation window, train-only family-global restart selection, and fail-closed two-family completeness, while explicitly blocking implementation until full KMeans/HMM parameters, restart schedule, likelihood/covariance/occupancy/semantic thresholds, selection score/tie-break, reproducibility environment, and dependency declaration are separately evidenced and user-confirmed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
