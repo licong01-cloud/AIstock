@@ -299,6 +299,10 @@ def _require_snapshot_identity(expected_value: Any, actual: Any, label: str) -> 
     if not isinstance(expected_value, Mapping):
         raise ValueError(f"{label} snapshot identity is missing")
     expected = dict(expected_value)
+    expected_lineage = expected.get("lineage_parent_ids")
+    if not isinstance(expected_lineage, (list, tuple)):
+        raise ValueError(f"{label} snapshot lineage_parent_ids must be an array")
+    expected["lineage_parent_ids"] = tuple(expected_lineage)
     actual_dict = asdict(actual)
     if expected != actual_dict:
         raise ValueError(
