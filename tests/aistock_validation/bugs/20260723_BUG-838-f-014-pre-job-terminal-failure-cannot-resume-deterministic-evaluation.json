@@ -36,6 +36,12 @@
       "actor": "Codex",
       "note": "Fix PR https://github.com/licong01-cloud/AIstock/pull/2654 is open and unmerged pending explicit user confirmation.",
       "timestamp": "2026-07-23T05:22:20.723001Z"
+    },
+    {
+      "action": "audit_followup_fixed",
+      "actor": "Codex",
+      "note": "R8-R11 read-only audit confirmed the canary was a definitive pre-job rejection but platform_delivery_status_json remained queued. The fix now persists rejected/not_started, remote_state_unknown/awaiting_worker, or identity_conflict/not_started according to the actual submission outcome. Final targeted matrix: 37 passed; l0 and validation_module_registry_l0 passed.",
+      "timestamp": "2026-07-23T06:00:04.519645Z"
     }
   ],
   "evidence_uris": [

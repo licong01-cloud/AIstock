@@ -33,6 +33,7 @@ from backend.services.quantevolver.qe_resource_phase_service import (
 )
 from backend.services.quantevolver.qe_workspace_client import (
     QELongTrendJobInspection,
+    QELongTrendWorkspaceError,
     QEWorkspaceClient,
     QEWorkspaceDatasetIdentity,
 )
@@ -533,6 +534,216 @@ def test_submit_reports_terminal_no_job_state_instead_of_failing_repository_clai
         "status": "failed",
         "reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT",
     }
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_status", "expected_delivery", "resource_terminal"),
+    [
+        (
+            "QELT_BUNDLE_INVALID",
+            "failed",
+            {"worker": "rejected", "cas": "not_started"},
+            True,
+        ),
+        (
+            "QELT_NODE_STATE_UNKNOWN",
+            "remote_state_unknown",
+            {"worker": "remote_state_unknown", "cas": "awaiting_worker"},
+            False,
+        ),
+    ],
+)
+def test_submit_persists_truthful_delivery_state_for_prejob_failure(
+    reason_code: str,
+    expected_status: str,
+    expected_delivery: dict[str, str],
+    resource_terminal: bool,
+) -> None:
+    evaluation_id = "qelt_" + "c" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.row = {
+                "evaluation_id": evaluation_id,
+                "status": "queued",
+                "request_sha": "a" * 64,
+                "resource_session_id": "qers-qelt-1",
+                "owner_id": None,
+                "fencing_token": 2,
+                "row_version": 4,
+            }
+            self.transitions: list[dict[str, object]] = []
+
+        def claim(self, _evaluation_id, *, owner_id):  # type: ignore[no-untyped-def]
+            self.row.update({"owner_id": owner_id, "fencing_token": 3, "row_version": 5})
+            return dict(self.row)
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(
+                evaluation_id=row["evaluation_id"],
+                owner_id=row["owner_id"],
+                fencing_token=row["fencing_token"],
+                row_version=row["row_version"],
+            )
+
+        def transition(self, _lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append(kwargs)
+            self.row.update(kwargs["updates"])
+            self.row["row_version"] = int(self.row["row_version"]) + 1
+            if kwargs.get("release_owner"):
+                self.row["owner_id"] = None
+            return dict(self.row)
+
+    class ResourceService:
+        def __init__(self) -> None:
+            self.terminals: list[dict[str, object]] = []
+
+        def mark_session_terminal(self, session_id, **kwargs):  # type: ignore[no-untyped-def]
+            self.terminals.append({"session_id": session_id, **kwargs})
+
+    class Client:
+        @staticmethod
+        async def submit_long_trend_evaluation(**_kwargs):  # type: ignore[no-untyped-def]
+            raise QELongTrendWorkspaceError(
+                "node rejected request",
+                reason_code=reason_code,
+                context={"status_code": 409},
+            )
+
+    repository = Repository()
+    resource_service = ResourceService()
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        resource_service=resource_service,  # type: ignore[arg-type]
+        owner_id="owner",
+    )
+    prepared = phase2_module.PreparedLongTrendEvaluation(
+        evaluation_id=evaluation_id,
+        control_row=dict(repository.row),
+        request_payload={"schema_version": "qe_long_trend_job_request_v1"},
+        resource_token="secret",
+        ready_for_node=True,
+        data_action_plan=(),
+    )
+
+    with pytest.raises(QELongTrendWorkspaceError, match="node rejected request"):
+        asyncio.run(
+            service.submit(
+                prepared=prepared,
+                task_id="task-1",
+                loop_index=1,
+                client=Client(),  # type: ignore[arg-type]
+            )
+        )
+
+    failure = repository.transitions[-1]
+    assert failure["updates"]["status"] == expected_status  # type: ignore[index]
+    assert failure["updates"]["platform_delivery_status_json"] == expected_delivery  # type: ignore[index]
+    assert bool(resource_service.terminals) is resource_terminal
+
+
+def test_submit_persists_identity_conflict_after_remote_receipt() -> None:
+    evaluation_id = "qelt_" + "b" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.row = {
+                "evaluation_id": evaluation_id,
+                "status": "queued",
+                "request_sha": "a" * 64,
+                "resource_session_id": "qers-qelt-1",
+                "owner_id": None,
+                "fencing_token": 2,
+                "row_version": 4,
+            }
+            self.transitions: list[dict[str, object]] = []
+
+        def claim(self, _evaluation_id, *, owner_id):  # type: ignore[no-untyped-def]
+            self.row.update({"owner_id": owner_id, "fencing_token": 3, "row_version": 5})
+            return dict(self.row)
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(
+                evaluation_id=row["evaluation_id"],
+                owner_id=row["owner_id"],
+                fencing_token=row["fencing_token"],
+                row_version=row["row_version"],
+            )
+
+        def transition(self, _lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append(kwargs)
+            self.row.update(kwargs["updates"])
+            self.row["row_version"] = int(self.row["row_version"]) + 1
+            if kwargs.get("release_owner"):
+                self.row["owner_id"] = None
+            return dict(self.row)
+
+    class ResourceService:
+        def __init__(self) -> None:
+            self.terminals: list[dict[str, object]] = []
+
+        def mark_session_terminal(self, session_id, **kwargs):  # type: ignore[no-untyped-def]
+            self.terminals.append({"session_id": session_id, **kwargs})
+
+    class Client:
+        @staticmethod
+        async def submit_long_trend_evaluation(**_kwargs):  # type: ignore[no-untyped-def]
+            return phase2_module.QELongTrendJobReceipt(
+                schema_version="qe_long_trend_job_receipt_v1",
+                task_id="task-1",
+                loop_id="Loop1",
+                evaluation_id=evaluation_id,
+                job_id="job-1",
+                request_sha="f" * 64,
+                status="queued",
+                duplicate_replay=False,
+                current_attempt_id="attempt-1",
+                execution_environment_snapshot_id="env-1",
+                execution_environment_manifest_sha256="e" * 64,
+            )
+
+    repository = Repository()
+    resource_service = ResourceService()
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        resource_service=resource_service,  # type: ignore[arg-type]
+        owner_id="owner",
+    )
+    prepared = phase2_module.PreparedLongTrendEvaluation(
+        evaluation_id=evaluation_id,
+        control_row=dict(repository.row),
+        request_payload={"schema_version": "qe_long_trend_job_request_v1"},
+        resource_token="secret",
+        ready_for_node=True,
+        data_action_plan=(),
+    )
+
+    with pytest.raises(QELongTrendPhase2Error) as exc_info:
+        asyncio.run(
+            service.submit(
+                prepared=prepared,
+                task_id="task-1",
+                loop_index=1,
+                client=Client(),  # type: ignore[arg-type]
+            )
+        )
+
+    assert exc_info.value.reason_code == "QELT_NODE_JOB_IDENTITY_CONFLICT"
+    failure = repository.transitions[-1]
+    assert failure["updates"]["status"] == "failed"  # type: ignore[index]
+    assert failure["updates"]["platform_delivery_status_json"] == {  # type: ignore[index]
+        "worker": "identity_conflict",
+        "cas": "not_started",
+    }
+    assert resource_service.terminals == [
+        {
+            "session_id": "qers-qelt-1",
+            "status": "failed",
+            "reason_code": "QELT_NODE_JOB_IDENTITY_CONFLICT",
+        }
+    ]
 
 
 def test_backend_wires_continuous_long_trend_reconciliation() -> None:

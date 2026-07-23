@@ -516,6 +516,11 @@ class QELongTrendPhase2Service:
             )
         except QELongTrendWorkspaceError as exc:
             next_status = "remote_state_unknown" if exc.reason_code == "QELT_NODE_STATE_UNKNOWN" else "failed"
+            delivery_status = (
+                {"worker": "remote_state_unknown", "cas": "awaiting_worker"}
+                if next_status == "remote_state_unknown"
+                else {"worker": "rejected", "cas": "not_started"}
+            )
             self.control_repository.transition(
                 lease,
                 expected_statuses=("submitting",),
@@ -523,6 +528,7 @@ class QELongTrendPhase2Service:
                     "status": next_status,
                     "reason_code": exc.reason_code,
                     "reason_json": {"message": str(exc), "context": exc.context},
+                    "platform_delivery_status_json": delivery_status,
                 },
                 release_owner=True,
             )
@@ -541,6 +547,7 @@ class QELongTrendPhase2Service:
                     "status": "failed",
                     "reason_code": QELongTrendReason.NODE_JOB_IDENTITY_CONFLICT.value,
                     "reason_json": {"expected_request_sha": submitting["request_sha"], "actual_request_sha": receipt.request_sha},
+                    "platform_delivery_status_json": {"worker": "identity_conflict", "cas": "not_started"},
                 },
                 release_owner=True,
             )
