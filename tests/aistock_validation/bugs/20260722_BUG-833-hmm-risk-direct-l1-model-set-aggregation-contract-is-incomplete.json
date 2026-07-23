@@ -27,6 +27,12 @@
       "actor": "user",
       "note": "User approved recommended C-007-A stock-fact-first and authorized implementation; PR merge remains separately user-confirmed.",
       "timestamp": "2026-07-23T02:50:37.0461503+08:00"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-D1 design evidence repair and C-008-B1 diagnostic-only evidence expansion; B2/B3, seed selection, READY artifact generation, and PR merge remain unapproved.",
+      "timestamp": "2026-07-23T05:40:30.0506446Z"
     }
   ],
   "evidence_uris": [],
