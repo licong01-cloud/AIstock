@@ -276,7 +276,7 @@ class QELongTrendDatasetReader:
     ) -> pd.DataFrame:
         frame = self._normalize_index(frame, reason=QELongTrendReason.DAILY_PV_SCHEMA_INVALID)
         columns = {str(column).lstrip("$").lower(): column for column in frame.columns}
-        required = {"close", "high", "low", "volume"}
+        required = {"open", "close", "high", "low", "volume"}
         missing = sorted(required - set(columns))
         if missing:
             raise QELongTrendError(
@@ -285,9 +285,16 @@ class QELongTrendDatasetReader:
             )
         selected = frame.loc[
             :,
-            [columns["close"], columns["high"], columns["low"], columns["volume"]],
+            [
+                columns["open"],
+                columns["close"],
+                columns["high"],
+                columns["low"],
+                columns["volume"],
+            ],
         ].rename(
             columns={
+                columns["open"]: "open_qfq",
                 columns["close"]: "close_qfq",
                 columns["high"]: "high_qfq",
                 columns["low"]: "low_qfq",
@@ -295,21 +302,23 @@ class QELongTrendDatasetReader:
             }
         )
         selected = self._slice(selected, start_ts, end_ts, instruments)
-        for column in ("close_qfq", "high_qfq", "low_qfq", "volume_qfq"):
+        for column in ("open_qfq", "close_qfq", "high_qfq", "low_qfq", "volume_qfq"):
             selected[column] = pd.to_numeric(selected[column], errors="coerce").astype("float64")
-        for column in ("close_qfq", "high_qfq", "low_qfq"):
+        for column in ("open_qfq", "close_qfq", "high_qfq", "low_qfq"):
             selected.loc[selected[column] <= 0.0, column] = np.nan
         selected.loc[selected["volume_qfq"] < 0.0, "volume_qfq"] = np.nan
-        finite_ohlc = selected[["close_qfq", "high_qfq", "low_qfq"]].notna().all(axis=1)
+        finite_ohlc = selected[["open_qfq", "close_qfq", "high_qfq", "low_qfq"]].notna().all(axis=1)
         invalid_ohlc = finite_ohlc & (
             (selected["high_qfq"] < selected["low_qfq"])
+            | (selected["open_qfq"] > selected["high_qfq"])
+            | (selected["open_qfq"] < selected["low_qfq"])
             | (selected["close_qfq"] > selected["high_qfq"])
             | (selected["close_qfq"] < selected["low_qfq"])
         )
         if bool(invalid_ohlc.any()):
             raise QELongTrendError(
                 QELongTrendReason.DAILY_PV_SCHEMA_INVALID,
-                "daily_pv.h5 contains inconsistent qfq high/low/close rows",
+                "daily_pv.h5 contains inconsistent qfq open/high/low/close rows",
                 context={"invalid_row_count": int(invalid_ohlc.sum())},
             )
         if selected.empty:
