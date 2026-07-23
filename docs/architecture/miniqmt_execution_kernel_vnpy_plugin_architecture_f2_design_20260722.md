@@ -6,7 +6,7 @@
 >
 > 文档状态：`design_ready`。本文完成可直接拆分实施的架构、schema、事务、迁移、测试和验收设计；不表示源代码、DDL、生产配置、服务重启或真实 SIM 已完成。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1-A strict contracts/canonical/determinism 为 `implemented_verified`，K1-B/K1-C 仍为 `not_started`，K1 overall 为 `in_progress`，现有产品 runtime 未切换。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1-A strict contracts/canonical/determinism 为 `implemented_verified + merged`（PR #2637，merge `e69e72dbdd6e5fd8d414721adaa86ccec7fafc2f`），K1-B 为 `in_progress`，K1-C 为 `not_started`，K1 overall 为 `in_progress`，现有产品 runtime 未切换。
 >
 > 日期：2026-07-22。
 
@@ -216,7 +216,7 @@ CI 必须用 import-boundary test 和 static guard 固定上述方向。
 - manifest `extra=forbid`，所有 set-semantics 集合 canonical sort 后计算 hash；`market_data_requirements` 按 requirement hash 排序，effect/order 等业务有序数组不得排序；
 - `plugin_id + plugin_version + behavior_contract_sha256` 不可变；
 - config/state schema definition 必须由标准 JSON Schema validator `check_schema`；`$ref/$dynamicRef` 只允许当前 document 内可解析的 `#`/`#/...` local JSON pointer，external URI、anchor alias、missing target 与 network retrieval 均拒绝。config 在 algo instance 创建前、state 在 writer 与 readback 时均按 exact manifest schema 完整验证，禁止只校验 schema hash、在运行中默认补业务字段或把 invalid instance 当空对象；
-- code-owned plugin catalog 只根据 manifest descriptor、pinned compatibility receipt 和显式 factory binding 构造，不允许 kernel 出现具体 algo 分支；process-local callable 不进入 canonical snapshot/hash；
+- code-owned plugin catalog 只根据 manifest descriptor、调用方显式 supplied 且无默认值的 pinned compatibility receipt 和显式 factory/config-validator/state-codec binding 构造，不允许 kernel 出现具体 algo 分支；process-local callable 不进入 canonical snapshot/hash；K1-B 按 K1 下位详细设计 §9.2 的 source/method/object/surface component hash 公式只验证 receipt closure，K1-C 才读取 pinned surface 并生成 receipt，禁止固定 PASSED、默认 receipt 或 no-op validator；
 - plugin catalog 构建与 Gateway route capability 分离：schema/hash/source/factory binding 冲突使 catalog build fail loud；某个 plugin 对某个 route capability 不闭合只生成该 plugin/route 的 FAILED compatibility receipt，并在创建该 algo 前 typed fail loud、`broker_called=false`，不得阻止其它已登记 plugin 发布或运行；
 - 多版本登记必须由 catalog 内 hash-covered `creation_bindings[algo_code] -> exact plugin_id/version/manifest_sha256` 决定新实例版本；历史 restore 使用 snapshot frozen key；禁止自动 latest、运行时扫描或具体算法 hard-code；
 - registration 是代码/manifest 技术合同，不是人工审批门禁。
@@ -713,7 +713,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - current three manifest 化；
 - `VnpyCompatibilitySurfaceV1` exact signature/object-field receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1 当前仅 `design_ready`，未实施产品代码、runtime switch、DDL/DML、配置或 broker 行为；
+- K1 overall 当前为 `in_progress`：K1-A 已通过 PR #2637 / `e69e72db` 实现验证并合入，K1-B 正在实现 registry/current-three manifests，K1-C 尚未开始；产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -909,14 +909,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
-| `F-053` | K1 detailed design §3 target module/dependency/import boundary；K1-A 保持无 runtime wiring，`plugin_contracts` 仅使用仓库已锁定 `jsonschema` 实施 schema authority | classifier `targeted_ci_required`、unmapped empty；target K1-C `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` | design_ready | none |
+| `F-053` | K1 detailed design §3；K1-B manifest 仅依赖三个 shadow contract modules，不连接 product runtime/DB/OMS/Gateway/broker | `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py`；`python -m nox -s guardrail_changed_files -- --changed-only` = 8/8 mapped、unmapped/ambiguous=0 | design_ready | none |
 | `F-054` | `plugin_contracts.py` + `plugin_canonical.py` strict contracts/public-marker-safe recursive FrozenJson/JSON Schema authority/raw-digest+hex/decimal/time/error evidence/exact event-state readback closure | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`；audit RED 5 failed；K1-A direct total 67 passed；canonical 94%、contracts 85% line+branch | implemented_verified | none |
-| `F-055` | K1 detailed design §7 route-independent catalog、descriptor/process binding、creation binding、aggregate/route receipts | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` route-isolation/zero-partial matrix | design_ready | none |
+| `F-055` | `backend/services/miniqmt_execution_runtime/plugin_registry.py` route-independent catalog、descriptor/process binding、exact creation/restore binding、bounded aggregate、supplied receipt component closure 与 route receipt | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` permutation/fresh-process/negative/truncation/route-isolation；K1-B direct 34 passed | design_ready | none |
 | `F-056` | `deterministic_context.py` + `plugin_contracts.py` exact logical context/algo/delivery/local-order/command/timer/diagnostic/effect identity closure、ordinal、raw-digest u53；generic ID kind 仅 `ACTION`，不与 persisted DTO identity 竞争 | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` + `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` same-ID/different-payload/readback/logical-time/single-authority matrix；97% deterministic line+branch | implemented_verified | none |
-| `F-057` | K1 detailed design §1、§8 current-three exact state/TWAP session/legacy projection；K1 shadow-only、runtime switch 属于 K3 | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` + existing parity/restart tests | design_ready | none |
-| `F-058` | K1 detailed design §1.2、§9 pinned compatibility lock/receipt；façade runtime 属于 K4 | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` | design_ready | none |
-| `F-059` | K1 detailed design §11 ownership/test routing/coverage | command `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` = 67 passed；command `python -m nox -s miniqmt_execution_runtime_l2` = 473 passed/1 skipped；classifier only selects owned module、unmapped empty；coverage 94/85/97 | design_ready | none |
-| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001；all K1-A production gates noop | design_ready | none |
+| `F-057` | `backend/execution_algos/vnpy_style/plugin_manifests.py` current-three exact schema/source/behavior/state/TWAP/legacy projection；shadow-only、runtime switch 属于 K3 | `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` strict positive/negative/state/source/TWAP/legacy matrix；K1-B direct 34 passed | design_ready | none |
+| `F-058` | K1 detailed design §1.2、§9 requirement lock 与 K1-B expected component hash seam | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` supplied receipt missing/FAILED/component mismatch direct negatives | design_ready | none |
+| `F-059` | K1 detailed design §11 ownership/test routing/coverage | `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` = 34 passed；coverage 88.90%/71.79%；`python -m nox -s miniqmt_execution_runtime_l2` = 508 passed/1 skipped | design_ready | none |
+| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | validation-receipt: 三份 F2 validator 8/8、18/18、60/60 与 DESIGN-COMPLIANCE-001 local PASS；production gates noop | design_ready | none |
 
 `design_ready` 只表示本文可直接指导实施；所有代码、DDL、CI 和真实 SIM 状态仍必须在后续 PR 与上位蓝图 progress ledger 中独立更新。
 
