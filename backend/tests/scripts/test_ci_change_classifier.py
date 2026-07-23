@@ -355,6 +355,20 @@ def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_
     assert payload["backend_sessions"] == ["simulation_core_l2"]
 
 
+def test_ci_changed_file_resolver_uses_its_direct_workflow_target(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["scripts/ci_changed_files.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["backend_plan_keys"] == []
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_test_targets"] == ["backend/tests/scripts/test_ci_changed_files.py"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Path) -> None:
     frontend = classifier.classify_changed_files(
         ["frontend/src/app/watchlist/page.tsx"],
@@ -838,7 +852,8 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     changed_files_step = next(
         step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
     )
-    assert "git diff --name-only --diff-filter=ACMRT" in changed_files_step["run"]
+    assert "scripts/ci_changed_files.py" in changed_files_step["run"]
+    assert "--diff-filter ACMRT" in changed_files_step["run"]
 
     catalog_steps = [
         step

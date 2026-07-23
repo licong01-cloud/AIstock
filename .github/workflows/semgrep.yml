@@ -31,17 +31,17 @@ jobs:
       - name: Detect Semgrep fast lane
         id: fast_lane
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/semgrep
-          HEAD_COMMIT="${HEAD_SHA:-HEAD}"
-          git rev-parse --verify "${HEAD_COMMIT}^{commit}" >/dev/null 2>&1 || HEAD_COMMIT="HEAD"
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/semgrep/semgrep_changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --diff-filter ACMRT
           python scripts/ci_change_classifier.py \
             --changed-files-file tmp/validation/semgrep/semgrep_changed_files.txt \
             --output-json tmp/validation/semgrep/change-classification.json
@@ -65,17 +65,17 @@ jobs:
       - name: Run Semgrep
         if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/semgrep
-          HEAD_COMMIT="${HEAD_SHA:-HEAD}"
-          git rev-parse --verify "${HEAD_COMMIT}^{commit}" >/dev/null 2>&1 || HEAD_COMMIT="HEAD"
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/semgrep/semgrep_changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --diff-filter ACMRT
           if [ -s tmp/validation/semgrep/semgrep_changed_files.txt ]; then
             xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json
           else

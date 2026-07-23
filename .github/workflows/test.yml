@@ -49,15 +49,16 @@ jobs:
 
       - name: Build changed-file list
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/ci_change_classifier
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/ci_change_classifier/changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}"
           cat tmp/validation/ci_change_classifier/changed_files.txt
 
       - name: Install change-classifier dependency
@@ -114,15 +115,16 @@ jobs:
       - name: Build registry changed-file list
         if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/bug_registry
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/bug_registry/changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/bug_registry/changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/bug_registry/changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}"
 
       - name: BUG registry metadata check
         if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
@@ -141,15 +143,17 @@ jobs:
       - name: Build static-gate changed-file list
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/guardrails
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/guardrails/l0_changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_SHA}" > tmp/validation/guardrails/l0_changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/guardrails/l0_changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --diff-filter ACMRT
 
       - name: nox -s l0 -- changed files
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
@@ -190,16 +194,17 @@ jobs:
 
       - name: Record documentation-only change
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           CLASSIFICATION: ${{ needs.classify-changes.outputs.classification }}
         run: |
           mkdir -p tmp/validation/docs_lite
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/docs_lite/changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/docs_lite/changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/docs_lite/changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}"
           {
             echo "# Docs-lite version record"
             echo ""
@@ -410,15 +415,16 @@ jobs:
 
       - name: Build changed-file list
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          BASE_SHA: ${{ github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/llm_prompt_evaluation/changed_files.txt
-          else
-            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/llm_prompt_evaluation/changed_files.txt
-          fi
+          python scripts/ci_changed_files.py \
+            --output tmp/validation/llm_prompt_evaluation/changed_files.txt \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}"
 
       - name: Run prompt evaluation policy gate
         run: |
