@@ -160,8 +160,8 @@ class VnpyCompatibilityFailureV1(FrozenStrictModel):
         return self
 
 
-class VnpyCompatibilityReceiptV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_compatibility_receipt_v1"]
+class VnpyCompatibilityReceiptV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_compatibility_receipt_v2"]
     plugin_id: IdentityV1
     plugin_version: IdentityV1
     manifest_sha256: Sha256V1
@@ -201,7 +201,7 @@ class VnpyCompatibilityReceiptV1(FrozenStrictModel):
     ) -> Self:
         failures = tuple(sorted(ordered_failures, key=lambda item: item.sort_key_v1()))
         payload = {
-            "schema_version": "vnpy_compatibility_receipt_v1",
+            "schema_version": "vnpy_compatibility_receipt_v2",
             "plugin_id": plugin_id,
             "plugin_version": plugin_version,
             "manifest_sha256": manifest_sha256,
@@ -216,7 +216,7 @@ class VnpyCompatibilityReceiptV1(FrozenStrictModel):
         }
         return cls(
             **{**payload, "status": status, "ordered_failures": failures},
-            receipt_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_receipt_v1", payload),
+            receipt_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_receipt_v2", payload),
         )
 
     @model_validator(mode="after")
@@ -251,12 +251,16 @@ class VnpyCompatibilityReceiptV1(FrozenStrictModel):
             ):
                 raise ValueError("compatibility truncation omitted hash is invalid")
         expected = hash_hex_v1(
-            "miniqmt_vnpy_compatibility_receipt_v1",
+            "miniqmt_vnpy_compatibility_receipt_v2",
             self.canonical_payload_v1(exclude={"receipt_sha256"}),
         )
         if self.receipt_sha256 != expected:
             raise ValueError("compatibility receipt hash mismatch")
         return self
+
+
+# Historical import name only; V2 schema/hash is the sole active receipt.
+VnpyCompatibilityReceiptV1 = VnpyCompatibilityReceiptV2
 
 
 class PluginCatalogBuildFailureV1(FrozenStrictModel):
@@ -848,7 +852,7 @@ def _compatibility_receipt_mismatch_v1(
     manifest = descriptor.manifest
     expected_components = compatibility_component_hashes_v1(manifest.compatibility_requirement)
     expected_receipt_sha256 = hash_hex_v1(
-        "miniqmt_vnpy_compatibility_receipt_v1",
+        "miniqmt_vnpy_compatibility_receipt_v2",
         receipt.canonical_payload_v1(exclude={"receipt_sha256"}),
     )
     mismatched_components = {
@@ -1056,7 +1060,7 @@ def build_plugin_catalog_v2(
         source_payload = manifest.source_attribution.canonical_payload_v1(exclude={"attribution_sha256"})
         expected_source = hash_hex_v1("miniqmt_source_attribution_v1", source_payload)
         requirement_payload = manifest.compatibility_requirement.canonical_payload_v1(exclude={"requirement_sha256"})
-        expected_requirement = hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", requirement_payload)
+        expected_requirement = hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v2", requirement_payload)
         if (
             manifest.behavior_contract_sha256 != expected_behavior
             or manifest.source_attribution.attribution_sha256 != expected_source

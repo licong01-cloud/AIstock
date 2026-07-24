@@ -4,15 +4,15 @@
 >
 > Feature tier：`F2`。
 >
-> 文档状态：`design_ready`。本文完成可直接拆分实施的架构、schema、事务、迁移、测试和验收设计；不表示源代码、DDL、生产配置、服务重启或真实 SIM 已完成。
+> 文档状态：`implementation_verified_local_pr_check_unobserved`。PR #2685 的两项 P1 final-review gap 已按 §8.4 与 K1 详细设计完成 V2 schema、RED/GREEN、direct/coverage/classifier/L2/F2 本地闭包；只有修复 HEAD required CI green 后才恢复 K1-C `implemented_verified`。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 已达到 `design_ready`；K1-A strict contracts/canonical/determinism 为 `implemented_verified + merged`（PR #2637，merge `e69e72dbdd6e5fd8d414721adaa86ccec7fafc2f`），K1-B 为 `implemented_verified + merged`（PR #2655，merge `ae1035a1ab4916427f7b72443c6235d544eb4c8e`）；K1-C C1/C2 为 `implemented_verified`（PR #2685，implementation HEAD `a0ba749e` required CI 11/11 green），`source_merge=pending_user_authorization`，尚未合入；K1 overall 为 `in_progress`，`close_sync=not_applicable_feature`，现有产品 runtime 未切换，production/runtime gates 均为 `noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified_local_pr_check_unobserved`；K1-A strict contracts/canonical/determinism 为 `implemented_verified + merged`（PR #2637，merge `e69e72dbdd6e5fd8d414721adaa86ccec7fafc2f`），K1-B 为 `implemented_verified + merged`（PR #2655，merge `ae1035a1ab4916427f7b72443c6235d544eb4c8e`）；K1-C PR #2685 为 `implemented_verified_local_pr_check_unobserved`、`source_merge=pending_user_authorization`；K1 overall 为 `in_progress`，K2/K3/K4 `not_started`，`close_sync=not_applicable_feature`，现有产品 runtime 未切换，production/runtime gates 均为 `noop`。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C resumed on 2026-07-24 after K1-B PR #2655 and state-sync merge entered `origin/main`. Checkpoint `1e23d595` plus C1/C2 close the structured compatibility requirement, repo-owned pinned source, locked surface, receipt, source-isolated/standard-package import proofs and K1-B catalog integration. Direct, coverage, classifier, L2, F2, design-compliance and PR #2685 implementation HEAD `a0ba749e` required CI pass; `source_merge=pending_user_authorization`. K1 overall remains `in_progress`, K2/K3/K4 are `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C final-review repair on 2026-07-24 closes indirect/dynamic import bypasses with bounded repo-relative V2 evidence and adds exact `vnpy/vnpy@4.0.0` object/enum source authority to the existing algotrading lock. Local direct, coverage, classifier-selected L2, F2 and design-compliance pass; the repair HEAD required CI has not yet been read back, so K1-C is `implemented_verified_local_pr_check_unobserved`, not unconditional `implemented_verified`. `source_merge=pending_user_authorization`; K1 overall remains `in_progress`, K2/K3/K4 are `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -551,7 +551,7 @@ Timer key 为 `runtime_id + schedule_id + due_at_exchange + epoch`；进程重�
 
 ### 8.2 façade 方法
 
-`VnpyCompatibilitySurfaceV1` 固定为 pinned upstream commit 实际方法面，不使用“至少支持”或动态 no-op：
+`LockedSurfaceV2` 固定为两个 pinned upstream commit 的实际方法/DTO/enum 面，不使用“至少支持”或动态 no-op：
 
 | upstream surface | façade exact contract |
 | --- | --- |
@@ -570,9 +570,9 @@ façade 必须按单次 `initialize()/transition()` 构造 immutable view 与 ef
 
 ### 8.3 支持边界
 
-- 当前 compatibility baseline 固定为 repo 已登记的 `vnpy_algotrading@4133987530eb28f3538d1983545d81c4f83d7d59` 与 MIT attribution；未来升级必须作为独立版本迁移，不得浮动依赖 latest；
+- 当前 compatibility baseline 固定为 repo 已登记的 `vnpy/vnpy_algotrading@4133987530eb28f3538d1983545d81c4f83d7d59` 与 `vnpy/vnpy@4.0.0@1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9` 两个 MIT upstream authority；未来升级必须作为独立版本迁移，不得浮动依赖 latest；
 - plugin manifest 明确 upstream file/commit/behavior hash；
-- plugin manifest 必须列出 `required_facade_methods`、`required_facade_object_fields`、order types 和 market-data requirements；registry 对照 `VnpyCompatibilitySurfaceV1` 生成 immutable `VnpyCompatibilityReceiptV1`，包含 upstream commit/file hash、方法签名 hash、DTO field hash 和 characterization hash；
+- plugin manifest 必须列出 `required_facade_methods`、`required_facade_object_fields`、order types 和 market-data requirements；K1-C generator 对照 exact dual-source `LockedSurfaceV2` 生成 immutable `VnpyCompatibilityReceiptV2`，K1-B registry 只消费 supplied receipt，包含双 upstream commit/file/license authority hash、方法签名 hash、DTO/enum field hash 和 characterization hash；
 - 上游算法若要求 MiniQMT 不支持的 order type/data capability，registration fail loud；
 - 未声明方法、对象字段、动态 attribute 或不支持的 callback 被访问时抛 `MINIQMT_VNPY_COMPAT_SURFACE_UNSUPPORTED`，不存在 `__getattr__` 默认值、空 no-op 或降级其它算法；
 - 不通过改算法默认值、合成数据或降级其它算法使其“可运行”；
@@ -580,21 +580,25 @@ façade 必须按单次 `initialize()/transition()` 构造 immutable view 与 ef
 
 ### 8.4 K1-C pinned-source authority and exact receipt schema
 
-K1-C 的唯一 source authority 是 `vnpy/vnpy_algotrading@4133987530eb28f3538d1983545d81c4f83d7d59`。仓库内必须保存该 commit 的六个原始 bytes：`vnpy_algotrading/base.py`、`engine.py`、`template.py`、`algos/sniper_algo.py`、`algos/best_limit_algo.py`、`algos/twap_algo.py`，以及同一 archive 的 MIT `LICENSE`、独立 `surface_contract.json` characterization artifact 和 `source_manifest.json`。manifest 固定字段为 `schema_version,upstream_repo,upstream_commit,files[{path,sha256,size_bytes}],license_file{path,sha256},characterization_file{path,sha256},license,copyright,source_manifest_sha256`，hash domain 为 `miniqmt_vnpy_pinned_source_manifest_v1`；surface contract 固定 method/object/enum structured payload 与 `miniqmt_vnpy_surface_contract_v1` hash。CI 只做本地 readback，不联网、不安装、不动态 import upstream；source exact path set、bytes SHA、size、license/characterization hash、repo-relative path/no traversal、duplicate/extra/missing/decode/AST drift 均 fail loud。
+K1-C has two exact repo-owned source namespaces: `VNPY_ALGOTRADING=vnpy/vnpy_algotrading@4133987530eb28f3538d1983545d81c4f83d7d59` and `VNPY_CORE=vnpy/vnpy@4.0.0@1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9`. VNPY_CORE contributes exact `vnpy/trader/object.py` (`10509`, `c153445fdad392bf6ac645b992e624df66e10a49c87448ca8ab2bf770212d75a`), `vnpy/trader/constant.py` (`4342`, `5a220fcc85bea0c4d92426533bcac444f74addd63b9b037a867370fe350df651`) and `LICENSE` (`1087`, `81294e5bcba945564df8586f1d789b016001b7b43eb4de97736679dd882cf191`). CI uses repo-owned bytes only.
 
-`VnpyCompatibilityRequirementV1` 的 method surface 是 structured DTO，不接受未解析 signature string。`VnpyMethodRequirementV1` 固定 `source_path,owner,name,parameters,return_annotation,return_behavior,error_behavior,method_requirement_sha256`；参数 DTO 固定 `name,kind,required,default_present,default_value,annotation`，`kind` 为五种 Python parameter kind，显式 `None` default 与缺省 default 可区分。object DTO 固定 `object_name,source_path,fields`，field DTO 固定 `name,kind,annotation,nullable,return_annotation`，field kind 为 `ATTRIBUTE/CALLABLE`；enum DTO 固定 `enum_name,source_path,enum_kind,values`。所有 nested carriers 使用 K1-A recursive FrozenJson/frozen model，按 canonical key 排序后 readback，缺失/extra/type/kind/default/annotation/return/error/field/enum drift 都属于 pinned compatibility failure。
+`source_manifest.json` is `vnpy_pinned_source_manifest_v2` with exactly two `VnpyUpstreamSourceV2` authorities. Each authority hashes namespace/repo/release tag/commit/files with path+size+SHA/license/copyright using `miniqmt_vnpy_upstream_source_authority_v2`; the outer manifest hashes the ordered authorities plus AIstock `surface_contract.json` characterization using `miniqmt_vnpy_pinned_source_manifest_v2`. `VnpyCompatibilityRequirementV2` and `VnpyCompatibilityReceiptV2` use V2 hash domains and include both authority hashes and the namespaced eight-source union. No V1 writer/readback/default adapter is accepted after migration.
 
-`locked_surface.py` 只读取 source manifest、逐文件 AST 和 requirement，生成 immutable surface。component formulas 是唯一 K1-B seam：
+External object fields/callable returns are AST-extracted from the exact core `object.py`, including local `BaseData` inheritance; enum member names and canonical value expressions are AST-extracted from exact core `constant.py`. `surface_contract.json` remains AIstock façade return/error characterization only and cannot prove external DTO/enum facts. Any core repo/tag/commit/path/size/hash/license/decode/AST/object/enum drift produces FAILED V2 receipt and K1-B aggregate zero publication.
+
+Import boundary uses `PluginImportBoundaryReceiptV2` with repo-relative failure identity, maximum 64 retained failures, explicit truncation marker, omitted-set hash, aggregate failure-set hash and receipt hash. AST resolves literal `getattr`, builtins/importlib dynamic import and callable aliases；isolated execution activates scope-provenance plus audit guards before target execution so helper/dynamic frames and raw `_io.FileIO` cannot perform file/environment/network/subprocess/thread/process/task side effects. Absolute source/root spellings are removed from isolated exception/stderr/invalid-receipt context before hashing. Source-isolated and standard package import remain separate direct evidence; violations are build failures, not runtime gates.
+
+`locked_surface.py` 只读取 V2 source manifest、逐文件 AST 和 requirement，生成 immutable surface。V1 public names 仅是指向相同 V2 writer/readback 的 source-compatible aliases，不接受 V1 payload。component formulas 是唯一 K1-B seam：
 
 ```text
-source_lock_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_source_lock_v1", source_files_and_hashes)
-method_signature_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_method_signatures_v1", required_method_signatures)
-object_field_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_object_fields_v1", {required_object_fields,required_enum_values})
-surface_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_surface_v1", {source_lock_sha256,method_signature_sha256,object_field_sha256,characterization_sha256})
-receipt_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_receipt_v1", exact preceding receipt fields)
+source_lock_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_source_lock_v2", {upstream_sources,source_files_and_hashes})
+method_signature_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_method_signatures_v2", required_method_signatures)
+object_field_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_object_fields_v2", {required_object_fields,required_enum_values})
+surface_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_surface_v2", {source_lock_sha256,method_signature_sha256,object_field_sha256,characterization_sha256})
+receipt_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_receipt_v2", exact preceding receipt fields)
 ```
 
-`VnpyCompatibilityFailureV1` 使用 `field_path,reason_code,context,context_sha256`，identity/sort 为 `(field_path,reason_code,context_sha256)`；context 受 K1-A bounded JSON-safe codec 约束（32 members、2048 字符 value、8 层）。generator 收集并稳定排序全部 bounded failures，最多保留 255 项；超限时追加唯一 `__failure_set__/MINIQMT_VNPY_COMPAT_FAILURES_TRUNCATED` marker，携带 `omitted_count` 与 omitted identity set hash 并进入 receipt hash。PASSED 只能是零 failure，FAILED 不能为空；writer/readback 共享同一 strict model/create/hash validator，禁止 caller hash drift、固定 PASSED、previous receipt、installed/latest fallback。K1-B catalog 只消费显式生成的 receipt；pinned FAILED 进入 aggregate catalog failure 并 zero-publication，route FAILED 仍只影响 exact plugin/route。
+`VnpyCompatibilityFailureV1` 是 V2 receipt 内唯一 failure carrier，使用 `field_path,reason_code,context,context_sha256`，identity/sort 为 `(field_path,reason_code,context_sha256)`；context 受 K1-A bounded JSON-safe codec 约束（32 members、2048 字符 value、8 层）。generator 收集并稳定排序全部 bounded failures，最多保留 255 项；超限时追加唯一 `__failure_set__/MINIQMT_VNPY_COMPAT_FAILURES_TRUNCATED` marker，携带 `omitted_count` 与 omitted identity set hash 并进入 receipt hash。PASSED 只能是零 failure，FAILED 不能为空；writer/readback 共享同一 strict model/create/hash validator，禁止 caller hash drift、固定 PASSED、previous receipt、installed/latest fallback。K1-B catalog 只消费显式生成的 V2 receipt；pinned FAILED 进入 aggregate catalog failure并 zero-publication，route FAILED 仍只影响 exact plugin/route。
 
 标准 package import 还必须通过真实 parent-package closure：`backend.execution_algos` 和 `backend.services.miniqmt_execution_runtime` 只在调用方显式请求既有公开符号时 lazy-load 原有注册/runtime 模块；直接导入 `backend.execution_algos.vnpy_compat` 不加载 14 个算法、`vnpy_style.legacy_adapter`、repository、Gateway、DB、网络或线程。source-isolated 测试与标准 package import 测试分别记录，前者不得冒充后者。
 
@@ -734,9 +738,9 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - 新增 V2 manifest/event/routing/delivery/state/command/transition/compatibility DTO；
 - generic registry，不修改 runtime 行为；
 - current three manifest 化；
-- `VnpyCompatibilitySurfaceV1` exact signature/object-field receipt、import/static negative tests；
+- `LockedSurfaceV2` exact signature/object/enum receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1 overall 当前为 `in_progress`：K1-A/B 已实现验证并合入；K1-C C1/C2 已完成实现、正式审核和 direct/coverage/classifier/F2/required CI 验证，状态为 `implemented_verified`（PR #2685），`source_merge=pending_user_authorization`，尚未合入 main，不得压缩成 K1 overall completed；K2/K3/K4 均 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
+- K1 overall 当前为 `in_progress`：K1-A/B 已实现验证并合入；K1-C PR #2685 的 indirect/dynamic import 与 external core DTO/enum source authority 两项 P1 已完成 V2 本地修复验证，状态为 `implemented_verified_local_pr_check_unobserved`，required CI green 前不得恢复 `implemented_verified`；`source_merge=pending_user_authorization`，K2/K3/K4 均 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -932,16 +936,14 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
-| `F-053` | K1 detailed design §3；K1-A/B/C shadow modules 与 source-isolated/standard package import boundary | `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` = 32 passed；AST/process negative matrix 与标准 package import 的 zero registration/legacy/runtime/repository/Gateway/thread/process/network/write side-effect closure | implemented_verified | none |
+| `F-053` | K1 detailed design §3；K1-A/B/C shadow modules 与 source-isolated/standard package import boundary；bounded repo-relative `PluginImportBoundaryReceiptV2` | `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` = 49 passed；public AST validator 与 isolated scope-provenance/audit guard 覆盖 indirect/dynamic/alias/getattr、helper-mediated file/environment/network/process/thread、raw FileIO、isolated context root-independence、explicit truncation/hash closure 和标准 package zero side effect；required CI 尚未在修复 HEAD readback | implemented_verified_local_pr_check_unobserved | none |
 | `F-054` | `plugin_contracts.py` + `plugin_canonical.py` strict contracts/public-marker-safe recursive FrozenJson/JSON Schema authority/raw-digest+hex/decimal/time/error evidence/exact event-state readback closure；current-three 共用 bounded schema evidence authority | K1-A merged receipt 保留 audit RED 5 failed、direct 67 passed、canonical 94%/contracts 85% line+branch；K1-B-REVIEW-FIX 当前 PR HEAD `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` 60 passed，`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` 覆盖 31/32/>32 typed JSON-safe evidence | implemented_verified | none |
 | `F-055` | `backend/services/miniqmt_execution_runtime/plugin_registry.py` route-independent catalog、durable descriptor/process binding、exact creation/restore、canonical snapshot、non-empty bounded aggregate；route authority validation 按 catalog strict、gateway strict、receipt reconstruction/comparison 三阶段分类 | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` = 55 passed；4 个 authority-classification RED 修复后，gateway-invalid reason/context 原样传播，valid authority + unsupported 为 FAILED receipt，valid authority + receipt drift 为 receipt-invalid；line/branch=88.06%/73.45%；PR #2655 final HEAD `97f7a030` required CI green，merge `ae1035a1` | implemented_verified + merged | none |
 | `F-056` | `deterministic_context.py` + `plugin_contracts.py` exact logical context/algo/delivery/local-order/command/timer/diagnostic/effect identity closure、ordinal、raw-digest u53；generic ID kind 仅 `ACTION`，不与 persisted DTO identity 竞争 | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` + `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` same-ID/different-payload/readback/logical-time/single-authority matrix；97% deterministic line+branch | implemented_verified | none |
 | `F-057` | `backend/execution_algos/vnpy_style/plugin_manifests.py` current-three exact schema/source/behavior/active-order lineage/TWAP/legacy projection；code-owned durable facts immutable、live callable 仅 process binding；schema evidence bounded；shadow-only | `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` = 39 passed，含 recursive mutation/fresh process/bounded evidence 与 factory/config-validator/state-codec drift；line/branch=89.61%/76.92%；second-final-review RED 后 GREEN；PR #2655 final HEAD `97f7a030` required CI green，merge `ae1035a1` | implemented_verified + merged | none |
-| `F-058` | K1 detailed design §1.2、§9 exact repo-owned source/method/object/enum/receipt lock 与 K1-B component seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` = 24 passed；真实六文件 exact path set/license/manifest/characterization readback、negative drift、immutable PASSED/FAILED/truncation/fresh-process、current-three real receipt/catalog zero-publication closure | implemented_verified | none |
-| `F-059` | K1 detailed design §11 ownership/test routing/coverage | `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` / `test_plugin_import_boundaries.py` / `test_algo_plugin_registry.py` / `test_current_three_plugin_manifests.py` / `test_algo_plugin_contracts.py` = 24/32/55/39/60 passed；K1-C modules line/branch 均达到 80/70；25 files mapped/unmapped/ambiguous=25/0/0；MiniQMT L2 624 passed/1 skipped，paper_v2 1050 passed/2 skipped/2 xfailed；PR #2685 implementation HEAD `a0ba749e` required CI 11/11 green | implemented_verified | none |
-| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | validation-receipt: 三份 F2 结果 8/8、18/18、60/60，DESIGN-COMPLIANCE-001 PASS；K1-C `source_merge=pending_user_authorization`，K1 overall `in_progress`，K2/K3/K4 `not_started`，`close_sync=not_applicable_feature`、production/runtime gates `noop` | implemented_verified | none |
-
-`design_ready` 只表示本文可直接指导实施；所有代码、DDL、CI 和真实 SIM 状态仍必须在后续 PR 与上位蓝图 progress ledger 中独立更新。
+| `F-058` | K1 detailed design §1.2、§9 dual-upstream V2 source/method/object/enum/receipt lock 与 K1-B component seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` = 49 passed；八 source、双 license/repo/tag/commit/path/hash/size、core object/enum AST drift、coordinated contract drift、fresh-process、current-three catalog zero-publication；required CI 尚未在修复 HEAD readback | implemented_verified_local_pr_check_unobserved | none |
+| `F-059` | K1 detailed design §11 ownership/test routing/coverage | `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` + `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` + shared direct matrix=`49/49/60/55/39=252 passed`；import/surface/receipt line/branch=`87.19/75.61`,`89.61/81.34`,`88.46/70.00`；repair/full classifier=`20/29`、`unmapped_code_files=[]`、MiniQMT/Paper；`python -m nox -s miniqmt_execution_runtime_l2`=`666/1`，`python -m nox -s paper_v2_backend`=`1050/2/2`；L0/registry PASS；required CI 尚未在修复 HEAD readback | implemented_verified_local_pr_check_unobserved | none |
+| `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`、`docs/architecture/miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`、`docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`；三份 F2 与 DESIGN-COMPLIANCE-001 本地执行；K1-C `source_merge=pending_user_authorization`，K1 overall `in_progress`，K2/K3/K4 `not_started`，`close_sync=not_applicable_feature`、production/runtime gates `noop`；required CI 尚未在修复 HEAD readback | implemented_verified_local_pr_check_unobserved | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 

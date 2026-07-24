@@ -132,10 +132,20 @@ def build_current_three_compatibility_receipts_v1(
     )
 
 
+bound_compatibility_failures_v2 = bound_compatibility_failures_v1
+build_current_three_compatibility_receipts_v2 = build_current_three_compatibility_receipts_v1
+build_vnpy_compatibility_receipt_v2 = build_vnpy_compatibility_receipt_v1
+readback_vnpy_compatibility_receipt_v2 = readback_vnpy_compatibility_receipt_v1
+
+
 __all__ = [
     "VnpyCompatibilityReceiptReadbackError",
     "bound_compatibility_failures_v1",
+    "bound_compatibility_failures_v2",
     "build_current_three_compatibility_receipts_v1",
+    "build_current_three_compatibility_receipts_v2",
     "build_vnpy_compatibility_receipt_v1",
+    "build_vnpy_compatibility_receipt_v2",
     "readback_vnpy_compatibility_receipt_v1",
+    "readback_vnpy_compatibility_receipt_v2",
 ]

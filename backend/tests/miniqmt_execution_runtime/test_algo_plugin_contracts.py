@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     FrozenJsonArrayV1,
     FrozenJsonMemberV1,
@@ -36,7 +37,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
     DiagnosticSeverityV1,
-    EnumValueRequirementV1,
     EventSourceV2,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
@@ -46,7 +46,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     MarketDataRequirementV1,
     MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
-    ObjectFieldRequirementV1,
     OrderTypeV1,
     PluginProviderV2,
     RuntimeEventEnvelopeV2,
@@ -55,12 +54,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     SourceAttributionV1,
     TimerMutationTypeV1,
     TimerMutationV1,
-    VnpyCompatibilityRequirementV1,
-    VnpyMethodRequirementV1,
-    VnpyObjectFieldKindV1,
-    VnpyObjectFieldV1,
-    VnpyParameterKindV1,
-    VnpyParameterRequirementV1,
+    VnpyCompatibilityRequirementV2,
 )
 
 
@@ -526,105 +520,11 @@ def _source_attribution() -> SourceAttributionV1:
     )
 
 
-def _compatibility_requirement() -> VnpyCompatibilityRequirementV1:
-    source_files = (
-        FileHashV1(path="vnpy_algotrading/engine.py", sha256="1" * 64),
-        FileHashV1(path="vnpy_algotrading/template.py", sha256="2" * 64),
-    )
-    object_fields = (
-        ObjectFieldRequirementV1(
-            object_name="TickData",
-            source_path="vnpy.trader.object",
-            fields=(
-                VnpyObjectFieldV1(
-                    name="datetime",
-                    kind=VnpyObjectFieldKindV1.ATTRIBUTE,
-                    annotation="datetime",
-                    nullable=False,
-                ),
-                VnpyObjectFieldV1(
-                    name="vt_symbol",
-                    kind=VnpyObjectFieldKindV1.ATTRIBUTE,
-                    annotation="str",
-                    nullable=False,
-                ),
-            ),
-        ),
-    )
-    enum_values = (
-        EnumValueRequirementV1(
-            enum_name="Direction",
-            source_path="vnpy.trader.constant",
-            enum_kind="Enum",
-            values=("LONG", "SHORT"),
-        ),
-    )
-    parameters = (
-        VnpyParameterRequirementV1(
-            name="algo",
-            kind=VnpyParameterKindV1.POSITIONAL_OR_KEYWORD,
-            required=True,
-            default_present=False,
-            default_value=None,
-            annotation="AlgoTemplate",
-        ),
-    )
-    method_plain = {
-        "schema_version": "vnpy_method_requirement_v1",
-        "source_path": "vnpy_algotrading/engine.py",
-        "owner": "AlgoEngine",
-        "name": "get_tick",
-        "parameters": [item.model_dump(mode="json") for item in parameters],
-        "return_annotation": "TickData | None",
-        "return_behavior": "immutable_market_view_or_none_with_diagnostic",
-        "error_behavior": "missing_tick_no_cache_or_synthesis",
-    }
-    get_tick = VnpyMethodRequirementV1(
-        **{**method_plain, "parameters": parameters},
-        method_requirement_sha256=hash_hex_v1("miniqmt_vnpy_method_requirement_v1", method_plain),
-    )
-    method_plain["name"] = "send_order"
-    send_order = VnpyMethodRequirementV1(
-        **{
-            **method_plain,
-            "parameters": parameters,
-            "return_annotation": "str",
-            "return_behavior": "deterministic_local_order_id_or_empty_with_diagnostic",
-            "error_behavior": "missing_contract_or_rounded_zero_zero_command",
-        },
-        method_requirement_sha256=hash_hex_v1(
-            "miniqmt_vnpy_method_requirement_v1",
-            {
-                **method_plain,
-                "parameters": [item.model_dump(mode="json") for item in parameters],
-                "return_annotation": "str",
-                "return_behavior": "deterministic_local_order_id_or_empty_with_diagnostic",
-                "error_behavior": "missing_contract_or_rounded_zero_zero_command",
-            },
-        ),
-    )
-    method_signatures = (get_tick, send_order)
-    payload = {
-        "schema_version": "vnpy_compatibility_requirement_v1",
-        "mode": "DERIVED_SOURCE_EXACT_CHARACTERIZATION",
-        "upstream_repo": "vnpy/vnpy_algotrading",
-        "upstream_commit": "4" * 40,
-        "source_files_and_hashes": [item.model_dump(mode="json") for item in source_files],
-        "required_method_signatures": [item.model_dump(mode="json") for item in method_signatures],
-        "required_object_fields": [item.model_dump(mode="json") for item in object_fields],
-        "required_enum_values": [item.model_dump(mode="json") for item in enum_values],
-        "characterization_sha256": "5" * 64,
-    }
-    model_payload = {
-        **payload,
-        "source_files_and_hashes": source_files,
-        "required_method_signatures": method_signatures,
-        "required_object_fields": object_fields,
-        "required_enum_values": enum_values,
-    }
-    return VnpyCompatibilityRequirementV1(
-        **model_payload,
-        requirement_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", payload),
+def _compatibility_requirement() -> VnpyCompatibilityRequirementV2:
+    return next(
+        manifest.compatibility_requirement
+        for manifest in current_three_manifests_v2()
+        if manifest.algo_code == "SNIPER_MINIQMT"
     )
 
 

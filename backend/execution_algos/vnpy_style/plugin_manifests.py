@@ -28,7 +28,6 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
-    EnumValueRequirementV1,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
     FileHashV1,
@@ -45,12 +44,16 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     Sha256V1,
     SideV1,
     SourceAttributionV1,
-    VnpyCompatibilityRequirementV1,
+    EnumValueRequirementV2,
+    VnpyEnumMemberRequirementV2,
+    VnpyCompatibilityRequirementV2,
     VnpyMethodRequirementV1,
     VnpyObjectFieldKindV1,
     VnpyObjectFieldV1,
     VnpyParameterKindV1,
     VnpyParameterRequirementV1,
+    VnpySourceFileV2,
+    VnpyUpstreamSourceV2,
     validate_json_schema_instance_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
@@ -90,6 +93,24 @@ _UPSTREAM_HASHES = MappingProxyType(
         "vnpy_algotrading/base.py": "8416653d8cf61ab45e26b593eea06417dd6fa21b331bba6c60a2bbb8bccf8f93",
         "vnpy_algotrading/engine.py": "2c73e1c093cabcd5768954f1129451877a82afd204790fb07e4f305b64c5e68d",
         "vnpy_algotrading/template.py": "b21fa36a8a2c347ab92379df1cd9f81ec69bc922233ec4096d75dbbade7454b8",
+    }
+)
+_UPSTREAM_SIZES = MappingProxyType(
+    {
+        "vnpy_algotrading/algos/best_limit_algo.py": 3560,
+        "vnpy_algotrading/algos/sniper_algo.py": 2186,
+        "vnpy_algotrading/algos/twap_algo.py": 2532,
+        "vnpy_algotrading/base.py": 255,
+        "vnpy_algotrading/engine.py": 8941,
+        "vnpy_algotrading/template.py": 6575,
+        "vnpy_core/vnpy/trader/object.py": 10509,
+        "vnpy_core/vnpy/trader/constant.py": 4342,
+    }
+)
+_CORE_HASHES = MappingProxyType(
+    {
+        "vnpy_core/vnpy/trader/object.py": "c153445fdad392bf6ac645b992e624df66e10a49c87448ca8ab2bf770212d75a",
+        "vnpy_core/vnpy/trader/constant.py": "5a220fcc85bea0c4d92426533bcac444f74addd63b9b037a867370fe350df651",
     }
 )
 _ALGO_FACTS = MappingProxyType(
@@ -529,13 +550,76 @@ def _object_field(
     )
 
 
+def _upstream_source_authority(
+    *,
+    namespace: Literal["VNPY_ALGOTRADING", "VNPY_CORE"],
+    repository: str,
+    release_tag: str | None,
+    commit: str,
+    paths: tuple[str, ...],
+    license_path: str,
+    license_sha256: str,
+    license_size_bytes: int,
+) -> VnpyUpstreamSourceV2:
+    files = tuple(
+        VnpySourceFileV2(
+            path=path,
+            size_bytes=_UPSTREAM_SIZES[path],
+            sha256=_UPSTREAM_HASHES[path] if path in _UPSTREAM_HASHES else _CORE_HASHES[path],
+        )
+        for path in paths
+    )
+    license_file = VnpySourceFileV2(path=license_path, size_bytes=license_size_bytes, sha256=license_sha256)
+    plain = {
+        "schema_version": "vnpy_upstream_source_v2",
+        "namespace": namespace,
+        "upstream_repo": repository,
+        "release_tag": release_tag,
+        "upstream_commit": commit,
+        "files": [item.canonical_payload_v1() for item in files],
+        "license_file": license_file.canonical_payload_v1(),
+        "license": "MIT License",
+        "copyright": UPSTREAM_COPYRIGHT,
+    }
+    return VnpyUpstreamSourceV2(
+        **{**plain, "files": files, "license_file": license_file},
+        authority_sha256=hash_hex_v1("miniqmt_vnpy_upstream_source_authority_v2", plain),
+    )
+
+
+def _upstream_authorities() -> tuple[VnpyUpstreamSourceV2, ...]:
+    algotrading_paths = tuple(sorted(_UPSTREAM_HASHES))
+    return (
+        _upstream_source_authority(
+            namespace="VNPY_ALGOTRADING",
+            repository=UPSTREAM_REPO,
+            release_tag=None,
+            commit=UPSTREAM_COMMIT,
+            paths=algotrading_paths,
+            license_path="vnpy_algotrading/LICENSE",
+            license_sha256="48d3942a8bdafaa59f36481584c8623d1ef2749fb66af9ec94ae680a2795aa96",
+            license_size_bytes=1089,
+        ),
+        _upstream_source_authority(
+            namespace="VNPY_CORE",
+            repository="https://github.com/vnpy/vnpy",
+            release_tag="4.0.0",
+            commit="1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9",
+            paths=("vnpy_core/vnpy/trader/constant.py", "vnpy_core/vnpy/trader/object.py"),
+            license_path="vnpy_core/LICENSE",
+            license_sha256="81294e5bcba945564df8586f1d789b016001b7b43eb4de97736679dd882cf191",
+            license_size_bytes=1087,
+        ),
+    )
+
+
 def _compatibility_object_fields() -> tuple[ObjectFieldRequirementV1, ...]:
     return tuple(
         sorted(
             (
                 ObjectFieldRequirementV1(
                     object_name="ContractData",
-                    source_path="vnpy.trader.object",
+                    source_path="vnpy_core/vnpy/trader/object.py",
                     fields=(
                         _object_field("exchange", "Exchange"),
                         _object_field("gateway_name", "str"),
@@ -546,7 +630,7 @@ def _compatibility_object_fields() -> tuple[ObjectFieldRequirementV1, ...]:
                 ),
                 ObjectFieldRequirementV1(
                     object_name="OrderData",
-                    source_path="vnpy.trader.object",
+                    source_path="vnpy_core/vnpy/trader/object.py",
                     fields=(
                         _object_field("is_active", "method", callable_return="bool"),
                         _object_field("price", "float"),
@@ -557,21 +641,21 @@ def _compatibility_object_fields() -> tuple[ObjectFieldRequirementV1, ...]:
                 ),
                 ObjectFieldRequirementV1(
                     object_name="TickData",
-                    source_path="vnpy.trader.object",
+                    source_path="vnpy_core/vnpy/trader/object.py",
                     fields=(
                         _object_field("ask_price_1", "float"),
                         _object_field("ask_volume_1", "float"),
                         _object_field("bid_price_1", "float"),
                         _object_field("bid_volume_1", "float"),
-                        _object_field("datetime", "datetime"),
+                        _object_field("datetime", "Datetime"),
                         _object_field("vt_symbol", "str"),
                     ),
                 ),
                 ObjectFieldRequirementV1(
                     object_name="TradeData",
-                    source_path="vnpy.trader.object",
+                    source_path="vnpy_core/vnpy/trader/object.py",
                     fields=(
-                        _object_field("datetime", "datetime"),
+                        _object_field("datetime", "Datetime | None", nullable=True),
                         _object_field("price", "float"),
                         _object_field("volume", "float"),
                         _object_field("vt_orderid", "str"),
@@ -698,72 +782,101 @@ def _compatibility_methods() -> tuple[VnpyMethodRequirementV1, ...]:
     return tuple(sorted(methods, key=lambda item: (item.source_path, item.owner, item.name)))
 
 
-def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> VnpyCompatibilityRequirementV1:
-    _, _, _, _, upstream_algo_path, _ = _ALGO_FACTS[algo_code]
+def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> VnpyCompatibilityRequirementV2:
     source_files = tuple(
-        FileHashV1(path=path, sha256=_UPSTREAM_HASHES[path])
-        for path in sorted(
-            (
-                upstream_algo_path,
-                "vnpy_algotrading/base.py",
-                "vnpy_algotrading/engine.py",
-                "vnpy_algotrading/template.py",
-            )
+        FileHashV1(
+            path=path,
+            sha256=_UPSTREAM_HASHES[path] if path in _UPSTREAM_HASHES else _CORE_HASHES[path],
         )
+        for path in sorted((*_UPSTREAM_HASHES, *_CORE_HASHES))
     )
     method_signatures = _compatibility_methods()
     object_fields = _compatibility_object_fields()
     enum_values = tuple(
         sorted(
             (
-                EnumValueRequirementV1(
+                EnumValueRequirementV2(
                     enum_name="AlgoStatus",
                     source_path="vnpy_algotrading/base.py",
                     enum_kind="Enum",
-                    values=("FINISHED", "PAUSED", "RUNNING", "STOPPED"),
+                    members=tuple(
+                        VnpyEnumMemberRequirementV2(name=name, value_expression=expression)
+                        for name, expression in (
+                            ("FINISHED", "'\u7ed3\u675f'"),
+                            ("PAUSED", "'\u6682\u505c'"),
+                            ("RUNNING", "'\u8fd0\u884c'"),
+                            ("STOPPED", "'\u505c\u6b62'"),
+                        )
+                    ),
                 ),
-                EnumValueRequirementV1(
+                EnumValueRequirementV2(
                     enum_name="Direction",
-                    source_path="vnpy.trader.constant",
+                    source_path="vnpy_core/vnpy/trader/constant.py",
                     enum_kind="Enum",
-                    values=("LONG", "SHORT"),
+                    members=tuple(
+                        VnpyEnumMemberRequirementV2(name=name, value_expression=expression)
+                        for name, expression in (
+                            ("LONG", "_('\u591a')"),
+                            ("SHORT", "_('\u7a7a')"),
+                            ("NET", "_('\u51c0')"),
+                        )
+                    ),
                 ),
-                EnumValueRequirementV1(
+                EnumValueRequirementV2(
                     enum_name="Offset",
-                    source_path="vnpy.trader.constant",
+                    source_path="vnpy_core/vnpy/trader/constant.py",
                     enum_kind="Enum",
-                    values=("NONE",),
+                    members=tuple(
+                        VnpyEnumMemberRequirementV2(name=name, value_expression=expression)
+                        for name, expression in (
+                            ("NONE", "''"),
+                            ("OPEN", "_('\u5f00')"),
+                            ("CLOSE", "_('\u5e73')"),
+                            ("CLOSETODAY", "_('\u5e73\u4eca')"),
+                            ("CLOSEYESTERDAY", "_('\u5e73\u6628')"),
+                        )
+                    ),
                 ),
-                EnumValueRequirementV1(
+                EnumValueRequirementV2(
                     enum_name="OrderType",
-                    source_path="vnpy.trader.constant",
+                    source_path="vnpy_core/vnpy/trader/constant.py",
                     enum_kind="Enum",
-                    values=("LIMIT",),
+                    members=tuple(
+                        VnpyEnumMemberRequirementV2(name=name, value_expression=expression)
+                        for name, expression in (
+                            ("LIMIT", "_('\u9650\u4ef7')"),
+                            ("MARKET", "_('\u5e02\u4ef7')"),
+                            ("STOP", "'STOP'"),
+                            ("FAK", "'FAK'"),
+                            ("FOK", "'FOK'"),
+                            ("RFQ", "_('\u8be2\u4ef7')"),
+                        )
+                    ),
                 ),
             ),
             key=lambda item: item.enum_name,
         )
     )
     plain = {
-        "schema_version": "vnpy_compatibility_requirement_v1",
+        "schema_version": "vnpy_compatibility_requirement_v2",
         "mode": "DERIVED_SOURCE_EXACT_CHARACTERIZATION",
-        "upstream_repo": UPSTREAM_REPO,
-        "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_sources": [item.canonical_payload_v1() for item in _upstream_authorities()],
         "source_files_and_hashes": [item.canonical_payload_v1() for item in source_files],
         "required_method_signatures": [item.canonical_payload_v1() for item in method_signatures],
         "required_object_fields": [item.canonical_payload_v1() for item in object_fields],
         "required_enum_values": [item.canonical_payload_v1() for item in enum_values],
         "characterization_sha256": characterization_sha256,
     }
-    return VnpyCompatibilityRequirementV1(
+    return VnpyCompatibilityRequirementV2(
         **{
             **plain,
+            "upstream_sources": _upstream_authorities(),
             "source_files_and_hashes": source_files,
             "required_method_signatures": method_signatures,
             "required_object_fields": object_fields,
             "required_enum_values": enum_values,
         },
-        requirement_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", plain),
+        requirement_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v2", plain),
     )
 
 

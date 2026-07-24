@@ -13,6 +13,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
+
 
 _FORBIDDEN_IMPORT_PREFIXES = (
     "aiohttp",
@@ -87,8 +89,31 @@ _WALL_CLOCK_CALLS = frozenset(
         "time.time_ns",
     }
 )
-_DYNAMIC_IMPORT_CALLS = frozenset({"__import__", "importlib.import_module"})
+_DYNAMIC_IMPORT_CALLS = frozenset({"__import__", "builtins.__import__", "importlib.import_module"})
+_FILESYSTEM_CALLS = frozenset(
+    {
+        "builtins.open",
+        "io.open",
+        "open",
+        "os.makedirs",
+        "os.mkdir",
+        "os.open",
+        "os.remove",
+        "os.rename",
+        "os.replace",
+        "os.unlink",
+        "pathlib.Path.mkdir",
+        "pathlib.Path.open",
+        "pathlib.Path.rename",
+        "pathlib.Path.replace",
+        "pathlib.Path.touch",
+        "pathlib.Path.unlink",
+        "pathlib.Path.write_bytes",
+        "pathlib.Path.write_text",
+    }
+)
 _MAX_CONTEXT_TEXT = 2048
+_MAX_IMPORT_FAILURES = 64
 _ISOLATED_IMPORT_TIMEOUT_SECONDS = 20
 _MODULE_NAME_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 
@@ -129,6 +154,7 @@ def _thaw_context(value: Any) -> Any:
 class ImportBoundaryTargetV1:
     module_name: str
     source_path: Path
+    source_identity: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "module_name", _strict_identity(self.module_name, field_name="module_name"))
@@ -138,6 +164,12 @@ class ImportBoundaryTargetV1:
             raise TypeError("source_path must be pathlib.Path")
         if self.source_path.suffix != ".py":
             raise ValueError("source_path must identify a Python source file")
+        if self.source_identity is not None:
+            object.__setattr__(
+                self,
+                "source_identity",
+                _strict_identity(self.source_identity, field_name="source_identity"),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +201,7 @@ class ImportBoundaryFailureV1:
         )
         return (
             {"SOURCE": 0, "AST": 1, "ISOLATED_IMPORT": 2}[self.stage],
+            1 if self.source_path == "__failure_set__" else 0,
             self.module_name,
             self.source_path,
             self.line,
@@ -177,16 +210,85 @@ class ImportBoundaryFailureV1:
             context_json,
         )
 
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "module_name": self.module_name,
+            "source_path": self.source_path,
+            "line": self.line,
+            "column": self.column,
+            "reason": self.reason,
+            "context": _thaw_context(self.context),
+        }
+
 
 @dataclass(frozen=True, slots=True)
-class PluginImportBoundaryReceiptV1:
-    schema_version: Literal["plugin_import_boundary_receipt_v1"]
+class PluginImportBoundaryReceiptV2:
+    schema_version: Literal["plugin_import_boundary_receipt_v2"]
     status: Literal["PASSED", "FAILED"]
     checked_modules: tuple[str, ...]
     ordered_failures: tuple[ImportBoundaryFailureV1, ...]
+    observed_failure_count: int
+    retained_failure_count: int
+    failures_truncated: bool
+    omitted_failure_count: int
+    omitted_failure_set_sha256: str
+    failure_set_sha256: str
+    receipt_sha256: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        checked_modules: tuple[str, ...],
+        failures: tuple[ImportBoundaryFailureV1, ...],
+    ) -> "PluginImportBoundaryReceiptV2":
+        ordered = tuple(sorted(failures, key=lambda item: item.sort_key))
+        observed = len(ordered)
+        retained = ordered[:_MAX_IMPORT_FAILURES]
+        omitted = ordered[_MAX_IMPORT_FAILURES:]
+        omitted_hash = _omitted_failure_hash_v2(omitted)
+        bounded = retained
+        if omitted:
+            marker = ImportBoundaryFailureV1(
+                stage="ISOLATED_IMPORT",
+                module_name="__aggregate__",
+                source_path="__failure_set__",
+                line=0,
+                column=0,
+                reason="MINIQMT_PLUGIN_IMPORT_FAILURES_TRUNCATED",
+                context={"omitted_count": len(omitted), "omitted_failure_set_sha256": omitted_hash},
+            )
+            bounded = (*retained, marker)
+        failure_set_hash = _failure_set_hash_v2(retained, len(omitted), omitted_hash)
+        status: Literal["PASSED", "FAILED"] = "FAILED" if observed else "PASSED"
+        receipt_hash = _receipt_hash_from_parts_v2(
+            status=status,
+            checked_modules=checked_modules,
+            ordered_failures=bounded,
+            observed_failure_count=observed,
+            retained_failure_count=len(retained),
+            failures_truncated=bool(omitted),
+            omitted_failure_count=len(omitted),
+            omitted_failure_set_sha256=omitted_hash,
+            failure_set_sha256=failure_set_hash,
+        )
+        return cls(
+            schema_version="plugin_import_boundary_receipt_v2",
+            status=status,
+            checked_modules=checked_modules,
+            ordered_failures=bounded,
+            observed_failure_count=observed,
+            retained_failure_count=len(retained),
+            failures_truncated=bool(omitted),
+            omitted_failure_count=len(omitted),
+            omitted_failure_set_sha256=omitted_hash,
+            failure_set_sha256=failure_set_hash,
+            receipt_sha256=receipt_hash,
+        )
 
     def __post_init__(self) -> None:
-        if self.schema_version != "plugin_import_boundary_receipt_v1":
+        if self.schema_version != "plugin_import_boundary_receipt_v2":
             raise ValueError("import boundary receipt schema_version is invalid")
         if self.status not in ("PASSED", "FAILED"):
             raise ValueError("import boundary receipt status is invalid")
@@ -205,6 +307,106 @@ class PluginImportBoundaryReceiptV1:
             raise ValueError("PASSED import receipt must not contain failures")
         if self.status == "FAILED" and not self.ordered_failures:
             raise ValueError("FAILED import receipt must contain failures")
+        if type(self.observed_failure_count) is not int or self.observed_failure_count < 0:
+            raise ValueError("observed_failure_count must be a non-negative integer")
+        marker = tuple(item for item in self.ordered_failures if item.source_path == "__failure_set__")
+        if marker:
+            if len(marker) != 1 or self.ordered_failures[-1] is not marker[0]:
+                raise ValueError("import truncation marker must be unique and final")
+            if not self.failures_truncated:
+                raise ValueError("import truncation marker requires failures_truncated")
+            context = _thaw_context(marker[0].context)
+            if set(context) != {"omitted_count", "omitted_failure_set_sha256"}:
+                raise ValueError("import truncation marker context is invalid")
+            if context["omitted_count"] != self.omitted_failure_count:
+                raise ValueError("import truncation omitted count mismatch")
+            if context["omitted_failure_set_sha256"] != self.omitted_failure_set_sha256:
+                raise ValueError("import truncation omitted hash mismatch")
+        elif self.failures_truncated or self.omitted_failure_count != 0:
+            raise ValueError("import truncation fields are inconsistent")
+        real_failures = tuple(item for item in self.ordered_failures if item.source_path != "__failure_set__")
+        if self.retained_failure_count != len(real_failures):
+            raise ValueError("retained_failure_count mismatch")
+        if self.observed_failure_count != self.retained_failure_count + self.omitted_failure_count:
+            raise ValueError("observed failure count mismatch")
+        expected_failure_set = _failure_set_hash_v2(
+            real_failures, self.omitted_failure_count, self.omitted_failure_set_sha256
+        )
+        if self.failure_set_sha256 != expected_failure_set:
+            raise ValueError("import failure set hash mismatch")
+        expected_receipt = _receipt_hash_from_parts_v2(
+            status=self.status,
+            checked_modules=self.checked_modules,
+            ordered_failures=self.ordered_failures,
+            observed_failure_count=self.observed_failure_count,
+            retained_failure_count=self.retained_failure_count,
+            failures_truncated=self.failures_truncated,
+            omitted_failure_count=self.omitted_failure_count,
+            omitted_failure_set_sha256=self.omitted_failure_set_sha256,
+            failure_set_sha256=self.failure_set_sha256,
+        )
+        if self.receipt_sha256 != expected_receipt:
+            raise ValueError("import boundary receipt hash mismatch")
+
+
+PluginImportBoundaryReceiptV1 = PluginImportBoundaryReceiptV2
+
+
+def _failure_identity_payload(item: ImportBoundaryFailureV1) -> dict[str, Any]:
+    return {
+        "stage": item.stage,
+        "module_name": item.module_name,
+        "source_path": item.source_path,
+        "line": item.line,
+        "column": item.column,
+        "reason": item.reason,
+        "context_sha256": hash_hex_v1("miniqmt_plugin_import_boundary_context_v2", _thaw_context(item.context)),
+    }
+
+
+def _omitted_failure_hash_v2(items: tuple[ImportBoundaryFailureV1, ...]) -> str:
+    return hash_hex_v1(
+        "miniqmt_plugin_import_boundary_omitted_failure_set_v2",
+        [_failure_identity_payload(item) for item in items],
+    )
+
+
+def _failure_set_hash_v2(retained: tuple[ImportBoundaryFailureV1, ...], omitted_count: int, omitted_hash: str) -> str:
+    return hash_hex_v1(
+        "miniqmt_plugin_import_boundary_failure_set_v2",
+        {
+            "retained_failures": [_failure_identity_payload(item) for item in retained],
+            "omitted_count": omitted_count,
+            "omitted_failure_set_sha256": omitted_hash,
+        },
+    )
+
+
+def _receipt_hash_from_parts_v2(
+    *,
+    status: Literal["PASSED", "FAILED"],
+    checked_modules: tuple[str, ...],
+    ordered_failures: tuple[ImportBoundaryFailureV1, ...],
+    observed_failure_count: int,
+    retained_failure_count: int,
+    failures_truncated: bool,
+    omitted_failure_count: int,
+    omitted_failure_set_sha256: str,
+    failure_set_sha256: str,
+) -> str:
+    payload = {
+        "schema_version": "plugin_import_boundary_receipt_v2",
+        "status": status,
+        "checked_modules": list(checked_modules),
+        "ordered_failures": [item.canonical_payload() for item in ordered_failures],
+        "observed_failure_count": observed_failure_count,
+        "retained_failure_count": retained_failure_count,
+        "failures_truncated": failures_truncated,
+        "omitted_failure_count": omitted_failure_count,
+        "omitted_failure_set_sha256": omitted_failure_set_sha256,
+        "failure_set_sha256": failure_set_sha256,
+    }
+    return hash_hex_v1("miniqmt_plugin_import_boundary_receipt_v2", payload)
 
 
 class PluginImportBoundaryError(RuntimeError):
@@ -242,7 +444,7 @@ def _failure(
     return ImportBoundaryFailureV1(
         stage=stage,
         module_name=target.module_name,
-        source_path=target.source_path.as_posix(),
+        source_path=target.source_identity or target.source_path.as_posix(),
         line=line,
         column=column,
         reason=reason,
@@ -334,6 +536,13 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Attribute):
             prefix = self._call_name(node.value)
             return f"{prefix}.{node.attr}" if prefix else None
+        if isinstance(node, ast.Call):
+            owner = self._call_name(node.func)
+            if owner in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+                base = self._call_name(node.args[0])
+                attribute = node.args[1]
+                if base and isinstance(attribute, ast.Constant) and type(attribute.value) is str:
+                    return f"{base}.{attribute.value}"
         return None
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -365,7 +574,13 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
                 reason="MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN",
                 context={"call": call_name},
             )
-        elif call_name in {"os.getenv", "os.open", "os.popen", "os.system"} or (
+        elif call_name in _FILESYSTEM_CALLS:
+            self._append(
+                node,
+                reason="MINIQMT_PLUGIN_IMPORT_FILESYSTEM_SIDE_EFFECT_FORBIDDEN",
+                context={"call": call_name},
+            )
+        elif call_name in {"os.getenv", "os.popen", "os.system"} or (
             call_name is not None and call_name.startswith("os.environ.")
         ):
             self._append(
@@ -373,6 +588,17 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
                 reason="MINIQMT_PLUGIN_IMPORT_EXTERNAL_STATE_FORBIDDEN",
                 context={"call": call_name},
             )
+        if call_name in {"getattr", "builtins.getattr"} and node.args:
+            owner = self._call_name(node.args[0])
+            attribute = node.args[1] if len(node.args) > 1 else None
+            if owner in {"builtins", "importlib", "os", "io", "pathlib", "subprocess"} and not (
+                isinstance(attribute, ast.Constant) and type(attribute.value) is str
+            ):
+                self._append(
+                    node,
+                    reason="MINIQMT_PLUGIN_IMPORT_DYNAMIC_ATTRIBUTE_ESCAPE_FORBIDDEN",
+                    context={"owner": owner},
+                )
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
@@ -388,11 +614,15 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
 _ISOLATED_IMPORT_SCRIPT = r"""
 import asyncio
 import builtins
+import concurrent.futures
+import importlib
 import importlib.util
+import io
 import json
 import multiprocessing
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
@@ -420,14 +650,49 @@ from pydantic import (
 module_name, source_path, repo_root = sys.argv[1:4]
 events = []
 target_source = os.path.normcase(os.path.abspath(source_path))
+repo_root_source = os.path.normcase(os.path.abspath(repo_root))
+import_active = False
+sys.dont_write_bytecode = True
 
 class BoundarySideEffect(RuntimeError):
     pass
 
-def guard(operation, original):
+def repo_owned_caller(include_indirect=False):
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if not filename.startswith("<"):
+            normalized = os.path.normcase(os.path.abspath(filename))
+            if normalized == repo_root_source or normalized.startswith(repo_root_source + os.sep):
+                return True
+            if not include_indirect:
+                return False
+        frame = frame.f_back
+    return False
+
+def direct_file_operation_caller():
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if filename.startswith("<frozen importlib"):
+            return False
+        if not filename.startswith("<"):
+            normalized = os.path.normcase(os.path.abspath(filename))
+            return normalized == repo_root_source or normalized.startswith(repo_root_source + os.sep)
+        frame = frame.f_back
+    return False
+
+def guard(operation, original, include_indirect=True):
     def guarded(*args, **kwargs):
-        caller_source = os.path.normcase(os.path.abspath(sys._getframe(1).f_code.co_filename))
-        if caller_source == target_source:
+        if import_active and repo_owned_caller(include_indirect=include_indirect):
+            events.append({"operation": operation})
+            raise BoundarySideEffect(operation)
+        return original(*args, **kwargs)
+    return guarded
+
+def direct_guard(operation, original):
+    def guarded(*args, **kwargs):
+        if import_active and repo_owned_caller():
             events.append({"operation": operation})
             raise BoundarySideEffect(operation)
         return original(*args, **kwargs)
@@ -435,13 +700,28 @@ def guard(operation, original):
 
 def guarded_open(file, mode="r", *args, **kwargs):
     operation = "open_write" if any(flag in mode for flag in "wax+") else "open_read"
-    caller_source = os.path.normcase(os.path.abspath(sys._getframe(1).f_code.co_filename))
-    if caller_source == target_source:
+    if import_active and repo_owned_caller(include_indirect=operation == "open_write"):
         events.append({"operation": operation})
         raise BoundarySideEffect(operation)
     return original_open(file, mode, *args, **kwargs)
 
+def guarded_io_open(file, mode="r", *args, **kwargs):
+    operation = "io_open_write" if any(flag in mode for flag in "wax+") else "io_open_read"
+    if import_active and repo_owned_caller(include_indirect=operation == "io_open_write"):
+        events.append({"operation": operation})
+        raise BoundarySideEffect(operation)
+    return original_io_open(file, mode, *args, **kwargs)
+
+def guarded_path_open(self, mode="r", *args, **kwargs):
+    operation = "pathlib_open_write" if any(flag in mode for flag in "wax+") else "pathlib_open_read"
+    if import_active and repo_owned_caller(include_indirect=operation == "pathlib_open_write"):
+        events.append({"operation": operation})
+        raise BoundarySideEffect(operation)
+    return original_path_open(self, mode, *args, **kwargs)
+
 original_open = builtins.open
+original_io_open = io.open
+original_path_open = pathlib.Path.open
 originals = []
 def patch(owner, name, operation=None, replacement=None):
     if hasattr(owner, name):
@@ -449,14 +729,86 @@ def patch(owner, name, operation=None, replacement=None):
         originals.append((owner, name, original))
         setattr(owner, name, replacement or guard(operation, original))
 
+forbidden_import_prefixes = (
+    "aiohttp", "asyncpg", "backend.agents", "backend.data_access", "backend.data_service",
+    "backend.db", "backend.infra", "backend.models", "backend.quant_models", "backend.repositories",
+    "backend.routers", "backend.schedulers", "backend.services.paper_trading",
+    "backend.services.quantevolver", "backend.services.selection", "backend.services.simulation_runtime",
+    "backend.services.strategy_package", "backend.strategies", "fastapi", "httpx", "psycopg",
+    "psycopg2", "redis", "requests", "socket", "sqlalchemy", "urllib", "vnpy", "websockets", "xtquant",
+)
+
+def forbidden_import(name):
+    return any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden_import_prefixes)
+
+original_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if import_active and repo_owned_caller(include_indirect=True) and isinstance(name, str) and forbidden_import(name):
+        events.append({"operation": "dynamic_import", "module": name})
+        raise BoundarySideEffect("dynamic_import")
+    return original_import(name, *args, **kwargs)
+
+original_import_module = importlib.import_module
+def guarded_import_module(name, package=None):
+    resolved = importlib.util.resolve_name(name, package) if isinstance(name, str) and name.startswith(".") else name
+    if import_active and repo_owned_caller(include_indirect=True) and isinstance(resolved, str) and forbidden_import(resolved):
+        events.append({"operation": "dynamic_import", "module": resolved})
+        raise BoundarySideEffect("dynamic_import")
+    return original_import_module(name, package)
+
+def audit_hook(event, args):
+    if not import_active:
+        return
+    # Calling sys._getframe from the provenance check itself emits an audit
+    # event. Restrict provenance evaluation to side-effect events so the hook
+    # cannot recursively audit its own stack inspection.
+    if event == "import":
+        if (
+            not repo_owned_caller(include_indirect=True)
+            or not args
+            or not isinstance(args[0], str)
+            or not forbidden_import(args[0])
+        ):
+            return
+        events.append({"operation": "audit_import", "module": args[0]})
+        raise BoundarySideEffect("audit_import")
+    if event == "open":
+        # Import machinery may read a repo-owned helper on behalf of the target.
+        # Direct target/helper file access still has a repo frame before the
+        # first importlib/dependency frame and is rejected before the OS operation.
+        if not direct_file_operation_caller():
+            return
+        events.append({"operation": "audit_open"})
+        raise BoundarySideEffect("audit_open")
+    if event not in {
+        "os.remove", "os.rename", "os.rmdir", "os.mkdir",
+        "socket.__new__", "socket.connect", "socket.getaddrinfo", "subprocess.Popen", "os.system",
+    }:
+        return
+    if not repo_owned_caller(include_indirect=True):
+        return
+    events.append({"operation": "audit_" + event})
+    raise BoundarySideEffect("audit_" + event)
+
+sys.addaudithook(audit_hook)
+
 patch(builtins, "open", replacement=guarded_open)
-for name in ("open", "read_bytes", "read_text", "write_bytes", "write_text", "touch", "mkdir", "unlink", "rename", "replace"):
+patch(builtins, "__import__", replacement=guarded_import)
+patch(importlib, "import_module", replacement=guarded_import_module)
+patch(io, "open", replacement=guarded_io_open)
+patch(pathlib.Path, "open", replacement=guarded_path_open)
+for name in ("read_bytes", "read_text"):
+    patch(pathlib.Path, name, "pathlib_" + name, replacement=guard("pathlib_" + name, getattr(pathlib.Path, name), False))
+for name in ("write_bytes", "write_text", "touch", "mkdir", "unlink", "rename", "replace"):
     patch(pathlib.Path, name, "pathlib_" + name)
-patch(os, "open", "os_open")
-patch(os, "popen", "os_popen")
-patch(os, "system", "os_system")
+for name in ("open", "popen", "system", "remove", "unlink", "rename", "replace", "mkdir", "makedirs", "rmdir"):
+    patch(os, name, "os_" + name)
+for name in ("copy", "copy2", "copyfile", "move", "rmtree", "make_archive"):
+    patch(shutil, name, "shutil_" + name)
 patch(socket, "socket", "socket")
 patch(socket, "create_connection", "socket_create_connection")
+for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+    patch(socket, name, "socket_" + name)
 for name in ("Popen", "run", "call", "check_call", "check_output"):
     patch(subprocess, name, "subprocess_" + name)
 patch(threading.Thread, "start", "thread_start")
@@ -464,6 +816,15 @@ patch(multiprocessing.Process, "start", "process_start")
 patch(_thread, "start_new_thread", "thread_start_new")
 patch(asyncio, "create_task", "asyncio_create_task")
 patch(asyncio, "ensure_future", "asyncio_ensure_future")
+patch(concurrent.futures.ThreadPoolExecutor, "submit", "thread_pool_submit")
+patch(concurrent.futures.ProcessPoolExecutor, "submit", "process_pool_submit")
+environment_type = type(os.environ)
+for name in ("__getitem__", "__setitem__", "__delitem__", "get", "keys", "values", "items", "__iter__"):
+    original = getattr(environment_type, name)
+    patch(environment_type, name, replacement=direct_guard("environment_" + name, original))
+for name in ("getenv", "putenv", "unsetenv"):
+    original = getattr(os, name)
+    patch(os, name, replacement=direct_guard("environment_" + name, original))
 
 parts = module_name.split(".")
 for index in range(1, len(parts)):
@@ -478,6 +839,7 @@ for index in range(1, len(parts)):
 
 result = {"events": events, "exception": None}
 try:
+    import_active = True
     spec = importlib.util.spec_from_file_location(module_name, source_path)
     if spec is None or spec.loader is None:
         raise ImportError("source loader unavailable")
@@ -497,11 +859,30 @@ except Exception as exc:
         "message_render_error_type": message_render_error_type,
     }
 finally:
+    import_active = False
     for owner, name, original in reversed(originals):
         setattr(owner, name, original)
 
 sys.stdout.write(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 """
+
+
+def _stable_isolated_text(value: Any, *, target: ImportBoundaryTargetV1, repo_root: Path) -> str:
+    if type(value) is not str:
+        return "<unavailable>"
+    stable = value
+    resolved_root = repo_root.resolve()
+    resolved_source = target.source_path.resolve(strict=False)
+    source_identity = target.source_identity or target.source_path.name
+    replacements = (
+        (str(resolved_source), source_identity),
+        (resolved_source.as_posix(), source_identity),
+        (str(resolved_root), "<repo_root>"),
+        (resolved_root.as_posix(), "<repo_root>"),
+    )
+    for absolute, replacement in replacements:
+        stable = stable.replace(absolute, replacement)
+    return stable[:_MAX_CONTEXT_TEXT]
 
 
 def _isolated_import_failures(
@@ -541,7 +922,7 @@ def _isolated_import_failures(
                 reason="MINIQMT_PLUGIN_IMPORT_ISOLATED_PROCESS_FAILED",
                 context={
                     "returncode": completed.returncode,
-                    "stderr": completed.stderr[:_MAX_CONTEXT_TEXT],
+                    "stderr": _stable_isolated_text(completed.stderr, target=target, repo_root=repo_root),
                 },
             ),
         )
@@ -553,7 +934,10 @@ def _isolated_import_failures(
                 stage="ISOLATED_IMPORT",
                 target=target,
                 reason="MINIQMT_PLUGIN_IMPORT_ISOLATED_RECEIPT_INVALID",
-                context={"error_type": type(exc).__name__, "stdout": completed.stdout[:_MAX_CONTEXT_TEXT]},
+                context={
+                    "error_type": type(exc).__name__,
+                    "stdout": _stable_isolated_text(completed.stdout, target=target, repo_root=repo_root),
+                },
             ),
         )
     failures: list[ImportBoundaryFailureV1] = []
@@ -576,7 +960,9 @@ def _isolated_import_failures(
                 reason="MINIQMT_PLUGIN_IMPORT_EXECUTION_FAILED",
                 context={
                     "exception_type": exception.get("type", "unknown"),
-                    "message": exception.get("message", "unavailable"),
+                    "message": _stable_isolated_text(
+                        exception.get("message", "unavailable"), target=target, repo_root=repo_root
+                    ),
                     "message_render_error_type": exception.get("message_render_error_type"),
                 },
             )
@@ -596,7 +982,21 @@ def validate_plugin_import_boundaries_v1(
     root = repo_root.resolve(strict=True)
     if not targets:
         raise ValueError("targets must not be empty")
-    ordered_targets = tuple(sorted(targets, key=lambda item: (item.module_name, item.source_path.as_posix())))
+    input_targets = tuple(sorted(targets, key=lambda item: (item.module_name, item.source_path.as_posix())))
+    ordered_targets: tuple[ImportBoundaryTargetV1, ...] = tuple(
+        ImportBoundaryTargetV1(
+            module_name=target.module_name,
+            source_path=target.source_path,
+            source_identity=target.source_path.resolve(strict=False).relative_to(root).as_posix(),
+        )
+        for target in input_targets
+        if target.source_path.resolve(strict=False).is_relative_to(root)
+    )
+    if len(ordered_targets) != len(input_targets):
+        outside = next(
+            target for target in input_targets if not target.source_path.resolve(strict=False).is_relative_to(root)
+        )
+        raise ValueError(f"target {outside.module_name} must be inside repo_root")
     if len({target.module_name for target in ordered_targets}) != len(ordered_targets):
         raise ValueError("target module names must be unique")
     if len({target.source_path.resolve(strict=False) for target in ordered_targets}) != len(ordered_targets):
@@ -667,15 +1067,16 @@ def validate_plugin_import_boundaries_v1(
         failures.extend(_isolated_import_failures(target=target, repo_root=root))
 
     ordered_failures = tuple(sorted(failures, key=lambda item: item.sort_key))
-    receipt = PluginImportBoundaryReceiptV1(
-        schema_version="plugin_import_boundary_receipt_v1",
-        status="FAILED" if ordered_failures else "PASSED",
+    receipt = PluginImportBoundaryReceiptV2.create(
         checked_modules=tuple(target.module_name for target in ordered_targets),
-        ordered_failures=ordered_failures,
+        failures=ordered_failures,
     )
     if ordered_failures:
         raise PluginImportBoundaryError(receipt)
     return receipt
+
+
+validate_plugin_import_boundaries_v2 = validate_plugin_import_boundaries_v1
 
 
 __all__ = [
@@ -683,5 +1084,7 @@ __all__ = [
     "ImportBoundaryTargetV1",
     "PluginImportBoundaryError",
     "PluginImportBoundaryReceiptV1",
+    "PluginImportBoundaryReceiptV2",
     "validate_plugin_import_boundaries_v1",
+    "validate_plugin_import_boundaries_v2",
 ]

@@ -622,35 +622,107 @@ class ObjectFieldRequirementV1(FrozenStrictModel):
         return self
 
 
-class EnumValueRequirementV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_enum_requirement_v1"] = "vnpy_enum_requirement_v1"
+class VnpyEnumMemberRequirementV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_enum_member_requirement_v2"] = "vnpy_enum_member_requirement_v2"
+    name: IdentityV1
+    value_expression: IdentityV1
+
+
+class EnumValueRequirementV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_enum_requirement_v2"] = "vnpy_enum_requirement_v2"
     enum_name: IdentityV1
     source_path: IdentityV1
     enum_kind: IdentityV1
-    values: tuple[IdentityV1, ...]
+    members: tuple[VnpyEnumMemberRequirementV2, ...]
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        return tuple(item.name for item in self.members)
 
     @model_validator(mode="after")
     def _validate_values(self) -> Self:
-        object.__setattr__(self, "values", _sorted_unique(self.values, field_name="required enum values"))
+        if not self.members:
+            raise ValueError("required enum values must not be empty")
+        names = tuple(item.name for item in self.members)
+        if len(names) != len(set(names)):
+            raise ValueError("required enum member names must be unique")
+        object.__setattr__(self, "members", tuple(sorted(self.members, key=lambda item: item.name)))
         return self
 
 
-class VnpyCompatibilityRequirementV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_compatibility_requirement_v1"]
-    mode: Literal["DERIVED_SOURCE_EXACT_CHARACTERIZATION"]
+class VnpySourceFileV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_source_file_v2"] = "vnpy_source_file_v2"
+    path: IdentityV1
+    size_bytes: NonNegativeIntV1
+    sha256: Sha256V1
+
+
+class VnpyUpstreamSourceV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_upstream_source_v2"] = "vnpy_upstream_source_v2"
+    namespace: Literal["VNPY_ALGOTRADING", "VNPY_CORE"]
     upstream_repo: IdentityV1
+    release_tag: IdentityV1 | None = None
     upstream_commit: IdentityV1
+    files: tuple[VnpySourceFileV2, ...]
+    license_file: VnpySourceFileV2
+    license: IdentityV1
+    copyright: IdentityV1
+    authority_sha256: Sha256V1
+
+    @model_validator(mode="after")
+    def _validate_authority(self) -> Self:
+        if _GIT_SHA_RE.fullmatch(self.upstream_commit) is None:
+            raise ValueError("upstream_commit must be a 40-character lowercase git sha")
+        if not self.files:
+            raise ValueError("upstream source files must not be empty")
+        paths = tuple(item.path for item in self.files)
+        if len(paths) != len(set(paths)):
+            raise ValueError("upstream source file paths must be unique")
+        all_paths = (*paths, self.license_file.path)
+        if any(
+            path != PurePosixPath(path).as_posix()
+            or PurePosixPath(path).is_absolute()
+            or PureWindowsPath(path).is_absolute()
+            or bool(PureWindowsPath(path).drive)
+            or "\\" in path
+            or any(part in ("", ".", "..") for part in PurePosixPath(path).parts)
+            for path in all_paths
+        ):
+            raise ValueError("upstream source paths must be normalized relative POSIX paths")
+        if self.license_file.path in paths:
+            raise ValueError("license file must be distinct from source files")
+        namespace_root = "vnpy_algotrading" if self.namespace == "VNPY_ALGOTRADING" else "vnpy_core"
+        if any(not path.startswith(namespace_root + "/") for path in paths):
+            raise ValueError("upstream source files must remain inside their authority namespace")
+        if self.license_file.path != f"{namespace_root}/LICENSE":
+            raise ValueError("upstream license file must use the exact authority namespace path")
+        object.__setattr__(self, "files", tuple(sorted(self.files, key=lambda item: item.path)))
+        expected = hash_hex_v1(
+            "miniqmt_vnpy_upstream_source_authority_v2",
+            self.canonical_payload_v1(exclude={"authority_sha256"}),
+        )
+        if self.authority_sha256 != expected:
+            raise ValueError("upstream source authority hash mismatch")
+        return self
+
+
+class VnpyCompatibilityRequirementV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_compatibility_requirement_v2"]
+    mode: Literal["DERIVED_SOURCE_EXACT_CHARACTERIZATION"]
+    upstream_sources: tuple[VnpyUpstreamSourceV2, ...]
     source_files_and_hashes: tuple[FileHashV1, ...]
     required_method_signatures: tuple[VnpyMethodRequirementV1, ...]
     required_object_fields: tuple[ObjectFieldRequirementV1, ...]
-    required_enum_values: tuple[EnumValueRequirementV1, ...]
+    required_enum_values: tuple[EnumValueRequirementV2, ...]
     characterization_sha256: Sha256V1
     requirement_sha256: Sha256V1
 
     @model_validator(mode="after")
     def _validate_closure(self) -> Self:
-        if _GIT_SHA_RE.fullmatch(self.upstream_commit) is None:
-            raise ValueError("upstream_commit must be a 40-character lowercase git sha")
+        authorities = tuple(sorted(self.upstream_sources, key=lambda item: item.namespace))
+        if tuple(item.namespace for item in authorities) != ("VNPY_ALGOTRADING", "VNPY_CORE"):
+            raise ValueError("upstream_sources must contain exactly VNPY_ALGOTRADING and VNPY_CORE")
+        object.__setattr__(self, "upstream_sources", authorities)
         object.__setattr__(
             self,
             "source_files_and_hashes",
@@ -669,29 +741,48 @@ class VnpyCompatibilityRequirementV1(FrozenStrictModel):
                 or any(part in ("", ".", "..") for part in normalized.parts)
             ):
                 raise ValueError("source_files_and_hashes paths must be normalized relative POSIX paths")
+        authority_files = {item.path: authority.namespace for authority in authorities for item in authority.files}
+        if set(source_paths) != set(authority_files):
+            raise ValueError("source_files_and_hashes must equal the two upstream authority source set")
         methods = tuple(
             sorted(self.required_method_signatures, key=lambda item: (item.source_path, item.owner, item.name))
         )
         method_keys = tuple((item.source_path, item.owner, item.name) for item in methods)
         if not methods or len(method_keys) != len(set(method_keys)):
             raise ValueError("required_method_signatures must be non-empty with unique method identities")
-        if any(item.source_path not in source_paths for item in methods):
-            raise ValueError("required method source_path must be present in source_files_and_hashes")
+        if any(
+            item.source_path not in source_paths or not item.source_path.startswith("vnpy_algotrading/")
+            for item in methods
+        ):
+            raise ValueError("required method source_path must be an algotrading authority file")
         object.__setattr__(self, "required_method_signatures", methods)
 
         objects = tuple(sorted(self.required_object_fields, key=lambda item: (item.object_name, item.source_path)))
         object_keys = tuple((item.object_name, item.source_path) for item in objects)
         if not objects or len(object_keys) != len(set(object_keys)):
             raise ValueError("required_object_fields must be non-empty with unique object identities")
+        if any(
+            item.source_path not in source_paths or not item.source_path.startswith("vnpy_core/") for item in objects
+        ):
+            raise ValueError("required object source_path must be a vnpy core authority file")
         object.__setattr__(self, "required_object_fields", objects)
 
         enums = tuple(sorted(self.required_enum_values, key=lambda item: (item.enum_name, item.source_path)))
         enum_keys = tuple((item.enum_name, item.source_path) for item in enums)
         if not enums or len(enum_keys) != len(set(enum_keys)):
             raise ValueError("required_enum_values must be non-empty with unique enum identities")
+        if any(
+            item.source_path not in source_paths
+            or not (
+                item.source_path.startswith("vnpy_core/")
+                or (item.source_path == "vnpy_algotrading/base.py" and item.enum_name == "AlgoStatus")
+            )
+            for item in enums
+        ):
+            raise ValueError("required enum source_path must be an authority file")
         object.__setattr__(self, "required_enum_values", enums)
         expected = hash_hex_v1(
-            "miniqmt_vnpy_compatibility_requirement_v1",
+            "miniqmt_vnpy_compatibility_requirement_v2",
             self.canonical_payload_v1(exclude={"requirement_sha256"}),
         )
         if self.requirement_sha256 != expected:
@@ -699,19 +790,22 @@ class VnpyCompatibilityRequirementV1(FrozenStrictModel):
         return self
 
 
-def compatibility_component_hashes_v1(requirement: VnpyCompatibilityRequirementV1) -> dict[str, str]:
+def compatibility_component_hashes_v2(requirement: VnpyCompatibilityRequirementV2) -> dict[str, str]:
     """Return the single canonical component-hash closure for K1-B/K1-C."""
 
     source_lock_sha256 = hash_hex_v1(
-        "miniqmt_vnpy_compatibility_source_lock_v1",
-        [item.canonical_payload_v1() for item in requirement.source_files_and_hashes],
+        "miniqmt_vnpy_compatibility_source_lock_v2",
+        {
+            "upstream_sources": [item.canonical_payload_v1() for item in requirement.upstream_sources],
+            "source_files_and_hashes": [item.canonical_payload_v1() for item in requirement.source_files_and_hashes],
+        },
     )
     method_signature_sha256 = hash_hex_v1(
-        "miniqmt_vnpy_compatibility_method_signatures_v1",
+        "miniqmt_vnpy_compatibility_method_signatures_v2",
         [item.canonical_payload_v1() for item in requirement.required_method_signatures],
     )
     object_field_sha256 = hash_hex_v1(
-        "miniqmt_vnpy_compatibility_object_fields_v1",
+        "miniqmt_vnpy_compatibility_object_fields_v2",
         {
             "required_object_fields": [item.canonical_payload_v1() for item in requirement.required_object_fields],
             "required_enum_values": [item.canonical_payload_v1() for item in requirement.required_enum_values],
@@ -725,8 +819,14 @@ def compatibility_component_hashes_v1(requirement: VnpyCompatibilityRequirementV
     }
     return {
         **surface_payload,
-        "surface_sha256": hash_hex_v1("miniqmt_vnpy_compatibility_surface_v1", surface_payload),
+        "surface_sha256": hash_hex_v1("miniqmt_vnpy_compatibility_surface_v2", surface_payload),
     }
+
+
+# Historical names remain import aliases only; V2 is the sole active schema.
+EnumValueRequirementV1 = EnumValueRequirementV2
+VnpyCompatibilityRequirementV1 = VnpyCompatibilityRequirementV2
+compatibility_component_hashes_v1 = compatibility_component_hashes_v2
 
 
 def _sorted_unique(values: tuple[Any, ...], *, field_name: str) -> tuple[Any, ...]:
@@ -1870,6 +1970,7 @@ __all__ = [
     "DeterministicExecutionContextV1",
     "DiagnosticObservationV1",
     "DiagnosticSeverityV1",
+    "EnumValueRequirementV2",
     "EnumValueRequirementV1",
     "EventSourceV2",
     "EventTypeV2",
@@ -1894,11 +1995,16 @@ __all__ = [
     "TimerMutationTypeV1",
     "TimerMutationV1",
     "VnpyCompatibilityRequirementV1",
+    "VnpyCompatibilityRequirementV2",
+    "VnpyEnumMemberRequirementV2",
     "VnpyMethodRequirementV1",
     "VnpyParameterKindV1",
     "VnpyParameterRequirementV1",
     "VnpyObjectFieldKindV1",
     "VnpyObjectFieldV1",
+    "VnpySourceFileV2",
+    "VnpyUpstreamSourceV2",
+    "compatibility_component_hashes_v2",
     "compatibility_component_hashes_v1",
     "validate_json_schema_instance_v1",
 ]

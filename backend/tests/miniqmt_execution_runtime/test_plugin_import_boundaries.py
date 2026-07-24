@@ -94,7 +94,7 @@ def test_ast_rejects_direct_alias_from_and_submodule_imports(
     assert failure.reason == "MINIQMT_PLUGIN_IMPORT_FORBIDDEN_DEPENDENCY"
     assert failure.context["import_name"] == expected_import
     assert failure.module_name == target.module_name
-    assert failure.source_path == target.source_path.as_posix()
+    assert failure.source_path == "fixtures/forbidden_import.py"
 
 
 @pytest.mark.parametrize(
@@ -206,13 +206,10 @@ def test_isolated_import_rejects_caught_file_write_side_effect(tmp_path: Path) -
         validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
 
     assert not marker.exists()
-    failure = next(
-        item
-        for item in exc_info.value.receipt.ordered_failures
-        if item.reason == "MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN"
-    )
-    assert failure.stage == "ISOLATED_IMPORT"
-    assert failure.context["operation"] == "open_write"
+    failure = exc_info.value.receipt.ordered_failures[0]
+    assert failure.reason == "MINIQMT_PLUGIN_IMPORT_FILESYSTEM_SIDE_EFFECT_FORBIDDEN"
+    assert failure.stage == "AST"
+    assert failure.context["call"] == "open"
 
 
 def test_isolated_import_does_not_execute_parent_package_init(tmp_path: Path) -> None:
@@ -302,7 +299,7 @@ def test_missing_source_is_an_aggregate_failure_with_module_and_path(tmp_path: P
     failure = exc_info.value.receipt.ordered_failures[0]
     assert failure.reason == "MINIQMT_PLUGIN_IMPORT_SOURCE_UNAVAILABLE"
     assert failure.module_name == target.module_name
-    assert failure.source_path == target.source_path.as_posix()
+    assert failure.source_path == "fixtures/missing.py"
     assert failure.context["error_type"] == "FileNotFoundError"
 
 
@@ -315,6 +312,191 @@ def test_duplicate_source_target_is_rejected_before_execution(tmp_path: Path) ->
             repo_root=tmp_path,
             targets=(_target("fixtures.one", path), _target("fixtures.two", path)),
         )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_reason"),
+    [
+        (
+            'import importlib\ngetattr(importlib, "import_module")("backend.services.simulation_runtime")\n',
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN",
+        ),
+        (
+            'import builtins\nbuiltins.__import__("backend.db")\n',
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN",
+        ),
+        (
+            'import os\nVALUE = getattr(os, "environ").get("SECRET")\n',
+            "MINIQMT_PLUGIN_IMPORT_EXTERNAL_STATE_FORBIDDEN",
+        ),
+        (
+            'import importlib\nlookup = getattr\nattribute = "import_module"\n'
+            'lookup(importlib, attribute)("backend.services.simulation_runtime")\n',
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_ATTRIBUTE_ESCAPE_FORBIDDEN",
+        ),
+    ],
+)
+def test_public_validator_rejects_indirect_dynamic_import_and_environment_access(
+    tmp_path: Path,
+    source: str,
+    expected_reason: str,
+) -> None:
+    target = _write_source(tmp_path, "fixtures.indirect_escape", source)
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert expected_reason in {item.reason for item in exc_info.value.receipt.ordered_failures}
+
+
+@pytest.mark.parametrize(
+    "source_factory",
+    [
+        lambda marker: f"import io\nio.open({str(marker)!r}, 'w', encoding='utf-8').write('forbidden')\n",
+        lambda marker: f"import os\nos.remove({str(marker)!r})\n",
+        lambda marker: f"import os\nos.unlink({str(marker)!r})\n",
+    ],
+)
+def test_public_validator_blocks_io_and_os_file_mutation_before_it_occurs(
+    tmp_path: Path,
+    source_factory,
+) -> None:
+    marker = tmp_path / "protected.txt"
+    marker.write_text("original", encoding="utf-8")
+    source = source_factory(marker)
+    target = _write_source(tmp_path, "fixtures.file_escape", source)
+
+    with pytest.raises(PluginImportBoundaryError):
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert marker.read_text(encoding="utf-8") == "original"
+
+
+def test_public_validator_blocks_helper_mediated_file_side_effect(tmp_path: Path) -> None:
+    marker = tmp_path / "helper-created.txt"
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "side_helper.py").write_text(
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('forbidden')\n",
+        encoding="utf-8",
+    )
+    target = _write_source(tmp_path, "fixtures.helper_target", "from . import side_helper\n")
+
+    with pytest.raises(PluginImportBoundaryError):
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "helper_source",
+    [
+        (
+            "import importlib\n"
+            'importlib.import_module("socket")\n'
+            "open({marker!r}, 'w', encoding='utf-8').write('dynamic-import-ran')\n"
+        ),
+        (
+            "import sys\n"
+            'sys.modules["socket"].socket()\n'
+            "open({marker!r}, 'w', encoding='utf-8').write('network-ran')\n"
+        ),
+        (
+            "import sys\n"
+            'sys.modules["subprocess"].run('
+            "[sys.executable, \"-c\", \"open({marker!r}, 'w').write('process-ran')\"], check=True)\n"
+        ),
+        (
+            "import sys\n"
+            'threading = sys.modules["threading"]\n'
+            "worker = threading.Thread(target=lambda: open({marker!r}, 'w').write('thread-ran'))\n"
+            "worker.start()\nworker.join()\n"
+        ),
+        (
+            "import sys\n"
+            'sys.modules["os"].environ.get("SECRET")\n'
+            "open({marker!r}, 'w', encoding='utf-8').write('environment-ran')\n"
+        ),
+    ],
+)
+def test_public_validator_blocks_helper_mediated_external_side_effects(
+    tmp_path: Path,
+    helper_source: str,
+) -> None:
+    marker = tmp_path / "helper-external-side-effect.txt"
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "external_helper.py").write_text(
+        helper_source.format(marker=str(marker)),
+        encoding="utf-8",
+    )
+    target = _write_source(tmp_path, "fixtures.external_target", "from . import external_helper\n")
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert any(
+        item.reason == "MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN" for item in exc_info.value.receipt.ordered_failures
+    )
+    assert not marker.exists()
+
+
+def test_import_failure_identity_is_repo_relative_and_root_independent(tmp_path: Path) -> None:
+    failures = []
+    for root_name in ("checkout-a", "checkout-b"):
+        root = tmp_path / root_name
+        target = _write_source(root, "fixtures.forbidden", "import backend.db\n")
+        with pytest.raises(PluginImportBoundaryError) as exc_info:
+            validate_plugin_import_boundaries_v1(repo_root=root, targets=(target,))
+        failures.append(exc_info.value.receipt.ordered_failures[0])
+
+    assert failures[0].source_path == "fixtures/forbidden.py"
+    assert failures[0].sort_key == failures[1].sort_key
+
+
+def test_isolated_import_failure_context_is_repo_relative_and_root_independent(tmp_path: Path) -> None:
+    failures = []
+    for root_name in ("checkout-a", "checkout-b"):
+        root = tmp_path / root_name
+        target = _write_source(root, "fixtures.runtime_failure", "raise RuntimeError(__file__)\n")
+        with pytest.raises(PluginImportBoundaryError) as exc_info:
+            validate_plugin_import_boundaries_v1(repo_root=root, targets=(target,))
+        failures.append(exc_info.value.receipt.ordered_failures[0])
+
+    assert failures[0].source_path == "fixtures/runtime_failure.py"
+    assert failures[0].sort_key == failures[1].sort_key
+
+
+def test_isolated_import_audit_blocks_raw_fileio_write(tmp_path: Path) -> None:
+    marker = tmp_path / "raw-fileio.txt"
+    target = _write_source(
+        tmp_path,
+        "fixtures.raw_fileio",
+        f"import _io\n_io.FileIO({str(marker)!r}, 'w').write(b'forbidden')\n",
+    )
+
+    with pytest.raises(PluginImportBoundaryError):
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert not marker.exists()
+
+
+def test_import_failures_are_bounded_truncated_and_hash_closed(tmp_path: Path) -> None:
+    source = "".join(f"import backend.db.forbidden_{index}\n" for index in range(100))
+    target = _write_source(tmp_path, "fixtures.many_violations", source)
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    receipt = exc_info.value.receipt
+    assert receipt.failures_truncated is True
+    assert receipt.observed_failure_count == 100
+    assert receipt.retained_failure_count == 64
+    assert receipt.omitted_failure_count == 36
+    assert len(receipt.ordered_failures) == 65
+    assert receipt.ordered_failures[-1].source_path == "__failure_set__"
+    assert receipt.failure_set_sha256 != "0" * 64
+    assert receipt.receipt_sha256 != "0" * 64
 
 
 @pytest.mark.parametrize("module_name", ["fixtures.invalid-name", "fixtures/path", " fixtures.name"])

@@ -11,17 +11,18 @@ from pydantic import ValidationError, model_validator
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
-    EnumValueRequirementV1,
+    EnumValueRequirementV2,
     FrozenStrictModel,
     IdentityV1,
     NonNegativeIntV1,
     ObjectFieldRequirementV1,
     Sha256V1,
-    VnpyCompatibilityRequirementV1,
+    VnpyCompatibilityRequirementV2,
     VnpyMethodRequirementV1,
     VnpyParameterKindV1,
     VnpyParameterRequirementV1,
-    compatibility_component_hashes_v1,
+    VnpyUpstreamSourceV2,
+    compatibility_component_hashes_v2,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import VnpyCompatibilityFailureV1
 
@@ -37,6 +38,8 @@ _PINNED_SOURCE_PATHS = frozenset(
         "vnpy_algotrading/algos/sniper_algo.py",
         "vnpy_algotrading/algos/best_limit_algo.py",
         "vnpy_algotrading/algos/twap_algo.py",
+        "vnpy_core/vnpy/trader/object.py",
+        "vnpy_core/vnpy/trader/constant.py",
     }
 )
 
@@ -67,7 +70,7 @@ class PinnedSourceFileV1(FrozenStrictModel):
         return self
 
 
-class PinnedSourceArtifactV1(FrozenStrictModel):
+class PinnedSourceArtifactV2(FrozenStrictModel):
     path: IdentityV1
     sha256: Sha256V1
 
@@ -77,51 +80,48 @@ class PinnedSourceArtifactV1(FrozenStrictModel):
         return self
 
 
-class PinnedSourceManifestV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_pinned_source_manifest_v1"]
-    upstream_repo: IdentityV1
-    upstream_commit: IdentityV1
-    files: tuple[PinnedSourceFileV1, ...]
-    license_file: PinnedSourceArtifactV1
-    characterization_file: PinnedSourceArtifactV1
-    license: IdentityV1
-    copyright: IdentityV1
+class PinnedSourceManifestV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_pinned_source_manifest_v2"]
+    upstream_sources: tuple[VnpyUpstreamSourceV2, ...]
+    characterization_file: PinnedSourceArtifactV2
     source_manifest_sha256: Sha256V1
 
     @model_validator(mode="after")
     def _validate_closure(self) -> Self:
-        if len(self.upstream_commit) != 40 or any(
-            character not in "0123456789abcdef" for character in self.upstream_commit
+        if tuple(getattr(item, "namespace", None) for item in self.upstream_sources) != (
+            "VNPY_ALGOTRADING",
+            "VNPY_CORE",
         ):
-            raise ValueError("upstream_commit must be a lowercase 40-character git sha")
-        if not self.files:
-            raise ValueError("source manifest files must not be empty")
-        paths = tuple(item.path for item in self.files)
-        if len(paths) != len(set(paths)):
-            raise ValueError("source manifest file paths must be unique")
-        if set(paths) != _PINNED_SOURCE_PATHS:
-            raise ValueError("source manifest must contain the exact pinned six-file path set")
-        ordered = tuple(sorted(self.files, key=lambda item: item.path))
-        object.__setattr__(self, "files", ordered)
-        if self.license_file.path != "LICENSE" or self.characterization_file.path != "surface_contract.json":
+            raise ValueError("source manifest must contain exactly two ordered upstream authorities")
+        paths = tuple(item.path for authority in self.upstream_sources for item in authority.files)
+        if set(paths) != _PINNED_SOURCE_PATHS or len(paths) != len(set(paths)):
+            raise ValueError("source manifest must contain the exact eight-file source path set")
+        if self.characterization_file.path != "surface_contract.json":
             raise ValueError("source manifest artifact paths must use the pinned authority names")
-        artifact_paths = {self.license_file.path, self.characterization_file.path}
-        if artifact_paths.intersection(paths) or len(artifact_paths) != 2:
-            raise ValueError("source artifact paths must be distinct from source files")
+        if self.characterization_file.path in paths:
+            raise ValueError("source artifact path must be distinct from source files")
         expected = hash_hex_v1(
-            "miniqmt_vnpy_pinned_source_manifest_v1",
+            "miniqmt_vnpy_pinned_source_manifest_v2",
             self.canonical_payload_v1(exclude={"source_manifest_sha256"}),
         )
         if self.source_manifest_sha256 != expected:
             raise ValueError("source manifest hash mismatch")
         return self
 
+    @property
+    def files(self) -> tuple[Any, ...]:
+        return tuple(item for authority in self.upstream_sources for item in authority.files)
 
-class VnpySurfaceContractV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_surface_contract_v1"]
+
+PinnedSourceManifestV1 = PinnedSourceManifestV2
+PinnedSourceArtifactV1 = PinnedSourceArtifactV2
+
+
+class VnpySurfaceContractV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_surface_contract_v2"]
     required_method_signatures: tuple[VnpyMethodRequirementV1, ...]
     required_object_fields: tuple[ObjectFieldRequirementV1, ...]
-    required_enum_values: tuple[EnumValueRequirementV1, ...]
+    required_enum_values: tuple[EnumValueRequirementV2, ...]
     surface_contract_sha256: Sha256V1
 
     @model_validator(mode="after")
@@ -141,7 +141,7 @@ class VnpySurfaceContractV1(FrozenStrictModel):
                 raise ValueError(f"{field_name} must be non-empty with unique identities")
             object.__setattr__(self, field_name, values)
         expected = hash_hex_v1(
-            "miniqmt_vnpy_surface_contract_v1",
+            "miniqmt_vnpy_surface_contract_v2",
             self.canonical_payload_v1(exclude={"surface_contract_sha256"}),
         )
         if self.surface_contract_sha256 != expected:
@@ -149,8 +149,11 @@ class VnpySurfaceContractV1(FrozenStrictModel):
         return self
 
 
-class LockedSurfaceV1(FrozenStrictModel):
-    schema_version: Literal["vnpy_locked_surface_v1"] = "vnpy_locked_surface_v1"
+VnpySurfaceContractV1 = VnpySurfaceContractV2
+
+
+class LockedSurfaceV2(FrozenStrictModel):
+    schema_version: Literal["vnpy_locked_surface_v2"] = "vnpy_locked_surface_v2"
     source_manifest_sha256: Sha256V1
     requirement_sha256: Sha256V1
     source_lock_sha256: Sha256V1
@@ -166,6 +169,9 @@ class LockedSurfaceV1(FrozenStrictModel):
         if self.ordered_failures != expected:
             raise ValueError("locked surface failures must be canonically sorted")
         return self
+
+
+LockedSurfaceV1 = LockedSurfaceV2
 
 
 def _safe_error(exc: Exception, *, source_root: Path | None = None) -> dict[str, str]:
@@ -249,7 +255,7 @@ def _read_surface_contract(
             )
         )
     try:
-        return VnpySurfaceContractV1.model_validate_json(content, strict=True)
+        return VnpySurfaceContractV2.model_validate_json(content, strict=True)
     except (ValueError, TypeError, ValidationError) as exc:
         failures.append(
             _failure(
@@ -269,7 +275,11 @@ def _read_sources(
     trees: dict[str, ast.Module] = {}
     declared = {item.path: item for item in manifest.files}
     actual = {path.relative_to(source_root).as_posix() for path in source_root.rglob("*") if path.is_file()}
-    allowed_artifacts = {manifest.license_file.path, manifest.characterization_file.path, _SOURCE_MANIFEST}
+    allowed_artifacts = {
+        manifest.characterization_file.path,
+        _SOURCE_MANIFEST,
+        *(authority.license_file.path for authority in manifest.upstream_sources),
+    }
     expected_paths = set(declared) | allowed_artifacts
     for extra in sorted(actual - expected_paths):
         failures.append(
@@ -406,7 +416,7 @@ def _extract_parameters(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[V
 
 
 def _validate_method_surface(
-    requirement: VnpyCompatibilityRequirementV1,
+    requirement: VnpyCompatibilityRequirementV2,
     trees: dict[str, ast.Module],
     failures: list[VnpyCompatibilityFailureV1],
 ) -> None:
@@ -462,9 +472,135 @@ def _validate_method_surface(
             )
 
 
+def _class_defs(tree: ast.Module) -> dict[str, ast.ClassDef]:
+    return {item.name: item for item in tree.body if isinstance(item, ast.ClassDef)}
+
+
+def _object_members(tree: ast.Module, object_name: str) -> dict[str, tuple[str, str, bool]]:
+    classes = _class_defs(tree)
+    members: dict[str, tuple[str, str, bool]] = {}
+
+    def visit_class(name: str, seen: set[str]) -> None:
+        if name in seen:
+            return
+        current = classes.get(name)
+        if current is None:
+            return
+        seen.add(name)
+        for base in current.bases:
+            if isinstance(base, ast.Name):
+                visit_class(base.id, seen)
+        for item in current.body:
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                annotation = _annotation(item.annotation)
+                members[item.target.id] = ("ATTRIBUTE", annotation, "None" in annotation)
+            elif isinstance(item, ast.FunctionDef) and item.name == "__post_init__":
+                for nested in ast.walk(item):
+                    if isinstance(nested, (ast.Assign, ast.AnnAssign)):
+                        targets = nested.targets if isinstance(nested, ast.Assign) else (nested.target,)
+                        for target in targets:
+                            if (
+                                isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and target.value.id == "self"
+                            ):
+                                annotation = (
+                                    _annotation(nested.annotation) if isinstance(nested, ast.AnnAssign) else "str"
+                                )
+                                members[target.attr] = ("ATTRIBUTE", annotation, "None" in annotation)
+            elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                members[item.name] = ("CALLABLE", _annotation(item.returns), False)
+
+    visit_class(object_name, set())
+    return members
+
+
+def _validate_core_object_surface(
+    requirement: VnpyCompatibilityRequirementV2,
+    trees: dict[str, ast.Module],
+    failures: list[VnpyCompatibilityFailureV1],
+) -> None:
+    tree = trees.get("vnpy_core/vnpy/trader/object.py")
+    if tree is None:
+        return
+    for required in requirement.required_object_fields:
+        members = _object_members(tree, required.object_name)
+        actual_fields = []
+        for field in required.fields:
+            actual = members.get(field.name)
+            if actual is None:
+                failures.append(
+                    _failure(
+                        f"required_object_fields[{required.object_name}].fields[{field.name}]",
+                        "MINIQMT_VNPY_COMPAT_OBJECT_FIELD_MISSING",
+                        {"object": required.object_name, "field": field.name},
+                    )
+                )
+                continue
+            kind, annotation, nullable = actual
+            return_annotation = annotation if kind == "CALLABLE" else None
+            field_annotation = "method" if kind == "CALLABLE" else annotation
+            actual_fields.append(
+                {
+                    "schema_version": "vnpy_object_field_v1",
+                    "name": field.name,
+                    "kind": kind,
+                    "annotation": field_annotation,
+                    "nullable": nullable,
+                    "return_annotation": return_annotation,
+                }
+            )
+        expected_fields = [item.canonical_payload_v1() for item in required.fields]
+        if tuple(actual_fields) != tuple(expected_fields):
+            failures.append(
+                _failure(
+                    f"required_object_fields[{required.object_name}]",
+                    "MINIQMT_VNPY_COMPAT_OBJECT_FIELD_DRIFT",
+                    {"expected": expected_fields, "actual": actual_fields},
+                )
+            )
+
+
+def _enum_members(tree: ast.Module, enum_name: str) -> dict[str, str]:
+    for item in tree.body:
+        if isinstance(item, ast.ClassDef) and item.name == enum_name:
+            values: dict[str, str] = {}
+            for statement in item.body:
+                if isinstance(statement, ast.Assign):
+                    expression = ast.unparse(statement.value)
+                    for target in statement.targets:
+                        if isinstance(target, ast.Name):
+                            values[target.id] = expression
+            return values
+    return {}
+
+
+def _validate_core_enum_surface(
+    requirement: VnpyCompatibilityRequirementV2,
+    trees: dict[str, ast.Module],
+    failures: list[VnpyCompatibilityFailureV1],
+) -> None:
+    core_tree = trees.get("vnpy_core/vnpy/trader/constant.py")
+    algo_tree = trees.get("vnpy_algotrading/base.py")
+    for required in requirement.required_enum_values:
+        tree = algo_tree if required.source_path == "vnpy_algotrading/base.py" else core_tree
+        if tree is None:
+            continue
+        actual = _enum_members(tree, required.enum_name)
+        expected = {item.name: item.value_expression for item in required.members}
+        if actual != expected:
+            failures.append(
+                _failure(
+                    f"required_enum_values[{required.enum_name}]",
+                    "MINIQMT_VNPY_COMPAT_ENUM_VALUE_DRIFT",
+                    {"expected": expected, "actual": actual},
+                )
+            )
+
+
 def _compare_surface_contract(
-    requirement: VnpyCompatibilityRequirementV1,
-    contract: VnpySurfaceContractV1,
+    requirement: VnpyCompatibilityRequirementV2,
+    contract: VnpySurfaceContractV2,
     failures: list[VnpyCompatibilityFailureV1],
 ) -> None:
     expected_methods = tuple(item.canonical_payload_v1() for item in requirement.required_method_signatures)
@@ -501,32 +637,27 @@ def _compare_surface_contract(
 
 def extract_locked_surface_v1(
     *,
-    requirement: VnpyCompatibilityRequirementV1,
+    requirement: VnpyCompatibilityRequirementV2,
     source_root: Path = PINNED_SOURCE_ROOT,
 ) -> LockedSurfaceV1:
     """Read and compare the offline source/surface without importing vn.py."""
 
-    if type(requirement) is not VnpyCompatibilityRequirementV1 or not isinstance(source_root, Path):
+    if type(requirement) is not VnpyCompatibilityRequirementV2 or not isinstance(source_root, Path):
         raise TypeError("requirement and source_root must use strict production types")
-    components = compatibility_component_hashes_v1(requirement)
+    components = compatibility_component_hashes_v2(requirement)
     failures: list[VnpyCompatibilityFailureV1] = []
     manifest = _load_manifest(source_root, failures)
     source_manifest_sha256 = "0" * 64
     if manifest is not None:
         source_manifest_sha256 = manifest.source_manifest_sha256
-        if (
-            manifest.upstream_repo != requirement.upstream_repo
-            or manifest.upstream_commit != requirement.upstream_commit
-        ):
+        if manifest.upstream_sources != requirement.upstream_sources:
             failures.append(
                 _failure(
                     "source_manifest.upstream",
                     "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT",
                     {
-                        "expected_repo": requirement.upstream_repo,
-                        "actual_repo": manifest.upstream_repo,
-                        "expected_commit": requirement.upstream_commit,
-                        "actual_commit": manifest.upstream_commit,
+                        "expected": [item.canonical_payload_v1() for item in requirement.upstream_sources],
+                        "actual": [item.canonical_payload_v1() for item in manifest.upstream_sources],
                     },
                 )
             )
@@ -547,29 +678,41 @@ def extract_locked_surface_v1(
             )
         trees = _read_sources(source_root, manifest, failures)
         _validate_method_surface(requirement, trees, failures)
+        _validate_core_object_surface(requirement, trees, failures)
+        _validate_core_enum_surface(requirement, trees, failures)
         contract = _read_surface_contract(source_root, manifest, failures)
         if contract is not None:
             _compare_surface_contract(requirement, contract, failures)
-        license_path = source_root / manifest.license_file.path
-        try:
-            license_hash = hashlib.sha256(license_path.read_bytes()).hexdigest()
-        except OSError as exc:
-            failures.append(
-                _failure(
-                    "license_file",
-                    "MINIQMT_VNPY_COMPAT_LICENSE_MISSING",
-                    {"path": manifest.license_file.path, **_safe_error(exc, source_root=source_root)},
-                )
-            )
-        else:
-            if license_hash != manifest.license_file.sha256:
+        for authority in manifest.upstream_sources:
+            license_path = source_root / authority.license_file.path
+            try:
+                license_bytes = license_path.read_bytes()
+            except OSError as exc:
                 failures.append(
                     _failure(
-                        "license_file.sha256",
-                        "MINIQMT_VNPY_COMPAT_LICENSE_HASH_DRIFT",
-                        {"expected": manifest.license_file.sha256, "actual": license_hash},
+                        f"{authority.namespace}.license_file",
+                        "MINIQMT_VNPY_COMPAT_LICENSE_MISSING",
+                        {"path": authority.license_file.path, **_safe_error(exc, source_root=source_root)},
                     )
                 )
+            else:
+                license_hash = hashlib.sha256(license_bytes).hexdigest()
+                if license_hash != authority.license_file.sha256:
+                    failures.append(
+                        _failure(
+                            f"{authority.namespace}.license_file.sha256",
+                            "MINIQMT_VNPY_COMPAT_LICENSE_HASH_DRIFT",
+                            {"expected": authority.license_file.sha256, "actual": license_hash},
+                        )
+                    )
+                if len(license_bytes) != authority.license_file.size_bytes:
+                    failures.append(
+                        _failure(
+                            f"{authority.namespace}.license_file.size_bytes",
+                            "MINIQMT_VNPY_COMPAT_LICENSE_SIZE_DRIFT",
+                            {"expected": authority.license_file.size_bytes, "actual": len(license_bytes)},
+                        )
+                    )
     ordered = tuple(sorted(failures, key=lambda item: item.sort_key_v1()))
     return LockedSurfaceV1(
         source_manifest_sha256=source_manifest_sha256,
@@ -584,16 +727,26 @@ def extract_locked_surface_v1(
 
 
 validate_pinned_source_v1 = extract_locked_surface_v1
+extract_locked_surface_v2 = extract_locked_surface_v1
+load_pinned_source_manifest_v2 = load_pinned_source_manifest_v1
+validate_pinned_source_v2 = extract_locked_surface_v1
 
 
 __all__ = [
     "PINNED_SOURCE_ROOT",
     "LockedSurfaceV1",
+    "LockedSurfaceV2",
     "PinnedSourceArtifactV1",
+    "PinnedSourceArtifactV2",
     "PinnedSourceFileV1",
     "PinnedSourceManifestV1",
+    "PinnedSourceManifestV2",
     "VnpySurfaceContractV1",
+    "VnpySurfaceContractV2",
     "extract_locked_surface_v1",
+    "extract_locked_surface_v2",
     "load_pinned_source_manifest_v1",
+    "load_pinned_source_manifest_v2",
     "validate_pinned_source_v1",
+    "validate_pinned_source_v2",
 ]

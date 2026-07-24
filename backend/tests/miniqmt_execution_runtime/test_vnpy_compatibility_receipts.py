@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from backend.execution_algos.vnpy_compat.locked_surface import (
     PINNED_SOURCE_ROOT,
-    PinnedSourceManifestV1,
+    PinnedSourceManifestV2,
     extract_locked_surface_v1,
     load_pinned_source_manifest_v1,
 )
@@ -34,18 +34,18 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     FileHashV1,
-    VnpyCompatibilityRequirementV1,
+    VnpyCompatibilityRequirementV2,
     VnpyMethodRequirementV1,
     VnpyParameterKindV1,
     VnpyParameterRequirementV1,
+    compatibility_component_hashes_v2,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
     CompatibilityStatusV1,
     PluginCatalogBuildError,
     VnpyCompatibilityFailureV1,
-    VnpyCompatibilityReceiptV1,
+    VnpyCompatibilityReceiptV2,
     build_plugin_catalog_v2,
-    compatibility_component_hashes_v1,
 )
 
 
@@ -62,8 +62,26 @@ def _copy_authority(tmp_path: Path) -> Path:
     return target
 
 
-def _reason_codes(receipt: VnpyCompatibilityReceiptV1) -> set[str]:
+def _reason_codes(receipt: VnpyCompatibilityReceiptV2) -> set[str]:
     return {item.reason_code for item in receipt.ordered_failures}
+
+
+def _rehash_source_manifest(payload: dict[str, object]) -> None:
+    authorities = payload["upstream_sources"]
+    assert isinstance(authorities, list)
+    for authority in authorities:
+        assert isinstance(authority, dict)
+        files = authority["files"]
+        assert isinstance(files, list)
+        files.sort(key=lambda item: item["path"])
+        authority["authority_sha256"] = hash_hex_v1(
+            "miniqmt_vnpy_upstream_source_authority_v2",
+            {key: value for key, value in authority.items() if key != "authority_sha256"},
+        )
+    payload["source_manifest_sha256"] = hash_hex_v1(
+        "miniqmt_vnpy_pinned_source_manifest_v2",
+        {key: value for key, value in payload.items() if key != "source_manifest_sha256"},
+    )
 
 
 def test_real_pinned_source_manifest_and_surface_read_back_exactly() -> None:
@@ -71,13 +89,22 @@ def test_real_pinned_source_manifest_and_surface_read_back_exactly() -> None:
     requirement = _manifest().compatibility_requirement
     surface = extract_locked_surface_v1(requirement=requirement, source_root=PINNED_SOURCE_ROOT)
 
-    assert source.upstream_commit == "4133987530eb28f3538d1983545d81c4f83d7d59"
-    assert len(source.files) == 6
-    assert source.license == "MIT License"
+    assert source.schema_version == "vnpy_pinned_source_manifest_v2"
+    assert tuple(item.namespace for item in source.upstream_sources) == ("VNPY_ALGOTRADING", "VNPY_CORE")
+    assert {item.upstream_commit for item in source.upstream_sources} == {
+        "4133987530eb28f3538d1983545d81c4f83d7d59",
+        "1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9",
+    }
+    assert len(source.files) == 8
+    assert {item.license for item in source.upstream_sources} == {"MIT License"}
+    assert {item.license_file.path for item in source.upstream_sources} == {
+        "vnpy_algotrading/LICENSE",
+        "vnpy_core/LICENSE",
+    }
     assert source.characterization_file.path == "surface_contract.json"
     assert surface.ordered_failures == ()
-    assert surface.source_lock_sha256 == compatibility_component_hashes_v1(requirement)["source_lock_sha256"]
-    assert surface.surface_sha256 == compatibility_component_hashes_v1(requirement)["surface_sha256"]
+    assert surface.source_lock_sha256 == compatibility_component_hashes_v2(requirement)["source_lock_sha256"]
+    assert surface.surface_sha256 == compatibility_component_hashes_v2(requirement)["surface_sha256"]
 
 
 def test_public_source_and_receipt_builders_reject_non_strict_carriers() -> None:
@@ -110,7 +137,7 @@ def test_requirement_is_structured_strict_and_input_order_independent() -> None:
     payload["required_method_signatures"] = tuple(reversed(payload["required_method_signatures"]))
     payload["required_object_fields"] = tuple(reversed(payload["required_object_fields"]))
     payload["required_enum_values"] = tuple(reversed(payload["required_enum_values"]))
-    reconstructed = VnpyCompatibilityRequirementV1.model_validate(payload, strict=True)
+    reconstructed = VnpyCompatibilityRequirementV2.model_validate(payload, strict=True)
     assert reconstructed == requirement
     assert canonical_json_bytes_v1(reconstructed.canonical_payload_v1()) == canonical_json_bytes_v1(
         requirement.canonical_payload_v1()
@@ -133,7 +160,7 @@ def test_requirement_rejects_bool_as_parameter_flags_and_hash_drift() -> None:
     requirement_payload = _manifest().compatibility_requirement.model_dump(mode="python")
     requirement_payload["requirement_sha256"] = "0" * 64
     with pytest.raises(ValidationError, match="requirement_sha256"):
-        VnpyCompatibilityRequirementV1.model_validate(requirement_payload, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(requirement_payload, strict=True)
 
 
 def test_requirement_rejects_impossible_parameter_default_closure() -> None:
@@ -161,29 +188,28 @@ def test_requirement_rejects_duplicate_source_paths_before_hash_acceptance() -> 
         FileHashV1(path="vnpy_algotrading/engine.py", sha256="2" * 64),
     )
     with pytest.raises(ValidationError, match="unique keys"):
-        VnpyCompatibilityRequirementV1.model_validate(payload, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(payload, strict=True)
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra"])
-def test_source_manifest_requires_exact_six_file_path_set(mutation: str) -> None:
+def test_source_manifest_requires_exact_eight_file_path_set(mutation: str) -> None:
     payload = json.loads((PINNED_SOURCE_ROOT / "source_manifest.json").read_text(encoding="utf-8"))
+    algotrading = payload["upstream_sources"][0]
     if mutation == "missing":
-        payload["files"].pop()
+        algotrading["files"].pop()
     else:
-        payload["files"].append(
+        algotrading["files"].append(
             {
+                "schema_version": "vnpy_source_file_v2",
                 "path": "vnpy_algotrading/algos/unsupported_algo.py",
                 "sha256": "1" * 64,
                 "size_bytes": 1,
             }
         )
-    payload["source_manifest_sha256"] = hash_hex_v1(
-        "miniqmt_vnpy_pinned_source_manifest_v1",
-        {key: value for key, value in payload.items() if key != "source_manifest_sha256"},
-    )
+    _rehash_source_manifest(payload)
 
-    with pytest.raises(ValidationError, match="exact pinned six-file"):
-        PinnedSourceManifestV1.model_validate_json(canonical_json_bytes_v1(payload), strict=True)
+    with pytest.raises(ValidationError, match="exact eight-file"):
+        PinnedSourceManifestV2.model_validate_json(canonical_json_bytes_v1(payload), strict=True)
 
 
 def test_requirement_rejects_invalid_method_and_source_identity_before_hash_acceptance() -> None:
@@ -192,7 +218,7 @@ def test_requirement_rejects_invalid_method_and_source_identity_before_hash_acce
     empty_methods = requirement.model_dump(mode="python")
     empty_methods["required_method_signatures"] = ()
     with pytest.raises(ValidationError, match="required_method_signatures"):
-        VnpyCompatibilityRequirementV1.model_validate(empty_methods, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(empty_methods, strict=True)
 
     duplicate_methods = requirement.model_dump(mode="python")
     duplicate_methods["required_method_signatures"] = (
@@ -200,14 +226,21 @@ def test_requirement_rejects_invalid_method_and_source_identity_before_hash_acce
         requirement.required_method_signatures[0],
     )
     with pytest.raises(ValidationError, match="unique method identities"):
-        VnpyCompatibilityRequirementV1.model_validate(duplicate_methods, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(duplicate_methods, strict=True)
 
     missing_method_source = requirement.model_dump(mode="python")
-    missing_method_source["source_files_and_hashes"] = tuple(
-        item for item in requirement.source_files_and_hashes if item.path != "vnpy_algotrading/engine.py"
+    method_payload = missing_method_source["required_method_signatures"][0]
+    method_payload["source_path"] = "vnpy_core/vnpy/trader/object.py"
+    canonical_method = requirement.required_method_signatures[0].canonical_payload_v1(
+        exclude={"method_requirement_sha256"}
+    )
+    canonical_method["source_path"] = "vnpy_core/vnpy/trader/object.py"
+    method_payload["method_requirement_sha256"] = hash_hex_v1(
+        "miniqmt_vnpy_method_requirement_v1",
+        canonical_method,
     )
     with pytest.raises(ValidationError, match="method source_path"):
-        VnpyCompatibilityRequirementV1.model_validate(missing_method_source, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(missing_method_source, strict=True)
 
     for invalid_path in ("../engine.py", "C:/escape.py", "..\\escape.py"):
         traversal = requirement.model_dump(mode="python")
@@ -216,12 +249,12 @@ def test_requirement_rejects_invalid_method_and_source_identity_before_hash_acce
             *requirement.source_files_and_hashes,
         )
         with pytest.raises(ValidationError, match="normalized relative POSIX"):
-            VnpyCompatibilityRequirementV1.model_validate(traversal, strict=True)
+            VnpyCompatibilityRequirementV2.model_validate(traversal, strict=True)
 
     wrong_mode = requirement.model_dump(mode="python")
     wrong_mode["mode"] = "derived_source_exact_characterization"
     with pytest.raises(ValidationError, match="mode"):
-        VnpyCompatibilityRequirementV1.model_validate(wrong_mode, strict=True)
+        VnpyCompatibilityRequirementV2.model_validate(wrong_mode, strict=True)
 
 
 @pytest.mark.parametrize(
@@ -263,6 +296,214 @@ def test_source_hash_decode_ast_and_method_signature_drift_are_aggregated(tmp_pa
     assert receipt.ordered_failures == tuple(sorted(receipt.ordered_failures, key=lambda item: item.sort_key_v1()))
 
 
+def test_core_object_and_enum_source_drift_is_explicitly_failed(tmp_path: Path) -> None:
+    source_root = _copy_authority(tmp_path)
+    object_path = source_root / "vnpy_core/vnpy/trader/object.py"
+    object_path.write_text(
+        object_path.read_text(encoding="utf-8").replace("datetime: Datetime\n", "datetime: Datetime | None\n", 1),
+        encoding="utf-8",
+    )
+    constant_path = source_root / "vnpy_core/vnpy/trader/constant.py"
+    constant_path.write_text(
+        constant_path.read_text(encoding="utf-8").replace('LONG = _("多")', 'LONG = _("多变")', 1),
+        encoding="utf-8",
+    )
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    reasons = _reason_codes(receipt)
+    assert "MINIQMT_VNPY_COMPAT_SOURCE_HASH_DRIFT" in reasons
+    assert "MINIQMT_VNPY_COMPAT_OBJECT_FIELD_DRIFT" in reasons
+    assert "MINIQMT_VNPY_COMPAT_ENUM_VALUE_DRIFT" in reasons
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("datetime: Datetime\n", "datetime: Datetime | None\n"),
+        ("datetime: Datetime | None = None\n", "datetime: Datetime = None\n"),
+        ("def is_active(self) -> bool:\n", "def is_active(self) -> str:\n"),
+    ],
+)
+def test_core_object_type_nullability_and_callable_drift_is_explicit(
+    tmp_path: Path,
+    before: str,
+    after: str,
+) -> None:
+    source_root = _copy_authority(tmp_path)
+    object_path = source_root / "vnpy_core/vnpy/trader/object.py"
+    original = object_path.read_text(encoding="utf-8")
+    assert before in original
+    object_path.write_text(original.replace(before, after), encoding="utf-8")
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    assert "MINIQMT_VNPY_COMPAT_OBJECT_FIELD_DRIFT" in _reason_codes(receipt)
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ('    NET = _("净")\n', ""),
+        ('    NET = _("净")\n', '    NET = _("净")\n    HEDGE = _("对冲")\n'),
+        ('    LONG = _("多")\n', '    LONG = _("多变")\n'),
+    ],
+)
+def test_core_enum_missing_extra_and_value_drift_is_explicit(
+    tmp_path: Path,
+    before: str,
+    after: str,
+) -> None:
+    source_root = _copy_authority(tmp_path)
+    constant_path = source_root / "vnpy_core/vnpy/trader/constant.py"
+    original = constant_path.read_text(encoding="utf-8")
+    assert before in original
+    constant_path.write_text(original.replace(before, after, 1), encoding="utf-8")
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    assert "MINIQMT_VNPY_COMPAT_ENUM_VALUE_DRIFT" in _reason_codes(receipt)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "reason"),
+    [
+        ("vnpy_core/vnpy/trader/object.py", "MINIQMT_VNPY_COMPAT_SOURCE_MISSING"),
+        ("vnpy_core/vnpy/trader/constant.py", "MINIQMT_VNPY_COMPAT_SOURCE_MISSING"),
+    ],
+)
+def test_core_source_missing_fails_loud(tmp_path: Path, relative_path: str, reason: str) -> None:
+    source_root = _copy_authority(tmp_path)
+    (source_root / relative_path).unlink()
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    assert reason in _reason_codes(receipt)
+
+
+def test_core_source_decode_and_ast_failures_are_retained(tmp_path: Path) -> None:
+    source_root = _copy_authority(tmp_path)
+    (source_root / "vnpy_core/vnpy/trader/constant.py").write_bytes(b"\xff\xfe")
+    (source_root / "vnpy_core/vnpy/trader/object.py").write_text("def broken(:\n", encoding="utf-8")
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert {
+        "MINIQMT_VNPY_COMPAT_SOURCE_DECODE_INVALID",
+        "MINIQMT_VNPY_COMPAT_SOURCE_AST_INVALID",
+    }.issubset(_reason_codes(receipt))
+
+
+def test_core_license_bytes_hash_and_size_drift_are_retained(tmp_path: Path) -> None:
+    source_root = _copy_authority(tmp_path)
+    license_path = source_root / "vnpy_core/LICENSE"
+    license_path.write_bytes(license_path.read_bytes() + b"drift")
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert {
+        "MINIQMT_VNPY_COMPAT_LICENSE_HASH_DRIFT",
+        "MINIQMT_VNPY_COMPAT_LICENSE_SIZE_DRIFT",
+    }.issubset(_reason_codes(receipt))
+
+
+def test_core_source_extra_duplicate_and_traversal_fail_loud(tmp_path: Path) -> None:
+    source_root = _copy_authority(tmp_path)
+    (source_root / "vnpy_core/extra.py").write_text("VALUE = 1\n", encoding="utf-8")
+    extra_receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+    assert "MINIQMT_VNPY_COMPAT_SOURCE_EXTRA" in _reason_codes(extra_receipt)
+
+    payload = json.loads((source_root / "source_manifest.json").read_text(encoding="utf-8"))
+    core = payload["upstream_sources"][1]
+    core["files"].append(dict(core["files"][0]))
+    _rehash_source_manifest(payload)
+    (source_root / "source_manifest.json").write_bytes(canonical_json_bytes_v1(payload))
+    duplicate_receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+    assert "MINIQMT_VNPY_COMPAT_SOURCE_MANIFEST_INVALID" in _reason_codes(duplicate_receipt)
+
+    traversal = json.loads((PINNED_SOURCE_ROOT / "source_manifest.json").read_text(encoding="utf-8"))
+    traversal["upstream_sources"][1]["files"][0]["path"] = "../constant.py"
+    _rehash_source_manifest(traversal)
+    (source_root / "source_manifest.json").write_bytes(canonical_json_bytes_v1(traversal))
+    traversal_receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+    assert "MINIQMT_VNPY_COMPAT_SOURCE_MANIFEST_INVALID" in _reason_codes(traversal_receipt)
+
+
+def test_requirement_and_surface_contract_drift_cannot_self_certify_core_bytes(tmp_path: Path) -> None:
+    source_root = _copy_authority(tmp_path)
+    contract = json.loads((source_root / "surface_contract.json").read_text(encoding="utf-8"))
+    contract["required_object_fields"][0]["fields"][0]["annotation"] = "object"
+    contract["surface_contract_sha256"] = hash_hex_v1(
+        "miniqmt_vnpy_surface_contract_v2",
+        {key: value for key, value in contract.items() if key != "surface_contract_sha256"},
+    )
+    (source_root / "surface_contract.json").write_bytes(canonical_json_bytes_v1(contract))
+
+    requirement_payload = _manifest().compatibility_requirement.model_dump(mode="python")
+    requirement_payload["required_object_fields"][0]["fields"][0]["annotation"] = "object"
+    canonical_requirement = _manifest().compatibility_requirement.canonical_payload_v1(exclude={"requirement_sha256"})
+    canonical_requirement["required_object_fields"][0]["fields"][0]["annotation"] = "object"
+    requirement_payload["requirement_sha256"] = hash_hex_v1(
+        "miniqmt_vnpy_compatibility_requirement_v2",
+        canonical_requirement,
+    )
+    drifted_requirement = VnpyCompatibilityRequirementV2.model_validate(requirement_payload, strict=True)
+    drifted_manifest = _manifest().model_copy(update={"compatibility_requirement": drifted_requirement})
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=drifted_manifest, source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    assert "MINIQMT_VNPY_COMPAT_OBJECT_FIELD_DRIFT" in _reason_codes(receipt)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_reason"),
+    [
+        ("upstream_repo", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("release_tag", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("upstream_commit", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("source_path", "MINIQMT_VNPY_COMPAT_SOURCE_MANIFEST_INVALID"),
+        ("source_sha256", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("source_size_bytes", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("license", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+        ("license_path", "MINIQMT_VNPY_COMPAT_SOURCE_MANIFEST_INVALID"),
+        ("license_traversal", "MINIQMT_VNPY_COMPAT_SOURCE_MANIFEST_INVALID"),
+        ("license_sha256", "MINIQMT_VNPY_COMPAT_SOURCE_IDENTITY_DRIFT"),
+    ],
+)
+def test_core_source_authority_metadata_drift_is_not_accepted(
+    tmp_path: Path,
+    field: str,
+    expected_reason: str,
+) -> None:
+    source_root = _copy_authority(tmp_path)
+    payload = json.loads((source_root / "source_manifest.json").read_text(encoding="utf-8"))
+    core = payload["upstream_sources"][1]
+    mutations = {
+        "upstream_repo": lambda: core.__setitem__("upstream_repo", "https://github.com/vnpy/not-vnpy"),
+        "release_tag": lambda: core.__setitem__("release_tag", "4.0.1"),
+        "upstream_commit": lambda: core.__setitem__("upstream_commit", "0" * 40),
+        "source_path": lambda: core["files"][0].__setitem__("path", "vnpy_core/vnpy/trader/constant_drift.py"),
+        "source_sha256": lambda: core["files"][0].__setitem__("sha256", "0" * 64),
+        "source_size_bytes": lambda: core["files"][0].__setitem__("size_bytes", 1),
+        "license": lambda: core.__setitem__("license", "not-the-pinned-license"),
+        "license_path": lambda: core["license_file"].__setitem__("path", "vnpy_core/LICENSE.drift"),
+        "license_traversal": lambda: core["license_file"].__setitem__("path", "../LICENSE"),
+        "license_sha256": lambda: core["license_file"].__setitem__("sha256", "0" * 64),
+    }
+    mutations[field]()
+    _rehash_source_manifest(payload)
+    (source_root / "source_manifest.json").write_bytes(canonical_json_bytes_v1(payload))
+
+    receipt = build_vnpy_compatibility_receipt_v1(manifest=_manifest(), source_root=source_root)
+
+    assert receipt.status is CompatibilityStatusV1.FAILED
+    assert expected_reason in _reason_codes(receipt)
+
+
 def test_extra_source_and_path_traversal_fail_loud(tmp_path: Path) -> None:
     source_root = _copy_authority(tmp_path)
     extra = source_root / "vnpy_algotrading/extra.py"
@@ -271,23 +512,17 @@ def test_extra_source_and_path_traversal_fail_loud(tmp_path: Path) -> None:
     assert "MINIQMT_VNPY_COMPAT_SOURCE_EXTRA" in _reason_codes(receipt)
 
     payload = json.loads((source_root / "source_manifest.json").read_text(encoding="utf-8"))
-    payload["files"][0]["path"] = "../escape.py"
-    payload["source_manifest_sha256"] = hash_hex_v1(
-        "miniqmt_vnpy_pinned_source_manifest_v1",
-        {key: value for key, value in payload.items() if key != "source_manifest_sha256"},
-    )
+    payload["upstream_sources"][0]["files"][0]["path"] = "../escape.py"
+    _rehash_source_manifest(payload)
     with pytest.raises(ValidationError, match="path"):
-        PinnedSourceManifestV1.model_validate_json(canonical_json_bytes_v1(payload), strict=True)
+        PinnedSourceManifestV2.model_validate_json(canonical_json_bytes_v1(payload), strict=True)
 
     for invalid_path in ("C:/escape.py", "..\\escape.py"):
         windows_payload = json.loads((PINNED_SOURCE_ROOT / "source_manifest.json").read_text(encoding="utf-8"))
-        windows_payload["files"][0]["path"] = invalid_path
-        windows_payload["source_manifest_sha256"] = hash_hex_v1(
-            "miniqmt_vnpy_pinned_source_manifest_v1",
-            {key: value for key, value in windows_payload.items() if key != "source_manifest_sha256"},
-        )
+        windows_payload["upstream_sources"][0]["files"][0]["path"] = invalid_path
+        _rehash_source_manifest(windows_payload)
         with pytest.raises(ValidationError, match="path"):
-            PinnedSourceManifestV1.model_validate_json(canonical_json_bytes_v1(windows_payload), strict=True)
+            PinnedSourceManifestV2.model_validate_json(canonical_json_bytes_v1(windows_payload), strict=True)
 
 
 def test_object_and_enum_surface_contract_drift_is_visible(tmp_path: Path) -> None:
@@ -295,9 +530,15 @@ def test_object_and_enum_surface_contract_drift_is_visible(tmp_path: Path) -> No
     contract_path = source_root / "surface_contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     contract["required_object_fields"][0]["fields"][0]["annotation"] = "object"
-    contract["required_enum_values"][0]["values"].append("UNKNOWN")
+    contract["required_enum_values"][0]["members"].append(
+        {
+            "schema_version": "vnpy_enum_member_requirement_v2",
+            "name": "UNKNOWN",
+            "value_expression": "'UNKNOWN'",
+        }
+    )
     contract["surface_contract_sha256"] = hash_hex_v1(
-        "miniqmt_vnpy_surface_contract_v1",
+        "miniqmt_vnpy_surface_contract_v2",
         {key: value for key, value in contract.items() if key != "surface_contract_sha256"},
     )
     contract_path.write_bytes(canonical_json_bytes_v1(contract))
@@ -326,7 +567,7 @@ def test_current_three_real_receipts_are_passed_exact_and_readback_stable() -> N
             == receipt
         )
         assert (
-            VnpyCompatibilityReceiptV1.model_validate_json(
+            VnpyCompatibilityReceiptV2.model_validate_json(
                 canonical_json_bytes_v1(receipt.canonical_payload_v1()), strict=True
             )
             == receipt
@@ -338,7 +579,7 @@ def test_receipt_hash_drift_is_rejected_by_writer_and_authority_readback() -> No
     payload = receipt.model_dump(mode="python")
     payload["receipt_sha256"] = "f" * 64
     with pytest.raises(ValidationError, match="receipt hash"):
-        VnpyCompatibilityReceiptV1.model_validate(payload, strict=True)
+        VnpyCompatibilityReceiptV2.model_validate(payload, strict=True)
 
 
 def test_failed_receipt_readback_recomputes_the_same_authority(tmp_path: Path) -> None:
@@ -381,7 +622,7 @@ def test_receipt_status_and_failure_set_must_close() -> None:
         context={"path": "missing.py"},
     )
     with pytest.raises(ValidationError, match="PASSED compatibility receipt cannot contain failures"):
-        VnpyCompatibilityReceiptV1.create(
+        VnpyCompatibilityReceiptV2.create(
             plugin_id=passed.plugin_id,
             plugin_version=passed.plugin_version,
             manifest_sha256=passed.manifest_sha256,
@@ -395,7 +636,7 @@ def test_receipt_status_and_failure_set_must_close() -> None:
             ordered_failures=(failure,),
         )
     with pytest.raises(ValidationError, match="FAILED compatibility receipt must contain failures"):
-        VnpyCompatibilityReceiptV1.create(
+        VnpyCompatibilityReceiptV2.create(
             plugin_id=passed.plugin_id,
             plugin_version=passed.plugin_version,
             manifest_sha256=passed.manifest_sha256,
@@ -444,7 +685,7 @@ def test_malformed_truncation_marker_is_rejected() -> None:
     )
 
     with pytest.raises(ValidationError, match="omitted_count"):
-        VnpyCompatibilityReceiptV1.create(
+        VnpyCompatibilityReceiptV2.create(
             plugin_id=passed.plugin_id,
             plugin_version=passed.plugin_version,
             manifest_sha256=passed.manifest_sha256,
@@ -495,9 +736,16 @@ def test_real_current_three_receipts_build_exact_catalog() -> None:
     assert len(runtime.snapshot.registration_descriptors) == 3
 
 
-def test_one_real_failed_receipt_prevents_catalog_publication(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "vnpy_algotrading/algos/sniper_algo.py",
+        "vnpy_core/vnpy/trader/object.py",
+    ],
+)
+def test_one_real_failed_receipt_prevents_catalog_publication(tmp_path: Path, relative_path: str) -> None:
     source_root = _copy_authority(tmp_path)
-    (source_root / "vnpy_algotrading/algos/sniper_algo.py").unlink()
+    (source_root / relative_path).unlink()
     receipts = list(build_current_three_compatibility_receipts_v1())
     manifests = current_three_manifests_v2()
     sniper_index = next(index for index, item in enumerate(manifests) if item.algo_code == "SNIPER_MINIQMT")
@@ -522,3 +770,33 @@ def test_one_real_failed_receipt_prevents_catalog_publication(tmp_path: Path) ->
     assert any(
         item["reason_code"] == "MINIQMT_VNPY_COMPAT_SOURCE_MISSING" for item in aggregate_context["ordered_failures"]
     )
+
+
+def test_requirement_binds_exact_vnpy_core_object_and_enum_authority() -> None:
+    requirement = _manifest().compatibility_requirement
+
+    assert requirement.schema_version == "vnpy_compatibility_requirement_v2"
+    authorities = {item.namespace: item for item in requirement.upstream_sources}
+    core = authorities["VNPY_CORE"]
+    assert core.upstream_repo == "https://github.com/vnpy/vnpy"
+    assert core.release_tag == "4.0.0"
+    assert core.upstream_commit == "1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9"
+    assert {(item.path, item.size_bytes, item.sha256) for item in core.files} == {
+        (
+            "vnpy_core/vnpy/trader/constant.py",
+            4342,
+            "5a220fcc85bea0c4d92426533bcac444f74addd63b9b037a867370fe350df651",
+        ),
+        (
+            "vnpy_core/vnpy/trader/object.py",
+            10509,
+            "c153445fdad392bf6ac645b992e624df66e10a49c87448ca8ab2bf770212d75a",
+        ),
+    }
+    assert core.license_file.path == "vnpy_core/LICENSE"
+    assert core.license_file.sha256 == "81294e5bcba945564df8586f1d789b016001b7b43eb4de97736679dd882cf191"
+    source_paths = {item.path for item in requirement.source_files_and_hashes}
+    assert "vnpy_core/vnpy/trader/object.py" in source_paths
+    assert "vnpy_core/vnpy/trader/constant.py" in source_paths
+    assert all(item.source_path in source_paths for item in requirement.required_object_fields)
+    assert all(item.source_path in source_paths for item in requirement.required_enum_values)
