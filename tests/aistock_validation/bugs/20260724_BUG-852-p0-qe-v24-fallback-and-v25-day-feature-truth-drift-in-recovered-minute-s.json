@@ -7,6 +7,8 @@
     "scripts/tail_twap_v24_strategy.py",
     "scripts/tail_twap_v25_strategy.py",
     "scripts/minute_execution_contract.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260724_BUG-852-p0-qe-v24-fallback-and-v25-day-feature-truth-drift-in-recovered-minute-s.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -26,6 +28,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260724-a3669c25f322",
       "timestamp": "2026-07-24T12:45:28.807416Z"
+    },
+    {
+      "action": "scope_expanded_for_ci_routing",
+      "actor": "codex",
+      "note": "Added exact QE minute-helper ownership and classifier regression after PR #2695 reported unmapped_code_blocked; no workflow policy or classifier behavior change.",
+      "timestamp": "2026-07-24T13:42:00Z"
     }
   ],
   "evidence_uris": [],
@@ -39,7 +47,9 @@
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "scripts/tail_twap_strategy.py",
       "scripts/tail_twap_v24_strategy.py",
-      "scripts/tail_twap_v25_strategy.py"
+      "scripts/tail_twap_v25_strategy.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
@@ -48,7 +58,9 @@
         "scripts/tail_twap_strategy.py",
         "scripts/tail_twap_v24_strategy.py",
         "scripts/tail_twap_v25_strategy.py",
-        "scripts/minute_execution_contract.py"
+        "scripts/minute_execution_contract.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -125,7 +137,9 @@
         "scripts/tail_twap_strategy.py",
         "scripts/tail_twap_v24_strategy.py",
         "scripts/tail_twap_v25_strategy.py",
-        "scripts/minute_execution_contract.py"
+        "scripts/minute_execution_contract.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "unmatched_files": []
     },
@@ -136,7 +150,9 @@
       "scripts/tail_twap_strategy.py",
       "scripts/tail_twap_v24_strategy.py",
       "scripts/tail_twap_v25_strategy.py",
-      "scripts/minute_execution_contract.py"
+      "scripts/minute_execution_contract.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-07-24T12:45:28.807419Z",
@@ -156,7 +172,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "qe_read_backend"
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

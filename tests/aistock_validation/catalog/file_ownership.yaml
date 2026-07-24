@@ -304,6 +304,18 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: QE service code is shared by single experiments and evolution flows.
+  - rule_id: qe_minute_execution_helpers
+    priority: 90
+    include:
+      - scripts/minute_execution_contract.py
+      - scripts/tail_twap_strategy.py
+      - scripts/tail_twap_v24_strategy.py
+      - scripts/tail_twap_v25_strategy.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution]
+    layer: script
+    risk_level: high
+    ownership_reason: QE workspace minute-execution helpers implement the same fail-closed execution contract as ConfigComposer-generated experiments.
   - rule_id: qe_mcp_data_contract
     priority: 100
     include:

@@ -135,6 +135,20 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
+    qe_minute_helpers_payload = classifier.classify_changed_files(
+        [
+            "scripts/minute_execution_contract.py",
+            "scripts/tail_twap_strategy.py",
+            "scripts/tail_twap_v24_strategy.py",
+            "scripts/tail_twap_v25_strategy.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_minute_helpers_payload["classification"] == "targeted_ci_required"
+    assert qe_minute_helpers_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_minute_helpers_payload["unmapped_code_files"] == []
+
     qe_mcp_payload = classifier.classify_changed_files(
         [
             "backend/mcp/modules/qe_experiment.py",
