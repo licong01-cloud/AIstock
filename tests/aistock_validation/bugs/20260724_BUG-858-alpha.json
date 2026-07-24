@@ -1,6 +1,8 @@
 {
   "actual": "R12P durable combine-backtest recovery run macb_453ca2d0c5b21b40_20240701_20260629_20260724T183518057210Z_7fef2219 已正确物化并上传 L2 CAS，但11个可计算子任务均在 rdagent-node1 启动后立即失败。调度任务ID为 macb_remote_2b60003f46c3_*，实际 wsl_command 却 cd 到按 macb_remote_<child_id>_<attempt_id>/Loop1 拼接的不存在目录。必须统一任务提交身份、节点创建的工作区路径与执行命令 cwd；禁止 fallback、猜测路径或跳过真实远端验证。10个 scheme_not_computable 研究结果不在修复范围。",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
     "tests/aistock_validation/bugs/20260724_BUG-858-alpha.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,8 +24,11 @@
       "timestamp": "2026-07-24T19:47:37.196837Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "multi-alpha://runs/macb_453ca2d0c5b21b40_20240701_20260629_20260724T183518057210Z_7fef2219",
+    "qe-workspace://rdagent-node1/tasks/macb_remote_2b60003f46c3_c0a673bb5f2a_a1/loops/Loop1/run.log"
+  ],
+  "expected": "Durable submission must use the same qe_task_id and loop identity for the QE Workspace submission payload, the node-created workspace directory, and the wsl_command working directory.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +57,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py::test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator -q",
   "required_verification": [
     "l0"
   ],

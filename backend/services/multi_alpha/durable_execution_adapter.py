@@ -122,6 +122,18 @@ class DurableExecutionAdapterError(RuntimeError):
         self.context = dict(context or {})
 
 
+def _remote_loop_index_from_intent(qe_loop_id: str) -> int:
+    normalized = str(qe_loop_id or "").strip()
+    suffix = normalized[4:] if normalized.startswith("Loop") else ""
+    if not suffix.isdigit() or int(suffix) < 1:
+        raise DurableExecutionAdapterError(
+            "durable submission intent has an invalid QE loop identity",
+            reason_code="multi_alpha_remote_loop_identity_invalid",
+            context={"qe_loop_id": qe_loop_id},
+        )
+    return int(suffix)
+
+
 class DurableChildNotComputable(DurableExecutionAdapterError):
     """The requested child formula has no computable result for frozen inputs."""
 
@@ -1214,10 +1226,16 @@ class QEWorkspacePredBacktestAdapter:
             artifact_manifest=l2_manifest,
             prediction_artifact_sha256=str(prediction_manifest["sha256"]),
         )
+        remote_loop_index = _remote_loop_index_from_intent(intent.qe_loop_id)
+        submission_backtest_config = {
+            **dict(request.backtest_config),
+            "remote_task_id": intent.qe_task_id,
+            "remote_loop_index": remote_loop_index,
+        }
         wsl_command = _remote_wsl_command(
             workspace=artifacts.workspace,
             remote_paths=remote_paths,
-            backtest_config=request.backtest_config,
+            backtest_config=submission_backtest_config,
         )
         experiment_files = _remote_small_files(
             workspace=artifacts.workspace,
@@ -1268,7 +1286,7 @@ class QEWorkspacePredBacktestAdapter:
         )
         payload = QEWorkspaceSubmissionPayload(
             task_id=intent.qe_task_id,
-            loop_index=1,
+            loop_index=remote_loop_index,
             config={
                 "source": "multi_alpha_durable_pred_backtest_v1",
                 "run_id": intent.run_id,

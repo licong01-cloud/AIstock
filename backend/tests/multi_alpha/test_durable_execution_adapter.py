@@ -754,6 +754,17 @@ def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp
         "combined_prediction.pkl.b64" not in call["payload"].experiment_files
         for call in coordinator.calls + remote_coordinator.calls
     )
+    remote_payload = remote_coordinator.calls[0]["payload"]
+    assert remote_payload.task_id == remote_intent.qe_task_id
+    assert (
+        f"/home/node/workspaces/{remote_intent.qe_task_id}/Loop1"
+        in remote_payload.wsl_command
+    )
+    fallback_task_id = (
+        f"macb_remote_{remote_published.workspace.parent.name}_"
+        f"{remote_published.workspace.name}"
+    )
+    assert fallback_task_id not in remote_payload.wsl_command
     assert len(artifact_client.paths) + len(remote_artifact_client.paths) == 4
 
 
