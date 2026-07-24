@@ -51,7 +51,6 @@ from backend.services.multi_alpha.remote_dispatch import (
     _remote_paths,
     _remote_small_files,
     _remote_wsl_command,
-    _resolve_l2_artifact_path,
     get_compute_node_info,
 )
 from backend.services.quantevolver.qe_active_execution_capacity import (
@@ -499,6 +498,10 @@ class QEWorkspacePredBacktestAdapter:
                 workspace=staging,
                 backtest_config=backtest_config,
             )
+            l2_artifact_path = self._stage_required_l2_artifact(
+                staging=staging,
+                backtest_config=backtest_config,
+            )
             materialization_payload = {
                 "schema_version": "multi_alpha_child_materialization_v1",
                 "run_id": materialization.run["id"],
@@ -515,6 +518,10 @@ class QEWorkspacePredBacktestAdapter:
             }
             self._atomic_write_json(staging / "materialization.json", materialization_payload)
             files = self._publish_staging_tree(staging=staging, workspace=workspace)
+            l2_artifact = {
+                "path": l2_artifact_path,
+                **dict(files[l2_artifact_path]),
+            }
             manifest = {
                 "schema_version": ARTIFACT_MANIFEST_SCHEMA,
                 "run_id": materialization.run["id"],
@@ -522,6 +529,7 @@ class QEWorkspacePredBacktestAdapter:
                 "attempt_id": materialization.attempt["attempt_id"],
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
                 "prediction_file": "combined_prediction.pkl",
+                "l2_artifact": l2_artifact,
                 "files": files,
                 "external_runtime_data_bindings": external_data_bindings,
                 "execution_identity": input_manifest.get("execution_identity"),
@@ -1193,10 +1201,7 @@ class QEWorkspacePredBacktestAdapter:
             if self._artifact_client_factory is not None
             else WorkspaceArtifactSyncClient.for_node(intent.node_id)
         )
-        l2_path = _resolve_l2_artifact_path(
-            workspace=artifacts.workspace,
-            backtest_config=request.backtest_config,
-        )
+        l2_path = self._published_l2_artifact_path(artifacts)
         l2_manifest = artifact_client.ensure_artifact(l2_path, node_id=intent.node_id)
         prediction_manifest = artifact_client.ensure_artifact(
             artifacts.prediction_path,
@@ -1644,6 +1649,91 @@ class QEWorkspacePredBacktestAdapter:
             )
         return files
 
+    def _stage_required_l2_artifact(
+        self,
+        *,
+        staging: Path,
+        backtest_config: Mapping[str, Any],
+    ) -> str:
+        """Place the exact L2 parquet inside the immutable child workspace.
+
+        Relative paths are resolved after the runtime template is copied.  An
+        explicit absolute source is copied into the canonical workspace name
+        so dispatch never depends on mutable workstation-local bytes.
+        """
+
+        raw = backtest_config.get("combined_factors_path") or backtest_config.get(
+            "l2_artifact_path"
+        )
+        if raw is None:
+            relative = Path("combined_factors_df.parquet")
+            source = staging / relative
+        else:
+            configured = Path(str(raw))
+            if configured.is_absolute():
+                relative = Path("combined_factors_df.parquet")
+                source = configured
+            else:
+                relative = configured
+                source = staging / relative
+        if (
+            not relative.parts
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise DurableExecutionAdapterError(
+                "configured L2 artifact path is not a safe workspace-relative path",
+                reason_code="multi_alpha_l2_artifact_path_invalid",
+                context={"configured_path": str(raw), "workspace": str(staging)},
+            )
+        if source.is_symlink() or not source.is_file():
+            raise DurableExecutionAdapterError(
+                "durable materialization requires a readable regular L2 factors parquet",
+                reason_code="multi_alpha_l2_artifact_missing",
+                context={
+                    "configured_path": str(raw) if raw is not None else None,
+                    "resolved_source": str(source),
+                    "workspace": str(staging),
+                },
+            )
+        destination = staging / relative
+        if source != destination:
+            if destination.exists():
+                source_digest = self._sha256_file(source)
+                destination_digest = self._sha256_file(destination)
+                if source_digest != destination_digest:
+                    raise DurableExecutionAdapterError(
+                        "configured L2 artifact conflicts with runtime template bytes",
+                        reason_code="multi_alpha_l2_artifact_conflict",
+                        context={"source": str(source), "destination": str(destination)},
+                    )
+            else:
+                self._atomic_copy_file(source, destination)
+        self._sha256_file(destination)
+        return relative.as_posix()
+
+    def _published_l2_artifact_path(
+        self,
+        artifacts: DurablePublishedArtifacts,
+    ) -> Path:
+        binding = artifacts.artifact_manifest.get("l2_artifact")
+        if not isinstance(binding, Mapping):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest has no L2 artifact binding",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        relative = Path(str(binding.get("path") or ""))
+        if (
+            not relative.parts
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest L2 path is invalid",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        return artifacts.workspace / relative
+
     def _verify_published_manifest(
         self,
         manifest: Mapping[str, Any],
@@ -1709,6 +1799,22 @@ class QEWorkspacePredBacktestAdapter:
         if not isinstance(files, Mapping) or not files:
             raise DurableExecutionAdapterError(
                 "durable artifact manifest has no file inventory",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        l2_artifact = manifest.get("l2_artifact")
+        if not isinstance(l2_artifact, Mapping):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest has no L2 artifact binding",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        l2_relative_name = str(l2_artifact.get("path") or "")
+        l2_file_metadata = files.get(l2_relative_name)
+        if not isinstance(l2_file_metadata, Mapping) or dict(l2_artifact) != {
+            "path": l2_relative_name,
+            **dict(l2_file_metadata),
+        }:
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest L2 binding does not match its file inventory",
                 reason_code="multi_alpha_artifact_manifest_invalid",
             )
         for relative_name, metadata in files.items():
