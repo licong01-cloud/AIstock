@@ -483,6 +483,22 @@ def test_isolated_import_guard_blocks_raw_fileio_access(tmp_path: Path, mode: st
     assert marker.read_bytes() == b"original"
 
 
+def test_isolated_import_guard_blocks_helper_mediated_raw_fileio_write(tmp_path: Path) -> None:
+    marker = tmp_path / "helper-raw-fileio.txt"
+    marker.write_bytes(b"original")
+    _write_source(
+        tmp_path,
+        "fixtures.raw_fileio_helper",
+        f"import _io\n_io.FileIO({str(marker)!r}, 'w').write(b'forbidden')\n",
+    )
+    target = _write_source(tmp_path, "fixtures.raw_fileio_target", "from . import raw_fileio_helper\n")
+
+    with pytest.raises(PluginImportBoundaryError):
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert marker.read_bytes() == b"original"
+
+
 def test_import_failures_are_bounded_truncated_and_hash_closed(tmp_path: Path) -> None:
     source = "".join(f"import backend.db.forbidden_{index}\n" for index in range(100))
     target = _write_source(tmp_path, "fixtures.many_violations", source)

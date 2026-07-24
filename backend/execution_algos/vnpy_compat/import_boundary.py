@@ -671,6 +671,18 @@ def repo_owned_caller(include_indirect=False):
         frame = frame.f_back
     return False
 
+def direct_repo_file_caller():
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if filename.startswith("<frozen importlib"):
+            return False
+        if not filename.startswith("<"):
+            normalized = os.path.normcase(os.path.abspath(filename))
+            return normalized == repo_root_source or normalized.startswith(repo_root_source + os.sep)
+        frame = frame.f_back
+    return False
+
 def guard(operation, original, include_indirect=True):
     def guarded(*args, **kwargs):
         if import_active and repo_owned_caller(include_indirect=include_indirect):
@@ -710,7 +722,7 @@ def guarded_path_open(self, mode="r", *args, **kwargs):
 
 def guarded_fileio(file, mode="r", *args, **kwargs):
     operation = "raw_fileio_write" if any(flag in mode for flag in "wax+") else "raw_fileio_read"
-    if import_active and repo_owned_caller(include_indirect=True):
+    if import_active and direct_repo_file_caller():
         events.append({"operation": operation})
         raise BoundarySideEffect(operation)
     return original_fileio(file, mode, *args, **kwargs)
