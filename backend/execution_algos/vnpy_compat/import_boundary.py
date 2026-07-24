@@ -629,6 +629,7 @@ import sys
 import threading
 import types
 import _thread
+import _io
 
 # Preload the required K1-A dependencies before side-effect guards. Missing
 # dependencies fail the isolated process instead of being silently ignored.
@@ -670,18 +671,6 @@ def repo_owned_caller(include_indirect=False):
         frame = frame.f_back
     return False
 
-def direct_file_operation_caller():
-    frame = sys._getframe(1)
-    while frame is not None:
-        filename = frame.f_code.co_filename
-        if filename.startswith("<frozen importlib"):
-            return False
-        if not filename.startswith("<"):
-            normalized = os.path.normcase(os.path.abspath(filename))
-            return normalized == repo_root_source or normalized.startswith(repo_root_source + os.sep)
-        frame = frame.f_back
-    return False
-
 def guard(operation, original, include_indirect=True):
     def guarded(*args, **kwargs):
         if import_active and repo_owned_caller(include_indirect=include_indirect):
@@ -719,9 +708,17 @@ def guarded_path_open(self, mode="r", *args, **kwargs):
         raise BoundarySideEffect(operation)
     return original_path_open(self, mode, *args, **kwargs)
 
+def guarded_fileio(file, mode="r", *args, **kwargs):
+    operation = "raw_fileio_write" if any(flag in mode for flag in "wax+") else "raw_fileio_read"
+    if import_active and repo_owned_caller(include_indirect=True):
+        events.append({"operation": operation})
+        raise BoundarySideEffect(operation)
+    return original_fileio(file, mode, *args, **kwargs)
+
 original_open = builtins.open
 original_io_open = io.open
 original_path_open = pathlib.Path.open
+original_fileio = _io.FileIO
 originals = []
 def patch(owner, name, operation=None, replacement=None):
     if hasattr(owner, name):
@@ -773,10 +770,16 @@ def audit_hook(event, args):
         events.append({"operation": "audit_import", "module": args[0]})
         raise BoundarySideEffect("audit_import")
     if event == "open":
-        # Import machinery may read a repo-owned helper on behalf of the target.
-        # Direct target/helper file access still has a repo frame before the
-        # first importlib/dependency frame and is rejected before the OS operation.
-        if not direct_file_operation_caller():
+        # Import loaders legitimately read source/bytecode while a target is
+        # active. Python-facing open APIs and _io.FileIO are guarded directly;
+        # the audit hook closes write-capable C paths without misclassifying
+        # importlib's platform-dependent read stack.
+        mode = args[1] if len(args) > 1 and isinstance(args[1], str) else ""
+        flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+        if not any(flag in mode for flag in "wax+") and not flags & write_flags:
+            return
+        if not repo_owned_caller(include_indirect=True):
             return
         events.append({"operation": "audit_open"})
         raise BoundarySideEffect("audit_open")
@@ -796,6 +799,7 @@ patch(builtins, "open", replacement=guarded_open)
 patch(builtins, "__import__", replacement=guarded_import)
 patch(importlib, "import_module", replacement=guarded_import_module)
 patch(io, "open", replacement=guarded_io_open)
+patch(_io, "FileIO", replacement=guarded_fileio)
 patch(pathlib.Path, "open", replacement=guarded_path_open)
 for name in ("read_bytes", "read_text"):
     patch(pathlib.Path, name, "pathlib_" + name, replacement=guard("pathlib_" + name, getattr(pathlib.Path, name), False))

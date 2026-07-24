@@ -467,18 +467,20 @@ def test_isolated_import_failure_context_is_repo_relative_and_root_independent(t
     assert failures[0].sort_key == failures[1].sort_key
 
 
-def test_isolated_import_audit_blocks_raw_fileio_write(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["r", "w"])
+def test_isolated_import_guard_blocks_raw_fileio_access(tmp_path: Path, mode: str) -> None:
     marker = tmp_path / "raw-fileio.txt"
+    marker.write_bytes(b"original")
     target = _write_source(
         tmp_path,
         "fixtures.raw_fileio",
-        f"import _io\n_io.FileIO({str(marker)!r}, 'w').write(b'forbidden')\n",
+        f"import _io\n_io.FileIO({str(marker)!r}, {mode!r})\n",
     )
 
     with pytest.raises(PluginImportBoundaryError):
         validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
 
-    assert not marker.exists()
+    assert marker.read_bytes() == b"original"
 
 
 def test_import_failures_are_bounded_truncated_and_hash_closed(tmp_path: Path) -> None:
