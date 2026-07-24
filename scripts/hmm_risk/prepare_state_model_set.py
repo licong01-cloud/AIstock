@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,10 +22,23 @@ if str(ROOT) not in sys.path:
 from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     ALL_CORE_FEATURES,
     BASE_FEATURES,
+    C008_B3_DIAG02_CONTRACT,
+    C008_B3_DIAG04_CONTRACT,
+    C008_B3_STRUCTURAL_CONTRACT,
     StateModelSetError,
     StateModelSetSpec,
     build_state_model_set,
+    canonical_json_bytes,
+    canonical_sha256,
+    c008_b3_diag02_fixed_numeric_environment,
+    c008_b3_diag04_fixed_numeric_environment,
+    diagnostic_runtime_versions,
+    diagnose_l1_seed_grid,
+    diagnose_l1_seed_grid_b1,
+    diagnose_l1_seed_grid_b3_diag02,
+    diagnose_l1_seed_grid_b3_diag04,
     parse_l2_artifact,
+    sha256_bytes,
     train_l1_models,
     write_state_model_set,
 )
@@ -105,7 +119,9 @@ def _resolve_artifact(root: Path, relative_path: str) -> Path:
 
 
 def _connect_readonly(prefix: str):
-    names = {name: os.environ.get(f"{prefix}{name}", "").strip() for name in ("HOST", "PORT", "NAME", "USER", "PASSWORD")}
+    names = {
+        name: os.environ.get(f"{prefix}{name}", "").strip() for name in ("HOST", "PORT", "NAME", "USER", "PASSWORD")
+    }
     missing = [name for name, value in names.items() if not value]
     if missing:
         raise StateModelSetError(f"database environment is incomplete for prefix {prefix}: {missing}")
@@ -121,7 +137,9 @@ def _connect_readonly(prefix: str):
     return conn, {"host": names["HOST"], "port": int(names["PORT"]), "dbname": names["NAME"]}
 
 
-def _load_calendar_and_benchmark(conn: Any, start: date, end: date) -> tuple[list[date], dict[date, float], dict[str, Any]]:
+def _load_calendar_and_benchmark(
+    conn: Any, start: date, end: date
+) -> tuple[list[date], dict[date, float], dict[str, Any]]:
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -183,12 +201,7 @@ def _family_spec(
     )
 
 
-def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
-    producer_commit = _git_commit()
-    if str(request.get("producer_commit") or "") != producer_commit:
-        raise StateModelSetError(
-            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
-        )
+def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
     source = request["source"]
     source_spec = StockFactSourceSpec(
         universe_key=str(source.get("universe_key") or ""),
@@ -223,9 +236,32 @@ def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, 
         "stock_facts": stock_fact_manifest,
         "calendar_benchmark": benchmark_manifest,
     }
-    expected_l2_codes = tuple(
-        sorted({code for item in constituents.values() for code in item["l2_codes"]})
-    )
+    return {
+        "source_spec": source_spec,
+        "database": db_identity,
+        "mapping_manifest": mapping_manifest,
+        "constituents": constituents,
+        "panel": panel,
+        "feature_definition": feature_definition,
+        "dataset_manifest": dataset_manifest,
+    }
+
+
+def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    db_identity = inputs["database"]
+    mapping_manifest = inputs["mapping_manifest"]
+    constituents = inputs["constituents"]
+    panel = inputs["panel"]
+    feature_definition = inputs["feature_definition"]
+    dataset_manifest = inputs["dataset_manifest"]
+    expected_l2_codes = tuple(sorted({code for item in constituents.values() for code in item["l2_codes"]}))
     receipts = []
     for family in request["families"]:
         feature_names = tuple(str(value) for value in family.get("feature_names") or ())
@@ -294,6 +330,390 @@ def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, 
     }
 
 
+def _diagnose_c008(request: dict[str, Any], *, db_prefix: str, include_b1_evidence: bool) -> dict[str, Any]:
+    """Load one immutable PIT input and run the requested non-selecting C-008 diagnostic."""
+
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    families: list[dict[str, Any]] = []
+    for family in request["families"]:
+        feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+        if feature_names not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+            raise StateModelSetError("family feature_names must exactly match the approved 7/20-dimensional order")
+        spec = _family_spec(
+            family,
+            request=request,
+            producer_commit=producer_commit,
+            source_l2_uri=f"configured://{str(family.get('l2_relative_path') or '').replace('\\', '/')}",
+            source_l2_sha256=str(family.get("l2_artifact_sha256") or ""),
+            dataset_manifest=inputs["dataset_manifest"],
+            mapping_manifest=inputs["mapping_manifest"],
+            feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
+        )
+        series = build_l1_training_series(
+            inputs["panel"],
+            feature_names=feature_names,
+            train_start=spec.train_start,
+            train_end=spec.train_end,
+            validation_start=spec.validation_start,
+            validation_end=spec.validation_end,
+            constituent_manifest_by_l1=inputs["constituents"],
+        )
+        families.append(
+            {
+                "family": spec.family,
+                "family_version": spec.family_version,
+                "candidate_ids": list(spec.candidate_ids),
+                "diagnostic": (diagnose_l1_seed_grid_b1 if include_b1_evidence else diagnose_l1_seed_grid)(
+                    series,
+                    feature_names=feature_names,
+                    preprocess_family=spec.preprocess_family,
+                ),
+            }
+        )
+    report = {
+        "schema_version": (
+            "hmm_risk_c008_b1_soft_evidence_report_v1"
+            if include_b1_evidence
+            else "hmm_risk_c008_seed_diagnostic_report_v1"
+        ),
+        "status": "diagnostic_complete",
+        "diagnostic_contract": "C-008-B1" if include_b1_evidence else "C-008-A",
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "universe_key": source_spec.universe_key,
+        "dataset_manifest": inputs["dataset_manifest"],
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest": inputs["mapping_manifest"],
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "selection_performed": False,
+        "ready_artifact_write_performed": False,
+        "families": families,
+    }
+    if include_b1_evidence:
+        report["runtime_versions"] = diagnostic_runtime_versions()
+        report["formal_acceptance_thresholds_applied"] = False
+        report["hard_semantic_authority_changed"] = False
+    return report
+
+
+def diagnose_c008(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run the user-approved C-008-A grid without selecting or writing models."""
+
+    return _diagnose_c008(request, db_prefix=db_prefix, include_b1_evidence=False)
+
+
+def diagnose_c008_b1(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run approved C-008-B1 evidence expansion without changing model semantics."""
+
+    return _diagnose_c008(request, db_prefix=db_prefix, include_b1_evidence=True)
+
+
+def diagnose_c008_b3_diag02(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run one fixed-environment structural diagnostic pass without selecting or writing models."""
+
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    c008_b3_diag02_fixed_numeric_environment()
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    families: list[dict[str, Any]] = []
+    for family in request["families"]:
+        feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+        if feature_names not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+            raise StateModelSetError("family feature_names must exactly match the approved 7/20-dimensional order")
+        spec = _family_spec(
+            family,
+            request=request,
+            producer_commit=producer_commit,
+            source_l2_uri=f"configured://{str(family.get('l2_relative_path') or '').replace('\\', '/')}",
+            source_l2_sha256=str(family.get("l2_artifact_sha256") or ""),
+            dataset_manifest=inputs["dataset_manifest"],
+            mapping_manifest=inputs["mapping_manifest"],
+            feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
+        )
+        series = build_l1_training_series(
+            inputs["panel"],
+            feature_names=feature_names,
+            train_start=spec.train_start,
+            train_end=spec.train_end,
+            validation_start=spec.validation_start,
+            validation_end=spec.validation_end,
+            constituent_manifest_by_l1=inputs["constituents"],
+        )
+        families.append(
+            {
+                "family": spec.family,
+                "family_version": spec.family_version,
+                "candidate_ids": list(spec.candidate_ids),
+                "diagnostic": diagnose_l1_seed_grid_b3_diag02(
+                    series,
+                    feature_names=feature_names,
+                    preprocess_family=spec.preprocess_family,
+                ),
+            }
+        )
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag02_single_pass_report_v1",
+        "status": "diagnostic_complete",
+        "diagnostic_contract": C008_B3_DIAG02_CONTRACT,
+        "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+        "universe_key": source_spec.universe_key,
+        "dataset_manifest": inputs["dataset_manifest"],
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest": inputs["mapping_manifest"],
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "fixed_numeric_environment": c008_b3_diag02_fixed_numeric_environment(),
+        "selection_performed": False,
+        "formal_acceptance_thresholds_applied": False,
+        "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "d4_exact_contract_approved": False,
+        "d5_01_exact_contract_approved": False,
+        "d6_exact_contract_approved": False,
+        "families": families,
+    }
+
+
+def diagnose_c008_b3_diag04(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run one scale-aware DIAG-04 refit pass without selection, formal acceptance, or model writes."""
+
+    producer_commit = _git_commit()
+    if str(request.get("producer_commit") or "") != producer_commit:
+        raise StateModelSetError(
+            f"request producer_commit differs from current code expected={request.get('producer_commit')} actual={producer_commit}"
+        )
+    c008_b3_diag04_fixed_numeric_environment()
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    source_spec = inputs["source_spec"]
+    families: list[dict[str, Any]] = []
+    for family in request["families"]:
+        feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+        if feature_names not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+            raise StateModelSetError("family feature_names must exactly match the approved 7/20-dimensional order")
+        spec = _family_spec(
+            family,
+            request=request,
+            producer_commit=producer_commit,
+            source_l2_uri=f"configured://{str(family.get('l2_relative_path') or '').replace('\\', '/')}",
+            source_l2_sha256=str(family.get("l2_artifact_sha256") or ""),
+            dataset_manifest=inputs["dataset_manifest"],
+            mapping_manifest=inputs["mapping_manifest"],
+            feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
+        )
+        series = build_l1_training_series(
+            inputs["panel"],
+            feature_names=feature_names,
+            train_start=spec.train_start,
+            train_end=spec.train_end,
+            validation_start=spec.validation_start,
+            validation_end=spec.validation_end,
+            constituent_manifest_by_l1=inputs["constituents"],
+        )
+        families.append(
+            {
+                "family": spec.family,
+                "family_version": spec.family_version,
+                "candidate_ids": list(spec.candidate_ids),
+                "diagnostic": diagnose_l1_seed_grid_b3_diag04(
+                    series,
+                    feature_names=feature_names,
+                    preprocess_family=spec.preprocess_family,
+                ),
+            }
+        )
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag04_single_pass_report_v1",
+        "status": "diagnostic_complete",
+        "diagnostic_contract": C008_B3_DIAG04_CONTRACT,
+        "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+        "universe_key": source_spec.universe_key,
+        "dataset_manifest": inputs["dataset_manifest"],
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest": inputs["mapping_manifest"],
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "fixed_numeric_environment": c008_b3_diag04_fixed_numeric_environment(),
+        "hmm_refit_performed": True,
+        "selection_performed": False,
+        "formal_acceptance_thresholds_applied": False,
+        "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "d4_exact_contract_approved": False,
+        "d5_01_exact_contract_approved": False,
+        "d6_exact_contract_approved": False,
+        "families": families,
+    }
+
+
+def _c008_b3_diag02_child_command(args: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--artifact-root",
+        str(Path(args.artifact_root).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--_c008-b3-diag02-child",
+    ]
+
+
+def _run_c008_b3_diag02_repeated(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
+    """Execute two fresh child processes and compare their canonical report bytes bit-for-bit."""
+
+    repeat_payloads: list[bytes] = []
+    stderr_receipts: list[dict[str, Any]] = []
+    for repeat_index in (1, 2):
+        completed = subprocess.run(
+            _c008_b3_diag02_child_command(args),
+            cwd=ROOT,
+            env=os.environ.copy(),
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            error = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise StateModelSetError(f"C-008-B3-DIAG-02 repeat {repeat_index} failed: {error[-4000:]}")
+        try:
+            json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise StateModelSetError(f"C-008-B3-DIAG-02 repeat {repeat_index} returned invalid JSON") from exc
+        repeat_payloads.append(completed.stdout)
+        stderr_receipts.append(
+            {
+                "repeat_index": repeat_index,
+                "stderr_line_count": len(completed.stderr.splitlines()),
+                "stderr_sha256": sha256_bytes(completed.stderr),
+            }
+        )
+    repeat_hashes = [sha256_bytes(payload) for payload in repeat_payloads]
+    bitwise_equal = repeat_payloads[0] == repeat_payloads[1]
+    report = json.loads(repeat_payloads[0])
+    report["single_pass_schema_version"] = report["schema_version"]
+    report["schema_version"] = "hmm_risk_c008_b3_diag02_repeated_report_v1"
+    report["status"] = "diagnostic_complete" if bitwise_equal else "diagnostic_reproducibility_failed"
+    report["reproducibility"] = {
+        "schema_version": "hmm_risk_c008_b3_diag02_reproducibility_v1",
+        "scope": "same_host_same_fixed_numeric_environment_only",
+        "fresh_process_repeat_count": 2,
+        "canonical_payload_sha256_by_repeat": repeat_hashes,
+        "canonical_payload_bitwise_equal": bitwise_equal,
+        "numeric_tolerance_used_for_acceptance": False,
+        "stderr_diagnostic_receipts": stderr_receipts,
+    }
+    return report, bitwise_equal
+
+
+def _c008_b3_diag04_child_command(args: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--artifact-root",
+        str(Path(args.artifact_root).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--_c008-b3-diag04-child",
+    ]
+
+
+def _run_c008_b3_diag04_repeated(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
+    """Execute two fresh DIAG-04 processes and require canonical byte equality without numeric tolerance."""
+
+    repeat_payloads: list[bytes] = []
+    stderr_receipts: list[dict[str, Any]] = []
+    for repeat_index in (1, 2):
+        completed = subprocess.run(
+            _c008_b3_diag04_child_command(args),
+            cwd=ROOT,
+            env=os.environ.copy(),
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            error = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} repeat {repeat_index} failed: {error[-4000:]}")
+        try:
+            json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} repeat {repeat_index} returned invalid JSON") from exc
+        repeat_payloads.append(completed.stdout)
+        stderr_receipts.append(
+            {
+                "repeat_index": repeat_index,
+                "stderr_line_count": len(completed.stderr.splitlines()),
+                "stderr_sha256": sha256_bytes(completed.stderr),
+            }
+        )
+    repeat_hashes = [sha256_bytes(payload) for payload in repeat_payloads]
+    bitwise_equal = repeat_payloads[0] == repeat_payloads[1]
+    report = json.loads(repeat_payloads[0])
+    report["single_pass_schema_version"] = report["schema_version"]
+    report["schema_version"] = "hmm_risk_c008_b3_diag04_repeated_report_v1"
+    report["status"] = "diagnostic_complete" if bitwise_equal else "diagnostic_reproducibility_failed"
+    report["reproducibility"] = {
+        "schema_version": "hmm_risk_c008_b3_diag04_reproducibility_v1",
+        "scope": "same_host_same_fixed_numeric_environment_only",
+        "fresh_process_repeat_count": 2,
+        "canonical_payload_sha256_by_repeat": repeat_hashes,
+        "canonical_payload_bitwise_equal": bitwise_equal,
+        "numeric_tolerance_used_for_acceptance": False,
+        "stderr_diagnostic_receipts": stderr_receipts,
+    }
+    return report, bitwise_equal
+
+
+def _write_diagnostic_report(path: Path, report: dict[str, Any]) -> str:
+    payload = canonical_json_bytes(report) + b"\n"
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise StateModelSetError(f"diagnostic report collision: {path}")
+        return canonical_sha256(report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return canonical_sha256(report)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True, help="Explicit preparation request JSON.")
@@ -301,6 +721,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", required=True, help="Output root for content-addressed READY sets.")
     parser.add_argument("--env-file", required=True, help="Credential-location file; secret values are never printed.")
     parser.add_argument("--db-env-prefix", required=True, help="Environment prefix such as TDX_DB_ or TDX_DB_DEV_.")
+    diagnostic_group = parser.add_mutually_exclusive_group()
+    diagnostic_group.add_argument(
+        "--c008-diagnostic-output",
+        help="Reproduce the approved C-008-A seeds 42-49 diagnostic report.",
+    )
+    diagnostic_group.add_argument(
+        "--c008-b1-diagnostic-output",
+        help="Run approved C-008-B1 soft/numeric evidence diagnostics without selection or model writes.",
+    )
+    diagnostic_group.add_argument(
+        "--c008-b3-diag02-output",
+        help="Run approved C-008-B3-DIAG-02 twice in fresh fixed-environment processes without selection/model writes.",
+    )
+    diagnostic_group.add_argument(
+        "--c008-b3-diag04-output",
+        help="Run approved C-008-B3 DIAG-04 scale-aware refits twice without selection/formal acceptance/model writes.",
+    )
+    parser.add_argument("--_c008-b3-diag02-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_c008-b3-diag04-child", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -309,12 +748,94 @@ def main() -> int:
     try:
         _read_env_file(Path(args.env_file).resolve())
         request = _load_request(Path(args.request).resolve())
-        receipt = prepare(
-            request,
-            artifact_root=Path(args.artifact_root).resolve(),
-            output_root=Path(args.output_root).resolve(),
-            db_prefix=str(args.db_env_prefix),
-        )
+        if args._c008_b3_diag02_child:
+            report = diagnose_c008_b3_diag02(request, db_prefix=str(args.db_env_prefix))
+            sys.stdout.buffer.write(canonical_json_bytes(report))
+            return 0
+        if args._c008_b3_diag04_child:
+            report = diagnose_c008_b3_diag04(request, db_prefix=str(args.db_env_prefix))
+            sys.stdout.buffer.write(canonical_json_bytes(report))
+            return 0
+        if args.c008_b3_diag04_output:
+            report, reproducible = _run_c008_b3_diag04_repeated(args)
+            report_path = Path(args.c008_b3_diag04_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_b3_diag04_receipt_v1",
+                "status": report["status"],
+                "diagnostic_contract": C008_B3_DIAG04_CONTRACT,
+                "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "fresh_process_repeat_count": 2,
+                "canonical_payload_bitwise_equal": reproducible,
+                "hmm_refit_performed": True,
+                "selection_performed": False,
+                "formal_acceptance_thresholds_applied": False,
+                "hard_semantic_authority_changed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "family_count": len(report["families"]),
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if reproducible else 1
+        if args.c008_b3_diag02_output:
+            report, reproducible = _run_c008_b3_diag02_repeated(args)
+            report_path = Path(args.c008_b3_diag02_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_b3_diag02_receipt_v1",
+                "status": report["status"],
+                "diagnostic_contract": C008_B3_DIAG02_CONTRACT,
+                "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "fresh_process_repeat_count": 2,
+                "canonical_payload_bitwise_equal": reproducible,
+                "selection_performed": False,
+                "formal_acceptance_thresholds_applied": False,
+                "hard_semantic_authority_changed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "family_count": len(report["families"]),
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if reproducible else 1
+        if args.c008_diagnostic_output or args.c008_b1_diagnostic_output:
+            include_b1 = bool(args.c008_b1_diagnostic_output)
+            report_path = Path(args.c008_b1_diagnostic_output or args.c008_diagnostic_output).resolve()
+            report = (
+                diagnose_c008_b1(request, db_prefix=str(args.db_env_prefix))
+                if include_b1
+                else diagnose_c008(request, db_prefix=str(args.db_env_prefix))
+            )
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": (
+                    "hmm_risk_c008_b1_soft_evidence_receipt_v1"
+                    if include_b1
+                    else "hmm_risk_c008_seed_diagnostic_receipt_v1"
+                ),
+                "status": "diagnostic_complete",
+                "diagnostic_contract": "C-008-B1" if include_b1 else "C-008-A",
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "selection_performed": False,
+                "ready_artifact_write_performed": False,
+                "formal_acceptance_thresholds_applied": False if include_b1 else None,
+                "hard_semantic_authority_changed": False if include_b1 else None,
+                "family_count": len(report["families"]),
+            }
+            if not include_b1:
+                receipt.pop("formal_acceptance_thresholds_applied")
+                receipt.pop("hard_semantic_authority_changed")
+        else:
+            receipt = prepare(
+                request,
+                artifact_root=Path(args.artifact_root).resolve(),
+                output_root=Path(args.output_root).resolve(),
+                db_prefix=str(args.db_env_prefix),
+            )
     except Exception as exc:
         error = {
             "schema_version": "hmm_risk_state_model_set_preparation_error_v1",
