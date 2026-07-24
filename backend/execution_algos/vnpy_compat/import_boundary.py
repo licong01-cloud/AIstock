@@ -586,10 +586,13 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
                 context={"call": call_name},
             )
         elif call_name in _DYNAMIC_IMPORT_CALLS:
+            context: dict[str, Any] = {"call": call_name}
+            if node.args and isinstance(node.args[0], ast.Constant) and type(node.args[0].value) is str:
+                context["module"] = node.args[0].value
             self._append(
                 node,
                 reason="MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN",
-                context={"call": call_name},
+                context=context,
             )
         elif call_name in _FILESYSTEM_CALLS:
             self._append(
@@ -619,13 +622,63 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if self._call_name(node.value) == "os.environ":
+        owner = self._call_name(node.value)
+        if owner == "os.environ":
             self._append(
                 node,
                 reason="MINIQMT_PLUGIN_IMPORT_EXTERNAL_STATE_FORBIDDEN",
                 context={"access": "os.environ"},
             )
+        elif owner == "sys.modules":
+            self._append(
+                node,
+                reason="MINIQMT_PLUGIN_IMPORT_DYNAMIC_MODULE_ESCAPE_FORBIDDEN",
+                context={"access": "sys.modules"},
+            )
         self.generic_visit(node)
+
+
+def _relative_import_name(target: ImportBoundaryTargetV1, node: ast.ImportFrom) -> str | None:
+    if node.level == 0:
+        return node.module
+    package_parts = target.module_name.split(".")[:-1]
+    parent_steps = node.level - 1
+    if parent_steps > len(package_parts):
+        return None
+    base_parts = package_parts[: len(package_parts) - parent_steps]
+    if node.module:
+        base_parts.extend(node.module.split("."))
+    return ".".join(base_parts)
+
+
+def _referenced_module_names(target: ImportBoundaryTargetV1, tree: ast.Module) -> tuple[str, ...]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = _relative_import_name(target, node)
+            if not base:
+                continue
+            names.add(base)
+            names.update(f"{base}.{alias.name}" for alias in node.names if alias.name != "*")
+    return tuple(sorted(names))
+
+
+def _module_boundary_prefix(module_name: str) -> str:
+    if module_name.endswith(".__init__"):
+        return module_name.removesuffix(".__init__")
+    return module_name.rpartition(".")[0]
+
+
+def _inside_module_boundary(module_name: str, boundary_prefix: str) -> bool:
+    return bool(boundary_prefix) and (module_name == boundary_prefix or module_name.startswith(boundary_prefix + "."))
+
+
+def _repo_module_source(repo_root: Path, module_name: str) -> Path | None:
+    relative = Path(*module_name.split("."))
+    candidates = (repo_root / relative / "__init__.py", (repo_root / relative).with_suffix(".py"))
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
 _ISOLATED_IMPORT_SCRIPT = r"""
@@ -665,7 +718,10 @@ from pydantic import (
     model_validator,
 )
 
-module_name, source_path, repo_root = sys.argv[1:4]
+module_name, source_path, repo_root, boundary_authority_json = sys.argv[1:5]
+boundary_authority = json.loads(boundary_authority_json)
+forbidden_import_prefixes = tuple(boundary_authority["forbidden_import_prefixes"])
+nondeterministic_modules = frozenset(boundary_authority["nondeterministic_modules"])
 events = []
 target_source = os.path.normcase(os.path.abspath(source_path))
 repo_root_source = os.path.normcase(os.path.abspath(repo_root))
@@ -755,17 +811,11 @@ def patch(owner, name, operation=None, replacement=None):
         originals.append((owner, name, original))
         setattr(owner, name, replacement or guard(operation, original))
 
-forbidden_import_prefixes = (
-    "aiohttp", "asyncpg", "backend.agents", "backend.data_access", "backend.data_service",
-    "backend.db", "backend.infra", "backend.models", "backend.quant_models", "backend.repositories",
-    "backend.routers", "backend.schedulers", "backend.services.paper_trading",
-    "backend.services.quantevolver", "backend.services.selection", "backend.services.simulation_runtime",
-    "backend.services.strategy_package", "backend.strategies", "fastapi", "httpx", "psycopg",
-    "psycopg2", "redis", "requests", "socket", "sqlalchemy", "urllib", "vnpy", "websockets", "xtquant",
-)
-
 def forbidden_import(name):
-    return any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden_import_prefixes)
+    root = name.split(".", 1)[0]
+    return root in nondeterministic_modules or any(
+        name == prefix or name.startswith(prefix + ".") for prefix in forbidden_import_prefixes
+    )
 
 original_import = builtins.__import__
 def guarded_import(name, *args, **kwargs):
@@ -962,6 +1012,15 @@ def _isolated_import_failures(
                 target.module_name,
                 str(target.source_path),
                 str(repo_root),
+                json.dumps(
+                    {
+                        "forbidden_import_prefixes": _FORBIDDEN_IMPORT_PREFIXES,
+                        "nondeterministic_modules": tuple(sorted(_NONDETERMINISTIC_MODULES)),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
             ],
             check=False,
             capture_output=True,
@@ -1069,73 +1128,115 @@ def validate_plugin_import_boundaries_v1(
     if len({target.source_path.resolve(strict=False) for target in ordered_targets}) != len(ordered_targets):
         raise ValueError("target source paths must be unique")
 
-    failures: list[ImportBoundaryFailureV1] = []
+    targets_by_module = {target.module_name: target for target in ordered_targets}
+    targets_by_path = {target.source_path.resolve(strict=False): target for target in ordered_targets}
+    checked_modules: set[str] = set(targets_by_module)
+    failures_by_key: dict[tuple[Any, ...], ImportBoundaryFailureV1] = {}
     ast_valid_targets: list[ImportBoundaryTargetV1] = []
-    for target in ordered_targets:
-        candidate_path = target.source_path.resolve(strict=False)
-        if not candidate_path.is_relative_to(root):
-            raise ValueError(f"target {target.module_name} must be inside repo_root")
-        try:
-            resolved_path = target.source_path.resolve(strict=True)
-        except OSError as exc:
-            failures.append(
-                _failure(
-                    stage="SOURCE",
-                    target=target,
-                    reason="MINIQMT_PLUGIN_IMPORT_SOURCE_UNAVAILABLE",
-                    context={"error_type": type(exc).__name__},
+
+    for explicit_target in ordered_targets:
+        boundary_prefix = _module_boundary_prefix(explicit_target.module_name)
+        pending = [explicit_target]
+        closure_modules: set[str] = set()
+        closure_failures: list[ImportBoundaryFailureV1] = []
+        while pending:
+            target = min(pending, key=lambda item: (item.module_name, item.source_path.as_posix()))
+            pending.remove(target)
+            if target.module_name in closure_modules:
+                continue
+            closure_modules.add(target.module_name)
+            checked_modules.add(target.module_name)
+            candidate_path = target.source_path.resolve(strict=False)
+            if not candidate_path.is_relative_to(root):
+                closure_failures.append(
+                    _failure(
+                        stage="SOURCE",
+                        target=target,
+                        reason="MINIQMT_PLUGIN_IMPORT_DEPENDENCY_OUTSIDE_REPO",
+                        context={"module_name": target.module_name},
+                    )
                 )
-            )
-            continue
-        try:
-            source = resolved_path.read_text(encoding="utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            failures.append(
-                _failure(
-                    stage="SOURCE",
-                    target=target,
-                    reason="MINIQMT_PLUGIN_IMPORT_SOURCE_DECODE_INVALID",
-                    context={"decode_error_type": type(exc).__name__, "start": exc.start, "end": exc.end},
+                continue
+            try:
+                resolved_path = target.source_path.resolve(strict=True)
+            except OSError as exc:
+                closure_failures.append(
+                    _failure(
+                        stage="SOURCE",
+                        target=target,
+                        reason="MINIQMT_PLUGIN_IMPORT_SOURCE_UNAVAILABLE",
+                        context={"error_type": type(exc).__name__},
+                    )
                 )
-            )
-            continue
-        except OSError as exc:
-            failures.append(
-                _failure(
-                    stage="SOURCE",
-                    target=target,
-                    reason="MINIQMT_PLUGIN_IMPORT_SOURCE_UNAVAILABLE",
-                    context={"error_type": type(exc).__name__},
+                continue
+            try:
+                source = resolved_path.read_text(encoding="utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                closure_failures.append(
+                    _failure(
+                        stage="SOURCE",
+                        target=target,
+                        reason="MINIQMT_PLUGIN_IMPORT_SOURCE_DECODE_INVALID",
+                        context={"decode_error_type": type(exc).__name__, "start": exc.start, "end": exc.end},
+                    )
                 )
-            )
-            continue
-        try:
-            tree = ast.parse(source, filename=target.source_path.as_posix(), mode="exec", type_comments=True)
-        except SyntaxError as exc:
-            failures.append(
-                _failure(
-                    stage="SOURCE",
-                    target=target,
-                    reason="MINIQMT_PLUGIN_IMPORT_SOURCE_AST_INVALID",
-                    context={"syntax_error": exc.msg},
-                    line=exc.lineno or 0,
-                    column=exc.offset or 0,
+                continue
+            except OSError as exc:
+                closure_failures.append(
+                    _failure(
+                        stage="SOURCE",
+                        target=target,
+                        reason="MINIQMT_PLUGIN_IMPORT_SOURCE_UNAVAILABLE",
+                        context={"error_type": type(exc).__name__},
+                    )
                 )
-            )
-            continue
-        visitor = _ImportBoundaryAstVisitor(target)
-        visitor.visit(tree)
-        if visitor.failures:
-            failures.extend(visitor.failures)
-            continue
-        ast_valid_targets.append(target)
+                continue
+            try:
+                tree = ast.parse(source, filename=target.source_path.as_posix(), mode="exec", type_comments=True)
+            except SyntaxError as exc:
+                closure_failures.append(
+                    _failure(
+                        stage="SOURCE",
+                        target=target,
+                        reason="MINIQMT_PLUGIN_IMPORT_SOURCE_AST_INVALID",
+                        context={"syntax_error": exc.msg},
+                        line=exc.lineno or 0,
+                        column=exc.offset or 0,
+                    )
+                )
+                continue
+            visitor = _ImportBoundaryAstVisitor(target)
+            visitor.visit(tree)
+            closure_failures.extend(visitor.failures)
+            for module_name in _referenced_module_names(target, tree):
+                if not _inside_module_boundary(module_name, boundary_prefix):
+                    continue
+                dependency_path = _repo_module_source(root, module_name)
+                if dependency_path is None:
+                    continue
+                resolved_dependency = dependency_path.resolve(strict=False)
+                dependency = targets_by_module.get(module_name) or targets_by_path.get(resolved_dependency)
+                if dependency is None:
+                    dependency = ImportBoundaryTargetV1(
+                        module_name=module_name,
+                        source_path=dependency_path,
+                        source_identity=dependency_path.relative_to(root).as_posix(),
+                    )
+                    targets_by_module[module_name] = dependency
+                    targets_by_path[resolved_dependency] = dependency
+                if dependency.module_name not in closure_modules:
+                    pending.append(dependency)
+        for failure in closure_failures:
+            failures_by_key.setdefault(failure.sort_key, failure)
+        if not closure_failures:
+            ast_valid_targets.append(explicit_target)
 
     for target in ast_valid_targets:
-        failures.extend(_isolated_import_failures(target=target, repo_root=root))
-
-    ordered_failures = tuple(sorted(failures, key=lambda item: item.sort_key))
+        for failure in _isolated_import_failures(target=target, repo_root=root):
+            failures_by_key.setdefault(failure.sort_key, failure)
+    ordered_failures = tuple(sorted(failures_by_key.values(), key=lambda item: item.sort_key))
     receipt = PluginImportBoundaryReceiptV2.create(
-        checked_modules=tuple(target.module_name for target in ordered_targets),
+        checked_modules=tuple(sorted(checked_modules)),
         failures=ordered_failures,
     )
     if ordered_failures:

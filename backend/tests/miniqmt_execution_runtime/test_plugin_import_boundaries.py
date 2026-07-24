@@ -389,6 +389,132 @@ def test_public_validator_blocks_helper_mediated_file_side_effect(tmp_path: Path
     assert not marker.exists()
 
 
+def test_public_validator_blocks_transitive_helper_sqlite_side_effect_before_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "helper-created.sqlite3"
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "sqlite_helper.py").write_text(
+        "import sqlite3\n"
+        f"connection = sqlite3.connect({str(marker)!r})\n"
+        "connection.execute('create table evidence(id integer)')\n"
+        "connection.commit()\n"
+        "connection.close()\n",
+        encoding="utf-8",
+    )
+    target = _write_source(tmp_path, "fixtures.sqlite_target", "from . import sqlite_helper\n")
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    receipt = exc_info.value.receipt
+    assert "fixtures.sqlite_helper" in receipt.checked_modules
+    assert any(
+        failure.module_name == "fixtures.sqlite_helper"
+        and failure.reason == "MINIQMT_PLUGIN_IMPORT_FORBIDDEN_DEPENDENCY"
+        and failure.context["import_name"] == "sqlite3"
+        for failure in receipt.ordered_failures
+    )
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("helper_source", "expected_reason"),
+    [
+        ("import time\nVALUE = time.time()\n", "MINIQMT_PLUGIN_IMPORT_WALL_CLOCK_FORBIDDEN"),
+        ("import random\nVALUE = random.random()\n", "MINIQMT_PLUGIN_IMPORT_GLOBAL_RANDOM_FORBIDDEN"),
+        (
+            "from datetime import datetime\nVALUE = datetime.now()\n",
+            "MINIQMT_PLUGIN_IMPORT_WALL_CLOCK_FORBIDDEN",
+        ),
+        (
+            'import sys\nVALUE = sys.modules["random"].random()\n',
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_MODULE_ESCAPE_FORBIDDEN",
+        ),
+    ],
+)
+def test_public_validator_blocks_transitive_helper_nondeterminism(
+    tmp_path: Path,
+    helper_source: str,
+    expected_reason: str,
+) -> None:
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "nondeterministic_helper.py").write_text(helper_source, encoding="utf-8")
+    target = _write_source(
+        tmp_path,
+        "fixtures.nondeterministic_target",
+        "from . import nondeterministic_helper\n",
+    )
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert any(
+        failure.module_name == "fixtures.nondeterministic_helper" and failure.reason == expected_reason
+        for failure in exc_info.value.receipt.ordered_failures
+    )
+
+
+def test_public_validator_blocks_nested_helper_forbidden_owner_without_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "nested-helper-ran.txt"
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "nested_middle.py").write_text("from . import nested_deep\n", encoding="utf-8")
+    (package / "nested_deep.py").write_text(
+        "from backend.services.miniqmt_execution_runtime import runtime\n"
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('forbidden')\n",
+        encoding="utf-8",
+    )
+    target = _write_source(tmp_path, "fixtures.nested_target", "from . import nested_middle\n")
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    receipt = exc_info.value.receipt
+    assert {"fixtures.nested_target", "fixtures.nested_middle", "fixtures.nested_deep"}.issubset(
+        receipt.checked_modules
+    )
+    assert any(
+        failure.module_name == "fixtures.nested_deep"
+        and failure.reason == "MINIQMT_PLUGIN_IMPORT_FORBIDDEN_DEPENDENCY"
+        and failure.context["import_name"] == "backend.services.miniqmt_execution_runtime"
+        for failure in receipt.ordered_failures
+    )
+    assert not marker.exists()
+
+
+def test_public_validator_transitive_helper_cycle_is_finite_and_canonical(tmp_path: Path) -> None:
+    package = tmp_path / "fixtures"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "cycle_a.py").write_text("from . import cycle_b\nVALUE_A = 1\n", encoding="utf-8")
+    (package / "cycle_b.py").write_text("from . import cycle_a\nVALUE_B = 2\n", encoding="utf-8")
+    target = _target("fixtures.cycle_a", package / "cycle_a.py")
+
+    receipt = validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert receipt.status == "PASSED"
+    assert receipt.checked_modules == ("fixtures.cycle_a", "fixtures.cycle_b")
+    assert receipt.ordered_failures == ()
+
+
+def test_transitive_helper_failure_identity_is_repo_relative_and_root_independent(tmp_path: Path) -> None:
+    failures = []
+    for root_name in ("checkout-a", "checkout-b"):
+        root = tmp_path / root_name
+        package = root / "fixtures"
+        package.mkdir(parents=True)
+        (package / "helper.py").write_text("import sqlite3\n", encoding="utf-8")
+        target = _write_source(root, "fixtures.target", "from . import helper\n")
+        with pytest.raises(PluginImportBoundaryError) as exc_info:
+            validate_plugin_import_boundaries_v1(repo_root=root, targets=(target,))
+        failures.append(
+            next(item for item in exc_info.value.receipt.ordered_failures if item.module_name == "fixtures.helper")
+        )
+
+    assert failures[0].source_path == "fixtures/helper.py"
+    assert failures[0].sort_key == failures[1].sort_key
+
+
 @pytest.mark.parametrize(
     "helper_source",
     [
@@ -437,7 +563,14 @@ def test_public_validator_blocks_helper_mediated_external_side_effects(
         validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
 
     assert any(
-        item.reason == "MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN" for item in exc_info.value.receipt.ordered_failures
+        item.module_name == "fixtures.external_helper"
+        and item.reason
+        in {
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN",
+            "MINIQMT_PLUGIN_IMPORT_DYNAMIC_MODULE_ESCAPE_FORBIDDEN",
+            "MINIQMT_PLUGIN_IMPORT_FILESYSTEM_SIDE_EFFECT_FORBIDDEN",
+        }
+        for item in exc_info.value.receipt.ordered_failures
     )
     assert not marker.exists()
 
@@ -455,8 +588,8 @@ def test_repo_helper_dynamic_import_retains_exact_forbidden_module(tmp_path: Pat
 
     failures = exc_info.value.receipt.ordered_failures
     assert any(
-        failure.reason == "MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN"
-        and failure.context.get("operation") == "dynamic_import"
+        failure.module_name == "fixtures.dynamic_helper"
+        and failure.reason == "MINIQMT_PLUGIN_IMPORT_DYNAMIC_IMPORT_FORBIDDEN"
         and failure.context.get("module") == "backend.services.simulation_runtime"
         for failure in failures
     )
