@@ -1,84 +1,134 @@
 {
-  "actual": "RDAGENT-RELEASE-IDENTITY-001 is enforced by workflow but RD-Agent main has no compliant immutable release builder, atomic current pointer, external RDAGENT_STATE_ROOT binding, deployment receipt, or fail-closed API startup contract. Latest merged source cannot be deployed without dirty-root/runtime-state contamination. Implement and validate in independent AIstock and RD-Agent worktrees; no DDL/DML.",
+  "actual": "Five children failed before attempt creation because heartbeat advanced the run row version while the materialization path retained an obsolete CAS version.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260724_BUG-854-rd-agent-immutable-release-builder-and-external-state-root-are-not-imple.json",
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "tests/aistock_validation/bugs/20260724_BUG-856-durable-multi-alpha-long-materialization-heartbeat-invalidates-run-cas-t.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-854",
-  "closed_at": "2026-07-24T16:28:56Z",
+  "bug_id": "BUG-856",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-24T15:23:21.977015Z",
-  "description": "RDAGENT-RELEASE-IDENTITY-001 is enforced by workflow but RD-Agent main has no compliant immutable release builder, atomic current pointer, external RDAGENT_STATE_ROOT binding, deployment receipt, or fail-closed API startup contract. Latest merged source cannot be deployed without dirty-root/runtime-state contamination. Implement and validate in independent AIstock and RD-Agent worktrees; no DDL/DML.",
+  "created_at": "2026-07-24T16:26:07.378255Z",
+  "description": "Five children failed before attempt creation because heartbeat advanced the run row version while the materialization path retained an obsolete CAS version.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260724-4fe52bea12a5",
-      "timestamp": "2026-07-24T15:23:21.977009Z"
+      "note": "Promoted from IC-20260724-de0e7560a476",
+      "timestamp": "2026-07-24T16:26:07.378251Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "multi-alpha-run:macb_453ca2d0c5b21b40_20240701_20260629_20260724T142906754918Z_236c5311/events/167,169,171,173,175"
+  ],
+  "expected": "Long child materialization may span multiple heartbeat intervals and still publish or report its business result using the current owned run token.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_orchestrator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+    ]
   },
-  "first_seen_at": "2026-07-24T15:23:21.977015Z",
+  "first_seen_at": "2026-07-24T16:26:07.378255Z",
   "fix_branch": null,
-  "fix_commit": "362cd217cb4332d81c5b01e8cdbf7dee96c03f8f",
-  "fixed_at": "2026-07-24T16:33:00.905623Z",
-  "github_issue_number": 2701,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2701",
-  "last_seen_at": "2026-07-24T15:23:21.977015Z",
-  "module": "rdagent",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2704,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2704",
+  "last_seen_at": "2026-07-24T16:26:07.378255Z",
+  "module": "qe.multi_alpha",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2703",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_durable_orchestrator_restart.py -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
-  "risk_area": "bug",
+  "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
-    "rdagent"
+    "qe.multi_alpha"
   ],
-  "title": "RD-Agent immutable release builder and external state root are not implemented",
+  "title": "Durable multi-alpha long materialization heartbeat invalidates run CAS token",
   "trigger_condition": {
-    "fingerprint": "4fe52bea12a5bd767a4a2f80",
-    "source_event_id": "FE-20260724-4fe52bea12a5"
+    "fingerprint": "de0e7560a476db82fd32f13a",
+    "source_event_id": "FE-20260724-de0e7560a476"
   },
-  "validation_evidence": [
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped"
-  ],
   "verification_budget": {
-    "budget": "deep",
+    "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "qe.multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -111,7 +161,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "45-60%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -127,11 +177,16 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "deep",
+      "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "qe.multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -164,8 +219,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "45-60%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  }
 }
