@@ -254,6 +254,28 @@
     "python -m nox -s validation_module_registry_l0 -> passed, 8 tests and 14/14 mapped",
     "python scripts/aistock_issue_workflow.py finish --bug-id BUG-848 --plan-only -> ready_for_pr, scope passed, blocking=0"
   ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "d32dfe5bd05f36be",
+      "result": "passed, blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "4733a0f59ec3e35d",
+      "result": "passed, 8 tests and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
