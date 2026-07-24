@@ -114,6 +114,7 @@ _FILESYSTEM_CALLS = frozenset(
 )
 _MAX_CONTEXT_TEXT = 2048
 _MAX_IMPORT_FAILURES = 64
+_MAX_EXCEPTION_DIAGNOSTIC_FAILURES = 16
 _ISOLATED_IMPORT_TIMEOUT_SECONDS = 20
 _MODULE_NAME_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 
@@ -412,7 +413,19 @@ def _receipt_hash_from_parts_v2(
 class PluginImportBoundaryError(RuntimeError):
     def __init__(self, receipt: PluginImportBoundaryReceiptV1) -> None:
         self.receipt = receipt
-        super().__init__(f"plugin import boundary failed with {len(receipt.ordered_failures)} failure(s)")
+        diagnostic_failures = receipt.ordered_failures[:_MAX_EXCEPTION_DIAGNOSTIC_FAILURES]
+        diagnostic = {
+            "observed": receipt.observed_failure_count,
+            "retained": receipt.retained_failure_count,
+            "omitted": receipt.omitted_failure_count,
+            "diagnostic_failures_shown": len(diagnostic_failures),
+            "failure_set_sha256": receipt.failure_set_sha256,
+            "failures": [item.canonical_payload() for item in diagnostic_failures],
+        }
+        super().__init__(
+            "plugin import boundary failed: "
+            + json.dumps(diagnostic, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def _matches_prefix(import_name: str, prefix: str) -> bool:

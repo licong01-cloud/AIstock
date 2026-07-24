@@ -456,15 +456,20 @@ def test_import_failure_identity_is_repo_relative_and_root_independent(tmp_path:
 
 def test_isolated_import_failure_context_is_repo_relative_and_root_independent(tmp_path: Path) -> None:
     failures = []
+    error_messages = []
     for root_name in ("checkout-a", "checkout-b"):
         root = tmp_path / root_name
         target = _write_source(root, "fixtures.runtime_failure", "raise RuntimeError(__file__)\n")
         with pytest.raises(PluginImportBoundaryError) as exc_info:
             validate_plugin_import_boundaries_v1(repo_root=root, targets=(target,))
         failures.append(exc_info.value.receipt.ordered_failures[0])
+        error_messages.append(str(exc_info.value))
 
     assert failures[0].source_path == "fixtures/runtime_failure.py"
     assert failures[0].sort_key == failures[1].sort_key
+    assert error_messages[0] == error_messages[1]
+    assert "MINIQMT_PLUGIN_IMPORT_EXECUTION_FAILED" in error_messages[0]
+    assert "fixtures/runtime_failure.py" in error_messages[0]
 
 
 @pytest.mark.parametrize("mode", ["r", "w"])
@@ -515,6 +520,12 @@ def test_import_failures_are_bounded_truncated_and_hash_closed(tmp_path: Path) -
     assert receipt.ordered_failures[-1].source_path == "__failure_set__"
     assert receipt.failure_set_sha256 != "0" * 64
     assert receipt.receipt_sha256 != "0" * 64
+    message = str(exc_info.value)
+    assert '"observed":100' in message
+    assert '"retained":64' in message
+    assert '"diagnostic_failures_shown":16' in message
+    assert receipt.failure_set_sha256 in message
+    assert len(message) < 16_384
 
 
 @pytest.mark.parametrize("module_name", ["fixtures.invalid-name", "fixtures/path", " fixtures.name"])
