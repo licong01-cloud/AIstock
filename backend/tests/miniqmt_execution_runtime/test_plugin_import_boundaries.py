@@ -441,6 +441,40 @@ def test_public_validator_blocks_helper_mediated_external_side_effects(
     assert not marker.exists()
 
 
+def test_repo_helper_dynamic_import_retains_exact_forbidden_module(tmp_path: Path) -> None:
+    _write_source(
+        tmp_path,
+        "fixtures.dynamic_helper",
+        'import importlib\nimportlib.import_module("backend.services.simulation_runtime")\n',
+    )
+    target = _write_source(tmp_path, "fixtures.dynamic_target", "from . import dynamic_helper\n")
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    failures = exc_info.value.receipt.ordered_failures
+    assert any(
+        failure.reason == "MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN"
+        and failure.context.get("operation") == "dynamic_import"
+        and failure.context.get("module") == "backend.services.simulation_runtime"
+        for failure in failures
+    )
+
+
+def test_external_validation_dependency_internal_import_is_not_repo_attributed(tmp_path: Path) -> None:
+    target = _write_source(
+        tmp_path,
+        "fixtures.validation_dependency",
+        "from jsonschema.validators import validator_for\n"
+        "from pydantic import BaseModel\n"
+        "assert validator_for is not None and BaseModel is not None\n",
+    )
+
+    receipt = validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    assert receipt.status == "PASSED"
+
+
 def test_import_failure_identity_is_repo_relative_and_root_independent(tmp_path: Path) -> None:
     failures = []
     for root_name in ("checkout-a", "checkout-b"):

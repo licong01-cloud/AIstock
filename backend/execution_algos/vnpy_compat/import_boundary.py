@@ -765,7 +765,7 @@ def forbidden_import(name):
 
 original_import = builtins.__import__
 def guarded_import(name, *args, **kwargs):
-    if import_active and repo_owned_caller(include_indirect=True) and isinstance(name, str) and forbidden_import(name):
+    if import_active and repo_owned_caller() and isinstance(name, str) and forbidden_import(name):
         events.append({"operation": "dynamic_import", "module": name})
         raise BoundarySideEffect("dynamic_import")
     return original_import(name, *args, **kwargs)
@@ -773,7 +773,7 @@ def guarded_import(name, *args, **kwargs):
 original_import_module = importlib.import_module
 def guarded_import_module(name, package=None):
     resolved = importlib.util.resolve_name(name, package) if isinstance(name, str) and name.startswith(".") else name
-    if import_active and repo_owned_caller(include_indirect=True) and isinstance(resolved, str) and forbidden_import(resolved):
+    if import_active and repo_owned_caller() and isinstance(resolved, str) and forbidden_import(resolved):
         events.append({"operation": "dynamic_import", "module": resolved})
         raise BoundarySideEffect("dynamic_import")
     return original_import_module(name, package)
@@ -786,7 +786,7 @@ def audit_hook(event, args):
     # cannot recursively audit its own stack inspection.
     if event == "import":
         if (
-            not repo_owned_caller(include_indirect=True)
+            not repo_owned_caller()
             or not args
             or not isinstance(args[0], str)
             or not forbidden_import(args[0])
@@ -972,12 +972,15 @@ def _isolated_import_failures(
     failures: list[ImportBoundaryFailureV1] = []
     for event in result.get("events", []):
         operation = event.get("operation") if isinstance(event, dict) else None
+        context = {"operation": operation or "unknown"}
+        if isinstance(event, dict) and type(event.get("module")) is str:
+            context["module"] = event["module"]
         failures.append(
             _failure(
                 stage="ISOLATED_IMPORT",
                 target=target,
                 reason="MINIQMT_PLUGIN_IMPORT_SIDE_EFFECT_FORBIDDEN",
-                context={"operation": operation or "unknown"},
+                context=context,
             )
         )
     exception = result.get("exception")
