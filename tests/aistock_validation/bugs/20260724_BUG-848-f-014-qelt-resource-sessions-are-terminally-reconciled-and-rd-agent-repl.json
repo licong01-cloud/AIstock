@@ -1,0 +1,333 @@
+{
+  "actual": "BUG-847 completed the qelt reconciler, authenticated callback, durable outbox v2, and production recovery work. The remaining BUG-848 defect is limited to imprecise RD-Agent callback transport classification for HTTP 600+, wrapped timeouts, generic URL errors, and bare OS errors.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260724_BUG-848-f-014-qelt-resource-sessions-are-terminally-reconciled-and-rd-agent-repl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-848",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-23T18:25:52.719163Z",
+  "description": "Narrow BUG-848 to the RD-Agent transport-classification increment not covered by BUG-847. AIstock has no business-source increment and all production repair, DML, deployment, restart, callback, and outbox actions are no-op.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260724-fb5459dcbc3b",
+      "timestamp": "2026-07-23T18:25:52.719159Z"
+    },
+    {
+      "action": "narrow_scope_after_bug_847",
+      "actor": "codex",
+      "note": "BUG-847 completed production recovery and deployed outbox v2. BUG-848 now retains only RD-Agent transport classification; duplicate AIstock source, tests, and repair tooling are removed and repeat DML is prohibited.",
+      "timestamp": "2026-07-24T07:55:09.7290571Z"
+    }
+  ],
+  "evidence_uris": [
+    "C:\\Users\\lc999\\.codex\\attachments\\74e9b303-ba18-4e84-9dea-9783aef66dd9\\pasted-text.txt"
+  ],
+  "expected": "Keep the deployed outbox v2 contract and the HTTP 409 state conflict_reconciliation_required unchanged. Classify only HTTP 500..599 as http_5xx, direct or URL-wrapped timeouts as timeout, generic URLError as network, and bare OSError as os_error.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "original_file_scope_contract": {
+    "added_files": [
+      "scripts/repair_qelt_resource_sessions.py",
+      "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+    ],
+    "changed_files": [
+      "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "scripts/repair_qelt_resource_sessions.py",
+        "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_resource_phase_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        },
+        {
+          "file": "scripts/repair_qelt_resource_sessions.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_repair_qelt_resource_sessions.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "scripts/repair_qelt_resource_sessions.py",
+        "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+      "scripts/repair_qelt_resource_sessions.py",
+      "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+    ]
+  },
+  "first_seen_at": "2026-07-23T18:25:52.719163Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2680,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2680",
+  "last_seen_at": "2026-07-23T18:25:52.719163Z",
+  "module": "qe.long_trend_evaluation",
+  "non_goals": [
+    "Do not add AIstock business-source changes for BUG-848.",
+    "Do not repeat production DML, repair, callback, outbox replay, deployment, or restart after BUG-847 production closure.",
+    "Do not replace or migrate the deployed outbox v2 contract or conflict_reconciliation_required state."
+  ],
+  "aistock_deployment_restart_gate": "noop",
+  "aistock_source_change": "noop",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_dml_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "rd_agent_change_scope": "transport_classification_only",
+  "repair_execution_gate": "noop",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file tests/aistock_validation/bugs/20260724_BUG-848-f-014-qelt-resource-sessions-are-terminally-reconciled-and-rd-agent-repl.json --changed-file tests/aistock_validation/bugs/.bug_id_allocator.json",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.long_trend_evaluation"
+  ],
+  "title": "F-014 qelt resource sessions are terminally reconciled and RD-Agent replays HTTP 409 forever",
+  "trigger_condition": {
+    "fingerprint": "fb5459dcbc3b8fb0274b05c9",
+    "source_event_id": "FE-20260724-fb5459dcbc3b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "validation_evidence": [
+    "python scripts/ci_changed_files.py --base-sha origin/main --head-sha HEAD -> passed, changed_file_count=2",
+    "python scripts/bug_registry_metadata_check.py -> passed, blocking=0",
+    "python -m nox -s l0 -> passed, findings=0, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed, 8 tests and 14/14 mapped",
+    "python scripts/aistock_issue_workflow.py finish --bug-id BUG-848 --plan-only -> ready_for_pr, scope passed, blocking=0"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "d32dfe5bd05f36be",
+      "result": "passed, blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "4733a0f59ec3e35d",
+      "result": "passed, 8 tests and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
