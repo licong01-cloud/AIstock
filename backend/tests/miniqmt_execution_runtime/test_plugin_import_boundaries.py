@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -560,6 +561,35 @@ def test_import_failures_are_bounded_truncated_and_hash_closed(tmp_path: Path) -
     assert '"diagnostic_failures_shown":16' in message
     assert receipt.failure_set_sha256 in message
     assert len(message) < 16_384
+
+
+@pytest.mark.parametrize(
+    "carrier",
+    (
+        "[]",
+        '{"events":{},"exception":null}',
+        '{"events":["not-an-object"],"exception":null}',
+        '{"events":[],"exception":"not-an-object"}',
+    ),
+)
+def test_public_validator_fails_loud_on_malformed_isolated_carrier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    carrier: str,
+) -> None:
+    target = _write_source(tmp_path, "fixtures.valid", "VALUE = 1\n")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=carrier, stderr=""),
+    )
+
+    with pytest.raises(PluginImportBoundaryError) as exc_info:
+        validate_plugin_import_boundaries_v1(repo_root=tmp_path, targets=(target,))
+
+    failure = exc_info.value.receipt.ordered_failures[0]
+    assert failure.reason == "MINIQMT_PLUGIN_IMPORT_ISOLATED_RECEIPT_INVALID"
+    assert failure.context["error_type"] == "IsolatedImportReceiptShapeError"
 
 
 @pytest.mark.parametrize("module_name", ["fixtures.invalid-name", "fixtures/path", " fixtures.name"])

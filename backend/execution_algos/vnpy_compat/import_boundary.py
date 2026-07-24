@@ -428,6 +428,10 @@ class PluginImportBoundaryError(RuntimeError):
         )
 
 
+class IsolatedImportReceiptShapeError(ValueError):
+    """Raised when the isolated worker returns a non-canonical carrier."""
+
+
 def _matches_prefix(import_name: str, prefix: str) -> bool:
     return import_name == prefix or import_name.startswith(prefix + ".")
 
@@ -914,6 +918,37 @@ def _stable_isolated_text(value: Any, *, target: ImportBoundaryTargetV1, repo_ro
     return stable[:_MAX_CONTEXT_TEXT]
 
 
+def _validate_isolated_import_result(result: Any) -> dict[str, Any]:
+    if type(result) is not dict or set(result) != {"events", "exception"}:
+        raise IsolatedImportReceiptShapeError("isolated result must contain exact events/exception fields")
+    events = result["events"]
+    if type(events) is not list:
+        raise IsolatedImportReceiptShapeError("isolated events must be a list")
+    for event in events:
+        if type(event) is not dict or set(event) not in ({"operation"}, {"module", "operation"}):
+            raise IsolatedImportReceiptShapeError("isolated event shape is invalid")
+        if type(event["operation"]) is not str or not event["operation"]:
+            raise IsolatedImportReceiptShapeError("isolated event operation is invalid")
+        if "module" in event and (type(event["module"]) is not str or not event["module"]):
+            raise IsolatedImportReceiptShapeError("isolated event module is invalid")
+    exception = result["exception"]
+    if exception is not None:
+        if type(exception) is not dict or set(exception) != {
+            "type",
+            "message",
+            "message_render_error_type",
+        }:
+            raise IsolatedImportReceiptShapeError("isolated exception shape is invalid")
+        if type(exception["type"]) is not str or not exception["type"]:
+            raise IsolatedImportReceiptShapeError("isolated exception type is invalid")
+        if type(exception["message"]) is not str:
+            raise IsolatedImportReceiptShapeError("isolated exception message is invalid")
+        render_error_type = exception["message_render_error_type"]
+        if render_error_type is not None and (type(render_error_type) is not str or not render_error_type):
+            raise IsolatedImportReceiptShapeError("isolated exception render error type is invalid")
+    return result
+
+
 def _isolated_import_failures(
     *, target: ImportBoundaryTargetV1, repo_root: Path
 ) -> tuple[ImportBoundaryFailureV1, ...]:
@@ -956,8 +991,8 @@ def _isolated_import_failures(
             ),
         )
     try:
-        result = json.loads(completed.stdout)
-    except (json.JSONDecodeError, TypeError) as exc:
+        result = _validate_isolated_import_result(json.loads(completed.stdout))
+    except (json.JSONDecodeError, TypeError, IsolatedImportReceiptShapeError) as exc:
         return (
             _failure(
                 stage="ISOLATED_IMPORT",
