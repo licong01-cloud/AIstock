@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     FrozenJsonArrayV1,
     FrozenJsonMemberV1,
@@ -36,7 +37,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
     DiagnosticSeverityV1,
-    EnumValueRequirementV1,
     EventSourceV2,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
@@ -46,7 +46,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     MarketDataRequirementV1,
     MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
-    ObjectFieldRequirementV1,
     OrderTypeV1,
     PluginProviderV2,
     RuntimeEventEnvelopeV2,
@@ -55,7 +54,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     SourceAttributionV1,
     TimerMutationTypeV1,
     TimerMutationV1,
-    VnpyCompatibilityRequirementV1,
+    VnpyCompatibilityRequirementV2,
 )
 
 
@@ -521,31 +520,11 @@ def _source_attribution() -> SourceAttributionV1:
     )
 
 
-def _compatibility_requirement() -> VnpyCompatibilityRequirementV1:
-    source_files = (FileHashV1(path="vnpy_algotrading/template.py", sha256="2" * 64),)
-    object_fields = (ObjectFieldRequirementV1(object_name="TickData", fields=("datetime", "vt_symbol")),)
-    enum_values = (EnumValueRequirementV1(enum_name="Direction", values=("LONG", "SHORT")),)
-    payload = {
-        "schema_version": "vnpy_compatibility_requirement_v1",
-        "mode": "DERIVED_SOURCE_EXACT_CHARACTERIZATION",
-        "upstream_repo": "vnpy/vnpy_algotrading",
-        "upstream_commit": "4" * 40,
-        "source_files_and_hashes": [item.model_dump(mode="json") for item in source_files],
-        "required_method_signatures": ["get_tick(algo)->TickData|None", "send_order(algo,...)->str"],
-        "required_object_fields": [item.model_dump(mode="json") for item in object_fields],
-        "required_enum_values": [item.model_dump(mode="json") for item in enum_values],
-        "characterization_sha256": "5" * 64,
-    }
-    model_payload = {
-        **payload,
-        "source_files_and_hashes": source_files,
-        "required_method_signatures": tuple(payload["required_method_signatures"]),
-        "required_object_fields": object_fields,
-        "required_enum_values": enum_values,
-    }
-    return VnpyCompatibilityRequirementV1(
-        **model_payload,
-        requirement_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", payload),
+def _compatibility_requirement() -> VnpyCompatibilityRequirementV2:
+    return next(
+        manifest.compatibility_requirement
+        for manifest in current_three_manifests_v2()
+        if manifest.algo_code == "SNIPER_MINIQMT"
     )
 
 
@@ -568,7 +547,7 @@ def _manifest(config_schema: dict[str, object] | None = None) -> ExecutionAlgoPl
     requirement = _market_requirement()
     attribution = _source_attribution()
     compatibility = _compatibility_requirement()
-    facade_fields = (ObjectFieldRequirementV1(object_name="TickData", fields=("datetime", "vt_symbol")),)
+    facade_fields = compatibility.required_object_fields
     payload: dict[str, object] = {
         "schema_version": "execution_algo_plugin_manifest_v2",
         "plugin_id": "aistock.vnpy.sniper",

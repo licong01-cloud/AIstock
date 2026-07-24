@@ -1,133 +1,85 @@
-"""MiniQMT unified execution runtime public API."""
+"""MiniQMT runtime public API with side-effect-free submodule imports."""
 
-from .client import (
-    MiniQMTExecutionRuntimeClient,
-    MiniQMTPlanPreviewResult,
-    MiniQMTRuntimeEvidence,
-    MiniQMTRuntimeManagedBatchSubmitResult,
-)
-from .config import (
-    MINIQMT_EXECUTION_RUNTIME_ENV,
-    MiniQMTExecutionRuntimeKind,
-    get_miniqmt_execution_runtime_kind,
-)
-from .contracts import (
-    MiniQMTGatewayContract,
-    MiniQMTGatewayEventSourceContract,
-    MiniQMTStrategyLedgerOmsContract,
-    MiniQMTVnpyAlgoCoreContract,
-)
-from .gateway import (
-    FakeMiniQMTGateway,
-    MiniQMTGateway,
-    MiniQMTGatewayCancelAck,
-    MiniQMTGatewayEventSource,
-    MiniQMTGatewayEventSourceError,
-    MiniQMTGatewayEventSink,
-    MiniQMTGatewayOrderAck,
-    QmtClientMiniQMTEventLoopGateway,
-    QmtClientMiniQMTGateway,
-)
-from .models import (
-    MiniQMTAlgoInstanceStatus,
-    MiniQMTChildOrder,
-    MiniQMTChildOrderStatus,
-    MiniQMTExecutionAlgoInstance,
-    MiniQMTExecutionEvent,
-    MiniQMTExecutionEventType,
-    MiniQMTExecutionRuntimeConfig,
-    MiniQMTExecutionRuntimeMode,
-    MiniQMTExecutionRuntimeRecord,
-    MiniQMTExecutionRuntimeState,
-    MiniQMTGatewayState,
-    MiniQMTOmsState,
-    MiniQMTOperatorCommandResult,
-    MiniQMTOperatorCommandStatus,
-    MiniQMTRuntimeRecoverySnapshot,
-)
-from .oms import MiniQMTOmsLedger, MiniQMTOmsProjection
-from .quote_auction import ClosingAuctionCapabilityProbe
-from .quote_evidence import MarkoutAnchor, QuoteEvidenceCoordinator, QuoteEvidenceHealth, QuoteIngressHealthV1
-from .repository import (
-    DEFAULT_MINIQMT_EXECUTION_RUNTIME_REPOSITORY,
-    MINIQMT_EXECUTION_RUNTIME_JSONFILE_TEST_ONLY_ENV,
-    MINIQMT_EXECUTION_RUNTIME_PRUNE_EVERY_WRITES_ENV,
-    MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV,
-    InMemoryMiniQMTExecutionRuntimeRepository,
-    JsonFileMiniQMTExecutionRuntimeRepository,
-    MiniQMTExecutionRuntimeRepository,
-    PostgresMiniQMTExecutionRuntimeRepository,
-    default_miniqmt_execution_runtime_repository,
-)
-from .risk import (
-    ConfigurableMiniQMTRiskEngine,
-    MiniQMTRiskDecision,
-    MiniQMTRiskDecisionAction,
-    MiniQMTRiskEngine,
-    MiniQMTRiskPriceBand,
-    MiniQMTRiskRuleSet,
-    NoopMiniQMTRiskEngine,
-)
-from .runtime import MiniQMTExecutionEventLoop, MiniQMTExecutionRuntime
-__all__ = [
-    "MiniQMTRuntimeManagedBatchSubmitResult",
-    "MiniQMTRuntimeEvidence",
-    "MiniQMTPlanPreviewResult",
-    "MiniQMTExecutionRuntimeClient",
-    "MINIQMT_EXECUTION_RUNTIME_ENV",
-    "ConfigurableMiniQMTRiskEngine",
-    "MiniQMTExecutionRuntimeKind",
-    "MiniQMTGatewayContract",
-    "MiniQMTGatewayEventSourceContract",
-    "MiniQMTStrategyLedgerOmsContract",
-    "MiniQMTVnpyAlgoCoreContract",
-    "FakeMiniQMTGateway",
-    "get_miniqmt_execution_runtime_kind",
-    "DEFAULT_MINIQMT_EXECUTION_RUNTIME_REPOSITORY",
-    "InMemoryMiniQMTExecutionRuntimeRepository",
-    "JsonFileMiniQMTExecutionRuntimeRepository",
-    "MINIQMT_EXECUTION_RUNTIME_JSONFILE_TEST_ONLY_ENV",
-    "MINIQMT_EXECUTION_RUNTIME_PRUNE_EVERY_WRITES_ENV",
-    "MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV",
-    "MiniQMTAlgoInstanceStatus",
-    "MiniQMTChildOrder",
-    "MiniQMTChildOrderStatus",
-    "MiniQMTExecutionAlgoInstance",
-    "MiniQMTExecutionEvent",
-    "MiniQMTExecutionEventLoop",
-    "MiniQMTExecutionEventType",
-    "MiniQMTExecutionRuntime",
-    "MiniQMTExecutionRuntimeConfig",
-    "MiniQMTExecutionRuntimeMode",
-    "MiniQMTExecutionRuntimeRecord",
-    "MiniQMTExecutionRuntimeRepository",
-    "MiniQMTExecutionRuntimeState",
-    "PostgresMiniQMTExecutionRuntimeRepository",
-    "default_miniqmt_execution_runtime_repository",
-    "MiniQMTGateway",
-    "ClosingAuctionCapabilityProbe",
-    "MarkoutAnchor",
-    "QuoteEvidenceCoordinator",
-    "QuoteEvidenceHealth",
-    "QuoteIngressHealthV1",
-    "MiniQMTGatewayCancelAck",
-    "MiniQMTGatewayEventSink",
-    "MiniQMTGatewayEventSource",
-    "MiniQMTGatewayEventSourceError",
-    "MiniQMTGatewayOrderAck",
-    "MiniQMTGatewayState",
-    "MiniQMTOmsLedger",
-    "MiniQMTOmsProjection",
-    "MiniQMTOmsState",
-    "MiniQMTOperatorCommandResult",
-    "MiniQMTOperatorCommandStatus",
-    "MiniQMTRiskDecision",
-    "MiniQMTRiskDecisionAction",
-    "MiniQMTRiskEngine",
-    "MiniQMTRiskPriceBand",
-    "MiniQMTRiskRuleSet",
-    "MiniQMTRuntimeRecoverySnapshot",
-    "NoopMiniQMTRiskEngine",
-    "QmtClientMiniQMTEventLoopGateway",
-    "QmtClientMiniQMTGateway",
-]
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+
+_EXPORT_MODULES = {
+    "MINIQMT_EXECUTION_RUNTIME_ENV": ".config",
+    "MiniQMTExecutionRuntimeKind": ".config",
+    "get_miniqmt_execution_runtime_kind": ".config",
+    "MiniQMTRuntimeManagedBatchSubmitResult": ".client",
+    "MiniQMTRuntimeEvidence": ".client",
+    "MiniQMTPlanPreviewResult": ".client",
+    "MiniQMTExecutionRuntimeClient": ".client",
+    "MiniQMTGatewayContract": ".contracts",
+    "MiniQMTGatewayEventSourceContract": ".contracts",
+    "MiniQMTStrategyLedgerOmsContract": ".contracts",
+    "MiniQMTVnpyAlgoCoreContract": ".contracts",
+    "FakeMiniQMTGateway": ".gateway",
+    "MiniQMTGateway": ".gateway",
+    "ClosingAuctionCapabilityProbe": ".quote_auction",
+    "MarkoutAnchor": ".quote_evidence",
+    "QuoteEvidenceCoordinator": ".quote_evidence",
+    "QuoteEvidenceHealth": ".quote_evidence",
+    "QuoteIngressHealthV1": ".quote_evidence",
+    "MiniQMTGatewayCancelAck": ".gateway",
+    "MiniQMTGatewayEventSink": ".gateway",
+    "MiniQMTGatewayEventSource": ".gateway",
+    "MiniQMTGatewayEventSourceError": ".gateway",
+    "MiniQMTGatewayOrderAck": ".gateway",
+    "QmtClientMiniQMTEventLoopGateway": ".gateway",
+    "QmtClientMiniQMTGateway": ".gateway",
+    "MiniQMTAlgoInstanceStatus": ".models",
+    "MiniQMTChildOrder": ".models",
+    "MiniQMTChildOrderStatus": ".models",
+    "MiniQMTExecutionAlgoInstance": ".models",
+    "MiniQMTExecutionEvent": ".models",
+    "MiniQMTExecutionEventType": ".models",
+    "MiniQMTExecutionRuntimeConfig": ".models",
+    "MiniQMTExecutionRuntimeMode": ".models",
+    "MiniQMTExecutionRuntimeRecord": ".models",
+    "MiniQMTExecutionRuntimeState": ".models",
+    "MiniQMTGatewayState": ".models",
+    "MiniQMTOmsState": ".models",
+    "MiniQMTOperatorCommandResult": ".models",
+    "MiniQMTOperatorCommandStatus": ".models",
+    "MiniQMTRuntimeRecoverySnapshot": ".models",
+    "MiniQMTOmsLedger": ".oms",
+    "MiniQMTOmsProjection": ".oms",
+    "DEFAULT_MINIQMT_EXECUTION_RUNTIME_REPOSITORY": ".repository",
+    "MINIQMT_EXECUTION_RUNTIME_JSONFILE_TEST_ONLY_ENV": ".repository",
+    "MINIQMT_EXECUTION_RUNTIME_PRUNE_EVERY_WRITES_ENV": ".repository",
+    "MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV": ".repository",
+    "InMemoryMiniQMTExecutionRuntimeRepository": ".repository",
+    "JsonFileMiniQMTExecutionRuntimeRepository": ".repository",
+    "MiniQMTExecutionRuntimeRepository": ".repository",
+    "PostgresMiniQMTExecutionRuntimeRepository": ".repository",
+    "default_miniqmt_execution_runtime_repository": ".repository",
+    "ConfigurableMiniQMTRiskEngine": ".risk",
+    "MiniQMTRiskDecision": ".risk",
+    "MiniQMTRiskDecisionAction": ".risk",
+    "MiniQMTRiskEngine": ".risk",
+    "MiniQMTRiskPriceBand": ".risk",
+    "MiniQMTRiskRuleSet": ".risk",
+    "NoopMiniQMTRiskEngine": ".risk",
+    "MiniQMTExecutionEventLoop": ".runtime",
+    "MiniQMTExecutionRuntime": ".runtime",
+}
+
+__all__ = list(_EXPORT_MODULES)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted((*globals(), *_EXPORT_MODULES))
