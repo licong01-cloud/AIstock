@@ -37,14 +37,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
+from qlib.backtest.decision import Order, TradeDecisionWO
 from qlib.backtest.utils import get_start_end_idx
 
 from tail_twap_strategy import (
     TailTWAPWithLimitStrategy,
     TAIL_START_OFFSET,
     REALLOC_OFFSET,
-    BLOCKED_FILL_THRESHOLD,
 )
 from minute_execution_contract import (
     MarketAction,
@@ -430,7 +429,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             )
         if np.isnan(minute_feats).any() or np.isinf(minute_feats).any():
             raise _DataMissingError(
-                f"minute_feats 包含 NaN/Inf"
+                "minute_feats 包含 NaN/Inf"
             )
 
         return minute_feats, day_feat
