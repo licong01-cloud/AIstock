@@ -58,9 +58,11 @@ _FORBIDDEN_IMPORT_PREFIXES = (
 )
 _ALLOWED_INTERNAL_IMPORT_PREFIXES = (
     "backend.execution_algos.vnpy_compat",
+    "backend.execution_algos.vnpy_style.plugin_manifests",
     "backend.services.miniqmt_execution_runtime.deterministic_context",
     "backend.services.miniqmt_execution_runtime.plugin_canonical",
     "backend.services.miniqmt_execution_runtime.plugin_contracts",
+    "backend.services.miniqmt_execution_runtime.plugin_registry",
 )
 _FORBIDDEN_OWNER_SYMBOLS = frozenset({"BaseGateway", "EventEngine", "MainEngine", "OmsEngine"})
 _FORBIDDEN_OWNER_CLASS_SUFFIXES = ("BaseGateway", "EventEngine", "Gateway", "MainEngine", "OmsEngine")

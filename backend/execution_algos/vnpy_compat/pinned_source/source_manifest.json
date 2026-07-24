@@ -1,0 +1,48 @@
+{
+  "characterization_file": {
+    "path": "surface_contract.json",
+    "sha256": "b21e9b4ece8074b1582ad5bbf146d525e55615d09935eee0abad5dabbcc00478"
+  },
+  "copyright": "Copyright (c) 2015-present, Xiaoyou Chen",
+  "files": [
+    {
+      "path": "vnpy_algotrading/algos/best_limit_algo.py",
+      "sha256": "b35227b932a160c2f786d3202283b61656d9f16631fb42f596a9d376765617e9",
+      "size_bytes": 3560
+    },
+    {
+      "path": "vnpy_algotrading/algos/sniper_algo.py",
+      "sha256": "fbf84d2c61f8200079fe1f8da3b3412a036e5a7ffb6c601f9e4614ad110c8c76",
+      "size_bytes": 2186
+    },
+    {
+      "path": "vnpy_algotrading/algos/twap_algo.py",
+      "sha256": "aeabb067ef79d48182f357b8d4736f8a90f6a4ecb77bc82506a3244575a6cd0f",
+      "size_bytes": 2532
+    },
+    {
+      "path": "vnpy_algotrading/base.py",
+      "sha256": "8416653d8cf61ab45e26b593eea06417dd6fa21b331bba6c60a2bbb8bccf8f93",
+      "size_bytes": 255
+    },
+    {
+      "path": "vnpy_algotrading/engine.py",
+      "sha256": "2c73e1c093cabcd5768954f1129451877a82afd204790fb07e4f305b64c5e68d",
+      "size_bytes": 8941
+    },
+    {
+      "path": "vnpy_algotrading/template.py",
+      "sha256": "b21fa36a8a2c347ab92379df1cd9f81ec69bc922233ec4096d75dbbade7454b8",
+      "size_bytes": 6575
+    }
+  ],
+  "license": "MIT License",
+  "license_file": {
+    "path": "LICENSE",
+    "sha256": "48d3942a8bdafaa59f36481584c8623d1ef2749fb66af9ec94ae680a2795aa96"
+  },
+  "schema_version": "vnpy_pinned_source_manifest_v1",
+  "source_manifest_sha256": "7f8d01a40c0345e566ae2811cbfb867b4ab3f09ff2b646da8a064aa0860bf213",
+  "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+  "upstream_repo": "https://github.com/vnpy/vnpy_algotrading"
+}

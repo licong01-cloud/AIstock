@@ -46,6 +46,11 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     SideV1,
     SourceAttributionV1,
     VnpyCompatibilityRequirementV1,
+    VnpyMethodRequirementV1,
+    VnpyObjectFieldKindV1,
+    VnpyObjectFieldV1,
+    VnpyParameterKindV1,
+    VnpyParameterRequirementV1,
     validate_json_schema_instance_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
@@ -464,6 +469,235 @@ def _source_attribution(algo_code: str) -> SourceAttributionV1:
     )
 
 
+def _parameter(
+    name: str,
+    annotation: str,
+    *,
+    required: bool = True,
+    default_present: bool = False,
+    default_value: Any = None,
+) -> VnpyParameterRequirementV1:
+    return VnpyParameterRequirementV1(
+        name=name,
+        kind=VnpyParameterKindV1.POSITIONAL_OR_KEYWORD,
+        required=required,
+        default_present=default_present,
+        default_value=default_value,
+        annotation=annotation,
+    )
+
+
+def _method_requirement(
+    *,
+    source_path: str,
+    owner: str,
+    name: str,
+    parameters: tuple[VnpyParameterRequirementV1, ...],
+    return_annotation: str,
+    return_behavior: str,
+    error_behavior: str,
+) -> VnpyMethodRequirementV1:
+    plain = {
+        "schema_version": "vnpy_method_requirement_v1",
+        "source_path": source_path,
+        "owner": owner,
+        "name": name,
+        "parameters": [item.canonical_payload_v1() for item in parameters],
+        "return_annotation": return_annotation,
+        "return_behavior": return_behavior,
+        "error_behavior": error_behavior,
+    }
+    return VnpyMethodRequirementV1(
+        **{**plain, "parameters": parameters},
+        method_requirement_sha256=hash_hex_v1("miniqmt_vnpy_method_requirement_v1", plain),
+    )
+
+
+def _object_field(
+    name: str,
+    annotation: str,
+    *,
+    nullable: bool = False,
+    callable_return: str | None = None,
+) -> VnpyObjectFieldV1:
+    return VnpyObjectFieldV1(
+        name=name,
+        kind=(VnpyObjectFieldKindV1.CALLABLE if callable_return is not None else VnpyObjectFieldKindV1.ATTRIBUTE),
+        annotation=annotation,
+        nullable=nullable,
+        return_annotation=callable_return,
+    )
+
+
+def _compatibility_object_fields() -> tuple[ObjectFieldRequirementV1, ...]:
+    return tuple(
+        sorted(
+            (
+                ObjectFieldRequirementV1(
+                    object_name="ContractData",
+                    source_path="vnpy.trader.object",
+                    fields=(
+                        _object_field("exchange", "Exchange"),
+                        _object_field("gateway_name", "str"),
+                        _object_field("min_volume", "float"),
+                        _object_field("pricetick", "float"),
+                        _object_field("symbol", "str"),
+                    ),
+                ),
+                ObjectFieldRequirementV1(
+                    object_name="OrderData",
+                    source_path="vnpy.trader.object",
+                    fields=(
+                        _object_field("is_active", "method", callable_return="bool"),
+                        _object_field("price", "float"),
+                        _object_field("status", "Status"),
+                        _object_field("traded", "float"),
+                        _object_field("vt_orderid", "str"),
+                    ),
+                ),
+                ObjectFieldRequirementV1(
+                    object_name="TickData",
+                    source_path="vnpy.trader.object",
+                    fields=(
+                        _object_field("ask_price_1", "float"),
+                        _object_field("ask_volume_1", "float"),
+                        _object_field("bid_price_1", "float"),
+                        _object_field("bid_volume_1", "float"),
+                        _object_field("datetime", "datetime"),
+                        _object_field("vt_symbol", "str"),
+                    ),
+                ),
+                ObjectFieldRequirementV1(
+                    object_name="TradeData",
+                    source_path="vnpy.trader.object",
+                    fields=(
+                        _object_field("datetime", "datetime"),
+                        _object_field("price", "float"),
+                        _object_field("volume", "float"),
+                        _object_field("vt_orderid", "str"),
+                        _object_field("vt_tradeid", "str"),
+                    ),
+                ),
+            ),
+            key=lambda item: item.object_name,
+        )
+    )
+
+
+def _compatibility_methods() -> tuple[VnpyMethodRequirementV1, ...]:
+    engine = "vnpy_algotrading/engine.py"
+    template = "vnpy_algotrading/template.py"
+    methods = (
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="cancel_order",
+            parameters=(_parameter("algo", "AlgoTemplate"), _parameter("vt_orderid", "str")),
+            return_annotation="None",
+            return_behavior="owned_exact_cancel_command_only",
+            error_behavior="unknown_or_cross_owner_order_typed_failure",
+        ),
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="get_contract",
+            parameters=(_parameter("algo", "AlgoTemplate"),),
+            return_annotation="ContractData | None",
+            return_behavior="frozen_contract_or_none_with_diagnostic",
+            error_behavior="missing_contract_typed_failure_without_substitution",
+        ),
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="get_tick",
+            parameters=(_parameter("algo", "AlgoTemplate"),),
+            return_annotation="TickData | None",
+            return_behavior="immutable_market_view_or_none_with_diagnostic",
+            error_behavior="missing_tick_no_cache_or_synthesis",
+        ),
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="put_algo_event",
+            parameters=(_parameter("algo", "AlgoTemplate"), _parameter("data", "dict")),
+            return_annotation="None",
+            return_behavior="strict_projection_collected_without_event_engine",
+            error_behavior="invalid_projection_typed_failure",
+        ),
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="send_order",
+            parameters=(
+                _parameter("algo", "AlgoTemplate"),
+                _parameter("direction", "Direction"),
+                _parameter("price", "float"),
+                _parameter("volume", "float"),
+                _parameter("order_type", "OrderType"),
+                _parameter("offset", "Offset"),
+            ),
+            return_annotation="str",
+            return_behavior="deterministic_local_order_id_or_empty_with_diagnostic",
+            error_behavior="missing_contract_or_rounded_zero_zero_command",
+        ),
+        _method_requirement(
+            source_path=engine,
+            owner="AlgoEngine",
+            name="write_log",
+            parameters=(
+                _parameter("msg", "str"),
+                _parameter(
+                    "algo",
+                    "AlgoTemplate | None",
+                    required=False,
+                    default_present=True,
+                    default_value=None,
+                ),
+            ),
+            return_annotation="None",
+            return_behavior="bounded_diagnostic_observation_only",
+            error_behavior="diagnostic_never_replaces_primary_failure",
+        ),
+        _method_requirement(
+            source_path=template,
+            owner="AlgoTemplate",
+            name="update_order",
+            parameters=(_parameter("order", "OrderData"),),
+            return_annotation="None",
+            return_behavior="exact_delivery_sequence_callback",
+            error_behavior="invalid_order_typed_failure",
+        ),
+        _method_requirement(
+            source_path=template,
+            owner="AlgoTemplate",
+            name="update_tick",
+            parameters=(_parameter("tick", "TickData"),),
+            return_annotation="None",
+            return_behavior="exact_delivery_sequence_callback",
+            error_behavior="invalid_tick_typed_failure",
+        ),
+        _method_requirement(
+            source_path=template,
+            owner="AlgoTemplate",
+            name="update_timer",
+            parameters=(),
+            return_annotation="None",
+            return_behavior="exact_delivery_sequence_callback",
+            error_behavior="invalid_timer_typed_failure",
+        ),
+        _method_requirement(
+            source_path=template,
+            owner="AlgoTemplate",
+            name="update_trade",
+            parameters=(_parameter("trade", "TradeData"),),
+            return_annotation="None",
+            return_behavior="exact_delivery_sequence_callback",
+            error_behavior="invalid_trade_typed_failure",
+        ),
+    )
+    return tuple(sorted(methods, key=lambda item: (item.source_path, item.owner, item.name)))
+
+
 def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> VnpyCompatibilityRequirementV1:
     _, _, _, _, upstream_algo_path, _ = _ALGO_FACTS[algo_code]
     source_files = tuple(
@@ -477,52 +711,35 @@ def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> 
             )
         )
     )
-    method_signatures = tuple(
-        sorted(
-            (
-                "cancel_order(algo,vt_orderid)->None",
-                "get_contract(algo)->ContractData|None",
-                "get_tick(algo)->TickData|None",
-                "put_algo_event(algo,data)->None",
-                "send_order(algo,direction,price,volume,order_type,offset)->str",
-                "update_order(algo,order)->None",
-                "update_tick(algo,tick)->None",
-                "update_timer(algo)->None",
-                "update_trade(algo,trade)->None",
-                "write_log(msg,algo=None)->None",
-            )
-        )
-    )
-    object_fields = tuple(
-        sorted(
-            (
-                ObjectFieldRequirementV1(
-                    object_name="ContractData",
-                    fields=("exchange", "gateway_name", "min_volume", "pricetick", "symbol"),
-                ),
-                ObjectFieldRequirementV1(
-                    object_name="OrderData",
-                    fields=("is_active", "price", "status", "traded", "vt_orderid"),
-                ),
-                ObjectFieldRequirementV1(
-                    object_name="TickData",
-                    fields=("ask_price_1", "ask_volume_1", "bid_price_1", "bid_volume_1", "datetime", "vt_symbol"),
-                ),
-                ObjectFieldRequirementV1(
-                    object_name="TradeData",
-                    fields=("datetime", "price", "volume", "vt_orderid", "vt_tradeid"),
-                ),
-            ),
-            key=lambda item: item.object_name,
-        )
-    )
+    method_signatures = _compatibility_methods()
+    object_fields = _compatibility_object_fields()
     enum_values = tuple(
         sorted(
             (
-                EnumValueRequirementV1(enum_name="AlgoStatus", values=("FINISHED", "PAUSED", "RUNNING", "STOPPED")),
-                EnumValueRequirementV1(enum_name="Direction", values=("LONG", "SHORT")),
-                EnumValueRequirementV1(enum_name="Offset", values=("NONE",)),
-                EnumValueRequirementV1(enum_name="OrderType", values=("LIMIT",)),
+                EnumValueRequirementV1(
+                    enum_name="AlgoStatus",
+                    source_path="vnpy_algotrading/base.py",
+                    enum_kind="Enum",
+                    values=("FINISHED", "PAUSED", "RUNNING", "STOPPED"),
+                ),
+                EnumValueRequirementV1(
+                    enum_name="Direction",
+                    source_path="vnpy.trader.constant",
+                    enum_kind="Enum",
+                    values=("LONG", "SHORT"),
+                ),
+                EnumValueRequirementV1(
+                    enum_name="Offset",
+                    source_path="vnpy.trader.constant",
+                    enum_kind="Enum",
+                    values=("NONE",),
+                ),
+                EnumValueRequirementV1(
+                    enum_name="OrderType",
+                    source_path="vnpy.trader.constant",
+                    enum_kind="Enum",
+                    values=("LIMIT",),
+                ),
             ),
             key=lambda item: item.enum_name,
         )
@@ -533,7 +750,7 @@ def _compatibility_requirement(algo_code: str, characterization_sha256: str) -> 
         "upstream_repo": UPSTREAM_REPO,
         "upstream_commit": UPSTREAM_COMMIT,
         "source_files_and_hashes": [item.canonical_payload_v1() for item in source_files],
-        "required_method_signatures": list(method_signatures),
+        "required_method_signatures": [item.canonical_payload_v1() for item in method_signatures],
         "required_object_fields": [item.canonical_payload_v1() for item in object_fields],
         "required_enum_values": [item.canonical_payload_v1() for item in enum_values],
         "characterization_sha256": characterization_sha256,
@@ -616,24 +833,7 @@ def _manifest(algo_code: str) -> ExecutionAlgoPluginManifestV2:
             )
         )
     )
-    facade_fields = (
-        ObjectFieldRequirementV1(
-            object_name="ContractData",
-            fields=("exchange", "gateway_name", "min_volume", "pricetick", "symbol"),
-        ),
-        ObjectFieldRequirementV1(
-            object_name="OrderData",
-            fields=("is_active", "price", "status", "traded", "vt_orderid"),
-        ),
-        ObjectFieldRequirementV1(
-            object_name="TickData",
-            fields=("ask_price_1", "ask_volume_1", "bid_price_1", "bid_volume_1", "datetime", "vt_symbol"),
-        ),
-        ObjectFieldRequirementV1(
-            object_name="TradeData",
-            fields=("datetime", "price", "volume", "vt_orderid", "vt_tradeid"),
-        ),
-    )
+    facade_fields = _compatibility_object_fields()
     plain: dict[str, Any] = {
         "schema_version": "execution_algo_plugin_manifest_v2",
         "plugin_id": plugin_id,

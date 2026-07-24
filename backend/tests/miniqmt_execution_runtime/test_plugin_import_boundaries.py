@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -46,6 +49,14 @@ def test_real_k1_a_and_k1_c_modules_pass_ast_and_isolated_import() -> None:
         _target(
             "backend.execution_algos.vnpy_compat.__init__",
             REPO_ROOT / "backend/execution_algos/vnpy_compat/__init__.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.locked_surface",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/locked_surface.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.receipts",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/receipts.py",
         ),
     )
 
@@ -310,3 +321,83 @@ def test_duplicate_source_target_is_rejected_before_execution(tmp_path: Path) ->
 def test_target_rejects_invalid_module_identity(tmp_path: Path, module_name: str) -> None:
     with pytest.raises(ValueError, match="module_name"):
         _target(module_name, tmp_path / "source.py")
+
+
+def test_standard_package_import_has_no_parent_registration_or_legacy_side_effect() -> None:
+    script = """
+import builtins
+import json
+import socket
+import subprocess
+import sys
+import threading
+sys.path.insert(0, sys.argv[1])
+sys.dont_write_bytecode = True
+side_effects = []
+original_open = builtins.open
+def guarded_open(file, mode="r", *args, **kwargs):
+    if any(flag in mode for flag in ("w", "a", "x", "+")):
+        side_effects.append("open_write")
+        raise RuntimeError("package import attempted a write")
+    return original_open(file, mode, *args, **kwargs)
+def blocked(operation):
+    def reject(*args, **kwargs):
+        side_effects.append(operation)
+        raise RuntimeError(f"package import attempted {operation}")
+    return reject
+builtins.open = guarded_open
+socket.socket.connect = blocked("network_connect")
+subprocess.Popen = blocked("process_start")
+threading.Thread.start = blocked("thread_start")
+import backend.execution_algos.vnpy_compat
+registry = sys.modules.get("backend.execution_algos.registry")
+payload = {
+    "registered_algorithms": len(registry.ALGO_REGISTRY) if registry is not None else 0,
+    "legacy_adapter_loaded": "backend.execution_algos.vnpy_style.legacy_adapter" in sys.modules,
+    "vnpy_compat_loaded": "backend.execution_algos.vnpy_compat" in sys.modules,
+    "runtime_loaded": "backend.services.miniqmt_execution_runtime.runtime" in sys.modules,
+    "repository_loaded": "backend.services.miniqmt_execution_runtime.repository" in sys.modules,
+    "gateway_loaded": "backend.services.miniqmt_execution_runtime.gateway" in sys.modules,
+    "side_effects": side_effects,
+}
+print(json.dumps(payload, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(REPO_ROOT)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    result = json.loads(completed.stdout)
+    assert result == {
+        "legacy_adapter_loaded": False,
+        "registered_algorithms": 0,
+        "vnpy_compat_loaded": True,
+        "runtime_loaded": False,
+        "repository_loaded": False,
+        "gateway_loaded": False,
+        "side_effects": [],
+    }
+
+
+def test_explicit_parent_registry_export_preserves_registered_algorithms() -> None:
+    script = """
+import json
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend.execution_algos import ALGO_REGISTRY, get_algo
+print(json.dumps({"count": len(ALGO_REGISTRY), "twap": get_algo("TWAP") is not None}, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(REPO_ROOT)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    result = json.loads(completed.stdout)
+    assert result["count"] >= 14
+    assert result["twap"] is True
