@@ -1252,6 +1252,7 @@ class MultiAlphaDurableRepository:
                 p0_2_columns = _attempt_uses_p0_2_columns(spec)
                 columns = [
                     "attempt_id",
+                    "run_id",
                     "child_id",
                     "attempt_no",
                     "retry_mode",
@@ -1268,6 +1269,7 @@ class MultiAlphaDurableRepository:
                 values = ["%s"] * len(columns)
                 params: list[Any] = [
                     spec.attempt_id,
+                    run_id,
                     spec.child_id,
                     spec.attempt_no,
                     spec.retry_mode,
@@ -1282,12 +1284,9 @@ class MultiAlphaDurableRepository:
                     Json(dict(spec.result_manifest or {})),
                 ]
                 if p0_2_columns:
-                    columns[1:1] = ["run_id"]
-                    values[1:1] = ["%s"]
-                    params[1:1] = [run_id]
-                    columns[5:5] = ["source_attempt_id", "execution_kind"]
-                    values[5:5] = ["%s", "%s"]
-                    params[5:5] = [spec.source_attempt_id, spec.execution_kind]
+                    columns[6:6] = ["source_attempt_id", "execution_kind"]
+                    values[6:6] = ["%s", "%s"]
+                    params[6:6] = [spec.source_attempt_id, spec.execution_kind]
                     columns.append("result_manifest_hash")
                     values.append("%s")
                     params.append(spec.result_manifest_hash)

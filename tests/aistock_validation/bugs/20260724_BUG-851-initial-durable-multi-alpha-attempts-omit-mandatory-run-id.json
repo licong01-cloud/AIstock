@@ -1,6 +1,8 @@
 {
   "actual": "R12P durable run macb_453ca2d0c5b21b40_20240701_20260629_20260724T114255448623Z_9fcdb6d1 failed in planner phase before remote dispatch. MultiAlphaDurableRepository.create_attempt resolves run_id from the locked child row, but only inserts run_id when _attempt_uses_p0_2_columns(spec) is true. An initial remote_execution DurableAttemptSpec has spec.run_id=None and no recovery fields, so the INSERT omits run_id even though production P0-2 schema requires multi_alpha_combine_backtest_child_attempt.run_id NOT NULL. PostgreSQL raised NotNullViolation; no remote attempt was created. Expected: every attempt insert persists the authoritative child run_id; recovery-only columns remain conditional; identity/conflict/event semantics stay unchanged.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
     "tests/aistock_validation/bugs/20260724_BUG-851-initial-durable-multi-alpha-attempts-omit-mandatory-run-id.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -26,17 +28,28 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
+      "changed_files": [
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_repository.py"
+      ],
+      "impacted_modules": [
+        "multi_alpha"
+      ],
       "matched_rules": [],
       "risk_levels": [],
       "suggested_scope": [],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository.py"
+    ]
   },
   "first_seen_at": "2026-07-24T12:21:40.310694Z",
   "fix_branch": null,
