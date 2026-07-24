@@ -7,6 +7,7 @@ from backend.routers import quantevolver_evolution as router_module
 from backend.services.quantevolver.qe_resource_phase_service import (
     AUTH_FAILED_REASON,
     QEResourcePhaseError,
+    _canonical_sha256,
 )
 
 
@@ -56,6 +57,8 @@ def test_resource_phase_webhook_passes_structured_payload(monkeypatch):
     assert response.json()["data"]["phase"] == "bootstrap"
     assert captured["token"] == "scoped-token"
     assert captured["payload"]["sequence_no"] == 1
+    assert "gpu_name" not in captured["payload"]
+    assert _canonical_sha256(captured["payload"]) == _canonical_sha256(_payload())
 
 
 def test_resource_phase_webhook_maps_auth_failure_to_403(monkeypatch):
