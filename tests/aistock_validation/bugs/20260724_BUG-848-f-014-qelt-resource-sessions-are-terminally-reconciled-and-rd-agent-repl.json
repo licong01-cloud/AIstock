@@ -1,12 +1,14 @@
 {
   "actual": "BUG-847 completed the qelt reconciler, authenticated callback, durable outbox v2, and production recovery work. The remaining BUG-848 defect is limited to imprecise RD-Agent callback transport classification for HTTP 600+, wrapped timeouts, generic URL errors, and bare OS errors.",
+  "aistock_deployment_restart_gate": "noop",
+  "aistock_source_change": "noop",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260724_BUG-848-f-014-qelt-resource-sessions-are-terminally-reconciled-and-rd-agent-repl.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-848",
-  "closed_at": null,
+  "closed_at": "2026-07-24T08:44:09Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -46,6 +48,19 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
+  "first_seen_at": "2026-07-23T18:25:52.719163Z",
+  "fix_branch": null,
+  "fix_commit": "e161d0cef04948fd6135b4074d7e84316f0ba9a7",
+  "fixed_at": "2026-07-24T14:41:18.219617Z",
+  "github_issue_number": 2680,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2680",
+  "last_seen_at": "2026-07-23T18:25:52.719163Z",
+  "module": "qe.long_trend_evaluation",
+  "non_goals": [
+    "Do not add AIstock business-source changes for BUG-848.",
+    "Do not repeat production DML, repair, callback, outbox replay, deployment, or restart after BUG-847 production closure.",
+    "Do not replace or migrate the deployed outbox v2 contract or conflict_reconciliation_required state."
+  ],
   "original_file_scope_contract": {
     "added_files": [
       "scripts/repair_qelt_resource_sessions.py",
@@ -167,21 +182,7 @@
       "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
     ]
   },
-  "first_seen_at": "2026-07-23T18:25:52.719163Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
-  "github_issue_number": 2680,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2680",
-  "last_seen_at": "2026-07-23T18:25:52.719163Z",
-  "module": "qe.long_trend_evaluation",
-  "non_goals": [
-    "Do not add AIstock business-source changes for BUG-848.",
-    "Do not repeat production DML, repair, callback, outbox replay, deployment, or restart after BUG-847 production closure.",
-    "Do not replace or migrate the deployed outbox v2 contract or conflict_reconciliation_required state."
-  ],
-  "aistock_deployment_restart_gate": "noop",
-  "aistock_source_change": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2684",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_dml_gate": "noop",
@@ -196,7 +197,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -205,6 +206,35 @@
     "fingerprint": "fb5459dcbc3b8fb0274b05c9",
     "source_event_id": "FE-20260724-fb5459dcbc3b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_resource_phase_service.py targeted nodeids -q -p no:cacheprovider -> 6 passed",
+    "python -m pytest backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py targeted nodeid -q -p no:cacheprovider -> 1 passed",
+    "python -m pytest test/app/test_qe_long_trend_worker_recovery.py -q -p no:cacheprovider -> 22 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "d32dfe5bd05f36be",
+      "result": "passed, blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "4733a0f59ec3e35d",
+      "result": "passed, 8 tests and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -247,35 +277,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "python scripts/ci_changed_files.py --base-sha origin/main --head-sha HEAD -> passed, changed_file_count=2",
-    "python scripts/bug_registry_metadata_check.py -> passed, blocking=0",
-    "python -m nox -s l0 -> passed, findings=0, blocking=0",
-    "python -m nox -s validation_module_registry_l0 -> passed, 8 tests and 14/14 mapped",
-    "python scripts/aistock_issue_workflow.py finish --bug-id BUG-848 --plan-only -> ready_for_pr, scope passed, blocking=0"
-  ],
-  "validation_receipts": [
-    {
-      "command": "python -m nox -s l0",
-      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
-      "evidence_kind": "nox",
-      "plan": "l0",
-      "receipt_id": "d32dfe5bd05f36be",
-      "result": "passed, blocking=0",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "python -m nox -s validation_module_registry_l0",
-      "commit": "6a8eee5b6839a1b394fe4e0d290e746a634943f4",
-      "evidence_kind": "nox",
-      "plan": "validation_module_registry_l0",
-      "receipt_id": "4733a0f59ec3e35d",
-      "result": "passed, 8 tests and 14/14 mapped",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    }
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
