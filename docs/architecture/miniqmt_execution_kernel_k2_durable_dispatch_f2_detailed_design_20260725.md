@@ -1,10 +1,10 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`not_started`。
+> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K2-A implementation_in_progress`，K2-B/C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2 source、K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2-A 已开始 strict carrier/repository slice，K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
 > 本文只完成 K2 实施级详细设计，不实施代码、不执行 DDL/DML、不安装依赖、不调用 broker、不修改 binding/config、不启停或重启服务。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
@@ -481,6 +481,8 @@ dispatcher直接测试必须调用production dispatcher public seam和instrument
 
 preflight/forward/rollback、全部§4 strict persistence carriers、worker epoch/incarnation、projection set、command-child mapping、PostgreSQL transactions、constraint/readback、legacy inventory。只实现repository/startup receipt public seam；不启动worker、不调用Gateway。
 
+当前 checkpoint：`plugin_contracts.py` 已实现 `RuntimeEventIngressReceiptV1`、`ConsumedLineageRefV1`、`ExecutionProjectionRef/SetV1`、`MiniQMTRiskDecisionReceiptV1` 与 `KernelErrorEvidenceV1` 的 strict writer/readback；`test_kernel_contracts.py` 真实RED为缺少生产合同的ImportError，GREEN为7 passed。该checkpoint不包含migration、repository、mapping/outbox/timer/incarnation，因此只标记K2-A in progress，绝不声明K2-A完成。
+
 ### K2-B — ingress, creation and delivery（5–7 人日）
 
 ALGO_START、routing、delivery claim/predecessor、pure initialize/transition、state/failure/skip、diagnostics；保持 shadow-only。
@@ -551,7 +553,7 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-061` | §1–§3；`runtime.py`、`client.py`、`repository.py`、现有migration定向事实 | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；实施前以exact symbols和schema readback确认 | design_ready | none |
-| `F-062` | §4.0–§4.10、§9；exact receipt domains/payloads、parent status、projection set、mapping、worker incarnation、calendar authority；K1 DTO仍为唯一business authority | target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py` | design_ready | none |
+| `F-062` | §4.0–§4.10、§9；exact receipt domains/payloads、parent status、projection set、mapping、worker incarnation、calendar authority；K1 DTO仍为唯一business authority | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py` RED ImportError→GREEN 7 passed；后续target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` | design_ready | none |
 | `F-063` | §4.1、§5、§6.1–6.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py` zero/one/many target、dedupe/conflict、commit-unknown readback | design_ready | none |
 | `F-064` | §4.2–4.4、§6.3、§7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` same-algo ordering、多worker、stale fence、atomic effect | design_ready | none |
 | `F-065` | §4.2–§4.4、§6.3、§7.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` parent enum、plugin/DB/retry exhaustion/active-child diagnostic closure/skip | design_ready | none |

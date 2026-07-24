@@ -1957,6 +1957,515 @@ class AlgoTransitionV1(_AlgoEffectBundleV1):
     schema_version: Literal["miniqmt_algo_transition_v1"]
 
 
+class ConsumedLineageTypeV1(StrEnum):
+    EVENT = "EVENT"
+    MARKET_DATA = "MARKET_DATA"
+    ORDER = "ORDER"
+    TRADE = "TRADE"
+    ACCOUNT = "ACCOUNT"
+    RECONCILIATION = "RECONCILIATION"
+    OPERATOR = "OPERATOR"
+
+
+class KernelProjectionTypeV1(StrEnum):
+    CONTRACT = "CONTRACT"
+    ACCOUNT = "ACCOUNT"
+    MARKET_CAPABILITY = "MARKET_CAPABILITY"
+    OMS_PREFLIGHT = "OMS_PREFLIGHT"
+    RISK_DECISION = "RISK_DECISION"
+    ROUTE_COMPATIBILITY = "ROUTE_COMPATIBILITY"
+    KILL_SWITCH_STATE = "KILL_SWITCH_STATE"
+
+
+class RiskDecisionStageV1(StrEnum):
+    EVENT = "EVENT"
+    PRE_SUBMIT = "PRE_SUBMIT"
+
+
+class RiskDecisionActionV1(StrEnum):
+    PASS = "PASS"
+    KILL_SWITCH = "KILL_SWITCH"
+
+
+class ConsumedLineageRefV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_consumed_lineage_ref_v1"]
+    lineage_type: ConsumedLineageTypeV1
+    identity: IdentityV1
+    payload_sha256: Sha256V1
+    lineage_ref_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        lineage_type: ConsumedLineageTypeV1 | str,
+        identity: str,
+        payload_sha256: str,
+    ) -> Self:
+        normalized_type = ConsumedLineageTypeV1(lineage_type)
+        payload = {
+            "schema_version": "miniqmt_consumed_lineage_ref_v1",
+            "lineage_type": normalized_type.value,
+            "identity": identity,
+            "payload_sha256": payload_sha256,
+        }
+        return cls(
+            schema_version="miniqmt_consumed_lineage_ref_v1",
+            lineage_type=normalized_type,
+            identity=identity,
+            payload_sha256=payload_sha256,
+            lineage_ref_sha256=hash_hex_v1("miniqmt_consumed_lineage_ref_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_lineage_ref(self) -> Self:
+        expected = hash_hex_v1(
+            "miniqmt_consumed_lineage_ref_v1",
+            self.canonical_payload_v1(exclude={"lineage_ref_sha256"}),
+        )
+        if self.lineage_ref_sha256 != expected:
+            raise ValueError("lineage_ref_sha256 does not match consumed lineage closure")
+        return self
+
+
+class ExecutionProjectionRefV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_execution_projection_ref_v1"]
+    projection_type: KernelProjectionTypeV1
+    projection_id: IdentityV1
+    projection_version: IdentityV1
+    payload_sha256: Sha256V1
+    source_event_id: IdentityV1 | None
+    logical_at_utc: UtcDateTimeV1
+    ref_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        projection_type: KernelProjectionTypeV1,
+        projection_id: str,
+        projection_version: str,
+        payload_sha256: str,
+        source_event_id: str | None,
+        logical_at_utc: Any,
+    ) -> Self:
+        normalized_time = canonical_utc_datetime_v1(logical_at_utc, field_name="logical_at_utc")
+        payload = {
+            "schema_version": "miniqmt_execution_projection_ref_v1",
+            "projection_type": projection_type.value,
+            "projection_id": projection_id,
+            "projection_version": projection_version,
+            "payload_sha256": payload_sha256,
+            "source_event_id": source_event_id,
+            "logical_at_utc": normalized_time,
+        }
+        return cls(
+            schema_version="miniqmt_execution_projection_ref_v1",
+            projection_type=projection_type,
+            projection_id=projection_id,
+            projection_version=projection_version,
+            payload_sha256=payload_sha256,
+            source_event_id=source_event_id,
+            logical_at_utc=normalized_time,
+            ref_sha256=hash_hex_v1("miniqmt_execution_projection_ref_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_projection_ref(self) -> Self:
+        expected = hash_hex_v1(
+            "miniqmt_execution_projection_ref_v1",
+            self.canonical_payload_v1(exclude={"ref_sha256"}),
+        )
+        if self.ref_sha256 != expected:
+            raise ValueError("ref_sha256 does not match execution projection closure")
+        return self
+
+
+class ExecutionProjectionSetV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_execution_projection_set_v1"]
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    event_id: IdentityV1
+    delivery_id: IdentityV1
+    ordered_projection_refs: tuple[ExecutionProjectionRefV1, ...]
+    projection_set_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+        event_id: str,
+        delivery_id: str,
+        projection_refs: tuple[ExecutionProjectionRefV1, ...],
+    ) -> Self:
+        payload = {
+            "schema_version": "miniqmt_execution_projection_set_v1",
+            "runtime_id": runtime_id,
+            "algo_instance_id": algo_instance_id,
+            "event_id": event_id,
+            "delivery_id": delivery_id,
+            "ordered_projection_refs": [item.model_dump(mode="json") for item in projection_refs],
+        }
+        return cls(
+            schema_version="miniqmt_execution_projection_set_v1",
+            runtime_id=runtime_id,
+            algo_instance_id=algo_instance_id,
+            event_id=event_id,
+            delivery_id=delivery_id,
+            ordered_projection_refs=projection_refs,
+            projection_set_sha256=hash_hex_v1("miniqmt_execution_projection_set_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_projection_set(self) -> Self:
+        keys = [(item.projection_type.value, item.projection_id) for item in self.ordered_projection_refs]
+        if keys != sorted(keys):
+            raise ValueError("ordered_projection_refs must be sorted by projection_type and projection_id")
+        projection_types = [item.projection_type for item in self.ordered_projection_refs]
+        if len(projection_types) != len(set(projection_types)):
+            raise ValueError("ordered_projection_refs contain duplicate projection_type authority")
+        expected = hash_hex_v1(
+            "miniqmt_execution_projection_set_v1",
+            self.canonical_payload_v1(exclude={"projection_set_sha256"}),
+        )
+        if self.projection_set_sha256 != expected:
+            raise ValueError("projection_set_sha256 does not match execution projection set closure")
+        return self
+
+
+class MiniQMTRiskDecisionReceiptV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_risk_decision_receipt_v1"]
+    decision_id: IdentityV1
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    event_id: IdentityV1
+    child_order_id: IdentityV1 | None
+    decision_stage: RiskDecisionStageV1
+    action: RiskDecisionActionV1
+    reason_code: IdentityV1
+    reason: IdentityV1
+    metadata: FrozenJsonObjectFieldV1
+    metadata_sha256: Sha256V1
+    logical_at_utc: UtcDateTimeV1
+    receipt_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+        event_id: str,
+        child_order_id: str | None,
+        decision_stage: RiskDecisionStageV1 | str,
+        action: RiskDecisionActionV1 | str,
+        reason_code: str,
+        reason: str,
+        metadata: dict[str, Any],
+        logical_at_utc: Any,
+    ) -> Self:
+        normalized_stage = RiskDecisionStageV1(decision_stage)
+        normalized_action = RiskDecisionActionV1(action)
+        normalized_metadata = thaw_json_v1(_freeze_json_object_field(metadata))
+        normalized_time = canonical_utc_datetime_v1(logical_at_utc, field_name="logical_at_utc")
+        decision_identity_payload = {
+            "runtime_id": runtime_id,
+            "algo_instance_id": algo_instance_id,
+            "event_id": event_id,
+            "child_order_id": child_order_id,
+            "decision_stage": normalized_stage.value,
+        }
+        decision_id = "mqriskdecision_" + hash_hex_v1(
+            "miniqmt_risk_decision_identity_v1",
+            decision_identity_payload,
+        )
+        payload = {
+            "schema_version": "miniqmt_risk_decision_receipt_v1",
+            "decision_id": decision_id,
+            **decision_identity_payload,
+            "action": normalized_action.value,
+            "reason_code": reason_code,
+            "reason": reason,
+            "metadata": normalized_metadata,
+            "metadata_sha256": hash_hex_v1("miniqmt_risk_decision_metadata_v1", normalized_metadata),
+            "logical_at_utc": normalized_time,
+        }
+        return cls(
+            schema_version="miniqmt_risk_decision_receipt_v1",
+            decision_id=decision_id,
+            runtime_id=runtime_id,
+            algo_instance_id=algo_instance_id,
+            event_id=event_id,
+            child_order_id=child_order_id,
+            decision_stage=normalized_stage,
+            action=normalized_action,
+            reason_code=reason_code,
+            reason=reason,
+            metadata=normalized_metadata,
+            metadata_sha256=payload["metadata_sha256"],
+            logical_at_utc=normalized_time,
+            receipt_sha256=hash_hex_v1("miniqmt_risk_decision_receipt_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_risk_decision(self) -> Self:
+        identity_payload = {
+            "runtime_id": self.runtime_id,
+            "algo_instance_id": self.algo_instance_id,
+            "event_id": self.event_id,
+            "child_order_id": self.child_order_id,
+            "decision_stage": self.decision_stage.value,
+        }
+        expected_id = "mqriskdecision_" + hash_hex_v1(
+            "miniqmt_risk_decision_identity_v1",
+            identity_payload,
+        )
+        if self.decision_id != expected_id:
+            raise ValueError("decision_id does not match risk decision identity closure")
+        metadata_payload = thaw_json_v1(self.metadata)
+        if self.metadata_sha256 != hash_hex_v1("miniqmt_risk_decision_metadata_v1", metadata_payload):
+            raise ValueError("metadata_sha256 does not match risk decision metadata closure")
+        expected_receipt = hash_hex_v1(
+            "miniqmt_risk_decision_receipt_v1",
+            self.canonical_payload_v1(exclude={"receipt_sha256"}),
+        )
+        if self.receipt_sha256 != expected_receipt:
+            raise ValueError("receipt_sha256 does not match risk decision receipt closure")
+        return self
+
+
+class RuntimeEventIngressReceiptV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_runtime_event_ingress_receipt_v1"]
+    ingress_receipt_id: IdentityV1
+    runtime_id: IdentityV1
+    event_id: IdentityV1
+    event_key_sha256: Sha256V1
+    runtime_sequence: PositiveIntV1
+    routing_rule_version: Literal["miniqmt_event_routing_v1"]
+    ordered_target_algo_instance_ids: tuple[IdentityV1, ...]
+    ordered_delivery_ids: tuple[IdentityV1, ...]
+    delivery_set_sha256: Sha256V1
+    transaction_commit_identity: IdentityV1
+    receipt_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        runtime_id: str,
+        event_id: str,
+        event_key_sha256: str,
+        runtime_sequence: int,
+        ordered_target_algo_instance_ids: tuple[str, ...],
+        ordered_delivery_ids: tuple[str, ...],
+        transaction_commit_identity: str,
+    ) -> Self:
+        routing_rule_version = "miniqmt_event_routing_v1"
+        ingress_receipt_id = "mqingress_" + hash_hex_v1(
+            "miniqmt_runtime_event_ingress_identity_v1",
+            {
+                "runtime_id": runtime_id,
+                "event_id": event_id,
+                "runtime_sequence": runtime_sequence,
+                "routing_rule_version": routing_rule_version,
+            },
+        )
+        delivery_payload = {
+            "event_id": event_id,
+            "routing_rule_version": routing_rule_version,
+            "ordered_target_algo_instance_ids": list(ordered_target_algo_instance_ids),
+            "ordered_delivery_ids": list(ordered_delivery_ids),
+        }
+        receipt_payload = {
+            "schema_version": "miniqmt_runtime_event_ingress_receipt_v1",
+            "ingress_receipt_id": ingress_receipt_id,
+            "runtime_id": runtime_id,
+            "event_id": event_id,
+            "event_key_sha256": event_key_sha256,
+            "runtime_sequence": runtime_sequence,
+            "routing_rule_version": routing_rule_version,
+            "ordered_target_algo_instance_ids": list(ordered_target_algo_instance_ids),
+            "ordered_delivery_ids": list(ordered_delivery_ids),
+            "delivery_set_sha256": hash_hex_v1("miniqmt_event_delivery_set_v1", delivery_payload),
+            "transaction_commit_identity": transaction_commit_identity,
+        }
+        return cls(
+            schema_version="miniqmt_runtime_event_ingress_receipt_v1",
+            ingress_receipt_id=ingress_receipt_id,
+            runtime_id=runtime_id,
+            event_id=event_id,
+            event_key_sha256=event_key_sha256,
+            runtime_sequence=runtime_sequence,
+            routing_rule_version=routing_rule_version,
+            ordered_target_algo_instance_ids=ordered_target_algo_instance_ids,
+            ordered_delivery_ids=ordered_delivery_ids,
+            delivery_set_sha256=receipt_payload["delivery_set_sha256"],
+            transaction_commit_identity=transaction_commit_identity,
+            receipt_sha256=hash_hex_v1("miniqmt_runtime_event_ingress_receipt_v1", receipt_payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_ingress_receipt(self) -> Self:
+        targets = list(self.ordered_target_algo_instance_ids)
+        deliveries = list(self.ordered_delivery_ids)
+        if len(targets) != len(deliveries):
+            raise ValueError("ingress target and delivery cardinality must match")
+        if len(targets) != len(set(targets)) or len(deliveries) != len(set(deliveries)):
+            raise ValueError("ingress target or delivery identities contain duplicate values")
+        if targets != sorted(targets):
+            raise ValueError("ordered_target_algo_instance_ids must be sorted")
+        expected_id = "mqingress_" + hash_hex_v1(
+            "miniqmt_runtime_event_ingress_identity_v1",
+            {
+                "runtime_id": self.runtime_id,
+                "event_id": self.event_id,
+                "runtime_sequence": self.runtime_sequence,
+                "routing_rule_version": self.routing_rule_version,
+            },
+        )
+        if self.ingress_receipt_id != expected_id:
+            raise ValueError("ingress_receipt_id does not match event ingress identity closure")
+        expected_set = hash_hex_v1(
+            "miniqmt_event_delivery_set_v1",
+            {
+                "event_id": self.event_id,
+                "routing_rule_version": self.routing_rule_version,
+                "ordered_target_algo_instance_ids": targets,
+                "ordered_delivery_ids": deliveries,
+            },
+        )
+        if self.delivery_set_sha256 != expected_set:
+            raise ValueError("delivery_set_sha256 does not match event delivery closure")
+        expected_receipt = hash_hex_v1(
+            "miniqmt_runtime_event_ingress_receipt_v1",
+            self.canonical_payload_v1(exclude={"receipt_sha256"}),
+        )
+        if self.receipt_sha256 != expected_receipt:
+            raise ValueError("receipt_sha256 does not match event ingress receipt closure")
+        return self
+
+
+def _qualified_exception_type_v1(error: BaseException) -> str:
+    error_type = type(error)
+    return f"{error_type.__module__}.{error_type.__qualname__}"
+
+
+def _safe_error_object_v1(value: Any) -> dict[str, Any]:
+    rendered = json_safe_evidence_v1(value)
+    if isinstance(rendered, dict):
+        return rendered
+    return {"value": rendered}
+
+
+class KernelErrorEvidenceV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_kernel_error_evidence_v1"]
+    stage: IdentityV1
+    stable_reason_code: IdentityV1
+    exception_type: IdentityV1
+    message: IdentityV1
+    retryable: StrictBool
+    terminal: StrictBool
+    broker_called: StrictBool | None
+    primary_context: FrozenJsonObjectFieldV1
+    bounded_secondary_errors: tuple[FrozenJsonObjectFieldV1, ...]
+    context_sha256: Sha256V1
+    evidence_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        stage: str,
+        stable_reason_code: str,
+        exception: BaseException,
+        message: str,
+        retryable: bool,
+        terminal: bool,
+        broker_called: bool | None,
+        primary_context: dict[str, Any],
+        secondary_errors: list[Any],
+    ) -> Self:
+        if retryable and terminal:
+            raise ValueError("kernel error evidence cannot be retryable and terminal")
+        safe_primary = _safe_error_object_v1(primary_context)
+        renderer_secondary: list[dict[str, Any]] = []
+        try:
+            str(exception)
+        except Exception as render_error:
+            renderer_secondary.append(
+                {
+                    "reason_code": "MINIQMT_KERNEL_EXCEPTION_RENDER_FAILED",
+                    "primary_exception_type": _qualified_exception_type_v1(exception),
+                    "renderer_exception_type": _qualified_exception_type_v1(render_error),
+                    "renderer_error": _safe_error_object_v1(render_error),
+                }
+            )
+        safe_secondary = [*renderer_secondary, *[_safe_error_object_v1(item) for item in secondary_errors]]
+        if len(safe_secondary) > 16:
+            omitted = safe_secondary[15:]
+            safe_secondary = [
+                *safe_secondary[:15],
+                {
+                    "reason_code": "MINIQMT_KERNEL_SECONDARY_ERRORS_TRUNCATED",
+                    "omitted_count": len(omitted),
+                    "omitted_set_sha256": hash_hex_v1("miniqmt_kernel_error_omitted_set_v1", omitted),
+                },
+            ]
+        context_payload = {
+            "primary_context": safe_primary,
+            "bounded_secondary_errors": safe_secondary,
+        }
+        payload = {
+            "schema_version": "miniqmt_kernel_error_evidence_v1",
+            "stage": stage,
+            "stable_reason_code": stable_reason_code,
+            "exception_type": _qualified_exception_type_v1(exception),
+            "message": message,
+            "retryable": retryable,
+            "terminal": terminal,
+            "broker_called": broker_called,
+            **context_payload,
+            "context_sha256": hash_hex_v1("miniqmt_kernel_error_context_v1", context_payload),
+        }
+        return cls(
+            schema_version="miniqmt_kernel_error_evidence_v1",
+            stage=stage,
+            stable_reason_code=stable_reason_code,
+            exception_type=payload["exception_type"],
+            message=message,
+            retryable=retryable,
+            terminal=terminal,
+            broker_called=broker_called,
+            primary_context=safe_primary,
+            bounded_secondary_errors=tuple(safe_secondary),
+            context_sha256=payload["context_sha256"],
+            evidence_sha256=hash_hex_v1("miniqmt_kernel_error_evidence_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_kernel_error_evidence(self) -> Self:
+        if self.retryable and self.terminal:
+            raise ValueError("kernel error evidence cannot be retryable and terminal")
+        if len(self.bounded_secondary_errors) > 16:
+            raise ValueError("bounded_secondary_errors exceeds the retained evidence limit")
+        context_payload = {
+            "primary_context": thaw_json_v1(self.primary_context),
+            "bounded_secondary_errors": [thaw_json_v1(item) for item in self.bounded_secondary_errors],
+        }
+        expected_context = hash_hex_v1("miniqmt_kernel_error_context_v1", context_payload)
+        if self.context_sha256 != expected_context:
+            raise ValueError("context_sha256 does not match kernel error context closure")
+        expected_evidence = hash_hex_v1(
+            "miniqmt_kernel_error_evidence_v1",
+            self.canonical_payload_v1(exclude={"evidence_sha256"}),
+        )
+        if self.evidence_sha256 != expected_evidence:
+            raise ValueError("evidence_sha256 does not match kernel error evidence closure")
+        return self
+
+
 __all__ = [
     "AbsenceDispositionV1",
     "AlgoEventDeliveryV1",
@@ -1966,6 +2475,8 @@ __all__ = [
     "AlgoTransitionV1",
     "BrokerCommandTypeV2",
     "BrokerCommandV2",
+    "ConsumedLineageRefV1",
+    "ConsumedLineageTypeV1",
     "DeliveryStatusV1",
     "DeterministicExecutionContextV1",
     "DiagnosticObservationV1",
@@ -1975,19 +2486,27 @@ __all__ = [
     "EventSourceV2",
     "EventTypeV2",
     "ExecutionAlgoPluginManifestV2",
+    "ExecutionProjectionRefV1",
+    "ExecutionProjectionSetV1",
     "FileHashV1",
     "FrozenJsonFieldV1",
     "FrozenJsonObjectFieldV1",
     "FrozenStrictModel",
     "GatewayCapabilityCatalogV1",
+    "KernelErrorEvidenceV1",
+    "KernelProjectionTypeV1",
     "MarketDataCapabilityV1",
     "MarketDataRequirementV1",
     "MiniQMTPluginContractError",
     "MiniQMTPluginReasonCode",
+    "MiniQMTRiskDecisionReceiptV1",
     "ObjectFieldRequirementV1",
     "OrderTypeV1",
     "PluginProviderV2",
     "RuntimeEventEnvelopeV2",
+    "RuntimeEventIngressReceiptV1",
+    "RiskDecisionActionV1",
+    "RiskDecisionStageV1",
     "SessionPhaseV1",
     "SideV1",
     "SourceAttributionV1",
