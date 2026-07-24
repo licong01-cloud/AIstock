@@ -2,9 +2,13 @@
   "actual": "The 60-second generic scanner reconciles qelt sessions from terminal historical parent loops, and the 15-second RD-Agent replayer treats HTTP 409 as a transport failure with effectively unbounded replay.",
   "allowed_write_scope": [
     "backend/services/quantevolver/qe_resource_phase_service.py",
+    "backend/routers/quantevolver_evolution.py",
     "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/long_trend_resource_session_repair.py",
     "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+    "backend/tests/unified_engine/test_qe_resource_phase_api.py",
     "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+    "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py",
     "tests/aistock_validation/bugs/20260723_BUG-847-f-014-qelt-sessions-are-terminalized-by-generic-qe-reconciliation-and-pe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,19 +33,30 @@
   "evidence_uris": [],
   "expected": "qelt sessions are terminalized only by authenticated F-014 callbacks or F-014 control/recovery; HTTP 409 remains undelivered in a durable reconciliation-required state with persisted backoff and can deliver unchanged after AIstock state repair; ordinary QE sessions still reconcile; historical repair is exact, idempotent, guarded, and not executed in production.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
+    ],
     "changed_files": [
       "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
       "backend/tests/unified_engine/test_qe_resource_phase_service.py",
-      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+      "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/routers/quantevolver_evolution.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/long_trend_resource_session_repair.py",
         "backend/tests/unified_engine/test_qe_resource_phase_service.py",
-        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+        "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -54,6 +69,17 @@
       ],
       "matched_rules": [
         {
+          "file": "backend/services/quantevolver/long_trend_resource_session_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        },
+        {
           "file": "backend/services/quantevolver/qe_resource_phase_service.py",
           "impact_modules": [
             "qe.single_experiment",
@@ -65,6 +91,17 @@
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
         },
         {
           "file": "backend/services/quantevolver/qe_evolution_service.py",
@@ -109,18 +146,26 @@
       ],
       "suggested_scope": [
         "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/routers/quantevolver_evolution.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/long_trend_resource_session_repair.py",
         "backend/tests/unified_engine/test_qe_resource_phase_service.py",
-        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+        "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
       "backend/tests/unified_engine/test_qe_resource_phase_service.py",
-      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+      "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
     ]
   },
   "first_seen_at": "2026-07-23T18:18:37.570230Z",
@@ -137,7 +182,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_resource_phase_service.py backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py -q",
+  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_resource_phase_service.py backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py -q",
   "required_verification": [
     "l0",
     "qe_read_backend",
