@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,6 +265,33 @@ class _Noop:
     pass
 
 
+class _RunHeartbeatRepository:
+    def __init__(self) -> None:
+        self.run = {
+            "id": "macb_test",
+            "owner_id": "worker",
+            "fencing_token": 1,
+            "row_version": 1,
+        }
+        self.heartbeat_calls = 0
+
+    def heartbeat_run(
+        self,
+        run_id: str,
+        *,
+        token: OwnershipToken,
+        lease_seconds: int,
+    ) -> Mapping[str, Any]:
+        assert run_id == self.run["id"]
+        assert lease_seconds > 0
+        assert token.owner_id == self.run["owner_id"]
+        assert token.fencing_token == self.run["fencing_token"]
+        assert token.row_version == self.run["row_version"]
+        self.heartbeat_calls += 1
+        self.run["row_version"] += 1
+        return dict(self.run)
+
+
 def _orchestrator(repository: _Repository, adapter: _Adapter) -> DurableMultiAlphaOrchestrator:
     return DurableMultiAlphaOrchestrator(
         repository=repository,  # type: ignore[arg-type]
@@ -281,6 +309,44 @@ def _orchestrator(repository: _Repository, adapter: _Adapter) -> DurableMultiAlp
         ),
         owner_id="worker",
     )
+
+
+def test_sync_operation_error_returns_latest_run_heartbeat_token() -> None:
+    repository = _RunHeartbeatRepository()
+    orchestrator = DurableMultiAlphaOrchestrator(
+        repository=repository,  # type: ignore[arg-type]
+        planner=_Noop(),  # type: ignore[arg-type]
+        adapter=_Noop(),  # type: ignore[arg-type]
+        archive_capture=_Noop(),  # type: ignore[arg-type]
+        active_import_service=_Noop(),  # type: ignore[arg-type]
+        recovery_worker=_Noop(),  # type: ignore[arg-type]
+        owner_id="worker",
+    )
+    orchestrator._config = SimpleNamespace(heartbeat_seconds=0.01, lease_seconds=60)
+
+    def failing_materialization() -> None:
+        time.sleep(0.04)
+        raise RuntimeError("scheme not computable")
+
+    value, token, operation_error = asyncio.run(
+        orchestrator._run_sync_with_run_heartbeat(
+            run_id="macb_test",
+            token=OwnershipToken(owner_id="worker", fencing_token=1, row_version=1),
+            operation=failing_materialization,
+        )
+    )
+
+    assert value is None
+    assert isinstance(operation_error, RuntimeError)
+    assert str(operation_error) == "scheme not computable"
+    assert repository.heartbeat_calls >= 1
+    assert token.row_version == repository.run["row_version"]
+    refreshed = repository.heartbeat_run(
+        "macb_test",
+        token=token,
+        lease_seconds=60,
+    )
+    assert refreshed["row_version"] == token.row_version + 1
 
 
 def test_completed_remote_result_collection_survives_restart_window(tmp_path: Path) -> None:
