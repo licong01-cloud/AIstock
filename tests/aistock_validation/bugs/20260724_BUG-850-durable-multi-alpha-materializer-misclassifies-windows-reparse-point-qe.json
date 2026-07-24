@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-850",
-  "closed_at": null,
+  "closed_at": "2026-07-24T13:11:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -69,8 +69,8 @@
   },
   "first_seen_at": "2026-07-24T11:45:21.380331Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f8874c75fc4a5c8798395d8d13246f861ee79dae",
+  "fixed_at": "2026-07-24T13:15:05.454529Z",
   "github_issue_number": 2688,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2688",
   "last_seen_at": "2026-07-24T11:45:21.380331Z",
@@ -78,6 +78,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2689",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -88,7 +89,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -97,6 +98,9 @@
     "fingerprint": "f3b19cd0fdf4c96c5d3e76f9",
     "source_event_id": "FE-20260724-f3b19cd0fdf4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/multi_alpha/test_durable_execution_identity.py -q -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
