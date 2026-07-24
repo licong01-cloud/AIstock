@@ -1,6 +1,6 @@
 ---
 name: aistock-merge-aftercare
-description: "Complete AIstock PR merge and post-merge aftercare. Use when the user asks to merge, close-sync, sync main, cleanup worktree/branch, install-client, apply DDL/dependency gates, or verify local/GitHub main alignment."
+description: "Complete AIstock/RD-Agent PR merge and post-merge aftercare. Use when the user asks to merge, close-sync, sync main, cleanup worktree/branch, install-client, apply DDL/dependency gates, perform RD-Agent release/deploy/rollback, or verify source/runtime alignment."
 ---
 
 # AIstock Merge Aftercare
@@ -8,6 +8,8 @@ description: "Complete AIstock PR merge and post-merge aftercare. Use when the u
 The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the aftercare procedure.
 
 Use this lane after implementation is ready and the user authorized merge or asks for post-merge cleanup.
+
+Use the RD-Agent section when source merge, immutable release, deployment, restart, runtime verification, or rollback is in scope. These are separate states and authorizations.
 
 ## Pre-merge
 
@@ -33,6 +35,16 @@ Use this lane after implementation is ready and the user authorized merge or ask
 - Prefer `python scripts/aistock_issue_workflow.py cleanup-after-merge --branch <branch> --pr-url <merged-pr-url> --worktree <task-worktree> --sync-root --apply` for safe cleanup. Never use `git reset --hard` or `git clean`.
 - Use HTTPS rewrite if Git SSH proxy fails under PowerShell.
 
+## RD-Agent Release Aftercare
+
+1. Treat a merged PR and deployed runtime as separate facts. Deployment input must be the merge commit already contained in the target remote branch; do not deploy a PR head, local-only commit, stash, or restored overlay.
+2. Fail closed unless the source is a clean checkout and repository, merge SHA, Git tree, and release manifest agree. Never use `Copy-Item`, file-level checkout, archive extraction, or another source overlay into a dirty root, production root, or `main` checkout.
+3. Build an immutable release outside the source checkout, named by the full merge SHA. Validate the manifest before atomically switching the `current` pointer. If the repository has no compliant release builder, report `release_deployment=blocked_not_implemented`; do not improvise an overlay.
+4. Require an explicit repo-external `RDAGENT_STATE_ROOT` for QE workspaces, logs, scheduler JSONL, MLflow, registry, cache, history, artifact CAS, and QELT outbox. Stop if any effective runtime-state path resolves inside a source or release directory.
+5. Persist a deployment receipt with repository, merge SHA, tree hash, manifest hash, release path, node, timestamps, actor, runtime path before/after, and rollback target. Keep secrets out of receipts.
+6. Report `source_merged`, `release_built`, `release_deployed`, `process_restarted`, `runtime_verified`, and `rollback_available` separately. Restart or pointer switching requires the user's target-specific runtime authorization.
+7. Roll back by atomically switching to the recorded immutable release. Do not reset or overwrite source, mutate a release, or introduce a database export/backup, research approval, or business gate.
+
 ## Report
 
-Include PR, merge commit, root `main...origin/main` status, cleanup result, client install status, production gates, and whether runtime/DB were untouched.
+Include PR, merge commit, root `main...origin/main` status, cleanup result, client install status, production gates, and whether runtime/DB were untouched. For RD-Agent also include release SHA/tree/manifest/path, receipt path, state root, restart/runtime verification, and rollback target as separate states.

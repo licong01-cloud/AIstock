@@ -352,8 +352,10 @@ def _sha256_tree(path: Path) -> str | None:
 WORKFLOW_RULE_DIGEST_REFS = (
     ".codex/skills/aistock-task-router/SKILL.md",
     ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
     ".claude/commands/aistock-task-router.md",
     ".claude/commands/fix-aistock-issue.md",
+    ".claude/commands/aistock-merge-aftercare.md",
     "docs/codex_project_memory.md",
     "docs/standards/README.md",
     "docs/standards/aistock_issue_workflow_quickstart.md",

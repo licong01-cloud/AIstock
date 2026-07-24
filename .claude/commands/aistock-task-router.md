@@ -14,7 +14,7 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 - BUG registration, fix, GitHub Issue, Context Pack or allowed scope -> `.claude/commands/fix-aistock-issue.md`.
 - New feature and design acceptance -> `.claude/commands/aistock-feature-workflow.md`.
 - Docs, handoff or small documentation cleanup -> `.claude/commands/aistock-docs-handoff.md`.
-- Merge, close-sync, root sync, production gates, install-client or cleanup -> `.claude/commands/aistock-merge-aftercare.md`.
+- Merge, close-sync, root sync, production gates, install-client, cleanup, or RD-Agent release/deploy/rollback -> `.claude/commands/aistock-merge-aftercare.md`.
 - Read-only triage, CI/nightly status or inventory -> `.claude/commands/aistock-readonly-triage.md`.
 - Broad UI/API/business-flow, LLM drift or cross-module validation -> `.claude/commands/aistock-validation-delegation.md`.
 

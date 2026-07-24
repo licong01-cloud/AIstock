@@ -19,7 +19,7 @@ Use this as the lightweight entry for broad or unclear AIstock work. The sole de
 - BUG registration, fix, GitHub Issue, Context Pack or allowed scope -> `fix-aistock-issue`.
 - New feature and design acceptance -> `verify-aistock-feature`.
 - Docs, handoff or small documentation cleanup -> `aistock-docs-handoff`.
-- Merge, close-sync, root sync, production gates, install-client or cleanup -> `aistock-merge-aftercare`.
+- Merge, close-sync, root sync, production gates, install-client, cleanup, or RD-Agent release/deploy/rollback -> `aistock-merge-aftercare`.
 - Read-only triage, CI/nightly status or inventory -> `aistock-readonly-triage`.
 - Broad UI/API/business-flow, LLM drift or cross-module validation -> `aistock-validation-delegation`.
 
