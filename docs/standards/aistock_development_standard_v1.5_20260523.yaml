@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: b94ecd2610eb25776a51207ade4e7cb02dd367728f2b4d582ee309c5f4001f48
+source_sha256: bf555a57a06735ae8c6b6ff0e14ae2a9f22251f362559ef2fc07056b1879682f
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-07-22"
@@ -505,6 +505,28 @@ rules:
     baseline_policy: block_release_until_verified
     remediation: Run frontend/backend dependency gates in the production runtime checkout before declaring restart readiness.
 
+  - rule_id: RDAGENT-RELEASE-IDENTITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-rdagent-release-identity-001
+    title: RD-Agent deployment uses merged immutable releases and external runtime state
+    severity: P1
+    category: production_release
+    enabled: true
+    checker:
+      type: manual_review
+      required_evidence:
+        - merged_commit_in_target_branch
+        - clean_source_checkout
+        - repository_merge_tree_manifest_match
+        - immutable_release_path
+        - repo_external_rdagent_state_root
+        - deployment_receipt
+        - atomic_current_pointer
+        - separate_source_deploy_restart_runtime_states
+        - rollback_target
+        - no_source_overlay
+    baseline_policy: block_release_until_verified
+    remediation: Build RD-Agent from a clean merged commit into an immutable release, keep state under RDAGENT_STATE_ROOT, atomically switch current, persist a receipt, and fail instead of using file overlays.
+
 manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
@@ -548,3 +570,19 @@ manual_review_controls:
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
     severity: P1
     title: Dependency file changes require frontend/backend production dependency gate evidence after main merge.
+  - control_id: RDAGENT-RELEASE-IDENTITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-rdagent-release-identity-001
+    severity: P1
+    title: RD-Agent source merge, immutable release, deployment, restart, runtime verification, and rollback keep one verifiable identity chain without source overlays.
+    required_evidence:
+      - merged_commit_in_target_branch
+      - clean_source_checkout
+      - repository_merge_tree_manifest_match
+      - immutable_release_path
+      - repo_external_rdagent_state_root
+      - deployment_receipt
+      - atomic_current_pointer
+      - separate_source_deploy_restart_runtime_states
+      - rollback_target
+      - no_source_overlay
+    failure_policy: block_release_deploy_restart_and_verified_claims

@@ -3531,6 +3531,30 @@ def test_verify_clients_workflow_only_checks_every_lane(
     assert all(item["status"] == "current" for item in payload["client_manifest"]["claude_entries"].values())
 
 
+def test_rdagent_release_aftercare_is_part_of_every_client_and_resume_digest() -> None:
+    assert ("merge_aftercare", "aistock-merge-aftercare") in workflow.CLIENT_CODEX_SKILLS
+    assert ("merge_aftercare", "aistock-merge-aftercare.md") in workflow.CLIENT_CLAUDE_COMMANDS
+    assert ".codex/skills/aistock-merge-aftercare/SKILL.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+    assert ".claude/commands/aistock-merge-aftercare.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+
+    codex_text = (workflow.REPO_ROOT / ".codex/skills/aistock-merge-aftercare/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    claude_text = (workflow.REPO_ROOT / ".claude/commands/aistock-merge-aftercare.md").read_text(
+        encoding="utf-8"
+    )
+    router_text = (workflow.REPO_ROOT / ".codex/skills/aistock-task-router/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    for text in (codex_text, claude_text):
+        assert "RDAGENT_STATE_ROOT" in text
+        assert "blocked_not_implemented" in text
+        assert "deployment receipt" in text.lower()
+        assert "Copy-Item" in text
+        assert "runtime_verified" in text
+    assert "RD-Agent release/deploy/rollback" in router_text
+
+
 def test_verification_budget_does_not_require_nightly_without_deferred_plans() -> None:
     budget = workflow._verification_budget_for_record(
         {
