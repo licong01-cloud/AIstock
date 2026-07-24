@@ -641,17 +641,32 @@ class PluginRouteCompatibilityReceiptV1(FrozenStrictModel):
         catalog_snapshot: PluginCatalogSnapshotV1,
         gateway_catalog: GatewayCapabilityCatalogV1,
     ) -> Self:
+        snapshot = _strict_catalog_snapshot_for_route_v1(
+            catalog_snapshot,
+            plugin_key=self.plugin_key,
+        )
+        gateway = _strict_gateway_catalog_for_route_v1(
+            gateway_catalog,
+            plugin_key=self.plugin_key,
+        )
         try:
-            expected = type(self).create(
-                catalog_snapshot=catalog_snapshot,
+            descriptor = _route_descriptor_v1(
+                snapshot,
                 plugin_key=self.plugin_key,
-                gateway_catalog=gateway_catalog,
+                gateway_catalog=gateway,
             )
-        except (MiniQMTPluginContractError, ValidationError, TypeError, ValueError, KeyError) as exc:
+            expected = _derive_plugin_route_compatibility_v1(
+                catalog_snapshot=snapshot,
+                descriptor=descriptor,
+                gateway_catalog=gateway,
+            )
+        except MiniQMTPluginContractError:
+            raise
+        except (ValidationError, TypeError, ValueError, KeyError) as exc:
             raise _route_receipt_authority_error_v1(
                 self,
                 requirement="ROUTE_COMPATIBILITY_AUTHORITY_REBUILD",
-                expected="exact registered plugin key and strict catalog authorities",
+                expected="exact receipt derived from validated catalog authorities",
                 actual=exc,
             ) from exc
         if canonical_json_bytes_v1(self) != canonical_json_bytes_v1(expected):

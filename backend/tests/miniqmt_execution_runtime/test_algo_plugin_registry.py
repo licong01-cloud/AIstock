@@ -27,6 +27,7 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     GatewayCapabilityCatalogV1,
     MarketDataCapabilityV1,
+    MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
     OrderTypeV1,
     SessionPhaseV1,
@@ -586,6 +587,90 @@ def test_route_evaluator_rejects_non_catalog_input_with_typed_json_safe_context(
     json.dumps(context, allow_nan=False)
 
 
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"exact_order_id_cancel": False},
+        {"route_id": "route.stale.identity"},
+    ),
+)
+def test_route_authority_validation_preserves_invalid_gateway_reason_and_context(
+    updates: dict[str, object],
+) -> None:
+    runtime = _build()
+    gateway = _gateway(_all_gateway_capabilities())
+    receipt = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=runtime.plugin_key_for_new_instance("SNIPER_MINIQMT"),
+        gateway_catalog=gateway,
+    )
+    stale = gateway.model_copy(update=updates)
+
+    with pytest.raises(MiniQMTPluginContractError) as error:
+        receipt.validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog=stale,
+        )
+
+    assert error.value.reason_code is MiniQMTPluginReasonCode.GATEWAY_CAPABILITY_CATALOG_INVALID
+    context = error.value.context
+    assert context["route"] == stale.route_id
+    assert context["requirement"] == "GATEWAY_CAPABILITY_CATALOG_STRICT_READBACK"
+    assert context["expected"] == "canonical schema, identity, field and catalog_sha256 closure"
+    assert context["actual"]
+    assert context["gateway_catalog_identity"] == {
+        "route_id": stale.route_id,
+        "catalog_sha256": gateway.catalog_sha256,
+    }
+    json.dumps(context, allow_nan=False)
+
+
+def test_route_authority_validation_preserves_non_gateway_type_error() -> None:
+    runtime = _build()
+    gateway = _gateway(_all_gateway_capabilities())
+    receipt = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=runtime.plugin_key_for_new_instance("SNIPER_MINIQMT"),
+        gateway_catalog=gateway,
+    )
+
+    with pytest.raises(MiniQMTPluginContractError) as error:
+        receipt.validate_against_authority_v1(
+            catalog_snapshot=runtime.snapshot,
+            gateway_catalog={"route_id": "route.invalid"},  # type: ignore[arg-type]
+        )
+
+    assert error.value.reason_code is MiniQMTPluginReasonCode.GATEWAY_CAPABILITY_CATALOG_INVALID
+    assert error.value.context["requirement"] == "GATEWAY_CAPABILITY_CATALOG_STRICT_READBACK"
+    assert error.value.context["expected"] == "GatewayCapabilityCatalogV1"
+    json.dumps(error.value.context, allow_nan=False)
+
+
+def test_route_authority_validation_preserves_invalid_catalog_snapshot_error() -> None:
+    runtime = _build()
+    gateway = _gateway(_all_gateway_capabilities())
+    receipt = evaluate_plugin_route_compatibility_v1(
+        catalog_snapshot=runtime.snapshot,
+        plugin_key=runtime.plugin_key_for_new_instance("SNIPER_MINIQMT"),
+        gateway_catalog=gateway,
+    )
+    stale_snapshot = runtime.snapshot.model_copy(update={"catalog_sha256": "f" * 64})
+
+    with pytest.raises(MiniQMTPluginContractError) as error:
+        receipt.validate_against_authority_v1(
+            catalog_snapshot=stale_snapshot,
+            gateway_catalog=gateway,
+        )
+
+    assert error.value.reason_code is MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID
+    context = error.value.context
+    assert context["requirement"] == "PLUGIN_CATALOG_SNAPSHOT_STRICT_READBACK"
+    assert context["expected"] == "canonical schema, identity and catalog_sha256 closure"
+    assert context["actual"]
+    assert context["gateway_catalog_identity"] is None
+    json.dumps(context, allow_nan=False)
+
+
 def test_route_requires_b0_quote_source() -> None:
     runtime = _build()
     plugin_key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
@@ -766,11 +851,12 @@ def test_route_receipt_authority_rejects_hash_correct_descriptor_and_catalog_dri
     tampered = _hash_correct_route_receipt(receipt, **updates)
 
     structural = _structural_route_readback(tampered)
-    with pytest.raises(ValueError, match="authority|closure") as error:
+    with pytest.raises(MiniQMTPluginContractError) as error:
         structural.validate_against_authority_v1(
             catalog_snapshot=runtime.snapshot,
             gateway_catalog=gateway,
         )
+    assert error.value.reason_code is MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID
     json.dumps(error.value.context, allow_nan=False)
 
 
@@ -804,6 +890,7 @@ def test_route_receipt_authority_rejects_hash_correct_gateway_fact_drift(
             catalog_snapshot=runtime.snapshot,
             gateway_catalog=gateway,
         )
+    assert error.value.reason_code is MiniQMTPluginReasonCode.ROUTE_COMPATIBILITY_RECEIPT_INVALID
     json.dumps(error.value.context, allow_nan=False)
 
 
@@ -896,6 +983,12 @@ def test_route_receipt_writer_structural_readback_and_authority_validation_are_e
     assert validated.observed_gateway_backend == gateway.gateway_backend
     assert validated.observed_session_phases == tuple(item.value for item in gateway.session_phases)
     assert validated.observed_idempotent_submit_by_client_ref is False
+    assert validated.broker_called is False
+    if set(gateway.market_data_capabilities) == set(_all_gateway_capabilities()):
+        assert validated.status is CompatibilityStatusV1.PASSED
+    else:
+        assert validated.status is CompatibilityStatusV1.FAILED
+        assert validated.ordered_failures
     assert "failures" not in inspect.signature(PluginRouteCompatibilityReceiptV1.create).parameters
 
 
