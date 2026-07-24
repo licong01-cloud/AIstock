@@ -21,7 +21,11 @@ from backend.services.multi_alpha.durable_models import (
     sha256_identity,
 )
 from backend.services.model_store import ModelStoreService
-from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest
+from backend.services.multi_alpha.combine_backtest import (
+    RUNTIME_EXTERNAL_DATA_LINK_NAMES,
+    CombineBacktestRequest,
+    is_runtime_external_data_link,
+)
 from backend.services.multi_alpha.durable_plan import PLANNER_VERSION
 from backend.services.multi_alpha.remote_dispatch import get_compute_node_info
 from backend.services.quantevolver.qe_workspace_client import (
@@ -754,7 +758,8 @@ def _configured_or_file_hash(config: Mapping[str, Any], *, hash_key: str, path_k
     raw_path = str(config.get(path_key) or "").strip()
     if not raw_path:
         return None
-    return _sha256_tree(Path(raw_path))
+    excluded_names = RUNTIME_EXTERNAL_DATA_LINK_NAMES if path_key == "runtime_template_dir" else frozenset()
+    return _sha256_tree(Path(raw_path), external_data_names=excluded_names)
 
 
 def _optional_sha256(value: Any) -> str | None:
@@ -792,26 +797,53 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _sha256_tree(root: Path) -> str:
+def _sha256_tree(root: Path, *, external_data_names: frozenset[str] = frozenset()) -> str:
     resolved = root.resolve(strict=True)
     if not resolved.is_dir():
         return _sha256_file(resolved)
     rows: list[dict[str, str]] = []
-    for path in sorted(item for item in resolved.rglob("*") if item.is_file()):
+    external_data_bindings: list[str] = []
+    for path in sorted(resolved.rglob("*")):
+        relative = path.relative_to(resolved)
+        if len(relative.parts) == 1 and path.name in external_data_names:
+            try:
+                external_data_link = is_runtime_external_data_link(path)
+            except OSError as exc:
+                raise DurableContractError(
+                    "runtime template identity cannot inspect an external QE data link",
+                    reason_code="multi_alpha_execution_identity_invalid",
+                    context={"path": str(path), "error_type": type(exc).__name__, "message": str(exc)},
+                ) from exc
+            if external_data_link:
+                external_data_bindings.append(relative.as_posix())
+                continue
+        try:
+            is_file = path.is_file()
+        except OSError as exc:
+            raise DurableContractError(
+                "runtime template identity cannot inspect a filesystem entry",
+                reason_code="multi_alpha_execution_identity_invalid",
+                context={"path": str(path), "error_type": type(exc).__name__, "message": str(exc)},
+            ) from exc
+        if not is_file:
+            continue
         if path.is_symlink():
             raise DurableContractError(
                 "runtime template identity does not permit symlinked files",
                 reason_code="multi_alpha_execution_identity_invalid",
                 context={"path": str(path)},
             )
-        rows.append({"path": path.relative_to(resolved).as_posix(), "sha256": _sha256_file(path)})
+        rows.append({"path": relative.as_posix(), "sha256": _sha256_file(path)})
     if not rows:
         raise DurableContractError(
             "runtime template identity cannot hash an empty directory",
             reason_code="multi_alpha_execution_identity_incomplete",
             context={"path": str(resolved)},
         )
-    return sha256_identity({"root_kind": "directory", "files": rows})
+    identity_payload: dict[str, Any] = {"root_kind": "directory", "files": rows}
+    if external_data_bindings:
+        identity_payload["external_data_bindings"] = external_data_bindings
+    return sha256_identity(identity_payload)
 
 
 def _git_commit(root: Path) -> str | None:
