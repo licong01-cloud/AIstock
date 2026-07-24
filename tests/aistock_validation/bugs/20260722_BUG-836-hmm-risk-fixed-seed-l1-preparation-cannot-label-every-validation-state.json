@@ -55,13 +55,25 @@
       "actor": "codex",
       "note": "C-008-B3-DIAG-02 completed two fresh-process passes (992 fits total) under the same fixed single-thread environment for both 31-sector families and seeds 42-49. Canonical payload hashes matched bitwise: 899dcbb53dbaf041d05eaf1abe7b9f02f002039adedb9118dd537ae3b9706d30. Final diagnostic report canonical hash: bd09380c74cce480489dcc6fee8a4ee739841c4a486a21a6a8deb894180ad5b2. No seed selection, D4/D5-01/D6 threshold application, model write, READY write, database write, or runtime action occurred.",
       "timestamp": "2026-07-24T01:29:49.3396697+08:00"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-B3-D3-03/D4-02-DIAG-04 using sector-local R_sj and nu=1.0 scale-aware initialization/covariance prior for two fresh-process refit diagnostics on the frozen dataset/mapping, both families, seeds 42-49, and the fixed single-thread environment. Seed selection, formal D4/D5/D6 acceptance, hard-semantic changes, model/READY writes, B3 implementation, database/runtime changes, and merge remain excluded.",
+      "timestamp": "2026-07-25T04:13:59+08:00"
+    },
+    {
+      "action": "record_validation_evidence",
+      "actor": "codex",
+      "note": "C-008-B3-D3-03/D4-02-DIAG-04 completed two fresh-process passes (992 fits total) at producer commit 94abea6cecb320dafbc2525d9dc39bfd549b30cd. Canonical payload hashes matched bitwise at 3abb384eb578dce1c39407ba55f9576f97db6f81ad54e07a8266fecf8eb19aac; final report canonical hash is 2c9136d5e1c89f66c180226848f4e761b91b864edb412d5c8ebcea8f17c74c9b. Both families completed 248/248 fits with zero raw covariance non-finite/non-positive cells. Dynamic lower-reference diagnostics still found 34 legacy and 31 autocycle cells, so no formal D4 conclusion was applied. No seed selection, D4/D5/D6 threshold application, hard-semantic change, model/READY write, database write, or runtime action occurred.",
+      "timestamp": "2026-07-25T04:14:01.6900331+08:00"
     }
   ],
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5054376238",
     "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5055624035"
   ],
-  "expected": "C-008-B1 reuses the immutable C-008-A PIT input, both 31-sector L1 families and seeds 42-49 to record train/validation hard occupancy, filtered-posterior mass/ESS/utility/stability, complete convergence deltas and raw/bounded covariance evidence. It applies no formal acceptance threshold, preserves the approved hard-state semantic authority, performs no seed selection, writes no model or READY artifact, and does not implement B2/B3.",
+  "expected": "C-008-B3-D3-03/D4-02-DIAG-04 reuses the immutable C-008 dataset/mapping, both 31-sector L1 families and seeds 42-49 under the fixed single-thread environment to run two fresh-process scale-aware refit diagnostics using sector-local R_sj and nu=1.0 initialization/covariance prior. It records initialization, convergence, smoothed covariance audit, causal hard evidence, and canonical reproducibility without applying formal D4/D5/D6 acceptance, selecting a seed, changing hard semantic authority, writing a model/READY artifact, implementing B3, or changing database/runtime state.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -112,7 +124,7 @@
   "production_backend_dependency_gate": "pending",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_ --c008-b1-diagnostic-output tmp/validation/hmm_risk/c008_b1_soft_evidence.json",
+  "reproduce_command": "$env:OMP_NUM_THREADS='1'; $env:OPENBLAS_NUM_THREADS='1'; $env:MKL_NUM_THREADS='1'; $env:VECLIB_MAXIMUM_THREADS='1'; $env:NUMEXPR_NUM_THREADS='1'; python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_ --c008-b3-diag04-output tmp/validation/hmm_risk/c008_b3_diag04_scale_aware_covariance_evidence.json",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
