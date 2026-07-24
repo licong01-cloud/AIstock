@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -64,6 +65,18 @@ DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
 DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
+RUNTIME_EXTERNAL_DATA_LINK_NAMES = frozenset(
+    {
+        "bak_basic.h5",
+        "cyq_perf.h5",
+        "daily_basic.h5",
+        "daily_pv.h5",
+        "margin_detail.h5",
+        "moneyflow.h5",
+        "sector_data.h5",
+        "static_factors.parquet",
+    }
+)
 RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
 REQUEST_SNAPSHOT_KEY = "_combine_request_v1"
 RUN_EVENT_LOG_NAME = "run_events.jsonl"
@@ -399,8 +412,24 @@ def _find_unreadable_runtime_template_entry(src: Path) -> tuple[Path, OSError] |
     return None
 
 
+def is_runtime_external_data_link(path: Path) -> bool:
+    """Inspect a canonical QE data entry without dereferencing its target."""
+
+    if path.name not in RUNTIME_EXTERNAL_DATA_LINK_NAMES:
+        return False
+    if path.is_symlink():
+        return True
+    metadata = path.lstat()
+    attributes = int(getattr(metadata, "st_file_attributes", 0) or 0)
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(attributes & reparse_flag)
+
+
 def _copy_runtime_template_native(*, src: Path, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
+    exclude_external_data_links = bool(backtest_config.get("_exclude_runtime_external_data_links"))
     for item in src.iterdir():
+        if exclude_external_data_links and is_runtime_external_data_link(item):
+            continue
         target = workspace / item.name
         if item.is_file():
             if not target.exists():
@@ -415,6 +444,18 @@ def _copy_runtime_template_via_wsl(*, src: Path, workspace: Path, backtest_confi
     src_wsl = win_to_wsl_path(str(src.resolve()))
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
     script = _wsl_template_validation_script(src_wsl) + f"; cp -a -n -- {shlex.quote(src_wsl + '/.')} {shlex.quote(workspace_wsl + '/')}"
+    if bool(backtest_config.get("_exclude_runtime_external_data_links")):
+        external_link_names = [
+            item.name
+            for item in src.iterdir()
+            if is_runtime_external_data_link(item)
+        ]
+        excluded_paths = " ".join(
+            shlex.quote(workspace_wsl + "/" + name)
+            for name in sorted(external_link_names)
+        )
+        if excluded_paths:
+            script += f"; rm -f -- {excluded_paths}"
     completed = run_command(
         ["wsl", "-d", distro, "bash", "-lc", script],
         cwd=workspace,

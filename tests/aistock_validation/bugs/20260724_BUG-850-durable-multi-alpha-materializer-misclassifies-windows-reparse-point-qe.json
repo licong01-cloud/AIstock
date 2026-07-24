@@ -1,6 +1,12 @@
 {
-  "actual": "R12P durable run macb_453ca2d0c5b21b40_20240701_20260629_20260724T113329317996Z_47889d7b reproduced a materialization failure when runtime_template_dir is a completed QE workspace containing DrvFS .h5/.parquet reparse points. _find_unreadable_runtime_template_entry can return no unreadable entry, then _copy_runtime_template_native evaluates item.is_dir() before copy_runtime_dirs and raises NotADirectoryError/WinError 267. The run creates no remote attempt and fails child materialization. Expected: reparse-point layouts are deterministically routed through the existing WSL cp -a path or skipped when directories are not requested, with explicit failure if WSL validation fails; no silent fallback and no change to combine/weight/LOO/backtest semantics.",
+  "actual": "R12P durable run macb_453ca2d0c5b21b40_20240701_20260629_20260724T113329317996Z_47889d7b reproduced a materialization failure when runtime_template_dir is a completed QE workspace containing DrvFS .h5/.parquet reparse points. The existing WSL cp -a path correctly preserves those links, but the durable artifact publisher then traverses every staging entry, dereferences a Windows reparse point through Path.is_dir()/is_file(), and raises NotADirectoryError/WinError 267 before any remote attempt is created. Expected: canonical external QE data links are explicitly recorded as non-published node data bindings, never dereferenced or silently hashed into the durable artifact set; unexpected links fail loud; combine/weight/LOO/backtest semantics remain unchanged.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/services/multi_alpha/durable_identity.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_identity.py",
     "tests/aistock_validation/bugs/20260724_BUG-850-durable-multi-alpha-materializer-misclassifies-windows-reparse-point-qe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,7 +19,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-24T11:45:21.380331Z",
-  "description": "R12P durable run macb_453ca2d0c5b21b40_20240701_20260629_20260724T113329317996Z_47889d7b reproduced a materialization failure when runtime_template_dir is a completed QE workspace containing DrvFS .h5/.parquet reparse points. _find_unreadable_runtime_template_entry can return no unreadable entry, then _copy_runtime_template_native evaluates item.is_dir() before copy_runtime_dirs and raises NotADirectoryError/WinError 267. The run creates no remote attempt and fails child materialization. Expected: reparse-point layouts are deterministically routed through the existing WSL cp -a path or skipped when directories are not requested, with explicit failure if WSL validation fails; no silent fallback and no change to combine/weight/LOO/backtest semantics.",
+  "description": "R12P durable run macb_453ca2d0c5b21b40_20240701_20260629_20260724T113329317996Z_47889d7b reproduced a materialization failure when runtime_template_dir is a completed QE workspace containing DrvFS .h5/.parquet reparse points. The existing WSL cp -a path correctly preserves those links, but the durable artifact publisher then traverses every staging entry, dereferences a Windows reparse point through Path.is_dir()/is_file(), and raises NotADirectoryError/WinError 267 before any remote attempt is created. Expected: canonical external QE data links are explicitly recorded as non-published node data bindings, never dereferenced or silently hashed into the durable artifact set; unexpected links fail loud; combine/weight/LOO/backtest semantics remain unchanged.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,17 +32,40 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
+      "changed_files": [
+        "backend/services/multi_alpha/combine_backtest.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/services/multi_alpha/durable_identity.py",
+        "backend/tests/test_multi_alpha_combine_backtest.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_identity.py"
+      ],
+      "impacted_modules": [
+        "multi_alpha"
+      ],
       "matched_rules": [],
       "risk_levels": [],
       "suggested_scope": [],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py"
+    ]
   },
   "first_seen_at": "2026-07-24T11:45:21.380331Z",
   "fix_branch": null,
