@@ -489,7 +489,7 @@ initialize 的 deterministic plugin/config/state failure 必须在该 transactio
 7. 标记 delivery APPLIED；
 8. commit。
 
-插件纯函数抛出的 schema/config/state/logic 异常视为 deterministic terminal failure，必须在同一 delivery transaction：保留 last-good state/hash、写 `AlgoFailureReceiptV1`、将 delivery 置 `FAILED_TERMINAL`、algo 置 `FAILED`、取消未触发 timer，并按 `child_order_id` 排序为所有 active owned child 生成 kernel-owned deterministic `CANCEL_ORDER` outbox command；后续 delivery 写 `SKIPPED_TERMINAL` receipt。cancel ACK/reconcile 仍由 OMS/Gateway 闭合；无法立即撤销时 algo 保持显式 failed-with-active-child diagnostics，不能伪报终态清洁。
+插件纯函数抛出的 schema/config/state/logic 异常视为 deterministic terminal failure，必须在同一 delivery transaction：保留 last-good state/hash、写 `AlgoFailureReceiptV1`、将 delivery 置 `FAILED_TERMINAL`、algo 置固定状态 `FAILED`、取消未触发 timer，并按 `child_order_id` 排序为所有 active owned child 生成 kernel-owned deterministic `CANCEL_ORDER` outbox command；后续 plugin delivery 写 `SKIPPED_TERMINAL` receipt。failed-with-active-child只允许作为独立durable closure diagnostic（`CANCEL_PENDING|OUTCOME_UNKNOWN`），不得增加第二个algo status；cancel ACK/reconcile 仍由 OMS/Gateway command-child mapping 闭合，全部child terminal后diagnostic转CLEAN但terminal delivery不变，不能伪报终态清洁。
 
 只有注册的 repository/serialization/deadlock/lease/provider 暂时故障允许 `FAILED_RETRYABLE`，state/transition/timer/outbox 全部保持未提交，attempt 有界；耗尽后转 terminal failure receipt。若 DB 本身不可用导致 failure receipt 也无法提交，consumer 不得 ACK，process health 必须 FAILED，并在 DB 恢复后以同 delivery identity 重试记录，不返回内存成功。禁止吞异常、保留旧 state 后标 APPLIED、提交部分 commands 或把插件异常转成空 transition。
 
@@ -748,12 +748,13 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 ### K2：durable dispatcher、delivery、timer 与 outbox
 
 - 唯一实施级下位合同为 [`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md)；
-- additive migration/repository；
+- additive migration/repository；全部K2 carrier具有exact schema/hash domain/writer-readback，且algo status严格复用本蓝图 §5.4，不新增`REJECTED/FAILED_WITH_ACTIVE_CHILD`业务状态；
 - ALGO_START、exact routing、per-algo predecessor sequence、delivery/failure/transition/outbox transactions；
-- ExchangeSessionClock；
-- crash/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
+- command→local order→existing child→broker order/trade使用同一durable mapping；risk/OMS/route只冻结并引用现有一次业务决定，dispatcher不做第二次admission；
+- ExchangeSessionClock使用B0 preload exact `CalendarSnapshotSet`派生的durable session authority、session epoch/event identities；
+- crash/DB-epoch process incarnation/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
 - 四个切片为 K2-A schema/repository、K2-B ingress/delivery、K2-C clock/timer、K2-D outbox/reconcile/observability；
-- 当前 `design_ready`、source `not_started`、shadow-only，预计 4 PR，16–24 人日。
+- 当前 `design_ready`、source `not_started`、shadow-only，预计 4 PR，21–29 人日。
 
 ### K3：迁移现有三个算法
 
@@ -926,12 +927,12 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-059` | K1 direct/negative/parity/import tests、changed-file test routing 与 coverage 可直接执行 |
 | `F-060` | K1 rollout/rollback、K2-K4 边界、无 fallback/人工门禁/平行 route 与生产状态分离完整 |
 | `F-061` | K2 当前同步直接副作用链、K1/K2/K3边界和信号/执行隔离定向事实完整 |
-| `F-062` | K2 event/algo/delivery/transition/outbox/timer/diagnostic schema、identity/hash、数据库约束可直接实施 |
+| `F-062` | K2 event/algo/delivery/transition/projection/mapping/outbox/worker-incarnation/timer/session/diagnostic schema、identity/hash、数据库约束可直接实施 |
 | `F-063` | ALGO_START与全部event exact routing、ordered delivery set和durable ACK事务完整 |
 | `F-064` | per-algo predecessor、lease/fence/CAS和state/effect transaction完整 |
 | `F-065` | deterministic failure、active-child cancel、skip receipt、bounded retry和DB failure语义完整 |
-| `F-066` | outbox three-phase、nullable broker-called、callback race与OUTCOME_UNKNOWN reconcile不重复下单 |
-| `F-067` | ExchangeSessionClock、durable timer、午休/catch-up/EOD/restart语义完整 |
+| `F-066` | command-child-broker mapping、outbox three-phase、nullable broker-called、callback race与OUTCOME_UNKNOWN reconcile不重复下单 |
+| `F-067` | exact calendar/session authority、ExchangeSessionClock、durable timer、午休/catch-up/EOD/restart语义完整 |
 | `F-068` | DEV-first migration、幂等preflight/forward/readback、legacy inventory与rollback不伪造事实 |
 | `F-069` | K2 diagnostics/metrics/alerts/retention/runbook有界、低基数、只读且无人工acknowledge |
 | `F-070` | K2 direct/crash/concurrency/migration测试、coverage、changed-file routing和生产状态分离完整 |
@@ -959,12 +960,12 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-059` | K1 detailed design §11 ownership/test routing/coverage | `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py`、`test_plugin_import_boundaries.py`、`test_algo_plugin_contracts.py`、`test_algo_plugin_registry.py`、`test_current_three_plugin_manifests.py` direct matrix=`49/65/60/55/39=268 passed`；import/surface/receipt line/branch=`88.27/77.88`,`89.61/81.34`,`88.46/70.00`；`python -m nox -s l0` 与 `validation_module_registry_l0` PASS；full classifier=`29 files`、`unmapped_code_files=[]`；CI run `30119335529` MiniQMT=`682/1`、Paper=`1042/2/1 deselected`、static/verdict green | implemented_verified | none |
 | `F-060` | K1 detailed design §2、§10、§12-§13 rollout/rollback/state separation | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`、`docs/architecture/miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`、`docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`；implementation `52e1c5a2`；三份 F2 validator、DESIGN-COMPLIANCE 与 final CI run `30119969033` 闭合；PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`，K1-C `source_merge=merged_pr_2685`，K2/K3/K4 `not_started`，production/runtime gates `noop` | implemented_verified | none |
 | `F-061` | K2 detailed design §1–§3 current facts/scope/dependency | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；exact `backend/services/miniqmt_execution_runtime/runtime.py`、`repository.py` 与 migration symbols | design_ready | none |
-| `F-062` | K2 detailed design §4、§9 durable carriers/additive schema | target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`test_kernel_contracts.py` | design_ready | none |
+| `F-062` | K2 detailed design §4.0–§4.10、§9 exact domains、parent status、projection/mapping/incarnation/calendar carriers与additive schema | target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`test_kernel_contracts.py` | design_ready | none |
 | `F-063` | K2 detailed design §4.1、§5、§6.1–6.2 ingress/routing | target `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py` | design_ready | none |
 | `F-064` | K2 detailed design §4.2–4.4、§6.3、§7 delivery/concurrency | target `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` | design_ready | none |
-| `F-065` | K2 detailed design §4.4、§6.3、§7.2 failure/retry | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` | design_ready | none |
-| `F-066` | K2 detailed design §4.5、§6.4–6.5、§7.3 outbox/reconcile | target `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py` | design_ready | none |
-| `F-067` | K2 detailed design §4.6、§8 exchange clock | target `backend/tests/miniqmt_execution_runtime/test_exchange_session_clock.py` | design_ready | none |
+| `F-065` | K2 detailed design §4.2–§4.4、§6.3、§7.2 parent status/failure/active-child closure/retry | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` | design_ready | none |
+| `F-066` | K2 detailed design §4.5–§4.7、§6.4–6.5、§7 outbox/mapping/incarnation/reconcile | target `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py` | design_ready | none |
+| `F-067` | K2 detailed design §4.8–§4.9、§8 calendar/session authority与exchange clock | target `backend/tests/miniqmt_execution_runtime/test_exchange_session_clock.py` | design_ready | none |
 | `F-068` | K2 detailed design §9 migration | target `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` | design_ready | none |
 | `F-069` | K2 detailed design §10 diagnostics/retention/runbook | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
 | `F-070` | K2 detailed design §11–§13 validation/rollout | command `python -m nox -s miniqmt_execution_runtime_l2`；K2 F2 validator command | design_ready | none |

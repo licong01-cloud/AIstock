@@ -90,6 +90,7 @@ Gateway/OMS callbacks -> ORDER/TRADE/ACCOUNT/RECONCILE -> same RuntimeEventIngre
 | `kernel_repository.py` | K2 PostgreSQL protocol、single transaction writers、claim/CAS/readback；不调用 plugin/Gateway |
 | `kernel_ingress.py` | event composite validation、routing、ALGO_START initialization coordinator |
 | `kernel_delivery.py` | delivery worker、pure plugin invocation、effect closure、failure/skip semantics |
+| `calendar_contracts.py` | 从现有 Adaptive IS contract无语义变化地提取共享 `CalendarSnapshot/CalendarSnapshotSet/SessionSegment` authority；旧路径只做显式兼容re-export |
 | `kernel_clock.py` | exchange calendar/session projection、durable timer due emission、EOD |
 | `kernel_outbox.py` | outbox claim、Gateway dispatch seam、ACK/non-acceptance/unknown reconcile |
 | `kernel_diagnostics.py` | bounded read-only identity-chain diagnostics 和 low-cardinality metrics snapshot |
@@ -101,13 +102,37 @@ Gateway/OMS callbacks -> ORDER/TRADE/ACCOUNT/RECONCILE -> same RuntimeEventIngre
 
 ## 4. Durable Contracts / 持久化合同
 
+### 4.0 Canonical rules shared by every K2 carrier
+
+K2 不允许“字段大致相同”的 repository dict。下文所有 `V1/V2` carrier 都复用 K1 `FrozenStrictModel`、`IdentityV1`、`Sha256V1`、canonical JSON、strict integer/decimal/UTC datetime 规则：`extra=forbid`，bool 不得作为 integer，naive datetime、non-finite number、可变 nested JSON、空 identity 和大小写不规范 hash 全部 fail-loud。所有 `ordered_*` array 保留声明顺序并拒绝 duplicate；所有 `set_sha256/receipt_sha256` 的 payload 必须包含对应字段列表中除自身 hash 外的全部 preceding fields，writer 与 readback 调用同一个 pure constructor 重算，不接受 caller supplied hash。immutable receipt 同 identity/different payload terminal conflict；latest-view outbox/mapping/schedule 只允许合法 state transition将 `row_version/mapping_version` 增一，同 `(identity,version)` different payload仍terminal conflict，immutable business fields永不可变。
+
+下文 hash domain 固定，不得由实现自行改名：
+
+| carrier | hash domain |
+| --- | --- |
+| ingress receipt | `miniqmt_runtime_event_ingress_receipt_v1` |
+| transition identity / receipt | `miniqmt_algo_transition_identity_v1` / `miniqmt_algo_transition_receipt_v1` |
+| command/timer/diagnostic/lineage sets | `miniqmt_transition_command_set_v1` / `miniqmt_transition_timer_set_v1` / `miniqmt_transition_diagnostic_set_v1` / `miniqmt_consumed_lineage_set_v1` |
+| failure context / omitted set / receipt | `miniqmt_algo_failure_context_v1` / `miniqmt_algo_failure_omitted_set_v1` / `miniqmt_algo_failure_receipt_v1` |
+| skip receipt | `miniqmt_algo_skip_receipt_v1` |
+| command-child mapping payload / receipt | `miniqmt_command_child_mapping_payload_v1` / `miniqmt_command_child_mapping_receipt_v1` |
+| dispatch attempt / ACK / unknown / non-acceptance / reconciliation | `miniqmt_command_dispatch_attempt_v1` / `miniqmt_broker_command_ack_receipt_v1` / `miniqmt_broker_unknown_outcome_receipt_v1` / `miniqmt_broker_non_acceptance_receipt_v1` / `miniqmt_broker_outcome_reconciliation_receipt_v1` |
+| projection ref / projection set | `miniqmt_execution_projection_ref_v1` / `miniqmt_execution_projection_set_v1` |
+| worker incarnation / startup receipt | `miniqmt_kernel_worker_incarnation_v1` / `miniqmt_kernel_worker_startup_receipt_v1` |
+| exchange-session authority / session event | `miniqmt_exchange_session_authority_v1` / `miniqmt_session_event_identity_v1` |
+| typed kernel error evidence | `miniqmt_kernel_error_context_v1` / `miniqmt_kernel_error_evidence_v1` |
+
+同 domain/same identity/different canonical payload 必须在任何 state/effect/outbox write 前 terminal conflict；不得用 log、metadata 或 Python object equality 替代 durable readback。
+
+`KernelErrorEvidenceV1` 是 delivery/outbox/timer/repository 的唯一错误 carrier，exact fields：`schema_version=miniqmt_kernel_error_evidence_v1,stage,stable_reason_code,exception_type,message,retryable,terminal,broker_called,primary_context,bounded_secondary_errors,context_sha256,evidence_sha256`。primary context必须包含适用owner IDs；secondary最多16项，超限保留前15项和包含omitted count/set hash的末尾marker。context/evidence分别使用上表domain；renderer失败只增加secondary evidence，不覆盖primary，也不返回空error。K2 persistence中的 `last_error_json/structured error` 必须是该carrier的canonical payload。
+
 ### 4.1 `RuntimeEventIngressReceiptV1`
 
 字段固定为：
 
 ```text
 schema_version=miniqmt_runtime_event_ingress_receipt_v1
-runtime_id, event_id, event_key_sha256, runtime_sequence
+ingress_receipt_id, runtime_id, event_id, event_key_sha256, runtime_sequence
 routing_rule_version=miniqmt_event_routing_v1
 ordered_target_algo_instance_ids
 ordered_delivery_ids
@@ -116,7 +141,9 @@ transaction_commit_identity
 receipt_sha256
 ```
 
-`delivery_set_sha256 = hash_hex_v1("miniqmt_event_delivery_set_v1", {event_id,routing_rule_version,ordered_target_algo_instance_ids,ordered_delivery_ids})`。ordered targets 按 `algo_instance_id` 排序；同 event retry 必须 byte-identical。receipt 只有 event 和全部 deliveries commit 后才能返回；零 target 是合法 durable fact，但必须由 routing rule 证明并保留空 set hash，不能静默丢弃 event。
+`ingress_receipt_id = "mqingress_" + hash_hex_v1("miniqmt_runtime_event_ingress_identity_v1", {runtime_id,event_id,runtime_sequence,routing_rule_version})`；`delivery_set_sha256 = hash_hex_v1("miniqmt_event_delivery_set_v1", {event_id,routing_rule_version,ordered_target_algo_instance_ids,ordered_delivery_ids})`。ordered targets 按 `algo_instance_id` 排序；同 event retry 必须 byte-identical。receipt 只有 event 和全部 deliveries commit 后才能返回；零 target 是合法 durable fact，但必须由 routing rule 证明并保留空 set hash，不能静默丢弃 event。
+
+`receipt_sha256 = hash_hex_v1("miniqmt_runtime_event_ingress_receipt_v1", exact fields in the code block except receipt_sha256)`；`transaction_commit_identity` 必须等于本次 event+receipt+全部 delivery transaction 的 §4.10 identity。readback 必须同时证明 event key/payload/correlation、ordered targets、ordered deliveries、set hash 和 transaction output identities，不能只验证 receipt 自身 hash。
 
 ### 4.2 `ExecutionAlgoInstancePersistenceV2`
 
@@ -131,13 +158,17 @@ plugin_config_json, plugin_config_sha256, compatibility_receipt_sha256
 state_schema_version, state_json, state_sha256
 transition_sequence, last_applied_delivery_sequence, last_applied_delivery_id
 last_closed_delivery_sequence, terminal_delivery_sequence
-status, failure_receipt_id, row_version
+status, failure_receipt_id, active_child_closure_status, active_child_count, row_version
 created_at_utc, updated_at_utc, terminal_at_utc, archived_at_utc
 ```
 
 `algo_instance_id` 必须使用K1 `_algo_instance_id_v2` complete source identity closure。`traded_quantity + remaining_quantity = target_quantity`，三者均为strict integer且不允许bool；active child累计成交和remaining必须与K1 active-order state闭合。
 
-K2 status exact enum：`INITIALIZING/ACTIVE/PAUSED/COMPLETED/CANCELLED/REJECTED/FAILED_WITH_ACTIVE_CHILD/FAILED/EXPIRED_WITH_RESIDUAL`。`FAILED_WITH_ACTIVE_CHILD` 是必须继续接收owned ORDER/TRADE/RECONCILE的非clean failure；全部active child闭合后才能转FAILED。terminal status要求terminal delivery/terminal timestamp；`INITIALIZING`只允许ALGO_START事务内暂态，不能在commit后独立可见。初始化deterministic failure允许state fields为null，但必须有failure receipt；其它K2 committed row必须有完整strict state。
+algo status 严格复用父蓝图，不新增业务状态：`INITIALIZING/ACTIVE/PAUSED/COMPLETED/CANCELLED/FAILED/EXPIRED_WITH_RESIDUAL`。broker rejection 是 command/child outcome，不是新的 algo `REJECTED` 状态；deterministic plugin failure 始终写 `FAILED`。
+
+父蓝图的 failed-with-active-child 是诊断闭包而非业务状态：`active_child_closure_status=NOT_APPLICABLE|CLEAN|CANCEL_PENDING|OUTCOME_UNKNOWN`，`active_child_count` 为 non-negative strict integer。只有 `FAILED` 可为 `CANCEL_PENDING/OUTCOME_UNKNOWN`；其它 terminal status 必须 `CLEAN`，非 failure active status 必须 `NOT_APPLICABLE`。失败时 algo 可先进入 `FAILED + CANCEL_PENDING/OUTCOME_UNKNOWN` 并继续由 OMS/Gateway mapping 接收 callback/reconcile；全部 child terminal 后原子更新为 `FAILED + CLEAN`，不改变 terminal delivery identity。terminal status要求terminal delivery/terminal timestamp；`INITIALIZING`只允许ALGO_START事务内暂态，不能在commit后独立可见。初始化deterministic failure允许state fields为null，但必须有failure receipt；其它K2 committed row必须有完整strict state。
+
+`active_child_count` 必须等于同 runtime/algo 下§4.6 mapping处于 `RESERVED|DISPATCHING|BROKER_ACCEPTED|OUTCOME_UNKNOWN` 的行数；writer在映射状态事务内按相同owner lock重算，readback独立聚合验证。不得由metadata计数、递增/递减猜测或callback payload直接覆盖。
 
 ### 4.3 `AlgoDeliveryPersistenceV1`
 
@@ -153,29 +184,41 @@ K1 `AlgoEventDeliveryV1` 保持唯一 delivery business carrier。K2 repository-
 
 ### 4.4 Transition/failure/skip receipts
 
-`AlgoTransitionReceiptV1` exact fields：`transition_id,delivery_id,event_id,runtime_id,algo_instance_id,plugin identity,transition_sequence,before_state_sha256_or_INIT,after_state_sha256,ordered_command_ids,command_set_sha256,ordered_timer_mutation_ids,timer_set_sha256,ordered_diagnostic_observation_ids,diagnostic_set_sha256,consumed_lineage,read_only_projection_sha256,effect_set_sha256,terminal_outcome,logical_applied_at_utc,transaction_commit_identity,receipt_sha256`。
+`transition_id = "mqtransition_" + hash_hex_v1("miniqmt_algo_transition_identity_v1", {delivery_id,event_id,runtime_id,algo_instance_id,transition_sequence})`。
 
-`AlgoFailureReceiptV1` exact fields：上述 owner/transition identity、`stable_reason_code,exception_type,message,bounded_context,context_sha256,last_good_state_sha256_or_ABSENT_INITIAL_STATE,ordered_cancel_command_ids,active_child_ids,failure_receipt_sha256`。context 最多 32 个稳定排序 item；超限保留前 31 项和唯一 truncation marker，marker含 omitted count/set hash。
+`ConsumedLineageRefV1` exact fields：`schema_version=miniqmt_consumed_lineage_ref_v1,lineage_type(EVENT|MARKET_DATA|ORDER|TRADE|ACCOUNT|RECONCILIATION|OPERATOR),identity,payload_sha256,lineage_ref_sha256`；`lineage_ref_sha256 = hash_hex_v1("miniqmt_consumed_lineage_ref_v1", exact preceding fields except lineage_ref_sha256)`。tuple 按插件实际消费顺序保留，identity 唯一。
 
-`AlgoSkipReceiptV1`：`delivery_id,event_id,algo_instance_id,previous_delivery_id,terminal_failure_receipt_id,reason_code=MINIQMT_ALGO_ALREADY_TERMINAL,skip_receipt_sha256`。它不能生成 state、transition、timer 或 broker submit command。
+`ExecutionProjectionRefV1` exact fields：`schema_version=miniqmt_execution_projection_ref_v1,projection_type(CONTRACT|ACCOUNT|MARKET_CAPABILITY|OMS_PREFLIGHT|RISK_DECISION|ROUTE_COMPATIBILITY|KILL_SWITCH_STATE),projection_id,projection_version,payload_sha256,source_event_id|null,logical_at_utc,ref_sha256`。`ref_sha256` 使用 §4.0 domain；`ExecutionProjectionSetV1` exact fields 为 `schema_version=miniqmt_execution_projection_set_v1,runtime_id,algo_instance_id,event_id,delivery_id,ordered_projection_refs,projection_set_sha256`，refs 固定按 `(projection_type,projection_id)` 排序并拒绝相同 type 的重复 authority，set hash 使用 §4.0 domain。
+
+`OMSPreflightProjectionReceiptV1` 只冻结现有OMS检查结果，不添加规则。exact fields：`schema_version=miniqmt_oms_preflight_projection_receipt_v1,receipt_id,runtime_id,algo_instance_id,parent_intent_id,child_order_id,order_intent_id,strategy_slot_id,account_projection_sha256,cash_fact_sha256,lot_fact_sha256,open_order_fact_sha256,decision(PASS|REJECT),reason_code,logical_at_utc,receipt_sha256`；`receipt_id = "mqomspreflight_" + hash_hex_v1("miniqmt_oms_preflight_identity_v1", {runtime_id,algo_instance_id,parent_intent_id,child_order_id,account_projection_sha256,cash_fact_sha256,lot_fact_sha256,open_order_fact_sha256})`，receipt hash使用`miniqmt_oms_preflight_projection_receipt_v1`。REJECT不会产生SUBMIT command。
+
+`MiniQMTRiskDecisionReceiptV1` 是现有 `MiniQMTRiskDecision` 的durable carrier，exact fields：`schema_version=miniqmt_risk_decision_receipt_v1,decision_id,runtime_id,algo_instance_id,event_id,child_order_id|null,decision_stage(EVENT|PRE_SUBMIT),action(PASS|KILL_SWITCH),reason_code,reason,metadata,metadata_sha256,logical_at_utc,receipt_sha256`；`decision_id = "mqriskdecision_" + hash_hex_v1("miniqmt_risk_decision_identity_v1", {runtime_id,algo_instance_id,event_id,child_order_id,decision_stage})`，metadata与receipt分别使用`miniqmt_risk_decision_metadata_v1`/`miniqmt_risk_decision_receipt_v1`。K2只调用当前已配置risk engine一次并持久化真实结果；显式配置的现有 `NoopMiniQMTRiskEngine` 是有真实PASS receipt的兼容实现，不等于engine缺失。缺失engine、调用异常或malformed decision不得转换成PASS，dispatcher不得再次调用。`KILL_SWITCH_STATE` ref只能引用已APPLIED的KILL_SWITCH decision/event，不建立另一套开关或人工解除门禁。
+
+`AlgoTransitionReceiptV1` exact fields：`schema_version=miniqmt_algo_transition_receipt_v1,transition_id,delivery_id,event_id,runtime_id,algo_instance_id,plugin_id,plugin_version,plugin_manifest_sha256,transition_sequence,before_state_sha256_or_INIT,after_state_sha256,ordered_command_ids,command_set_sha256,ordered_timer_mutation_ids,timer_set_sha256,ordered_diagnostic_observation_ids,diagnostic_set_sha256,ordered_consumed_lineage_refs,consumed_lineage_set_sha256,execution_projection_set_sha256,effect_set_sha256,terminal_outcome|null,logical_applied_at_utc,transaction_commit_identity,receipt_sha256`。四个set hash分别为 `hash_hex_v1(§4.0对应domain,{transition_id,algo_instance_id,ordered_*})`；lineage payload使用ordered ref的完整canonical payload而非只取identity。`receipt_sha256` 使用 §4.0 domain 覆盖全部 preceding fields。`effect_set_sha256` 必须等于 K1 `AlgoTransitionV1` readback，不能由 receipt 重新解释 effects。
+
+`AlgoFailureReceiptV1` exact fields：`schema_version=miniqmt_algo_failure_receipt_v1,failure_receipt_id,delivery_id,event_id,runtime_id,algo_instance_id,plugin_id,plugin_version,plugin_manifest_sha256,transition_sequence,stable_reason_code,exception_type,message,bounded_context,context_sha256,last_good_state_sha256_or_ABSENT_INITIAL_STATE,ordered_cancel_command_ids,ordered_active_child_ids,active_child_closure_status,transaction_commit_identity,failure_receipt_sha256`。`failure_receipt_id = "mqalgofailure_" + hash_hex_v1("miniqmt_algo_failure_identity_v1", {delivery_id,event_id,algo_instance_id,transition_sequence,stable_reason_code})`。context canonical key path 排序，最多 32 项；超限保留前 31 项和唯一末尾 marker，marker含 omitted count 与 omitted canonical items 的 §4.0 omitted-set hash。`context_sha256` 与 `failure_receipt_sha256` 分别使用 §4.0 domain；renderer failure 作为 bounded secondary item，不能覆盖 primary error。
+
+`AlgoSkipReceiptV1` exact fields：`schema_version=miniqmt_algo_skip_receipt_v1,skip_receipt_id,delivery_id,event_id,runtime_id,algo_instance_id,previous_delivery_id,terminal_failure_receipt_id,reason_code=MINIQMT_ALGO_ALREADY_TERMINAL,logical_skipped_at_utc,transaction_commit_identity,skip_receipt_sha256`；`skip_receipt_id = "mqalgoskip_" + hash_hex_v1("miniqmt_algo_skip_identity_v1", {delivery_id,event_id,algo_instance_id,terminal_failure_receipt_id})`，receipt hash 使用 §4.0 domain。它不能生成 state、transition、timer 或 broker submit command。
 
 ### 4.5 `BrokerCommandOutboxV1`
 
 字段固定为：
 
 ```text
-schema_version, command_id, transition_id, ordinal
-runtime_id, algo_instance_id, parent_intent_id
+schema_version=miniqmt_broker_command_outbox_v1, command_id, transition_id, ordinal
+runtime_id, algo_instance_id, parent_intent_id, mapping_id
 command_type, local_vt_orderid, payload_json, payload_sha256
 status, attempt_count, lease_owner, lease_epoch, lease_fence_token, lease_expires_at
 dispatch_attempt_id, deterministic_client_order_ref, next_attempt_at_utc
 broker_called: false|true|null
-broker_order_id, ack_payload, ack_payload_sha256
+broker_order_id, ack_receipt_json, ack_receipt_sha256
 non_acceptance_receipt, unknown_outcome_receipt, reconcile_receipt
-last_error_json, row_version, created_at_utc, updated_at_utc, closed_at_utc
+last_error_json, row_version, created_at_utc, updated_at_utc, closed_at_utc, outbox_row_sha256
 ```
 
 状态：`PENDING/CLAIMED/DISPATCHING/ACKED/ACKED_REJECTED/FAILED_RETRYABLE/OUTCOME_UNKNOWN/RECONCILING/FAILED_TERMINAL`。`BrokerCommandV2` 是唯一 command identity/payload authority；outbox readback必须重建它并拒绝同 command id 不同业务字段。
+
+`deterministic_client_order_ref = "mqclientref_" + hash_hex_v1("miniqmt_command_client_ref_v1", {command_id,mapping_id})`，MiniQMT `order_remark` 使用同一完整值；同 account/trade date必须唯一。Gateway若未来声明不同长度/字符集能力，必须先扩展并锁定Gateway catalog及兼容receipt，K2不得静默截断。`outbox_row_sha256 = hash_hex_v1("miniqmt_broker_command_outbox_row_v1", exact current row fields except outbox_row_sha256)`；每次CAS更新后writer/readback重算。
 
 `broker_called` composite truth：
 
@@ -186,19 +229,60 @@ last_error_json, row_version, created_at_utc, updated_at_utc, closed_at_utc
 
 每次 claim/dispatch/reconcile 都写 append-only `BrokerDispatchAttemptV1`：attempt id、command/fence、阶段、started/finished、pre-call flag、outcome、error/receipt hash。current outbox row 是 latest view，attempt rows是不可变历史。
 
-`lease_fence_token = "mqfence_" + hash_hex_v1("miniqmt_kernel_lease_fence_v1", {owner_type,owner_id,lease_epoch,lease_owner})`；`lease_owner` 必须包含已由 service startup receipt持久化的 process incarnation id。`dispatch_attempt_id = "mqdispatch_" + hash_hex_v1("miniqmt_command_dispatch_attempt_v1", {command_id,attempt_count,lease_epoch,lease_fence_token})`。禁止随机UUID、进程内自增值或wall clock进入这两个identity。
+`BrokerDispatchAttemptV1` exact fields：`schema_version=miniqmt_broker_dispatch_attempt_v1,dispatch_attempt_id,command_id,attempt_count,lease_epoch,lease_fence_token,process_incarnation_id,stage(CLAIMED|PRE_CALL|DISPATCHING_COMMITTED|GATEWAY_RETURNED|CALLBACK_OBSERVED|COMPLETION_COMMITTED|RECONCILING|CLOSED),started_at_utc,finished_at_utc|null,pre_call_complete,broker_called,outcome|null,error_reason_code|null,error_context_sha256|null,authority_receipt_sha256|null,attempt_receipt_sha256`。attempt receipt 使用 §4.0 domain 覆盖全部 preceding fields；append-only row 只允许以同 attempt id/same payload readback，不做 in-place stage overwrite，每个 stage 是独立 row并以 `(dispatch_attempt_id,stage)` 唯一。
 
-`BrokerNonAcceptanceReceiptV1` exact fields：`command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
+`lease_fence_token = "mqfence_" + hash_hex_v1("miniqmt_kernel_lease_fence_v1", {owner_type,owner_id,lease_epoch,lease_owner})`；`lease_owner = worker_id + ":" + process_incarnation_id`，二者必须通过 §4.7 startup receipt strict-readback。`dispatch_attempt_id = "mqdispatch_" + hash_hex_v1("miniqmt_command_dispatch_attempt_v1", {command_id,attempt_count,lease_epoch,lease_fence_token})`。禁止随机UUID、PID、进程内自增值或wall clock进入这些identity。
 
-`BrokerOutcomeReconciliationReceiptV1` exact fields：`command_id,reconcile_attempt,query_criteria_sha256,callback_watermark,ordered_matched_order_ids,ordered_matched_trade_ids,order_snapshot_sha256,trade_snapshot_sha256,outcome(NOT_FOUND|UNIQUE_ACCEPTED|UNIQUE_REJECTED|CONFLICT),broker_called,broker_order_id,reason_code,observed_at_utc,receipt_sha256`。`NOT_FOUND`不得自动转`broker_called=false`；`CONFLICT`必须terminal且保留全部matched identities。
+`BrokerCommandAckReceiptV1` exact fields：`schema_version=miniqmt_broker_command_ack_receipt_v1,command_id,mapping_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,source(SYNCHRONOUS_RETURN|CALLBACK|RECONCILIATION),accepted,broker_called=true,broker_order_id|null,reason_code,ack_payload_sha256,observed_at_utc,receipt_sha256`。accepted=true必须有non-empty broker order id；accepted=false不得携带accepted broker id。receipt hash使用§4.0 domain，raw ACK仅以bounded canonical payload/hash保存，不把空payload当成功。
 
-### 4.6 Timer schedule and occurrence
+`BrokerUnknownOutcomeReceiptV1` exact fields：`schema_version=miniqmt_broker_unknown_outcome_receipt_v1,command_id,dispatch_attempt_id,mapping_id,lease_fence_token,uncertain_stage(GATEWAY_CALL|GATEWAY_RETURN|ACK_PERSIST|CALLBACK_CORRELATION),callback_watermark,reason_code,broker_called=null,observed_at_utc,receipt_sha256`；receipt hash使用§4.0 domain。该receipt只授权OUTCOME_UNKNOWN/reconcile，永不授权重复SUBMIT。
 
-`ExecutionAlgoTimerScheduleV1` 字段：`schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,due_at_exchange_utc,catch_up_policy,payload,payload_sha256,status(SCHEDULED|EMITTING|EMITTED|CANCELLED|EXPIRED),timer_occurrence_id,emitted_event_id,lease/fence,row_version,created/updated/closed`。
+`BrokerNonAcceptanceReceiptV1` exact fields：`schema_version=miniqmt_broker_non_acceptance_receipt_v1,command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`；receipt hash 使用 §4.0 domain。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
+
+`BrokerOutcomeReconciliationReceiptV1` exact fields：`schema_version=miniqmt_broker_outcome_reconciliation_receipt_v1,command_id,reconcile_attempt,query_criteria_sha256,callback_watermark,ordered_matched_order_ids,ordered_matched_trade_ids,order_snapshot_sha256,trade_snapshot_sha256,outcome(NOT_FOUND|UNIQUE_ACCEPTED|UNIQUE_REJECTED|CONFLICT),broker_called,broker_order_id|null,reason_code,observed_at_utc,receipt_sha256`；receipt hash 使用 §4.0 domain。matched IDs 按 broker authoritative identity 排序且分别唯一。`NOT_FOUND`不得自动转`broker_called=false`；`CONFLICT`必须terminal且保留全部matched identities。
+
+### 4.6 Command-to-child/broker mapping
+
+`ExecutionCommandChildMappingV1` 是 command、现有 OMS child projection 与 broker callback 的唯一 durable join，不允许只把 IDs 塞进 metadata。exact fields：
+
+```text
+schema_version=miniqmt_command_child_mapping_v1
+mapping_id, command_id, runtime_id, algo_instance_id, parent_intent_id, strategy_slot_id
+local_vt_orderid, child_order_id, deterministic_client_order_ref, order_remark
+symbol, side, requested_price_decimal, requested_quantity
+broker_order_id|null, broker_identity_source_event_id|null
+mapping_status=RESERVED|DISPATCHING|BROKER_ACCEPTED|BROKER_REJECTED|OUTCOME_UNKNOWN|TERMINAL
+mapping_version, payload_sha256, last_order_event_id|null, last_trade_event_id|null
+created_transition_id, updated_by_event_id|null, created_at_utc, updated_at_utc, mapping_receipt_sha256
+```
+
+`child_order_id = "mqchild_" + hash_hex_v1("miniqmt_kernel_child_order_identity_v1", {command_id,local_vt_orderid})`；`mapping_id = "mqcmdchild_" + hash_hex_v1("miniqmt_command_child_mapping_identity_v1", {command_id,local_vt_orderid,child_order_id})`。`payload_sha256` 使用 §4.0 mapping-payload domain，exact payload为 `{command_id,runtime_id,algo_instance_id,parent_intent_id,strategy_slot_id,local_vt_orderid,child_order_id,deterministic_client_order_ref,order_remark,symbol,side,requested_price_decimal,requested_quantity,created_transition_id}`；mapping receipt 使用 §4.0 receipt domain覆盖除自身外全部字段。
+
+SUBMIT command 必须在产生 outbox 的同一 transition transaction 中先写 `RESERVED` mapping 和现有 `execution_child_order` projection；该 child row 的 `child_order_id`、owner、symbol、side、quantity、price 与 mapping完全一致，并新增非空 `command_id/local_vt_orderid/deterministic_client_order_ref/order_remark/mapping_receipt_sha256`。dispatcher 只能消费已经 strict-readback 的 mapping；Gateway 调用前把 outbox 与 mapping 原子推进到 `DISPATCHING`。ACK/callback/reconcile 只能按 deterministic client ref、order remark、local id 或 exact broker id命中同一 mapping，并以 row-version CAS附加 broker identity；相同 identifier 命中多个 mapping、同 command 不同 child、同 broker id 不同 mapping全部 terminal conflict且不广播猜测。
+
+CANCEL command 不创建第二个 child；它必须引用目标 SUBMIT mapping 的 exact `local_vt_orderid + child_order_id + broker_order_id`。callback-before-ACK 先更新 mapping和append order/trade event，synchronous completion 只验证已有 authoritative fact。该链保证 event→delivery→transition→command→mapping→child→order/trade 可从数据库完整重建。
+
+### 4.7 Durable worker incarnation
+
+不存在预先假定的外部“service startup receipt”。K2 自己持久化 `execution_kernel_worker_epoch` 和 append-only `execution_kernel_worker_incarnation`。startup transaction 锁定 stable configured `worker_id + process_role` epoch row，将 durable `incarnation_sequence` 加一并插入：`schema_version=miniqmt_kernel_worker_startup_receipt_v1,worker_id,process_role,incarnation_sequence,source_revision,process_incarnation_id,started_at_utc,startup_transaction_commit_identity,receipt_sha256`。
+
+`process_incarnation_id = "mqinc_" + hash_hex_v1("miniqmt_kernel_worker_incarnation_v1", {worker_id,process_role,incarnation_sequence,source_revision})`；`source_revision` 是当前代码发布身份（Git merge/source SHA或等价immutable build identity）的non-empty `IdentityV1`，不伪装成SHA-256。startup receipt hash 使用 §4.0 domain。DB sequence 是唯一 restart discriminator；时间、PID、UUID和随机值不进入 identity。worker只有 startup receipt commit/readback 后才可 claim；graceful shutdown仅释放自身未进入外部调用的lease，startup row保持immutable；crash由下个incarnation按过期lease恢复，不重写旧receipt。
+
+### 4.8 Timer schedule and occurrence
+
+`ExecutionAlgoTimerScheduleV1` exact fields：`schema_version=miniqmt_execution_algo_timer_schedule_v1,schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,due_at_exchange_utc,catch_up_policy,payload,payload_sha256,status(SCHEDULED|EMITTING|EMITTED|CANCELLED|EXPIRED),timer_occurrence_id,emitted_event_id|null,lease_owner|null,lease_epoch,lease_fence_token|null,lease_expires_at_utc|null,row_version,created_at_utc,updated_at_utc,closed_at_utc|null,schedule_receipt_sha256`。schedule/occurrence identity严格复用K1 `TimerMutationV1`；schedule receipt 使用 `miniqmt_timer_schedule_receipt_v1` 覆盖全部 preceding fields。
+
+每次 emission 另写 append-only `ExecutionAlgoTimerOccurrenceV1`：`schema_version=miniqmt_execution_algo_timer_occurrence_v1,timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,exchange_session_authority_sha256,status(CLAIMED|EVENT_COMMITTED|SKIPPED|EXPIRED),emitted_event_id|null,catch_up_receipt_sha256|null,lease_owner|null,lease_epoch,lease_fence_token|null,lease_expires_at_utc|null,row_version,created_at_utc,closed_at_utc|null,occurrence_receipt_sha256`。occurrence receipt 使用 `miniqmt_timer_occurrence_receipt_v1`；不得用 schedule latest-view 替代 emission history。
 
 同 `(algo_instance_id,timer_name,schedule_epoch)` 唯一。one-shot UPSERT 同 identity/同 payload幂等；同 identity 不同 due/payload terminal conflict。schedule 只有 TIMER ingress receipt commit 后才可 `EMITTED`。`monotonic_ns` 只用于同一 process 的观测，不进入 durable occurrence identity或交易时长。
 
-### 4.7 Transaction commit identity
+### 4.9 Exchange-session authority
+
+K2 不自行读取“今天是否交易”的松散布尔值。K2-C先把现有 `CalendarSnapshot/CalendarSnapshotSet/SessionSegment` 原实现无语义变化地提取到shared `calendar_contracts.py`，Adaptive IS旧路径仅显式re-export同一class，禁止复制第二套calendar DTO/hash。每个 runtime/trade date 首次创建时必须 strict-readback现有 B0 preload 产生的 `CalendarSnapshotSet`（SH/SZ/BJ exact set、`snapshot_set_id/set_sha256`、Asia/Shanghai、session segments、source version），并在同一事务持久化完整canonical set JSON；restart只读该durable authority，不重新用新observed time生成“同日新日历”。`ExchangeSessionAuthorityV1` exact fields：`schema_version=miniqmt_exchange_session_authority_v1,runtime_id,exchange_trade_date,calendar_snapshot_set_id,calendar_snapshot_set_json,calendar_snapshot_set_sha256,ordered_market_calendar_sha256s,timezone=Asia/Shanghai,session_definition_version,ordered_session_segments,source_effective_at_utc,authority_sha256`。`session_definition_version = "mqsessiondef_" + hash_hex_v1("miniqmt_exchange_session_definition_v1", {timezone,ordered_session_segments})`，authority hash 使用 §4.0 domain；同 trade date不同 calendar/session payload terminal drift，不选择 latest/previous fallback。
+
+`session_epoch = "mqsessionepoch_" + hash_hex_v1("miniqmt_session_epoch_v1", {runtime_id,exchange_trade_date,exchange_session_authority_sha256})`；`session_event_id = "mqsessionevt_" + hash_hex_v1("miniqmt_session_event_identity_v1", {runtime_id,session_epoch,session_phase,phase_boundary_at_utc})`。EOD source identity 使用同 `session_epoch`；TIMER occurrence继续使用K1 schedule/due identity并在 occurrence row引用 authority hash。exchange-active seconds只在 authority中 `CONTINUOUS_AM/CONTINUOUS_PM` segments内累计，午休/auction/closed为零；所有 phase boundary由 segments转换为UTC后得到，不由 tick数量、process wake time或本机日期猜测。
+
+### 4.10 Transaction commit identity
 
 PostgreSQL writer 在事务内使用 repo-owned `transaction_commit_identity = "mqtx_" + hash_hex_v1("miniqmt_kernel_transaction_v1", {operation,owner identities,input hashes,ordered output identities})`。它不是 PostgreSQL xid 的替代，也不假装证明物理 commit；commit-return unknown时 consumer用该 identity及全部业务 identity独立 readback，只有完整 closure一致才 ACK，否则保持未确认并重试 readback。
 
@@ -211,8 +295,8 @@ PostgreSQL writer 在事务内使用 repo-owned `transaction_commit_identity = "
 | `ALGO_START` | source identity 中唯一 `algo_instance_id`；必须是 sequence 1 delivery |
 | `TICK` | 同 runtime、symbol、`ACTIVE` 且 manifest订阅 TICK 的 algo；market_data_id lineage exact；market wait仍是ACTIVE state/diagnostic，不伪装PAUSED |
 | `TIMER` | schedule/occurrence owner的唯一 `ACTIVE` algo；PAUSED schedule不广播，按operator/state transition保留或显式取消 |
-| `ORDER/TRADE` | durable command→local child→broker identity mapping；即使algo为PAUSED或FAILED_WITH_ACTIVE_CHILD也必须投递owned callback；identity conflict不广播猜测 |
-| `ACCOUNT` | 同 runtime订阅 ACCOUNT 的ACTIVE/PAUSED/FAILED_WITH_ACTIVE_CHILD owner，ordered fan-out |
+| `ORDER/TRADE` | §4.6 durable command→local child→broker mapping；ACTIVE/PAUSED owner正常投递；FAILED algo的callback由OMS/mapping闭合 active child diagnostics，不重新调用已terminal plugin；identity conflict不广播猜测 |
+| `ACCOUNT` | 同 runtime订阅 ACCOUNT 的ACTIVE/PAUSED owner，ordered fan-out；FAILED algo只由OMS/mapping更新active-child closure，不产生新plugin transition |
 | `SESSION` | 同 runtime订阅 SESSION 的ACTIVE/PAUSED非终态 algo，ordered fan-out |
 | `RECONCILE` | receipt correlation 中已有 command/child/algo owners；不得创建新 owner |
 | `EOD` | 同 runtime全部非终态 algo；已终态 algo不生成 delivery |
@@ -230,7 +314,7 @@ deterministic config/plugin/state failure在同事务写 initialization-failed a
 
 ### 6.2 External ingress
 
-一个事务内：`SELECT execution_runtime FOR UPDATE` → event key/hash dedupe → 分配 runtime sequence → 写 envelope → 计算 ordered targets → 按 algo id排序锁 row → 为每个 target 分配 next delivery sequence/predecessor → 写 deliveries → 写 ingress receipt/hash → 更新 runtime sequence → commit。
+一个事务内：`SELECT execution_runtime FOR UPDATE` → event key/hash dedupe → 分配 runtime sequence → 写 envelope → 对ORDER/TRADE/RECONCILE先strict-readback §4.6 mapping并原子更新mapping、existing child projection与FAILED algo active-child closure → 计算仍需plugin消费的ordered targets → 按 algo id排序锁 row → 为每个 target 分配 next delivery sequence/predecessor → 写 deliveries → 写 ingress receipt/hash → 更新 runtime sequence → commit。FAILED algo callback允许零plugin target，但mapping/OMS closure必须和event在同一事务提交；不能先ACK callback再异步猜测归属。
 
 同 event key同 payload/correlation返回原 receipt；同 key不同 payload/source/correlation typed conflict。event存在但 delivery set缺失、重复或 hash不闭合视为 durable corruption，不自动补行。
 
@@ -238,13 +322,13 @@ deterministic config/plugin/state failure在同事务写 initialization-failed a
 
 worker 只 claim 每个 algo 的最小非终态 delivery，并要求 predecessor terminal closure。事务内锁 algo row，重建 event/delivery/manifest/current state，构造 deterministic context，调用 pure transition，校验 quantity/active-child/market-data/effect closure，原子写 transition、latest state、timer、diagnostics、outbox并标 APPLIED。
 
-插件 deterministic failure按 §4.3 写 failure receipt、保留 last-good state、取消未触发 timer，并为 active owned child按 child id排序生成 kernel-owned CANCEL outbox；algo 状态为 FAILED_WITH_ACTIVE_CHILD，直到 OMS/Gateway callback/reconcile闭合，不伪报 clean terminal。
+插件 deterministic failure按 §4.4 写 failure receipt、保留 last-good state、取消未触发 timer，并为 active owned child按 child id排序生成 kernel-owned CANCEL outbox；algo 状态固定为父蓝图 `FAILED`，同时按真实 child facts写 `active_child_closure_status=CANCEL_PENDING|OUTCOME_UNKNOWN`。OMS/Gateway callback/reconcile闭合后只把 closure更新为CLEAN，不创建第二个plugin transition、不改写terminal delivery，也不伪报clean terminal。
 
 repository/serialization/deadlock/lease/provider暂时故障允许 bounded retry，且本次 state/transition/timer/outbox零提交。DB不可用导致 failure receipt也无法写时 consumer不 ACK、health FAILED；恢复后以同 delivery identity重试。
 
 ### 6.4 Command dispatch three-phase protocol
 
-1. **Claim transaction**：claim PENDING/eligible retry，写 CLAIMED + fence；strict-readback `BrokerCommandV2`、owner、transition内已冻结的OMS/risk/route projection receipt。dispatcher不得重新计算策略包、signal、quantity或新增第二次business risk admission；现有durable kill-switch/operator变化必须先作为event delivery产生明确command cancellation/terminal transition。明确技术pre-call failure可写 `broker_called=false`。
+1. **Claim transaction**：claim PENDING/eligible retry，写 CLAIMED + fence；strict-readback `BrokerCommandV2`、§4.6 mapping、transition绑定的 `ExecutionProjectionSetV1` 和其中 exact OMS preflight、现有 `MiniQMTRiskDecision` canonical receipt、K1 `PluginRouteCompatibilityReceiptV1` refs。`RISK_DECISION` 只是把当前 `MiniQMTRiskDecision(action,reason_code,reason,canonical metadata)` 以 `miniqmt_risk_decision_receipt_v1` 冻结，action只允许 `PASS|KILL_SWITCH`；它记录现有一次 pre-submit业务决定，不新增第二套规则。dispatcher只验证 transition已消费的 frozen PASS receipt与 command/mapping identity一致，不重新运行 risk engine，不重新计算策略包、signal、quantity，也不新增第二次business risk admission。durable kill-switch/operator变化必须先作为event delivery产生明确command cancellation/terminal transition；明确技术pre-call failure才可写 `broker_called=false`。
 2. **Dispatching transaction**：调用 Gateway 前先提交 DISPATCHING、dispatch attempt id、deterministic client ref、`broker_called=null`。
 3. **External call + completion transaction**：事务外调用 Gateway；返回/exception/callback后在新事务按 fence和identity写 ACK/REJECTED或 OUTCOME_UNKNOWN。
 
@@ -282,7 +366,7 @@ OUTCOME_UNKNOWN reconcile最多 10 次，间隔 `0,1,2,5,10,20,30,30,30,30` 秒�
 
 ## 8. ExchangeSessionClock / 交易时钟
 
-Clock只读取 frozen A-share trade calendar、Asia/Shanghai session definition和durable schedules。它产生 `SESSION_OPEN/LUNCH_START/LUNCH_END/CLOSE/EOD` 与 TIMER occurrence，并全部通过同一 ingress writer。
+Clock只读取 §4.9 strict `ExchangeSessionAuthorityV1` 和durable schedules。它产生 `SESSION_OPEN/LUNCH_START/LUNCH_END/CLOSE/EOD` 与 TIMER occurrence，并全部通过同一 ingress writer；calendar/session authority缺失或hash漂移时停止该 exact runtime/date 的 clock emission并写typed health failure，不读取本机日期、latest calendar或默认交易日继续。
 
 - `OPEN_AUCTION/CONTINUOUS_AM/LUNCH_BREAK/CONTINUOUS_PM/CLOSE_AUCTION/CLOSED` phase exact；
 - 午休不累计 exchange-active seconds，不发交易 TIMER；跨午休 due平移到下午；
@@ -300,23 +384,27 @@ preflight只读并 fail-loud检查：目标 schema/table/column type和现有 co
 
 ### 9.2 Additive DDL
 
+SQL type policy固定：identity/status/reason/version/hash使用 `TEXT`（hash另有 `^[0-9a-f]{64}$` CHECK）；strict counters/sequence/row version使用 `BIGINT` 并CHECK范围；business quantity使用 `INTEGER` 且禁止负数；canonical price使用 `NUMERIC(20,6)`；durable payload/receipt使用 `JSONB NOT NULL` 且由同 row 的 schema/hash presence CHECK闭合；logical/observed/lease timestamps使用 `TIMESTAMPTZ`。每个新表必须有明确命名的 PK/UNIQUE/CHECK/FK 和 `COMMENT ON TABLE/COLUMN`；实现不得把本节缩成无约束 JSONB blob。
+
 1. `execution_runtime_event` 增加 K1 V2 envelope、routing receipt、hash、soft archive字段，并新增 `(runtime_id,event_key_sha256)` unique；
 2. `execution_runtime_event` 同时增加 `event_contract_version=LEGACY_V1|KERNEL_V2`；legacy rows保留原event/source语义，K2 rows必须满足K1 `_EVENT_COMPOSITE`对应的event/source/payload-schema exact组合；
 3. `execution_algo_instance` 增加 `kernel_contract_version,plugin/config/compatibility,state/sequence/failure,row_version` fields；legacy rows标识 `LEGACY_V1`，K2 writer和K2 worker查询只创建/消费 `KERNEL_V2`；该 discriminator用于迁移事实，不是业务 fallback或route selector；
 4. 新建 `execution_algo_event_delivery`；
-5. 新建 `execution_algo_transition`，保存 success/failure/skip receipt与 after-state JSON/hash；
+5. 新建 `execution_algo_transition`，保存 §4.4 exact success/failure/skip receipt、`execution_projection_set_json/sha256` 与 after-state JSON/hash；projection set row必须以 `(runtime_id,algo_instance_id,event_id,delivery_id,projection_set_sha256)` composite owner closure验证，不允许只存孤立hash；
 6. 新建 `execution_algo_command_outbox` 和 append-only `execution_algo_command_dispatch_attempt`；
-7. 新建 `execution_algo_timer_schedule`；
-8. 新建 `execution_algo_diagnostic_observation`；
-9. 为 runtime/algo/event/delivery/transition/command建立 composite owner FK；
-10. delivery增加 derived `previous_delivery_sequence`：sequence 1要求 predecessor fields全空；sequence>1要求 previous sequence=sequence-1，并以 `(algo_instance_id,previous_delivery_sequence,previous_delivery_id)` self FK指向前一 delivery；
-11. event type/source/schema、delivery/outbox/timer status、nullable broker_called、receipt presence使用 explicit/composite CHECK；
-12. CHECK/FK可先 `NOT VALID` 添加再 `VALIDATE`；新表UNIQUE在建表时创建，现有event表的V2 key使用partial unique index `WHERE event_key_sha256 IS NOT NULL`，受控migration以`CREATE UNIQUE INDEX CONCURRENTLY`建立并独立readback。禁止对UNIQUE使用PostgreSQL不支持的`NOT VALID`；
-13. second apply必须无 catalog drift。
+7. `execution_child_order` additive增加 `mapping_id,command_id,local_vt_orderid,deterministic_client_order_ref,order_remark,mapping_status,mapping_version,mapping_payload_sha256,mapping_receipt_sha256,last_order_event_id,last_trade_event_id`；LEGACY rows允许全空，KERNEL_V2 rows要求全部immutable mapping字段非空并以 `(runtime_id,algo_instance_id,parent_intent_id,command_id,local_vt_orderid,child_order_id)` composite unique/FK闭合；`broker_order_id` partial unique继续保留且 callback update必须匹配mapping CAS；
+8. 新建 `execution_algo_timer_schedule` 和 append-only `execution_algo_timer_occurrence`，后者以 `(timer_occurrence_id,schedule_id,runtime_id,algo_instance_id)` composite FK归属schedule；
+9. 新建 `execution_kernel_worker_epoch` 与 append-only `execution_kernel_worker_incarnation`；epoch PK=`(worker_id,process_role)`，incarnation UNIQUE=`(worker_id,process_role,incarnation_sequence)`和`process_incarnation_id`；delivery/outbox/timer lease owner FK引用incarnation，避免不存在的外部startup authority；
+10. 新建 `execution_algo_diagnostic_observation`；
+11. 为 runtime/algo/event/delivery/transition/command/mapping/timer/incarnation建立 composite owner FK；
+12. delivery增加 derived `previous_delivery_sequence`：sequence 1要求 predecessor fields全空；sequence>1要求 previous sequence=sequence-1，并以 `(algo_instance_id,previous_delivery_sequence,previous_delivery_id)` self FK指向前一 delivery；
+13. event type/source/schema、algo status/active-child closure、delivery/outbox/mapping/timer/occurrence/incarnation status、nullable broker_called、receipt presence使用 explicit/composite CHECK；不得把父蓝图没有的 `REJECTED/FAILED_WITH_ACTIVE_CHILD` 加入 algo CHECK；
+14. CHECK/FK可先 `NOT VALID` 添加再 `VALIDATE`；新表UNIQUE在建表时创建，现有event/child表的K2 key使用带 `kernel_contract_version='KERNEL_V2'` predicate 的partial unique index，受控migration以`CREATE UNIQUE INDEX CONCURRENTLY`建立并独立readback。禁止对UNIQUE使用PostgreSQL不支持的`NOT VALID`；
+15. second apply必须无 catalog drift。
 
 forward migration明确分为：transactional additive columns/new tables → commit → nontransactional `CREATE UNIQUE INDEX CONCURRENTLY` → transactional CHECK/FK validate/comments → independent readback。任何阶段失败均记录精确stage；不得把已创建index视为整项migration成功，也不得在事务块内执行CONCURRENTLY。
 
-event composite CHECK固定为两支且不互相fallback：`LEGACY_V1` 必须保持现有legacy event/source allowlist并要求V2-only routing/receipt fields为空；`KERNEL_V2` 必须要求V2 fields全部存在，并按K1 `_EVENT_COMPOSITE`验证event type、source和payload schema。任何半套row均由数据库拒绝。
+event、algo和child composite CHECK都固定为 `LEGACY_V1/KERNEL_V2` 两支且不互相fallback：legacy row保持原字段语义并要求K2-only fields全空；K2 row要求对应§4 fields全部存在并通过exact status/source/schema/receipt presence组合。任何半套row均由数据库拒绝。
 
 ### 9.3 Legacy inventory/backfill
 
@@ -357,20 +445,21 @@ metric labels只允许 backend、plugin_id、event_type、command_type、status�
 - writer/readback exact schema/hash、malformed/null/empty/object/list/number/bool、nonfinite/naive time；
 - event key same/different payload、zero/one/many target routing、ordered set hash；
 - ALGO_START sequence 1、predecessor/self-FK、duplicate delivery、same identity/different payload；
-- initialization/APPLIED/failure/skip transaction atomicity；
-- state/effect/quantity/active-child/market lineage closure；
-- outbox nullable broker_called matrix、callback-before-ACK、same command/different payload；
-- stale lease/fence/CAS、five-worker same-algo single claim和different-algo parallel；
-- timer午休/下午/restart/回拨/catch-up/EOD residual；
+- initialization/APPLIED/failure/skip transaction atomicity；receipt domain/payload、bounded failure marker和writer/readback parity；
+- 父蓝图algo enum exact；`REJECTED/FAILED_WITH_ACTIVE_CHILD`数据库负例；FAILED active-child closure从CANCEL_PENDING/OUTCOME_UNKNOWN到CLEAN且terminal delivery不变；
+- state/effect/quantity/active-child/market lineage closure；projection set exact refs、existing risk PASS/KILL_SWITCH capture和dispatcher不得二次evaluate；
+- outbox nullable broker_called matrix、callback-before-ACK、same command/different payload；command/local/child/order-remark/broker/trade全链与冲突矩阵；
+- worker epoch/incarnation restart、stale lease/fence/CAS、five-worker same-algo single claim和different-algo parallel；
+- exact CalendarSnapshotSet readback、calendar/session drift、session epoch/event ID、timer午休/下午/restart/回拨/catch-up/EOD residual；
 - bounded retry、failure truncation、diagnostics pagination/cardinality。
 
 ### 11.2 Crash-point matrix
 
-至少注入：event写前、event与delivery之间、delivery claim后、plugin return后、transition commit前后、outbox claim后、DISPATCHING commit后/broker call前、broker return后/ACK commit前、callback先于ACK、timer ingress commit后/schedule emitted前。每个点证明零partial economic facts、identity-stable restart、无重复broker command。
+至少注入：worker incarnation sequence提交前后、event写前、event与delivery之间、delivery claim后、plugin return后、transition/mapping/child/outbox commit前后、outbox claim后、DISPATCHING commit后/broker call前、broker return后/ACK commit前、callback先于ACK、timer occurrence ingress commit后/schedule emitted前。每个点证明不存在任何部分提交的经济事实、identity-stable restart、command-child mapping完整、无重复broker command。
 
 ### 11.3 Migration/DEV tests
 
-在现有DEV PostgreSQL先readback，再在transactional disposable fixture执行preflight/forward/second apply/constraint negative/rollback；独立连接production-style readback。不得执行生产DDL，不要求数据库导出。数据库必须直接拒绝非法 CHECK/unique/composite FK，不接受仅Python测试。
+在现有DEV PostgreSQL先readback，再在transactional disposable fixture执行preflight/forward/second apply/constraint negative/rollback；独立连接production-style readback。不得执行生产DDL，不要求数据库导出。数据库必须直接拒绝非法 CHECK/unique/composite FK，包括parent enum drift、半套K2 child mapping、重复broker mapping、孤立projection set、未知worker incarnation lease和重复timer occurrence；不接受仅Python测试。
 
 ### 11.4 Routing and required plans
 
@@ -388,19 +477,19 @@ dispatcher直接测试必须调用production dispatcher public seam和instrument
 
 ## 12. Implementation Plan and Slices / 实施计划与开发切片
 
-### K2-A — schema and repository（4–6 人日）
+### K2-A — schema and repository（6–8 人日）
 
-preflight/forward/rollback、strict persistence carriers、PostgreSQL transactions、constraint/readback、legacy inventory。无 worker、无 Gateway call。
+preflight/forward/rollback、全部§4 strict persistence carriers、worker epoch/incarnation、projection set、command-child mapping、PostgreSQL transactions、constraint/readback、legacy inventory。只实现repository/startup receipt public seam；不启动worker、不调用Gateway。
 
-### K2-B — ingress, creation and delivery（4–6 人日）
+### K2-B — ingress, creation and delivery（5–7 人日）
 
 ALGO_START、routing、delivery claim/predecessor、pure initialize/transition、state/failure/skip、diagnostics；保持 shadow-only。
 
-### K2-C — ExchangeSessionClock and timer（3–4 人日）
+### K2-C — ExchangeSessionClock and timer（4–5 人日）
 
 session events、durable schedule/occurrence、午休/catch-up/EOD/restart；不迁移TWAP产品route。
 
-### K2-D — outbox, reconcile and observability（5–8 人日）
+### K2-D — outbox, reconcile and observability（6–9 人日）
 
 dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS/Gateway reconcile、metrics/alerts/platform diagnostics/runbook。生产adapter存在但不由产品runtime实例化。
 
@@ -462,12 +551,12 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-061` | §1–§3；`runtime.py`、`client.py`、`repository.py`、现有migration定向事实 | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；实施前以exact symbols和schema readback确认 | design_ready | none |
-| `F-062` | §4、§9；K1 DTO为唯一business authority，K2 persistence carrier不复制identity | target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py` | design_ready | none |
+| `F-062` | §4.0–§4.10、§9；exact receipt domains/payloads、parent status、projection set、mapping、worker incarnation、calendar authority；K1 DTO仍为唯一business authority | target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py` | design_ready | none |
 | `F-063` | §4.1、§5、§6.1–6.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py` zero/one/many target、dedupe/conflict、commit-unknown readback | design_ready | none |
 | `F-064` | §4.2–4.4、§6.3、§7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` same-algo ordering、多worker、stale fence、atomic effect | design_ready | none |
-| `F-065` | §4.4、§6.3、§7.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` plugin/DB/retry exhaustion/active child/skip | design_ready | none |
-| `F-066` | §4.5、§6.4–6.5、§7.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py` DISPATCHING crash、callback-before-ACK、unknown/nonacceptance | design_ready | none |
-| `F-067` | §4.6、§8 | target `backend/tests/miniqmt_execution_runtime/test_exchange_session_clock.py` session/午休/restart/catch-up/EOD | design_ready | none |
+| `F-065` | §4.2–§4.4、§6.3、§7.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` parent enum、plugin/DB/retry exhaustion/active-child diagnostic closure/skip | design_ready | none |
+| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py` mapping全链、incarnation/fence、DISPATCHING crash、callback-before-ACK、unknown/nonacceptance | design_ready | none |
+| `F-067` | §4.8–§4.9、§8 | target `backend/tests/miniqmt_execution_runtime/test_exchange_session_clock.py` exact calendar/session identity、午休/restart/catch-up/EOD | design_ready | none |
 | `F-068` | §9 | target `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` preflight/second apply/rollback/independent readback | design_ready | none |
 | `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
 | `F-070` | §11–§13 | command `python -m nox -s miniqmt_execution_runtime_l2`；command `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md --tier F2` | design_ready | none |
@@ -478,10 +567,10 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | --- | --- | --- |
 | no simplified/subset/POC | pass | 设计覆盖production repository、DDL、ingress、delivery、timer、outbox、reconcile和observability；每个slice单独交付但不冒充K2 complete |
 | no silent error/fake success | pass | DB/commit/broker unknown均有typed durable state；无空transition、默认ACK、`broker_called`强转、event/delivery丢弃 |
-| no business semantic drift | pass | 不改signal/selection/package admission/asset/side/quantity/policy/B0/OMS/Gateway authority；K3前产品route不切换 |
+| no business semantic drift | pass | algo status严格复用父蓝图；broker reject与active-child dirty closure不升级成新业务状态；不改signal/selection/package admission/asset/side/quantity/policy/B0/OMS/Gateway authority；K3前产品route不切换 |
 | no unauthorized gate/approval | pass | 无RBAC、审批、manual acknowledge/repair/enable flag；自动retry/reconcile是执行语义，不是人工门禁 |
 | no fallback/parallel route | pass | K2 shadow-only且不提供业务route选择；无legacy/minute/default-algo fallback，无第二OMS/Gateway/EventEngine |
-| no nondeterministic hidden state | pass | event/delivery/transition/command/timer identities与retry schedule来自durable fields；process cache、wall clock、global random不构成authority |
+| no nondeterministic hidden state | pass | event/delivery/transition/command/mapping/timer/session identities与retry schedule来自durable fields；worker incarnation来自DB epoch；process cache、PID、UUID、wall clock、global random不构成authority |
 | production state separated | pass | design/source/DDL/dependency/config/binding/restart/runtime activation分别记录；本设计全部production gates为noop |
 
 ## 17. Definition of Done / K2 完成定义
