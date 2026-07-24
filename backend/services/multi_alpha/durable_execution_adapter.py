@@ -14,6 +14,7 @@ import pandas as pd
 from backend.services.model_store import ModelStoreService
 from backend.services.multi_alpha.combine_backtest import (
     REQUEST_SNAPSHOT_KEY,
+    RUNTIME_EXTERNAL_DATA_LINK_NAMES,
     CombineBacktestRequest,
     MultiAlphaCombineBacktestError,
     apply_pred_backtest_overrides,
@@ -21,6 +22,7 @@ from backend.services.multi_alpha.combine_backtest import (
     combine_legs,
     is_rank_fusion_scheme,
     ingest_enhanced_metrics,
+    is_runtime_external_data_link,
     json_mapping,
     maybe_upload_combined_prediction,
     parse_request,
@@ -69,6 +71,43 @@ from backend.services.quantevolver.qe_execution_reservation import (
 
 ARTIFACT_MANIFEST_SCHEMA = "multi_alpha_child_artifact_manifest_v1"
 RESULT_MANIFEST_SCHEMA = "multi_alpha_child_result_manifest_v1"
+
+
+def _runtime_external_data_bindings(backtest_config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Describe QE data links excluded from the portable child artifact set.
+
+    Completed Windows/DrvFS QE workspaces expose the canonical H5 bundle as
+    Linux links.  Durable remote execution binds the selected node's own QE
+    dataset and must not dereference or upload those workstation-local links.
+    Listing directory entry names is safe on Windows even when stat/open is
+    not, so the exclusion remains explicit in both materialization metadata
+    and the immutable artifact manifest.
+    """
+
+    raw_root = str(backtest_config.get("runtime_template_dir") or "").strip()
+    if not raw_root:
+        return []
+    root = Path(raw_root)
+    try:
+        present_names = {
+            entry.name
+            for entry in root.iterdir()
+            if is_runtime_external_data_link(entry)
+        }
+    except OSError as exc:
+        raise DurableExecutionAdapterError(
+            "durable runtime template entries cannot be enumerated",
+            reason_code="multi_alpha_runtime_template_scan_failed",
+            context={"path": str(root), "error_type": type(exc).__name__, "message": str(exc)},
+        ) from exc
+    return [
+        {
+            "name": name,
+            "binding": "node_canonical_qe_data",
+            "published": False,
+        }
+        for name in sorted(RUNTIME_EXTERNAL_DATA_LINK_NAMES & present_names)
+    ]
 
 
 class DurableExecutionAdapterError(RuntimeError):
@@ -447,9 +486,14 @@ class QEWorkspacePredBacktestAdapter:
             prediction_path = staging / "combined_prediction.pkl"
             write_qlib_prediction(materialization.prediction_frame, prediction_path)
             backtest_config = runtime_backtest_config(materialization.request)
+            external_data_bindings = _runtime_external_data_bindings(backtest_config)
+            durable_backtest_config = {
+                **backtest_config,
+                "_exclude_runtime_external_data_links": True,
+            }
             prepare_pred_backtest_workspace(
                 workspace=staging,
-                backtest_config=backtest_config,
+                backtest_config=durable_backtest_config,
             )
             apply_pred_backtest_overrides(
                 workspace=staging,
@@ -467,6 +511,7 @@ class QEWorkspacePredBacktestAdapter:
                 "weights": dict(materialization.weights),
                 "per_window_weights": [dict(item) for item in materialization.per_window_weights],
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
+                "external_runtime_data_bindings": external_data_bindings,
             }
             self._atomic_write_json(staging / "materialization.json", materialization_payload)
             files = self._publish_staging_tree(staging=staging, workspace=workspace)
@@ -478,6 +523,7 @@ class QEWorkspacePredBacktestAdapter:
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
                 "prediction_file": "combined_prediction.pkl",
                 "files": files,
+                "external_runtime_data_bindings": external_data_bindings,
                 "execution_identity": input_manifest.get("execution_identity"),
                 "execution_identity_hash": input_manifest.get("execution_identity_hash"),
                 "execution_identity_evidence": input_manifest.get("execution_identity_evidence"),
@@ -1712,6 +1758,34 @@ class QEWorkspacePredBacktestAdapter:
                     reason_code="multi_alpha_artifact_hash_mismatch",
                     context={"path": str(path)},
                 )
+        external_bindings = manifest.get("external_runtime_data_bindings", [])
+        if not isinstance(external_bindings, list):
+            raise DurableExecutionAdapterError(
+                "durable artifact external runtime data bindings are invalid",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        observed_binding_names: set[str] = set()
+        for binding in external_bindings:
+            if not isinstance(binding, Mapping):
+                raise DurableExecutionAdapterError(
+                    "durable artifact external runtime data binding is not an object",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
+            name = str(binding.get("name") or "")
+            if (
+                name not in RUNTIME_EXTERNAL_DATA_LINK_NAMES
+                or Path(name).name != name
+                or binding.get("binding") != "node_canonical_qe_data"
+                or binding.get("published") is not False
+                or name in observed_binding_names
+                or name in files
+            ):
+                raise DurableExecutionAdapterError(
+                    "durable artifact external runtime data binding is inconsistent",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"binding": dict(binding)},
+                )
+            observed_binding_names.add(name)
 
     @staticmethod
     def _sha256_file(path: Path) -> tuple[str, int]:
