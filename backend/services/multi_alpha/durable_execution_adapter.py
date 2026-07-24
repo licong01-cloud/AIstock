@@ -678,6 +678,41 @@ class QEWorkspacePredBacktestAdapter:
                     )
                 self._atomic_copy_file(source_path, staging / relative)
             files = self._publish_staging_tree(staging=staging, workspace=workspace)
+            source_l2_artifact = source.artifact_manifest.get("l2_artifact")
+            if not isinstance(source_l2_artifact, Mapping):
+                raise DurableExecutionAdapterError(
+                    "source artifact manifest has no L2 artifact binding",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"source_attempt_id": source_attempt_id},
+                )
+            l2_relative_name = str(source_l2_artifact.get("path") or "")
+            copied_l2_metadata = files.get(l2_relative_name)
+            if not isinstance(copied_l2_metadata, Mapping):
+                raise DurableExecutionAdapterError(
+                    "copied recovery artifacts have no bound L2 file",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={
+                        "source_attempt_id": source_attempt_id,
+                        "l2_artifact_path": l2_relative_name,
+                    },
+                )
+            raw_external_bindings = source.artifact_manifest.get(
+                "external_runtime_data_bindings"
+            )
+            if raw_external_bindings is None:
+                external_runtime_data_bindings: list[dict[str, Any]] = []
+            elif isinstance(raw_external_bindings, list) and all(
+                isinstance(item, Mapping) for item in raw_external_bindings
+            ):
+                external_runtime_data_bindings = [
+                    dict(item) for item in raw_external_bindings
+                ]
+            else:
+                raise DurableExecutionAdapterError(
+                    "source artifact manifest has invalid external runtime data bindings",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"source_attempt_id": source_attempt_id},
+                )
             manifest = {
                 "schema_version": ARTIFACT_MANIFEST_SCHEMA,
                 "run_id": successor_run_id,
@@ -685,7 +720,19 @@ class QEWorkspacePredBacktestAdapter:
                 "attempt_id": successor_attempt_id,
                 "input_manifest_hash": successor_input_manifest_hash,
                 "prediction_file": "combined_prediction.pkl",
+                "l2_artifact": {
+                    "path": l2_relative_name,
+                    **dict(copied_l2_metadata),
+                },
                 "files": files,
+                "external_runtime_data_bindings": external_runtime_data_bindings,
+                "execution_identity": source.artifact_manifest.get("execution_identity"),
+                "execution_identity_hash": source.artifact_manifest.get(
+                    "execution_identity_hash"
+                ),
+                "execution_identity_evidence": source.artifact_manifest.get(
+                    "execution_identity_evidence"
+                ),
                 "recovery_source": {
                     "source_run_id": source_run_id,
                     "source_child_id": source_child_id,

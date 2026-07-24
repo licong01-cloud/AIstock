@@ -2,7 +2,9 @@
   "actual": "After BUG-858 runtime restart, a targeted R12P backtest_only recovery verifies and copies the frozen source artifact inventory, but constructs the successor artifact_manifest.json without the required l2_artifact binding. The same path immediately calls _verify_published_manifest, which fails with multi_alpha_artifact_manifest_invalid: durable artifact manifest has no L2 artifact binding. No successor run or remote task is created. Preserve exact frozen prediction/L2 bytes and recovery lineage; do not add fallback or alter research parameters.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260724_BUG-859-qe-multi-alpha-backtest-only-recovery-omits-l2-artifact-binding.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-859",
@@ -26,20 +28,65 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ]
   },
   "first_seen_at": "2026-07-24T20:31:01.637056Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-859-qe-multi-alpha-backtest-only-recovery-omits-l2-a-20260724",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2716,
@@ -59,7 +106,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -162,5 +209,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
