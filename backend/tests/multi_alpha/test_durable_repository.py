@@ -450,7 +450,7 @@ def test_same_run_identity_with_different_request_hash_fails_loudly() -> None:
     assert provider.rollbacks == 1
 
 
-def test_p0_1b_insert_shapes_remain_available_before_additive_p0_2_ddl() -> None:
+def test_legacy_optional_insert_shapes_keep_required_attempt_run_id() -> None:
     request_payload = _run_request()
     run_spec = DurableRunSpec(
         run_id="macb_test",
@@ -523,6 +523,9 @@ def test_p0_1b_insert_shapes_remain_available_before_additive_p0_2_ddl() -> None
     attempt_repository = MultiAlphaDurableRepository(connection_provider=attempt_provider)
     attempt_repository.create_attempt(attempt_spec)
     attempt_sql = attempt_provider.cursor.executions[2][0]
+    attempt_params = attempt_provider.cursor.executions[2][1]
+    assert "attempt_id, run_id, child_id" in " ".join(attempt_sql.split())
+    assert attempt_params[:3] == [attempt_spec.attempt_id, "macb_test", child_id]
     assert "source_attempt_id" not in attempt_sql
     assert "execution_kind" not in attempt_sql
     assert "result_manifest_hash" not in attempt_sql
