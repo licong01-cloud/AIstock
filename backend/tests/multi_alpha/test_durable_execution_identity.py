@@ -165,6 +165,34 @@ def test_execution_identity_is_content_addressed_and_child_plan_carries_it(tmp_p
     assert specs[0].input_manifest["execution_identity_evidence"]["complete"] is True
 
 
+def test_runtime_identity_does_not_dereference_node_bound_qe_data_links(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(f"prediction:{run_id}".encode("utf-8"))
+    request = _request(tmp_path)
+    external_data = Path(str(request.backtest_config["runtime_template_dir"])) / "bak_basic.h5"
+    external_data.write_bytes(b"stand-in for an unreadable DrvFS data link")
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_identity.is_runtime_external_data_link",
+        lambda path: path == external_data,
+    )
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),  # type: ignore[arg-type]
+        environment_loader=lambda _node_id: _environment(),
+        dataset_loader=lambda _node_id, _root: _dataset(complete=True),
+        node_info_resolver=lambda _node_id: SimpleNamespace(qlib_data_path="/home/lc999/data/factor_data"),
+        source_root=REPO_ROOT,
+    )
+
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+
+    assert resolution.complete is True
+    assert resolution.identity is not None
+    assert len(resolution.identity.payload["runtime"]["qlib_runtime_template_sha256"]) == 64
+
+
 def test_missing_dataset_manifest_is_visible_evidence_not_a_research_rejection(tmp_path: Path) -> None:
     for run_id in ("qe_a_L1", "qe_b_L1"):
         (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")

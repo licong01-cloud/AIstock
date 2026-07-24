@@ -477,6 +477,41 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert not list(published.workspace.parent.glob("*.tmp"))
 
 
+def test_publish_excludes_and_records_node_bound_qe_data_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    external_data = tmp_path / "runtime" / "bak_basic.h5"
+    external_data.write_bytes(b"stand-in for an unreadable DrvFS data link")
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_execution_adapter.is_runtime_external_data_link",
+        lambda path: path.name == "bak_basic.h5",
+    )
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.combine_backtest.is_runtime_external_data_link",
+        lambda path: path.name == "bak_basic.h5",
+    )
+
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+
+    expected_binding = {
+        "name": "bak_basic.h5",
+        "binding": "node_canonical_qe_data",
+        "published": False,
+    }
+    assert published.artifact_manifest["external_runtime_data_bindings"] == [expected_binding]
+    assert "bak_basic.h5" not in published.artifact_manifest["files"]
+    assert not (published.workspace / "bak_basic.h5").exists()
+    materialization = json.loads((published.workspace / "materialization.json").read_text(encoding="utf-8"))
+    assert materialization["external_runtime_data_bindings"] == [expected_binding]
+
+
 def test_builtin_rematerialize_recomputes_from_verified_frozen_prediction_sources(
     tmp_path: Path,
 ) -> None:
