@@ -25,9 +25,9 @@ B1 最优配置 (评估 PA=+6.35 bps vs v20 基线 +5.11 bps, 买入侧 +30%):
 在独立的 exp_dir 工作目录中执行。
 
 错误处理原则：
-  - 任何改变执行分配方式的 fallback 必须 logger.warning 明确告警
-  - 关键数据缺失 (prev_close, up_limit_price, down_limit_price) 直接 raise, 不静默降级
-  - plan 生成失败将记录股票为"降级执行", 使用 TWAP 直至结束
+  - 模型、plan、分钟线、factor、prev_close 或涨跌停数据异常直接失败
+  - 停牌、盘中无 bar、涨停买入和跌停卖出是显式 NO_FILL 市场状态
+  - 禁止把 V24 plan 失败、plan 越界或零权重静默改成 TWAP/均匀执行
 """
 from __future__ import annotations
 
@@ -46,6 +46,19 @@ from tail_twap_strategy import (
     REALLOC_OFFSET,
     BLOCKED_FILL_THRESHOLD,
 )
+from minute_execution_contract import (
+    MarketAction,
+    MinuteExecutionContractError,
+    classify_market_state,
+    normalize_trade_step,
+    raw_price,
+    strict_remaining_fraction,
+)
+
+try:
+    from qe_suspend_filter import QESuspendFilter
+except Exception:  # pragma: no cover - Qlib workspace packaging guard
+    QESuspendFilter = None
 
 
 logger = logging.getLogger(__name__)
@@ -141,7 +154,7 @@ def _gap_ratio_to_bucket(gap_ratio: float) -> int:
 
 
 class _DataMissingError(Exception):
-    """数据缺失异常，用于显式失败而非静默 fallback。"""
+    """数据缺失异常；调用方必须失败，不能改变执行算法。"""
     pass
 
 
@@ -175,6 +188,9 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         unfilled_handler=None,
         unfilled_trigger_minute=None,
         unfilled_backup_depth=None,
+        filter_suspended_on_signal=False,
+        suspend_filter_file=None,
+        suspend_filter_strict=True,
         **kwargs,
     ):
         super().__init__(
@@ -207,7 +223,25 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         self._plan_model.load_state_dict(state)
         self._plan_model.eval()
+        if filter_suspended_on_signal:
+            if QESuspendFilter is None:
+                raise RuntimeError("V24 suspend filter requested but qe_suspend_filter is not importable")
+            self._qe_suspend_filter = QESuspendFilter(
+                enabled=True,
+                suspend_filter_file=suspend_filter_file,
+                strict=suspend_filter_strict,
+                logger_obj=logger,
+            )
+        else:
+            self._qe_suspend_filter = None
         logger.info("[TailTWAPv24] loaded plan model from %s", self._model_path)
+
+    def _is_artifact_suspended(self, stock_id, trade_time) -> bool:
+        if self._qe_suspend_filter is None:
+            return False
+        suspended = self._qe_suspend_filter.suspended_symbols(trade_time)
+        aliases = self._qe_suspend_filter._symbol_aliases(stock_id)
+        return bool(aliases & suspended)
 
     def reset(self, outer_trade_decision=None, **kwargs):
         super().reset(outer_trade_decision=outer_trade_decision, **kwargs)
@@ -216,8 +250,8 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             self._v24_plans: dict[str, np.ndarray] = {}
             # 标记 plan 生成是否已尝试 (避免每分钟重试)
             self._v24_plan_generated: dict[str, bool] = {}
-            # 标记 plan 生成失败, 后续走降级 TWAP
-            self._v24_plan_failed: set[str] = set()
+            self._v24_no_fill_reasons: dict[str, str] = {}
+            self._v24_warmup_market_blocked: set[str] = set()
             # 分钟级数据缓存: 在 warmup 期间逐分钟累积
             self._v24_close_buf: dict[str, list] = {}
             self._v24_vol_buf: dict[str, list] = {}
@@ -235,7 +269,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
     def _collect_bar(self, stock_id, trade_start_time, trade_end_time):
         """在 warmup 期间逐分钟收集 close/vol/high/low/up_limit_price/down_limit_price/prev_close。
 
-        任一关键字段缺失则本根不追加, 并记录 warning。
+        任一关键字段缺失都直接失败；调用方已先处理显式市场状态。
         """
         try:
             close = self.trade_exchange.get_close(
@@ -243,18 +277,14 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                 method="ts_data_last",
             )
         except (KeyError, IndexError, ValueError) as e:
-            logger.warning(
-                "[TailTWAPv24] collect_bar get_close failed stock=%s t=%s: %s",
-                stock_id, trade_start_time, e,
-            )
-            return
+            raise _DataMissingError(
+                f"minute_close_missing_data_error stock={stock_id} t={trade_start_time}: {e}"
+            ) from e
 
         if close is None or np.isnan(close) or close <= 0:
-            logger.warning(
-                "[TailTWAPv24] collect_bar invalid close stock=%s t=%s close=%s",
-                stock_id, trade_start_time, close,
+            raise _DataMissingError(
+                f"minute_close_invalid_data_error stock={stock_id} t={trade_start_time} close={close}"
             )
-            return
 
         try:
             vol = self.trade_exchange.quote.get_data(
@@ -281,50 +311,35 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                 stock_id, trade_start_time, trade_end_time,
                 field="$prev_close", method="ts_data_last",
             )
-        except (KeyError, IndexError, ValueError) as e:
-            logger.warning(
-                "[TailTWAPv24] collect_bar quote fields failed stock=%s t=%s: %s",
-                stock_id, trade_start_time, e,
+            factor = self.trade_exchange.quote.get_data(
+                stock_id, trade_start_time, trade_end_time,
+                field="$factor", method="ts_data_last",
             )
-            return
+        except (KeyError, IndexError, ValueError) as e:
+            raise _DataMissingError(
+                f"minute_quote_missing_data_error stock={stock_id} t={trade_start_time}: {e}"
+            ) from e
 
         # 关键字段不得为 None 或 NaN — 任何缺失都丢弃本根而非用替代值
         if vol is None or np.isnan(vol):
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing volume stock=%s t=%s",
-                stock_id, trade_start_time,
-            )
-            return
+            raise _DataMissingError(f"volume_invalid_data_error stock={stock_id} t={trade_start_time}")
         if high is None or np.isnan(high):
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing high stock=%s t=%s",
-                stock_id, trade_start_time,
-            )
-            return
+            raise _DataMissingError(f"high_missing_data_error stock={stock_id} t={trade_start_time}")
         if low is None or np.isnan(low):
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing low stock=%s t=%s",
-                stock_id, trade_start_time,
-            )
-            return
+            raise _DataMissingError(f"low_missing_data_error stock={stock_id} t={trade_start_time}")
         if lu is None or np.isnan(lu) or lu <= 0:
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing up_limit_price stock=%s t=%s lu=%s",
-                stock_id, trade_start_time, lu,
-            )
-            return
+            raise _DataMissingError(f"limit_price_missing_data_error stock={stock_id} up_limit={lu}")
         if ld is None or np.isnan(ld) or ld <= 0:
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing down_limit_price stock=%s t=%s ld=%s",
-                stock_id, trade_start_time, ld,
-            )
-            return
+            raise _DataMissingError(f"limit_price_missing_data_error stock={stock_id} down_limit={ld}")
         if pc is None or np.isnan(pc) or pc <= 0:
-            logger.warning(
-                "[TailTWAPv24] collect_bar missing prev_close stock=%s t=%s pc=%s",
-                stock_id, trade_start_time, pc,
-            )
-            return
+            raise _DataMissingError(f"prev_close_missing_data_error stock={stock_id} prev_close={pc}")
+
+        try:
+            close = raw_price(close, factor)
+            high = raw_price(high, factor)
+            low = raw_price(low, factor)
+        except MinuteExecutionContractError as e:
+            raise _DataMissingError(f"stock={stock_id} t={trade_start_time}: {e}") from e
 
         self._v24_close_buf.setdefault(stock_id, []).append(float(close))
         self._v24_vol_buf.setdefault(stock_id, []).append(float(vol))
@@ -423,7 +438,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
     def _generate_plan_for_stock(self, stock_id, direction):
         """在 t=30 时刻为 stock_id 生成 210 维 plan 分布。
 
-        任一关键数据缺失 → raise _DataMissingError, 由调用方记录并降级。
+        任一关键数据缺失都会失败，禁止切换为其他执行算法。
         """
         limit_pct = _get_limit_pct(stock_id)
 
@@ -462,7 +477,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             else:
                 # 一字板 (涨停/跌停锁定): P0 已在 warmup 期间处理了顺向全量执行
                 # (买入+跌停→全量买入, 卖出+涨停→全量卖出)
-                # 反向 (买入涨停/卖出跌停) 降级 TWAP, 每分钟尝试等待开板
+                # 反向 (买入涨停/卖出跌停) 是显式 NO_FILL，不生成 plan。
                 raise _DataMissingError("limit_locked (一字板, high==low, vol>0)")
         elif vol_arr.sum() < 1e-6:
             raise _DataMissingError("zero_volume in warmup period")
@@ -522,23 +537,20 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         start_idx, end_idx = get_start_end_idx(
             self.trade_calendar, self.outer_trade_decision
         )
-        trade_len = end_idx - start_idx + 1
-
         if trade_step < start_idx or trade_step > end_idx:
             return TradeDecisionWO(order_list=[], strategy=self)
 
         # 计算相对时间步
-        rel_trade_step = trade_step - start_idx
-
-        # 根据总长度判断是否有集合竞价
-        has_auction = (trade_len == 241)  # 包含集合竞价的交易日
-        if has_auction:
-            # 早期数据：跳过集合竞价（第一个时间步，09:25）
-            if rel_trade_step == 0:
-                return TradeDecisionWO(order_list=[], strategy=self)
-            # 调整相对时间步，排除集合竞价
-            rel_trade_step = rel_trade_step - 1
-        # 后期数据（trade_len=240）：不跳过，直接使用rel_trade_step
+        try:
+            rel_trade_step = normalize_trade_step(
+                trade_step=trade_step,
+                start_idx=start_idx,
+                end_idx=end_idx,
+            )
+        except MinuteExecutionContractError as e:
+            raise _DataMissingError(str(e)) from e
+        if rel_trade_step is None:
+            return TradeDecisionWO(order_list=[], strategy=self)
 
         # 更新已执行数量 (同父类)
         if execute_result is not None:
@@ -554,21 +566,12 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             trade_step
         )
 
-        is_last_step = (rel_trade_step == trade_len - 1)
+        is_last_step = rel_trade_step == FULL_DAY_MINUTES - 1
 
         # ================================================
         # P4: 尾盘触发闲置资金再分配 (仅一次) — 14:55 触发
         # ================================================
-        # REALLOC_OFFSET=235 是相对于241根数据(含集合竞价)的第235分钟(14:55)
-        # 对于240根数据，对应的是第234分钟
-        if has_auction:
-            # 早期数据(241根): 第235分钟 = rel_step 234
-            trigger_step = REALLOC_OFFSET - 1  # 235-1=234
-        else:
-            # 后期数据(240根): 第234分钟 = rel_step 234
-            trigger_step = REALLOC_OFFSET - 1  # 235-1=234
-
-        if rel_trade_step >= trigger_step and not self._realloc_done:
+        if rel_trade_step >= REALLOC_OFFSET and not self._realloc_done:
             self._realloc_done = True
             if self._unfilled_handler == "TAIL_SUBSTITUTE":
                 self._do_realloc_substitute(trade_start_time, trade_end_time)
@@ -577,12 +580,20 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
 
         order_list = []
         for order in self.outer_trade_decision.get_decision():
-            # 停牌检测
+            # 停牌是显式 NO_FILL 市场状态。
+            if self._is_artifact_suspended(order.stock_id, trade_start_time):
+                self._v24_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
+                if rel_trade_step < self._warmup_minutes:
+                    self._v24_warmup_market_blocked.add(order.stock_id)
+                continue
             if self.trade_exchange.check_stock_suspended(
                 stock_id=order.stock_id,
                 start_time=trade_start_time,
                 end_time=trade_end_time,
             ):
+                self._v24_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
+                if rel_trade_step < self._warmup_minutes:
+                    self._v24_warmup_market_blocked.add(order.stock_id)
                 continue
 
             amount_remain = self.trade_amount_remain[order.stock_id]
@@ -597,62 +608,76 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             # ================================================
             if order.stock_id not in self._p0_done:
                 try:
-                    close_price = self.trade_exchange.get_close(
+                    close_adjusted = self.trade_exchange.get_close(
                         order.stock_id,
                         trade_start_time,
                         trade_end_time,
                         method="ts_data_last",
                     )
-                    if (
-                        close_price is not None
-                        and not np.isnan(close_price)
-                        and close_price > 0
-                    ):
-                        limit_up = self.trade_exchange.quote.get_data(
-                            order.stock_id, trade_start_time, trade_end_time,
-                            field="$up_limit_price", method="ts_data_last",
-                        )
-                        limit_down = self.trade_exchange.quote.get_data(
-                            order.stock_id, trade_start_time, trade_end_time,
-                            field="$down_limit_price", method="ts_data_last",
-                        )
-
-                        if (
-                            order.direction == Order.BUY
-                            and limit_down is not None
-                            and not np.isnan(limit_down)
-                            and close_price <= limit_down
-                        ):
-                            order_list.append(Order(
-                                stock_id=order.stock_id,
-                                amount=amount_remain,
-                                start_time=trade_start_time,
-                                end_time=trade_end_time,
-                                direction=order.direction,
-                            ))
-                            self._p0_done.add(order.stock_id)
-                            continue
-
-                        if (
-                            order.direction == Order.SELL
-                            and limit_up is not None
-                            and not np.isnan(limit_up)
-                            and close_price >= limit_up
-                        ):
-                            order_list.append(Order(
-                                stock_id=order.stock_id,
-                                amount=amount_remain,
-                                start_time=trade_start_time,
-                                end_time=trade_end_time,
-                                direction=order.direction,
-                            ))
-                            self._p0_done.add(order.stock_id)
-                            continue
-                except (KeyError, IndexError) as e:
-                    logger.warning(
-                        "[TailTWAPv24] P0 涨跌停检测失败 stock=%s: %s",
-                        order.stock_id, e,
+                    limit_up = self.trade_exchange.quote.get_data(
+                        order.stock_id, trade_start_time, trade_end_time,
+                        field="$up_limit_price", method="ts_data_last",
                     )
+                    limit_down = self.trade_exchange.quote.get_data(
+                        order.stock_id, trade_start_time, trade_end_time,
+                        field="$down_limit_price", method="ts_data_last",
+                    )
+                    prev_close = self.trade_exchange.quote.get_data(
+                        order.stock_id, trade_start_time, trade_end_time,
+                        field="$prev_close", method="ts_data_last",
+                    )
+                    factor = self.trade_exchange.quote.get_data(
+                        order.stock_id, trade_start_time, trade_end_time,
+                        field="$factor", method="ts_data_last",
+                    )
+                    volume = self.trade_exchange.quote.get_data(
+                        order.stock_id, trade_start_time, trade_end_time,
+                        field="$volume", method="ts_data_last",
+                    )
+                    close_price = raw_price(close_adjusted, factor)
+                    state = classify_market_state(
+                        side="BUY" if order.direction == Order.BUY else "SELL",
+                        price=close_price,
+                        prev_close=prev_close,
+                        limit_up=limit_up,
+                        limit_down=limit_down,
+                        volume=volume,
+                    )
+                    if state.action == MarketAction.NO_FILL:
+                        self._v24_no_fill_reasons[order.stock_id] = state.reason
+                        if rel_trade_step < self._warmup_minutes:
+                            self._v24_warmup_market_blocked.add(order.stock_id)
+                        logger.info(
+                            "[TailTWAPv24] market-state stock=%s reason=%s",
+                            order.stock_id,
+                            state.reason,
+                        )
+                        continue
+                    if state.action == MarketAction.P0_FORCE:
+                        if order.direction == Order.BUY:
+                            order_list.append(Order(
+                                stock_id=order.stock_id,
+                                amount=amount_remain,
+                                start_time=trade_start_time,
+                                end_time=trade_end_time,
+                                direction=order.direction,
+                            ))
+                            self._p0_done.add(order.stock_id)
+                            continue
+                        if order.direction == Order.SELL:
+                            order_list.append(Order(
+                                stock_id=order.stock_id,
+                                amount=amount_remain,
+                                start_time=trade_start_time,
+                                end_time=trade_end_time,
+                                direction=order.direction,
+                            ))
+                            self._p0_done.add(order.stock_id)
+                            continue
+                except (KeyError, IndexError, ValueError, MinuteExecutionContractError) as e:
+                    raise _DataMissingError(
+                        f"V24 market data error stock={order.stock_id}: {e}"
+                    ) from e
 
             # ================================================
             # 计算本分钟执行量 — v24 plan 贯穿 t=30~239
@@ -686,20 +711,16 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                     amount_delta_target = min(amount_delta, amount_remain)
             else:
                 # --- t=30~239: v24 plan 贯穿全程, extra 叠加 ---
+                if order.stock_id in self._v24_warmup_market_blocked:
+                    self._v24_no_fill_reasons[order.stock_id] = "v24_warmup_market_state_no_plan"
+                    continue
                 # 首次生成 plan (仅在 t=30 尝试一次)
                 if not self._v24_plan_generated.get(order.stock_id, False):
                     self._v24_plan_generated[order.stock_id] = True
-                    try:
-                        plan = self._generate_plan_for_stock(
-                            order.stock_id, order.direction,
-                        )
-                        self._v24_plans[order.stock_id] = plan
-                    except _DataMissingError as e:
-                        logger.warning(
-                            "[TailTWAPv24] plan 生成失败, 降级 TWAP stock=%s: %s",
-                            order.stock_id, e,
-                        )
-                        self._v24_plan_failed.add(order.stock_id)
+                    plan = self._generate_plan_for_stock(
+                        order.stock_id, order.direction,
+                    )
+                    self._v24_plans[order.stock_id] = plan
 
                 plan = self._v24_plans.get(order.stock_id)
                 plan_idx = rel_trade_step - self._warmup_minutes  # [0, 210)
@@ -710,30 +731,15 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                     continue
 
                 # ── 计算 base amount_delta (来自原 remaining) ──
-                if order.stock_id in self._v24_plan_failed or plan is None:
-                    # 降级 TWAP: 剩余均匀分配
-                    base_delta = amount_remain / remaining_day_steps
-                elif 0 <= plan_idx < len(plan):
-                    remaining_weight = float(plan[plan_idx:].sum())
-                    if remaining_weight > 1e-8:
-                        frac = float(plan[plan_idx]) / remaining_weight
-                        frac = float(np.clip(frac, 0.0, 1.0))
-                        base_delta = amount_remain * frac
-                    else:
-                        # plan 尾部全 0 (异常): 明确告警 + 均匀兜底
-                        logger.warning(
-                            "[TailTWAPv24] plan 尾部权重为 0, 剩余均匀执行 "
-                            "stock=%s plan_idx=%d remaining=%d",
-                            order.stock_id, plan_idx, remaining_day_steps,
-                        )
-                        base_delta = amount_remain / remaining_day_steps
-                else:
-                    # plan_idx 越界 (不应发生, plan_len=210 覆盖 t=30~239)
-                    logger.warning(
-                        "[TailTWAPv24] plan_idx 越界 stock=%s plan_idx=%d, 均匀兜底",
-                        order.stock_id, plan_idx,
+                if plan is None:
+                    raise _DataMissingError(
+                        f"V24 execution_plan_missing_config_error stock={order.stock_id}"
                     )
-                    base_delta = amount_remain / remaining_day_steps
+                try:
+                    frac = strict_remaining_fraction(plan, plan_idx, expected_length=PLAN_LEN)
+                except MinuteExecutionContractError as e:
+                    raise _DataMissingError(f"V24 stock={order.stock_id}: {e}") from e
+                base_delta = amount_remain * frac
 
                 # ── 叠加 extra 追加量 (14:55 后才有值, 仅 BUY 方向) ──
                 extra = self._realloc_extra.get(order.stock_id, 0)
@@ -774,16 +780,9 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
 
         # ================================================
         # TAIL_SUBSTITUTE: 为备选股生成买入订单 (尾盘段, 复用父类逻辑)
-        # 备选股不在 outer_trade_decision 中, 没有 v24 plan, 用均匀 TWAP
+        # 备选股是显式 TAIL_SUBSTITUTE 子策略，尾盘按剩余时段线性调度。
         # ================================================
-        # TAIL_START_OFFSET=210 是相对于241根数据的第210分钟(14:30)
-        # 对于240根数据，对应的是第209分钟
-        if has_auction:
-            trigger_step = TAIL_START_OFFSET - 1  # 210-1=209
-        else:
-            trigger_step = TAIL_START_OFFSET - 1  # 210-1=209
-
-        if rel_trade_step >= trigger_step and self._unfilled_handler == "TAIL_SUBSTITUTE":
+        if rel_trade_step >= TAIL_START_OFFSET and self._unfilled_handler == "TAIL_SUBSTITUTE":
             existing_sids = {o.stock_id for o in order_list}
             for sid, extra in self._realloc_extra.items():
                 if extra <= 1e-5 or sid in existing_sids:
@@ -802,6 +801,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                     amount_delta_target = extra
                 else:
                     amount_delta_target = extra / remaining_steps
+                self._v24_no_fill_reasons[sid] = "tail_substitute_linear_schedule"
                 _unit = self.trade_exchange.get_amount_of_trade_unit(
                     stock_id=sid,
                     start_time=trade_start_time,

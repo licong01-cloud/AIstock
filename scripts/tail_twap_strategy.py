@@ -18,10 +18,25 @@ A股交易时间: 09:30-11:30 (120min) + 13:00-15:00 (120min) = 240min/天
 再分配触发 14:55 = 第235分钟
 """
 
+import logging
+
 import numpy as np
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 from qlib.contrib.strategy.rule_strategy import TWAPStrategy
 from qlib.backtest.utils import get_start_end_idx
+from minute_execution_contract import (
+    MarketAction,
+    MinuteExecutionContractError,
+    classify_market_state,
+    normalize_trade_step,
+    raw_price,
+    select_tail_substitute_candidates,
+)
+
+try:
+    from qe_suspend_filter import QESuspendFilter
+except Exception:  # pragma: no cover - Qlib workspace packaging guard
+    QESuspendFilter = None
 
 
 # 14:30 = 第210个交易分钟 (0-indexed)
@@ -30,6 +45,8 @@ TAIL_START_OFFSET = 210
 REALLOC_OFFSET = 235
 # 买入订单成交率低于此值视为被卡住
 BLOCKED_FILL_THRESHOLD = 0.2
+
+logger = logging.getLogger(__name__)
 
 
 class TailTWAPWithLimitStrategy(TWAPStrategy):
@@ -42,7 +59,8 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
     def __init__(self, start_time=None, end_time=None, split_count=None,
                  lookback_days=None, participation_rate=None,
                  unfilled_handler=None, unfilled_trigger_minute=None,
-                 unfilled_backup_depth=None, **kwargs):
+                 unfilled_backup_depth=None, filter_suspended_on_signal=False,
+                 suspend_filter_file=None, suspend_filter_strict=True, **kwargs):
         """接受 conf.yaml 中 execution_algo_params 传入的参数。
 
         Qlib init_instance_by_config 会把 inner_strategy.kwargs 全部传到 __init__。
@@ -68,6 +86,17 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             )
         self._realloc_offset = int(unfilled_trigger_minute or REALLOC_OFFSET)
         self._backup_depth = int(unfilled_backup_depth or 15)
+        if filter_suspended_on_signal:
+            if QESuspendFilter is None:
+                raise RuntimeError("TailTWAP suspend filter requested but qe_suspend_filter is not importable")
+            self._qe_suspend_filter = QESuspendFilter(
+                enabled=True,
+                suspend_filter_file=suspend_filter_file,
+                strict=suspend_filter_strict,
+                logger_obj=logger,
+            )
+        else:
+            self._qe_suspend_filter = None
 
     def reset(self, outer_trade_decision=None, **kwargs):
         super().reset(outer_trade_decision=outer_trade_decision, **kwargs)
@@ -80,6 +109,41 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             # 再分配额外买入量: {stock_id: extra_shares}
             self._realloc_extra = {}
             self._realloc_done = False
+            self._execution_no_fill_reasons = {}
+
+    def _quote_value(self, stock_id, trade_start_time, trade_end_time, field):
+        try:
+            return self.trade_exchange.quote.get_data(
+                stock_id,
+                trade_start_time,
+                trade_end_time,
+                field=field,
+                method="ts_data_last",
+            )
+        except (KeyError, IndexError, ValueError, AttributeError) as exc:
+            raise RuntimeError(
+                f"minute quote field missing: stock={stock_id} field={field}"
+            ) from exc
+
+    def _is_artifact_suspended(self, stock_id, trade_time) -> bool:
+        if self._qe_suspend_filter is None:
+            return False
+        suspended = self._qe_suspend_filter.suspended_symbols(trade_time)
+        aliases = self._qe_suspend_filter._symbol_aliases(stock_id)
+        return bool(aliases & suspended)
+
+    def _raw_deal_price(self, stock_id, trade_start_time, trade_end_time, direction):
+        adjusted_price = self.trade_exchange.get_deal_price(
+            stock_id=stock_id,
+            start_time=trade_start_time,
+            end_time=trade_end_time,
+            direction=direction,
+        )
+        factor = self._quote_value(stock_id, trade_start_time, trade_end_time, "$factor")
+        try:
+            return raw_price(adjusted_price, factor)
+        except MinuteExecutionContractError as exc:
+            raise RuntimeError(f"stock={stock_id}: {exc}") from exc
 
     def _do_realloc(self, trade_start_time, trade_end_time):
         """14:55 触发: 检测被卡住的买入订单, 将闲置资金加仓到正常股票。"""
@@ -95,15 +159,19 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             remain = self.trade_amount_remain.get(order.stock_id, 0)
             fill_rate = 1.0 - remain / orig
 
-            # 获取当前价格
-            price = self.trade_exchange.get_deal_price(
+            if self._is_artifact_suspended(order.stock_id, trade_start_time):
+                self._execution_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
+                continue
+            if self.trade_exchange.check_stock_suspended(
                 stock_id=order.stock_id,
                 start_time=trade_start_time,
                 end_time=trade_end_time,
-                direction=OrderDir.BUY,
-            )
-            if price is None or np.isnan(price) or price <= 1e-8:
+            ):
+                self._execution_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
                 continue
+            price = self._raw_deal_price(
+                order.stock_id, trade_start_time, trade_end_time, OrderDir.BUY
+            )
 
             if fill_rate < BLOCKED_FILL_THRESHOLD:
                 # 被卡住: 剩余未成交部分的资金视为闲置
@@ -158,15 +226,21 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             remain = self.trade_amount_remain.get(order.stock_id, 0)
             fill_rate = 1.0 - remain / orig
             if fill_rate < BLOCKED_FILL_THRESHOLD:
-                price = self.trade_exchange.get_deal_price(
+                if self._is_artifact_suspended(order.stock_id, trade_start_time):
+                    self._execution_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
+                    continue
+                if self.trade_exchange.check_stock_suspended(
                     stock_id=order.stock_id,
                     start_time=trade_start_time,
                     end_time=trade_end_time,
-                    direction=OrderDir.BUY,
+                ):
+                    self._execution_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
+                    continue
+                price = self._raw_deal_price(
+                    order.stock_id, trade_start_time, trade_end_time, OrderDir.BUY
                 )
-                if price is not None and not np.isnan(price) and price > 1e-8:
-                    blocked_cash += remain * price
-                    n_blocked += 1
+                blocked_cash += remain * price
+                n_blocked += 1
 
         if blocked_cash <= 1e-5 or n_blocked == 0:
             return
@@ -175,16 +249,18 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
         outer_strategy = self.outer_trade_decision.strategy
         backup_candidates = getattr(outer_strategy, "_backup_candidates", [])
         if not backup_candidates:
-            self._do_realloc(trade_start_time, trade_end_time)
+            self._execution_no_fill_reasons["__tail_substitute__"] = "tail_substitute_no_candidates"
+            logger.info("[TailTWAP] TAIL_SUBSTITUTE no-fill: no backup candidates")
             return
 
         # 3. 计算当前持仓数量，确定还能新增多少只
         topk = getattr(outer_strategy, "topk", None)
-        current_holdings = set()
+        if topk is None or int(topk) <= 0:
+            raise RuntimeError("TAIL_SUBSTITUTE requires a positive outer strategy topk")
         try:
             current_holdings = set(outer_strategy.trade_position.get_stock_list())
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError("TAIL_SUBSTITUTE requires authoritative trade_position") from exc
         # 已在 _realloc_extra 中的备选股也算入
         already_added = set(self._realloc_extra.keys())
         # 统计当前正在执行的卖出订单数量——这些订单会释放持仓位
@@ -192,40 +268,43 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             1 for order in self.outer_trade_decision.get_decision()
             if order.direction == Order.SELL
         )
-        effective_count = len(current_holdings) + len(already_added) - n_selling
-        if topk is not None:
-            max_new = max(0, min(n_blocked, topk - effective_count))
-        else:
-            max_new = n_blocked
+        prices = {}
 
-        if max_new == 0:
-            return
-
-        # 4. 按 score 降序过滤可交易备选股，最多取 max_new 只
-        selected = []
-        for sid, score in backup_candidates:
-            if len(selected) >= max_new:
-                break
-            if sid in current_holdings or sid in already_added:
-                continue
+        def is_tradable(sid):
+            if self._is_artifact_suspended(sid, trade_start_time):
+                self._execution_no_fill_reasons[sid] = "suspended_by_suspend_d"
+                return False
             if not self.trade_exchange.is_stock_tradable(
                 stock_id=sid,
                 start_time=trade_start_time,
                 end_time=trade_end_time,
                 direction=Order.BUY,
             ):
-                continue
-            price = self.trade_exchange.get_deal_price(
-                stock_id=sid,
-                start_time=trade_start_time,
-                end_time=trade_end_time,
-                direction=OrderDir.BUY,
-            )
-            if price is not None and not np.isnan(price) and price > 1e-8:
-                selected.append((sid, price, score))
+                return False
+            price = self._raw_deal_price(sid, trade_start_time, trade_end_time, OrderDir.BUY)
+            prices[sid] = float(price)
+            return True
+
+        ranked = select_tail_substitute_candidates(
+            backup_candidates,
+            blocked_count=n_blocked,
+            current_holdings=current_holdings,
+            already_added=already_added,
+            selling_count=n_selling,
+            topk=int(topk),
+            is_tradable=is_tradable,
+        )
+        selected = [(sid, prices[sid], score) for sid, score in ranked]
 
         if not selected:
-            self._do_realloc(trade_start_time, trade_end_time)
+            effective_count = len(current_holdings) + len(already_added) - n_selling
+            reason = (
+                "tail_substitute_topk_capacity_exhausted"
+                if effective_count >= int(topk)
+                else "tail_substitute_candidates_not_tradable"
+            )
+            self._execution_no_fill_reasons["__tail_substitute__"] = reason
+            logger.info("[TailTWAP] TAIL_SUBSTITUTE no-fill: backup candidates are not tradable")
             return
 
         # 5. 闲置资金平均分配给选中的备选股
@@ -241,6 +320,7 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
                 extra_shares = np.floor(extra_shares / _unit) * _unit
             if extra_shares > 1e-5:
                 self._realloc_extra[sid] = extra_shares
+                self._execution_no_fill_reasons[sid] = "tail_substitute_selected"
 
     def generate_trade_decision(self, execute_result=None):
         # 空决策
@@ -251,12 +331,20 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
         start_idx, end_idx = get_start_end_idx(
             self.trade_calendar, self.outer_trade_decision
         )
-        trade_len = end_idx - start_idx + 1
-
         if trade_step < start_idx or trade_step > end_idx:
             return TradeDecisionWO(order_list=[], strategy=self)
 
-        rel_trade_step = trade_step - start_idx
+        try:
+            rel_trade_step = normalize_trade_step(
+                trade_step=trade_step,
+                start_idx=start_idx,
+                end_idx=end_idx,
+            )
+        except MinuteExecutionContractError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if rel_trade_step is None:
+            self._execution_no_fill_reasons["__calendar__"] = "auction_wait"
+            return TradeDecisionWO(order_list=[], strategy=self)
 
         # 更新已执行数量
         if execute_result is not None:
@@ -289,11 +377,15 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
         order_list = []
         for order in self.outer_trade_decision.get_decision():
             # 停牌检测
+            if self._is_artifact_suspended(order.stock_id, trade_start_time):
+                self._execution_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
+                continue
             if self.trade_exchange.check_stock_suspended(
                 stock_id=order.stock_id,
                 start_time=trade_start_time,
                 end_time=trade_end_time,
             ):
+                self._execution_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
                 continue
 
             amount_remain = self.trade_amount_remain[order.stock_id]
@@ -305,76 +397,68 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
             # ================================================
             if order.stock_id not in self._p0_done:
                 try:
-                    close_price = self.trade_exchange.get_close(
+                    close_adjusted = self.trade_exchange.get_close(
                         order.stock_id,
                         trade_start_time,
                         trade_end_time,
                         method="ts_data_last",
                     )
-                    if (
-                        close_price is not None
-                        and not np.isnan(close_price)
-                        and close_price > 0
-                    ):
-                        limit_up = self.trade_exchange.quote.get_data(
-                            order.stock_id,
-                            trade_start_time,
-                            trade_end_time,
-                            field="$limit_up",
-                            method="ts_data_last",
-                        )
-                        limit_down = self.trade_exchange.quote.get_data(
-                            order.stock_id,
-                            trade_start_time,
-                            trade_end_time,
-                            field="$limit_down",
-                            method="ts_data_last",
-                        )
-
-                        # 买入 + 跌停价 → 全量买入 (最低价买入)
-                        if (
-                            order.direction == Order.BUY
-                            and limit_down is not None
-                            and not np.isnan(limit_down)
-                            and close_price <= limit_down
-                        ):
-                            order_list.append(
-                                Order(
-                                    stock_id=order.stock_id,
-                                    amount=amount_remain,
-                                    start_time=trade_start_time,
-                                    end_time=trade_end_time,
-                                    direction=order.direction,
-                                )
-                            )
-                            self._p0_done.add(order.stock_id)
-                            continue
-
-                        # 卖出 + 涨停价 → 全量卖出 (最高价卖出)
-                        if (
-                            order.direction == Order.SELL
-                            and limit_up is not None
-                            and not np.isnan(limit_up)
-                            and close_price >= limit_up
-                        ):
-                            order_list.append(
-                                Order(
-                                    stock_id=order.stock_id,
-                                    amount=amount_remain,
-                                    start_time=trade_start_time,
-                                    end_time=trade_end_time,
-                                    direction=order.direction,
-                                )
-                            )
-                            self._p0_done.add(order.stock_id)
-                            continue
-                except (KeyError, IndexError) as e:
-                    # quote 中缺少该股票/时间段的涨跌停数据 → 跳过P0但必须记录
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "[TailTWAP] P0 涨跌停检测失败: stock=%s, error=%s",
-                        order.stock_id, e,
+                    factor = self._quote_value(
+                        order.stock_id, trade_start_time, trade_end_time, "$factor"
                     )
+                    close_price = raw_price(close_adjusted, factor)
+                    limit_up = self._quote_value(
+                        order.stock_id, trade_start_time, trade_end_time, "$up_limit_price"
+                    )
+                    limit_down = self._quote_value(
+                        order.stock_id, trade_start_time, trade_end_time, "$down_limit_price"
+                    )
+                    prev_close = self._quote_value(
+                        order.stock_id, trade_start_time, trade_end_time, "$prev_close"
+                    )
+                    volume = self._quote_value(
+                        order.stock_id, trade_start_time, trade_end_time, "$volume"
+                    )
+                    state = classify_market_state(
+                        side="BUY" if order.direction == Order.BUY else "SELL",
+                        price=close_price,
+                        prev_close=prev_close,
+                        limit_up=limit_up,
+                        limit_down=limit_down,
+                        volume=volume,
+                    )
+                    if state.action == MarketAction.NO_FILL:
+                        self._execution_no_fill_reasons[order.stock_id] = state.reason
+                        continue
+                    if state.action == MarketAction.P0_FORCE:
+                        if order.direction == Order.BUY:
+                            order_list.append(
+                                Order(
+                                    stock_id=order.stock_id,
+                                    amount=amount_remain,
+                                    start_time=trade_start_time,
+                                    end_time=trade_end_time,
+                                    direction=order.direction,
+                                )
+                            )
+                            self._p0_done.add(order.stock_id)
+                            continue
+                        if order.direction == Order.SELL:
+                            order_list.append(
+                                Order(
+                                    stock_id=order.stock_id,
+                                    amount=amount_remain,
+                                    start_time=trade_start_time,
+                                    end_time=trade_end_time,
+                                    direction=order.direction,
+                                )
+                            )
+                            self._p0_done.add(order.stock_id)
+                            continue
+                except (KeyError, IndexError, ValueError, MinuteExecutionContractError) as exc:
+                    raise RuntimeError(
+                        f"TailTWAP market data error stock={order.stock_id}: {exc}"
+                    ) from exc
 
             # ================================================
             # P3: 尾盘TWAP (14:30-15:00)
@@ -383,7 +467,7 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
                 continue  # 非尾盘且无P0触发 → 本分钟不执行
 
             # 计算本分钟应执行量 (原始订单部分)
-            remaining_steps = end_idx - trade_step + 1
+            remaining_steps = 240 - rel_trade_step
             if remaining_steps <= 0:
                 continue
 
@@ -409,7 +493,7 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
                 amount_delta_target = amount_delta
 
             # 最后一步: 全部剩余 (包含再分配额外量)
-            if rel_trade_step == trade_len - 1:
+            if rel_trade_step == 239:
                 amount_delta_target = amount_remain + self._realloc_extra.get(
                     order.stock_id, 0
                 )
@@ -433,16 +517,19 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
                 if extra <= 1e-5 or sid in existing_sids:
                     continue
                 # 备选股不在原始订单中，需要检查可交易性
+                if self._is_artifact_suspended(sid, trade_start_time):
+                    self._execution_no_fill_reasons[sid] = "suspended_by_suspend_d"
+                    continue
                 if self.trade_exchange.check_stock_suspended(
                     stock_id=sid,
                     start_time=trade_start_time,
                     end_time=trade_end_time,
                 ):
                     continue
-                remaining_steps = end_idx - trade_step + 1
+                remaining_steps = 240 - rel_trade_step
                 if remaining_steps <= 0:
                     continue
-                if rel_trade_step == trade_len - 1:
+                if rel_trade_step == 239:
                     amount_delta_target = extra
                 else:
                     amount_delta_target = extra / remaining_steps

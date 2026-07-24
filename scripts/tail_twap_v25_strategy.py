@@ -21,6 +21,11 @@ from tail_twap_strategy import (
     TAIL_START_OFFSET,
     REALLOC_OFFSET,
 )
+from minute_execution_contract import (
+    DayFeatureArtifact,
+    MinuteExecutionContractError,
+    normalize_trade_step,
+)
 try:
     from qe_suspend_filter import QESuspendFilter
 except Exception:  # pragma: no cover - Qlib workspace packaging guard
@@ -150,6 +155,8 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         early_model_path: str,
         late_model_path: str,
         device: str = "cpu",
+        day_features_file=None,
+        day_features_schema_version=None,
         start_time=None,
         end_time=None,
         split_count=None,
@@ -189,6 +196,18 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         self._late_model.load_state_dict(_load_state(self._late_model_path, self._device))
         self._early_model.eval()
         self._late_model.eval()
+        if not day_features_file or not day_features_schema_version:
+            raise RuntimeError(
+                "V25 requires day_features_file and day_features_schema_version; "
+                "zero/default day features are forbidden"
+            )
+        try:
+            self._day_features_artifact = DayFeatureArtifact(
+                day_features_file,
+                expected_schema_version=day_features_schema_version,
+            )
+        except MinuteExecutionContractError as exc:
+            raise RuntimeError(str(exc)) from exc
         if filter_suspended_on_signal:
             if QESuspendFilter is None:
                 raise RuntimeError("V25 suspend filter requested but qe_suspend_filter is not importable")
@@ -430,7 +449,16 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         gap_ratio = float(gap_pct / limit_pct) if limit_pct > 1e-8 else 0.0
         gap_bucket = _gap_ratio_to_bucket(gap_ratio)
         is_buy = 1.0 if direction == Order.BUY else 0.0
-        day_features = np.zeros(10, dtype=np.float32)
+        try:
+            day_features = np.asarray(
+                self._day_features_artifact.vector(
+                    trade_date=trade_start_time,
+                    symbol=stock_id,
+                ),
+                dtype=np.float32,
+            )
+        except MinuteExecutionContractError as exc:
+            raise RuntimeError(str(exc)) from exc
 
         with torch.no_grad():
             gb = torch.LongTensor([gap_bucket]).to(self._device)
@@ -470,17 +498,19 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
 
         trade_step = self.trade_calendar.get_trade_step()
         start_idx, end_idx = get_start_end_idx(self.trade_calendar, self.outer_trade_decision)
-        trade_len = end_idx - start_idx + 1
         if trade_step < start_idx or trade_step > end_idx:
             return TradeDecisionWO(order_list=[], strategy=self)
 
-        rel_trade_step = trade_step - start_idx
-        has_auction = trade_len == 241
-        if has_auction:
-            if rel_trade_step == 0:
-                return TradeDecisionWO(order_list=[], strategy=self)
-            rel_trade_step -= 1
-        if rel_trade_step < 0 or rel_trade_step >= TOTAL_LEN:
+        try:
+            rel_trade_step = normalize_trade_step(
+                trade_step=trade_step,
+                start_idx=start_idx,
+                end_idx=end_idx,
+            )
+        except MinuteExecutionContractError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if rel_trade_step is None:
+            self._v25_no_fill_reasons["__calendar__"] = "auction_wait"
             return TradeDecisionWO(order_list=[], strategy=self)
 
         if execute_result is not None:
@@ -492,8 +522,7 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
 
         trade_start_time, trade_end_time = self.trade_calendar.get_step_time(trade_step)
         is_last_step = rel_trade_step >= TOTAL_LEN - 1 or trade_step >= end_idx
-        trigger_step = REALLOC_OFFSET - 1
-        if rel_trade_step >= trigger_step and not self._realloc_done:
+        if rel_trade_step >= REALLOC_OFFSET and not self._realloc_done:
             self._realloc_done = True
             if self._unfilled_handler == "TAIL_SUBSTITUTE":
                 self._do_realloc_substitute(trade_start_time, trade_end_time)
@@ -702,8 +731,7 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 allow_sell_residual=is_last_step and order.direction == Order.SELL,
             )
 
-        trigger_step = TAIL_START_OFFSET - 1
-        if rel_trade_step >= trigger_step and self._unfilled_handler == "TAIL_SUBSTITUTE":
+        if rel_trade_step >= TAIL_START_OFFSET and self._unfilled_handler == "TAIL_SUBSTITUTE":
             existing_sids = {o.stock_id for o in order_list}
             for sid, extra in self._realloc_extra.items():
                 if extra <= 1e-5 or sid in existing_sids:

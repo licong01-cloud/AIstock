@@ -437,6 +437,7 @@ QE_LOCAL_STRATEGY_ROOTS = [
 AUTHORITATIVE_QE_HELPER_ASSETS = {
     # V25 is a strategy/model asset. Keep the authority in the AIstock repo
     # instead of probing an RDAgent/WSL workspace from Windows.
+    "minute_execution_contract.py": AISTOCK_PROJECT_ROOT / "scripts" / "minute_execution_contract.py",
     "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
     "tail_twap_v25_1_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_1_strategy.py",
 }
@@ -1675,7 +1676,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("minute_execution_contract.py", "tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -2075,7 +2076,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("minute_execution_contract.py", "tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2777,7 +2778,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("minute_execution_contract.py", "tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)

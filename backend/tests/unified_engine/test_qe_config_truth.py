@@ -461,7 +461,11 @@ def _parse_conf_yaml_with_jinja_placeholders(yaml_text: str):
 def test_v25_execution_algo_generates_v25_inner_strategy():
     yaml_text = _base_yaml(
         execution_algo="V25_TWO_STAGE",
-        execution_algo_params={"device": "cpu"},
+        execution_algo_params={
+            "device": "cpu",
+            "day_features_file": "qe_v25_day_features.json",
+            "day_features_schema_version": "qe_v25_model_inputs_v1",
+        },
     )
     inner_strategy = _slice_yaml_between(
         yaml_text,
@@ -479,6 +483,8 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
     assert "filter_suspended_on_signal: true" in inner_strategy
     assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
     assert "suspend_filter_strict: true" in inner_strategy
+    assert "day_features_file: qe_v25_day_features.json" in inner_strategy
+    assert "day_features_schema_version: qe_v25_model_inputs_v1" in inner_strategy
     assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
     assert "filter_suspended_on_signal: true" not in outer_strategy
     assert "effective_algo: V25_TWO_STAGE" in yaml_text
@@ -486,10 +492,23 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
     assert "late_model_path:" in yaml_text
 
 
+def test_minute_execution_contract_is_an_aistock_authoritative_helper():
+    helper = ConfigComposer._resolve_qe_helper_asset(
+        Path("/missing/rdagent/template"),
+        "minute_execution_contract.py",
+    )
+    assert helper == SCRIPTS_DIR / "minute_execution_contract.py"
+    assert helper.is_file()
+
+
 def test_v25_1_execution_algo_generates_v25_1_inner_strategy():
     yaml_text = _base_yaml(
         execution_algo="V25_1_SMALL_CAP",
-        execution_algo_params={"device": "cpu"},
+        execution_algo_params={
+            "device": "cpu",
+            "day_features_file": "qe_v25_day_features.json",
+            "day_features_schema_version": "qe_v25_model_inputs_v1",
+        },
     )
     inner_strategy = _slice_yaml_between(
         yaml_text,
@@ -507,6 +526,8 @@ def test_v25_1_execution_algo_generates_v25_1_inner_strategy():
     assert "filter_suspended_on_signal: true" in inner_strategy
     assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
     assert "suspend_filter_strict: true" in inner_strategy
+    assert "day_features_file: qe_v25_day_features.json" in inner_strategy
+    assert "day_features_schema_version: qe_v25_model_inputs_v1" in inner_strategy
     assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
     assert "effective_algo: V25_1_SMALL_CAP" in yaml_text
     assert "early_model_path:" in yaml_text
