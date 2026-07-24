@@ -34,6 +34,9 @@ C008_B1_DIAGNOSTIC_VERSION = "hmm_risk_c008_b1_soft_evidence_v1"
 C008_B3_STRUCTURAL_CONTRACT = "C-008-B3-STRUCTURAL-A"
 C008_B3_DIAG02_CONTRACT = "C-008-B3-DIAG-02"
 C008_B3_DIAG02_VERSION = "hmm_risk_c008_b3_diag02_structural_evidence_v1"
+C008_B3_DIAG04_CONTRACT = "C-008-B3-D3-03/D4-02-DIAG-04"
+C008_B3_DIAG04_VERSION = "hmm_risk_c008_b3_diag04_scale_aware_covariance_evidence_v1"
+C008_B3_DIAG04_NU = 1.0
 C008_B3_DIAG02_FIXED_THREAD_ENV = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -182,6 +185,67 @@ def c008_b3_diag02_parameter_profile() -> dict[str, Any]:
     }
 
 
+def c008_b3_diag04_parameter_profile() -> dict[str, Any]:
+    """Return the approved DIAG-04 refit profile without activating any formal acceptance gate."""
+
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag04_parameter_profile_v1",
+        "contract": C008_B3_DIAG04_CONTRACT,
+        "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+        "numeric_contract_status": "DIAGNOSTIC_ONLY_NOT_FORMAL_ACCEPTANCE",
+        "restart_schedule": list(C008_DIAGNOSTIC_SEEDS),
+        "kmeans": {
+            "n_clusters": 3,
+            "init": "k-means++",
+            "n_init": 1,
+            "random_state": "restart_seed",
+            "max_iter": 300,
+            "tol": 1e-4,
+            "algorithm": "lloyd",
+            "copy_x": True,
+            "empty_or_lt_two_cluster_members": "fit_failed_initialization",
+            "means_initialization": "cluster_centers",
+        },
+        "scale_aware_covariance": {
+            "reference": "sector_local_train_variance_ddof_0_R_sj",
+            "nu": C008_B3_DIAG04_NU,
+            "initialization_formula": "(n_k*S_kj + nu*R_sj)/(n_k+nu)",
+            "covars_prior_formula": "nu*R_sj",
+            "covars_weight": C008_B3_DIAG04_NU + 1.0,
+            "initialization_clip_performed": False,
+            "postfit_projection_performed": False,
+        },
+        "gaussian_hmm": {
+            "n_components": 3,
+            "covariance_type": "diag",
+            "min_covar": 0.0,
+            "startprob_prior": 1.0,
+            "transmat_prior": 1.0,
+            "means_prior": 0.0,
+            "means_weight": 0.0,
+            "covars_prior": "nu_times_sector_local_R_sj",
+            "covars_weight": C008_B3_DIAG04_NU + 1.0,
+            "algorithm": "viterbi",
+            "random_state": "restart_seed",
+            "n_iter": HMM_N_ITER,
+            "tol": 0.01,
+            "params": "stmc",
+            "init_params": "",
+            "implementation": "log",
+            "verbose": False,
+        },
+        "manual_initialization": {
+            "startprob": "uniform_1_over_3",
+            "transition_alpha": HMM_TRANSITION_ALPHA,
+            "minimum_self_transition": HMM_MIN_SELF_TRANSITION,
+            "transition_order": "hard_transition_counts_then_alpha_then_self_floor",
+        },
+        "hmm_refit_performed": True,
+        "selection_performed": False,
+        "formal_acceptance_thresholds_applied": False,
+    }
+
+
 def c008_b3_diag02_fixed_numeric_environment() -> dict[str, Any]:
     """Fail closed unless both fresh diagnostic processes use the approved single-thread environment."""
 
@@ -213,6 +277,47 @@ def c008_b3_diag02_fixed_numeric_environment() -> dict[str, Any]:
             packages[name] = "not-installed"
     return {
         "schema_version": "hmm_risk_c008_b3_diag02_numeric_environment_v1",
+        "scope": "same_host_same_fixed_numeric_environment_only",
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "python_executable": str(Path(sys.executable).resolve()),
+        "packages": packages,
+        "thread_env": thread_env,
+        "thread_pools": pools,
+    }
+
+
+def c008_b3_diag04_fixed_numeric_environment() -> dict[str, Any]:
+    """Fail closed unless DIAG-04 uses the approved same-host single-thread environment."""
+
+    thread_env = {key: os.environ.get(key) for key in C008_B3_DIAG02_FIXED_THREAD_ENV}
+    invalid = {key: value for key, value in thread_env.items() if value != "1"}
+    if invalid:
+        raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} requires fixed thread env value 1: {invalid}")
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError as exc:  # pragma: no cover - scikit-learn dependency contract supplies it.
+        raise StateModelSetError(f"threadpoolctl is required for {C008_B3_DIAG04_CONTRACT}") from exc
+    pools = threadpool_info()
+    non_single = [
+        {
+            "user_api": item.get("user_api"),
+            "internal_api": item.get("internal_api"),
+            "num_threads": item.get("num_threads"),
+        }
+        for item in pools
+        if int(item.get("num_threads") or 0) != 1
+    ]
+    if non_single:
+        raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} thread pools are not single-threaded: {non_single}")
+    packages = {}
+    for name in ("numpy", "scipy", "scikit-learn", "hmmlearn", "threadpoolctl"):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = "not-installed"
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag04_numeric_environment_v1",
         "scope": "same_host_same_fixed_numeric_environment_only",
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -951,6 +1056,23 @@ class _B3Diag02FitEvidence:
     model_numeric_payload_sha256: str
 
 
+@dataclass(frozen=True)
+class _B3Diag04FitEvidence:
+    train: np.ndarray
+    validation: np.ndarray
+    train_posteriors: np.ndarray
+    validation_posteriors: np.ndarray
+    startprob: np.ndarray
+    transmat: np.ndarray
+    means: np.ndarray
+    raw_covars: np.ndarray
+    initialization_evidence: dict[str, Any]
+    monitor_evidence: dict[str, Any]
+    covariance_evidence: dict[str, Any]
+    final_training_log_likelihood: float
+    model_numeric_payload_sha256: str
+
+
 def _manual_b3_diag02_initialization(
     train: np.ndarray,
     *,
@@ -1125,6 +1247,313 @@ def _fit_l1_b3_diag02_evidence(
         initialization_evidence=initialization,
         monitor_evidence=monitor,
         covariance_evidence=covariance,
+        model_numeric_payload_sha256=canonical_sha256(numeric_payload),
+    )
+
+
+def _sector_local_reference_variance(train: np.ndarray) -> np.ndarray:
+    values = np.asarray(train, dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] < 2 or values.shape[1] < 1 or not np.isfinite(values).all():
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} sector-local train observations are invalid",
+            stage="sector_local_covariance_reference",
+            evidence={"shape": list(values.shape), "non_finite_count": int((~np.isfinite(values)).sum())},
+        )
+    reference = np.var(values, axis=0, ddof=0)
+    if reference.shape != (values.shape[1],) or not np.isfinite(reference).all() or np.any(reference <= 0.0):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} sector-local R_sj must be finite and strictly positive",
+            stage="sector_local_covariance_reference",
+            evidence={
+                "reference_variance": [float(value) if math.isfinite(float(value)) else None for value in reference],
+                "non_positive_count": int((reference <= 0.0).sum()),
+                "non_finite_count": int((~np.isfinite(reference)).sum()),
+            },
+        )
+    return reference
+
+
+def _manual_b3_diag04_initialization(
+    train: np.ndarray,
+    *,
+    sector_reference_variance: np.ndarray,
+    random_seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    try:
+        from sklearn.cluster import KMeans
+    except ImportError as exc:  # pragma: no cover - dependency contract reports this explicitly.
+        raise StateModelSetError(f"scikit-learn is required for {C008_B3_DIAG04_CONTRACT}") from exc
+    reference = np.asarray(sector_reference_variance, dtype=np.float64)
+    if reference.shape != (train.shape[1],) or not np.isfinite(reference).all() or np.any(reference <= 0.0):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} sector-local R_sj is invalid",
+            stage="sector_local_covariance_reference",
+            evidence={"shape": list(reference.shape)},
+        )
+    kmeans = KMeans(
+        n_clusters=3,
+        init="k-means++",
+        n_init=1,
+        random_state=random_seed,
+        max_iter=300,
+        tol=1e-4,
+        algorithm="lloyd",
+        copy_x=True,
+    )
+    labels = np.asarray(kmeans.fit_predict(train), dtype=np.int64)
+    counts = np.bincount(labels, minlength=3)
+    if counts.shape != (3,) or np.any(counts < 2):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} KMeans requires three clusters with at least two rows each",
+            stage="manual_kmeans_initialization",
+            evidence={"cluster_counts": counts.astype(int).tolist()},
+        )
+    means = _finite_array(kmeans.cluster_centers_, f"{C008_B3_DIAG04_CONTRACT} initial means", ndim=2)
+    raw_cluster_covars = np.vstack([np.var(train[labels == state], axis=0, ddof=0) for state in range(3)])
+    if raw_cluster_covars.shape != means.shape or not np.isfinite(raw_cluster_covars).all():
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} KMeans covariance initialization is invalid",
+            stage="manual_kmeans_initialization",
+            evidence={"cluster_counts": counts.astype(int).tolist()},
+        )
+    nu = C008_B3_DIAG04_NU
+    covars = (counts[:, None] * raw_cluster_covars + nu * reference[None, :]) / (counts[:, None] + nu)
+    if not np.isfinite(covars).all() or np.any(covars <= 0.0):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} scale-aware initialized covariance is invalid",
+            stage="manual_kmeans_initialization",
+            evidence={"cluster_counts": counts.astype(int).tolist()},
+        )
+    transition_counts = np.zeros((3, 3), dtype=np.float64)
+    np.add.at(transition_counts, (labels[:-1], labels[1:]), 1.0)
+    transmat = (transition_counts + HMM_TRANSITION_ALPHA) / (
+        transition_counts.sum(axis=1, keepdims=True) + HMM_TRANSITION_ALPHA * 3.0
+    )
+    transmat = _apply_minimum_self_transition(transmat, field=f"{C008_B3_DIAG04_CONTRACT} initial transmat")
+    startprob = np.full(3, 1.0 / 3.0, dtype=np.float64)
+    evidence = {
+        "schema_version": "hmm_risk_c008_b3_diag04_manual_initialization_v1",
+        "thresholds_applied": False,
+        "random_seed": random_seed,
+        "kmeans_parameters": c008_b3_diag04_parameter_profile()["kmeans"],
+        "kmeans_iterations": int(kmeans.n_iter_),
+        "kmeans_inertia": float(kmeans.inertia_),
+        "cluster_counts": counts.astype(int).tolist(),
+        "cluster_label_sha256": canonical_sha256(labels.tolist()),
+        "means": means.tolist(),
+        "sector_local_reference_variance_R_sj": reference.tolist(),
+        "sector_local_reference_identity": _float64_array_identity(reference),
+        "nu": nu,
+        "raw_cluster_diag_covars_ddof_0": raw_cluster_covars.tolist(),
+        "scale_aware_initial_diag_covars": covars.tolist(),
+        "initialization_formula": "(n_k*S_kj + nu*R_sj)/(n_k+nu)",
+        "initialization_clip_performed": False,
+        "transition_counts": transition_counts.astype(int).tolist(),
+        "startprob": startprob.tolist(),
+        "transmat": transmat.tolist(),
+    }
+    return startprob, transmat, means, covars, evidence
+
+
+def _b3_diag04_covariance_evidence(
+    model: Any,
+    train: np.ndarray,
+    *,
+    raw_covars: np.ndarray,
+    sector_reference_variance: np.ndarray,
+) -> tuple[dict[str, Any], np.ndarray, float]:
+    values = np.asarray(raw_covars, dtype=np.float64)
+    reference = np.asarray(sector_reference_variance, dtype=np.float64)
+    diagnostic = _covariance_diagnostic(values, expected_shape=(3, train.shape[1]))
+    if not diagnostic["valid_for_bounding"]:
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} raw covariance is invalid",
+            stage="raw_covariance_validation",
+            evidence={"covariance": diagnostic},
+        )
+    try:
+        log_likelihood, smoothed = model.score_samples(train)
+    except Exception as exc:
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} full-sequence posterior audit failed: {exc}",
+            stage="smoothed_posterior_audit",
+            evidence={"error_type": type(exc).__name__, "error": str(exc)},
+        ) from exc
+    smoothed = np.asarray(smoothed, dtype=np.float64)
+    if (
+        not math.isfinite(float(log_likelihood))
+        or smoothed.shape != (train.shape[0], 3)
+        or not np.isfinite(smoothed).all()
+        or np.any(smoothed < 0.0)
+    ):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} full-sequence posterior audit is invalid",
+            stage="smoothed_posterior_audit",
+            evidence={"shape": list(smoothed.shape), "log_likelihood": float(log_likelihood)},
+        )
+    row_error = np.max(np.abs(smoothed.sum(axis=1) - 1.0))
+    masses = smoothed.sum(axis=0)
+    if not np.isfinite(masses).all() or np.any(masses <= 0.0):
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} smoothed state mass is invalid",
+            stage="smoothed_posterior_audit",
+            evidence={"state_masses": masses.tolist()},
+        )
+    weighted_means = (smoothed.T @ train) / masses[:, None]
+    weighted_variance = np.empty_like(values)
+    fitted_mean_second_moment = np.empty_like(values)
+    fitted_means = np.asarray(model.means_, dtype=np.float64)
+    for state in range(3):
+        weighted_variance[state] = (smoothed[:, state, None] * np.square(train - weighted_means[state])).sum(
+            axis=0
+        ) / masses[state]
+        fitted_mean_second_moment[state] = (smoothed[:, state, None] * np.square(train - fitted_means[state])).sum(
+            axis=0
+        ) / masses[state]
+    nu = C008_B3_DIAG04_NU
+    expected = (nu * reference[None, :] + masses[:, None] * fitted_mean_second_moment) / (nu + masses[:, None])
+    residual = values - expected
+    relative_residual = residual / np.maximum(np.abs(expected), np.finfo(np.float64).tiny)
+    lower = nu * reference[None, :] / (nu + masses[:, None])
+    upper = (nu + train.shape[0]) * reference[None, :] / (nu + masses[:, None])
+    below = values < lower
+    above = values > upper
+    evidence = {
+        **diagnostic,
+        "schema_version": "hmm_risk_c008_b3_diag04_covariance_audit_v1",
+        "formal_bounds_applied": False,
+        "formal_anomaly_budget_applied": False,
+        "mstep_consistency_acceptance_applied": False,
+        "postfit_projection_performed": False,
+        "posterior_kind": "full_sequence_forward_backward_smoothed_diagnostic_only",
+        "hard_semantic_authority_changed": False,
+        "nu": nu,
+        "sector_local_reference_variance_R_sj": reference.tolist(),
+        "state_posterior_mass": masses.tolist(),
+        "posterior_row_sum_max_abs_error": float(row_error),
+        "posterior_weighted_mean": weighted_means.tolist(),
+        "posterior_weighted_variance_about_weighted_mean": weighted_variance.tolist(),
+        "posterior_second_moment_about_fitted_mean": fitted_mean_second_moment.tolist(),
+        "mstep_expected_covariance": expected.tolist(),
+        "raw_covars": values.tolist(),
+        "mstep_residual": residual.tolist(),
+        "mstep_relative_residual": relative_residual.tolist(),
+        "mstep_max_abs_residual": float(np.max(np.abs(residual))),
+        "mstep_max_abs_relative_residual": float(np.max(np.abs(relative_residual))),
+        "dynamic_lower_reference": lower.tolist(),
+        "dynamic_upper_reference": upper.tolist(),
+        "dynamic_below_count_diagnostic": int(below.sum()),
+        "dynamic_above_count_diagnostic": int(above.sum()),
+        "dynamic_anomaly_mask_sha256": canonical_sha256((below | above).astype(np.uint8).tolist()),
+        "smoothed_posterior_identity": _float64_array_identity(smoothed),
+        "mstep_expected_covariance_identity": _float64_array_identity(expected),
+        "mstep_residual_identity": _float64_array_identity(residual),
+    }
+    return evidence, smoothed, float(log_likelihood)
+
+
+def _fit_l1_b3_diag04_evidence(
+    item: L1TrainingSeries,
+    *,
+    preprocess: Mapping[str, Any],
+    feature_count: int,
+    random_seed: int,
+) -> _B3Diag04FitEvidence:
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError as exc:  # pragma: no cover - dependency gate reports this explicitly.
+        raise StateModelSetError(f"hmmlearn is required for {C008_B3_DIAG04_CONTRACT}") from exc
+    code = item.sector_code
+    train = _apply_preprocess(item.train_observations, preprocess)
+    validation = _apply_preprocess(item.validation_observations, preprocess)
+    reference = _sector_local_reference_variance(train)
+    startprob, transmat, means, covars, initialization = _manual_b3_diag04_initialization(
+        train,
+        sector_reference_variance=reference,
+        random_seed=random_seed,
+    )
+    prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, feature_count)).copy()
+    model = GaussianHMM(
+        n_components=3,
+        covariance_type="diag",
+        min_covar=0.0,
+        startprob_prior=1.0,
+        transmat_prior=1.0,
+        means_prior=0.0,
+        means_weight=0.0,
+        covars_prior=prior,
+        covars_weight=C008_B3_DIAG04_NU + 1.0,
+        algorithm="viterbi",
+        random_state=random_seed,
+        n_iter=HMM_N_ITER,
+        tol=0.01,
+        verbose=False,
+        params="stmc",
+        init_params="",
+        implementation="log",
+    )
+    model.startprob_ = startprob.copy()
+    model.transmat_ = transmat.copy()
+    model.means_ = means.copy()
+    model.covars_ = covars.copy()
+    try:
+        model.fit(train)
+    except Exception as exc:
+        raise _L1FitDiagnosticError(
+            f"{C008_B3_DIAG04_CONTRACT} model training failed for {code}: {exc}",
+            stage="model_fit",
+            evidence={"initialization": initialization, "error_type": type(exc).__name__, "error": str(exc)},
+        ) from exc
+    monitor = _monitor_diagnostic(model)
+    raw_covars = np.asarray(model._covars_, dtype=np.float64)
+    covariance, smoothed_posteriors, final_likelihood = _b3_diag04_covariance_evidence(
+        model,
+        train,
+        raw_covars=raw_covars,
+        sector_reference_variance=reference,
+    )
+    try:
+        fitted_startprob = _probability_vector(model.startprob_, f"{code}.diag04.startprob", 3)
+        fitted_transmat = _transition_matrix(model.transmat_, f"{code}.diag04.transmat", 3)
+        fitted_means = _finite_array(model.means_, f"{code}.diag04.means", ndim=2)
+        train_posteriors = causal_forward_posteriors(
+            train, startprob=fitted_startprob, transmat=fitted_transmat, means=fitted_means, covars=raw_covars
+        )
+        validation_posteriors = causal_forward_posteriors(
+            validation, startprob=fitted_startprob, transmat=fitted_transmat, means=fitted_means, covars=raw_covars
+        )
+    except StateModelSetError as exc:
+        raise _L1FitDiagnosticError(
+            str(exc),
+            stage="parameter_or_posterior_validation",
+            evidence={"initialization": initialization, "monitor": monitor, "covariance": covariance},
+        ) from exc
+    numeric_payload = {
+        "parameter_profile_hash": canonical_sha256(c008_b3_diag04_parameter_profile()),
+        "startprob": _float64_array_identity(fitted_startprob),
+        "transmat": _float64_array_identity(fitted_transmat),
+        "means": _float64_array_identity(fitted_means),
+        "raw_covars": _float64_array_identity(raw_covars),
+        "sector_reference_variance": _float64_array_identity(reference),
+        "covariance_prior": _float64_array_identity(prior),
+        "monitor_history": _float64_array_identity(tuple(float(value) for value in model.monitor_.history)),
+        "smoothed_train_posteriors": _float64_array_identity(smoothed_posteriors),
+        "causal_train_posteriors": _float64_array_identity(train_posteriors),
+        "causal_validation_posteriors": _float64_array_identity(validation_posteriors),
+    }
+    return _B3Diag04FitEvidence(
+        train=train,
+        validation=validation,
+        train_posteriors=train_posteriors,
+        validation_posteriors=validation_posteriors,
+        startprob=fitted_startprob,
+        transmat=fitted_transmat,
+        means=fitted_means,
+        raw_covars=raw_covars,
+        initialization_evidence=initialization,
+        monitor_evidence=monitor,
+        covariance_evidence=covariance,
+        final_training_log_likelihood=final_likelihood,
         model_numeric_payload_sha256=canonical_sha256(numeric_payload),
     )
 
@@ -1539,6 +1968,134 @@ def diagnose_l1_seed_grid_b3_diag02(
         "feature_names": list(features),
         "preprocess": preprocess,
         "family_feature_variance_ddof_0": family_feature_variance.tolist(),
+        "expected_sector_set_hash": canonical_sha256(expected_codes),
+        "seed_results": seed_results,
+    }
+
+
+def diagnose_l1_seed_grid_b3_diag04(
+    series: Mapping[str, L1TrainingSeries],
+    *,
+    feature_names: Sequence[str],
+    preprocess_family: str,
+    seeds: Sequence[int] = C008_DIAGNOSTIC_SEEDS,
+) -> dict[str, Any]:
+    """Refit the approved DIAG-04 grid and collect scale-aware covariance evidence only."""
+
+    expected_codes = tuple(sorted(series))
+    if len(expected_codes) != EXPECTED_L1_COUNT:
+        raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} requires exactly 31 sectors; actual={len(expected_codes)}")
+    features = tuple(str(item) for item in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError(
+            f"{C008_B3_DIAG04_CONTRACT} feature definition must be the approved 7/20-dimensional family"
+        )
+    diagnostic_seeds = tuple(int(seed) for seed in seeds)
+    if diagnostic_seeds != C008_DIAGNOSTIC_SEEDS:
+        raise StateModelSetError(f"{C008_B3_DIAG04_CONTRACT} seeds must be exactly {C008_DIAGNOSTIC_SEEDS}")
+    for item in series.values():
+        item.validate(len(features))
+    preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
+    seed_results: dict[str, Any] = {}
+    for seed in diagnostic_seeds:
+        sectors: dict[str, Any] = {}
+        for code in expected_codes:
+            item = series[code]
+            try:
+                evidence = _fit_l1_b3_diag04_evidence(
+                    item,
+                    preprocess=preprocess,
+                    feature_count=len(features),
+                    random_seed=seed,
+                )
+            except StateModelSetError as exc:
+                sectors[code] = {
+                    "fit_status": "fit_failed",
+                    "failure_stage": getattr(exc, "stage", "unclassified_state_model_set_error"),
+                    "error": str(exc),
+                    "failure_evidence": getattr(exc, "evidence", {}),
+                    "training_rows": int(item.train_observations.shape[0]),
+                    "validation_rows": int(item.validation_observations.shape[0]),
+                    "hmm_refit_performed": True,
+                    "formal_acceptance_thresholds_applied": False,
+                }
+                continue
+            sector_score = evidence.final_training_log_likelihood / (evidence.train.shape[0] * len(features))
+            sectors[code] = {
+                "fit_status": "fit_completed_diagnostic_only",
+                "hmm_refit_performed": True,
+                "formal_acceptance_thresholds_applied": False,
+                "d4_acceptance_evaluated": False,
+                "d5_01_selection_score_approved": False,
+                "d6_semantic_acceptance_evaluated": False,
+                "training_rows": int(evidence.train.shape[0]),
+                "validation_rows": int(evidence.validation.shape[0]),
+                "initialization_evidence": evidence.initialization_evidence,
+                "monitor_evidence": evidence.monitor_evidence,
+                "covariance_evidence": evidence.covariance_evidence,
+                "train_hard_sequence_evidence": _hard_sequence_evidence(
+                    evidence.train_posteriors,
+                    item.train_dates,
+                ),
+                "validation_hard_sequence_evidence": _hard_sequence_evidence(
+                    evidence.validation_posteriors,
+                    item.validation_dates,
+                    utility=item.validation_future_utility,
+                ),
+                "train_log_likelihood_per_row_dimension_diagnostic": sector_score,
+                "model_numeric_payload_sha256": evidence.model_numeric_payload_sha256,
+                "fitted_parameter_identities": {
+                    "startprob": _float64_array_identity(evidence.startprob),
+                    "transmat": _float64_array_identity(evidence.transmat),
+                    "means": _float64_array_identity(evidence.means),
+                    "raw_covars": _float64_array_identity(evidence.raw_covars),
+                },
+            }
+        completed = [item for item in sectors.values() if item["fit_status"] == "fit_completed_diagnostic_only"]
+        observed_scores = [
+            float(item["train_log_likelihood_per_row_dimension_diagnostic"])
+            for item in completed
+            if item["train_log_likelihood_per_row_dimension_diagnostic"] is not None
+        ]
+        seed_results[str(seed)] = {
+            "seed": seed,
+            "sector_count": len(sectors),
+            "fit_completed_count": len(completed),
+            "fit_failed_count": len(sectors) - len(completed),
+            "all_31_fits_completed": len(completed) == EXPECTED_L1_COUNT,
+            "observed_score_count": len(observed_scores),
+            "observed_score_min_median_mean": (
+                [min(observed_scores), float(np.median(observed_scores)), float(np.mean(observed_scores))]
+                if observed_scores
+                else None
+            ),
+            "family_candidate_eligibility_evaluated": False,
+            "selection_performed": False,
+            "sectors": sectors,
+        }
+    return {
+        "schema_version": "hmm_risk_l1_c008_b3_diag04_v1",
+        "diagnostic_contract": C008_B3_DIAG04_CONTRACT,
+        "structural_contract": C008_B3_STRUCTURAL_CONTRACT,
+        "diagnostic_algorithm_version": C008_B3_DIAG04_VERSION,
+        "parameter_profile": c008_b3_diag04_parameter_profile(),
+        "parameter_profile_sha256": canonical_sha256(c008_b3_diag04_parameter_profile()),
+        "seeds": list(diagnostic_seeds),
+        "all_restarts_completed": True,
+        "hmm_refit_performed": True,
+        "selection_performed": False,
+        "artifact_write_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "formal_acceptance_thresholds_applied": False,
+        "hard_semantic_authority_changed": False,
+        "validation_accessed_for_selection": False,
+        "future_utility_accessed_for_selection": False,
+        "d4_exact_contract_approved": False,
+        "d5_01_exact_contract_approved": False,
+        "d6_exact_contract_approved": False,
+        "feature_names": list(features),
+        "preprocess": preprocess,
         "expected_sector_set_hash": canonical_sha256(expected_codes),
         "seed_results": seed_results,
     }

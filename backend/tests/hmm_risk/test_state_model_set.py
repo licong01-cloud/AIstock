@@ -524,6 +524,143 @@ def test_c008_b3_diag02_repeated_runner_requires_bitwise_canonical_equality(monk
     assert report["reproducibility"]["numeric_tolerance_used_for_acceptance"] is False
 
 
+def test_c008_b3_diag04_manual_initialization_uses_sector_scale_and_nu_without_clip() -> None:
+    rng = np.random.default_rng(20260725)
+    train = np.vstack(
+        [
+            rng.normal([-4.0, -40.0], [0.02, 2.0], size=(20, 2)),
+            rng.normal([0.0, 0.0], [0.03, 3.0], size=(20, 2)),
+            rng.normal([4.0, 40.0], [0.04, 4.0], size=(20, 2)),
+        ]
+    )
+    reference = subject._sector_local_reference_variance(train)
+
+    _, _, means, covars, evidence = subject._manual_b3_diag04_initialization(
+        train,
+        sector_reference_variance=reference,
+        random_seed=42,
+    )
+
+    counts = np.asarray(evidence["cluster_counts"], dtype=np.float64)
+    raw = np.asarray(evidence["raw_cluster_diag_covars_ddof_0"], dtype=np.float64)
+    expected = (counts[:, None] * raw + reference[None, :]) / (counts[:, None] + 1.0)
+    assert means.shape == covars.shape == (3, 2)
+    assert covars == pytest.approx(expected)
+    assert evidence["nu"] == 1.0
+    assert evidence["initialization_clip_performed"] is False
+    assert subject.c008_b3_diag04_parameter_profile()["gaussian_hmm"]["covars_weight"] == 2.0
+
+
+def test_c008_b3_diag04_rejects_non_positive_sector_reference() -> None:
+    train = np.column_stack((np.arange(12, dtype=np.float64), np.ones(12, dtype=np.float64)))
+
+    with pytest.raises(subject.StateModelSetError, match="strictly positive"):
+        subject._sector_local_reference_variance(train)
+
+
+def test_c008_b3_diag04_fit_records_smoothed_covariance_audit_without_acceptance() -> None:
+    item = next(iter(_training_series().values()))
+    preprocess = subject._fit_preprocess({item.sector_code: item}, preprocess_family="identity")
+
+    evidence = subject._fit_l1_b3_diag04_evidence(
+        item,
+        preprocess=preprocess,
+        feature_count=len(subject.BASE_FEATURES),
+        random_seed=42,
+    )
+
+    covariance = evidence.covariance_evidence
+    assert evidence.train_posteriors.shape == (150, 3)
+    assert evidence.validation_posteriors.shape == (60, 3)
+    assert covariance["posterior_kind"] == "full_sequence_forward_backward_smoothed_diagnostic_only"
+    assert covariance["formal_bounds_applied"] is False
+    assert covariance["formal_anomaly_budget_applied"] is False
+    assert covariance["mstep_consistency_acceptance_applied"] is False
+    assert covariance["postfit_projection_performed"] is False
+    assert covariance["hard_semantic_authority_changed"] is False
+    assert covariance["posterior_row_sum_max_abs_error"] < 1e-12
+    assert len(covariance["state_posterior_mass"]) == 3
+    assert len(evidence.model_numeric_payload_sha256) == 64
+
+
+def test_c008_b3_diag04_records_full_grid_without_selection(monkeypatch) -> None:
+    series = _training_series()
+
+    def fake_fit(item, *, preprocess, feature_count, random_seed):
+        del preprocess, random_seed
+        train = np.asarray(item.train_observations, dtype=np.float64)
+        validation = np.asarray(item.validation_observations, dtype=np.float64)
+        train_posteriors = np.zeros((train.shape[0], 3), dtype=np.float64)
+        validation_posteriors = np.zeros((validation.shape[0], 3), dtype=np.float64)
+        for state, indices in enumerate(np.array_split(np.arange(train.shape[0]), 3)):
+            train_posteriors[indices, state] = 1.0
+        for state, indices in enumerate(np.array_split(np.arange(validation.shape[0]), 3)):
+            validation_posteriors[indices, state] = 1.0
+        covars = np.ones((3, feature_count), dtype=np.float64)
+        return subject._B3Diag04FitEvidence(
+            train=train,
+            validation=validation,
+            train_posteriors=train_posteriors,
+            validation_posteriors=validation_posteriors,
+            startprob=np.asarray([1 / 3, 1 / 3, 1 / 3]),
+            transmat=np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            means=np.zeros((3, feature_count)),
+            raw_covars=covars,
+            initialization_evidence={"thresholds_applied": False},
+            monitor_evidence={"history": [-100.0, -90.0]},
+            covariance_evidence={"formal_bounds_applied": False},
+            final_training_log_likelihood=-90.0,
+            model_numeric_payload_sha256="b" * 64,
+        )
+
+    monkeypatch.setattr(subject, "_fit_l1_b3_diag04_evidence", fake_fit)
+    report = subject.diagnose_l1_seed_grid_b3_diag04(
+        series,
+        feature_names=subject.BASE_FEATURES,
+        preprocess_family="identity",
+    )
+
+    assert report["diagnostic_contract"] == "C-008-B3-D3-03/D4-02-DIAG-04"
+    assert report["seeds"] == list(range(42, 50))
+    assert report["hmm_refit_performed"] is True
+    assert report["selection_performed"] is False
+    assert report["formal_acceptance_thresholds_applied"] is False
+    assert report["hard_semantic_authority_changed"] is False
+    for seed in report["seed_results"].values():
+        assert seed["fit_completed_count"] == 31
+        assert seed["family_candidate_eligibility_evaluated"] is False
+        assert seed["selection_performed"] is False
+
+
+def test_c008_b3_diag04_repeated_runner_requires_bitwise_canonical_equality(monkeypatch, tmp_path) -> None:
+    payload = subject.canonical_json_bytes(
+        {"schema_version": "diag04-single", "status": "diagnostic_complete", "families": []}
+    )
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(preparation.subprocess, "run", fake_run)
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        artifact_root=str(tmp_path / "artifacts"),
+        output_root=str(tmp_path / "output"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+    )
+
+    report, reproducible = preparation._run_c008_b3_diag04_repeated(args)
+
+    assert reproducible is True
+    assert len(calls) == 2
+    assert report["schema_version"] == "hmm_risk_c008_b3_diag04_repeated_report_v1"
+    assert report["reproducibility"]["fresh_process_repeat_count"] == 2
+    assert report["reproducibility"]["canonical_payload_bitwise_equal"] is True
+    assert report["reproducibility"]["numeric_tolerance_used_for_acceptance"] is False
+
+
 def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> None:
     report = {
         "schema_version": "hmm_risk_c008_seed_diagnostic_report_v1",
