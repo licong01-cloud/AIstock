@@ -473,8 +473,55 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert published.prediction_path.exists()
     assert (published.workspace / "conf.yaml").exists()
     assert published.artifact_manifest["schema_version"] == "multi_alpha_child_artifact_manifest_v1"
+    assert published.artifact_manifest["l2_artifact"]["path"] == "combined_factors_df.parquet"
     assert replay.artifact_manifest == published.artifact_manifest
     assert not list(published.workspace.parent.glob("*.tmp"))
+
+
+def test_publish_rejects_missing_l2_artifact_before_artifact_manifest(tmp_path: Path) -> None:
+    adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    (tmp_path / "runtime" / "combined_factors_df.parquet").unlink()
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+
+    with pytest.raises(DurableExecutionAdapterError) as caught:
+        adapter.publish_artifacts(materialized)
+
+    assert caught.value.reason_code == "multi_alpha_l2_artifact_missing"
+    assert not (materialized.workspace / "artifact_manifest.json").exists()
+
+
+def test_publish_copies_explicit_absolute_l2_source_into_immutable_workspace(tmp_path: Path) -> None:
+    adapter, repository, _coordinator, artifact_client, _used_nodes = _adapter(tmp_path)
+    runtime_l2 = tmp_path / "runtime" / "combined_factors_df.parquet"
+    runtime_l2.unlink()
+    external_l2 = tmp_path / "authoritative" / "g14-fp-h40.parquet"
+    external_l2.parent.mkdir()
+    external_l2.write_bytes(b"authoritative-l2")
+    repository.run["backtest_config_json"]["combined_factors_path"] = str(external_l2)
+    repository.run["backtest_config_json"]["_combine_request_v1"]["backtest_config"][
+        "combined_factors_path"
+    ] = str(external_l2)
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+
+    published = adapter.publish_artifacts(materialized)
+    external_l2.unlink()
+    published_l2 = published.workspace / "combined_factors_df.parquet"
+
+    assert published_l2.read_bytes() == b"authoritative-l2"
+    assert published.artifact_manifest["l2_artifact"] == {
+        "path": "combined_factors_df.parquet",
+        **published.artifact_manifest["files"]["combined_factors_df.parquet"],
+    }
+    assert adapter._published_l2_artifact_path(published) == published_l2
+    assert artifact_client.paths == []
 
 
 def test_publish_excludes_and_records_node_bound_qe_data_files(
