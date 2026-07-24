@@ -28,9 +28,9 @@ SEQUENCE_CONFLICT_REASON = "QE_RESOURCE_EVENT_SEQUENCE_CONFLICT"
 PHASE_INVALID_REASON = "QE_RESOURCE_EVENT_PHASE_INVALID"
 GPU_LEASE_BUSY_REASON = "QE_GPU_PHASE_LEASE_BUSY"
 GPU_PHASE_LIFECYCLE_REASON = "QE_GPU_PHASE_LIFECYCLE_COMPLETE"
-QELT_SOURCE_PREFIX = "qelt:"
 
 TERMINAL_PHASES = {"completed", "failed", "cancelled"}
+QELT_SOURCE_RUN_KEY_PREFIX = "qelt:"
 GPU_RELEASE_PHASES = {"gpu_phase_released", "release_rejected"}
 _PHASE_TRANSITIONS: dict[str, set[str]] = {
     "created": {"bootstrap", "train", "backtest", "long_trend_eval", "failed"},
@@ -71,10 +71,6 @@ def _token_sha256(token: str) -> str:
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def is_independent_qelt_source_run_key(source_run_key: Any) -> bool:
-    return str(source_run_key or "").startswith(QELT_SOURCE_PREFIX)
 
 
 def validate_phase_transition(current_phase: str, event: Mapping[str, Any]) -> None:
@@ -398,12 +394,18 @@ class QEResourcePhaseService:
                 cur.execute(
                     """
                     UPDATE qe_archive.run_resource_session
-                    SET status = %s,
+                    SET status = CASE
+                            WHEN status IN ('completed', 'failed', 'cancelled') THEN status
+                            ELSE %s
+                        END,
                         current_phase = CASE
                             WHEN current_phase IN ('completed', 'failed', 'cancelled') THEN current_phase
                             ELSE %s
                         END,
-                        terminal_reason_code = COALESCE(%s, terminal_reason_code),
+                        terminal_reason_code = CASE
+                            WHEN status IN ('completed', 'failed', 'cancelled') THEN terminal_reason_code
+                            ELSE COALESCE(%s, terminal_reason_code)
+                        END,
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
                     WHERE session_id = %s
@@ -484,8 +486,8 @@ class QEResourcePhaseService:
                     FROM qe_evolution_loops l
                     WHERE s.task_id = l.task_id
                       AND s.loop_index = l.loop_index
-                      AND s.source_run_key NOT LIKE 'qelt:%'
                       AND s.status IN ('reserved', 'running')
+                      AND s.source_run_key NOT LIKE 'qelt:%'
                       AND l.status IN (
                           'completed', 'failed', 'cancelled', 'canceled',
                           'interrupted', 'timeout', 'stopped'
@@ -629,7 +631,7 @@ class QEResourcePhaseService:
                     )
 
                 current_phase = str(session["current_phase"] or "created")
-                qelt_source = is_independent_qelt_source_run_key(session["source_run_key"])
+                qelt_source = str(session["source_run_key"]).startswith(QELT_SOURCE_RUN_KEY_PREFIX)
                 if phase == "long_trend_eval" and not qelt_source:
                     raise QEResourcePhaseError(
                         PHASE_INVALID_REASON,

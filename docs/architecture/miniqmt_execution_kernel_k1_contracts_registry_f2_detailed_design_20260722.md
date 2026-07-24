@@ -2,9 +2,9 @@
 
 > 权威关系：本文是 [`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md) 的 K1 下位实施合同；模拟盘唯一上位权威仍是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。冲突时依次以上位蓝图、整体内核蓝图、本文为准。本文不得改写 StrategyPackage admission、Selection/Target、`B0_QUOTE_V2`、OMS、Gateway 或唯一 broker route 的 owner。
 >
-> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K1-A implemented_verified`，`K1-B/K1-C not_started`，K1 overall `in_progress`。
+> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K1-A implemented_verified + merged`（PR #2637，merge `e69e72dbdd6e5fd8d414721adaa86ccec7fafc2f`），`K1-B implemented_verified + merged`（PR #2655，final source HEAD `97f7a030a7eace0bacaa92892f40235116b60aaa`，merge `ae1035a1ab4916427f7b72443c6235d544eb4c8e`，mergedAt `2026-07-24T04:52:30Z`，`source_merge=merged_pr_2655`）；K1-C committed/source 尚未进入 main/PR、`source_merge=not_committed`，本地隔离 worktree 观察为 `C1=in_progress`、import-boundary `implemented_verified_local`、compatibility requirement/locked surface/receipt `blocked_by_design_and_source_authority`，不构成已提交实现；K1 overall `in_progress`；K2/K3/K4 均 `not_started`，`close_sync=not_applicable_feature`，产品 runtime 未切换，production DDL/DML/dependency/config/binding/broker/restart/runtime activation gates 均为 `noop`。
 >
-> 当前实现基线：`origin/main@b03f368a6bfe188219478eca542b0a4c8bde3c76`，审核补修日期 2026-07-23。
+> 当前实现基线：`origin/main@3f77aa16bed0129e182849a7c57fdf87c20dc264`，K1-B 编码前审核日期 2026-07-23。
 >
 > 交付边界：本文只定义 K1 contracts、code-owned plugin catalog/registry construction、deterministic context、current-three manifests、pinned vn.py compatibility lock/receipt 和 import boundary。本文不实施产品代码、不执行 DDL/DML、不修改生产配置、不调用 broker、不启动、停止或重启服务。
 
@@ -128,7 +128,7 @@ vnpy_compat locked surface/receipts -> plugin_contracts + plugin_canonical
 composition root -> plugin_registry + explicit process bindings + creation bindings
 ```
 
-`jsonschema` 只用于校验 code-owned manifest 的 config/state JSON Schema 定义以及 writer/readback instance；它是仓库已锁定的后端依赖，不提供网络、动态插件加载、默认值注入或运行时 gate。schema `$ref/$dynamicRef` 只允许当前 document 内可解析到现存目标的 `#`/`#/...` local JSON pointer，外部 URI、anchor alias 或 missing target 在 validator 运行前拒绝，禁止隐式网络 retrieval。校验必须先 `check_schema`，再汇总确定性排序后的 instance violations；不得只 hash schema 而不执行 schema。
+`jsonschema` 只用于校验 code-owned manifest 的 config/state JSON Schema 定义以及 writer/readback instance；它是仓库已锁定的后端依赖，不提供网络、动态插件加载、默认值注入或运行时 gate。schema `$ref/$dynamicRef` 只允许当前 document 内可解析到现存目标的 `#`/`#/...` local JSON pointer，外部 URI、anchor alias 或 missing target 在 validator 运行前拒绝，禁止隐式网络 retrieval。校验必须先 `check_schema`，再使用 K1-A 唯一 `validate_json_schema_instance_v1` authority 有界消费 instance violations：最多保留 32 项，只为判断截断再观察第 33 项；evidence 固定携带 `violations_truncated/retained_violation_count/observed_violation_count_lower_bound/ordered_violations`，同一 malformed input 必须稳定且 JSON-safe。不得先无界 materialize 后切片、静默丢弃第 33 项以后错误或只 hash schema 而不执行 schema。
 
 插件/manifest/compat 模块禁止导入：
 
@@ -222,7 +222,7 @@ hash_hex_v1(domain, payload) = lowercase_hex(digest_bytes_v1(domain, payload))  
 | `restart_policy` | literal `DURABLE_RESTORE` |
 | `source_attribution` | `SourceAttributionV1`，含 repo/commit/files+hash/license/AIstock source hashes |
 | `compatibility_requirement` | `VnpyCompatibilityRequirementV1` |
-| `behavior_characterization_sha256` | current core trace vectors hash |
+| `behavior_characterization_sha256` | 带 schema/algo/vector identity 的 current core executable trace vectors 与 kernel behavior assertions 的完整 hash；不能只 hash 无输入/输出的说明文字 |
 | `behavior_contract_sha256` | 下述 behavior closure hash |
 | `manifest_sha256` | 下述完整 manifest hash |
 
@@ -246,6 +246,8 @@ hash_hex_v1(domain, payload) = lowercase_hex(digest_bytes_v1(domain, payload))  
 
 `plugin_id + plugin_version` 唯一；同 key 只有完整 manifest hash 相同才幂等。相同 `algo_code` 可以登记多个历史可恢复版本，但 code-owned catalog 必须且只能用一个 hash-covered `creation_binding` 指定新实例的 exact PluginKey；历史 restore 使用 durable snapshot key，不自动选 latest、不把旧版本删除，也不通过 Gateway capability 改写 creation binding。
 
+参与 manifest/catalog 构建的 code-owned module authority 在模块加载时即冻结：`CURRENT_THREE_BEHAVIOR_CHARACTERIZATIONS_V2` 与 `_LEGACY_DEFAULTS` 使用 K1-A recursive `FrozenJsonObjectV1`；`_UPSTREAM_HASHES`、`_ALGO_FACTS`、`_PROCESS_VALIDATOR_FACTS` 使用只含 immutable scalar/tuple 的 sealed `MappingProxyType`，`_PLUGIN_FIELDS` 的 nested field sets 为 `frozenset`，`_CONTROL_FIELDS` 为 `frozenset`。`_ALGO_FACTS/_PROCESS_VALIDATOR_FACTS` 只保存 plugin/algo/version/state schema、expected factory/config-validator/state-codec callable ref 与 normalized signature hash、source path/hash 和 behavior identity 等可 canonicalize durable facts，禁止保存 class/function/callable object。live factory/config-validator/state-codec 只能存在于独立 process-local binding table，不能动态生成或改写 durable manifest/descriptor identity。构建可以从 frozen authority 取得新的 thawed working copy，但不得暴露或复制已经可被调用方污染的 mutable global；任何顶层或嵌套 mutation 必须明确失败且不得改变后续 manifest/catalog hash。
+
 ### 5.2 `MarketDataRequirementV1` 与 `GatewayCapabilityCatalogV1`
 
 `MarketDataRequirementV1` 字段：
@@ -260,7 +262,7 @@ hash_hex_v1(domain, payload) = lowercase_hex(digest_bytes_v1(domain, payload))  
 
 `MarketDataViewV2` 的 `L1_BID/L1_ASK` projection 保留该侧真实 price 和 volume，但 requirement 只检查 `required_fields`。Sniper 的对手盘要求 price+volume；BestLimit/TWAP 只要求其实际消费的 price，不能因未消费的 volume 暂缺额外阻断。任何已提供字段仍由 B0 authority 按既有 schema 校验，非法值不得当作 missing。`AUCTION_NATIVE` 只接受 source 原生 auction payload，禁止从普通 quote、last price、minute bar、旧缓存或 timer 合成。
 
-`GatewayCapabilityCatalogV1` 字段为 `schema_version/route_id/quote_source/gateway_backend/order_types/market_data_capabilities/session_phases/idempotent_submit_by_client_ref/exact_order_id_cancel/catalog_sha256`；`catalog_sha256 = hash_hex_v1("miniqmt_gateway_capability_catalog_v1", exact preceding fields)`。它是代码/adapter capability fact，不是策略包校验或人工门禁，也不进入 plugin catalog hash。K1 route evaluator 生成 per-plugin/per-route `PluginRouteCompatibilityReceiptV1`；K2 algo creation 才消费该 receipt。static unsupported、current observation missing、supplied invalid 三种状态不得合并。
+`GatewayCapabilityCatalogV1` 字段为 `schema_version/route_id/quote_source/gateway_backend/order_types/market_data_capabilities/session_phases/idempotent_submit_by_client_ref/exact_order_id_cancel/catalog_sha256`；`catalog_sha256 = hash_hex_v1("miniqmt_gateway_capability_catalog_v1", exact preceding fields)`。它是代码/adapter capability fact，不是策略包校验或人工门禁，也不进入 plugin catalog hash。K1 route evaluator 入口必须用同一 `GatewayCapabilityCatalogV1.model_validate(..., strict=True)` writer/readback authority 重新证明 schema/identity/hash closure；stale `model_copy`、caller hash drift 或 supplied invalid 产生 typed `MINIQMT_GATEWAY_CAPABILITY_CATALOG_INVALID`，不得降级成 static unsupported。有效 MiniQMT route 固定要求 `quote_source=B0_QUOTE_V2`；manifest `required_facade_methods` 包含 `cancel_order` 时固定要求 `exact_order_id_cancel=true`；`idempotent_submit_by_client_ref=false` 仍是允许事实，不得新增为门禁。K1 route evaluator 生成 per-plugin/per-route `PluginRouteCompatibilityReceiptV1`；K2 algo creation 才消费该 receipt。static unsupported、current observation missing、supplied invalid 三种状态不得合并。
 
 ### 5.3 `RuntimeEventEnvelopeV2` 与 `AlgoEventDeliveryV1`
 
@@ -348,7 +350,7 @@ build_plugin_catalog_v2(
     descriptors: tuple[PluginRegistrationDescriptorV2, ...],
     creation_bindings: tuple[PluginCreationBindingV1, ...],
     process_bindings: PluginProcessBindingsV2,
-    compatibility_surface: VnpyCompatibilitySurfaceV1,
+    pinned_compatibility_receipts: tuple[VnpyCompatibilityReceiptV1, ...],
 ) -> PluginCatalogRuntimeV2
 
 evaluate_plugin_route_compatibility_v1(
@@ -362,8 +364,8 @@ evaluate_plugin_route_compatibility_v1(
 四类对象严格分层：
 
 1. `PluginKeyV1 = plugin_id + plugin_version + manifest_sha256`；
-2. `PluginRegistrationDescriptorV2 = manifest + factory_binding_id + factory_signature_sha256 + config_validator_binding_id + config_validator_signature_sha256 + state_codec_binding_id + state_codec_signature_sha256`，仅含可 canonicalize 的 frozen data；
-3. `PluginProcessBindingsV2` 是 process-local sealed mapping：binding ID -> explicit callable。constructor 必须先复制 caller mapping，再以不可变 mapping view 保存 exact callable references；caller 后续修改原 dict 不得换掉已验证 binding。callable 只能由 composition root 代码引用，不能从 `implementation_ref` import；该 mapping 不进入任何 durable/canonical hash，但 callable 的 `__module__ + __qualname__` 必须等于 descriptor/manifest exact implementation ref，normalized `inspect.signature` 必须等于 descriptor signature hash，`inspect.getsourcefile` 的 repo-relative path/hash 必须与 `SourceAttributionV1.aistock_files` 闭合；只验证同 signature 而接受另一函数属于 `MINIQMT_PLUGIN_BINDING_INVALID`；
+2. `PluginRegistrationDescriptorV2 = manifest + factory_binding_id + factory_callable_ref + factory_signature_sha256 + config_validator_binding_id + config_validator_callable_ref + config_validator_signature_sha256 + state_codec_binding_id + state_codec_callable_ref + state_codec_signature_sha256`，仅含可 canonicalize 的 frozen data；`factory_callable_ref` 必须等于 manifest `implementation_ref`，另外两个 callable ref 必须是显式 `python.module:qualname`，不得由 binding ID、命名约定或动态 import 猜测；
+3. `PluginProcessBindingsV2` 是 process-local sealed mapping：binding ID -> explicit callable。constructor 必须先复制 caller mapping，再以不可变 mapping view 保存 exact callable references；caller 后续修改原 dict 不得换掉已验证 binding。callable 只能由 composition root 代码引用，不能从任何 callable ref import；该 mapping 不进入任何 durable/canonical hash，也不能作为 manifest/descriptor writer 的输入 authority。每个 callable 的 `__module__ + __qualname__` 必须分别等于冻结 descriptor 对应 callable ref，normalized `inspect.signature` 必须等于冻结 descriptor 对应 signature hash，`inspect.getsourcefile` 的 repo-relative path/hash 必须与 `SourceAttributionV1.aistock_files` 闭合；只验证同 signature 而接受另一函数，或因运行中 `__qualname__/__signature__` 漂移而重写 descriptor/catalog identity，均属于 `MINIQMT_PLUGIN_BINDING_INVALID`。signature normalization 固定为 parameter 的 `name/kind/required-or-canonical-JSON-default/annotation-qualified-name` ordered tuple 与 return annotation；禁止 `repr`、object address、PID 或解释器生成的临时 identity；
 4. `PluginCreationBindingV1 = algo_code + exact PluginKeyV1`，决定新实例版本并进入 catalog hash。历史 restore 始终使用 instance snapshot 的 frozen PluginKeyV1，不查询 creation binding。
 
 current-three `creation_bindings` 固定为：
@@ -376,11 +378,13 @@ TWAP_LITE_MINIQMT  -> aistock.vnpy.twap_lite / 2.0.0 / registered manifest_sha25
 
 manifest hash 在 implementation 构建时由注册对象计算，上述 binding 必须引用同一 descriptor 的实际 hash，不允许独立复制 hash 字符串。每个 active `algo_code` 必须且只能有一个 creation binding；binding 缺失、指向不存在/历史-only descriptor、algo_code 不一致均为 catalog build conflict。禁止自动 latest、数据库热选版本或 kernel 的具体算法分支。
 
-catalog 构建顺序固定：strict parse/deep-freeze → schema/hash closure → source/behavior closure → process binding existence/signature closure → pinned vn.py compatibility receipt → duplicate/version/creation-binding closure → 按 `(algo_code,plugin_id,plugin_version,manifest_sha256)` 排序冻结 snapshot。schema/source/binding/identity 任一失败均不发布 catalog，并抛出携带完整 `PluginCatalogBuildFailureReceiptV1` 的 `PluginCatalogBuildError`。
+catalog 构建顺序固定：strict parse/deep-freeze → schema/hash closure → source/behavior closure → process binding existence/ref/signature/source closure → supplied pinned vn.py compatibility receipt closure → duplicate/version/creation-binding closure → 按 `(algo_code,plugin_id,plugin_version,manifest_sha256)` 排序冻结 snapshot。K1-B 不生成 compatibility receipt；它要求调用方显式提供每个 descriptor 恰好一个 `VnpyCompatibilityReceiptV1`，并验证 plugin key、manifest/requirement/source/method/object/characterization hash、`status=PASSED` 和 receipt hash。缺失、重复、FAILED、identity/hash 不一致全部进入 aggregate build failure。K1-C 才实现从 pinned source/surface 生成该 receipt；K1-B 不提供默认 receipt、固定 PASSED、no-op validator 或省略参数的 overload。schema/source/binding/identity 任一失败均不发布 catalog，并抛出携带完整 `PluginCatalogBuildFailureReceiptV1` 的 `PluginCatalogBuildError`。
 
-`PluginCatalogBuildFailureReceiptV1` 字段为 `schema_version,build_input_sha256,ordered_descriptor_keys,ordered_failures,failure_set_sha256,receipt_sha256`；`failure_set_sha256 = hash_hex_v1("miniqmt_plugin_catalog_failure_set_v1", ordered_failures)`，`receipt_sha256 = hash_hex_v1("miniqmt_plugin_catalog_build_failure_receipt_v1", exact preceding fields)`。它不含 wall clock、callable repr/地址或 Gateway catalog。exception 是该 receipt 的唯一返回载体，调用方不得以空 catalog 或上一个 catalog 假成功。ordered failures 使用 stable stage/plugin/field/reason/context hash 排序并保留全部 bounded failures。
+`PluginCatalogBuildFailureV1` exact 字段为 `stage,plugin_id,plugin_version,algo_code,manifest_sha256,field_path,reason_code,context,context_sha256`；stage 仅允许 `STRICT_PARSE/SCHEMA_HASH/SOURCE_BEHAVIOR/PROCESS_BINDING/PINNED_COMPATIBILITY/REGISTRATION_CREATION/SNAPSHOT_FREEZE`。`context` 先经过 K1-A bounded JSON-safe evidence codec，最多 32 items、2048 字符 value、8 层；`context_sha256 = hash_hex_v1("miniqmt_plugin_catalog_failure_context_v1", context)`。排序 key 固定为 `(stage,plugin_id,plugin_version,algo_code,manifest_sha256,field_path,reason_code,context_sha256)`。
 
-`PluginCatalogSnapshotV1` 只包含 `schema_version,registration_descriptors,pinned_compatibility_receipts,creation_bindings,catalog_sha256`；`catalog_sha256 = hash_hex_v1("miniqmt_plugin_catalog_snapshot_v1", exact preceding fields)`。`PluginCatalogRuntimeV2` 仅在 snapshot 成功后将其与已验证的 process bindings 组合；snapshot/canonical hash 从不包含 callable、构建时间、进程 ID 或内存地址。同一 descriptor/binding 输入以任意输入顺序、不同进程构建必须得到 byte-identical snapshot。
+`PluginCatalogBuildFailureReceiptV1` 字段为 `schema_version,build_input_sha256,ordered_descriptor_keys,total_failure_count,failures_truncated,ordered_failures,omitted_failure_set_sha256,failure_set_sha256,receipt_sha256`；failure receipt 必须至少闭合一个真实 failure，writer 与 hash-correct readback 均拒绝 `total_failure_count=0/ordered_failures=[]`，不得自动制造 marker 或把空 failure 转成 success。最多返回 256 项，若总数超过 256，保留排序后的前 255 项并以第 256 项（固定为最后一项，不再次参与普通 failure sort）`SNAPSHOT_FREEZE/__failure_set__/MINIQMT_PLUGIN_REGISTRATION_CONFLICT` 记录 omitted count 与全部 omitted failure identities 的 hash。非截断 receipt 必须满足 `total_failure_count == len(ordered_failures)`；截断 marker 必须精确闭合 `omitted_count = total_failure_count - 255` 与 `omitted_failure_set_sha256`。`failure_set_sha256 = hash_hex_v1("miniqmt_plugin_catalog_failure_set_v1", {total_failure_count,failures_truncated,ordered_failures,omitted_failure_set_sha256})`，`receipt_sha256 = hash_hex_v1("miniqmt_plugin_catalog_build_failure_receipt_v1", exact preceding fields)`。`build_input_sha256` 只覆盖按 canonical bytes 排序的 descriptors/creation bindings bounded JSON-safe input evidence、排序后的 process binding IDs 和 supplied receipt data，不含 callable；同一语义输入 permutation 的 failure receipt 必须 byte-identical。receipt 不含 wall clock、callable repr/地址或 Gateway catalog。exception 是该 receipt 的唯一返回载体，调用方不得以空 catalog、partial catalog 或上一个 catalog 假成功。
+
+`PluginCatalogSnapshotV1` 只包含 `schema_version,registration_descriptors,pinned_compatibility_receipts,creation_bindings,catalog_sha256`；`catalog_sha256 = hash_hex_v1("miniqmt_plugin_catalog_snapshot_v1", exact preceding fields)`。writer 只能按固定 canonical key 排序后生成 snapshot；persisted/readback carrier 必须已经保持该顺序，禁止 readback 端先排序再接受非 canonical snapshot。readback 除重算 hash 外还必须重新证明 descriptor key/version 唯一、每个 descriptor 恰有一个 PASSED receipt、每个 algo 恰有一个指向 exact registered PluginKey 的 creation binding，以及 nested descriptor/receipt hash closure；hash-correct 但 duplicate、noncanonical、orphan 或 incomplete 的 durable snapshot 必须拒绝。`PluginCatalogRuntimeV2` 仅在 snapshot 成功后将其与已验证的 process bindings 组合；snapshot/canonical hash 从不包含 callable、构建时间、进程 ID 或内存地址。同一 descriptor/binding 输入以任意输入顺序、不同进程构建必须得到 byte-identical snapshot。
 
 Gateway capability 不参与 plugin catalog 构建和 `catalog_sha256`。`evaluate_plugin_route_compatibility_v1` 在 algo 创建前按 exact plugin key + exact gateway catalog 生成：
 
@@ -390,14 +394,29 @@ PluginRouteCompatibilityReceiptV1 =
   plugin_key / algo_code
   plugin_manifest_sha256 / catalog_sha256
   gateway_capability_catalog_sha256
+  gateway_route_id
+  required_facade_methods
+  required_gateway_backends / observed_gateway_backend
+  required_quote_source / observed_quote_source
+  requires_exact_order_id_cancel / observed_exact_order_id_cancel
+  observed_idempotent_submit_by_client_ref
   required/supported order types
   required/supported market capabilities with side/field/session detail
+  observed_session_phases
   status = PASSED | FAILED
   ordered_failures
   receipt_sha256
 ```
 
+每项 `PluginRouteCompatibilityFailureV1.context` 固定闭合 `plugin,route,requirement,expected,actual,gateway_catalog_identity(route_id/catalog_sha256)` 并计算 `context_sha256`。唯一 pure route evaluator 必须从 exact catalog descriptor 派生 plugin/algo/manifest、required facade/order/market/backend facts，从 strict-readback gateway catalog 派生 route/hash/quote/backend/order/market/session/exact-cancel/idempotent facts，并自动生成完整、稳定排序、无重复的 failure set 与 status。`PluginRouteCompatibilityReceiptV1.create()` 只接受 exact `catalog_snapshot + plugin_key + gateway_catalog` authority，不接受 caller-supplied failure list；evaluator writer 只能调用该 authority。
+
+普通 `model_validate/model_validate_json` 只证明 receipt 自身 strict schema、nested hash、failure ordering/uniqueness、status 与 `receipt_sha256` 的 structural closure，不得冒充 route business authority readback。durable consumer 必须显式调用 `validate_against_authority_v1(catalog_snapshot, gateway_catalog)`：该方法 strict-readback 两个 catalog，重新运行同一个 pure evaluator并 exact 比较 receipt 的每个 field、完整 failure set、status 与 hash。missing/extra/duplicate/伪造 failure、hash-correct algo/plugin/manifest/catalog/route/gateway/fact/context 漂移全部以 typed JSON-safe `MINIQMT_PLUGIN_ROUTE_COMPATIBILITY_RECEIPT_INVALID` fail-loud。K2 在消费任何 route receipt 前必须调用该方法；不能仅凭 opaque hash 或普通 model readback 准入/阻断。合法 PASSED/FAILED receipt 因而都显式携带经过 strict readback 的 authority identity/facts；`idempotent_submit_by_client_ref=false` 只记录，不成为门禁。
+
+`validate_against_authority_v1` 的错误分类固定为三个有序阶段，禁止 catch-all 改写主错误：第一阶段 strict-readback plugin catalog snapshot，失败原样保留其批准的 typed reason/message/JSON-safe context；第二阶段 strict-readback supplied gateway catalog，`MINIQMT_GATEWAY_CAPABILITY_CATALOG_INVALID` 必须连同 route/catalog identity、requirement、expected/actual 和 exception chain 原样传播，不得包装成 receipt invalid 或降级成 `STATIC_UNSUPPORTED`；只有两个 authority 均有效后，第三阶段才按 exact descriptor 与 pure evaluator 重建 receipt，且仅 durable receipt 与重建结果不一致时产生 `MINIQMT_PLUGIN_ROUTE_COMPATIBILITY_RECEIPT_INVALID`。有效 authority 的能力不满足仍生成该 plugin/route 的 exact FAILED receipt、`broker_called=false`，不新增静态 capability 门禁。
+
 `receipt_sha256 = hash_hex_v1("miniqmt_plugin_route_compatibility_receipt_v1", exact preceding fields)`。FAILED route receipt 只拒绝该 plugin/route 的 algo 创建并保留 `broker_called=false`，catalog 和其它 plugin/route 继续有效。它不是人工审批，也不能写回或移除 catalog registration。
+
+route evaluator 只比较 static route facts，failure kind 固定为 `STATIC_UNSUPPORTED`；current observation missing 与 supplied invalid observation 不是该函数输入，分别由 event delivery 的 durable wait/EOD residual 与 B0 typed rejection 处理，禁止在 route receipt 中伪装为 static unsupported。
 
 禁止：目录扫描、namespace package scanning、`importlib` 动态字符串、Python entry point、配置文件任意 module/class、上传 zip/wheel、热 reload、自动选最高版本、未注册 fallback、捕获异常后跳过坏插件。
 
@@ -412,6 +431,8 @@ PluginRouteCompatibilityReceiptV1 =
 | `MINIQMT_PLUGIN_CONFIG_SCHEMA_INVALID` | config invalid/unknown/type coercion required | caller receives typed failure；K1 shadow only |
 | `MINIQMT_PLUGIN_STATE_SCHEMA_INVALID` | state unknown/missing/hash/version invalid | no restore/default state |
 | `MINIQMT_PLUGIN_CAPABILITY_UNSUPPORTED` | exact route catalog cannot satisfy exact plugin requirement | route receipt FAILED；只拒绝该 algo/route，plugin catalog 不变 |
+| `MINIQMT_GATEWAY_CAPABILITY_CATALOG_INVALID` | gateway catalog strict schema/identity/hash readback 失败 | evaluator typed fail-loud；不得当作 static unsupported |
+| `MINIQMT_PLUGIN_ROUTE_COMPATIBILITY_RECEIPT_INVALID` | durable receipt 与 exact plugin/gateway authority 重算结果存在 identity/fact/failure/status/hash 漂移 | authority readback typed fail-loud；不得准入、不得伪造 FAILED、不得影响其它 plugin/route |
 | `MINIQMT_VNPY_COMPAT_SURFACE_UNSUPPORTED` | method/signature/DTO/source/characterization mismatch | catalog build failure receipt；不发布 catalog |
 | `MINIQMT_PLUGIN_DETERMINISM_CONFLICT` | same input different state/effect/ID/draw | terminal test/runtime contract failure |
 
@@ -443,6 +464,7 @@ TWAP 虽然 `on_tick` 不发单，仍消费 TICK 更新 exact `last_market_data_
 | --- | --- |
 | `algo_name` | non-empty deterministic string；等于 algo instance frozen local name |
 | `algo_code/symbol/side/offset` | exact manifest algo code；recognized A-share symbol；`BUY|SELL`；literal `NONE` |
+| `parent_intent_id` | non-empty trim-stable frozen parent identity；每个 active child 必须精确相等 |
 | `limit_price_decimal` | positive canonical decimal string，必须按 frozen contract `pricetick` 可整除，不硬编码 0.01 |
 | `parent_quantity/min_volume/volume_increment` | strict positive integer shares；quantity closure 使用同一 board-lot authority |
 | `status` | `PAUSED/RUNNING/STOPPED/FINISHED`；与 instance status 的映射由 parent contract 固定 |
@@ -453,11 +475,11 @@ TWAP 虽然 `on_tick` 不发单，仍消费 TICK 更新 exact `last_market_data_
 | `last_tick_lineage` | `MarketDataLineageRefV1 | null` |
 | `finished_reason` | `FINISHED` 时 non-empty reason；`PAUSED/RUNNING/STOPPED` 为 null，STOPPED reason 由对应 event/diagnostic receipt 保存，不伪造 finished reason |
 
-`PluginActiveOrderStateV1` exact fields：`local_vt_orderid,submit_command_id,broker_order_id|null,status,requested_price_decimal,requested_quantity,cumulative_filled_quantity,last_order_event_id|null,last_trade_event_id|null,mapping_sha256`；`mapping_sha256 = hash_hex_v1("miniqmt_plugin_active_order_state_v1", exact preceding fields)`。status 固定为 `PENDING_DISPATCH/SUBMITTED/PARTIALLY_FILLED/CANCEL_PENDING/CANCELLED/FILLED/REJECTED/OUTCOME_UNKNOWN`；filled quantity 必须在 `[0,requested_quantity]`；broker ID 只能由 durable Gateway/OMS receipt 提供，禁止从 local ID 猜测。inactive order 不留在 `active_orders`，但其历史继续由 command/child/order/trade facts 重建。
+`PluginActiveOrderStateV1` exact fields：`parent_intent_id,local_vt_orderid,submit_command_id,broker_order_id|null,symbol,side,status,requested_price_decimal,requested_quantity,cumulative_filled_quantity,remaining_quantity,last_order_event_id|null,last_trade_event_id|null,market_data_lineage,mapping_sha256`；`mapping_sha256 = hash_hex_v1("miniqmt_plugin_active_order_state_v1", exact preceding fields)`，因此 parent/local/broker identity、command/child identity、symbol、side、canonical price、requested/filled/remaining quantity、下单依据的 exact `MarketDataLineageRefV1` 与 order/trade state lineage 全部进入同一 mapping closure。status 固定为 `PENDING_DISPATCH/SUBMITTED/PARTIALLY_FILLED/CANCEL_PENDING/CANCELLED/FILLED/REJECTED/OUTCOME_UNKNOWN`；`remaining_quantity = requested_quantity - cumulative_filled_quantity`，filled quantity 必须在 `[0,requested_quantity]`，所有 active remaining 之和不得超过 parent remaining，且所有 active child 的 cumulative filled 之和不得超过 top-level `traded_quantity`；parent/symbol/side 必须等于 frozen algo state。后一个交叉闭包保证 durable child partial fill 不会与 parent traded fact 矛盾并在 restart 后造成重复数量。current-three 只在连续竞价 native L1 quote 上创建 child，因此 active mapping 的 market-data lineage 必须为 `CONTINUOUS_AM|CONTINUOUS_PM`，不得由 auction、minute、last-price、cache 或 TIMER 合成。broker ID 只能由 durable Gateway/OMS receipt 提供，禁止从 local ID 猜测。inactive order 不留在 `active_orders`，但其历史继续由 command/child/order/trade facts 重建。
 
-`MarketDataLineageRefV1` exact fields：`market_data_id,event_id,payload_sha256,generation,sequence,exchange_time_utc,session_phase`。同 identity/hash conflict 拒绝；不得只保存裸 tick payload 或进程缓存地址。
+`MarketDataLineageRefV1` exact fields：`market_data_id,event_id,payload_sha256,generation,sequence,exchange_time_utc,session_phase`。identity 必须 non-empty/trim-stable，generation/sequence 为 strict nonnegative int，`exchange_time_utc` 必须按 K1-A authority 是 canonical UTC microsecond `Z` carrier；同 identity/hash conflict 拒绝，不得只保存裸 tick payload 或进程缓存地址。
 
-Sniper `vt_orderid: string|null`；非 null 时必须引用唯一 active order。BestLimit 增加 `vt_orderid:string|null`、`order_price_decimal:string|null`、`next_draw_ordinal:int>=0`；无 active order 时前两者同时为 null，有 active order 时两者与该 order 完全一致。禁止只保存当前 `audit_metadata()` 子集后在重启时猜测。
+Sniper `vt_orderid: string|null`；非 null 时必须引用唯一 active order，active child price 必须等于 frozen `limit_price_decimal`。BestLimit 增加 `vt_orderid:string|null`、`order_price_decimal:string|null`、`next_draw_ordinal:int>=0`；无 active order 时前两者同时为 null，有 active order时两者与该 order identity 及 canonical requested price 完全一致。TWAP active child price 同样等于 frozen limit price。禁止只保存当前 `audit_metadata()` 子集后在重启时猜测。
 
 ### 8.4 TWAP exact units/session/restart state
 
@@ -473,7 +495,7 @@ Sniper `vt_orderid: string|null`；非 null 时必须引用唯一 active order�
 | `last_timer_occurrence_id` | 已应用 TIMER 时 non-empty；初始化为 null；同 occurrence 不重复累计 |
 | `last_market_data_lineage` | `MarketDataLineageRefV1|null`；TIMER 只能读取该 durable lineage |
 
-只有 `session_phase=CONTINUOUS_AM|CONTINUOUS_PM` 且 exact `timer_occurrence_id` 首次 APPLIED 的一秒 TIMER 才同时推进两个 elapsed counter。`OPEN_AUCTION/LUNCH_BREAK/CLOSE_AUCTION/CLOSED` 不累计 duration/interval；跨午休 due 由 ExchangeSessionClock 顺延到 PM 下一 exchange-active second，不执行 catch-up burst。`active_elapsed_seconds == duration_seconds` 或 EOD 时按 parent residual contract 终结；restart 从 snapshot + last timer occurrence 继续，不重放已计时秒、不读取 wall clock。
+只有 `session_phase=CONTINUOUS_AM|CONTINUOUS_PM` 且 exact `timer_occurrence_id` 首次 APPLIED 的一秒 TIMER 才同时推进两个 elapsed counter。`OPEN_AUCTION/LUNCH_BREAK/CLOSE_AUCTION/CLOSED` 不累计 duration/interval；跨午休 due 由 ExchangeSessionClock 顺延到 PM 下一 exchange-active second，不执行 catch-up burst。`last_market_data_lineage` 必须与 common `last_tick_lineage` exact 相等，避免 TIMER 从另一份进程缓存猜测 latest view。`active_elapsed_seconds == duration_seconds` 必须已经是带 non-empty finished reason 的 `FINISHED` state；EOD 可在 duration 前按 parent residual contract明确终结。restart 从 snapshot + last timer occurrence 继续，不重放已计时秒、不读取 wall clock。
 
 legacy `timer_count/total_count` 迁移分别映射为 `interval_elapsed_seconds/active_elapsed_seconds`，但必须与 durable TIMER/session evidence 和 config range 闭合；active order 由 snapshot IDs 与 durable command/child/OMS facts exact join。缺 evidence、计数越界或 identity 冲突生成 typed migration failure，不归零、不重建空 state。迁移 receipt 固定 old/new schema/hash、consumed evidence IDs、field mapping 和 receipt hash。
 
@@ -487,7 +509,11 @@ legacy `timer_count/total_count` 迁移分别映射为 `interval_elapsed_seconds
 | legacy timer driver | `timer_iterations`；保留 raw/hash，但不进入 plugin config；K2/K3 由真实 timer 替代 |
 | kernel order controls | `time_in_force_seconds,max_cancel_replace,marketable_limit_cross_ticks,marketable_limit_protection_band_pct,price_tick`；保留为 separate projection |
 
-TWAP `duration_seconds/interval_seconds` 是现有 registry 曾声明的 legacy aliases，但当前 default merge 可能使 alias-only 输入仍采用默认 `time/interval`。shadow receipt 必须同时保存 raw config/hash、`legacy_effective_config` 和 `candidate_canonical_config`：alias 与 canonical 同时存在且值不同立即 conflict；alias-only 若会改变 legacy effective behavior，标记 `DRIFT_REQUIRES_EXPLICIT_POLICY_MIGRATION`，K1/K3 都不得静默重解释已冻结 release。未知 key、bool-as-number、空白/非有限值同样显式报告。K1 不据此阻断当前 run；K3 切换前完成所有 active release/policy 的 read-only inventory 与 parity，未知真实字段不得删除、默认或静默忽略。该 inventory 是兼容性证据，不是人工审批门禁。
+TWAP `duration_seconds/interval_seconds` 是现有 registry 曾声明的 legacy aliases，但当前 registry 先 merge canonical defaults 再 merge raw config，因此 alias-only 输入通常保留 alias 字段而实际 `time/interval` 仍采用 canonical default。shadow receipt 必须同时保存 raw config/hash、真实 `legacy_effective_config` 和 `candidate_canonical_config`：legacy effective projection 必须保留 default merge 后的全部 raw unknown/control/alias 字段，并精确复现 BestLimit/TWAP 对 canonical numeric fields 的现有 `int()` normalization，同时把 bool-as-number、nonfinite、blank 与 conversion error 另行显式观察；不得为了 candidate schema 删除真实 legacy effective 字段。alias 与 canonical 同时存在且值不同立即 `CONFLICT`，即使同时存在 unknown/invalid evidence 也不得被较弱分类掩盖；alias-only 只有在 candidate canonical behavior 与 legacy effective canonical behavior 不同时才标记 `DRIFT_REQUIRES_EXPLICIT_POLICY_MIGRATION`，相同则为 `ALIAS_EQUIVALENT`。K1/K3 都不得静默重解释已冻结 release。未知 key 同样显式报告，但若 known plugin fields 本身可形成 strict candidate，则 unknown evidence 不得抹掉该 candidate。K1 不据此阻断当前 run；K3 切换前完成所有 active release/policy 的 read-only inventory 与 parity。该 inventory 是兼容性证据，不是人工审批门禁。
+
+`LegacyVnpyPolicyProjectionV1` exact 字段为 `schema_version,algo_code,raw_legacy_config,raw_config_sha256,legacy_effective_config,candidate_canonical_config,adapter_runtime_controls,unknown_fields,alias_observations,invalid_fields,drift_classification,observation_only,runtime_effect_applied,projection_sha256,receipt_sha256`。raw config 先经 bounded JSON-safe evidence codec，因而 NaN/Infinity、bool-as-number、非字符串 key、空白和未知 object 保留类型/值证据而不进入业务 canonical config；`raw_config_sha256 = hash_hex_v1("miniqmt_legacy_policy_raw_config_v1", raw_legacy_config)`。unknown/alias/invalid observation 按 `(field,kind,value_sha256)` 排序且不删除原字段证据。
+
+`drift_classification` 只允许 `NO_DRIFT/ALIAS_EQUIVALENT/DRIFT_REQUIRES_EXPLICIT_POLICY_MIGRATION/CONFLICT/INVALID_INPUT_VISIBLE`；`candidate_canonical_config` 在严格 config 无法形成时为 null，不能用默认 config 伪装成功。`projection_sha256 = hash_hex_v1("miniqmt_legacy_policy_projection_v1", exact fields through drift_classification)`；receipt 再覆盖 `observation_only=true,runtime_effect_applied=false` 与 projection hash。K1-B projection 纯函数不得调用旧 runtime、修改 release/policy 或成为 run gate。
 
 ## 9. vn.py Compatibility Surface and Receipt / 兼容面
 
@@ -519,7 +545,7 @@ required object fields：
 
 requirement 字段：`schema_version,mode,upstream_repo,upstream_commit,source_files_and_hashes,required_method_signatures,required_object_fields,required_enum_values,characterization_sha256,requirement_sha256`；`requirement_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", exact preceding fields)`。
 
-pinned compatibility receipt 字段：`schema_version,plugin_id,plugin_version,manifest_sha256,requirement_sha256,surface_sha256,source_lock_sha256,method_signature_sha256,object_field_sha256,characterization_sha256,status(PASSED|FAILED),ordered_failures,receipt_sha256`。它不含 Gateway catalog、wall clock 或 process binding callable；相同输入必须 byte-identical。任一 pinned compatibility FAILED 进入 `PluginCatalogBuildFailureReceiptV1` 并阻止整个 code catalog 发布，因为这表示代码/source 合同损坏，而不是当前 route 不支持。
+pinned compatibility receipt 字段：`schema_version,plugin_id,plugin_version,manifest_sha256,requirement_sha256,surface_sha256,source_lock_sha256,method_signature_sha256,object_field_sha256,characterization_sha256,status(PASSED|FAILED),ordered_failures,receipt_sha256`。PASSED receipt 的 component closure 固定为：`source_lock_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_source_lock_v1", source_files_and_hashes)`；`method_signature_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_method_signatures_v1", required_method_signatures)`；`object_field_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_object_fields_v1", {required_object_fields,required_enum_values})`；`surface_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_surface_v1", {source_lock_sha256,method_signature_sha256,object_field_sha256,characterization_sha256})`。K1-B 的 `compatibility_component_hashes_v1(requirement)` 只计算上述 requirement-side expected hashes 并核对 supplied receipt，不读取或生成 surface、不设置 status；K1-C 才从 pinned source/surface 生成 receipt。它不含 Gateway catalog、wall clock 或 process binding callable；相同输入必须 byte-identical。任一 component 不一致或 pinned compatibility FAILED 均进入 `PluginCatalogBuildFailureReceiptV1` 并阻止整个 code catalog 发布，因为这表示代码/source 合同损坏，而不是当前 route 不支持。
 
 Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该 receipt FAILED 只拒绝 exact plugin/route algo 创建，不改变 pinned compatibility receipt、plugin catalog 或其它 plugin；不得把 route failure 伪装为 catalog build failure，也不得只记录第一个错误后把其余 route/plugin 当成功。
 
@@ -531,9 +557,11 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 - 先写 malformed type/hash/identity/time/decimal/draw、caller-input/returned-view nested mutation RED tests；
 - 不接 runtime/repository。
 
-当前实现状态：`implemented_verified`。实现位于 `backend/services/miniqmt_execution_runtime/plugin_canonical.py`、`plugin_contracts.py`、`deterministic_context.py`；直接证据位于 `test_algo_plugin_contracts.py` 和 `test_deterministic_execution_context.py`。初始 RED 因三个目标模块不存在产生 2 个 collection error；正式审核补充的 marker mutation、error renderer、exact source identity、same-command-ID/different-payload effect 与 schema/time authority matrix 为 5 failed。最终 GREEN 为 67 个 strict/hash/event/schema/state/effect/determinism 直接用例；changed-file classifier 为 `targeted_ci_required`、`unmapped_code_files=[]`，只选择 `miniqmt_execution_runtime_l2`，该计划 473 passed、1 skipped。当前 line+branch coverage：canonical 94%、contracts 85%、determinism 97%。schema violation evidence 最多消费并呈现 32 项且显式标记 truncation；通用 `derive_id_v1` 仅保留插件内部 `ACTION` kind，持久化 DTO 不存在可竞争的第二 identity authority。新模块未从现有 package `__init__`、runtime、repository、Gateway 或 OMS 接线；`source_merge=pending_pr_update`，不能写成 K1 complete 或 production activated。
+当前实现状态：`implemented_verified + merged`。实现位于 `backend/services/miniqmt_execution_runtime/plugin_canonical.py`、`plugin_contracts.py`、`deterministic_context.py`；直接证据位于 `test_algo_plugin_contracts.py` 和 `test_deterministic_execution_context.py`。初始 RED 因三个目标模块不存在产生 2 个 collection error；正式审核补充的 marker mutation、error renderer、exact source identity、same-command-ID/different-payload effect 与 schema/time authority matrix 为 5 failed。最终 GREEN 为 67 个 strict/hash/event/schema/state/effect/determinism 直接用例；changed-file classifier 为 `targeted_ci_required`、`unmapped_code_files=[]`，只选择 `miniqmt_execution_runtime_l2`，该计划 473 passed、1 skipped。当前 line+branch coverage：canonical 94%、contracts 85%、determinism 97%。schema violation evidence 最多消费并呈现 32 项且显式标记 truncation；通用 `derive_id_v1` 仅保留插件内部 `ACTION` kind，持久化 DTO 不存在可竞争的第二 identity authority。新模块未从现有 package `__init__`、runtime、repository、Gateway 或 OMS 接线；K1-A 已通过 PR #2637 合入，merge commit 为 `e69e72dbdd6e5fd8d414721adaa86ccec7fafc2f`，不能写成 K1 complete 或 production activated。
 
 ### K1-B — registry/current-three manifests（3–4 人日）
+
+当前状态：`implemented_verified + merged`。PR #2655 独立权威审核从 committed HEAD `85ee8f98` 重新建立首批 RED 12 failed/1 passed，并补修 noncanonical/hash-correct snapshot、malformed aggregate、input permutation/truncation、active-order 价量/lineage、TWAP terminal/latest-view、behavior trace 与 legacy effective projection。K1-B-FINAL-REVIEW 又从 PR HEAD `24568736` 独立建立 3 个 RED nodeid：hash-correct snapshot 可携带与 descriptor 不一致的 PASSED compatibility component receipt；active child cumulative fill 可超过 parent top-level traded fact；active-order mapping 缺 parent identity 与下单 market-data lineage。K1-B-REVIEW-FIX 从 PR HEAD `7549a735` 为四项合入阻断建立 6 个独立 RED nodeid：empty build-failure receipt 未拒绝、gateway stale hash 未 readback、非 B0 quote 与 non-exact cancel 被误判 PASSED、code-owned characterization 可变、schema failure 无 bounded truncation evidence。第二次终审补修从 `b366cc00` 建立 route receipt hash-correct authority drift 与 live callable ref/signature drift RED：ordinary readback 不能冒充 authority validation，writer/readback/consumer 共享 exact catalog + strict gateway pure evaluator；durable descriptor facts 不保存 live callable，binding drift fail-loud。最后一项 authority-classification 补修从 `7130c32` 建立 4 个 RED：stale/hash/identity gateway、非 gateway 输入和 invalid catalog snapshot 的原 typed reason/context 被 catch-all 覆盖；现按 catalog strict、gateway strict、receipt reconstruction/comparison 三阶段传播，gateway-invalid 原样保留，receipt-invalid 仅用于两个 authority 有效后的 durable drift。GREEN 为 registry/current-three/import-boundary/shared-contract direct 55/39/2/60 passed；current registry direct line/branch coverage=88.06%/73.45%；完整 PR changed files=9，本轮 delta=5，mapped/unmapped/ambiguous 分别为 9/0/0 与 5/0/0；classifier 选择 `miniqmt_execution_runtime_l2` 与 `paper_v2_backend`，结果为 568 passed/1 skipped 与 1048 passed/2 skipped/2 xfailed；L0、module registry、三份 F2 validator、Feature Workflow pre-PR 和 DESIGN-COMPLIANCE-001 在 final source HEAD `97f7a030a7eace0bacaa92892f40235116b60aaa` 闭合，required CI green。PR #2655 于 `2026-07-24T04:52:30Z` 以 merge commit `ae1035a1ab4916427f7b72443c6235d544eb4c8e` 合入，`source_merge=merged_pr_2655`、`close_sync=not_applicable_feature`；production gates 与 runtime activation 均为 `noop`，产品 runtime 未切换。
 
 - 实现 route-independent immutable plugin catalog、serializable descriptor/process binding split、creation bindings、aggregate build failure receipt 和 per-route compatibility receipt；
 - 实现 source/behavior closure、current-three exact config/state schema/manifest；
@@ -542,6 +570,8 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 - 不改变 `VNPY_STYLE_ASSETS` 产品调用。
 
 ### K1-C — compatibility/import boundary（2–3 人日）
+
+当前 committed/source 状态：source implementation 尚未进入 main/PR，`source_merge=not_committed`。本地并行 worktree 的只读状态观察为：`C1=in_progress`；source-isolated import-boundary `implemented_verified_local`；compatibility requirement/locked surface/receipt `blocked_by_design_and_source_authority`。该本地证据不等于 K1-C implemented，也不进入 K1-B source。K1-B 只消费显式 supplied strict compatibility receipt；不生成、不默认、不伪造 receipt，也不声明 K1-C 完成。
 
 - 实现 locked surface、requirement/receipt；
 - AST + isolated import negative matrix；
@@ -559,7 +589,7 @@ Gateway capability 使用 §7.1 独立 `PluginRouteCompatibilityReceiptV1`。该
 - deep immutability：构建后修改 caller 原始 nested dict/list、修改 thawed/readback view、复用 mutable default，以及直接构造公开 marker 后修改 caller nested value，均不能改变 frozen object/hash；
 - error evidence：异常 `__str__` 或 Mapping renderer 再次失败时输出 primary type 与 render error type，不能二次抛异常；
 - catalog：descriptor input permutation、duplicate key、missing/duplicate creation binding、historical restore key、factory binding module/qualname/signature/source mismatch、caller binding dict mutation 不换掉 sealed callable、callable 不可进入 hash、bad source/hash、aggregate FAILED receipt、zero partial publication；
-- route compatibility：一个 unsupported plugin/route 只产生 FAILED route receipt，current-three 其它 registration/snapshot/hash 不变；不同 route receipt 不改 catalog；
+- route compatibility：stale/hash-drift gateway catalog typed fail-loud；有效 catalog 的非 B0 quote 与 required-cancel/non-exact-cancel 产生 exact FAILED receipt，合法 B0 + exact cancel 保持 PASSED，且一个 unsupported plugin/route 不改变 current-three 其它 registration/snapshot/hash；不同 route receipt 不改 catalog；
 - deterministic：same context retry/restart、different transition/ordinal、BestLimit raw-digest u53 exact vectors、duplicate/skip ordinal、no wall-clock/uuid/global random imports；
 - manifests：三算法 config 正反 matrix、side/required-field capability、complete active-order/lineage/state schema、TWAP exchange-active seconds/午休不累计/EOD/restart、source/behavior hash；
 - legacy projection：canonical/alias same/different/alias-only drift、legacy effective vs candidate config、adapter controls preserved、unknown key visible、no runtime effect；
@@ -655,26 +685,26 @@ K1 rollback 是 source revert：因没有 DB、配置、runtime switch 或 broke
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-053` | §3 target modules/dependency/import denylist；K1-A dependency direction 保持，`plugin_contracts` 仅新增仓库已锁定 `jsonschema` 用于 schema authority，不连接 runtime/network/DB | changed-file classifier `targeted_ci_required`、`unmapped_code_files=[]`；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` AST + isolated import 仍属 K1-C | design_ready | none |
-| `F-054` | `plugin_contracts.py` and `plugin_canonical.py` strict models、public-marker-safe recursive FrozenJson、JSON Schema definition/instance authority、canonical decimal/time/JSON/raw digest+hex、typed JSON-safe error evidence、writer/readback hash closure | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` malformed identity/type/extra/hash/set permutation/duplicate JSON key/exact composite event/delivery/state/config/initialization/effect/deep-mutation/broken-renderer/bounded-schema-evidence/JSON readback matrix；direct total 67 passed；canonical 94%、contracts 85% line+branch | implemented_verified | none |
-| `F-055` | §7 target `backend/services/miniqmt_execution_runtime/plugin_registry.py` | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` descriptor/binding/creation/route-isolation/aggregate-failure matrix | design_ready | none |
+| `F-053` | §3 target modules/dependency/import denylist；K1-B manifest 仅依赖 `plugin_canonical/plugin_contracts/plugin_registry` shadow contract modules，不连接 product runtime/network/DB/OMS/Gateway/broker | `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py` = 2 passed；完整 PR=9 files、本轮 authority-classification delta=5 files，mapped/unmapped/ambiguous 分别为 9/0/0 与 5/0/0；K1-C committed/source 尚未进入 main/PR，本地仅 source-isolated import-boundary 为 `implemented_verified_local`，compatibility generator/locked surface/receipt 仍 `blocked_by_design_and_source_authority` | design_ready | none |
+| `F-054` | `plugin_contracts.py` and `plugin_canonical.py` strict models、public-marker-safe recursive FrozenJson、JSON Schema definition/instance authority、canonical decimal/time/JSON/raw digest+hex、typed JSON-safe error evidence、writer/readback hash closure；K1-B current-three 复用同一 bounded schema evidence authority | K1-A merged receipt 保留 direct 67 passed、canonical 94%/contracts 85% line+branch；K1-B-REVIEW-FIX 在当前 PR HEAD 对 shared authority 再运行 `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` 60 passed，并由 `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` 的 31/32/>32 evidence 覆盖新增公共 seam | implemented_verified | none |
+| `F-055` | `backend/services/miniqmt_execution_runtime/plugin_registry.py` immutable catalog、durable descriptor/process binding、exact creation/restore key、canonical persisted snapshot readback、non-empty bounded aggregate receipt；route authority validation 依次 strict-readback plugin catalog、gateway catalog，再用 pure evaluator 重建/比较 receipt | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` = 55 passed；authority-classification RED=4 failed，GREEN 覆盖 stale/hash/identity gateway、non-gateway input、invalid catalog snapshot、valid FAILED/PASSED 与 receipt drift；gateway-invalid 原 reason/context 保留，receipt-invalid 仅在 authority 有效后使用；registry direct line/branch 88.06%/73.45%；PR #2655 final HEAD `97f7a030` required CI green，merge `ae1035a1` | implemented_verified + merged | none |
 | `F-056` | `deterministic_context.py`、`DeterministicExecutionContextV1` 与 contract DTO exact algo/delivery/local-order/command/timer/diagnostic/effect identity closure、raw-digest u53、BestLimit quantity、strict ordinal sequence | `backend/tests/miniqmt_execution_runtime/test_deterministic_execution_context.py` logical-time/hash/retry/readback/raw-digest/different ordinal/invalid coercion/range；`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` same-ID/different-payload、authority-time/readback identity matrix；determinism 97% line+branch | implemented_verified | none |
-| `F-057` | §1、§8 target `backend/execution_algos/vnpy_style/plugin_manifests.py` | target `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` exact active-order/lineage/TWAP session/legacy drift + existing parity/restart paths | design_ready | none |
-| `F-058` | §1.2、§9 target `backend/execution_algos/vnpy_compat/locked_surface.py` and `receipts.py` | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compatibility_receipts.py` pinned source/signature/DTO/error characterization | design_ready | none |
-| `F-059` | §11 ownership/catalog/test plans and coverage | direct = 67 passed；`python -m nox -s miniqmt_execution_runtime_l2` = 473 passed/1 skipped；classifier `targeted_ci_required`/unmapped empty；coverage canonical/contracts/determinism = 94/85/97 | design_ready | none |
-| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates | artifact: `docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`；command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md --tier F2`；DESIGN-COMPLIANCE-001 | design_ready | none |
+| `F-057` | `backend/execution_algos/vnpy_style/plugin_manifests.py` 三个 2.0.0 exact AISTOCK_DERIVED manifest/config/state/event/capability/source/executable behavior trace closure、strict active-order lineage codec、immutable durable facts、process-only live callable、bounded schema evidence、TWAP 与 observation-only legacy projection | `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` = 39 passed，覆盖 schema/state/source/active-order/TWAP/current-core/legacy、recursive mutation、fresh-process 与 bounded evidence；factory/config-validator/state-codec ref/signature drift RED 后 GREEN；manifest direct line/branch 89.61%/76.92%；PR #2655 final HEAD `97f7a030` required CI green，merge `ae1035a1` | implemented_verified + merged | none |
+| `F-058` | §1.2、§9 pinned requirement lock；K1-B `compatibility_component_hashes_v1` 只计算 requirement-side expected source/method/object/surface hashes并核对 supplied receipt | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` missing/FAILED/component mismatch fail-loud | design_ready | none |
+| `F-059` | §11 ownership/catalog/test plans and coverage | `backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` / `backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py` / `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py` / `backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py` = 55/39/2/60 passed；current registry direct coverage 88.06% line/73.45% branch；完整 PR=9 files、本轮 delta=5 files，unmapped/ambiguous=0/0；classifier `targeted_ci_required`；`python -m nox -s miniqmt_execution_runtime_l2` = 568 passed/1 skipped；`python -m nox -s paper_v2_backend` = 1048 passed/2 skipped/2 xfailed | implemented_verified | none |
+| `F-060` | §2、§10、§12-§13 state-separated rollout/rollback/gates；K1-B shadow-only，产品 runtime 零接线 | validation-receipt: L0/module registry PASS，三份 F2 validator 8/8、18/18、60/60，Feature Workflow pre-PR 与 DESIGN-COMPLIANCE-001 local PASS；`source_merge=merged_pr_2655`、`close_sync=not_applicable_feature`、production/runtime gates `noop` | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001 / 正式复核
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified/subset/POC | pass | K1-A 不只生成 helper：writer/readback 均闭合 public marker、schema definition/instance、event/algo/delivery/effect identity 与 context time；K1-B/C 继续明确 not_started，没有把 K1-A 宣称为统一架构完成 |
-| no silent error/fake success | pass | same identity/different business payload、invalid schema/state/config/source key、logical-time drift 和 malformed renderer 全部直接拒绝；error evidence 保留 renderer failure type，无 exception pass、空 state/config、固定 True ACK |
-| no business semantic drift | pass | K1 shadow-only；signal/target/side/quantity/A股规则/B0/OMS/Gateway/唯一 broker route 不变；TWAP time/interval 固定 exchange-active seconds、午休不累计，legacy alias-only drift 不自动重解释；current-three parity 是切换前置证据 |
-| no unauthorized gate/approval | pass | plugin catalog 与 per-route capability 分离，单 plugin/route failure 不阻止其它 plugin；无 RBAC、审批、acknowledge、confirm-run、人工恢复、永久 enable flag |
+| no simplified/subset/POC | pass | K1-A writer/readback 与 K1-B 完整 catalog/current-three/shadow projection 均有直接证据；K1-C committed/source 未进入 main/PR，本地 C1/import-boundary/blocked compatibility 状态独立记录且未宣称 implemented；K1 overall 仍为 in_progress，没有把 K1-B 宣称为统一架构或 production runtime 完成 |
+| no silent error/fake success | pass | same identity/different business payload、invalid schema/state/config/source key、logical-time drift、stale gateway hash 与 malformed renderer 全部直接拒绝；schema evidence 有界且显式截断，empty build-failure receipt writer/readback 均拒绝；无 exception pass、空 state/config/catalog、固定 PASSED/True ACK |
+| no business semantic drift | pass | K1 shadow-only；signal/target/side/quantity/A股规则/OMS/Gateway/唯一 broker route 不变；route evaluator 只强化既定 B0 quote 与 conditional exact-cancel authority，TWAP time/interval 固定 exchange-active seconds、午休不累计，legacy alias-only drift 不自动重解释；current-three parity 是切换前置证据 |
+| no unauthorized gate/approval | pass | plugin catalog 与 per-route capability 分离，单 plugin/route failure 不阻止其它 plugin；父设计允许的 `idempotent_submit_by_client_ref=false` 未升级为门禁；无 RBAC、审批、acknowledge、confirm-run、人工恢复、永久 enable flag |
 | no fallback/parallel route | pass | 无 LEGACY/minute/default-algo fallback，不启动第二 vn.py EventEngine/OMS/Gateway；旧 runtime 在 K3 前仍是唯一产品 authority |
-| no nondeterministic hidden state | pass | algo/delivery/local-order/command/timer/diagnostic/effect identity 与 logical time 均从 exact persisted/context fields 重算；ordinal/draw 明确派生，禁止 wall clock/UUID/global random/process cache |
-| production state separated | pass | design/source/DDL/DML/dependency/config/binding/broker/restart/runtime 分开；本设计所有生产 gate 为 noop |
+| no nondeterministic hidden state | pass | algo/delivery/local-order/command/timer/diagnostic/effect identity 与 logical time 均从 exact persisted/context fields 重算；behavior/source/algo/default/field code-owned authority 在模块加载时 sealed/frozen，mutation 后 manifest/catalog hash 不变；ordinal/draw 明确派生，禁止 wall clock/UUID/global random/process cache |
+| production state separated | pass | K1-B source 已通过 PR #2655 / merge `ae1035a1` 合入，`source_merge=merged_pr_2655`、`close_sync=not_applicable_feature`；DDL/DML/dependency/config/binding/broker/restart/runtime activation 继续分开且全部为 `noop`，产品 runtime 未切换 |
 
 ## 17. Definition of Done / K1 完成定义
 

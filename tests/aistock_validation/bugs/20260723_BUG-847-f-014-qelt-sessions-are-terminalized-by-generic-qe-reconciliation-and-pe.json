@@ -1,70 +1,62 @@
 {
-  "actual": "BUG-847 completed the qelt reconciler, authenticated callback, durable outbox v2, and production recovery work. The remaining BUG-848 defect is limited to imprecise RD-Agent callback transport classification for HTTP 600+, wrapped timeouts, generic URL errors, and bare OS errors.",
+  "actual": "The 60-second generic scanner reconciles qelt sessions from terminal historical parent loops, and the 15-second RD-Agent replayer treats HTTP 409 as a transport failure with effectively unbounded replay.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260724_BUG-848-f-014-qelt-resource-sessions-are-terminally-reconciled-and-rd-agent-repl.json",
+    "backend/services/quantevolver/qe_resource_phase_service.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/long_trend_resource_session_repair.py",
+    "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+    "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+    "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+    "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py",
+    "tests/aistock_validation/bugs/20260723_BUG-847-f-014-qelt-sessions-are-terminalized-by-generic-qe-reconciliation-and-pe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-848",
-  "closed_at": null,
+  "bug_id": "BUG-847",
+  "closed_at": "2026-07-24T05:07:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-23T18:25:52.719163Z",
-  "description": "Narrow BUG-848 to the RD-Agent transport-classification increment not covered by BUG-847. AIstock has no business-source increment and all production repair, DML, deployment, restart, callback, and outbox actions are no-op.",
+  "created_at": "2026-07-23T18:18:37.570230Z",
+  "description": "The 60-second generic scanner reconciles qelt sessions from terminal historical parent loops, and the 15-second RD-Agent replayer treats HTTP 409 as a transport failure with effectively unbounded replay.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260724-fb5459dcbc3b",
-      "timestamp": "2026-07-23T18:25:52.719159Z"
-    },
-    {
-      "action": "narrow_scope_after_bug_847",
-      "actor": "codex",
-      "note": "BUG-847 completed production recovery and deployed outbox v2. BUG-848 now retains only RD-Agent transport classification; duplicate AIstock source, tests, and repair tooling are removed and repeat DML is prohibited.",
-      "timestamp": "2026-07-24T07:55:09.7290571Z"
+      "note": "Promoted from IC-20260723-b7cd46c002f0",
+      "timestamp": "2026-07-23T18:18:37.570227Z"
     }
   ],
-  "evidence_uris": [
-    "C:\\Users\\lc999\\.codex\\attachments\\74e9b303-ba18-4e84-9dea-9783aef66dd9\\pasted-text.txt"
-  ],
-  "expected": "Keep the deployed outbox v2 contract and the HTTP 409 state conflict_reconciliation_required unchanged. Classify only HTTP 500..599 as http_5xx, direct or URL-wrapped timeouts as timeout, generic URLError as network, and bare OSError as os_error.",
+  "evidence_uris": [],
+  "expected": "qelt sessions are terminalized only by authenticated F-014 callbacks or F-014 control/recovery; HTTP 409 remains undelivered in a durable reconciliation-required state with persisted backoff and can deliver unchanged after AIstock state repair; ordinary QE sessions still reconcile; historical repair is exact, idempotent, guarded, and not executed in production.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
-      "unmatched_files": []
-    },
-    "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
-  },
-  "original_file_scope_contract": {
     "added_files": [
-      "scripts/repair_qelt_resource_sessions.py",
-      "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
     ],
     "changed_files": [
       "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
       "backend/tests/unified_engine/test_qe_resource_phase_service.py",
-      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py"
+      "backend/tests/unified_engine/test_qe_resource_phase_api.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/routers/quantevolver_evolution.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/long_trend_resource_session_repair.py",
         "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_api.py",
         "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
-        "scripts/repair_qelt_resource_sessions.py",
-        "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+        "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -73,11 +65,20 @@
         "qe.auto_evolution",
         "qe.enhanced_metrics",
         "qe.data_completeness",
-        "qe.long_trend_evaluation",
-        "scripts",
-        "tests.backend"
+        "qe.long_trend_evaluation"
       ],
       "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/long_trend_resource_session_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        },
         {
           "file": "backend/services/quantevolver/qe_resource_phase_service.py",
           "impact_modules": [
@@ -90,6 +91,17 @@
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
         },
         {
           "file": "backend/services/quantevolver/qe_evolution_service.py",
@@ -127,90 +139,85 @@
           "primary_module": "qe.long_trend_evaluation",
           "risk_level": "high",
           "rule_id": "qe_long_trend_evaluation_phase2"
-        },
-        {
-          "file": "scripts/repair_qelt_resource_sessions.py",
-          "impact_modules": [],
-          "primary_module": "scripts",
-          "risk_level": "medium",
-          "rule_id": "scripts_default"
-        },
-        {
-          "file": "backend/tests/scripts/test_repair_qelt_resource_sessions.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
         "backend/services/quantevolver/qe_resource_phase_service.py",
+        "backend/routers/quantevolver_evolution.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/long_trend_resource_session_repair.py",
         "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+        "backend/tests/unified_engine/test_qe_resource_phase_api.py",
         "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
-        "scripts/repair_qelt_resource_sessions.py",
-        "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+        "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_resource_phase_service.py",
+      "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/long_trend_resource_session_repair.py",
       "backend/tests/unified_engine/test_qe_resource_phase_service.py",
+      "backend/tests/unified_engine/test_qe_resource_phase_api.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
-      "scripts/repair_qelt_resource_sessions.py",
-      "backend/tests/scripts/test_repair_qelt_resource_sessions.py"
+      "backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py"
     ]
   },
-  "first_seen_at": "2026-07-23T18:25:52.719163Z",
+  "first_seen_at": "2026-07-23T18:18:37.570230Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
-  "github_issue_number": 2680,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2680",
-  "last_seen_at": "2026-07-23T18:25:52.719163Z",
+  "fix_commit": "c64d36f295cb18ff6191596a73af3206e8e00297",
+  "fixed_at": "2026-07-24T05:10:49.314681Z",
+  "github_issue_number": 2679,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2679",
+  "last_seen_at": "2026-07-23T18:18:37.570230Z",
   "module": "qe.long_trend_evaluation",
   "non_goals": [
-    "Do not add AIstock business-source changes for BUG-848.",
-    "Do not repeat production DML, repair, callback, outbox replay, deployment, or restart after BUG-847 production closure.",
-    "Do not replace or migrate the deployed outbox v2 contract or conflict_reconciliation_required state."
+    "Do not restart production runtime services without explicit approval."
   ],
-  "aistock_deployment_restart_gate": "noop",
-  "aistock_source_change": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2681",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
-  "production_dml_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "rd_agent_change_scope": "transport_classification_only",
-  "repair_execution_gate": "noop",
-  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file tests/aistock_validation/bugs/20260724_BUG-848-f-014-qelt-resource-sessions-are-terminally-reconciled-and-rd-agent-repl.json --changed-file tests/aistock_validation/bugs/.bug_id_allocator.json",
+  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_resource_phase_service.py backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py -q",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0"
+    "qe_read_backend",
+    "qe_long_trend_phase2_backend"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
-  "title": "F-014 qelt resource sessions are terminally reconciled and RD-Agent replays HTTP 409 forever",
+  "title": "F-014 qelt sessions are terminalized by generic QE reconciliation and permanent HTTP 409 outboxes replay forever",
   "trigger_condition": {
-    "fingerprint": "fb5459dcbc3b8fb0274b05c9",
-    "source_event_id": "FE-20260724-fb5459dcbc3b"
+    "fingerprint": "b7cd46c002f075e045cd237d",
+    "source_event_id": "FE-20260723-b7cd46c002f0"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed, 8 tests and 14/14 mapped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "qe.long_trend_evaluation",
+        "qe_read",
+        "qe_long_trend_phase2"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_long_trend_phase2_backend"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -240,8 +247,7 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0",
-      "validation_module_registry_l0"
+      "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -262,9 +268,16 @@
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "qe.long_trend_evaluation",
+          "qe_read",
+          "qe_long_trend_phase2"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_long_trend_phase2_backend"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -294,8 +307,7 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0",
-        "validation_module_registry_l0"
+        "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

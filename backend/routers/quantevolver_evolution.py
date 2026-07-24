@@ -1898,7 +1898,7 @@ def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhaseP
     try:
         result = QEResourcePhaseService().ingest_event(
             token=token,
-            payload=payload.model_dump(mode="json"),
+            payload=payload.model_dump(mode="json", exclude_unset=True),
         )
         return {"status": "success", "data": result}
     except QEResourcePhaseError as exc:

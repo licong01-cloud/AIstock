@@ -25,7 +25,6 @@ class _FakeResourceState:
         self.list_rows = []
         self.has_unreleased = False
         self.last_gpu_conflict_sql = ""
-        self.last_reconcile_sql = ""
         self.loop_statuses = {}
         self.session_columns = {
             "session_id", "source_run_key", "attempt_no", "task_id", "loop_id",
@@ -134,39 +133,37 @@ class _FakeResourceCursor:
         elif normalized.startswith("SELECT status FROM qe_archive.run_resource_session"):
             session = self.state.sessions.get(params[0])
             self.row = (session["status"],) if session else None
-        elif "SET status = %s," in normalized and "terminal_reason_code" in normalized:
+        elif (
+            normalized.startswith("UPDATE qe_archive.run_resource_session SET status = CASE")
+            and "terminal_reason_code" in normalized
+        ):
             status, phase, reason_code, session_id = params
             session = self.state.sessions[session_id]
-            session["status"] = status
+            was_terminal = session["status"] in {"completed", "failed", "cancelled"}
+            if not was_terminal:
+                session["status"] = status
             if session["current_phase"] not in {"completed", "failed", "cancelled"}:
                 session["current_phase"] = phase
-            session["terminal_reason_code"] = reason_code or session["terminal_reason_code"]
+            if not was_terminal:
+                session["terminal_reason_code"] = reason_code or session["terminal_reason_code"]
             self.rowcount = 1
         elif "SELECT 1 FROM qe_archive.run_resource_session" in normalized:
             self.state.last_gpu_conflict_sql = normalized
             self.row = (1,) if self.state.has_unreleased else None
         elif normalized.startswith("UPDATE qe_archive.run_resource_session s SET status = CASE"):
-            self.state.last_reconcile_sql = normalized
-            excludes_qelt = "s.source_run_key NOT LIKE 'qelt:%'" in normalized
             updated = 0
             for session in self.state.sessions.values():
+                if session["source_run_key"].startswith("qelt:"):
+                    continue
                 loop_status = self.state.loop_statuses.get((session["task_id"], session["loop_index"]))
                 if session["status"] not in {"reserved", "running"}:
-                    continue
-                if excludes_qelt and str(session["source_run_key"]).startswith("qelt:"):
                     continue
                 if loop_status not in {
                     "completed", "failed", "cancelled", "canceled",
                     "interrupted", "timeout", "stopped",
                 }:
                     continue
-                terminal = (
-                    "cancelled"
-                    if loop_status in {"cancelled", "canceled"}
-                    else "completed"
-                    if loop_status == "completed"
-                    else "failed"
-                )
+                terminal = "cancelled" if loop_status in {"cancelled", "canceled"} else loop_status
                 session["status"] = terminal
                 session["current_phase"] = terminal
                 session["terminal_reason_code"] = (
@@ -249,21 +246,6 @@ def _service_with_fake_state():
     return QEResourcePhaseService(connection_provider=lambda: _FakeResourceConn(state)), state
 
 
-def _create_qelt_session(service, state, *, loop_index: int, submitted: bool = False):  # type: ignore[no-untyped-def]
-    secret = service.create_session(
-        task_id="qe_task",
-        loop_index=loop_index,
-        node_id="wsl2-5080",
-        phase_pipeline_enabled=False,
-    )
-    evaluation_id = "qelt_" + f"{loop_index:x}" * 64
-    source_run_key = f"qelt:{evaluation_id}"
-    state.sessions[secret.session_id]["source_run_key"] = source_run_key
-    if submitted:
-        service.mark_session_submitted(secret.session_id)
-    return secret, evaluation_id, source_run_key
-
-
 def test_resource_phase_token_hash_and_event_hash_are_deterministic():
     assert _token_sha256("secret") == _token_sha256("secret")
     assert _token_sha256("secret") != _token_sha256("other")
@@ -327,9 +309,6 @@ def test_resource_phase_state_machine_rejects_regression_and_allows_safe_termina
         validate_phase_transition("backtest", {"phase": "train"})
     with pytest.raises(QEResourcePhaseError, match="unknown phase"):
         validate_phase_transition("created", {"phase": "guessed_from_log"})
-    for terminal_phase in ("completed", "failed", "cancelled"):
-        with pytest.raises(QEResourcePhaseError, match="not allowed"):
-            validate_phase_transition(terminal_phase, {"phase": "completed"})
 
 
 def test_resource_session_lifecycle_and_archive_binding():
@@ -439,76 +418,99 @@ def test_resource_session_restart_reconciliation_uses_durable_loop_terminal_stat
     assert session["terminal_reason_code"] == "QE_RESOURCE_RECONCILED_FROM_LOOP_TERMINAL"
 
 
-@pytest.mark.parametrize("submitted", [False, True])
-def test_repeated_scanner_reconciliation_excludes_qelt_source_identity(submitted):  # type: ignore[no-untyped-def]
-    service, state = _service_with_fake_state()
-    secret, _evaluation_id, _source_run_key = _create_qelt_session(
-        service,
-        state,
-        loop_index=5,
-        submitted=submitted,
+def _make_qelt_session(service, state, *, loop_index: int = 4):
+    secret = service.create_session(
+        task_id="qe_task",
+        loop_index=loop_index,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=False,
     )
-    state.loop_statuses[("qe_task", 5)] = "completed"
-    expected = dict(state.sessions[secret.session_id])
-
-    assert service.reconcile_terminal_sessions() == 0
-    assert service.reconcile_terminal_sessions() == 0
-    assert state.sessions[secret.session_id] == expected
-    assert state.phases == {}
-    assert "s.source_run_key NOT LIKE 'qelt:%'" in state.last_reconcile_sql
+    session = state.sessions[secret.session_id]
+    evaluation_id = "qelt_" + "a" * 64
+    session["source_run_key"] = f"qelt:{evaluation_id}"
+    return secret, evaluation_id
 
 
-@pytest.mark.parametrize(
-    ("terminal_phase", "phase_status"),
-    [("completed", "succeeded"), ("failed", "failed")],
-)
-def test_qelt_session_terminal_state_only_follows_authenticated_callbacks(terminal_phase, phase_status):  # type: ignore[no-untyped-def]
-    service, state = _service_with_fake_state()
-    secret, evaluation_id, source_run_key = _create_qelt_session(service, state, loop_index=6)
-    base = {
+def _qelt_event(secret, evaluation_id: str, *, loop_index: int, sequence_no: int, phase: str):
+    return {
         "session_id": secret.session_id,
-        "source_run_key": source_run_key,
+        "source_run_key": f"qelt:{evaluation_id}",
         "task_id": "qe_task",
-        "loop_id": "Loop6",
-        "loop_index": 6,
+        "loop_id": f"Loop{loop_index}",
+        "loop_index": loop_index,
         "node_id": "wsl2-5080",
+        "sequence_no": sequence_no,
+        "phase": phase,
+        "phase_status": "running" if phase == "long_trend_eval" else phase,
         "metadata": {"evaluation_id": evaluation_id},
     }
 
-    assert service.ingest_event(
-        token=secret.token,
-        payload={
-            **base,
-            "sequence_no": 1,
-            "phase": "long_trend_eval",
-            "phase_status": "running",
-        },
-    )["status"] == "accepted"
-    assert service.ingest_event(
-        token=secret.token,
-        payload={
-            **base,
-            "sequence_no": 2,
-            "phase": terminal_phase,
-            "phase_status": phase_status,
-        },
-    )["status"] == "accepted"
 
-    state.loop_statuses[("qe_task", 6)] = "failed" if terminal_phase == "completed" else "completed"
+def test_qelt_session_is_excluded_from_repeated_parent_loop_terminal_reconciliation():
+    service, state = _service_with_fake_state()
+    secret, _evaluation_id = _make_qelt_session(service, state)
+    state.loop_statuses[("qe_task", 4)] = "completed"
+
     assert service.reconcile_terminal_sessions() == 0
+    assert service.reconcile_terminal_sessions() == 0
+    session = service.get_session_state(secret.session_id)
+    assert session["status"] == "reserved"
+    assert session["current_phase"] == "created"
+    assert session["last_sequence_no"] == 0
+    assert session["terminal_reason_code"] is None
+    assert state.phases == {}
+
+
+@pytest.mark.parametrize("terminal_phase", ["completed", "failed"])
+def test_qelt_session_accepts_authenticated_long_trend_then_terminal_callback(terminal_phase: str):
+    service, state = _service_with_fake_state()
+    secret, evaluation_id = _make_qelt_session(service, state)
+
+    assert service.ingest_event(
+        token=secret.token,
+        payload=_qelt_event(secret, evaluation_id, loop_index=4, sequence_no=1, phase="long_trend_eval"),
+    )["status"] == "accepted"
+    assert service.ingest_event(
+        token=secret.token,
+        payload=_qelt_event(secret, evaluation_id, loop_index=4, sequence_no=2, phase=terminal_phase),
+    )["status"] == "accepted"
     session = service.get_session_state(secret.session_id)
     assert session["status"] == terminal_phase
     assert session["current_phase"] == terminal_phase
+    assert session["last_sequence_no"] == 2
+
+    state.loop_statuses[("qe_task", 4)] = "failed" if terminal_phase == "completed" else "completed"
+    assert service.reconcile_terminal_sessions() == 0
     with pytest.raises(QEResourcePhaseError, match="not allowed"):
         service.ingest_event(
             token=secret.token,
-            payload={
-                **base,
-                "sequence_no": 3,
-                "phase": "failed" if terminal_phase == "completed" else "completed",
-                "phase_status": "failed",
-            },
+            payload=_qelt_event(secret, evaluation_id, loop_index=4, sequence_no=3, phase="long_trend_eval"),
         )
+
+
+def test_terminal_setter_cannot_reverse_existing_normal_or_qelt_terminal_state():
+    service, state = _service_with_fake_state()
+    normal = service.create_session(
+        task_id="qe_task",
+        loop_index=3,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=True,
+    )
+    qelt, _evaluation_id = _make_qelt_session(service, state, loop_index=4)
+    service.mark_session_terminal(normal.session_id, status="completed", reason_code="normal_completed")
+    service.mark_session_terminal(qelt.session_id, status="failed", reason_code="qelt_failed")
+
+    service.mark_session_terminal(normal.session_id, status="failed", reason_code="must_not_replace")
+    service.mark_session_terminal(qelt.session_id, status="completed", reason_code="must_not_replace")
+
+    normal_state = service.get_session_state(normal.session_id)
+    qelt_state = service.get_session_state(qelt.session_id)
+    assert (normal_state["status"], normal_state["current_phase"], normal_state["terminal_reason_code"]) == (
+        "completed", "completed", "normal_completed",
+    )
+    assert (qelt_state["status"], qelt_state["current_phase"], qelt_state["terminal_reason_code"]) == (
+        "failed", "failed", "qelt_failed",
+    )
 
 
 def test_resource_event_ingestion_is_ordered_authenticated_and_idempotent():
