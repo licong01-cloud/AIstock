@@ -6,15 +6,15 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration已完成本地direct与DEV PostgreSQL验证，当前为`local_verified_pr_ci_pending`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_pr`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration已完成本地direct、DEV PostgreSQL与required CI验证，当前为`implemented_verified`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_user_authorization`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`local_verified_pr_ci_pending`，K2-B/C/D=`not_started`。K2-A未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`implemented_verified`，K2-B/C/D=`not_started`。K2-A PR #2729已OPEN/CLEAN/MERGEABLE且required CI green；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is now `implementation_in_progress`: K2-A delivers the exact strict carriers, additive migration and PostgreSQL repository slice with direct/DEV PostgreSQL `25 passed`, repository line/branch `88.22%/72.96%`, classifier-selected `miniqmt_execution_runtime_l2` and no unmapped code. K2-A required CI/PR mergeability remain pending, while K2-B/C/D and K3/K4 remain `not_started`; product runtime is not switched and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is now `implementation_in_progress`: K2-A delivers the exact strict carriers, additive migration and PostgreSQL repository slice with direct/DEV PostgreSQL `25 passed`, repository line/branch `88.22%/72.96%`, classifier-selected `miniqmt_execution_runtime_l2` and no unmapped code. PR #2729 required CI run `30154314170` is green and the PR is OPEN/CLEAN/MERGEABLE, so K2-A is `implemented_verified`; source merge remains pending user authorization, while K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -754,7 +754,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - ExchangeSessionClock使用B0 preload exact `CalendarSnapshotSet`派生的durable session authority、session epoch/event identities；
 - crash/DB-epoch process incarnation/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
 - 四个切片为 K2-A schema/repository、K2-B ingress/delivery、K2-C clock/timer、K2-D outbox/reconcile/observability；
-- 当前 `implementation_in_progress`、K2-A source `local_verified_pr_ci_pending`、K2-B/C/D `not_started`、shadow-only；K2-A已实现全部strict carriers、migration/preflight/guarded rollback、PostgreSQL event/transition/mapping/outbox/timer/incarnation repository seam，direct/DEV PostgreSQL=`25 passed`、coverage line/branch=`88.22%/72.96%`；required CI和PR mergeability待闭合。预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
+- 当前 `implementation_in_progress`、K2-A source `implemented_verified`、K2-B/C/D `not_started`、shadow-only；K2-A已实现全部strict carriers、migration/preflight/guarded rollback、PostgreSQL event/transition/mapping/outbox/timer/incarnation repository seam，direct/DEV PostgreSQL=`25 passed`、coverage line/branch=`88.22%/72.96%`；PR #2729 required CI run `30154314170` green且OPEN/CLEAN/MERGEABLE，source merge待用户授权。预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
 
 ### K3：迁移现有三个算法
 
@@ -968,7 +968,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-067` | K2 detailed design §4.8–§4.9、§8 calendar/session authority与exchange clock | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_repository_postgres.py` timer/session/CAS/readback/concurrency；K2-C target clock | design_ready | none |
 | `F-068` | K2 detailed design §9 migration | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` DEV preflight、first/second apply、partial catalog、readback、rollback | design_ready | none |
 | `F-069` | K2 detailed design §10 diagnostics/retention/runbook | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | K2 detailed design §11–§13 validation/rollout | command `python -m nox -s miniqmt_execution_runtime_l2`；K2-A direct/DEV PostgreSQL=25 passed、repository line/branch=88.22/72.96、classifier MiniQMT only/unmapped=0；最终PR CI证据回填K2 checkpoint | design_ready | none |
+| `F-070` | K2 detailed design §11–§13 validation/rollout | command `python -m nox -s miniqmt_execution_runtime_l2`；K2-A direct/DEV PostgreSQL=25 passed、repository line/branch=88.22/72.96、classifier MiniQMT only/unmapped=0；PR #2729 required CI run `30154314170` green且OPEN/CLEAN/MERGEABLE | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
