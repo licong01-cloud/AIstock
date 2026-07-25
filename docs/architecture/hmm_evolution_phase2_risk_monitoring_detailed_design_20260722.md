@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-25
-- 状态：`C008_B3_L2_AUDIT01_VERIFIED_RETRAIN_DESIGN_A_APPROVED_REMAINING_CONTRACTS_BLOCKED`
+- 状态：`C008_B3_D4_03_B_USER_APPROVED_L2_RETRAIN_D5_D6_IMPLEMENTATION_BLOCKED`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.12
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A 与 D4-02-A 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A 的设计方向。AUDIT-01 已证明两份既有 L2 artifact 不能按 D4-01-A/D4-02-A grandfather；本设计只定义未来受控重训合同，不授权执行重训、选择 seed、生成 model/READY 或写数据库/runtime。D4-03、D5-01、D6-01、B3 源码、真实 selection 与 READY 仍未获批准或完成。任何后续 PR 合入仍须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A 的设计方向。AUDIT-01 已证明两份既有 L2 artifact 不能按 D4-01-A/D4-02-A grandfather；本设计只定义未来受控重训合同，不授权执行重训、选择 seed、生成 model/READY 或写数据库/runtime。D5-01、D6-01、B3/L2 retrain 源码、真实 selection 与 READY 仍未获批准或完成。任何后续 PR 合入仍须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -24,7 +24,7 @@ Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓
 
 ### 0.2 成功边界
 
-- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 当前为 `BLOCKED_C008_B3_L2_RETRAIN_AND_REMAINING_CONTRACT_DECISIONS`，不得以既有 post-fit 修正 L2 artifact、单 family、部分 sector、未经批准的阈值或 validation-picked seed 冒充完成。
+- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 当前为 `BLOCKED_C008_B3_L2_RETRAIN_D5_D6_AND_IMPLEMENTATION`，不得以既有 post-fit 修正 L2 artifact、单 family、部分 sector、未经批准的阈值或 validation-picked seed 冒充完成。
 - F-012：所有生成、查询和报告均为 advisory-only，只写 `hmm_risk.*`，不产生任何交易副作用。
 - F-013：真实 API/UI 完成 L1/L2、7 日热力图、今日预警、固定详情、状态分布、事件与回测证据。
 
@@ -441,8 +441,8 @@ C-008-B3-STRUCTURAL-A 已批准以下结构，不得在实现中改回库隐式�
   后形成 pre-fit transmat；fit 后禁止 parameter projection；
 - legacy `identity` 与 autocycle train-only global 1%/99% winsor + z-score preprocess 保持已批准。
 
-D3-03-A 于 2026-07-25 获用户明确批准，精确合同如下；它不批准 D4-03/D5-01/D6-01，也不授权实现或 selection。D4-01-A
-由以下独立合同批准，不得从 D3-03-A 的 `tol` 隐式推导：
+D3-03-A 于 2026-07-25 获用户明确批准，精确合同如下；该次 D3 决策本身不授权实现或 selection，也不能替代任何独立 D4/D5/D6
+合同。D4-03-B 随后由用户独立批准；D4-01-A 由以下独立合同批准，不得从 D3-03-A 的 `tol` 隐式推导：
 
 - algorithm version 固定为 `hmm_risk_c008_b3_d3_03_a_v1`；任何公式、参数或初始化顺序变化必须使用新版本，不得原地漂移；
 - 对每个 family/sector，在批准的 family preprocess 后，仅用冻结 train observation 计算
@@ -462,18 +462,16 @@ D3-03-A 于 2026-07-25 获用户明确批准，精确合同如下；它不批准
 - fit 后禁止 covariance/transmat 或其他参数 projection/clip；startprob、transmat、means、raw covariance、`R_sj`、prior、
   KMeans labels/counts、全部显式参数、依赖/线程环境与 algorithm version 必须进入 canonical receipt/hash。
 
-##### D4. 独立数值验收合同：D4-01-A/D4-02-A 已批准，D4-03 仍待确认
+##### D4. 独立数值验收合同：D4-01-A/D4-02-A/D4-03-B 已批准
 
-fit、monitor、likelihood、covariance、train occupancy 必须是独立状态；`monitor_converged=true` 不推导 likelihood 或
-covariance 可接受。D4-01-A 已独立确认 convergence/likelihood 合同，D4-02-A 已独立确认 covariance 合同；下列 D4-03
-公式/阈值尚未获批，不能把当前文档旧值写成 active gate：
-
-- train hard count、normalized occupancy、contiguous run/transition/dwell coverage 与 posterior normalization/tie tolerance；
-- 任一阈值的版本、边界比较符、non-finite/zero denominator 语义和 typed reason code。
+fit、monitor、likelihood、covariance、train occupancy 必须是独立状态；`monitor_converged=true` 不推导 likelihood、
+covariance 或 train occupancy 可接受。D4-01-A 独立定义 convergence/likelihood，D4-02-A 独立定义 covariance，
+D4-03-B 独立定义 train-only hard occupancy/run/transition evidence；任一状态通过都不能覆盖其他状态失败。
 
 C-008-B1 明确记录 `formal_acceptance_thresholds_applied=false`。随后完成的 DIAG-02 与 DIAG-03 补齐了 date-level
 month/run/transition、raw covariance 与 sector-local reference evidence，但同样明确记录没有应用正式验收阈值；敏感性
-grid 只用于展示候选边界影响，不能反向成为 gate。
+grid 只用于展示候选边界影响，不能反向成为 gate。D4-03-B 是 2026-07-25 后续用户决策形成的新合同；不得把历史
+DIAG-02/DIAG-04 records 改写为已执行正式 D4-03 acceptance。
 
 DIAG-02（schema `hmm_risk_c008_b3_diag02_repeated_report_v1`，canonical SHA-256
 `bd09380c74cce480489dcc6fee8a4ee739841c4a486a21a6a8deb894180ad5b2`）在同一固定单线程数值环境完成两个
@@ -485,7 +483,7 @@ fresh-process pass，每次 2 family × 8 seed × 31 sector = 496 fits；两次 
   因而这些历史 records 不构成 D4-01-A 正式验收；
 - legacy 的 `801780.SI` 在每个 seed 的 train 与 validation 都各有一个 singleton hard state，最小 train occupancy
   `0.0016638935108153079`；autocycle train 最小 hard count/occupancy 为 `36/0.061224489795918366`，但 validation 的
-  seeds 44/46/47 在 `801970.SI` 各有 singleton；D4-03/D6-01 阈值仍未批准；
+  seeds 44/46/47 在 `801970.SI` 各有 singleton；该次诊断执行时 D4-03/D6-01 阈值尚未批准；
 - `selection_performed=false`、D4/D5-01/D6 acceptance 均未执行，不能把诊断性 score 排序称为 seed selection。
 
 D4-02-DIAG-03（schema `hmm_risk_c008_b3_d4_02_diag03_sector_local_covariance_reference_v1`，producer
@@ -523,7 +521,9 @@ commit `94abea6cecb320dafbc2525d9dc39bfd549b30cd`，复用同一冻结 dataset/m
 - DIAG-04 使用 0.5% dynamic-bound tolerance 与 2% M-step residual 做 sensitivity readback 时，两个 family 的全部
   496 records/cells 均无超界；该 readback 没有执行 family eligibility 或 selection；
 - legacy train/validation hard state 最小 count 提升到 `17/6`；autocycle train 最小 count 为 `49`，但 validation 的
-  `801970.SI` 仍有 4 个 singleton records。因此 D4-03/D6-01 继续独立 blocked，D3-03/D4-02 通过不能推导 READY。
+  `801970.SI` 仍有 4 个 singleton records。D4-03-B 后续 sensitivity 重聚合显示两个 family 的 train records 均为
+  248/248、8/8 seed 满足候选边界，但该历史 artifact 的 `formal_acceptance_thresholds_applied=false` 保持不变；D6-01
+  继续独立 blocked，D3-03/D4-02/D4-03 设计批准不能推导 validation semantic evidence 或 READY。
 
 DIAG-04 的 likelihood 只读重聚合进一步确认：两个 family 各 248/248 monitor 均报告 converged，history 全部 finite，
 iterations 均严格小于 300；legacy/autocycle 分别有 8/9 个 negative-delta records，全部且仅发生在 terminal delta，最大
@@ -639,11 +639,13 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    任一 process 或任一预声明 fit 缺失时 restart schedule 为 incomplete，不得进入 selection。
 4. **fit/init 与独立 D4 authority**：每个 L2 fit 严格执行 D3-02-B KMeans identity 和 D3-03-A 的完整显式
    GaussianHMM/sector-local `R_sj`/`ν=1.0` initialization/prior；禁止 pre/post-fit clip/projection，禁止用旧 L2 参数作
-   fallback。fit 后分别执行 D4-01-A likelihood 与 D4-02-A raw covariance 合同；monitor、likelihood、covariance 状态
-   独立持久化，任一失败不能被其他状态覆盖。D4-03 仍待用户确认，在批准前所有 retrain candidate 仍不具备完整 D4 eligibility。
+   fallback。fit 后分别执行 D4-01-A likelihood、D4-02-A raw covariance 与 D4-03-B train occupancy 合同；monitor、
+   likelihood、covariance、train occupancy 状态独立持久化，任一失败不能被其他状态覆盖。
 5. **selection/semantic 不前置**：D3/D4 fit 阶段必须记录
-   `validation_accessed=false/future_utility_accessed=false`。只有 D4-03 与 D5-01 精确合同后续获批且同一 restart 的
-   131/131 L2 全部 eligible，才可按 D5-01 从 train-only evidence 选择一个 family-global restart；本设计不执行该选择。
+   `validation_accessed=false/future_utility_accessed=false`。只有同一 restart 的 131/131 L2 全部通过 D3/D4，才可成为
+   L2 family candidate；本设计不执行 selection。D5-01 必须另行精确决定 restart identity 是 L1/L2 共用一个 family-global
+   seed，还是分别选择 level-global seed，并定义 31/131 score aggregation；在该决策前不得由 L1 score 推导 L2 seed、由 L2
+   score 推导 L1 seed或静默选择两个不同 seed。
    选择后才允许在唯一 validation 上执行 D6-01 hard semantic mapping；D6 失败不得回到 D5 换 seed。B2 soft authority、
    hidden-state index、neutral/fixed fallback 和 per-sector stitching 全部禁止。
 6. **逐 entry immutable receipt**：至少保存 family/version、seed/schedule index、L2 code、ordered observation dates、
@@ -660,7 +662,7 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
 9. **失败与停止语义**：输入/sector/preprocess/fit/monitor/likelihood/covariance/occupancy/repeat/selection/semantic 任一
    failed、blocked、insufficient 或 pending 均禁止 READY；使用最具体现有 reason code。无 eligible candidate 时 family
    保持 blocked，不扩大 seed、不切换 family、不改变 threshold、不回退旧 L2 model，也不触发人工运行时审批。
-10. **授权边界**：D4-03、D5-01、D6-01 仍须按各自 Decision Index 获用户精确确认；随后 B3/L2 retrain 源码、依赖安装、
+10. **授权边界**：D4-03-B 已获用户精确确认；D5-01、D6-01 仍须按各自 Decision Index 获用户确认。随后 B3/L2 retrain 源码、依赖安装、
     实际 4192 fits、selection、model/READY write、PR merge、生产依赖与 runtime 激活分别执行和报告。本文批准不推导其中
     任何一项已获授权或完成。
 
@@ -700,17 +702,59 @@ D4-01-A 与 D4-02-A 分别解决 convergence/likelihood 和 covariance validity/
 selection、semantic evidence、family completeness 或 READY。DIAG-04 本身仍为
 `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT`，不得反写为已执行正式验收。
 
+D4-03-B 于 2026-07-25 获用户明确批准，正式 train occupancy acceptance 合同如下：
+
+0. threshold/algorithm version 固定为 `hmm_risk_c008_b3_d4_03_b_v1`；本合同对 direct L1 与未来受控 direct L2、两个
+   family 和全部预声明 restart 使用同一阈值。禁止按 level/family/sector/seed 或 observed extrema 临时改写；
+1. **train-only causal posterior authority**：仅使用最终 fitted raw parameters，从 fitted `startprob_` 开始，对 immutable
+   train observation sequence 计算 causal filtered posterior `p(z_t|x_<=t)`；不得读取 validation、future utility、semantic
+   label 或 D5 selection 结果。hard state 为每行 posterior `argmax`，hidden-state index 不具有 semantic 含义；
+2. **posterior numeric validity**：posterior shape 必须严格为 `(N_train,3)` 且 `N_train>0`；所有 cell 必须 finite 且非负，
+   每行 sum 的最大绝对误差必须 `<=1e-12`。每行 top1-top2 margin 必须严格 `>1e-12`；小于或恰好等于边界均为 tie failure，
+   不得按 state index、stable sort 或默认值继续；
+3. **hard count 与 occupancy**：对每个 hidden state `s`，令 `C_s=count(argmax_t=s)`，要求
+   `C_s >= max(5,ceil(0.01*N_train))`，且 `C_s/N_train >=0.01`。两个条件分别记录 comparison evidence；即使 count 条件因
+   ceil 已隐含 ratio，也不得删除 normalized occupancy readback 或把两个 reason 压缩为一个；
+4. **calendar-month coverage**：每 state 被 hard assigned 的 observation date 必须覆盖至少 `3` 个不同 `YYYY-MM` calendar
+   month；比较为 `month_count>=3`。month 只由 immutable ordered train dates 计算，不从 row index、validation 或当前日历回填；
+5. **run 与 transition coverage**：在 immutable train observation row 顺序上，每 state 的 contiguous run count 必须
+   `>=3`；incoming 和 outgoing state-change transition count 必须分别 `>=2`，仅统计相邻 observation rows 之间
+   `state_a!=state_b` 的变化，自转移不计入。每 state 的 maximum single-run share
+   `max_run_length/C_s` 必须 `<=0.8`；denominator 非正或 run 不可计算时 fail closed；
+6. **date-gap 边界**：run 表示模型实际输入 observation sequence 的连续 row，不冒充自然日或无缺口交易日连续。ordered
+   train date list/hash、canonical calendar coverage、missing/invalid date count/hash 必须进入 input/occupancy receipt；缺口仍由
+   C-007-A input coverage 独立验收，不能因 row-run 通过而被隐藏，也不得把缺失日虚构成 state transition；
+7. **diagnostic-only soft evidence**：posterior mass、normalized mass、ESS、entropy 和 posterior-weighted utility 可记录为
+   diagnostic，但不参与 D4-03 pass/fail，不改变 hard authority，也不得用于补足 hard count/month/run/transition；
+8. **状态闭包**：`train_occupancy_status` 只允许 `accepted/failed/insufficient_evidence`。必要 train dates/posterior/hard
+   sequence receipt 缺失或 hash 不可验证时为 `insufficient_evidence/train_occupancy_valid=false`；证据存在但第 1..6 项任一
+   失败时为 `failed/false`；全部通过时才为 `accepted/true`。D4-03 accepted 不推导 D5/D6、family completeness 或 READY；
+9. **reason 与确定性优先级**：保留全部适用 failure/blocking，不得 first-failure 丢失可安全遍历证据。primary reason 顺序为
+   evidence missing、date sequence invalid、posterior invalid、normalization、tie、state count、occupancy、month、run、transition、run concentration；
+   新增/保留的稳定 code 见第 12 节，family receipt 按 level/family/seed/sector 聚合 count、code 与 evidence hash；
+10. **receipt**：逐 entry 保存 contract version/hash、level/family/seed/sector、`N_train`、ordered date/hash、posterior/hard
+    assignment identity、逐 state count/ratio/months/runs/incoming/outgoing/max-run-share、所有 threshold/comparison result、
+    failure/blocking arrays、primary reason、status/valid mapping、producer/dependency/numeric environment，并固定
+    `validation_accessed=false/future_utility_accessed=false`。
+
+D4-03-B 的只读 sensitivity 不是正式 acceptance：DIAG-02 下 legacy 238/248 records 通过但 0/8 seed 达到 31/31，失败集中于
+`801780.SI` 和 seeds 42/43 的 `801130.SI`；autocycle 248/248、8/8。DIAG-04 下两个 family 均为 248/248、8/8；2% 候选也
+全部通过，而 5% 候选使 legacy 仅 236/248 且 0/8 完整 seed。选择 1% anti-singleton 合同的语义是阻止 singleton/单月/单 run
+被当作完整训练结构，同时不在 D4 阶段用未经批准的 semantic significance 淘汰 rare regime。历史 artifact 继续标记
+`formal_acceptance_thresholds_applied=false`；未来实现和受控 L2 重训必须从 immutable receipt 重新执行 D4-03-B。
+
 ##### D5. train-only family selection：D5-02 已批准，D5-01 仍待确认
 
-- 只有同一 family 的 31/31 sector 均通过最终 D3/D4 合同的 restart 才能成为 family candidate；局部 sector 不能拼接；
+- 只有同一 family/level 的 L1 31/31 或 L2 131/131 sector 均通过最终 D3/D4 合同的 restart 才能成为该 level 的
+  family candidate；局部 sector 不能拼接；
 - selection score、normalization、sector 聚合、数值精度与 deterministic tie-break 仍待用户确认；validation/future utility
   始终不可见，selection 完成后不得 refit；
 - reproducibility receipt 必须记录全部候选、失败阶段/reason、parameter hash、selected identity 与
   `validation_accessed=false/future_utility_accessed=false`；
 - D5-02-B 已批准在同一固定数值环境、单线程和两个 fresh process 下以 canonical payload/model/receipt hash bitwise equality
   作为复现合同；DIAG-02 已证明该 host/environment 下两次 payload bitwise 相等。该证据不外推跨 host/BLAS/依赖升级；
-- D5-01 的 selection score、normalization、31-sector aggregation、数值精度与 deterministic tie-break 仍待用户确认。
-  selection 完成后不得 refit，validation/future utility 始终不可见。
+- D5-01 的 selection score、normalization、31/131-sector aggregation、数值精度、deterministic tie-break 与 L1/L2
+  restart identity 粒度仍待用户确认。selection 完成后不得 refit，validation/future utility 始终不可见。
 
 ##### D6. hard semantic validation 的待决证据充分性
 
@@ -730,10 +774,10 @@ selection、semantic evidence、family completeness 或 READY。DIAG-04 本身�
 likelihood/covariance/occupancy/semantic 阈值版本、selection formula/tie-break、全部候选摘要、selected family identity、
 validation mapping/receipt、运行库/数值环境和全部 input hashes。
 
-只有两个 family 各自的 L1 31/31 entry 同时满足独立的 fit/convergence/likelihood/covariance/occupancy/selection/semantic
-evidence 合同，且原 C-002-A 的 L2 131/131 entry 也满足 fit/convergence/likelihood/covariance/semantic evidence、coverage、
-parser/hash/causal replay，才允许构建 `READY` model set。D5 family-global restart selection 只作用于本次新拟合的 L1；它不
-替代或重写 L2 acceptance，也不得把既有 L2 final parameters 推导为数值验收通过。
+只有两个 family 各自的 L1 31/31 与受控重训 L2 131/131 entry 都满足独立的
+fit/convergence/likelihood/covariance/occupancy/selection/semantic evidence、coverage、parser/hash/causal replay，才允许构建
+`READY` model set。D5-01 必须在后续决策中明确同一 family 的 L1/L2 是否共用 restart identity；在此之前不得由任一 level
+替代、重写或推导另一 level 的 selection/acceptance，也不得把既有 L2 final parameters 推导为数值验收通过。
 D7-01-A 已批准未来 B3 实现精确声明 `hmmlearn==0.3.3`；当前版本仅存在于诊断执行环境，尚未进入
 `requirements.txt`。当前文档 PR 的 backend dependency gate 为 `noop`；未来 B3 实现合入后，
 `production_backend_dependency_gate` 必须保持 `pending`，直至依赖安装获得独立授权并完成 import/version smoke。
@@ -1169,9 +1213,16 @@ q20 边界相等计 adverse、OPPORTUNITY 排除、L1 constituent 缺失、跨 h
 - `hmm_risk_model_covariance_acceptance_failed`
 - `hmm_risk_model_covariance_bounds_failed`
 - `hmm_risk_model_covariance_anomaly_budget_exceeded`
+- `hmm_risk_model_train_occupancy_evidence_missing`
+- `hmm_risk_model_train_date_sequence_invalid`
+- `hmm_risk_model_posterior_invalid`
+- `hmm_risk_model_posterior_normalization_failed`
 - `hmm_risk_model_train_occupancy_insufficient`
 - `hmm_risk_model_train_state_count_insufficient`
+- `hmm_risk_model_train_month_coverage_insufficient`
 - `hmm_risk_model_train_run_coverage_insufficient`
+- `hmm_risk_model_train_transition_coverage_insufficient`
+- `hmm_risk_model_train_run_concentration_exceeded`
 - `hmm_risk_model_posterior_tie`
 - `hmm_risk_model_restart_family_incomplete`
 - `hmm_risk_model_restart_schedule_incomplete`
@@ -1206,9 +1257,9 @@ q20 边界相等计 adverse、OPPORTUNITY 排除、L1 constituent 缺失、跨 h
 - `hmm_risk_schema_drift`
 - `hmm_risk_chart_renderer_unavailable`
 
-C-008-B3 的 D4-01-A/D4-02-A reason code 已进入批准的设计合同，但在 B3 源码实现前不代表历史 diagnostic record 已执行
+C-008-B3 的 D4-01-A/D4-02-A/D4-03-B reason code 已进入批准的设计合同，但在 B3 源码实现前不代表历史 diagnostic record 已执行
 正式验收。未来实现必须使用最具体 reason code；`hmm_risk_model_likelihood_terminal_decrease_warning` 是可继续后续独立
-验收的显式 warning 状态，不是 failure，也不得被压缩为普通 success。D4-03/D5-01/D6-01 的未决阈值不得提前触发 gate；
+验收的显式 warning 状态，不是 failure，也不得被压缩为普通 success。D5-01/D6-01 的未决阈值不得提前触发 gate；
 initialization、likelihood、covariance、occupancy、validation evidence 或 family selection 失败不得压缩为 generic incomplete。
 
 未知异常使用稳定 internal reason + trace id，详细堆栈只进入服务日志；不得转成 neutral、空成功或旧日 current。
@@ -1245,7 +1296,7 @@ Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修�
 - C-008-A/B1 已证明当前 direct L1 preparation 合同不能完成 legacy 31/31；Slice 0 的 schema/direct preparation
   implementation 可继续保留。C-008-B3-DESIGN 仅批准 hard-authority/train-only family-global restart 方向，精确算法、
   阈值、selection 与 evidence contract 尚待用户确认，完整 model-set preparation 状态为
-  `BLOCKED_C008_B3_L2_RETRAIN_AND_REMAINING_CONTRACT_DECISIONS`；D3-03-A/D4-01-A/D4-02-A 批准或 diagnostic completion 均不构成 Slice 0
+  `BLOCKED_C008_B3_L2_RETRAIN_D5_D6_AND_IMPLEMENTATION`；D3-03-A/D4-01-A/D4-02-A/D4-03-B 批准或 diagnostic completion 均不构成 Slice 0
   model artifact 完成。
 - 仅 DEV DDL 验证；production DDL 独立 pending。
 
@@ -1307,14 +1358,22 @@ primary module required plan。未映射文件先修 catalog。`impact_modules`�
   `likelihood_valid` 的精确映射；多 failure + blocking + warning 的数组聚合、确定性顺序、状态优先级与 primary reason；
   warning receipt/aggregate 不得丢失；threshold version/hash 回读；D4-01 warning 不得覆盖 D4-02/D4-03 或后续
   selection/semantic failure。
+- D4-03-B fix-point 必须覆盖：train posterior shape 与 `N_train=0`；cell non-finite/negative；row-sum error 恰好
+  `1e-12` 和略高于边界；top1-top2 margin 恰好 `1e-12` 和略高于边界；
+  `max(5,ceil(0.01*N_train))` 在整数/非整数 1% 边界的 count 与 ratio 分离；month count 2/3；run count 2/3；incoming/
+  outgoing 1/2；maximum run share 恰好 0.8 和略高于 0.8；ordered date/hash 缺失、重复、逆序和 canonical date gap evidence；
+  observation-row run 不得冒充自然日连续；全部 reason 聚合、确定性 primary priority 与
+  `accepted/failed/insufficient_evidence -> train_occupancy_valid` 映射；soft mass/ESS 不得补 hard evidence；
+  validation/future utility 不可见；D4-03 accepted 不得覆盖 D4-01/D4-02 failure 或推导 D5/D6/READY。DIAG-02 与 DIAG-04
+  sensitivity 的 legacy 0/8 -> 8/8 区分性必须保留，但历史 diagnostic 不得反写为正式 acceptance。
 - L2 numeric provenance fix-point 已由 C-008-B3-D4-L2-AUDIT-01 完成：13/13 candidate snapshot 收敛为两份 exact SHA；
   两者均缺 immutable D4-01 history，且 262/262 entry 明确记录 post-fit covariance 修正。测试必须固定
   `likelihood_status=insufficient_evidence`、`covariance_status=failed`、primary/secondary reason 的优先级与 9+4 identity
   聚合；不得因 snapshot/job=`completed`、final logprob 或 metadata hash 存在而转为 accepted。
 - L2 retrain contract fix-point 在未来实现获授权后必须覆盖：冻结 dataset/mapping/watermark/window 与 canonical 131 set/hash；
   两 family × seeds 42..49 × 131 sectors 的 `2096 fits/process` 完整性；两个 fresh process 的 `4192 fits` 与 bitwise
-  receipt/model hash；D3-02-B/D3-03-A、D4-01-A/D4-02-A 的逐 entry 状态和完整 receipt；validation/future utility 不可见；
-  不覆盖旧 SHA；D4-03/D5-01/D6 未批准或任一 family 不完整时不得 selection/model/READY。该 fix-point 当前只进入设计，
+  receipt/model hash；D3-02-B/D3-03-A、D4-01-A/D4-02-A/D4-03-B 的逐 entry 状态和完整 receipt；validation/future utility 不可见；
+  不覆盖旧 SHA；D5-01/D6 未批准或任一 family 不完整时不得 selection/model/READY。该 fix-point 当前只进入设计，
   本 docs PR 不执行 fit 或生成 artifact。
 - API/report fix-point 必须证明 `overview.model_set_acceptance_summary` 的 L1/L2 counts 闭合、warning 不计入普通 accepted、
   L1/L2 D4 version 的 non-null/null 边界、canonical empty warning hash、warning count/code/evidence hash 与 entry receipts 一致；
@@ -1372,11 +1431,11 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-DIAG-02 | 是否在固定数值环境按批准结构运行两次完整只读结构诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | 992 fits、两次 canonical payload hash 相同；补齐 likelihood、covariance、month/run/transition/occupancy evidence，未执行正式 D4/D5-01/D6 |
 | C-008-B3-D4-01 | convergence/likelihood exact tolerance 与 warning/failure 语义 | `RESOLVED_USER_APPROVED_D4_01_A` | `hmm_risk_c008_b3_d4_01_a_v1`：monitor/history 独立完整性；non-terminal negative fail；terminal positive `<0.01`；terminal negative relative `>=-2e-5` 为持久化 warning、低于边界 fail；不得自动放宽或把 warning 静默成普通 success |
 | C-008-B3-D4-L2-AUDIT-01 | 既有 L2 131/131 是否具备可按 D4-01-A/D4-02-A 回读的 immutable training/numeric receipt | `VERIFIED_FAIL_CLOSED_LIKELIHOOD_INSUFFICIENT_COVARIANCE_FAILED` | 13/13 candidate snapshot 收敛为 legacy 9 + autocycle 4 两份 exact SHA；两者均缺完整 D4-01 history，262/262 entry 均有 post-fit covariance 修正。likelihood 保持 insufficient、covariance 为 failed；禁止 grandfather、补 metadata、复制 L1 evidence 或 READY |
-| C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_DESIGN_ONLY_IMPLEMENTATION_BLOCKED` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、冻结 dataset/mapping/window、seeds 42..49、两 fresh process；2096 fits/process、4192 fits total。D4-03/D5-01/D6、源码、实际 fit、selection、model/READY、依赖和 runtime 均未授权 |
+| C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_DESIGN_ONLY_IMPLEMENTATION_BLOCKED` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、冻结 dataset/mapping/window、seeds 42..49、两 fresh process；2096 fits/process、4192 fits total。D4-03-B 已批准但未执行；D5-01/D6、源码、实际 fit、selection、model/READY、依赖和 runtime 均未授权 |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
 | C-008-B3-D4-02 | covariance reference/bounds/floor/anomaly budget | `RESOLVED_USER_APPROVED_D4_02_A` | dynamic `L/U`、`τ_bound=0.005` 闭区间、tolerance 后 total/per-state/per-feature zero anomaly、M-step residual `<=0.02`、raw-only posterior 与禁止 clip/projection 已批准 |
-| C-008-B3-D4-03 | train hard occupancy/month/run/transition acceptance | `PROPOSED_PENDING_USER_APPROVAL` | DIAG-02 证明 legacy `801780.SI` 8/8 train singleton；阈值仍待确认 |
+| C-008-B3-D4-03 | train hard occupancy/month/run/transition acceptance | `RESOLVED_USER_APPROVED_D4_03_B` | `hmm_risk_c008_b3_d4_03_b_v1`：causal train hard authority；每 state count `>=max(5,ceil(1%*N))`、occupancy `>=1%`、month/run `>=3`、incoming/outgoing `>=2`、max-run-share `<=0.8`、row-sum error `<=1e-12`、margin严格 `>1e-12`；historical DIAG 不反写正式 acceptance |
 | C-008-B3-D5-01 | train-only family-global score/aggregation/tie-break | `PROPOSED_PENDING_USER_APPROVAL` | 只有最终 D3/D4 31/31 candidate 可参与；本次没有 selection |
 | C-008-B3-D5-02 | 固定数值环境内的可复现性 | `RESOLVED_USER_APPROVED_D5_02_B_FIXED_ENVIRONMENT` | 两个 fresh process canonical hash 必须 bitwise equal；不外推跨 host/BLAS/依赖版本 |
 | C-008-B3-D6-01 | hard semantic validation count/month/run/utility gap | `PROPOSED_PENDING_USER_APPROVAL` | hard authority与单一 validation保持；singleton 不自动充分，精确阈值仍待确认 |
@@ -1388,19 +1447,19 @@ C-007-A 已于 2026-07-23 获用户明确批准并回填本文；它是 offline 
 不是运行时人工确认或可调门禁。
 C-008-D1/C-008-B1/C-008-B3-DESIGN 方向已于 2026-07-23 获用户明确批准；后续又批准
 C-008-B3-STRUCTURAL-A、DIAG-02、D3-01-A、D3-02-B、固定环境 D5-02-B、D7-01-A 与只读 D4-02-DIAG-03；
-2026-07-25 又批准 D3-03-A、D4-01-A、D4-02-A、C-008-B3-D4-L2-AUDIT-01 结论与受控 L2 重训设计方案 A。该批准不包含
-D4-03、D5-01、D6-01、B3/L2 retrain 源码实现、实际 fit、seed selection、model/READY artifact 或 runtime/database 写入。
+2026-07-25 又批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、C-008-B3-D4-L2-AUDIT-01 结论与受控 L2 重训设计方案 A。
+该批准不包含 D5-01、D6-01、B3/L2 retrain 源码实现、实际 fit、seed selection、model/READY artifact 或 runtime/database 写入。
 DIAG-02/03/04 的 `formal_acceptance_thresholds_applied=false` 仍是硬边界，
 不得把 diagnostic completion 改写为正式 candidate acceptance。
 C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`BLOCKED_C008_B3_L2_RETRAIN_AND_REMAINING_CONTRACT_DECISIONS`；AUDIT-01 已完成且受控 L2 重训方案 A 的设计方向已批准，但 D4-03/D5-01/D6-01、L2 retrain/B3 源码、实际 fit、真实 selection 与两-family READY 证据均未完成。
+- F-011 parent：`BLOCKED_C008_B3_L2_RETRAIN_D5_D6_AND_IMPLEMENTATION`；AUDIT-01、受控 L2 重训设计 A 与 D4-03-B 已批准，但 D5-01/D6-01、L2 retrain/B3 源码、实际 fit、真实 selection 与两-family READY 证据均未完成。
 - F-011-A 数据/PIT/observation：`DESIGN_READY_USER_APPROVED`；C-007-A 数据、单位、PIT mapping 与 7/20 维公式未被 C-008-A 推翻。
-- F-011-B fit/convergence/covariance：`BLOCKED_C008_B3_CONTROLLED_L2_RETRAIN_AND_REMAINING_CONTRACTS`；D3-01/D3-02/D3-03-A、D4-01-A、D4-02-A、固定环境 D5-02、D7-01 与受控 L2 重训设计 A 已批准；AUDIT-01 已确认旧 L2 likelihood evidence insufficient、covariance failed，必须生成新 identity。D4-03/D5-01 仍待确认，批准合同尚未由 B3/L2 retrain 源码正式执行。
+- F-011-B fit/convergence/covariance/occupancy：`BLOCKED_C008_B3_CONTROLLED_L2_RETRAIN_AND_IMPLEMENTATION`；D3-01/D3-02/D3-03-A、D4-01-A、D4-02-A、D4-03-B、固定环境 D5-02、D7-01 与受控 L2 重训设计 A 已批准；AUDIT-01 已确认旧 L2 likelihood evidence insufficient、covariance failed，必须生成新 identity。批准合同尚未由 B3/L2 retrain 源码正式执行，historical DIAG 不构成正式 D4 acceptance。
 - F-011-C semantic evidence/selection：`BLOCKED_C008_B3_SEMANTIC_EVIDENCE_CONTRACT`；hard authority 与单一 validation 语义保持，count/month/run/utility separation 阈值待用户确认，B2 不采用。
-- F-011-D 两-family READY：`BLOCKED_DEPENDENCY`；当前 READY artifact 数为 0；DIAG-04 只证明 L1 refit/covariance/likelihood diagnostic evidence，不执行已批准的 D4-01-A/D4-02-A 正式验收；AUDIT-01 已证明既有 L2 不可接受且受控 L2 重训尚未实施。D4-03/D5-01/D6-01、family eligibility、selection 或 READY 均未执行。
+- F-011-D 两-family READY：`BLOCKED_DEPENDENCY`；当前 READY artifact 数为 0；DIAG-04 只提供 L1 sensitivity，不执行已批准的 D4-01-A/D4-02-A/D4-03-B 正式验收；AUDIT-01 已证明既有 L2 不可接受且受控 L2 重训尚未实施。D5-01/D6-01、family eligibility、selection 或 READY 均未执行。
 - F-011-E generator/job/revision：`PENDING_IMPLEMENTATION`；不得由未完成的 model-set preparation 推导为 verified。
 - F-012：advisory-only 写入与依赖隔离，不产生 Selection/Paper/QMT/QE/交易副作用。
 - F-013：真实 read API、风险 UI、失败状态、可访问证据与 retrospective report。
@@ -1409,11 +1468,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,state_model_set,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | C-008-A/B1；DIAG-02 canonical `bd09380c74cce480489dcc6fee8a4ee739841c4a486a21a6a8deb894180ad5b2`；DIAG-03 canonical `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；DIAG-04 canonical `2c9136d5e1c89f66c180226848f4e761b91b864edb412d5c8ebcea8f17c74c9b`；AUDIT-01 9+4 exact identity/catalog/file readback；`backend/tests/hmm_risk/test_state_model_set.py` | APPROVED_BY_USER_DIRECTION_ONLY_BLOCKED_REMAINING_CONTRACT | D3-03-A/D4-01-A/D4-02-A 与受控 L2 重训设计 A 已批准；旧 L2 不可接受，D4-03/D5-01/D6、L2 retrain/B3 实现、真实 selection 与两-family READY 均未完成 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{input_resolver,state_model_set,market_repository,observation,state_generator,alert_state_machine,repository,job_service,worker}.py`; `scripts/hmm_risk/run_daily_worker.py` | C-008-A/B1；DIAG-02 canonical `bd09380c74cce480489dcc6fee8a4ee739841c4a486a21a6a8deb894180ad5b2`；DIAG-03 canonical `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；DIAG-04 canonical `2c9136d5e1c89f66c180226848f4e761b91b864edb412d5c8ebcea8f17c74c9b`；AUDIT-01 9+4 exact identity/catalog/file readback；`backend/tests/hmm_risk/test_state_model_set.py` | APPROVED_BY_USER_DIRECTION_ONLY_BLOCKED_REMAINING_CONTRACT | D3-03-A/D4-01-A/D4-02-A/D4-03-B 与受控 L2 重训设计 A 已批准；旧 L2 不可接受，D5-01/D6、L2 retrain/B3 实现、真实 selection 与两-family READY 均未完成 |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{market_repository,observation}.py`; C-007-A formulas | `backend/tests/hmm_risk/test_state_model_set.py`; artifact: `F:/Dev/AIstock_worktrees/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260722/tmp/validation/hmm_risk/c008_seed_diagnostic.json` | DESIGN_READY_USER_APPROVED | 无 |
-| F-011-B fit/convergence/covariance | `backend/services/hmm_risk/state_model_set.py`; `scripts/hmm_risk/prepare_state_model_set.py`; future controlled L2 retrain path | `backend/tests/hmm_risk/test_state_model_set.py`; DIAG-02/DIAG-03/DIAG-04 canonical receipts；AUDIT-01 13/13 snapshot 与 262-entry readback | APPROVED_BY_USER_D3_03_D4_01_D4_02_L2_RETRAIN_DESIGN_BLOCKED_IMPLEMENTATION | AUDIT-01 固定旧 L2 likelihood insufficient/covariance failed；新 `hmm_risk_c008_b3_l2_retrain_a_v1` identity 尚未实施，D4-03/D5-01 仍待确认，DIAG-04 不构成正式 candidate acceptance |
+| F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/state_model_set.py`; `scripts/hmm_risk/prepare_state_model_set.py`; future controlled L2 retrain path | `backend/tests/hmm_risk/test_state_model_set.py`; DIAG-02/DIAG-03/DIAG-04 canonical receipts；AUDIT-01 13/13 snapshot 与 262-entry readback | APPROVED_BY_USER_D3_D4_L2_RETRAIN_DESIGN_BLOCKED_IMPLEMENTATION | AUDIT-01 固定旧 L2 likelihood insufficient/covariance failed；`hmm_risk_c008_b3_d4_03_b_v1` 已批准但未执行，新 L2 identity 尚未实施，DIAG-04 不构成正式 candidate acceptance |
 | F-011-C semantic/selection | `backend/services/hmm_risk/state_model_set.py` preparation boundary | `backend/tests/hmm_risk/test_state_model_set.py`; B1/DIAG-02 receipts | APPROVED_BY_USER_DIRECTION_ONLY_BLOCKED_SEMANTIC_EVIDENCE_CONTRACT | hard authority和原单一 validation方向保持；legacy/autocycle singleton证据已记录，count/month/run/utility gap细节未批准；B2不采用 |
-| F-011-D two-family READY | content-addressed L1/L2 model-set artifact | `backend/tests/hmm_risk/test_state_model_set.py`; A/B1/DIAG-02/DIAG-03/DIAG-04/AUDIT-01 receipts | APPROVED_BY_USER_BLOCKED_DEPENDENCY | READY artifact 数为 0；旧 L2 已由 AUDIT-01 判定不可接受，新受控 L2 未训练；没有执行 D4-03/D5-01/D6、selection 或 artifact write，两个 family 完整性未成立 |
+| F-011-D two-family READY | content-addressed L1/L2 model-set artifact | `backend/tests/hmm_risk/test_state_model_set.py`; A/B1/DIAG-02/DIAG-03/DIAG-04/AUDIT-01 receipts | APPROVED_BY_USER_BLOCKED_DEPENDENCY | READY artifact 数为 0；旧 L2 已由 AUDIT-01 判定不可接受，新受控 L2 未训练；D4-03-B 未由实现执行，也没有执行 D5-01/D6、selection 或 artifact write，两个 family 完整性未成立 |
 | F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
 | F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | DESIGN_READY_USER_APPROVED | 无 |
 | F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | USER_APPROVED_PENDING_UPSTREAM_MODEL_SET | 用户明确批准 C-008-D1：API/UI 合同未被否定，但真实验收依赖可证明的 READY model set |
@@ -1436,10 +1495,10 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 | `accepted_with_warning` 被当成 failure 或普通 success | 固定 `likelihood_valid` 映射和 `failed > insufficient_evidence > accepted_with_warning > accepted` 优先级；failure/warning 分数组聚合；overview/report 回读同一 warning evidence hash |
 | 既有 L2 final parameters 被误当成 D4-01/D4-02 numeric receipt | AUDIT-01 已固定旧 L2 likelihood insufficient、covariance failed；禁止 grandfather、复制 L1 evidence、静默跳过或未经授权执行重训，新的两-family 131/131 未闭合前不得 READY |
 | covariance clip 掩盖系统性 anomaly | D3-03-A/D4-02-A 禁止 initialization/post-fit clip 与 projection；正式 posterior 只使用通过 raw validity、0.5% dynamic-bound 闭区间、zero anomaly budget 和 2% M-step residual 的 raw covariance；全部 mask/hash 留存 |
-| hard occupancy 极低但仍 labelable | train 与单一 validation 分别记录 hard count、contiguous run/month coverage 和 utility separation；精确阈值待用户确认，不得以 1 个样本自动通过 |
+| hard occupancy 极低但仍 labelable | train 侧按已批准 `hmm_risk_c008_b3_d4_03_b_v1` 分别验收 count/ratio/month/run/transition/max-run-share 与 posterior numeric validity；单一 validation 的 D6-01 count/month/run/utility evidence 仍待用户确认。任一侧都不得以 1 个样本自动通过，也不得以 train accepted 推导 validation semantic evidence |
 | 未经确认拆分 validation 或增加 holdout | 保持批准的 `2024-07-01..2025-03-31` 单一 validation 与 fitted `startprob_` prior；任何 split/holdout 先明确业务语义并获确认 |
 | 库默认值或浮点环境导致不可复现 | D3-03-A 固定 KMeans/HMM 全参数与 sector-local prior；D5-02-B 固定依赖、BLAS/线程和 canonical serialization；不得仅凭 seed 或跨 host 外推 deterministic hash |
-| 诊断数值被写成正式 gate | B1/DIAG-02/03/04 的 `formal_acceptance_thresholds_applied=false` 是硬边界；D3-03-A/D4-01-A/D4-02-A 是后续实现合同，不得把历史 diagnostic records 改写为已通过正式验收 |
+| 诊断数值被写成正式 gate | B1/DIAG-02/03/04 的 `formal_acceptance_thresholds_applied=false` 是硬边界；D3-03-A/D4-01-A/D4-02-A/D4-03-B 是后续实现合同，不得把历史 diagnostic records 改写为已通过正式验收 |
 | autocycle-only 冒充两-family 完成 | F-011-D 要求所有已批准 family 完整；legacy 缺失时保持 blocked |
 | 历史 mapping 的 industry/index code 双表示被随机选行 | classify 唯一规范化；等价 source rows 全量留 hash，非等价多映射 fail loud；禁止 `DISTINCT ON` |
 | partial day 冒充完整 | run terminal `partial_failed`；UI degraded 并列 missing sectors |
@@ -1499,24 +1558,24 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   authority、原单一 validation 和 fitted `startprob_` prior，B2 明确不采用；L2 provenance audit 未改 model/mapping，
   受控重训设计 A 固定 frozen input、两个 family、direct L2 和新 content identity，不迁移或覆盖旧 candidate/snapshot；
   删除未经确认的 calibration/holdout split 与阈值。
-- no_unrequested_gate_or_approval：D4-01-A 是用户明确批准的确定性模型合同，不是运行时人工审批；未获确认的 D4-03 occupancy、
+- no_unrequested_gate_or_approval：D4-01-A、D4-02-A 与 D4-03-B 是用户明确批准的确定性模型合同，不是运行时人工审批；未获确认的
   D5-01 selection、D6-01 semantic evidence、split/holdout 不进入 active contract；未来确认的
   确定性模型合同不是运行时人工审批。preview 不是批准步骤，普通 read 无确认；只保留规范要求的 production DDL/dependency/
   runtime 独立授权和用户要求的逐 PR 合入确认。L2 provenance audit 与受控重训的确定性合同不是新增人工审批、发布门禁或
-  研究方向淘汰；D4-03/D5-01/D6 未批准时保持 blocked 是现有完整 READY 合取的 fail-closed 结果。
+  研究方向淘汰；D4-03-B 虽已批准但尚未由实现执行，D5-01/D6-01 仍未批准，保持 blocked 是现有完整 READY 合取的 fail-closed 结果。
 
 ## 24. 当前完成状态与下一步
 
 本文件已回填 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、C-008-B3-STRUCTURAL-A、
-D3-01-A、D3-02-B、D3-03-A、D4-01-A、D4-02-A、固定环境 D5-02-B、D7-01-A、C-008-B3-D4-L2-AUDIT-01 与受控
+D3-01-A、D3-02-B、D3-03-A、D4-01-A、D4-02-A、D4-03-B、固定环境 D5-02-B、D7-01-A、C-008-B3-D4-L2-AUDIT-01 与受控
 L2 重训设计 A，并登记 DIAG-02/DIAG-03/DIAG-04 canonical evidence。C-008-A/C-008-B1/DIAG-02/DIAG-03/DIAG-04 均为 diagnostic-only historical evidence；它们在执行时
-不应用正式阈值、不选择 seed、不写 model/READY。D3-03-A/D4-01-A/D4-02-A 是后续实现必须满足的批准合同，不将历史 evidence
+不应用正式阈值、不选择 seed、不写 model/READY。D3-03-A/D4-01-A/D4-02-A/D4-03-B 是后续实现必须满足的批准合同，不将历史 evidence
 反写为已通过正式 candidate acceptance；C-008-B2 为 `NOT_APPROVED`。F-011 parent 当前为
-`BLOCKED_C008_B3_L2_RETRAIN_AND_REMAINING_CONTRACT_DECISIONS`，F-012 保持 `DESIGN_READY_USER_APPROVED`，F-013 为
+`BLOCKED_C008_B3_L2_RETRAIN_D5_D6_AND_IMPLEMENTATION`，F-012 保持 `DESIGN_READY_USER_APPROVED`，F-013 为
 `PENDING_UPSTREAM_MODEL_SET`。本文不使任何 model set READY，也不授权 B3 实现。
 
 生产 `sector_data` 不执行 identity DDL/DML；当前设计修订未安装依赖、未启停服务、未运行 job、未写数据库，也未激活
-Phase 2 runtime。AUDIT-01 已完成；下一步依次确认 D4-03 train occupancy、D6-01 hard semantic evidence 与 D5-01
-train-only family-global selection。上述合同未完成前不得启动 B3/L2 retrain 源码实现；即使全部设计合同随后获批，implementation
+Phase 2 runtime。AUDIT-01 与 D4-03-B 设计决策已完成；下一步依次确认 D6-01 hard semantic evidence 与 D5-01
+train-only selection（包括 L1/L2 restart identity 粒度和 31/131 aggregation）。上述合同未完成前不得启动 B3/L2 retrain 源码实现；即使全部设计合同随后获批，implementation
 仍必须使用独立 branch/PR、实现批准的边界测试，并在 merge 前取得用户明确确认。后续实现、依赖安装、selection、model/READY
 write、数据库或 runtime action 均不由本设计提交自动授权。
