@@ -66,6 +66,9 @@ _ALLOWED_INTERNAL_IMPORT_PREFIXES = (
     "backend.services.miniqmt_execution_runtime.plugin_contracts",
     "backend.services.miniqmt_execution_runtime.plugin_registry",
 )
+_TARGET_INTERNAL_IMPORT_PREFIXES = {
+    "backend.services.miniqmt_execution_runtime.plugin_contracts": ("backend.execution_algos.adaptive_is.contracts",),
+}
 _FORBIDDEN_OWNER_SYMBOLS = frozenset({"BaseGateway", "EventEngine", "MainEngine", "OmsEngine"})
 _FORBIDDEN_OWNER_CLASS_SUFFIXES = ("BaseGateway", "EventEngine", "Gateway", "MainEngine", "OmsEngine")
 _NONDETERMINISTIC_MODULES = {
@@ -436,12 +439,15 @@ def _matches_prefix(import_name: str, prefix: str) -> bool:
     return import_name == prefix or import_name.startswith(prefix + ".")
 
 
-def _forbidden_import_reason(import_name: str) -> str | None:
+def _forbidden_import_reason(import_name: str, *, target_module_name: str) -> str | None:
     root = import_name.split(".", 1)[0]
     if root in _NONDETERMINISTIC_MODULES:
         return _NONDETERMINISTIC_MODULES[root]
+    allowed_internal_prefixes = _ALLOWED_INTERNAL_IMPORT_PREFIXES + _TARGET_INTERNAL_IMPORT_PREFIXES.get(
+        target_module_name, ()
+    )
     if _matches_prefix(import_name, "backend") and not any(
-        _matches_prefix(import_name, prefix) for prefix in _ALLOWED_INTERNAL_IMPORT_PREFIXES
+        _matches_prefix(import_name, prefix) for prefix in allowed_internal_prefixes
     ):
         return "MINIQMT_PLUGIN_IMPORT_FORBIDDEN_DEPENDENCY"
     if any(_matches_prefix(import_name, prefix) for prefix in _FORBIDDEN_IMPORT_PREFIXES):
@@ -498,7 +504,7 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
 
     def _record_import(self, node: ast.AST, *, import_name: str, local_name: str) -> None:
         self._aliases[local_name] = import_name
-        reason = _forbidden_import_reason(import_name)
+        reason = _forbidden_import_reason(import_name, target_module_name=self._target.module_name)
         if reason is not None:
             self._append(node, reason=reason, context={"import_name": import_name})
 
@@ -519,8 +525,15 @@ class _ImportBoundaryAstVisitor(ast.NodeVisitor):
                 symbol_name = alias.name
                 full_name = f"{import_module}.{symbol_name}"
                 self._aliases[alias.asname or symbol_name] = full_name
-                reason = _forbidden_import_reason(full_name)
-                if reason is not None and _forbidden_import_reason(import_module) is None:
+                reason = _forbidden_import_reason(full_name, target_module_name=self._target.module_name)
+                if (
+                    reason is not None
+                    and _forbidden_import_reason(
+                        import_module,
+                        target_module_name=self._target.module_name,
+                    )
+                    is None
+                ):
                     self._append(node, reason=reason, context={"import_name": full_name})
                 if symbol_name in _FORBIDDEN_OWNER_SYMBOLS:
                     self._append(

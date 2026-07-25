@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import json
+from datetime import date, datetime, time
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal, Self
@@ -26,6 +27,13 @@ from pydantic import (
     StrictStr,
     field_validator,
     model_validator,
+)
+
+from backend.execution_algos.adaptive_is.contracts import (
+    CalendarSnapshot,
+    CalendarSnapshotSet,
+    MarketCode,
+    SessionSegment,
 )
 
 from .plugin_canonical import (
@@ -2844,6 +2852,11 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
         }
         if self.status not in allowed[previous.status]:
             raise ValueError("illegal delivery status transition")
+        if self.status is DeliveryStatusV1.CLAIMED:
+            if self.lease_epoch != previous.lease_epoch + 1:
+                raise ValueError("delivery lease_epoch must advance from its durable predecessor")
+        elif self.lease_epoch != previous.lease_epoch:
+            raise ValueError("delivery completion must preserve the claimed lease epoch")
         return self
 
     @model_validator(mode="after")
@@ -2901,6 +2914,13 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
                 raise ValueError("terminal delivery must close and clear its active lease")
         elif self.closed_at_utc is not None:
             raise ValueError("non-terminal delivery cannot carry closed_at_utc")
+        _validate_kernel_lease_fence_v1(
+            owner_type="DELIVERY",
+            owner_id=self.delivery_id,
+            lease_owner=self.lease_owner,
+            lease_epoch=self.lease_epoch,
+            lease_fence_token=self.lease_fence_token,
+        )
         if self.last_error_json is not None:
             KernelErrorEvidenceV1.model_validate_json(
                 json.dumps(thaw_json_v1(self.last_error_json), sort_keys=True, separators=(",", ":"))
@@ -3751,6 +3771,28 @@ def kernel_lease_fence_token_v1(*, owner_type: str, owner_id: str, lease_epoch: 
     )
 
 
+def _validate_kernel_lease_fence_v1(
+    *,
+    owner_type: str,
+    owner_id: str,
+    lease_owner: str | None,
+    lease_epoch: int,
+    lease_fence_token: str | None,
+) -> None:
+    if lease_owner is None:
+        if lease_fence_token is not None:
+            raise ValueError("lease fence cannot exist without a lease owner")
+        return
+    expected = kernel_lease_fence_token_v1(
+        owner_type=owner_type,
+        owner_id=owner_id,
+        lease_epoch=lease_epoch,
+        lease_owner=lease_owner,
+    )
+    if lease_fence_token != expected:
+        raise ValueError("lease_fence_token does not match exact kernel fence authority")
+
+
 class CommandChildMappingStatusV1(StrEnum):
     RESERVED = "RESERVED"
     DISPATCHING = "DISPATCHING"
@@ -4079,6 +4121,11 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         }
         if self.status not in allowed[previous.status]:
             raise ValueError("illegal outbox status transition")
+        if self.status is BrokerCommandOutboxStatusV1.CLAIMED:
+            if self.lease_epoch != previous.lease_epoch + 1:
+                raise ValueError("outbox lease_epoch must advance from its durable predecessor")
+        elif self.lease_epoch != previous.lease_epoch:
+            raise ValueError("outbox completion must preserve the claimed lease epoch")
         return self
 
     @model_validator(mode="after")
@@ -4106,6 +4153,13 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
             raise ValueError("outbox lease owner, fence and expiry must be present together")
         if self.lease_owner is not None and self.lease_epoch <= 0:
             raise ValueError("leased outbox row requires positive lease epoch")
+        _validate_kernel_lease_fence_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=self.command_id,
+            lease_owner=self.lease_owner,
+            lease_epoch=self.lease_epoch,
+            lease_fence_token=self.lease_fence_token,
+        )
         if self.dispatch_attempt_id is not None and self.attempt_count <= 0:
             raise ValueError("dispatch attempt identity requires positive attempt count")
         if self.ack_receipt_json is not None:
@@ -4289,6 +4343,11 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
         }
         if self.status not in allowed[previous.status]:
             raise ValueError("illegal timer schedule status transition")
+        if self.status is ExecutionAlgoTimerScheduleStatusV1.EMITTING:
+            if self.lease_epoch != previous.lease_epoch + 1:
+                raise ValueError("timer schedule lease_epoch must advance from its durable predecessor")
+        elif self.lease_epoch != previous.lease_epoch:
+            raise ValueError("timer schedule completion must preserve the claimed lease epoch")
         return self
 
     @model_validator(mode="after")
@@ -4315,6 +4374,13 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
             raise ValueError("leased timer schedule requires positive lease epoch")
         if self.status is ExecutionAlgoTimerScheduleStatusV1.EMITTING and self.lease_owner is None:
             raise ValueError("EMITTING timer schedule requires durable lease")
+        _validate_kernel_lease_fence_v1(
+            owner_type="TIMER_SCHEDULE",
+            owner_id=self.schedule_id,
+            lease_owner=self.lease_owner,
+            lease_epoch=self.lease_epoch,
+            lease_fence_token=self.lease_fence_token,
+        )
         if self.status is ExecutionAlgoTimerScheduleStatusV1.EMITTED:
             if self.emitted_event_id is None:
                 raise ValueError("EMITTED timer schedule requires committed event identity")
@@ -4409,6 +4475,8 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
             ExecutionAlgoTimerOccurrenceStatusV1.EXPIRED,
         }:
             raise ValueError("illegal timer occurrence status transition")
+        if self.lease_epoch != previous.lease_epoch:
+            raise ValueError("timer occurrence completion must preserve the claimed lease epoch")
         return self
 
     @model_validator(mode="after")
@@ -4423,7 +4491,7 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
         if any(value is None for value in lease_values) != all(value is None for value in lease_values):
             raise ValueError("timer occurrence lease fields must be present together")
         if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
-            if self.lease_owner is None or self.lease_epoch <= 0 or self.closed_at_utc is not None:
+            if self.lease_owner is None or self.lease_epoch != 1 or self.closed_at_utc is not None:
                 raise ValueError("CLAIMED occurrence requires active durable lease")
             if self.emitted_event_id is not None or self.catch_up_receipt_sha256 is not None:
                 raise ValueError("CLAIMED occurrence cannot carry terminal emission outcome")
@@ -4435,6 +4503,13 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
                     raise ValueError("EVENT_COMMITTED occurrence requires emitted event identity")
             elif self.emitted_event_id is not None:
                 raise ValueError("skipped/expired occurrence cannot fabricate emitted event")
+        _validate_kernel_lease_fence_v1(
+            owner_type="TIMER_OCCURRENCE",
+            owner_id=self.timer_occurrence_id,
+            lease_owner=self.lease_owner,
+            lease_epoch=self.lease_epoch,
+            lease_fence_token=self.lease_fence_token,
+        )
         expected_hash = hash_hex_v1(
             "miniqmt_timer_occurrence_receipt_v1",
             self.canonical_payload_v1(exclude={"occurrence_receipt_sha256"}),
@@ -4502,14 +4577,37 @@ class ExchangeSessionAuthorityV1(FrozenStrictModel):
             raise ValueError("exchange session authority requires exact SH/SZ/BJ calendar set")
         if len(self.ordered_session_segments) == 0:
             raise ValueError("exchange session authority requires non-empty ordered session segments")
-        snapshot_set = thaw_json_v1(self.calendar_snapshot_set_json)
-        if snapshot_set.get("snapshot_set_id") != self.calendar_snapshot_set_id:
+        snapshot_set = _calendar_snapshot_set_from_json_v1(thaw_json_v1(self.calendar_snapshot_set_json))
+        if snapshot_set.snapshot_set_id != self.calendar_snapshot_set_id:
             raise ValueError("calendar snapshot set identity conflicts with canonical JSON")
-        if snapshot_set.get("set_sha256") != self.calendar_snapshot_set_sha256:
+        if snapshot_set.set_sha256 != self.calendar_snapshot_set_sha256:
             raise ValueError("calendar snapshot set hash conflicts with canonical JSON")
-        if snapshot_set.get("timezone") not in (None, "Asia/Shanghai"):
-            raise ValueError("calendar snapshot set timezone conflicts with exchange authority")
+        market_order = (MarketCode.SH, MarketCode.SZ, MarketCode.BJ)
+        snapshots = tuple(snapshot_set.snapshot_by_market[market] for market in market_order)
+        if tuple(snapshot.calendar_sha256 for snapshot in snapshots) != self.ordered_market_calendar_sha256s:
+            raise ValueError("ordered market calendar hashes conflict with shared CalendarSnapshotSet")
+        if any(snapshot.trade_date.isoformat() != self.exchange_trade_date for snapshot in snapshots):
+            raise ValueError("calendar snapshot trade date conflicts with exchange authority")
+        if any(snapshot.timezone != self.timezone for snapshot in snapshots):
+            raise ValueError("calendar snapshot timezone conflicts with exchange authority")
+        if len({snapshot.source_version for snapshot in snapshots}) != 1:
+            raise ValueError("calendar snapshot set must use one exact source version")
+        if len({snapshot.effective_at_utc for snapshot in snapshots}) != 1:
+            raise ValueError("calendar snapshot set must use one exact effective time")
+        if (
+            canonical_utc_datetime_v1(snapshots[0].effective_at_utc, field_name="calendar.source_effective_at_utc")
+            != self.source_effective_at_utc
+        ):
+            raise ValueError("calendar source effective time conflicts with exchange authority")
         segment_payload = [thaw_json_v1(item) for item in self.ordered_session_segments]
+        shared_segments = tuple(segment.canonical_payload() for segment in snapshots[0].session_segments)
+        if any(
+            tuple(segment.canonical_payload() for segment in snapshot.session_segments) != shared_segments
+            for snapshot in snapshots
+        ):
+            raise ValueError("SH/SZ/BJ session segments must close to one exact shared definition")
+        if tuple(segment_payload) != shared_segments:
+            raise ValueError("ordered session segments conflict with shared CalendarSnapshotSet")
         expected_definition = "mqsessiondef_" + hash_hex_v1(
             "miniqmt_exchange_session_definition_v1",
             {"timezone": self.timezone, "ordered_session_segments": segment_payload},
@@ -4523,6 +4621,56 @@ class ExchangeSessionAuthorityV1(FrozenStrictModel):
         if self.authority_sha256 != expected_hash:
             raise ValueError("authority_sha256 does not match exchange-session closure")
         return self
+
+
+def _calendar_snapshot_set_from_json_v1(payload: dict[str, Any]) -> CalendarSnapshotSet:
+    if set(payload) != {"snapshot_set_id", "snapshot_by_market", "set_sha256"}:
+        raise ValueError("calendar_snapshot_set_json must be the exact shared CalendarSnapshotSet payload")
+    raw_snapshots = payload["snapshot_by_market"]
+    if not isinstance(raw_snapshots, dict):
+        raise TypeError("calendar snapshot_by_market must be a JSON object")
+    expected_keys = {f"MarketCode.{market.value}" for market in MarketCode}
+    if set(raw_snapshots) != expected_keys:
+        raise ValueError("calendar snapshot set must contain exact SH/SZ/BJ market keys")
+    snapshots: dict[MarketCode, CalendarSnapshot] = {}
+    for market in MarketCode:
+        raw = raw_snapshots[f"MarketCode.{market.value}"]
+        if not isinstance(raw, dict) or set(raw) != {
+            "calendar_id",
+            "market",
+            "trade_date",
+            "timezone",
+            "session_segments",
+            "effective_at_utc",
+            "source_version",
+        }:
+            raise ValueError("calendar snapshot must use the exact shared CalendarSnapshot fields")
+        raw_segments = raw["session_segments"]
+        if not isinstance(raw_segments, list) or not raw_segments:
+            raise ValueError("calendar snapshot requires non-empty session segments")
+        segments = tuple(
+            SessionSegment(
+                start_local=time.fromisoformat(segment["start_local"]),
+                end_local=time.fromisoformat(segment["end_local"]),
+            )
+            for segment in raw_segments
+            if isinstance(segment, dict) and set(segment) == {"start_local", "end_local"}
+        )
+        if len(segments) != len(raw_segments):
+            raise ValueError("calendar session segment must use exact start_local/end_local fields")
+        snapshots[market] = CalendarSnapshot(
+            calendar_id=raw["calendar_id"],
+            market=raw["market"],
+            trade_date=date.fromisoformat(raw["trade_date"]),
+            timezone=raw["timezone"],
+            session_segments=segments,
+            effective_at_utc=datetime.fromisoformat(raw["effective_at_utc"].replace("Z", "+00:00")),
+            source_version=raw["source_version"],
+        )
+    snapshot_set = CalendarSnapshotSet(snapshot_set_id=payload["snapshot_set_id"], snapshot_by_market=snapshots)
+    if payload["set_sha256"] != snapshot_set.set_sha256:
+        raise ValueError("calendar snapshot set SHA-256 conflicts with shared authority")
+    return snapshot_set
 
 
 __all__ = [

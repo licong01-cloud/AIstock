@@ -163,12 +163,23 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'K2 preflight partial target index catalog';
     END IF;
+
+    IF installed_target_count = 10 THEN
+        IF to_regprocedure('qmt_strategy.miniqmt_k2_catalog_fingerprint()') IS NULL THEN
+            RAISE EXCEPTION 'K2 preflight missing schema catalog fingerprint authority';
+        END IF;
+        IF qmt_strategy.miniqmt_k2_catalog_fingerprint()
+            <> 'c9d5f192eb4522f54519c8e0c63540218c2674155471c1455c3150bea7a809c4'
+        THEN
+            RAISE EXCEPTION 'K2 preflight exact schema catalog drift';
+        END IF;
+    END IF;
 END $$;
 
 SELECT
     'miniqmt_execution_kernel_k2_20260725'::TEXT AS migration_id,
     'edd5bac639c001a254842a96594f7ab93c2fcf92'::TEXT AS design_source_revision,
-    'db0fa2140a11d795dcc903ac95ece64288645284ff68f495635adda5bdbc9e43'::TEXT AS expected_migration_sha256,
+    'bd25f30033b40fd6ccf1877eec500e457cc90ba71e76f1f7c741d4d7b971e6f5'::TEXT AS expected_migration_sha256,
     COUNT(*) FILTER (WHERE btrim(event_id) = '' OR btrim(runtime_id) = '') AS legacy_invalid_row_count,
     COUNT(*) AS legacy_event_count,
     COUNT(DISTINCT event_type) AS legacy_event_type_count,

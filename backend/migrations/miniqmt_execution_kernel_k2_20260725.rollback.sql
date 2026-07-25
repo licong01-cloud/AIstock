@@ -26,6 +26,8 @@ BEGIN
     END IF;
 END $$;
 
+DROP FUNCTION IF EXISTS qmt_strategy.miniqmt_k2_catalog_fingerprint();
+
 ALTER TABLE qmt_strategy.execution_child_order
     DROP CONSTRAINT IF EXISTS fk_miniqmt_k2_child_transition_owner,
     DROP CONSTRAINT IF EXISTS fk_miniqmt_k2_child_algo_owner;
@@ -86,6 +88,9 @@ ALTER TABLE qmt_strategy.execution_algo_instance
     DROP COLUMN IF EXISTS plugin_id,
     DROP COLUMN IF EXISTS traded_quantity,
     DROP COLUMN IF EXISTS kernel_contract_version;
+
+ALTER TABLE qmt_strategy.execution_runtime
+    DROP CONSTRAINT IF EXISTS uq_miniqmt_k2_runtime_trade_date;
 
 ALTER TABLE qmt_strategy.execution_child_order
     DROP CONSTRAINT IF EXISTS ck_miniqmt_k2_child_mapping_contract,

@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, date, datetime, time
 
 import pytest
 from pydantic import ValidationError
+
+from backend.execution_algos.adaptive_is.contracts import (
+    CalendarSnapshot,
+    CalendarSnapshotSet,
+    MarketCode,
+    SessionSegment,
+    canonical_json_bytes,
+)
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
+    AlgoEventDeliveryV1,
     AlgoFailureReceiptV1,
     AlgoSkipReceiptV1,
     AlgoTransitionReceiptV1,
@@ -23,6 +33,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
     ConsumedLineageRefV1,
+    DeliveryStatusV1,
     ExchangeSessionAuthorityV1,
     ExecutionAlgoPersistenceStatusV2,
     ExecutionAlgoTimerOccurrenceStatusV1,
@@ -151,6 +162,37 @@ def _pending_outbox() -> BrokerCommandOutboxV1:
         updated_at_utc="2026-07-25T01:30:00Z",
         closed_at_utc=None,
     )
+
+
+def _calendar_authority_values(*, snapshot_set_id: str = "calendar_set_k2") -> dict[str, object]:
+    segments = (SessionSegment(time(9, 30), time(11, 30)), SessionSegment(time(13), time(15)))
+    effective_at = datetime(2026, 7, 24, 16, tzinfo=UTC)
+    snapshots = {
+        market: CalendarSnapshot(
+            calendar_id=f"calendar_{market.value}_20260725",
+            market=market,
+            trade_date=date(2026, 7, 25),
+            timezone="Asia/Shanghai",
+            session_segments=segments,
+            effective_at_utc=effective_at,
+            source_version="aistock_calendar_v1",
+        )
+        for market in MarketCode
+    }
+    snapshot_set = CalendarSnapshotSet(snapshot_set_id=snapshot_set_id, snapshot_by_market=snapshots)
+    snapshot_json = json.loads(canonical_json_bytes(snapshot_set.canonical_payload()).decode("utf-8"))
+    snapshot_json["set_sha256"] = snapshot_set.set_sha256
+    ordered = (MarketCode.SH, MarketCode.SZ, MarketCode.BJ)
+    return {
+        "calendar_snapshot_set_id": snapshot_set.snapshot_set_id,
+        "calendar_snapshot_set_json": snapshot_json,
+        "calendar_snapshot_set_sha256": snapshot_set.set_sha256,
+        "ordered_market_calendar_sha256s": tuple(
+            snapshot_set.snapshot_by_market[market].calendar_sha256 for market in ordered
+        ),
+        "ordered_session_segments": tuple(segment.canonical_payload() for segment in segments),
+        "source_effective_at_utc": effective_at,
+    }
 
 
 def test_k2a_public_contract_surface_is_complete() -> None:
@@ -579,6 +621,192 @@ def test_ack_unknown_and_reconciliation_receipts_reject_fake_success_and_ambiguo
         )
 
 
+@pytest.mark.parametrize("carrier_kind", ["delivery", "outbox", "timer_schedule", "timer_occurrence"])
+def test_k2_lease_carriers_reject_arbitrary_fence_tokens(carrier_kind: str) -> None:
+    owner = "worker_k2:incarnation_k2"
+    arbitrary = "arbitrary_not_mqfence"
+    if carrier_kind == "delivery":
+        delivery = AlgoEventDeliveryV1.create(
+            event=_tick_event(),
+            algo_instance_id=_algo_id(),
+            plugin_manifest_sha256=_sha("1"),
+            algo_delivery_sequence=1,
+            previous_delivery_id=None,
+            status=DeliveryStatusV1.CLAIMED,
+            attempt_count=1,
+            lease_owner=owner,
+            lease_expires_at="2026-07-25T01:40:00Z",
+            transition_id=None,
+            last_error_json=None,
+            created_at_utc="2026-07-25T01:30:00Z",
+            updated_at_utc="2026-07-25T01:31:00Z",
+        )
+        with pytest.raises(ValidationError, match="exact kernel fence authority"):
+            AlgoDeliveryPersistenceV1.create(
+                delivery=delivery,
+                lease_epoch=1,
+                lease_fence_token=arbitrary,
+                row_version=2,
+                next_attempt_at_utc=None,
+                failure_receipt_id=None,
+                skip_receipt_id=None,
+                closed_at_utc=None,
+            )
+        return
+
+    mutation = TimerMutationV1.create(
+        mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+        algo_instance_id=_algo_id(),
+        transition_id="transition_fence_k2",
+        ordinal=0,
+        timer_name="fence_timer",
+        schedule_epoch="session_epoch_fence_k2",
+        due_at_exchange_utc="2026-07-25T02:00:00Z",
+        catch_up_policy="EXPIRE_IF_LATE",
+        payload={"slice": 1},
+    )
+    schedule = ExecutionAlgoTimerScheduleV1.create(
+        runtime_id="runtime_k2",
+        mutation=mutation,
+        status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+        emitted_event_id=None,
+        lease_owner=None,
+        lease_epoch=0,
+        lease_fence_token=None,
+        lease_expires_at_utc=None,
+        row_version=1,
+        created_at_utc="2026-07-25T01:30:00Z",
+        updated_at_utc="2026-07-25T01:30:00Z",
+        closed_at_utc=None,
+    )
+    if carrier_kind == "timer_schedule":
+        with pytest.raises(ValidationError, match="exact kernel fence authority"):
+            ExecutionAlgoTimerScheduleV1.create(
+                runtime_id="runtime_k2",
+                mutation=mutation,
+                status=ExecutionAlgoTimerScheduleStatusV1.EMITTING,
+                emitted_event_id=None,
+                lease_owner=owner,
+                lease_epoch=1,
+                lease_fence_token=arbitrary,
+                lease_expires_at_utc="2026-07-25T02:01:00Z",
+                row_version=2,
+                created_at_utc="2026-07-25T01:30:00Z",
+                updated_at_utc="2026-07-25T01:59:00Z",
+                closed_at_utc=None,
+            )
+        return
+    if carrier_kind == "timer_occurrence":
+        with pytest.raises(ValidationError, match="exact kernel fence authority"):
+            ExecutionAlgoTimerOccurrenceV1.create(
+                schedule=schedule,
+                exchange_session_authority_sha256=_sha("4"),
+                status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+                emitted_event_id=None,
+                catch_up_receipt_sha256=None,
+                lease_owner=owner,
+                lease_epoch=1,
+                lease_fence_token=arbitrary,
+                lease_expires_at_utc="2026-07-25T02:01:00Z",
+                row_version=1,
+                created_at_utc="2026-07-25T01:59:00Z",
+                closed_at_utc=None,
+            )
+        return
+
+    command = _submit_command()
+    mapping = _mapping(status=CommandChildMappingStatusV1.RESERVED, version=1)
+    with pytest.raises(ValidationError, match="exact kernel fence authority"):
+        BrokerCommandOutboxV1.create(
+            command=command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.CLAIMED,
+            attempt_count=1,
+            lease_owner=owner,
+            lease_epoch=1,
+            lease_fence_token=arbitrary,
+            lease_expires_at="2026-07-25T01:40:00Z",
+            dispatch_attempt_id=None,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=2,
+            created_at_utc="2026-07-25T01:30:00Z",
+            updated_at_utc="2026-07-25T01:31:00Z",
+            closed_at_utc=None,
+        )
+
+
+def test_delivery_fence_rejects_wrong_owner_type_id_epoch_or_owner() -> None:
+    delivery = AlgoEventDeliveryV1.create(
+        event=_tick_event(),
+        algo_instance_id=_algo_id(),
+        plugin_manifest_sha256=_sha("1"),
+        algo_delivery_sequence=1,
+        previous_delivery_id=None,
+        status=DeliveryStatusV1.CLAIMED,
+        attempt_count=1,
+        lease_owner="worker_k2:incarnation_k2",
+        lease_expires_at="2026-07-25T01:40:00Z",
+        transition_id=None,
+        last_error_json=None,
+        created_at_utc="2026-07-25T01:30:00Z",
+        updated_at_utc="2026-07-25T01:31:00Z",
+    )
+    exact = AlgoDeliveryPersistenceV1.create(
+        delivery=delivery,
+        lease_epoch=1,
+        lease_fence_token=kernel_lease_fence_token_v1(
+            owner_type="DELIVERY",
+            owner_id=delivery.delivery_id,
+            lease_epoch=1,
+            lease_owner="worker_k2:incarnation_k2",
+        ),
+        row_version=2,
+        next_attempt_at_utc=None,
+        failure_receipt_id=None,
+        skip_receipt_id=None,
+        closed_at_utc=None,
+    )
+    bad_tokens = (
+        kernel_lease_fence_token_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=delivery.delivery_id,
+            lease_epoch=1,
+            lease_owner="worker_k2:incarnation_k2",
+        ),
+        kernel_lease_fence_token_v1(
+            owner_type="DELIVERY",
+            owner_id="mqdelivery_wrong_owner_id",
+            lease_epoch=1,
+            lease_owner="worker_k2:incarnation_k2",
+        ),
+        kernel_lease_fence_token_v1(
+            owner_type="DELIVERY",
+            owner_id=delivery.delivery_id,
+            lease_epoch=2,
+            lease_owner="worker_k2:incarnation_k2",
+        ),
+        kernel_lease_fence_token_v1(
+            owner_type="DELIVERY",
+            owner_id=delivery.delivery_id,
+            lease_epoch=1,
+            lease_owner="worker_k2:other_incarnation",
+        ),
+    )
+    for token in bad_tokens:
+        payload = exact.model_dump(mode="python")
+        payload["lease_fence_token"] = token
+        with pytest.raises(ValidationError, match="exact kernel fence authority"):
+            AlgoDeliveryPersistenceV1.model_validate(payload)
+
+
 def test_timer_and_exchange_session_authority_reject_identity_and_calendar_drift() -> None:
     mutation = TimerMutationV1.create(
         mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
@@ -626,23 +854,10 @@ def test_timer_and_exchange_session_authority_reject_identity_and_calendar_drift
     )
     assert occurrence.timer_occurrence_id == schedule.timer_occurrence_id
 
-    snapshot_hash = _sha("5")
     authority = ExchangeSessionAuthorityV1.create(
         runtime_id="runtime_k2",
         exchange_trade_date="2026-07-25",
-        calendar_snapshot_set_id="calendar_set_k2",
-        calendar_snapshot_set_json={
-            "snapshot_set_id": "calendar_set_k2",
-            "set_sha256": snapshot_hash,
-            "timezone": "Asia/Shanghai",
-        },
-        calendar_snapshot_set_sha256=snapshot_hash,
-        ordered_market_calendar_sha256s=(_sha("6"), _sha("7"), _sha("8")),
-        ordered_session_segments=(
-            {"phase": "CONTINUOUS_AM", "start": "09:30:00", "end": "11:30:00"},
-            {"phase": "CONTINUOUS_PM", "start": "13:00:00", "end": "15:00:00"},
-        ),
-        source_effective_at_utc="2026-07-24T16:00:00Z",
+        **_calendar_authority_values(),
     )
     drift = authority.model_dump(mode="python")
     drift["calendar_snapshot_set_sha256"] = _sha("9")
@@ -654,3 +869,19 @@ def test_timer_and_exchange_session_authority_reject_identity_and_calendar_drift
     )
     with pytest.raises(ValidationError, match="hash conflicts"):
         ExchangeSessionAuthorityV1.model_validate(drift)
+
+    with pytest.raises(ValidationError, match="exact shared CalendarSnapshotSet payload"):
+        ExchangeSessionAuthorityV1.create(
+            runtime_id="runtime_k2",
+            exchange_trade_date="2026-07-25",
+            calendar_snapshot_set_id="calendar_set_k2",
+            calendar_snapshot_set_json={
+                "snapshot_set_id": "calendar_set_k2",
+                "set_sha256": _sha("5"),
+                "timezone": "Asia/Shanghai",
+            },
+            calendar_snapshot_set_sha256=_sha("5"),
+            ordered_market_calendar_sha256s=(_sha("6"), _sha("7"), _sha("8")),
+            ordered_session_segments=({"start_local": "09:30:00", "end_local": "11:30:00"},),
+            source_effective_at_utc="2026-07-24T16:00:00Z",
+        )

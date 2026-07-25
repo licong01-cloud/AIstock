@@ -419,7 +419,35 @@ def test_k2_migration_first_second_apply_constraints_and_guarded_rollback_on_dev
         conn.close()
 
 
-def test_k2_preflight_rejects_partial_constraint_catalog_on_dev_postgres() -> None:
+@pytest.mark.parametrize(
+    "drift_sql",
+    (
+        """
+        ALTER TABLE {schema}.execution_algo_command_outbox
+            DROP CONSTRAINT ck_miniqmt_k2_outbox_broker_called;
+        ALTER TABLE {schema}.execution_algo_command_outbox
+            ADD CONSTRAINT ck_miniqmt_k2_outbox_broker_called CHECK (broker_called IS NULL) NOT VALID
+        """,
+        """
+        ALTER TABLE {schema}.execution_exchange_session_authority
+            DROP CONSTRAINT fk_miniqmt_k2_exchange_session_runtime;
+        ALTER TABLE {schema}.execution_exchange_session_authority
+            ADD CONSTRAINT fk_miniqmt_k2_exchange_session_runtime FOREIGN KEY (runtime_id)
+            REFERENCES {schema}.execution_runtime(runtime_id) NOT VALID
+        """,
+        """
+        DROP INDEX {schema}.uq_miniqmt_k2_child_broker_order;
+        CREATE UNIQUE INDEX uq_miniqmt_k2_child_broker_order
+            ON {schema}.execution_child_order(broker_order_id)
+            WHERE broker_order_id IS NOT NULL
+        """,
+        "ALTER TABLE {schema}.execution_exchange_session_authority ALTER COLUMN session_definition_version TYPE VARCHAR(128)",
+        "ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP NOT NULL",
+        "ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP DEFAULT",
+    ),
+    ids=("check", "owner_fk", "partial_predicate", "column_type", "column_nullability", "column_default"),
+)
+def test_k2_preflight_and_forward_reject_exact_catalog_drift_on_dev_postgres(drift_sql: str) -> None:
     schema = _fixture_schema()
     preflight = PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema)
     forward = FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
@@ -430,11 +458,12 @@ def test_k2_preflight_rejects_partial_constraint_catalog_on_dev_postgres() -> No
             cur.execute(_base_fixture_sql(schema))
             cur.execute(preflight)
             _apply_forward(cur, forward)
-            cur.execute(
-                f"ALTER TABLE {schema}.execution_algo_command_outbox DROP CONSTRAINT ck_miniqmt_k2_outbox_broker_called"
-            )
-            with pytest.raises(psycopg2.Error, match="partial target constraint catalog"):
+            cur.execute(drift_sql.format(schema=schema))
+            with pytest.raises(psycopg2.Error, match="exact schema catalog drift"):
                 cur.execute(preflight)
+            cur.execute("ROLLBACK")
+            with pytest.raises(psycopg2.Error, match="schema catalog drift"):
+                _apply_forward(cur, forward)
             cur.execute("ROLLBACK")
     finally:
         conn.autocommit = True

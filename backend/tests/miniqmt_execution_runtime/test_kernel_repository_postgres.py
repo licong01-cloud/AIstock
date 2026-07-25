@@ -13,6 +13,7 @@ import psycopg2.extras
 import pytest
 
 from backend.services.miniqmt_execution_runtime.kernel_repository import (
+    KernelRepositoryCommitUnknown,
     KernelRepositoryConflict,
     KernelRepositorySchemaError,
     PostgresMiniQMTKernelRepository,
@@ -30,6 +31,8 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerCommandTypeV2,
     BrokerCommandV2,
     BrokerDispatchAttemptV1,
+    BrokerOutcomeReconciliationReceiptV1,
+    BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
     DeliveryStatusV1,
     EventSourceV2,
@@ -55,6 +58,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 from backend.tests.miniqmt_execution_runtime.test_kernel_contracts import (
     _algo_id,
+    _calendar_authority_values,
     _tick_event,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres import (
@@ -158,6 +162,34 @@ class _FirstWriteBarrierConnection(_SchemaConnection):
         )
 
 
+class _FaultInjectionCursor(_SchemaCursor):
+    _MARKERS = {
+        "mapping": "UPDATE qmt_strategy.execution_child_order",
+        "outbox": "UPDATE qmt_strategy.execution_algo_command_outbox",
+        "algo": "INSERT INTO qmt_strategy.execution_algo_instance",
+    }
+
+    def __init__(self, cursor: object, schema: str, fault_point: str) -> None:
+        super().__init__(cursor, schema)
+        self._fault_point = fault_point
+
+    def execute(self, query: object, parameters: object = None) -> object:
+        if isinstance(query, str) and self._MARKERS[self._fault_point] in query:
+            raise RuntimeError(f"injected {self._fault_point} write failure")
+        return super().execute(query, parameters)
+
+
+class _FaultInjectionConnection(_SchemaConnection):
+    def __init__(self, connection: object, schema: str, fault_point: str) -> None:
+        super().__init__(connection, schema)
+        self._fault_point = fault_point
+
+    def cursor(self, *args: object, **kwargs: object) -> _FaultInjectionCursor:
+        return _FaultInjectionCursor(  # type: ignore[attr-defined]
+            self._connection.cursor(*args, **kwargs), self._schema, self._fault_point
+        )
+
+
 def _conn_factory(schema: str):
     @contextmanager
     def factory(*, autocommit: bool = False, manage_transaction: bool = False):
@@ -167,6 +199,76 @@ def _conn_factory(schema: str):
         try:
             yield proxy
             if manage_transaction and not autocommit:
+                connection.commit()
+        except Exception:
+            if not autocommit:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return factory
+
+
+def _fault_injection_factory(schema: str, fault_point: str):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = False):
+        connection = psycopg2.connect(**_dev_dsn())
+        connection.autocommit = autocommit
+        proxy = _FaultInjectionConnection(connection, schema, fault_point)
+        try:
+            yield proxy
+            if manage_transaction and not autocommit:
+                connection.commit()
+        except Exception:
+            if not autocommit:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return factory
+
+
+def _commit_unknown_factory(schema: str):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = False):
+        connection = psycopg2.connect(**_dev_dsn())
+        connection.autocommit = autocommit
+        proxy = _SchemaConnection(connection, schema)
+        try:
+            yield proxy
+            if manage_transaction and not autocommit:
+                connection.commit()
+                raise KernelRepositoryCommitUnknown("commit return was not observed")
+        except KernelRepositoryCommitUnknown:
+            raise
+        except Exception:
+            if not autocommit:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return factory
+
+
+def _post_commit_schedule_drift_factory(schema: str, schedule_id: str):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = False):
+        connection = psycopg2.connect(**_dev_dsn())
+        connection.autocommit = autocommit
+        proxy = _SchemaConnection(connection, schema)
+        try:
+            yield proxy
+            if manage_transaction and not autocommit:
+                connection.commit()
+                with connection.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {schema}.execution_algo_timer_schedule "
+                        "SET row_version=row_version+1 WHERE schedule_id=%s",
+                        (schedule_id,),
+                    )
                 connection.commit()
         except Exception:
             if not autocommit:
@@ -388,8 +490,35 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             .preflight_schema()
             .values()
         )
+        with raw.cursor() as cur:
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP DEFAULT"
+            )
+        with pytest.raises(KernelRepositorySchemaError, match="catalog drift"):
+            repository.preflight_schema()
+        with raw.cursor() as cur:
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence SET DEFAULT 0"
+            )
+        assert all(repository.preflight_schema().values())
         PostgresMiniQMTKernelRepository(conn_factory=object())
         with pytest.raises(KernelRepositorySchemaError, match="incomplete"):
+            PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(incomplete_schema)).preflight_schema()
+        with raw.cursor() as cur:
+            for table_name in (
+                "execution_algo_event_delivery",
+                "execution_algo_transition",
+                "execution_algo_command_outbox",
+                "execution_algo_command_dispatch_attempt",
+                "execution_algo_timer_schedule",
+                "execution_algo_timer_occurrence",
+                "execution_kernel_worker_epoch",
+                "execution_kernel_worker_incarnation",
+                "execution_exchange_session_authority",
+                "execution_algo_diagnostic_observation",
+            ):
+                cur.execute(f"CREATE TABLE {incomplete_schema}.{table_name}(id INTEGER)")
+        with pytest.raises(KernelRepositorySchemaError, match="fingerprint authority is unavailable"):
             PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(incomplete_schema)).preflight_schema()
         first_start = repository.start_worker_incarnation(
             worker_id="worker_repo_k2",
@@ -635,6 +764,48 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         submit_command = BrokerCommandV2.model_validate_json(
             json.dumps(outbox.model_dump(mode="json")["payload_json"], sort_keys=True, separators=(",", ":"))
         )
+        mismatched_attempt_fence = kernel_lease_fence_token_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=outbox.command_id,
+            lease_epoch=2,
+            lease_owner=lease_owner,
+        )
+        mismatched_dispatch_attempt = BrokerDispatchAttemptV1.create(
+            command_id=outbox.command_id,
+            attempt_count=claimed_outbox.attempt_count,
+            lease_epoch=2,
+            lease_fence_token=mismatched_attempt_fence,
+            process_incarnation_id=second_start.process_incarnation_id,
+            stage="CLAIMED",
+            started_at_utc="2026-07-25T01:31:00Z",
+            finished_at_utc=None,
+            pre_call_complete=False,
+            broker_called=None,
+            outcome=None,
+            error_reason_code=None,
+            error_context_sha256=None,
+            authority_receipt_sha256=None,
+        )
+        with pytest.raises(KernelRepositoryConflict, match="current outbox lease"):
+            repository.append_dispatch_attempt(mismatched_dispatch_attempt)
+        dispatch_attempt = BrokerDispatchAttemptV1.create(
+            command_id=outbox.command_id,
+            attempt_count=claimed_outbox.attempt_count,
+            lease_epoch=claimed_outbox.lease_epoch,
+            lease_fence_token=claimed_outbox.lease_fence_token,
+            process_incarnation_id=second_start.process_incarnation_id,
+            stage="CLAIMED",
+            started_at_utc="2026-07-25T01:31:00Z",
+            finished_at_utc=None,
+            pre_call_complete=False,
+            broker_called=None,
+            outcome=None,
+            error_reason_code=None,
+            error_context_sha256=None,
+            authority_receipt_sha256=None,
+        )
+        assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
+        assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
         dispatching_mapping = ExecutionCommandChildMappingV1.create(
             command=submit_command,
             strategy_slot_id="slot_k2",
@@ -657,7 +828,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_epoch=claimed_outbox.lease_epoch,
             lease_fence_token=claimed_outbox.lease_fence_token,
             lease_expires_at=claimed_outbox.lease_expires_at,
-            dispatch_attempt_id="dispatch_repo_k2",
+            dispatch_attempt_id=dispatch_attempt.dispatch_attempt_id,
             next_attempt_at_utc=None,
             broker_called=None,
             broker_order_id=None,
@@ -713,12 +884,35 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 outbox=mismatched_outbox,
                 expected_mapping_version=999,
                 expected_outbox_row_version=claimed_outbox.row_version,
+                expected_lease_owner=claimed_outbox.lease_owner,
+                expected_lease_epoch=claimed_outbox.lease_epoch,
+                expected_lease_fence_token=claimed_outbox.lease_fence_token,
+            )
+        stale_owner = f"worker_repo_k2:{first_start.process_incarnation_id}"
+        stale_fence = kernel_lease_fence_token_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=outbox.command_id,
+            lease_epoch=claimed_outbox.lease_epoch,
+            lease_owner=stale_owner,
+        )
+        with pytest.raises(KernelRepositoryConflict, match="expected lease"):
+            repository.compare_and_swap_mapping_outbox(
+                mapping=dispatching_mapping,
+                outbox=dispatching_outbox,
+                expected_mapping_version=1,
+                expected_outbox_row_version=claimed_outbox.row_version,
+                expected_lease_owner=stale_owner,
+                expected_lease_epoch=claimed_outbox.lease_epoch,
+                expected_lease_fence_token=stale_fence,
             )
         assert repository.compare_and_swap_mapping_outbox(
             mapping=dispatching_mapping,
             outbox=dispatching_outbox,
             expected_mapping_version=1,
             expected_outbox_row_version=claimed_outbox.row_version,
+            expected_lease_owner=claimed_outbox.lease_owner,
+            expected_lease_epoch=claimed_outbox.lease_epoch,
+            expected_lease_fence_token=claimed_outbox.lease_fence_token,
         ) == {"mapping": dispatching_mapping, "outbox": dispatching_outbox}
         ack_receipt = BrokerCommandAckReceiptV1.create(
             command_id=outbox.command_id,
@@ -775,26 +969,10 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             outbox=accepted_outbox,
             expected_mapping_version=2,
             expected_outbox_row_version=dispatching_outbox.row_version,
+            expected_lease_owner=dispatching_outbox.lease_owner,
+            expected_lease_epoch=dispatching_outbox.lease_epoch,
+            expected_lease_fence_token=dispatching_outbox.lease_fence_token,
         ) == {"mapping": accepted_mapping, "outbox": accepted_outbox}
-        dispatch_attempt = BrokerDispatchAttemptV1.create(
-            command_id=outbox.command_id,
-            attempt_count=1,
-            lease_epoch=1,
-            lease_fence_token=outbox_fence,
-            process_incarnation_id=second_start.process_incarnation_id,
-            stage="CLAIMED",
-            started_at_utc="2026-07-25T01:31:00Z",
-            finished_at_utc=None,
-            pre_call_complete=False,
-            broker_called=None,
-            outcome=None,
-            error_reason_code=None,
-            error_context_sha256=None,
-            authority_receipt_sha256=None,
-        )
-        assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
-        assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
-
         mutation = TimerMutationV1.create(
             mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
             algo_instance_id=_algo_id(),
@@ -822,6 +1000,66 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         )
         assert repository.write_timer_schedule(schedule) == schedule
         assert repository.write_timer_schedule(schedule) == schedule
+        commit_unknown_mutation = TimerMutationV1.create(
+            mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+            algo_instance_id=_algo_id(),
+            transition_id="transition_timer_commit_unknown_k2",
+            ordinal=0,
+            timer_name="commit_unknown_timer",
+            schedule_epoch="session_epoch_k2",
+            due_at_exchange_utc="2026-07-25T02:03:00Z",
+            catch_up_policy="EXPIRE_IF_LATE",
+            payload={"slice": 3},
+        )
+        commit_unknown_schedule = ExecutionAlgoTimerScheduleV1.create(
+            runtime_id="runtime_k2",
+            mutation=commit_unknown_mutation,
+            status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+            emitted_event_id=None,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=1,
+            created_at_utc="2026-07-25T01:30:00Z",
+            updated_at_utc="2026-07-25T01:30:00Z",
+            closed_at_utc=None,
+        )
+        commit_unknown_repository = PostgresMiniQMTKernelRepository(conn_factory=_commit_unknown_factory(schema))
+        with pytest.raises(KernelRepositoryCommitUnknown, match="not observed"):
+            commit_unknown_repository.write_timer_schedule(commit_unknown_schedule)
+        assert repository.read_timer_schedule(commit_unknown_schedule.schedule_id) == commit_unknown_schedule
+
+        drift_mutation = TimerMutationV1.create(
+            mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+            algo_instance_id=_algo_id(),
+            transition_id="transition_timer_readback_drift_k2",
+            ordinal=0,
+            timer_name="readback_drift_timer",
+            schedule_epoch="session_epoch_k2",
+            due_at_exchange_utc="2026-07-25T02:04:00Z",
+            catch_up_policy="EXPIRE_IF_LATE",
+            payload={"slice": 4},
+        )
+        drift_schedule = ExecutionAlgoTimerScheduleV1.create(
+            runtime_id="runtime_k2",
+            mutation=drift_mutation,
+            status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+            emitted_event_id=None,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=1,
+            created_at_utc="2026-07-25T01:30:00Z",
+            updated_at_utc="2026-07-25T01:30:00Z",
+            closed_at_utc=None,
+        )
+        drift_repository = PostgresMiniQMTKernelRepository(
+            conn_factory=_post_commit_schedule_drift_factory(schema, drift_schedule.schedule_id)
+        )
+        with pytest.raises(KernelRepositoryConflict, match="scalar columns drift"):
+            drift_repository.write_timer_schedule(drift_schedule)
         occurrence_fence = kernel_lease_fence_token_v1(
             owner_type="TIMER_OCCURRENCE",
             owner_id=schedule.timer_occurrence_id,
@@ -844,9 +1082,59 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         )
         assert repository.write_timer_occurrence(occurrence) == occurrence
         assert repository.write_timer_occurrence(occurrence) == occurrence
-        assert repository.list_recovery_timer_occurrences(
+        tie_mutation = TimerMutationV1.create(
+            mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+            algo_instance_id=_algo_id(),
+            transition_id="transition_timer_tie_k2",
+            ordinal=0,
+            timer_name="slice_timer_tie",
+            schedule_epoch="session_epoch_k2",
+            due_at_exchange_utc="2026-07-25T02:00:00Z",
+            catch_up_policy="EXPIRE_IF_LATE",
+            payload={"slice": 22},
+        )
+        tie_schedule = ExecutionAlgoTimerScheduleV1.create(
+            runtime_id="runtime_k2",
+            mutation=tie_mutation,
+            status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+            emitted_event_id=None,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=1,
+            created_at_utc=schedule.created_at_utc,
+            updated_at_utc=schedule.updated_at_utc,
+            closed_at_utc=None,
+        )
+        repository.write_timer_schedule(tie_schedule)
+        tie_fence = kernel_lease_fence_token_v1(
+            owner_type="TIMER_OCCURRENCE",
+            owner_id=tie_schedule.timer_occurrence_id,
+            lease_epoch=1,
+            lease_owner=lease_owner,
+        )
+        tie_occurrence = ExecutionAlgoTimerOccurrenceV1.create(
+            schedule=tie_schedule,
+            exchange_session_authority_sha256="4" * 64,
+            status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+            emitted_event_id=None,
+            catch_up_receipt_sha256=None,
+            lease_owner=lease_owner,
+            lease_epoch=1,
+            lease_fence_token=tie_fence,
+            lease_expires_at_utc="2026-07-25T02:01:00Z",
+            row_version=1,
+            created_at_utc=occurrence.created_at_utc,
+            closed_at_utc=None,
+        )
+        repository.write_timer_occurrence(tie_occurrence)
+        recovery_occurrences = repository.list_recovery_timer_occurrences(
             runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=("CLAIMED",), limit=10
-        ) == (occurrence,)
+        )
+        assert recovery_occurrences == tuple(
+            sorted((occurrence, tie_occurrence), key=lambda item: item.timer_occurrence_id)
+        )
         schedule_fence = kernel_lease_fence_token_v1(
             owner_type="TIMER_SCHEDULE",
             owner_id=schedule.schedule_id,
@@ -893,26 +1181,37 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         with pytest.raises(TypeError):
             repository.write_exchange_session_authority("bad")  # type: ignore[arg-type]
 
-        snapshot_hash = "5" * 64
         authority = ExchangeSessionAuthorityV1.create(
             runtime_id="runtime_k2",
             exchange_trade_date="2026-07-25",
-            calendar_snapshot_set_id="calendar_set_repo_k2",
-            calendar_snapshot_set_json={
-                "snapshot_set_id": "calendar_set_repo_k2",
-                "set_sha256": snapshot_hash,
-                "timezone": "Asia/Shanghai",
-            },
-            calendar_snapshot_set_sha256=snapshot_hash,
-            ordered_market_calendar_sha256s=("6" * 64, "7" * 64, "8" * 64),
-            ordered_session_segments=(
-                {"phase": "CONTINUOUS_AM", "start": "09:30:00", "end": "11:30:00"},
-                {"phase": "CONTINUOUS_PM", "start": "13:00:00", "end": "15:00:00"},
-            ),
-            source_effective_at_utc="2026-07-24T16:00:00Z",
+            **_calendar_authority_values(snapshot_set_id="calendar_set_repo_k2"),
         )
         assert repository.write_exchange_session_authority(authority) == authority
         assert repository.write_exchange_session_authority(authority) == authority
+        with raw.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
+                ("runtime_session_mismatch", date(2026, 7, 26)),
+            )
+        mismatched_date_authority = ExchangeSessionAuthorityV1.create(
+            runtime_id="runtime_session_mismatch",
+            exchange_trade_date="2026-07-25",
+            **_calendar_authority_values(snapshot_set_id="calendar_set_repo_mismatch_k2"),
+        )
+        with pytest.raises(KernelRepositoryConflict, match="trade date conflicts"):
+            repository.write_exchange_session_authority(mismatched_date_authority)
+        missing_runtime_authority = ExchangeSessionAuthorityV1.create(
+            runtime_id="missing_runtime_authority",
+            exchange_trade_date="2026-07-25",
+            **_calendar_authority_values(snapshot_set_id="calendar_set_repo_missing_runtime_k2"),
+        )
+        with pytest.raises(KeyError):
+            repository.write_exchange_session_authority(missing_runtime_authority)
+        with pytest.raises(TypeError):
+            repository.read_exchange_session_authority(
+                runtime_id="runtime_k2",
+                exchange_trade_date="2026-07-25",  # type: ignore[arg-type]
+            )
 
         event = _event(last_price="10.000000")
         delivery = _delivery(event)
@@ -1097,13 +1396,14 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             closed_at_utc="2026-07-25T01:33:00Z",
         )
         failed_delivery = AlgoDeliveryPersistenceV1.model_validate(failed_delivery_payload)
-        failed_algo_payload = algo_v2.model_dump(mode="python")
+        current_algo = repository.read_algo_instance(_algo_id())
+        failed_algo_payload = current_algo.model_dump(mode="python")
         failed_algo_payload.update(
             status=ExecutionAlgoPersistenceStatusV2.FAILED,
             failure_receipt_id=failure_receipt.failure_receipt_id,
             active_child_closure_status=ActiveChildClosureStatusV1.CANCEL_PENDING,
             active_child_count=1,
-            row_version=3,
+            row_version=current_algo.row_version + 1,
             transition_sequence=2,
             last_closed_delivery_sequence=2,
             terminal_delivery_sequence=2,
@@ -1128,13 +1428,332 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             receipt=failure_receipt,
             projection_set=None,
             after_state=None,
-            expected_algo_row_version=2,
+            expected_algo_row_version=current_algo.row_version,
             expected_delivery_row_version=2,
             command_outboxes=(cancel_command_outbox,),
         )
         assert transition_bundle["receipt"] == failure_receipt
         assert transition_bundle["new_child_mappings"] == ()
         assert transition_bundle["command_outboxes"] == (cancel_command_outbox,)
+
+        cancel_command = BrokerCommandV2.model_validate_json(
+            json.dumps(
+                cancel_command_outbox.model_dump(mode="json")["payload_json"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        cancel_fence = kernel_lease_fence_token_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=cancel_command.command_id,
+            lease_epoch=1,
+            lease_owner=lease_owner,
+        )
+        claimed_cancel = repository.claim_outbox_command(
+            command_id=cancel_command.command_id,
+            lease_owner=lease_owner,
+            lease_epoch=1,
+            lease_fence_token=cancel_fence,
+            lease_expires_at="2026-07-25T01:45:00Z",
+            updated_at_utc="2026-07-25T01:34:00Z",
+            expected_row_version=1,
+        )
+        cancel_attempt = BrokerDispatchAttemptV1.create(
+            command_id=cancel_command.command_id,
+            attempt_count=claimed_cancel.attempt_count,
+            lease_epoch=claimed_cancel.lease_epoch,
+            lease_fence_token=claimed_cancel.lease_fence_token,
+            process_incarnation_id=second_start.process_incarnation_id,
+            stage="CLAIMED",
+            started_at_utc="2026-07-25T01:34:00Z",
+            finished_at_utc=None,
+            pre_call_complete=False,
+            broker_called=None,
+            outcome=None,
+            error_reason_code=None,
+            error_context_sha256=None,
+            authority_receipt_sha256=None,
+        )
+        repository.append_dispatch_attempt(cancel_attempt)
+        dispatching_cancel = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.DISPATCHING,
+            attempt_count=claimed_cancel.attempt_count,
+            lease_owner=claimed_cancel.lease_owner,
+            lease_epoch=claimed_cancel.lease_epoch,
+            lease_fence_token=claimed_cancel.lease_fence_token,
+            lease_expires_at=claimed_cancel.lease_expires_at,
+            dispatch_attempt_id=cancel_attempt.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=claimed_cancel.row_version + 1,
+            created_at_utc=claimed_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:34:10Z",
+            closed_at_utc=None,
+        )
+        assert repository.compare_and_swap_mapping_outbox(
+            mapping=accepted_mapping,
+            outbox=dispatching_cancel,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_outbox_row_version=claimed_cancel.row_version,
+            expected_lease_owner=claimed_cancel.lease_owner,
+            expected_lease_epoch=claimed_cancel.lease_epoch,
+            expected_lease_fence_token=claimed_cancel.lease_fence_token,
+        ) == {"mapping": accepted_mapping, "outbox": dispatching_cancel}
+
+        rejected_ack = BrokerCommandAckReceiptV1.create(
+            command_id=cancel_command.command_id,
+            mapping_id=mapping.mapping_id,
+            deterministic_client_order_ref=dispatching_cancel.deterministic_client_order_ref,
+            gateway_route_id="gateway_route_cancel_repo_k2",
+            gateway_catalog_sha256="9" * 64,
+            source="SYNCHRONOUS_RETURN",
+            accepted=False,
+            broker_order_id=None,
+            reason_code="BROKER_CANCEL_REJECTED",
+            ack_payload_sha256="a" * 64,
+            observed_at_utc="2026-07-25T01:34:20Z",
+        )
+        rejected_cancel = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+            attempt_count=dispatching_cancel.attempt_count,
+            lease_owner=None,
+            lease_epoch=dispatching_cancel.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=True,
+            broker_order_id=None,
+            ack_receipt_json=rejected_ack,
+            ack_receipt_sha256=rejected_ack.receipt_sha256,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=dispatching_cancel.row_version + 1,
+            created_at_utc=dispatching_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:34:20Z",
+            closed_at_utc="2026-07-25T01:34:20Z",
+        )
+        algo_before_rejected_cas = repository.read_algo_instance(_algo_id())
+        with pytest.raises(KernelRepositoryConflict, match="outbox CAS failed"):
+            repository.compare_and_swap_mapping_outbox(
+                mapping=accepted_mapping,
+                outbox=rejected_cancel,
+                expected_mapping_version=accepted_mapping.mapping_version,
+                expected_outbox_row_version=999,
+                expected_lease_owner=dispatching_cancel.lease_owner,
+                expected_lease_epoch=dispatching_cancel.lease_epoch,
+                expected_lease_fence_token=dispatching_cancel.lease_fence_token,
+            )
+        assert repository.read_command_identity_chain(cancel_command.command_id) == {
+            "mapping": accepted_mapping,
+            "outbox": dispatching_cancel,
+        }
+        assert repository.read_algo_instance(_algo_id()) == algo_before_rejected_cas
+        assert algo_before_rejected_cas.status is ExecutionAlgoPersistenceStatusV2.FAILED
+
+        unknown_receipt = BrokerUnknownOutcomeReceiptV1.create(
+            command_id=cancel_command.command_id,
+            dispatch_attempt_id=cancel_attempt.dispatch_attempt_id,
+            mapping_id=mapping.mapping_id,
+            lease_fence_token=cancel_fence,
+            uncertain_stage="GATEWAY_RETURN",
+            callback_watermark="callback_watermark_cancel_k2",
+            reason_code="MINIQMT_CANCEL_OUTCOME_UNKNOWN",
+            observed_at_utc="2026-07-25T01:34:30Z",
+        )
+        unknown_cancel = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            attempt_count=dispatching_cancel.attempt_count,
+            lease_owner=None,
+            lease_epoch=dispatching_cancel.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=unknown_receipt,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=dispatching_cancel.row_version + 1,
+            created_at_utc=dispatching_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:34:30Z",
+            closed_at_utc=None,
+        )
+        repository.compare_and_swap_mapping_outbox(
+            mapping=accepted_mapping,
+            outbox=unknown_cancel,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_outbox_row_version=dispatching_cancel.row_version,
+            expected_lease_owner=dispatching_cancel.lease_owner,
+            expected_lease_epoch=dispatching_cancel.lease_epoch,
+            expected_lease_fence_token=dispatching_cancel.lease_fence_token,
+        )
+        not_found = BrokerOutcomeReconciliationReceiptV1.create(
+            command_id=cancel_command.command_id,
+            reconcile_attempt=1,
+            query_criteria_sha256="b" * 64,
+            callback_watermark="callback_watermark_cancel_k2",
+            ordered_matched_order_ids=(),
+            ordered_matched_trade_ids=(),
+            order_snapshot_sha256="c" * 64,
+            trade_snapshot_sha256="d" * 64,
+            outcome="NOT_FOUND",
+            broker_called=None,
+            broker_order_id=None,
+            reason_code="CANCEL_NOT_FOUND_YET",
+            observed_at_utc="2026-07-25T01:34:40Z",
+        )
+        reconciling_cancel = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.RECONCILING,
+            attempt_count=unknown_cancel.attempt_count,
+            lease_owner=None,
+            lease_epoch=unknown_cancel.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=unknown_cancel.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=unknown_receipt,
+            reconcile_receipt=not_found,
+            last_error_json=None,
+            row_version=unknown_cancel.row_version + 1,
+            created_at_utc=unknown_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:34:40Z",
+            closed_at_utc=None,
+        )
+        repository.compare_and_swap_mapping_outbox(
+            mapping=accepted_mapping,
+            outbox=reconciling_cancel,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_outbox_row_version=unknown_cancel.row_version,
+            expected_lease_owner=unknown_cancel.lease_owner,
+            expected_lease_epoch=unknown_cancel.lease_epoch,
+            expected_lease_fence_token=unknown_cancel.lease_fence_token,
+        )
+        terminal_event_id = "event_cancel_terminal_k2"
+        terminal_mapping = ExecutionCommandChildMappingV1.create(
+            command=submit_command,
+            strategy_slot_id="slot_k2",
+            mapping_status=CommandChildMappingStatusV1.TERMINAL,
+            mapping_version=accepted_mapping.mapping_version + 1,
+            broker_order_id=accepted_mapping.broker_order_id,
+            broker_identity_source_event_id=accepted_mapping.broker_identity_source_event_id,
+            last_order_event_id=terminal_event_id,
+            last_trade_event_id=None,
+            updated_by_event_id=terminal_event_id,
+            created_at_utc=accepted_mapping.created_at_utc,
+            updated_at_utc="2026-07-25T01:35:00Z",
+        )
+        reconciled = BrokerOutcomeReconciliationReceiptV1.create(
+            command_id=cancel_command.command_id,
+            reconcile_attempt=2,
+            query_criteria_sha256="e" * 64,
+            callback_watermark="callback_watermark_cancel_k2_final",
+            ordered_matched_order_ids=(accepted_mapping.broker_order_id,),
+            ordered_matched_trade_ids=(),
+            order_snapshot_sha256="f" * 64,
+            trade_snapshot_sha256="0" * 64,
+            outcome="UNIQUE_ACCEPTED",
+            broker_called=True,
+            broker_order_id=accepted_mapping.broker_order_id,
+            reason_code="CANCEL_TERMINAL_CONFIRMED",
+            observed_at_utc="2026-07-25T01:35:00Z",
+        )
+        terminal_ack = BrokerCommandAckReceiptV1.create(
+            command_id=cancel_command.command_id,
+            mapping_id=mapping.mapping_id,
+            deterministic_client_order_ref=reconciling_cancel.deterministic_client_order_ref,
+            gateway_route_id="gateway_route_cancel_repo_k2",
+            gateway_catalog_sha256="1" * 64,
+            source="RECONCILIATION",
+            accepted=True,
+            broker_order_id=accepted_mapping.broker_order_id,
+            reason_code="CANCEL_TERMINAL_CONFIRMED",
+            ack_payload_sha256="2" * 64,
+            observed_at_utc="2026-07-25T01:35:00Z",
+        )
+        terminal_cancel = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.ACKED,
+            attempt_count=reconciling_cancel.attempt_count,
+            lease_owner=None,
+            lease_epoch=reconciling_cancel.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=reconciling_cancel.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=True,
+            broker_order_id=accepted_mapping.broker_order_id,
+            ack_receipt_json=terminal_ack,
+            ack_receipt_sha256=terminal_ack.receipt_sha256,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=unknown_receipt,
+            reconcile_receipt=reconciled,
+            last_error_json=None,
+            row_version=reconciling_cancel.row_version + 1,
+            created_at_utc=reconciling_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:35:00Z",
+            closed_at_utc="2026-07-25T01:35:00Z",
+        )
+        pre_terminal_chain = repository.read_command_identity_chain(cancel_command.command_id)
+        pre_terminal_algo = repository.read_algo_instance(_algo_id())
+        for fault_point in ("mapping", "outbox", "algo"):
+            fault_repository = PostgresMiniQMTKernelRepository(
+                conn_factory=_fault_injection_factory(schema, fault_point)
+            )
+            with pytest.raises(RuntimeError, match=f"injected {fault_point} write failure"):
+                fault_repository.compare_and_swap_mapping_outbox(
+                    mapping=terminal_mapping,
+                    outbox=terminal_cancel,
+                    expected_mapping_version=accepted_mapping.mapping_version,
+                    expected_outbox_row_version=reconciling_cancel.row_version,
+                    expected_lease_owner=reconciling_cancel.lease_owner,
+                    expected_lease_epoch=reconciling_cancel.lease_epoch,
+                    expected_lease_fence_token=reconciling_cancel.lease_fence_token,
+                )
+            assert repository.read_command_identity_chain(cancel_command.command_id) == pre_terminal_chain
+            assert repository.read_algo_instance(_algo_id()) == pre_terminal_algo
+        repository.compare_and_swap_mapping_outbox(
+            mapping=terminal_mapping,
+            outbox=terminal_cancel,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_outbox_row_version=reconciling_cancel.row_version,
+            expected_lease_owner=reconciling_cancel.lease_owner,
+            expected_lease_epoch=reconciling_cancel.lease_epoch,
+            expected_lease_fence_token=reconciling_cancel.lease_fence_token,
+        )
+        closed_algo = repository.read_algo_instance(_algo_id())
+        assert closed_algo.status is ExecutionAlgoPersistenceStatusV2.FAILED
+        assert closed_algo.active_child_closure_status is ActiveChildClosureStatusV1.CLEAN
+        assert closed_algo.active_child_count == 0
+        assert closed_algo.failure_receipt_id == failed_algo.failure_receipt_id
+        assert closed_algo.terminal_delivery_sequence == failed_algo.terminal_delivery_sequence
 
         invalid_claim_fence = kernel_lease_fence_token_v1(
             owner_type="DELIVERY",
@@ -1182,10 +1801,105 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             repository.list_recovery_outbox_commands(
                 runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=(), limit=10
             )
+        with pytest.raises(ValueError, match="unsupported recovery statuses"):
+            repository.list_recovery_outbox_commands(
+                runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=("PENDNG",), limit=10
+            )
+        with pytest.raises(ValueError, match="duplicates"):
+            repository.list_recovery_deliveries(
+                runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=("PENDING", "PENDING"), limit=10
+            )
+        with pytest.raises(ValueError, match="strict string"):
+            repository.list_recovery_timer_occurrences(
+                runtime_id="runtime_k2",
+                trade_date=date(2026, 7, 25),
+                statuses=(1,),  # type: ignore[arg-type]
+                limit=10,
+            )
+        with pytest.raises(ValueError, match="trim-stable strict string"):
+            repository.list_recovery_deliveries(
+                runtime_id=" runtime_k2",
+                trade_date=date(2026, 7, 25),
+                statuses=("PENDING",),
+                limit=10,
+            )
         with pytest.raises(ValueError, match=r"\[1, 1000\]"):
             repository.list_recovery_deliveries(
                 runtime_id="runtime_repo_k2", trade_date=date(2026, 7, 25), statuses=("PENDING",), limit=0
             )
+        with pytest.raises(KeyError):
+            repository.read_delivery("missing_delivery")
+        with pytest.raises(KeyError):
+            repository.read_outbox_command("missing_outbox")
+        with pytest.raises(KeyError):
+            repository.read_algo_instance("missing_algo")
+        with pytest.raises(KeyError):
+            repository.read_dispatch_attempt("missing_attempt", "CLAIMED")
+        with pytest.raises(KeyError):
+            repository.read_timer_schedule("missing_schedule")
+        with pytest.raises(KeyError):
+            repository.read_timer_occurrence("missing_occurrence")
+        with pytest.raises(KeyError):
+            repository.read_exchange_session_authority(
+                runtime_id="missing_runtime", exchange_trade_date=date(2026, 7, 25)
+            )
+
+        scalar_drift_cases = (
+            (
+                f"UPDATE {schema}.execution_algo_event_delivery SET row_version=row_version+1 WHERE delivery_id=%s",
+                (failed_delivery.delivery_id,),
+                lambda: repository.read_delivery(failed_delivery.delivery_id),
+                f"UPDATE {schema}.execution_algo_event_delivery SET row_version=row_version-1 WHERE delivery_id=%s",
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_command_outbox SET row_version=row_version+1 WHERE command_id=%s",
+                (terminal_cancel.command_id,),
+                lambda: repository.read_outbox_command(terminal_cancel.command_id),
+                f"UPDATE {schema}.execution_algo_command_outbox SET row_version=row_version-1 WHERE command_id=%s",
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_instance SET row_version=row_version+1 WHERE algo_instance_id=%s",
+                (_algo_id(),),
+                lambda: repository.read_algo_instance(_algo_id()),
+                f"UPDATE {schema}.execution_algo_instance SET row_version=row_version-1 WHERE algo_instance_id=%s",
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_command_dispatch_attempt "
+                "SET attempt_count=attempt_count+1 WHERE dispatch_attempt_id=%s AND stage='CLAIMED'",
+                (cancel_attempt.dispatch_attempt_id,),
+                lambda: repository.read_dispatch_attempt(cancel_attempt.dispatch_attempt_id, "CLAIMED"),
+                f"UPDATE {schema}.execution_algo_command_dispatch_attempt "
+                "SET attempt_count=attempt_count-1 WHERE dispatch_attempt_id=%s AND stage='CLAIMED'",
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_timer_occurrence SET row_version=row_version+1 "
+                "WHERE timer_occurrence_id=%s",
+                (tie_occurrence.timer_occurrence_id,),
+                lambda: repository.read_timer_occurrence(tie_occurrence.timer_occurrence_id),
+                f"UPDATE {schema}.execution_algo_timer_occurrence SET row_version=row_version-1 "
+                "WHERE timer_occurrence_id=%s",
+            ),
+            (
+                f"UPDATE {schema}.execution_exchange_session_authority SET authority_sha256=%s "
+                "WHERE runtime_id=%s AND exchange_trade_date=%s",
+                ("3" * 64, authority.runtime_id, date(2026, 7, 25)),
+                lambda: repository.read_exchange_session_authority(
+                    runtime_id=authority.runtime_id, exchange_trade_date=date(2026, 7, 25)
+                ),
+                f"UPDATE {schema}.execution_exchange_session_authority SET authority_sha256=%s "
+                "WHERE runtime_id=%s AND exchange_trade_date=%s",
+            ),
+        )
+        for drift_sql, parameters, readback, restore_sql in scalar_drift_cases:
+            with raw.cursor() as cur:
+                cur.execute(drift_sql, parameters)
+            with pytest.raises(KernelRepositoryConflict):
+                readback()
+            restore_parameters = parameters
+            if "execution_exchange_session_authority" in restore_sql:
+                restore_parameters = (authority.authority_sha256, authority.runtime_id, date(2026, 7, 25))
+            with raw.cursor() as cur:
+                cur.execute(restore_sql, restore_parameters)
     finally:
         raw.autocommit = True
         with raw.cursor() as cur:
