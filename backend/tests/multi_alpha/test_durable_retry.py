@@ -592,6 +592,102 @@ def test_results_only_worker_refuses_owner_race_candidate_without_completed_rece
     assert adapter.collect_calls == 0
 
 
+def test_results_only_worker_reuses_hashed_inline_reference_result_without_raw_artifact(
+    tmp_path: Path,
+) -> None:
+    repository = _SiblingCompletedRecoveryRepository()
+    adapter = _RemoteCompletedRepairAdapter(tmp_path)
+    worker = DurableRecoveryWorker(
+        repository=repository,  # type: ignore[arg-type]
+        adapter=adapter,  # type: ignore[arg-type]
+    )
+    result_manifest = {
+        "schema_version": "multi_alpha_recovery_reference_result_v1",
+        "source_attempt_id": "macba_original",
+        "source_result_manifest": {"schema_version": "multi_alpha_child_result_manifest_v1"},
+        "source_result_manifest_hash": "1" * 64,
+        "source_artifact_manifest": {"manifest_hash": "2" * 64},
+        "metrics": {"cagr": 0.5, "sharpe": 1.5},
+        "materialization_metadata": {"weights": {"leg_a": 1.0}, "per_window_weights": []},
+        "business_formula_version": "legacy_execution_identity_incomplete",
+        "execution_disposition": "reuse_result",
+    }
+    source_attempt = {
+        "attempt_id": "macba_reference",
+        "status": "succeeded",
+        "execution_kind": "reference_result",
+        "result_manifest_json": result_manifest,
+        "result_manifest_hash": artifact_manifest_hash_for(result_manifest),
+        "artifact_manifest_json": {"manifest_hash": "3" * 64},
+    }
+    entry = RecoveryPlanEntry(
+        source_child_id=LOO_ID,
+        child_key="loo:equal:drop:leg_b",
+        child_kind="loo",
+        source_status="succeeded",
+        disposition="reuse_result",
+        source_attempt_id=source_attempt["attempt_id"],
+        source_attempt_status="succeeded",
+        source_lineage={
+            "source_run_id": RUN_ID,
+            "source_child_id": LOO_ID,
+            "remote_result_collection_required": False,
+        },
+    )
+
+    payload, effective_attempt = worker._load_recovery_result_payload(
+        entry=entry,
+        source_attempt=source_attempt,
+    )
+
+    assert payload["metrics"] == result_manifest["metrics"]
+    assert payload["materialization_metadata"] == result_manifest["materialization_metadata"]
+    assert payload["result_manifest"] == result_manifest
+    assert effective_attempt is source_attempt
+    assert adapter.inspect_calls == 0
+    assert adapter.collect_calls == 0
+
+
+def test_results_only_worker_rejects_tampered_inline_reference_result(
+    tmp_path: Path,
+) -> None:
+    repository = _SiblingCompletedRecoveryRepository()
+    worker = DurableRecoveryWorker(
+        repository=repository,  # type: ignore[arg-type]
+        adapter=_RemoteCompletedRepairAdapter(tmp_path),  # type: ignore[arg-type]
+    )
+    source_attempt = {
+        "attempt_id": "macba_reference",
+        "status": "succeeded",
+        "execution_kind": "reference_result",
+        "result_manifest_json": {
+            "schema_version": "multi_alpha_recovery_reference_result_v1",
+            "metrics": {"cagr": 0.5},
+            "materialization_metadata": {"weights": {}, "per_window_weights": []},
+        },
+        "result_manifest_hash": "0" * 64,
+        "artifact_manifest_json": {},
+    }
+    entry = RecoveryPlanEntry(
+        source_child_id=LOO_ID,
+        child_key="loo:equal:drop:leg_b",
+        child_kind="loo",
+        source_status="succeeded",
+        disposition="reuse_result",
+        source_attempt_id=source_attempt["attempt_id"],
+        source_attempt_status="succeeded",
+        source_lineage={"source_run_id": RUN_ID, "source_child_id": LOO_ID},
+    )
+
+    with pytest.raises(ValueError) as caught:
+        worker._load_recovery_result_payload(
+            entry=entry,
+            source_attempt=source_attempt,
+        )
+
+    assert getattr(caught.value, "reason_code", None) == "results_only_artifact_missing"
+
+
 def test_backtest_only_successor_keeps_exact_source_attempt_and_creates_one_remote_attempt() -> None:
     repository = _RecoverySpecRepository(
         retry_mode_target_status="failed",
