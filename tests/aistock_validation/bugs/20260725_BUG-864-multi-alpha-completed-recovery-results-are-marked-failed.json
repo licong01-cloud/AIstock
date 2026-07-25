@@ -9,6 +9,7 @@
     "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
     "backend/tests/multi_alpha/test_durable_retry.py",
     "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+    "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
     "tests/aistock_validation/bugs/20260725_BUG-864-multi-alpha-completed-recovery-results-are-marked-failed.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -44,7 +45,8 @@
       "backend/tests/multi_alpha/test_durable_execution_adapter.py",
       "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
       "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/test_multi_alpha_combine_ui_adapter.py"
+      "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx"
     ],
     "ownership": {
       "changed_files": [
@@ -55,7 +57,8 @@
         "backend/tests/multi_alpha/test_durable_execution_adapter.py",
         "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
         "backend/tests/multi_alpha/test_durable_retry.py",
-        "backend/tests/test_multi_alpha_combine_ui_adapter.py"
+        "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx"
       ],
       "impacted_modules": [
         "qe.core",
@@ -64,6 +67,8 @@
         "qe.auto_evolution",
         "qe.enhanced_metrics",
         "qe.data_completeness",
+        "qe.archive",
+        "validation.center",
         "platform.db"
       ],
       "matched_rules": [
@@ -163,6 +168,17 @@
           "primary_module": "qe.auto_evolution",
           "risk_level": "high",
           "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
         }
       ],
       "risk_levels": [
@@ -176,7 +192,8 @@
         "backend/tests/multi_alpha/test_durable_execution_adapter.py",
         "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
         "backend/tests/multi_alpha/test_durable_retry.py",
-        "backend/tests/test_multi_alpha_combine_ui_adapter.py"
+        "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx"
       ],
       "unmatched_files": []
     },
@@ -189,7 +206,8 @@
       "backend/tests/multi_alpha/test_durable_execution_adapter.py",
       "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
       "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/test_multi_alpha_combine_ui_adapter.py"
+      "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx"
     ]
   },
   "first_seen_at": "2026-07-25T16:23:02.387551Z",
