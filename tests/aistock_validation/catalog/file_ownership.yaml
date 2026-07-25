@@ -383,6 +383,15 @@ rules:
     layer: backend_test
     risk_level: critical
     ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
+  - rule_id: miniqmt_execution_kernel_migrations
+    priority: 96
+    include:
+      - backend/migrations/miniqmt_execution_kernel_*.sql
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2]
+    layer: database
+    risk_level: critical
+    ownership_reason: Execution Kernel migrations define the durable event, delivery, transition, command, mapping, timer, and worker-fence authority consumed by the canonical MiniQMT runtime.
   - rule_id: miniqmt_phase_one_quote_ingress
     priority: 96
     include:

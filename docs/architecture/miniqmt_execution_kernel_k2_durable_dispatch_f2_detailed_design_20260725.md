@@ -1,12 +1,19 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready`；实现状态：`K2-A implementation_in_progress`，K2-B/C/D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A local_verified_pr_ci_pending`，K2-B/C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2-A 已开始 strict carrier/repository slice，K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2-A strict carriers、additive migration 与 PostgreSQL repository 已在独立分支完成本地验证，required CI/PR merge尚未发生；K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
-> 本文只完成 K2 实施级详细设计，不实施代码、不执行 DDL/DML、不安装依赖、不调用 broker、不修改 binding/config、不启停或重启服务。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
+> 本轮 K2-A 只实现 schema/repository slice，不启动 worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 migration/repository；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
+
+### K2-A implementation checkpoint（2026-07-25）
+
+- K2-A source under review：`plugin_contracts.py` 中K2-A要求的§4 strict durable carriers；`kernel_repository.py` PostgreSQL writer/readback、row lock/CAS、DB-sequenced worker incarnation、event/delivery、transition/mapping/child/outbox、timer/session authority与有界恢复查询；三份 additive/preflight/guarded-rollback migration。
+- RED：初始 public seam 分别以 missing carrier ImportError、missing repository module 和 missing migration artifact 失败；正式审计另复现 rollback遗漏exchange authority、CANCEL错误broker identity、非法mapping/outbox coupled state，以及并发timer first-write泄漏provider `UniqueViolation`。
+- GREEN：direct + repository PostgreSQL + migration PostgreSQL=`25 passed`；`kernel_repository.py` line=`88.22%`、branch=`72.96%`；classifier=`targeted_ci_required`、backend session仅`miniqmt_execution_runtime_l2`、`unmapped_code_files=[]`、catalog validation required。
+- 当前状态只允许写作 `K2-A local_verified_pr_ci_pending`。三份F2 validator、最终L0/registry、PR required CI和mergeability仍需在本分支完成后，才可提升为`K2-A implemented_verified`；K2 overall仍需K2-B/C/D，不能由K2-A推断完成。
 
 ## 0. Implementation Decision / 实施决策
 
@@ -523,8 +530,8 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 | gate | current state | explanation |
 | --- | --- | --- |
-| `source_merge` | `pending_pr` | 本轮只有设计文档 |
-| `close_sync` | `not_applicable_feature_design` | 非BUG |
+| `source_merge` | `pending_pr` | K2-A source已本地验证，尚未提交PR/合入 |
+| `close_sync` | `not_applicable_feature` | 非BUG feature |
 | `production_ddl_gate` | `noop` | 未执行K2 migration |
 | `production_dml_gate` | `noop` | 无生产写入 |
 | `production_backend_dependency_gate` | `noop` | 无依赖变化 |
@@ -552,23 +559,23 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-061` | §1–§3；`runtime.py`、`client.py`、`repository.py`、现有migration定向事实 | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；实施前以exact symbols和schema readback确认 | design_ready | none |
-| `F-062` | §4.0–§4.10、§9；exact receipt domains/payloads、parent status、projection set、mapping、worker incarnation、calendar authority；K1 DTO仍为唯一business authority | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py` RED ImportError→GREEN 7 passed；后续target `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` | design_ready | none |
-| `F-063` | §4.1、§5、§6.1–6.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py` zero/one/many target、dedupe/conflict、commit-unknown readback | design_ready | none |
-| `F-064` | §4.2–4.4、§6.3、§7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` same-algo ordering、多worker、stale fence、atomic effect | design_ready | none |
-| `F-065` | §4.2–§4.4、§6.3、§7.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_failure_recovery.py` parent enum、plugin/DB/retry exhaustion/active-child diagnostic closure/skip | design_ready | none |
-| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py` mapping全链、incarnation/fence、DISPATCHING crash、callback-before-ACK、unknown/nonacceptance | design_ready | none |
-| `F-067` | §4.8–§4.9、§8 | target `backend/tests/miniqmt_execution_runtime/test_exchange_session_clock.py` exact calendar/session identity、午休/restart/catch-up/EOD | design_ready | none |
-| `F-068` | §9 | target `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` preflight/second apply/rollback/independent readback | design_ready | none |
+| `F-061` | §1–§3；`runtime.py`、`client.py`、`repository.py`、现有migration定向事实 | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；K2-A无产品route/runtime wiring | design_ready | none |
+| `F-062` | §4.0–§4.10、§9；`plugin_contracts.py`、`kernel_repository.py`、K2 migration triplet | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`test_kernel_repository_postgres.py`、`test_kernel_migration_postgres.py`当前总计25 passed；K2-B/C/D继续消费该schema authority | design_ready | none |
+| `F-063` | §4.1、§5、§6.1–6.2；repository event+receipt+ordered deliveries transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` event dedupe/conflict/rollback/commit readback；K2-B再实现ingress coordinator | design_ready | none |
+| `F-064` | §4.2–4.4、§6.3、§7；algo/delivery row lock、CAS、transition bundle、worker fence primitives | `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` stale version、transaction rollback、atomic bundle与durable recount；K2-B再实现delivery worker | design_ready | none |
+| `F-065` | §4.2–§4.4、§6.3、§7.2；strict failure/skip/parent closure schema与repository transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_migration_postgres.py` initialization failure、FAILED closure、failure/cancel/DB CHECK负例；恢复编排留在后续slice | design_ready | none |
+| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3；mapping/outbox/dispatch attempt/incarnation schema与CAS | `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` SUBMIT/CANCEL/DISPATCHING/ACK/coupled-CAS/broker identity；K2-D再实现dispatcher/reconciler | design_ready | none |
+| `F-067` | §4.8–§4.9、§8；timer schedule/occurrence、exchange-session authority schema/repository | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_repository_postgres.py` timer/session drift、CAS/readback、并发first-write；K2-C再实现clock | design_ready | none |
+| `F-068` | §9；三份 migration + checksum/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` DEV preflight、first/second apply、partial catalog、约束负例、guarded rollback；production DDL未执行 | design_ready | none |
 | `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | §11–§13 | command `python -m nox -s miniqmt_execution_runtime_l2`；command `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md --tier F2` | design_ready | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | command `python -m nox -s miniqmt_execution_runtime_l2`；K2-A direct+DEV PostgreSQL=25 passed、line/branch=88.22/72.96、classifier MiniQMT L2 only/unmapped=0；最终PR CI证据回填本checkpoint | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified/subset/POC | pass | 设计覆盖production repository、DDL、ingress、delivery、timer、outbox、reconcile和observability；每个slice单独交付但不冒充K2 complete |
-| no silent error/fake success | pass | DB/commit/broker unknown均有typed durable state；无空transition、默认ACK、`broker_called`强转、event/delivery丢弃 |
+| no simplified/subset/POC | pass | K2-A交付全部strict carriers、真实PostgreSQL repository与完整migration；未以in-memory/mock helper冒充完成，也未把K2-A写成K2 overall complete |
+| no silent error/fake success | pass | DB/commit/broker unknown均有typed durable state；timer并发provider异常已转为repository typed conflict；无空transition、默认ACK、`broker_called`强转、event/delivery丢弃 |
 | no business semantic drift | pass | algo status严格复用父蓝图；broker reject与active-child dirty closure不升级成新业务状态；不改signal/selection/package admission/asset/side/quantity/policy/B0/OMS/Gateway authority；K3前产品route不切换 |
 | no unauthorized gate/approval | pass | 无RBAC、审批、manual acknowledge/repair/enable flag；自动retry/reconcile是执行语义，不是人工门禁 |
 | no fallback/parallel route | pass | K2 shadow-only且不提供业务route选择；无legacy/minute/default-algo fallback，无第二OMS/Gateway/EventEngine |
@@ -577,4 +584,4 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 ## 17. Definition of Done / K2 完成定义
 
-只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
+K2-A 只有在本地direct/DEV migration/repository/coverage、三份F2 validator、classifier-selected gate、L0/registry、PR required CI与mergeability全部闭合后，才能标记`implemented_verified`；source merge仍需用户授权。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
