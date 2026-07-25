@@ -159,10 +159,7 @@ def canonicalize_mapping_rows(
         )
     canonical_rows: list[dict[str, Any]] = []
     for identity, values in sorted(grouped.items(), key=lambda item: (item[0][1], item[0][0])):
-        unique = {
-            (value["l1_code"], value["l1_name"], value["l2_code"], value["l2_name"])
-            for value in values
-        }
+        unique = {(value["l1_code"], value["l1_name"], value["l2_code"], value["l2_name"]) for value in values}
         if len(unique) != 1:
             raise StateModelSetError(f"symbol/date resolves to multiple canonical sector identities: {identity}")
         canonical_rows.append(values[0])
@@ -237,7 +234,8 @@ def _row_complete(row: Mapping[str, Any]) -> tuple[bool, list[str]]:
             _finite_number(
                 value,
                 field,
-                positive=field in {
+                positive=field
+                in {
                     "open_yuan",
                     "high_yuan",
                     "low_yuan",
@@ -280,13 +278,9 @@ def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float =
     missing_weight_evidence: list[dict[str, Any]] = []
     for row in expected:
         try:
-            expected_weights.append(
-                _finite_number(row.get("prev_circ_mv_cny"), "prev_circ_mv_cny", positive=True)
-            )
+            expected_weights.append(_finite_number(row.get("prev_circ_mv_cny"), "prev_circ_mv_cny", positive=True))
         except StateModelSetError:
-            missing_weight_evidence.append(
-                {"symbol": str(row.get("symbol") or ""), "fields": ["prev_circ_mv_cny"]}
-            )
+            missing_weight_evidence.append({"symbol": str(row.get("symbol") or ""), "fields": ["prev_circ_mv_cny"]})
     if missing_weight_evidence:
         known_count_coverage = (len(expected) - len(missing_weight_evidence)) / len(expected)
         raise ObservationCoverageError(
@@ -447,11 +441,46 @@ def aggregate_stock_fact_rows(
     return output, manifest
 
 
+def project_stock_fact_rows_for_direct_level(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    sector_level: str,
+) -> list[dict[str, Any]]:
+    """Project stock facts to a direct L1/L2 grouping identity without cross-level model aggregation."""
+
+    if sector_level not in {"L1", "L2"}:
+        raise StateModelSetError("direct sector level must be L1 or L2")
+    projected: list[dict[str, Any]] = []
+    for source in rows:
+        row = dict(source)
+        if sector_level == "L2":
+            code = str(row.get("l2_code") or "").strip()
+            name = str(row.get("l2_name") or "").strip()
+            if not code or not name:
+                raise StateModelSetError("direct L2 stock fact identity is incomplete")
+            row["l1_code"] = code
+            row["l1_name"] = name
+        projected.append(row)
+    projected.sort(
+        key=lambda row: (
+            row.get("trade_date"),
+            str(row.get("l1_code") or ""),
+            str(row.get("symbol") or ""),
+        )
+    )
+    return projected
+
+
 def _rolling_rank(series: pd.Series, window: int, min_periods: int) -> pd.Series:
-    return series.groupby(level="l1_code", group_keys=False).rolling(
-        window,
-        min_periods=min_periods,
-    ).rank(pct=True).droplevel(0)
+    return (
+        series.groupby(level="l1_code", group_keys=False)
+        .rolling(
+            window,
+            min_periods=min_periods,
+        )
+        .rank(pct=True)
+        .droplevel(0)
+    )
 
 
 def build_l1_feature_panel(
@@ -459,6 +488,8 @@ def build_l1_feature_panel(
     *,
     trading_dates: Sequence[date],
     csi300_returns: Mapping[date, float],
+    expected_sector_count: int = 31,
+    direct_sector_level: str = "L1",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute the approved 7/20 features from L1 raw aggregates."""
 
@@ -469,8 +500,12 @@ def build_l1_feature_panel(
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
     panel = panel.set_index(["trade_date", "l1_code"]).sort_index()
     codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
-    if len(codes) != 31:
-        raise StateModelSetError(f"feature panel requires 31 L1 sectors; actual={len(codes)}")
+    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
+        raise StateModelSetError("direct sector feature panel requires L1/31 or L2/131")
+    if len(codes) != expected_sector_count:
+        raise StateModelSetError(
+            f"feature panel requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(codes)}"
+        )
     calendar = pd.DatetimeIndex(pd.to_datetime(list(trading_dates)), name="trade_date")
     expected_index = pd.MultiIndex.from_product([calendar, codes], names=["trade_date", "l1_code"])
     panel = panel.reindex(expected_index)
@@ -487,9 +522,9 @@ def build_l1_feature_panel(
     panel["volume_ratio"] = panel["l1_volume"] / market_volume.replace(0, np.nan)
     panel["volatility_Nd"] = by_sector["l1_return"].rolling(3, min_periods=3).std(ddof=0).droplevel(0)
     panel["net_mf_ratio"] = panel["net_mf_amount"] / panel["l1_amount"].replace(0, np.nan)
-    panel["elg_net_mf_ratio"] = (
-        panel["buy_elg_amount"] - panel["sell_elg_amount"]
-    ) / panel["l1_amount"].replace(0, np.nan)
+    panel["elg_net_mf_ratio"] = (panel["buy_elg_amount"] - panel["sell_elg_amount"]) / panel["l1_amount"].replace(
+        0, np.nan
+    )
     panel["sector_turnover"] = panel["l1_amount"] / panel["l1_total_mv"].replace(0, np.nan) * 100.0
     panel["sf_turnover_pctile_250d_neg"] = -_rolling_rank(panel["sector_turnover"], 250, 120)
     panel["sf_turnover_pctile_120d_neg"] = -_rolling_rank(panel["sector_turnover"], 120, 60)
@@ -497,9 +532,9 @@ def build_l1_feature_panel(
     turn20 = by_sector["sector_turnover"].rolling(20, min_periods=10).mean().droplevel(0)
     panel["sf_turnover_ma5_ma20_neg"] = -(turn5 / turn20.replace(0, np.nan) - 1.0)
     panel["sf_mf_net_ratio_std_5d_neg"] = -by_sector["net_mf_ratio"].rolling(5, min_periods=5).std(ddof=1).droplevel(0)
-    panel["small_net_ratio"] = (
-        panel["buy_sm_amount"] - panel["sell_sm_amount"]
-    ) / panel["l1_amount"].replace(0, np.nan)
+    panel["small_net_ratio"] = (panel["buy_sm_amount"] - panel["sell_sm_amount"]) / panel["l1_amount"].replace(
+        0, np.nan
+    )
     panel["sf_small_net_ratio_5d"] = by_sector["small_net_ratio"].rolling(5, min_periods=3).mean().droplevel(0)
     panel["sf_intraday_range_5d_neg"] = -by_sector["l1_range_ratio"].rolling(5, min_periods=3).mean().droplevel(0)
     panel["atr14"] = by_sector["l1_true_range_ratio"].rolling(14, min_periods=10).mean().droplevel(0)
@@ -507,18 +542,27 @@ def build_l1_feature_panel(
 
     complete_count = panel["l1_return"].notna().groupby(level="trade_date").transform("sum")
     range_median = panel["l1_range_ratio"].groupby(level="trade_date").transform("median")
-    range_vs_market = (panel["l1_range_ratio"] / range_median.replace(0, np.nan)).where(complete_count == 31)
-    panel["sf_range_vs_market_10d"] = range_vs_market.groupby(level="l1_code", group_keys=False).rolling(
-        10,
-        min_periods=5,
-    ).mean().droplevel(0)
+    range_vs_market = (panel["l1_range_ratio"] / range_median.replace(0, np.nan)).where(
+        complete_count == expected_sector_count
+    )
+    panel["sf_range_vs_market_10d"] = (
+        range_vs_market.groupby(level="l1_code", group_keys=False)
+        .rolling(
+            10,
+            min_periods=5,
+        )
+        .mean()
+        .droplevel(0)
+    )
     vol20 = by_sector["l1_return"].rolling(20, min_periods=10).std(ddof=1).droplevel(0)
     vol_median = vol20.groupby(level="trade_date").transform("median")
-    panel["sf_vol_vs_market_20d"] = (vol20 / vol_median.replace(0, np.nan)).where(complete_count == 31)
+    panel["sf_vol_vs_market_20d"] = (vol20 / vol_median.replace(0, np.nan)).where(
+        complete_count == expected_sector_count
+    )
     panel["sf_breadth_1d"] = panel["breadth_1d"]
     panel["sf_breadth_5d"] = panel["breadth_5d"]
     breadth_mean = panel["breadth_5d"].groupby(level="trade_date").transform("mean")
-    panel["sf_excess_breadth_5d"] = (panel["breadth_5d"] - breadth_mean).where(complete_count == 31)
+    panel["sf_excess_breadth_5d"] = (panel["breadth_5d"] - breadth_mean).where(complete_count == expected_sector_count)
     panel["sf_dispersion_5d_neg"] = -panel["dispersion_5d"]
     panel = panel.replace([np.inf, -np.inf], np.nan)
     feature_definition = {
@@ -528,7 +572,9 @@ def build_l1_feature_panel(
         "all_core_features": list(ALL_CORE_FEATURES),
         "rolling_window": 3,
         "coverage_threshold": MIN_COVERAGE,
-        "cross_section_required_l1_count": 31,
+        "direct_sector_level": direct_sector_level,
+        "cross_section_required_sector_count": expected_sector_count,
+        "cross_section_required_l1_count": expected_sector_count if direct_sector_level == "L1" else None,
         "rank_tie_method": "pandas_average_pct",
     }
     return panel, feature_definition
@@ -548,6 +594,8 @@ def build_l1_training_series(
     validation_start: date,
     validation_end: date,
     constituent_manifest_by_l1: Mapping[str, Mapping[str, Any]],
+    expected_sector_count: int = 31,
+    direct_sector_level: str = "L1",
 ) -> dict[str, L1TrainingSeries]:
     """Freeze train/validation matrices and validation-only future utility."""
 
@@ -555,10 +603,10 @@ def build_l1_training_series(
     if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
         raise StateModelSetError("feature_names is not an approved family")
     work = panel.copy()
-    utility = sum(
-        weight * _future_sum(work["daily_excess"], horizon)
-        for horizon, weight in ((5, 0.35), (10, 0.35), (20, 0.30))
-    )
+    future_components = {horizon: _future_sum(work["daily_excess"], horizon) for horizon in (5, 10, 20)}
+    for horizon, values in future_components.items():
+        work[f"validation_excess_return_{horizon}d"] = values
+    utility = 0.35 * future_components[5] + 0.35 * future_components[10] + 0.30 * future_components[20]
     work["validation_future_utility"] = utility
     output: dict[str, L1TrainingSeries] = {}
     for code in sorted(work.index.get_level_values("l1_code").unique()):
@@ -570,7 +618,13 @@ def build_l1_training_series(
         ].dropna()
         validation = sector.loc[
             (sector_dates >= validation_start) & (sector_dates <= validation_end),
-            [*features, "validation_future_utility"],
+            [
+                *features,
+                "validation_future_utility",
+                "validation_excess_return_5d",
+                "validation_excess_return_10d",
+                "validation_excess_return_20d",
+            ],
         ].dropna()
         if len(train) < MIN_TRAINING_ROWS or len(validation) < 30:
             raise StateModelSetError(
@@ -586,24 +640,36 @@ def build_l1_training_series(
             sector_code=str(code),
             sector_name=str(sector["l1_name"].dropna().iloc[-1]),
             train_observations=train.to_numpy(dtype=np.float64),
+            train_dates=tuple(item.date() for item in train.index),
             validation_observations=validation.loc[:, list(features)].to_numpy(dtype=np.float64),
+            validation_dates=tuple(item.date() for item in validation.index),
             validation_future_utility=validation["validation_future_utility"].to_numpy(dtype=np.float64),
             pit_l2_constituents=l2_codes,
             pit_constituent_manifest_hash=canonical_sha256(constituent),
             observation_manifest_hash=canonical_sha256(
                 {
                     "observation_version": OBSERVATION_VERSION,
+                    "direct_sector_level": direct_sector_level,
                     "sector_code": str(code),
                     "feature_names": list(features),
                     "train_dates": [item.date().isoformat() for item in train.index],
                     "validation_dates": [item.date().isoformat() for item in validation.index],
                     "train_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
-                    "validation_sha256": canonical_sha256(
-                        validation[[*features, "validation_future_utility"]].to_numpy(dtype=np.float64).tolist()
-                    ),
+                    "validation_sha256": canonical_sha256(validation.to_numpy(dtype=np.float64).tolist()),
                 }
             ),
+            validation_future_components={
+                "excess_return_5d": validation["validation_excess_return_5d"].to_numpy(dtype=np.float64),
+                "excess_return_10d": validation["validation_excess_return_10d"].to_numpy(dtype=np.float64),
+                "excess_return_20d": validation["validation_excess_return_20d"].to_numpy(dtype=np.float64),
+            },
+            validation_utility_source_cutoff=date(2025, 4, 30),
+            validation_utility_formula_version="hmm_risk_hard_future_excess_035_035_030_v1",
         )
-    if len(output) != 31:
-        raise StateModelSetError(f"training series requires 31 L1 sectors; actual={len(output)}")
+    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
+        raise StateModelSetError("training series requires an approved L1/31 or L2/131 contract")
+    if len(output) != expected_sector_count:
+        raise StateModelSetError(
+            f"training series requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(output)}"
+        )
     return output

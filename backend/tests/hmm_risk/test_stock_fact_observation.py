@@ -166,9 +166,7 @@ def _aggregate(day: date, code_index: int, day_index: int) -> subject.L1DailyAgg
 def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() -> None:
     calendar = [item.date() for item in pd.bdate_range("2022-01-03", periods=360)]
     aggregates = [
-        _aggregate(day, code_index, day_index)
-        for day_index, day in enumerate(calendar)
-        for code_index in range(31)
+        _aggregate(day, code_index, day_index) for day_index, day in enumerate(calendar) for code_index in range(31)
     ]
     benchmark = {day: 0.001 * np.cos(index / 40.0) for index, day in enumerate(calendar)}
 
@@ -225,3 +223,24 @@ def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> No
     row = panel.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
     assert np.isnan(row["sf_vol_vs_market_20d"])
     assert np.isnan(row["sf_excess_breadth_5d"])
+
+
+def test_direct_l2_projection_uses_canonical_stock_fact_identity_without_mutating_l1() -> None:
+    source = {
+        "trade_date": date(2024, 1, 2),
+        "symbol": "000001.SZ",
+        "l1_code": "801010.SI",
+        "l1_name": "农林牧渔",
+        "l2_code": "801012.SI",
+        "l2_name": "农产品加工",
+    }
+    projected = subject.project_stock_fact_rows_for_direct_level([source], sector_level="L2")
+    assert projected[0]["l1_code"] == "801012.SI"
+    assert projected[0]["l1_name"] == "农产品加工"
+    assert source["l1_code"] == "801010.SI"
+
+    with pytest.raises(subject.StateModelSetError, match="direct L2 stock fact identity is incomplete"):
+        subject.project_stock_fact_rows_for_direct_level(
+            [{**source, "l2_code": ""}],
+            sector_level="L2",
+        )

@@ -526,6 +526,15 @@ rules:
     layer: research_data_pipeline
     risk_level: high
     ownership_reason: HMM Risk is an advisory-only isolated domain with direct L1/L2 model-set preparation, exact schema contracts, and dedicated backend/UI validation plans.
+  - rule_id: python_backend_dependency_manifest
+    priority: 80
+    include:
+      - requirements.txt
+    primary_module: platform.config
+    impact_modules: []
+    layer: backend_dependency_manifest
+    risk_level: high
+    ownership_reason: The pinned Python dependency manifest controls reproducible backend runtime package identity and production dependency aftercare.
   - rule_id: hmm_evolution_services
     priority: 90
     include:

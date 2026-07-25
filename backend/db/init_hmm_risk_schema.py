@@ -13,110 +13,258 @@ from .pg_pool import get_conn
 
 SCHEMA_NAME = "hmm_risk"
 SCHEMA_VERSION = "hmm_risk_schema_v1"
-SCHEMA_COMMENT = (
-    "hmm_risk_schema_v1 advisory-only HMM L1/L2 state, alert, event, "
-    "job and retrospective evidence"
-)
+SCHEMA_COMMENT = "hmm_risk_schema_v1 advisory-only HMM L1/L2 state, alert, event, job and retrospective evidence"
 
 
 EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
     "daily_generation_run": (
-        "run_id", "idempotency_key", "request_hash", "request_payload", "status",
-        "candidate_id", "candidate_manifest_hash", "state_model_set_id",
-        "state_model_set_hash", "l1_model_sha256", "l2_model_sha256",
-        "trade_date_policy", "requested_trade_date", "resolved_trade_date", "as_of_date",
-        "generator_version", "rule_version", "input_manifest", "input_hash", "owner_id",
-        "fencing_token", "row_version", "lease_expires_at", "heartbeat_at",
-        "max_runtime_seconds", "expected_count", "succeeded_count", "failed_count",
-        "l1_expected_count", "l1_succeeded_count", "l2_expected_count",
-        "l2_succeeded_count", "missing_evidence", "error_code", "error_message",
-        "error_context", "cancel_requested_at", "cancel_requested_by", "queued_at",
-        "started_at", "completed_at", "created_at", "updated_at",
+        "run_id",
+        "idempotency_key",
+        "request_hash",
+        "request_payload",
+        "status",
+        "candidate_id",
+        "candidate_manifest_hash",
+        "state_model_set_id",
+        "state_model_set_hash",
+        "l1_model_sha256",
+        "l2_model_sha256",
+        "trade_date_policy",
+        "requested_trade_date",
+        "resolved_trade_date",
+        "as_of_date",
+        "generator_version",
+        "rule_version",
+        "input_manifest",
+        "input_hash",
+        "owner_id",
+        "fencing_token",
+        "row_version",
+        "lease_expires_at",
+        "heartbeat_at",
+        "max_runtime_seconds",
+        "expected_count",
+        "succeeded_count",
+        "failed_count",
+        "l1_expected_count",
+        "l1_succeeded_count",
+        "l2_expected_count",
+        "l2_succeeded_count",
+        "missing_evidence",
+        "error_code",
+        "error_message",
+        "error_context",
+        "cancel_requested_at",
+        "cancel_requested_by",
+        "queued_at",
+        "started_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
     ),
     "sector_state_timeline": (
-        "state_id", "run_id", "candidate_id", "candidate_manifest_hash", "snapshot_id",
-        "config_id", "trade_date", "as_of_date", "sector_level", "sector_code",
-        "sector_name", "hmm_state", "state_probabilities", "state_confidence",
-        "state_origin", "confidence_definition_version", "parser_contract",
-        "adapter_version", "observation_version", "state_model_set_id",
-        "model_artifact_sha256", "input_hash", "result_hash", "mapping_snapshot_hash",
-        "generator_version", "rule_version", "transition_from", "transition_kind",
-        "severity", "dedupe_key", "revision", "supersedes_state_id", "evidence",
+        "state_id",
+        "run_id",
+        "candidate_id",
+        "candidate_manifest_hash",
+        "snapshot_id",
+        "config_id",
+        "trade_date",
+        "as_of_date",
+        "sector_level",
+        "sector_code",
+        "sector_name",
+        "hmm_state",
+        "state_probabilities",
+        "state_confidence",
+        "state_origin",
+        "confidence_definition_version",
+        "parser_contract",
+        "adapter_version",
+        "observation_version",
+        "state_model_set_id",
+        "model_artifact_sha256",
+        "input_hash",
+        "result_hash",
+        "mapping_snapshot_hash",
+        "generator_version",
+        "rule_version",
+        "transition_from",
+        "transition_kind",
+        "severity",
+        "dedupe_key",
+        "revision",
+        "supersedes_state_id",
+        "evidence",
         "created_at",
     ),
     "daily_alert": (
-        "alert_id", "run_id", "state_id", "candidate_id", "trade_date", "sector_level",
-        "sector_code", "severity", "transition_from", "transition_to", "rule_version",
-        "generator_version", "explanation_version", "explanation", "input_hash",
-        "result_hash", "dedupe_key", "revision", "supersedes_alert_id", "created_at",
+        "alert_id",
+        "run_id",
+        "state_id",
+        "candidate_id",
+        "trade_date",
+        "sector_level",
+        "sector_code",
+        "severity",
+        "transition_from",
+        "transition_to",
+        "rule_version",
+        "generator_version",
+        "explanation_version",
+        "explanation",
+        "input_hash",
+        "result_hash",
+        "dedupe_key",
+        "revision",
+        "supersedes_alert_id",
+        "created_at",
     ),
     "risk_event": (
-        "event_revision_id", "event_id", "dedupe_key", "candidate_id", "sector_level",
-        "sector_code", "event_type", "rule_version", "status", "revision",
-        "first_alert_id", "latest_alert_id", "opened_trade_date", "last_trade_date",
-        "resolved_trade_date", "resolution_reason", "supersedes_event_revision_id",
-        "result_hash", "evidence", "created_at",
+        "event_revision_id",
+        "event_id",
+        "dedupe_key",
+        "candidate_id",
+        "sector_level",
+        "sector_code",
+        "event_type",
+        "rule_version",
+        "status",
+        "revision",
+        "first_alert_id",
+        "latest_alert_id",
+        "opened_trade_date",
+        "last_trade_date",
+        "resolved_trade_date",
+        "resolution_reason",
+        "supersedes_event_revision_id",
+        "result_hash",
+        "evidence",
+        "created_at",
     ),
     "retrospective_report": (
-        "report_id", "candidate_id", "candidate_manifest_hash", "model_artifact_sha256",
-        "start_trade_date", "end_trade_date", "sector_level", "report_spec",
-        "report_spec_hash", "source_manifest", "source_hash", "status", "metrics",
-        "evidence", "result_hash", "sample_count", "error_code", "error_message",
-        "error_context", "created_at", "completed_at",
+        "report_id",
+        "candidate_id",
+        "candidate_manifest_hash",
+        "model_artifact_sha256",
+        "start_trade_date",
+        "end_trade_date",
+        "sector_level",
+        "report_spec",
+        "report_spec_hash",
+        "source_manifest",
+        "source_hash",
+        "status",
+        "metrics",
+        "evidence",
+        "result_hash",
+        "sample_count",
+        "error_code",
+        "error_message",
+        "error_context",
+        "created_at",
+        "completed_at",
     ),
 }
 
 EXPECTED_CONSTRAINTS: Mapping[str, frozenset[str]] = {
-    "daily_generation_run": frozenset({
-        "pk_hmm_risk_daily_generation_run", "uq_hmm_risk_run_idempotency",
-        "fk_hmm_risk_run_candidate", "ck_hmm_risk_run_status",
-        "ck_hmm_risk_run_trade_date_policy", "ck_hmm_risk_run_requested_date",
-        "ck_hmm_risk_run_resolved_dates", "ck_hmm_risk_run_hash_pair",
-        "ck_hmm_risk_run_fencing", "ck_hmm_risk_run_row_version",
-        "ck_hmm_risk_run_runtime", "ck_hmm_risk_run_counters",
-        "ck_hmm_risk_run_level_counters", "ck_hmm_risk_run_missing_evidence",
-        "ck_hmm_risk_run_owner_lease", "ck_hmm_risk_run_cancel_pair",
-        "ck_hmm_risk_run_terminal",
-    }),
-    "sector_state_timeline": frozenset({
-        "pk_hmm_risk_sector_state", "fk_hmm_risk_state_run",
-        "fk_hmm_risk_state_supersedes", "uq_hmm_risk_state_revision",
-        "uq_hmm_risk_state_input", "ck_hmm_risk_state_dates",
-        "ck_hmm_risk_state_level", "ck_hmm_risk_state_code",
-        "ck_hmm_risk_state_name", "ck_hmm_risk_state_value",
-        "ck_hmm_risk_state_probability_shape", "ck_hmm_risk_state_confidence",
-        "ck_hmm_risk_state_origin", "ck_hmm_risk_state_transition_from",
-        "ck_hmm_risk_state_severity", "ck_hmm_risk_state_revision",
-    }),
-    "daily_alert": frozenset({
-        "pk_hmm_risk_daily_alert", "fk_hmm_risk_alert_run", "fk_hmm_risk_alert_state",
-        "fk_hmm_risk_alert_supersedes", "uq_hmm_risk_alert_state",
-        "uq_hmm_risk_alert_revision", "uq_hmm_risk_alert_input",
-        "ck_hmm_risk_alert_level", "ck_hmm_risk_alert_severity",
-        "ck_hmm_risk_alert_transition_from", "ck_hmm_risk_alert_transition_to",
-        "ck_hmm_risk_alert_revision",
-    }),
-    "risk_event": frozenset({
-        "pk_hmm_risk_event_revision", "fk_hmm_risk_event_first_alert",
-        "fk_hmm_risk_event_latest_alert", "fk_hmm_risk_event_supersedes",
-        "uq_hmm_risk_event_revision", "uq_hmm_risk_event_result",
-        "ck_hmm_risk_event_level", "ck_hmm_risk_event_type",
-        "ck_hmm_risk_event_status", "ck_hmm_risk_event_revision",
-        "ck_hmm_risk_event_dates", "ck_hmm_risk_event_resolution",
-    }),
-    "retrospective_report": frozenset({
-        "pk_hmm_risk_report", "uq_hmm_risk_report_identity",
-        "ck_hmm_risk_report_dates", "ck_hmm_risk_report_level",
-        "ck_hmm_risk_report_status", "ck_hmm_risk_report_sample_count",
-        "ck_hmm_risk_report_terminal",
-    }),
+    "daily_generation_run": frozenset(
+        {
+            "pk_hmm_risk_daily_generation_run",
+            "uq_hmm_risk_run_idempotency",
+            "fk_hmm_risk_run_candidate",
+            "ck_hmm_risk_run_status",
+            "ck_hmm_risk_run_trade_date_policy",
+            "ck_hmm_risk_run_requested_date",
+            "ck_hmm_risk_run_resolved_dates",
+            "ck_hmm_risk_run_hash_pair",
+            "ck_hmm_risk_run_fencing",
+            "ck_hmm_risk_run_row_version",
+            "ck_hmm_risk_run_runtime",
+            "ck_hmm_risk_run_counters",
+            "ck_hmm_risk_run_level_counters",
+            "ck_hmm_risk_run_missing_evidence",
+            "ck_hmm_risk_run_owner_lease",
+            "ck_hmm_risk_run_cancel_pair",
+            "ck_hmm_risk_run_terminal",
+        }
+    ),
+    "sector_state_timeline": frozenset(
+        {
+            "pk_hmm_risk_sector_state",
+            "fk_hmm_risk_state_run",
+            "fk_hmm_risk_state_supersedes",
+            "uq_hmm_risk_state_revision",
+            "uq_hmm_risk_state_input",
+            "ck_hmm_risk_state_dates",
+            "ck_hmm_risk_state_level",
+            "ck_hmm_risk_state_code",
+            "ck_hmm_risk_state_name",
+            "ck_hmm_risk_state_value",
+            "ck_hmm_risk_state_probability_shape",
+            "ck_hmm_risk_state_confidence",
+            "ck_hmm_risk_state_origin",
+            "ck_hmm_risk_state_transition_from",
+            "ck_hmm_risk_state_severity",
+            "ck_hmm_risk_state_revision",
+        }
+    ),
+    "daily_alert": frozenset(
+        {
+            "pk_hmm_risk_daily_alert",
+            "fk_hmm_risk_alert_run",
+            "fk_hmm_risk_alert_state",
+            "fk_hmm_risk_alert_supersedes",
+            "uq_hmm_risk_alert_state",
+            "uq_hmm_risk_alert_revision",
+            "uq_hmm_risk_alert_input",
+            "ck_hmm_risk_alert_level",
+            "ck_hmm_risk_alert_severity",
+            "ck_hmm_risk_alert_transition_from",
+            "ck_hmm_risk_alert_transition_to",
+            "ck_hmm_risk_alert_revision",
+        }
+    ),
+    "risk_event": frozenset(
+        {
+            "pk_hmm_risk_event_revision",
+            "fk_hmm_risk_event_first_alert",
+            "fk_hmm_risk_event_latest_alert",
+            "fk_hmm_risk_event_supersedes",
+            "uq_hmm_risk_event_revision",
+            "uq_hmm_risk_event_result",
+            "ck_hmm_risk_event_level",
+            "ck_hmm_risk_event_type",
+            "ck_hmm_risk_event_status",
+            "ck_hmm_risk_event_revision",
+            "ck_hmm_risk_event_dates",
+            "ck_hmm_risk_event_resolution",
+        }
+    ),
+    "retrospective_report": frozenset(
+        {
+            "pk_hmm_risk_report",
+            "uq_hmm_risk_report_identity",
+            "ck_hmm_risk_report_dates",
+            "ck_hmm_risk_report_level",
+            "ck_hmm_risk_report_status",
+            "ck_hmm_risk_report_sample_count",
+            "ck_hmm_risk_report_terminal",
+        }
+    ),
 }
 
-EXPECTED_INDEXES = frozenset({
-    "idx_hmm_risk_run_claim", "idx_hmm_risk_run_lease", "idx_hmm_risk_state_lookup",
-    "idx_hmm_risk_state_run", "idx_hmm_risk_alert_lookup", "idx_hmm_risk_event_lookup",
-    "idx_hmm_risk_report_lookup",
-})
+EXPECTED_INDEXES = frozenset(
+    {
+        "idx_hmm_risk_run_claim",
+        "idx_hmm_risk_run_lease",
+        "idx_hmm_risk_state_lookup",
+        "idx_hmm_risk_state_run",
+        "idx_hmm_risk_alert_lookup",
+        "idx_hmm_risk_event_lookup",
+        "idx_hmm_risk_report_lookup",
+    }
+)
 EXPECTED_VIEWS = frozenset({"sector_state_current", "daily_alert_current", "risk_event_current"})
 
 # Filled from the canonical PostgreSQL catalog snapshot produced by this file.
@@ -162,7 +310,7 @@ TABLE_DDL = (
         l1_succeeded_count INTEGER NOT NULL DEFAULT 0,
         l2_expected_count INTEGER NOT NULL DEFAULT 0,
         l2_succeeded_count INTEGER NOT NULL DEFAULT 0,
-        missing_evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+        missing_evidence JSONB NOT NULL,
         error_code TEXT,
         error_message TEXT,
         error_context JSONB,
@@ -190,8 +338,8 @@ TABLE_DDL = (
         CONSTRAINT ck_hmm_risk_run_cancel_pair CHECK ((cancel_requested_at IS NULL) = (cancel_requested_by IS NULL)),
         CONSTRAINT ck_hmm_risk_run_terminal CHECK (
           (status NOT IN ('succeeded','partial_failed','failed','cancelled') AND completed_at IS NULL)
-          OR (status='succeeded' AND completed_at IS NOT NULL AND resolved_trade_date IS NOT NULL AND input_hash IS NOT NULL AND expected_count=succeeded_count AND failed_count=0 AND error_code IS NULL)
-          OR (status='partial_failed' AND completed_at IS NOT NULL AND resolved_trade_date IS NOT NULL AND input_hash IS NOT NULL AND succeeded_count>0 AND failed_count>0)
+          OR (status='succeeded' AND completed_at IS NOT NULL AND resolved_trade_date IS NOT NULL AND input_hash IS NOT NULL AND expected_count=succeeded_count AND failed_count=0 AND jsonb_array_length(missing_evidence)=0 AND error_code IS NULL)
+          OR (status='partial_failed' AND completed_at IS NOT NULL AND resolved_trade_date IS NOT NULL AND input_hash IS NOT NULL AND succeeded_count>0 AND failed_count>0 AND jsonb_array_length(missing_evidence)>0)
           OR (status IN ('failed','cancelled') AND completed_at IS NOT NULL AND error_code IS NOT NULL)
         )
     )
@@ -599,12 +747,8 @@ def _structure_payload(contract: Mapping[str, Any]) -> dict[str, Any]:
             }
             for table, body in contract["tables"].items()
         },
-        "indexes": [
-            {key: index[key] for key in ("name", "definition")} for index in contract["indexes"]
-        ],
-        "views": [
-            {key: view[key] for key in ("name", "definition")} for view in contract["views"]
-        ],
+        "indexes": [{key: index[key] for key in ("name", "definition")} for index in contract["indexes"]],
+        "views": [{key: view[key] for key in ("name", "definition")} for view in contract["views"]],
     }
 
 
@@ -654,8 +798,7 @@ def verify_contract_snapshot(contract: Mapping[str, Any]) -> None:
     actual_hash = _canonical_sha256(_structure_payload(contract))
     if actual_hash != EXPECTED_STRUCTURE_SHA256:
         raise RuntimeError(
-            "hmm_risk_schema_drift: structure hash "
-            f"expected={EXPECTED_STRUCTURE_SHA256} actual={actual_hash}"
+            f"hmm_risk_schema_drift: structure hash expected={EXPECTED_STRUCTURE_SHA256} actual={actual_hash}"
         )
 
 

@@ -71,6 +71,9 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "jsonb_object_length" not in ddl
     assert "state_origin='direct_hmm'" in ddl
     assert "state_probabilities - 'trending' - 'neutral' - 'fading' = '{}'::jsonb" in ddl
+    assert "missing_evidence jsonb not null default" not in ddl
+    assert "failed_count=0 and jsonb_array_length(missing_evidence)=0" in ddl
+    assert "failed_count>0 and jsonb_array_length(missing_evidence)>0" in ddl
     assert "select *" not in ddl
 
 
@@ -151,4 +154,3 @@ def test_bootstrap_executes_every_statement_then_verifies(monkeypatch: pytest.Mo
 
     assert connection.executed == list(schema.iter_ddl())
     assert connection.verified is True
-

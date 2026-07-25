@@ -66,7 +66,9 @@ class PostgresStockFactReader:
                 or state[3] > self.spec.source_start
                 or state[4] < self.spec.source_end
             ):
-                raise StateModelSetError("requested PIT universe is not ready/clean or does not cover the source window")
+                raise StateModelSetError(
+                    "requested PIT universe is not ready/clean or does not cover the source window"
+                )
             cursor.execute(
                 """
                 SELECT table_name,column_name,data_type
@@ -74,17 +76,19 @@ class PostgresStockFactReader:
                 WHERE table_schema='market' AND table_name=ANY(%s)
                 ORDER BY table_name,ordinal_position
                 """,
-                ([
-                    "kline_daily_raw",
-                    "daily_basic",
-                    "moneyflow_ts",
-                    "stk_limit",
-                    "suspend_d",
-                    "trading_calendar",
-                    "sw_index_member",
-                    "sw_index_classify",
-                    "stock_universe_pit_spans",
-                ],),
+                (
+                    [
+                        "kline_daily_raw",
+                        "daily_basic",
+                        "moneyflow_ts",
+                        "stk_limit",
+                        "suspend_d",
+                        "trading_calendar",
+                        "sw_index_member",
+                        "sw_index_classify",
+                        "stock_universe_pit_spans",
+                    ],
+                ),
             )
             column_contract = [tuple(item) for item in cursor.fetchall()]
         return {
@@ -208,12 +212,25 @@ class PostgresStockFactReader:
         finally:
             cursor.close()
 
-    def iter_stock_fact_rows(self, *, fetch_size: int = 10_000) -> Iterator[dict[str, Any]]:
+    def iter_stock_fact_rows(
+        self,
+        *,
+        fetch_size: int = 10_000,
+        sector_level: str = "L1",
+    ) -> Iterator[dict[str, Any]]:
+        if sector_level not in {"L1", "L2"}:
+            raise StateModelSetError("stock fact read level must be L1 or L2")
         history_start = self.spec.source_start - timedelta(days=60)
-        cursor = self._conn.cursor(name="hmm_risk_stock_fact_source")
+        cursor_name = "hmm_risk_stock_fact_source" if sector_level == "L1" else "hmm_risk_stock_fact_source_l2"
+        cursor = self._conn.cursor(name=cursor_name)
         cursor.itersize = fetch_size
+        order_by = (
+            "c.trade_date,c.l1_code,c.ts_code,c.l2_code"
+            if sector_level == "L1"
+            else "c.trade_date,c.l2_code,c.ts_code,c.l1_code"
+        )
         cursor.execute(
-            """
+            f"""
             WITH price_history AS (
               SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
                      lag(trade_date,1) OVER w previous_price_date,
@@ -271,7 +288,7 @@ class PostgresStockFactReader:
             LEFT JOIN basic_history db ON db.trade_date=c.trade_date AND db.ts_code=c.ts_code
             LEFT JOIN market.moneyflow_ts mf ON mf.trade_date=c.trade_date AND mf.ts_code=c.ts_code
             LEFT JOIN market.stk_limit lim ON lim.trade_date=c.trade_date AND lim.ts_code=c.ts_code
-            ORDER BY c.trade_date,c.l1_code,c.ts_code,c.l2_code
+            ORDER BY {order_by}
             """,
             (
                 history_start,
@@ -322,14 +339,28 @@ class PostgresStockFactReader:
         finally:
             cursor.close()
 
-    def iter_missing_price_rows(self, *, fetch_size: int = 2_000) -> Iterator[dict[str, Any]]:
+    def iter_missing_price_rows(
+        self,
+        *,
+        fetch_size: int = 2_000,
+        sector_level: str = "L1",
+    ) -> Iterator[dict[str, Any]]:
         """Yield eligible, non-suspended symbol-days missing canonical price facts."""
 
+        if sector_level not in {"L1", "L2"}:
+            raise StateModelSetError("missing-price read level must be L1 or L2")
+
         history_start = self.spec.source_start - timedelta(days=60)
-        cursor = self._conn.cursor(name="hmm_risk_missing_price_source")
+        cursor_name = "hmm_risk_missing_price_source" if sector_level == "L1" else "hmm_risk_missing_price_source_l2"
+        cursor = self._conn.cursor(name=cursor_name)
         cursor.itersize = fetch_size
+        order_by = (
+            "c.trade_date,c.l1_code,c.ts_code,c.l2_code"
+            if sector_level == "L1"
+            else "c.trade_date,c.l2_code,c.ts_code,c.l1_code"
+        )
         cursor.execute(
-            """
+            f"""
             WITH calendar_base AS (
               SELECT cal_date::date trade_date FROM market.trading_calendar
               WHERE is_trading=true AND cal_date BETWEEN %s AND %s
@@ -370,7 +401,7 @@ class PostgresStockFactReader:
                 SELECT 1 FROM market.suspend_d sd
                 WHERE sd.trade_date=c.trade_date AND sd.ts_code=c.ts_code
               )
-            ORDER BY c.trade_date,c.l1_code,c.ts_code,c.l2_code
+            ORDER BY {order_by}
             """,
             (
                 self.spec.source_start,
@@ -430,10 +461,7 @@ def load_mapping_manifest(reader: PostgresStockFactReader) -> tuple[dict[str, An
     canonical_identity_count = 0
     previous_canonical: tuple[date, str, str, str] | None = None
     for row in reader.iter_mapping_source_rows():
-        serialized = {
-            key: (value.isoformat() if isinstance(value, date) else value)
-            for key, value in row.items()
-        }
+        serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
         digest.update(canonical_json_bytes(serialized))
         digest.update(b"\n")
         count += 1
@@ -484,30 +512,43 @@ def load_daily_aggregates(
     reader: PostgresStockFactReader,
     *,
     min_coverage: float = MIN_COVERAGE,
+    sector_level: str = "L1",
 ) -> tuple[list[L1DailyAggregate], dict[str, Any]]:
+    if sector_level not in {"L1", "L2"}:
+        raise StateModelSetError("daily aggregate level must be L1 or L2")
     digest = hashlib.sha256()
     raw_count = 0
     aggregates: list[L1DailyAggregate] = []
-    invalid_l1_dates: list[dict[str, Any]] = []
+    invalid_sector_dates: list[dict[str, Any]] = []
 
-    missing_rows = list(reader.iter_missing_price_rows())
+    missing_rows = list(
+        reader.iter_missing_price_rows()
+        if sector_level == "L1"
+        else reader.iter_missing_price_rows(sector_level=sector_level)
+    )
+    sort_code = "l1_code" if sector_level == "L1" else "l2_code"
     merged_rows = heapq.merge(
-        reader.iter_stock_fact_rows(),
+        reader.iter_stock_fact_rows()
+        if sector_level == "L1"
+        else reader.iter_stock_fact_rows(sector_level=sector_level),
         iter(missing_rows),
-        key=lambda row: (row["trade_date"], row["l1_code"], row["symbol"], row["l2_code"]),
+        key=lambda row: (row["trade_date"], row[sort_code], row["symbol"], row["l1_code"], row["l2_code"]),
     )
 
     def rows_with_hash() -> Iterator[dict[str, Any]]:
         nonlocal raw_count
         for row in merged_rows:
-            serialized = {
-                key: (value.isoformat() if isinstance(value, date) else value)
-                for key, value in row.items()
-            }
+            serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
             digest.update(canonical_json_bytes(serialized))
             digest.update(b"\n")
             raw_count += 1
-            yield row
+            if sector_level == "L2":
+                projected = dict(row)
+                projected["l1_code"] = row["l2_code"]
+                projected["l1_name"] = row["l2_name"]
+                yield projected
+            else:
+                yield row
 
     for _, group in itertools.groupby(
         rows_with_hash(),
@@ -516,10 +557,13 @@ def load_daily_aggregates(
         try:
             aggregates.append(aggregate_l1_day(list(group), min_coverage=min_coverage))
         except ObservationCoverageError as exc:
-            invalid_l1_dates.append(
+            identity = (
+                {"l1_code": exc.l1_code} if sector_level == "L1" else {"sector_level": "L2", "sector_code": exc.l1_code}
+            )
+            invalid_sector_dates.append(
                 {
                     "trade_date": exc.trade_date.isoformat(),
-                    "l1_code": exc.l1_code,
+                    **identity,
                     "reason": "stock_coverage_insufficient",
                     "count_coverage": exc.count_coverage,
                     "weight_coverage": exc.weight_coverage,
@@ -536,8 +580,8 @@ def load_daily_aggregates(
         "missing_non_suspended_price_row_count": len(missing_rows),
         "raw_jsonl_sha256": digest.hexdigest(),
         "aggregate_row_count": len(aggregates),
-        "invalid_l1_date_count": len(invalid_l1_dates),
-        "invalid_l1_dates": invalid_l1_dates,
+        "invalid_l1_date_count": len(invalid_sector_dates),
+        "invalid_l1_dates": invalid_sector_dates,
         "aggregate_sha256": hashlib.sha256(
             canonical_json_bytes(
                 [
@@ -552,4 +596,9 @@ def load_daily_aggregates(
         "min_count_coverage": min_coverage,
         "min_weight_coverage": min_coverage,
     }
+    if sector_level == "L2":
+        manifest["schema_version"] = "hmm_risk_direct_l2_stock_fact_dataset_manifest_v1"
+        manifest["direct_sector_level"] = "L2"
+        manifest["invalid_sector_date_count"] = manifest.pop("invalid_l1_date_count")
+        manifest["invalid_sector_dates"] = manifest.pop("invalid_l1_dates")
     return aggregates, manifest

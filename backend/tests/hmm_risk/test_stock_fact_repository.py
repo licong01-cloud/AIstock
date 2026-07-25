@@ -46,14 +46,8 @@ class _Cursor:
         if "information_schema.columns" in self.sql:
             return [("daily_basic", "trade_date", "date")]
         if "FROM market.sw_index_classify" in self.sql:
-            rows = [
-                ("L1", f"L1-{index:02d}", f"I1-{index:02d}", f"L1 Sector {index}")
-                for index in range(31)
-            ]
-            rows.extend(
-                ("L2", f"L2-{index:03d}", f"I2-{index:03d}", f"L2 Sector {index}")
-                for index in range(131)
-            )
+            rows = [("L1", f"L1-{index:02d}", f"I1-{index:02d}", f"L1 Sector {index}") for index in range(31)]
+            rows.extend(("L2", f"L2-{index:03d}", f"I2-{index:03d}", f"L2 Sector {index}") for index in range(131))
             return rows
         if "duplicates WHERE duplicate_groups>0" in self.sql:
             return self.connection.duplicates
@@ -62,7 +56,7 @@ class _Cursor:
     def __iter__(self):
         if self.name == "hmm_risk_mapping_source":
             return iter(self.connection.mapping_rows)
-        if self.name == "hmm_risk_stock_fact_source":
+        if self.name in {"hmm_risk_stock_fact_source", "hmm_risk_stock_fact_source_l2"}:
             return iter(self.connection.stock_rows)
         return iter(())
 
@@ -159,6 +153,7 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
 
     mapping = next(reader.iter_mapping_source_rows())
     stock = next(reader.iter_stock_fact_rows())
+    l2_stock = next(reader.iter_stock_fact_rows(sector_level="L2"))
 
     assert mapping["source_l1_code"] == "I1-00"
     assert mapping["l1_code"] == "L1-00"
@@ -167,6 +162,10 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     assert stock["amount_cny"] == 1_000.0
     assert stock["prev_circ_mv_cny"] == 800_000.0
     assert stock["net_mf_amount_cny"] == 20_000.0
+    assert l2_stock == stock
+    l2_queries = [sql for name, sql, _ in connection.executed if name == "hmm_risk_stock_fact_source_l2"]
+    assert len(l2_queries) == 1
+    assert "ORDER BY c.trade_date,c.l2_code,c.ts_code,c.l1_code" in l2_queries[0]
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
 
 
