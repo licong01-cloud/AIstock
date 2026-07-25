@@ -250,6 +250,84 @@ def test_task_progress_uses_latest_running_run_heartbeat() -> None:
     assert task["heartbeat_at"] == "2026-06-26T02:20:00+00:00"
 
 
+def test_task_progress_distinguishes_remote_running_from_waiting_capacity() -> None:
+    bundles: dict[str, dict[str, Any]] = {}
+    for index in range(10):
+        run = _run(
+            f"run_recovery_{index}",
+            status="running",
+            topk=25 + index,
+            created_at=f"2026-07-25T16:{index:02d}:00+00:00",
+            reason={"phase": "recovery_children_published"},
+        )
+        run.update(
+            {
+                "attempt_count": 1,
+                "remote_running_count": 1 if index < 4 else 0,
+                "queued_count": 0 if index < 4 else 1,
+                "reconciling_count": 0,
+                "terminal_attempt_count": 0,
+            }
+        )
+        bundles[run["id"]] = {"run": run, "scheme_results": [], "loo": []}
+    task = _adapter(bundles).list_tasks()["tasks"][0]
+
+    assert task["status"] == "running"
+    assert task["running_count"] == 4
+    assert task["queued_count"] == 6
+    assert task["reconciling_count"] == 0
+    assert task["progress"] == {
+        "completed": 0,
+        "total": 10,
+        "pending": 10,
+        "running": 4,
+        "queued": 6,
+        "reconciling": 0,
+    }
+
+
+def test_latest_partial_recovered_successor_is_task_truth_after_failed_history() -> None:
+    failed = _run(
+        "run_failed_history",
+        status="failed",
+        created_at="2026-07-25T16:00:00+00:00",
+    )
+    recovered = _run(
+        "run_recovered_latest",
+        status="partial_recovered",
+        created_at="2026-07-25T20:00:00+00:00",
+    )
+    for run in (failed, recovered):
+        run.update(
+            {
+                "attempt_count": 1,
+                "remote_running_count": 0,
+                "queued_count": 0,
+                "reconciling_count": 0,
+                "terminal_attempt_count": 1,
+            }
+        )
+    adapter = _adapter(
+        {
+            failed["id"]: {"run": failed, "scheme_results": [], "loo": []},
+            recovered["id"]: {
+                "run": recovered,
+                "scheme_results": [_scheme("equal")],
+                "loo": _loo("equal"),
+            },
+        }
+    )
+
+    task = adapter.get_task(task_key_for_run(recovered), scheme="equal")
+
+    assert task["task"]["status"] == "partial_recovered"
+    recovered_loop = next(
+        loop for loop in task["loops"] if loop["run_id"] == recovered["id"]
+    )
+    assert recovered_loop["status"] == "completed"
+    assert recovered_loop["raw_status"] == "partial_recovered"
+
+
 def test_failed_runs_with_disjoint_schemes_do_not_break_task_render() -> None:
     # Failed/partial run 已持久化的 scheme 结果也是研究证据，必须保留并可切换。
     run_ok = _run("run_ok", status="succeeded")

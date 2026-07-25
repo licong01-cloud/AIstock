@@ -25,6 +25,8 @@ type CombineTask = {
   default_scheme?: string;
   phase?: string | null;
   running_count?: number;
+  queued_count?: number;
+  reconciling_count?: number;
   completed_count?: number;
   partial_failed_count?: number;
   failed_count?: number;
@@ -96,6 +98,8 @@ function combineStatusInfo(status: string): { color: string; bgColor: string; la
       return { label: "运行中", color: "#0369a1", bgColor: "#e0f2fe" };
     case "completed":
       return { label: "已完成", color: "#047857", bgColor: "#d1fae5" };
+    case "partial_recovered":
+      return { label: "已恢复（部分可计算）", color: "#047857", bgColor: "#d1fae5" };
     case "failed":
     case "partial_failed":
       return { label: status === "partial_failed" ? "部分失败" : "已失败", color: "#b91c1c", bgColor: "#fee2e2" };
@@ -128,14 +132,14 @@ function schemeText(task: CombineTask): string {
 function taskProgressText(task: CombineTask): string {
   const progress = task.progress || {};
   if (progress.completed != null || progress.total != null || progress.pending != null) {
-    return `${String(progress.completed ?? "-")}/${String(progress.total ?? "-")} pending=${String(progress.pending ?? "-")}`;
+    return `${String(progress.completed ?? "-")}/${String(progress.total ?? "-")} running=${String(progress.running ?? task.running_count ?? "-")} queued=${String(progress.queued ?? task.queued_count ?? "-")} reconciling=${String(progress.reconciling ?? task.reconciling_count ?? "-")}`;
   }
   return task.phase || "-";
 }
 
 function MultiAlphaCombineBacktestWorkspace() {
   const [tasks, setTasks] = useState<CombineTask[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "completed" | "partial_failed" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "pending" | "completed" | "partial_recovered" | "partial_failed" | "failed">("all");
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -212,7 +216,9 @@ function MultiAlphaCombineBacktestWorkspace() {
           >
             <option value="all">全部状态</option>
             <option value="running">运行中</option>
+            <option value="pending">等待容量</option>
             <option value="completed">已完成</option>
+            <option value="partial_recovered">已恢复（部分可计算）</option>
             <option value="partial_failed">部分失败</option>
             <option value="failed">已失败</option>
           </select>

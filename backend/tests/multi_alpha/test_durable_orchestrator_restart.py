@@ -204,6 +204,7 @@ class _Repository:
         assert phase in {
             "completed_result_collection_pending",
             "remote_status_unmapped",
+            "terminal_reservation_reconciliation_pending",
         }
         assert token.row_version == self.attempt["row_version"]
         self.yields += 1
@@ -415,6 +416,60 @@ def test_completed_remote_result_collection_survives_restart_window(tmp_path: Pa
     assert repository.child["selected_attempt_id"] == "macba_test"
     assert adapter.collect_calls == 2
     assert adapter.terminal_calls == 2
+
+
+def test_terminal_reservation_owner_race_remains_reconciling_until_retry(
+    tmp_path: Path,
+) -> None:
+    repository = _Repository()
+    adapter = _Adapter(tmp_path, repository)
+
+    def owner_race(**_kwargs: Any) -> Mapping[str, Any]:
+        adapter.terminal_calls += 1
+        raise DurableExecutionAdapterError(
+            "capacity reconciler still owns the exact terminal reservation",
+            reason_code="qe_execution_reservation_owner_mismatch",
+        )
+
+    adapter.record_remote_terminal = owner_race  # type: ignore[method-assign]
+    orchestrator = _orchestrator(repository, adapter)
+    intent = DurableSubmissionIntent(
+        run_id="macb_test",
+        child_id="macbc_test",
+        attempt_id="macba_test",
+        attempt_no=1,
+        node_id="wsl2-5080",
+        qe_task_id="qe_test",
+        qe_loop_id="Loop1",
+        submission_intent_hash="a" * 64,
+    )
+    artifacts = DurablePublishedArtifacts(
+        workspace=tmp_path,
+        prediction_path=tmp_path / "combined_prediction.pkl",
+        artifact_manifest_path=tmp_path / "artifact_manifest.json",
+        artifact_manifest={"manifest_hash": "b" * 64},
+    )
+
+    asyncio.run(
+        orchestrator._apply_remote_status(
+            run={"id": "macb_test"},
+            child=dict(repository.child),
+            attempt_id="macba_test",
+            token=OwnershipToken(owner_id="worker", fencing_token=1, row_version=1),
+            intent=intent,
+            artifacts=artifacts,
+            remote_status="completed",
+            remote_payload={"status": "completed"},
+        )
+    )
+
+    assert repository.attempt["status"] == "reconciling"
+    assert repository.child["status"] == "reconciling"
+    assert repository.yields == 1
+    assert adapter.collect_calls == 0
+    assert repository.events[-1]["phase"] == (
+        "terminal_reservation_reconciliation_pending"
+    )
 
 
 def test_completed_after_deadline_is_ingested_with_evidence(tmp_path: Path) -> None:

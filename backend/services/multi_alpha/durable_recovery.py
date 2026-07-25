@@ -8,6 +8,7 @@ after the resulting scope has been persisted.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -225,10 +226,12 @@ class DurableRecoveryService:
                 reason_code="multi_alpha_recovery_target_not_found",
                 context={"source_run_id": source_run_id, "target_child_id": target_child_id},
             )
-        attempts_by_child = {
-            str(child["child_id"]): tuple(self._repository.list_attempts(str(child["child_id"])))
-            for child in source_children
-        }
+        attempts_by_child = self._attempts_for_preview(
+            source_run=source_run,
+            source_children=source_children,
+            target=target,
+            retry_mode=retry_mode,
+        )
         command_id = make_command_id(source_run_id, idempotency_key)
         execution_identity = _execution_identity_from_source(source_run, source_children, attempts_by_child)
         identity_evidence = legacy_execution_identity_evidence(execution_identity)
@@ -303,10 +306,6 @@ class DurableRecoveryService:
                 context={"source_run_id": source_run_id},
             )
         source_children = tuple(self._repository.list_children(source_run_id))
-        attempts_by_child = {
-            str(child["child_id"]): tuple(self._repository.list_attempts(str(child["child_id"])))
-            for child in source_children
-        }
         target = next(
             (row for row in source_children if str(row.get("child_id") or "") == target_child_id),
             None,
@@ -317,6 +316,12 @@ class DurableRecoveryService:
                 reason_code="multi_alpha_recovery_target_not_found",
                 context={"source_run_id": source_run_id, "target_child_id": target_child_id},
             )
+        attempts_by_child = self._attempts_for_preview(
+            source_run=source_run,
+            source_children=source_children,
+            target=target,
+            retry_mode=retry_mode,
+        )
         execution_identity = _execution_identity_from_source(source_run, source_children, attempts_by_child)
         identity_evidence = legacy_execution_identity_evidence(execution_identity)
         formula_version = _business_formula_version(execution_identity)
@@ -364,6 +369,112 @@ class DurableRecoveryService:
             execution_identity=execution_identity,
             identity_evidence=identity_evidence,
             formula_version=formula_version,
+        )
+
+    def _attempts_for_preview(
+        self,
+        *,
+        source_run: Mapping[str, Any],
+        source_children: Sequence[Mapping[str, Any]],
+        target: Mapping[str, Any],
+        retry_mode: str,
+    ) -> dict[str, tuple[Mapping[str, Any], ...]]:
+        attempts_by_child = {
+            str(child["child_id"]): tuple(
+                self._repository.list_attempts(str(child["child_id"]))
+            )
+            for child in source_children
+        }
+        if retry_mode != RetryMode.RESULTS_ONLY.value:
+            return attempts_by_child
+        target_child_id = str(target["child_id"])
+        if any(
+            _is_results_reference_source(attempt)
+            for attempt in attempts_by_child.get(target_child_id, ())
+        ):
+            return attempts_by_child
+        candidate = self._find_external_results_source(
+            source_run=source_run,
+            target=target,
+        )
+        if candidate is not None:
+            attempts_by_child[target_child_id] = (
+                *attempts_by_child.get(target_child_id, ()),
+                candidate,
+            )
+        return attempts_by_child
+
+    def _find_external_results_source(
+        self,
+        *,
+        source_run: Mapping[str, Any],
+        target: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        list_runs = getattr(self._repository, "list_runs", None)
+        if not callable(list_runs):
+            return None
+        expected_source_attempt_id = _nested_source_attempt_id(target)
+        if not expected_source_attempt_id:
+            return None
+        candidates: list[dict[str, Any]] = []
+        for candidate_run in list_runs(
+            task_id=str(source_run.get("task_id") or "") or None,
+            limit=1000,
+        ):
+            if str(candidate_run.get("id") or "") == str(source_run.get("id") or ""):
+                continue
+            if not _same_research_identity(source_run, candidate_run):
+                continue
+            for candidate_child in self._repository.list_children(
+                str(candidate_run["id"])
+            ):
+                if str(candidate_child.get("child_key") or "") != str(
+                    target.get("child_key") or ""
+                ):
+                    continue
+                for attempt in self._repository.list_attempts(
+                    str(candidate_child["child_id"])
+                ):
+                    if str(attempt.get("source_attempt_id") or "") != expected_source_attempt_id:
+                        continue
+                    if not _is_results_reference_source(attempt):
+                        continue
+                    candidates.append(
+                        {
+                            **dict(attempt),
+                            "_recovery_source_run_id": str(candidate_run["id"]),
+                            "_recovery_source_run_request_hash": candidate_run.get(
+                                "request_hash"
+                            ),
+                            "_recovery_source_child_id": str(candidate_child["child_id"]),
+                            "_recovery_source_child_status": candidate_child.get("status"),
+                            "_remote_result_repair_candidate": (
+                                _is_terminal_owner_race_repair_candidate(attempt)
+                            ),
+                        }
+                    )
+        if not candidates:
+            return None
+        signatures = {_results_source_signature(candidate) for candidate in candidates}
+        if len(signatures) != 1:
+            raise DurableContractError(
+                "multiple completed recovery attempts disagree for the same frozen source",
+                reason_code="results_only_recovery_candidate_ambiguous",
+                context={
+                    "target_child_key": target.get("child_key"),
+                    "expected_source_attempt_id": expected_source_attempt_id,
+                    "candidate_attempt_ids": sorted(
+                        str(candidate.get("attempt_id") or "")
+                        for candidate in candidates
+                    ),
+                },
+            )
+        return max(
+            candidates,
+            key=lambda attempt: (
+                str(attempt.get("finished_at") or attempt.get("updated_at") or ""),
+                str(attempt.get("attempt_id") or ""),
+            ),
         )
 
     def _materializer_identity_for(
@@ -508,6 +619,9 @@ class DurableRecoveryWorker:
             "results_only_successful_source_attempt_missing",
             "results_only_result_manifest_missing",
             "results_only_artifact_missing",
+            "results_only_remote_result_not_completed",
+            "multi_alpha_child_result_not_visible",
+            "qe_workspace_result_transport_unavailable",
             "backtest_prediction_missing",
             "backtest_prediction_hash_mismatch",
             "backtest_identity_missing",
@@ -729,10 +843,52 @@ class DurableRecoveryWorker:
                 context={"source_run_id": plan.source_run_id},
             )
         source_children = tuple(self._repository.list_children(plan.source_run_id))
-        attempts_by_child = {
-            str(child["child_id"]): tuple(self._repository.list_attempts(str(child["child_id"])))
+        attempts_by_child: dict[str, tuple[Mapping[str, Any], ...]] = {
+            str(child["child_id"]): tuple(
+                self._repository.list_attempts(str(child["child_id"]))
+            )
             for child in source_children
         }
+        for entry in plan.entries:
+            if entry.source_attempt_id is None:
+                continue
+            if _source_attempt_for_entry(entry, attempts_by_child) is not None:
+                continue
+            external_attempt = self._repository.get_attempt(entry.source_attempt_id)
+            if external_attempt is None:
+                raise DurableContractError(
+                    "planned external recovery source attempt disappeared",
+                    reason_code="recovery_scope_stale",
+                    context={"source_attempt_id": entry.source_attempt_id},
+                )
+            actual_run_id = str(entry.source_lineage.get("source_run_id") or "")
+            actual_child_id = str(entry.source_lineage.get("source_child_id") or "")
+            if (
+                str(external_attempt.get("run_id") or "") != actual_run_id
+                or str(external_attempt.get("child_id") or "") != actual_child_id
+            ):
+                raise DurableContractError(
+                    "planned external recovery source lineage changed",
+                    reason_code="source_lineage_mismatch",
+                    context={
+                        "source_attempt_id": entry.source_attempt_id,
+                        "expected_run_id": actual_run_id,
+                        "actual_run_id": external_attempt.get("run_id"),
+                        "expected_child_id": actual_child_id,
+                        "actual_child_id": external_attempt.get("child_id"),
+                    },
+                )
+            attempts_by_child[entry.source_child_id] = (
+                *attempts_by_child.get(entry.source_child_id, ()),
+                {
+                    **dict(external_attempt),
+                    "_recovery_source_run_id": actual_run_id,
+                    "_recovery_source_child_id": actual_child_id,
+                    "_remote_result_repair_candidate": bool(
+                        entry.source_lineage.get("remote_result_collection_required")
+                    ),
+                },
+            )
         source_result_payloads: dict[str, Mapping[str, Any]] = {}
         for entry in plan.entries:
             if entry.disposition not in {"reuse_result", "recompute_derived"}:
@@ -743,12 +899,23 @@ class DurableRecoveryWorker:
                     reason_code="results_only_artifact_missing",
                     context={"source_child_id": entry.source_child_id},
                 )
-            source_result_payloads[entry.source_attempt_id] = (
-                self._adapter.load_recovery_source_result_payload(
-                    source_run_id=plan.source_run_id,
-                    source_child_id=entry.source_child_id,
-                    source_attempt_id=entry.source_attempt_id,
+            source_attempt = _source_attempt_for_entry(entry, attempts_by_child)
+            if source_attempt is None:
+                raise DurableContractError(
+                    "recovery reference entry source attempt is unavailable",
+                    reason_code="results_only_artifact_missing",
+                    context={"source_attempt_id": entry.source_attempt_id},
                 )
+            payload, effective_attempt = self._load_recovery_result_payload(
+                entry=entry,
+                source_attempt=source_attempt,
+            )
+            source_result_payloads[entry.source_attempt_id] = payload
+            attempts_by_child[entry.source_child_id] = tuple(
+                effective_attempt
+                if str(candidate.get("attempt_id") or "") == entry.source_attempt_id
+                else candidate
+                for candidate in attempts_by_child.get(entry.source_child_id, ())
             )
         specs = build_successor_recovery_specs(
             plan=plan,
@@ -829,6 +996,97 @@ class DurableRecoveryWorker:
             token=staging_token,
             recovery_specs=specs,
             staging_manifest=staging_manifest,
+        )
+
+    def _load_recovery_result_payload(
+        self,
+        *,
+        entry: RecoveryPlanEntry,
+        source_attempt: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+        source_run_id = _required_text(
+            entry.source_lineage.get("source_run_id"),
+            field="entry.source_lineage.source_run_id",
+        )
+        source_child_id = _required_text(
+            entry.source_lineage.get("source_child_id"),
+            field="entry.source_lineage.source_child_id",
+        )
+        if not entry.source_lineage.get("remote_result_collection_required"):
+            return (
+                self._adapter.load_recovery_source_result_payload(
+                    source_run_id=source_run_id,
+                    source_child_id=source_child_id,
+                    source_attempt_id=str(source_attempt["attempt_id"]),
+                ),
+                source_attempt,
+            )
+
+        source_run = self._repository.get_run(source_run_id)
+        source_child = self._repository.get_child(source_child_id)
+        if source_run is None or source_child is None:
+            raise DurableContractError(
+                "remote-completed recovery source disappeared",
+                reason_code="recovery_scope_stale",
+                context={
+                    "source_run_id": source_run_id,
+                    "source_child_id": source_child_id,
+                },
+            )
+        node_id = _required_text(source_attempt.get("node_id"), field="source_attempt.node_id")
+        artifacts = self._adapter.load_published_artifacts(
+            run_id=source_run_id,
+            child_id=source_child_id,
+            attempt_id=str(source_attempt["attempt_id"]),
+        )
+        intent = self._adapter.prepare_submission_intent(
+            run=source_run,
+            child=source_child,
+            attempt=source_attempt,
+            node_id=node_id,
+        )
+        inspection = asyncio.run(self._adapter.inspect_remote(intent=intent))
+        remote_status = str(inspection.status.get("status") or "").lower()
+        receipt_status = str(inspection.receipt.status or "").lower()
+        if remote_status != "completed" or receipt_status != "completed":
+            raise DurableContractError(
+                "results-only repair requires an authoritative completed remote receipt",
+                reason_code="results_only_remote_result_not_completed",
+                context={
+                    "source_attempt_id": source_attempt.get("attempt_id"),
+                    "remote_status": remote_status,
+                    "receipt_status": receipt_status,
+                },
+            )
+        collected = asyncio.run(
+            self._adapter.collect_result(
+                intent=intent,
+                artifacts=artifacts,
+            )
+        )
+        result_manifest = dict(collected.result_manifest)
+        _required_text(
+            result_manifest.get("manifest_hash"),
+            field="collected.result_manifest.manifest_hash",
+        )
+        result_manifest_hash = artifact_manifest_hash_for(result_manifest)
+        effective_attempt = {
+            **dict(source_attempt),
+            "status": "succeeded",
+            "result_manifest_json": result_manifest,
+            "result_manifest_hash": result_manifest_hash,
+            "artifact_manifest_json": dict(artifacts.artifact_manifest),
+        }
+        return (
+            {
+                "metrics": dict(collected.metrics),
+                "materialization_metadata": dict(
+                    self._adapter.load_materialization_metadata(artifacts)
+                ),
+                "artifact_manifest": dict(artifacts.artifact_manifest),
+                "result_manifest": result_manifest,
+            },
+            effective_attempt,
         )
 
     def _fail_scope_stale(
@@ -1341,10 +1599,16 @@ def recovery_execution_evidence(plan: RecoveryPlan) -> dict[str, Any]:
     if not isinstance(identity, Mapping):
         gaps.append("legacy_execution_identity_incomplete")
     if plan.retry_mode == RetryMode.RESULTS_ONLY.value:
-        if target.source_attempt_status != "succeeded":
+        remote_collection_required = bool(
+            target.source_lineage.get("remote_result_collection_required")
+        )
+        if target.source_attempt_status != "succeeded" and not remote_collection_required:
             gaps.append("results_only_successful_source_attempt_missing")
         result_hash = lineage.get("result_manifest_hash")
-        if not isinstance(result_hash, str) or not result_hash:
+        if (
+            not remote_collection_required
+            and (not isinstance(result_hash, str) or not result_hash)
+        ):
             gaps.append("results_only_result_manifest_missing")
     elif plan.retry_mode == RetryMode.BACKTEST_ONLY.value:
         if not lineage.get("prediction_artifact_uri") or not lineage.get("prediction_artifact_hash"):
@@ -1385,7 +1649,7 @@ def _disposition_for_child(
         if (
             retry_mode == RetryMode.RESULTS_ONLY.value
             and selected_attempt is not None
-            and str(selected_attempt.get("status") or "") == "succeeded"
+            and _is_results_reference_source(selected_attempt)
         ):
             return "reuse_result"
         return "execute"
@@ -1440,6 +1704,102 @@ def _select_source_attempt(
     return None
 
 
+def _attempt_reason_code(attempt: Mapping[str, Any]) -> str:
+    direct = str(attempt.get("error_code") or "").strip()
+    if direct:
+        return direct
+    error = attempt.get("error_json")
+    if isinstance(error, Mapping):
+        return str(error.get("reason_code") or "").strip()
+    return ""
+
+
+def _is_terminal_owner_race_repair_candidate(attempt: Mapping[str, Any]) -> bool:
+    """Identify a frozen terminal-receipt ownership race without claiming remote success.
+
+    Historical rows record the authoritative failure reason in ``error_json``
+    and replace the local ``remote_status`` with ``reconcile_failed``.  Remote
+    completion is therefore proven later from the immutable QE receipt before
+    any result is collected.
+    """
+
+    return (
+        str(attempt.get("status") or "") == "failed"
+        and _attempt_reason_code(attempt) == "qe_execution_reservation_owner_mismatch"
+        and str(attempt.get("remote_status") or "") in {"completed", "reconcile_failed"}
+        and bool(str(attempt.get("node_id") or "").strip())
+        and bool(str(attempt.get("qe_task_id") or "").strip())
+        and bool(str(attempt.get("qe_loop_id") or "").strip())
+        and bool(str(attempt.get("submission_intent_hash") or "").strip())
+    )
+
+
+def _is_results_reference_source(attempt: Mapping[str, Any]) -> bool:
+    if _is_terminal_owner_race_repair_candidate(attempt):
+        return True
+    return (
+        str(attempt.get("status") or "") == "succeeded"
+        and isinstance(attempt.get("result_manifest_json"), Mapping)
+        and bool(attempt.get("result_manifest_json"))
+        and bool(str(attempt.get("result_manifest_hash") or "").strip())
+    )
+
+
+def _results_source_signature(attempt: Mapping[str, Any]) -> tuple[str, ...]:
+    if str(attempt.get("status") or "") == "succeeded":
+        return (
+            "result",
+            str(attempt.get("result_manifest_hash") or ""),
+            str(attempt.get("source_attempt_id") or ""),
+        )
+    return (
+        "terminal_owner_race_candidate",
+        str(attempt.get("submission_intent_hash") or ""),
+        str(attempt.get("qe_task_id") or ""),
+        str(attempt.get("qe_loop_id") or ""),
+    )
+
+
+def _nested_source_attempt_id(value: Mapping[str, Any]) -> str | None:
+    direct = str(value.get("source_attempt_id") or "").strip()
+    if direct:
+        return direct
+    for key in ("source_lineage_json", "input_manifest_json", "source_lineage", "recovery"):
+        nested = value.get(key)
+        if isinstance(nested, Mapping):
+            found = _nested_source_attempt_id(nested)
+            if found:
+                return found
+    for nested in value.values():
+        if isinstance(nested, Mapping):
+            found = _nested_source_attempt_id(nested)
+            if found:
+                return found
+    return None
+
+
+def _same_research_identity(
+    source_run: Mapping[str, Any],
+    candidate_run: Mapping[str, Any],
+) -> bool:
+    scalar_fields = (
+        "task_id",
+        "roster_hash",
+        "oos_start",
+        "oos_end",
+        "normalize_method",
+        "baseline_leg_id",
+    )
+    if any(
+        str(source_run.get(field) or "") != str(candidate_run.get(field) or "")
+        for field in scalar_fields
+    ):
+        return False
+    return sha256_identity(dict(source_run.get("walk_forward_json") or {})) == sha256_identity(
+        dict(candidate_run.get("walk_forward_json") or {})
+    )
+
+
 def _source_lineage(
     *,
     source_run: Mapping[str, Any],
@@ -1454,13 +1814,36 @@ def _source_lineage(
     input_manifest = dict(child.get("input_manifest_json") or {})
     result_manifest = dict(attempt.get("result_manifest_json") or {}) if attempt is not None else {}
     artifact_manifest = dict(attempt.get("artifact_manifest_json") or {}) if attempt is not None else {}
+    actual_source_run_id = (
+        attempt.get("_recovery_source_run_id")
+        if attempt is not None
+        else None
+    ) or source_run.get("id")
+    actual_source_child_id = (
+        attempt.get("_recovery_source_child_id")
+        if attempt is not None
+        else None
+    ) or child.get("child_id")
+    remote_result_collection_required = bool(
+        attempt is not None and _is_terminal_owner_race_repair_candidate(attempt)
+    )
     return {
-        "source_run_id": source_run.get("id"),
-        "source_run_request_hash": source_run.get("request_hash"),
-        "source_child_id": child.get("child_id"),
+        "source_run_id": actual_source_run_id,
+        "source_run_request_hash": (
+            attempt.get("_recovery_source_run_request_hash")
+            if attempt is not None
+            else None
+        )
+        or source_run.get("request_hash"),
+        "source_child_id": actual_source_child_id,
         "source_child_key": child.get("child_key"),
         "source_child_kind": child.get("child_kind"),
-        "source_child_status": child.get("status"),
+        "source_child_status": (
+            attempt.get("_recovery_source_child_status")
+            if attempt is not None
+            else None
+        )
+        or child.get("status"),
         "source_attempt_id": attempt.get("attempt_id") if attempt is not None else None,
         "source_attempt_status": attempt.get("status") if attempt is not None else None,
         "source_attempt_execution_kind": attempt.get("execution_kind") if attempt is not None else None,
@@ -1473,6 +1856,19 @@ def _source_lineage(
         "artifact_manifest_hash": artifact_manifest_hash_for(artifact_manifest),
         "result_manifest": result_manifest,
         "result_manifest_hash": attempt.get("result_manifest_hash") if attempt is not None else None,
+        "remote_result_collection_required": remote_result_collection_required,
+        "remote_result_identity": (
+            {
+                "node_id": attempt.get("node_id"),
+                "qe_task_id": attempt.get("qe_task_id"),
+                "qe_loop_id": attempt.get("qe_loop_id"),
+                "submission_intent_hash": attempt.get("submission_intent_hash"),
+                "remote_status": attempt.get("remote_status"),
+                "error_code": attempt.get("error_code"),
+            }
+            if remote_result_collection_required and attempt is not None
+            else None
+        ),
         "execution_identity": dict(execution_identity) if execution_identity is not None else None,
         "recovery_materializer_identity": (
             dict(recovery_materializer_identity) if recovery_materializer_identity is not None else None

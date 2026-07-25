@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -16,7 +18,13 @@ from backend.services.multi_alpha.durable_models import (
 from backend.services.multi_alpha.durable_recovery import (
     DurableRecoveryWorker,
     DurableRecoveryService,
+    RecoveryPlanEntry,
     build_successor_recovery_specs,
+)
+from backend.services.multi_alpha.durable_execution_adapter import (
+    DurableCollectedResult,
+    DurablePublishedArtifacts,
+    DurableSubmissionIntent,
 )
 
 
@@ -205,6 +213,150 @@ class _RecoverySpecRepository(_Repository):
         self.children[LOO_ID]["selected_attempt_id"] = target["attempt_id"]
 
 
+class _SiblingCompletedRecoveryRepository(_RecoverySpecRepository):
+    def __init__(self) -> None:
+        super().__init__(
+            retry_mode_target_status="not_recovered",
+            target_attempt_status="failed",
+        )
+        original_attempt_id = "macba_" + "1" * 64
+        self.children[LOO_ID]["selected_attempt_id"] = None
+        self.children[LOO_ID]["input_manifest_json"]["recovery"] = {
+            "source_attempt_id": original_attempt_id,
+        }
+        self.children[LOO_ID]["input_manifest_hash"] = artifact_manifest_hash_for(
+            self.children[LOO_ID]["input_manifest_json"]
+        )
+        self.attempts[LOO_ID] = []
+        self.sibling_run = {
+            **deepcopy(self.run),
+            "id": "macb_sibling_recovery",
+            "status": "failed",
+        }
+        self.sibling_child = {
+            **deepcopy(self.children[LOO_ID]),
+            "child_id": "macbc_sibling_loo",
+            "run_id": self.sibling_run["id"],
+            "status": "failed",
+        }
+        self.sibling_attempt = {
+            "attempt_id": "macba_" + "2" * 64,
+            "run_id": self.sibling_run["id"],
+            "child_id": self.sibling_child["child_id"],
+            "attempt_no": 1,
+            "status": "failed",
+            "phase": "reconcile_failed",
+            "error_json": {
+                "reason_code": "qe_execution_reservation_owner_mismatch",
+            },
+            "remote_status": "reconcile_failed",
+            "source_attempt_id": original_attempt_id,
+            "execution_kind": "remote_execution",
+            "retry_mode": "backtest_only",
+            "node_id": "rdagent-node1",
+            "qe_task_id": "macb_remote_sibling",
+            "qe_loop_id": "Loop1",
+            "submission_intent_hash": "3" * 64,
+            "artifact_manifest_json": {"manifest_hash": "4" * 64},
+            "result_manifest_json": {},
+            "result_manifest_hash": None,
+            "finished_at": "2026-07-25T19:00:00+08:00",
+        }
+
+    def list_runs(
+        self,
+        *,
+        task_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        assert task_id == TASK_ID
+        assert status is None
+        assert limit == 1000
+        return [deepcopy(self.run), deepcopy(self.sibling_run)]
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        if run_id == self.sibling_run["id"]:
+            return deepcopy(self.sibling_run)
+        return super().get_run(run_id)
+
+    def list_children(self, run_id: str) -> list[dict[str, Any]]:
+        if run_id == self.sibling_run["id"]:
+            return [deepcopy(self.sibling_child)]
+        return super().list_children(run_id)
+
+    def list_attempts(self, child_id: str) -> list[dict[str, Any]]:
+        if child_id == self.sibling_child["child_id"]:
+            return [deepcopy(self.sibling_attempt)]
+        return super().list_attempts(child_id)
+
+    def get_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        if attempt_id == self.sibling_attempt["attempt_id"]:
+            return deepcopy(self.sibling_attempt)
+        return None
+
+    def get_child(self, child_id: str) -> dict[str, Any] | None:
+        if child_id == self.sibling_child["child_id"]:
+            return deepcopy(self.sibling_child)
+        return deepcopy(self.children.get(child_id))
+
+
+class _RemoteCompletedRepairAdapter:
+    def __init__(self, root: Path, *, remote_status: str = "completed") -> None:
+        self.artifacts = DurablePublishedArtifacts(
+            workspace=root,
+            prediction_path=root / "combined_prediction.pkl",
+            artifact_manifest_path=root / "artifact_manifest.json",
+            artifact_manifest={"manifest_hash": "4" * 64},
+        )
+        self.inspect_calls = 0
+        self.collect_calls = 0
+        self.remote_status = remote_status
+
+    @staticmethod
+    def recovery_materializer_identity_for_run(_run: Mapping[str, Any]) -> Mapping[str, Any]:
+        return {"materializer": "test"}
+
+    def load_published_artifacts(self, **_kwargs: Any) -> DurablePublishedArtifacts:
+        return self.artifacts
+
+    def prepare_submission_intent(self, **_kwargs: Any) -> DurableSubmissionIntent:
+        attempt = _kwargs["attempt"]
+        return DurableSubmissionIntent(
+            run_id=str(_kwargs["run"]["id"]),
+            child_id=str(_kwargs["child"]["child_id"]),
+            attempt_id=str(attempt["attempt_id"]),
+            attempt_no=1,
+            node_id=str(attempt["node_id"]),
+            qe_task_id=str(attempt["qe_task_id"]),
+            qe_loop_id=str(attempt["qe_loop_id"]),
+            submission_intent_hash=str(attempt["submission_intent_hash"]),
+        )
+
+    async def inspect_remote(self, **_kwargs: Any) -> Any:
+        self.inspect_calls += 1
+        return SimpleNamespace(
+            receipt=SimpleNamespace(status=self.remote_status),
+            status={"status": self.remote_status},
+        )
+
+    async def collect_result(self, **_kwargs: Any) -> DurableCollectedResult:
+        self.collect_calls += 1
+        manifest = {
+            "schema_version": "multi_alpha_child_result_manifest_v1",
+            "manifest_hash": "5" * 64,
+        }
+        return DurableCollectedResult(
+            metrics={"cagr": 0.5, "sharpe": 1.5},
+            result_manifest=manifest,
+            result_manifest_path=self.artifacts.workspace / "result_manifest.json",
+        )
+
+    @staticmethod
+    def load_materialization_metadata(_artifacts: DurablePublishedArtifacts) -> Mapping[str, Any]:
+        return {"weights": {}, "per_window_weights": []}
+
+
 def _source_result_payloads(repository: _RecoverySpecRepository) -> dict[str, dict[str, Any]]:
     payloads: dict[str, dict[str, Any]] = {}
     for attempts in repository.attempts.values():
@@ -336,6 +488,108 @@ def test_results_only_successor_references_verified_results_and_never_creates_re
     target = next(spec for spec in specs.child_specs if spec.source_child_id == LOO_ID)
     assert target.execution_disposition == "reuse_result"
     assert target.status == "reconciling"
+
+
+def test_results_only_preview_finds_exact_completed_sibling_owner_race_attempt() -> None:
+    repository = _SiblingCompletedRecoveryRepository()
+
+    preview = DurableRecoveryService(repository).preview(
+        source_run_id=RUN_ID,
+        target_child_id=LOO_ID,
+        retry_mode="results_only",
+        idempotency_key="recover_completed_sibling",
+    )
+
+    assert preview.plan is not None
+    target = next(
+        entry for entry in preview.plan.entries if entry.source_child_id == LOO_ID
+    )
+    assert target.disposition == "reuse_result"
+    assert target.source_attempt_id == repository.sibling_attempt["attempt_id"]
+    assert target.source_lineage["source_run_id"] == repository.sibling_run["id"]
+    assert target.source_lineage["source_child_id"] == repository.sibling_child["child_id"]
+    assert target.source_lineage["remote_result_collection_required"] is True
+    assert "results_only_successful_source_attempt_missing" not in preview.evidence[
+        "evidence_gaps"
+    ]
+    assert "results_only_result_manifest_missing" not in preview.evidence[
+        "evidence_gaps"
+    ]
+
+
+def test_results_only_worker_collects_exact_remote_completed_artifact_without_rerun(
+    tmp_path: Path,
+) -> None:
+    repository = _SiblingCompletedRecoveryRepository()
+    adapter = _RemoteCompletedRepairAdapter(tmp_path)
+    worker = DurableRecoveryWorker(
+        repository=repository,  # type: ignore[arg-type]
+        adapter=adapter,  # type: ignore[arg-type]
+    )
+    entry = RecoveryPlanEntry(
+        source_child_id=LOO_ID,
+        child_key="loo:equal:drop:leg_b",
+        child_kind="loo",
+        source_status="not_recovered",
+        disposition="reuse_result",
+        source_attempt_id=repository.sibling_attempt["attempt_id"],
+        source_attempt_status="failed",
+        source_lineage={
+            "source_run_id": repository.sibling_run["id"],
+            "source_child_id": repository.sibling_child["child_id"],
+            "remote_result_collection_required": True,
+        },
+    )
+
+    payload, effective_attempt = worker._load_recovery_result_payload(
+        entry=entry,
+        source_attempt=repository.sibling_attempt,
+    )
+
+    assert adapter.inspect_calls == 1
+    assert adapter.collect_calls == 1
+    assert payload["metrics"] == {"cagr": 0.5, "sharpe": 1.5}
+    assert effective_attempt["status"] == "succeeded"
+    assert effective_attempt["result_manifest_hash"] == artifact_manifest_hash_for(
+        effective_attempt["result_manifest_json"]
+    )
+
+
+def test_results_only_worker_refuses_owner_race_candidate_without_completed_receipt(
+    tmp_path: Path,
+) -> None:
+    repository = _SiblingCompletedRecoveryRepository()
+    adapter = _RemoteCompletedRepairAdapter(tmp_path, remote_status="running")
+    worker = DurableRecoveryWorker(
+        repository=repository,  # type: ignore[arg-type]
+        adapter=adapter,  # type: ignore[arg-type]
+    )
+    entry = RecoveryPlanEntry(
+        source_child_id=LOO_ID,
+        child_key="loo:equal:drop:leg_b",
+        child_kind="loo",
+        source_status="not_recovered",
+        disposition="reuse_result",
+        source_attempt_id=repository.sibling_attempt["attempt_id"],
+        source_attempt_status="failed",
+        source_lineage={
+            "source_run_id": repository.sibling_run["id"],
+            "source_child_id": repository.sibling_child["child_id"],
+            "remote_result_collection_required": True,
+        },
+    )
+
+    with pytest.raises(ValueError) as caught:
+        worker._load_recovery_result_payload(
+            entry=entry,
+            source_attempt=repository.sibling_attempt,
+        )
+
+    assert getattr(caught.value, "reason_code", None) == (
+        "results_only_remote_result_not_completed"
+    )
+    assert adapter.inspect_calls == 1
+    assert adapter.collect_calls == 0
 
 
 def test_backtest_only_successor_keeps_exact_source_attempt_and_creates_one_remote_attempt() -> None:
