@@ -5,7 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterator, Sequence
 
 import psycopg2
@@ -28,11 +29,12 @@ from .plugin_contracts import (
     BrokerDispatchAttemptV1,
     CommandChildMappingStatusV1,
     DeliveryStatusV1,
+    EventSourceV2,
+    EventTypeV2,
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
     ExecutionAlgoTimerOccurrenceStatusV1,
     ExecutionAlgoTimerOccurrenceV1,
-    ExecutionAlgoTimerScheduleStatusV1,
     ExecutionAlgoTimerScheduleV1,
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
@@ -57,7 +59,157 @@ class KernelRepositoryCommitUnknown(RuntimeError):
     """The database may have committed, but the transaction return was not observed."""
 
 
-_K2_SCHEMA_CATALOG_SHA256 = "c9d5f192eb4522f54519c8e0c63540218c2674155471c1455c3150bea7a809c4"
+_K2_SCHEMA_CATALOG_SHA256 = "6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762"
+
+_K2_CATALOG_QUERY = """
+WITH target_tables(relname) AS (
+    VALUES
+        ('execution_kernel_worker_epoch'),
+        ('execution_kernel_worker_incarnation'),
+        ('execution_algo_event_delivery'),
+        ('execution_algo_transition'),
+        ('execution_algo_command_outbox'),
+        ('execution_algo_command_dispatch_attempt'),
+        ('execution_algo_timer_schedule'),
+        ('execution_algo_timer_occurrence'),
+        ('execution_exchange_session_authority'),
+        ('execution_algo_diagnostic_observation')
+), additive_columns(relname,attname) AS (
+    VALUES
+        ('execution_runtime','runtime_id'),
+        ('execution_runtime','trade_date'),
+        ('execution_runtime_event','event_contract_version'),
+        ('execution_runtime_event','event_schema_version'),
+        ('execution_runtime_event','payload_schema_version'),
+        ('execution_runtime_event','event_key_sha256'),
+        ('execution_runtime_event','payload_sha256'),
+        ('execution_runtime_event','observed_at_utc'),
+        ('execution_runtime_event','logical_at_utc'),
+        ('execution_runtime_event','source_identity_json'),
+        ('execution_runtime_event','correlation_json'),
+        ('execution_runtime_event','ingress_receipt_json'),
+        ('execution_runtime_event','ingress_receipt_sha256'),
+        ('execution_runtime_event','routing_rule_version'),
+        ('execution_runtime_event','transaction_commit_identity'),
+        ('execution_algo_instance','kernel_contract_version'),
+        ('execution_algo_instance','traded_quantity'),
+        ('execution_algo_instance','plugin_id'),
+        ('execution_algo_instance','plugin_version'),
+        ('execution_algo_instance','plugin_manifest_sha256'),
+        ('execution_algo_instance','plugin_config_json'),
+        ('execution_algo_instance','plugin_config_sha256'),
+        ('execution_algo_instance','compatibility_receipt_sha256'),
+        ('execution_algo_instance','state_schema_version'),
+        ('execution_algo_instance','state_json'),
+        ('execution_algo_instance','state_sha256'),
+        ('execution_algo_instance','transition_sequence'),
+        ('execution_algo_instance','last_applied_delivery_sequence'),
+        ('execution_algo_instance','last_applied_delivery_id'),
+        ('execution_algo_instance','last_closed_delivery_sequence'),
+        ('execution_algo_instance','terminal_delivery_sequence'),
+        ('execution_algo_instance','failure_receipt_id'),
+        ('execution_algo_instance','active_child_closure_status'),
+        ('execution_algo_instance','active_child_count'),
+        ('execution_algo_instance','row_version'),
+        ('execution_algo_instance','terminal_at_utc'),
+        ('execution_algo_instance','kernel_carrier_json'),
+        ('execution_child_order','kernel_contract_version'),
+        ('execution_child_order','mapping_id'),
+        ('execution_child_order','command_id'),
+        ('execution_child_order','local_vt_orderid'),
+        ('execution_child_order','deterministic_client_order_ref'),
+        ('execution_child_order','order_remark'),
+        ('execution_child_order','mapping_status'),
+        ('execution_child_order','mapping_version'),
+        ('execution_child_order','mapping_payload_sha256'),
+        ('execution_child_order','mapping_receipt_sha256'),
+        ('execution_child_order','broker_identity_source_event_id'),
+        ('execution_child_order','last_order_event_id'),
+        ('execution_child_order','last_trade_event_id'),
+        ('execution_child_order','created_transition_id'),
+        ('execution_child_order','updated_by_event_id'),
+        ('execution_child_order','mapping_created_at_utc'),
+        ('execution_child_order','mapping_updated_at_utc'),
+        ('execution_child_order','mapping_json')
+), catalog_items(sort_key,item) AS (
+    SELECT
+        format('column:%s:%05s', table_class.relname, attribute.attnum),
+        jsonb_build_array(
+            'column', table_class.relname, attribute.attname,
+            format_type(attribute.atttypid, attribute.atttypmod),
+            attribute.attnotnull,
+            coalesce(pg_get_expr(attribute_default.adbin, attribute_default.adrelid), '')
+        )
+    FROM pg_class AS table_class
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    JOIN pg_attribute AS attribute
+      ON attribute.attrelid=table_class.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    LEFT JOIN pg_attrdef AS attribute_default
+      ON attribute_default.adrelid=table_class.oid AND attribute_default.adnum=attribute.attnum
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR (table_class.relname,attribute.attname) IN (SELECT relname,attname FROM additive_columns)
+      )
+
+    UNION ALL
+
+    SELECT
+        format('constraint:%s:%s', table_class.relname, constraint_record.conname),
+        jsonb_build_array(
+            'constraint', table_class.relname, constraint_record.conname,
+            constraint_record.contype, constraint_record.condeferrable,
+            constraint_record.condeferred, constraint_record.convalidated,
+            replace(
+                pg_get_constraintdef(constraint_record.oid, true),
+                table_schema.nspname || '.', '<schema>.'
+            )
+        )
+    FROM pg_constraint AS constraint_record
+    JOIN pg_class AS table_class ON table_class.oid=constraint_record.conrelid
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR constraint_record.conname LIKE '%miniqmt_k2%'
+      )
+
+    UNION ALL
+
+    SELECT
+        format('index:%s:%s', table_class.relname, index_class.relname),
+        jsonb_build_array(
+            'index', table_class.relname, index_class.relname,
+            index_record.indisunique, index_record.indisprimary,
+            index_record.indisvalid, index_record.indisready,
+            replace(
+                pg_get_indexdef(index_record.indexrelid, 0, true),
+                table_schema.nspname || '.', '<schema>.'
+            ),
+            coalesce(
+                replace(
+                    pg_get_expr(index_record.indpred, index_record.indrelid, true),
+                    table_schema.nspname || '.', '<schema>.'
+                ),
+                ''
+            )
+        )
+    FROM pg_index AS index_record
+    JOIN pg_class AS table_class ON table_class.oid=index_record.indrelid
+    JOIN pg_class AS index_class ON index_class.oid=index_record.indexrelid
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR index_class.relname LIKE '%miniqmt_k2%'
+      )
+), canonical_catalog AS (
+    SELECT coalesce(jsonb_agg(item ORDER BY sort_key), '[]'::jsonb)::TEXT AS payload
+    FROM catalog_items
+)
+SELECT encode(sha256(convert_to(payload, 'UTF8')), 'hex')
+FROM canonical_catalog
+""".strip()
 
 
 def _accepts_keyword(factory: Any, keyword: str) -> bool:
@@ -89,6 +241,447 @@ def _bounded_limit(limit: int) -> int:
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise ValueError("limit must be a strict integer in [1, 1000]")
     return limit
+
+
+def _lease_owner_projection(lease_owner: str | None) -> tuple[str | None, str | None]:
+    if lease_owner is None:
+        return None, None
+    worker_id, separator, process_incarnation_id = lease_owner.partition(":")
+    if separator != ":" or not worker_id or not process_incarnation_id:
+        raise ValueError("lease_owner must be worker_id:process_incarnation_id")
+    return worker_id, process_incarnation_id
+
+
+def _delivery_scalar_projection(delivery: AlgoDeliveryPersistenceV1) -> dict[str, Any]:
+    values = delivery.model_dump(mode="json")
+    lease_worker, lease_incarnation = _lease_owner_projection(delivery.lease_owner)
+    return {
+        "delivery_id": delivery.delivery_id,
+        "event_id": delivery.event_id,
+        "runtime_id": delivery.runtime_id,
+        "algo_instance_id": delivery.algo_instance_id,
+        "plugin_manifest_sha256": delivery.plugin_manifest_sha256,
+        "algo_delivery_sequence": delivery.algo_delivery_sequence,
+        "previous_delivery_sequence": None
+        if delivery.previous_delivery_id is None
+        else delivery.algo_delivery_sequence - 1,
+        "previous_delivery_id": delivery.previous_delivery_id,
+        "status": delivery.status.value,
+        "attempt_count": delivery.attempt_count,
+        "lease_owner": delivery.lease_owner,
+        "lease_worker_id": lease_worker,
+        "lease_process_incarnation_id": lease_incarnation,
+        "lease_epoch": delivery.lease_epoch,
+        "lease_fence_token": delivery.lease_fence_token,
+        "lease_expires_at": delivery.lease_expires_at,
+        "transition_id": delivery.transition_id,
+        "last_error_json": values["last_error_json"],
+        "next_attempt_at_utc": delivery.next_attempt_at_utc,
+        "failure_receipt_id": delivery.failure_receipt_id,
+        "skip_receipt_id": delivery.skip_receipt_id,
+        "row_version": delivery.row_version,
+        "created_at_utc": delivery.created_at_utc,
+        "updated_at_utc": delivery.updated_at_utc,
+        "closed_at_utc": delivery.closed_at_utc,
+    }
+
+
+def _outbox_scalar_projection(outbox: BrokerCommandOutboxV1) -> dict[str, Any]:
+    values = outbox.model_dump(mode="json")
+    lease_worker, lease_incarnation = _lease_owner_projection(outbox.lease_owner)
+    return {
+        "command_id": outbox.command_id,
+        "transition_id": outbox.transition_id,
+        "ordinal": outbox.ordinal,
+        "runtime_id": outbox.runtime_id,
+        "algo_instance_id": outbox.algo_instance_id,
+        "parent_intent_id": outbox.parent_intent_id,
+        "mapping_id": outbox.mapping_id,
+        "command_type": outbox.command_type.value,
+        "local_vt_orderid": outbox.local_vt_orderid,
+        "payload_json": values["payload_json"],
+        "payload_sha256": outbox.payload_sha256,
+        "status": outbox.status.value,
+        "attempt_count": outbox.attempt_count,
+        "lease_owner": outbox.lease_owner,
+        "lease_worker_id": lease_worker,
+        "lease_process_incarnation_id": lease_incarnation,
+        "lease_epoch": outbox.lease_epoch,
+        "lease_fence_token": outbox.lease_fence_token,
+        "lease_expires_at": outbox.lease_expires_at,
+        "dispatch_attempt_id": outbox.dispatch_attempt_id,
+        "deterministic_client_order_ref": outbox.deterministic_client_order_ref,
+        "next_attempt_at_utc": outbox.next_attempt_at_utc,
+        "broker_called": outbox.broker_called,
+        "broker_order_id": outbox.broker_order_id,
+        "ack_receipt_json": values["ack_receipt_json"],
+        "ack_receipt_sha256": outbox.ack_receipt_sha256,
+        "non_acceptance_receipt_json": values["non_acceptance_receipt"],
+        "unknown_outcome_receipt_json": values["unknown_outcome_receipt"],
+        "reconcile_receipt_json": values["reconcile_receipt"],
+        "last_error_json": values["last_error_json"],
+        "row_version": outbox.row_version,
+        "created_at_utc": outbox.created_at_utc,
+        "updated_at_utc": outbox.updated_at_utc,
+        "closed_at_utc": outbox.closed_at_utc,
+        "outbox_row_sha256": outbox.outbox_row_sha256,
+    }
+
+
+def _algo_scalar_projection(algo: ExecutionAlgoInstancePersistenceV2) -> dict[str, Any]:
+    values = algo.model_dump(mode="json")
+    return {
+        "algo_instance_id": algo.algo_instance_id,
+        "runtime_id": algo.runtime_id,
+        "parent_intent_id": algo.parent_intent_id,
+        "strategy_slot_id": algo.strategy_slot_id,
+        "symbol": algo.symbol,
+        "side": algo.side.value,
+        "target_quantity": algo.target_quantity,
+        "traded_quantity": algo.traded_quantity,
+        "remaining_quantity": algo.remaining_quantity,
+        "algo_code": algo.algo_code,
+        "status": algo.status.value,
+        "archived_at": algo.archived_at_utc,
+        "created_at": algo.created_at_utc,
+        "updated_at": algo.updated_at_utc,
+        "kernel_contract_version": algo.kernel_contract_version,
+        "plugin_id": algo.plugin_id,
+        "plugin_version": algo.plugin_version,
+        "plugin_manifest_sha256": algo.plugin_manifest_sha256,
+        "plugin_config_json": values["plugin_config_json"],
+        "plugin_config_sha256": algo.plugin_config_sha256,
+        "compatibility_receipt_sha256": algo.compatibility_receipt_sha256,
+        "state_schema_version": algo.state_schema_version,
+        "state_json": values["state_json"],
+        "state_sha256": algo.state_sha256,
+        "transition_sequence": algo.transition_sequence,
+        "last_applied_delivery_sequence": algo.last_applied_delivery_sequence,
+        "last_applied_delivery_id": algo.last_applied_delivery_id,
+        "last_closed_delivery_sequence": algo.last_closed_delivery_sequence,
+        "terminal_delivery_sequence": algo.terminal_delivery_sequence,
+        "failure_receipt_id": algo.failure_receipt_id,
+        "active_child_closure_status": algo.active_child_closure_status.value,
+        "active_child_count": algo.active_child_count,
+        "row_version": algo.row_version,
+        "terminal_at_utc": algo.terminal_at_utc,
+    }
+
+
+def _worker_startup_scalar_projection(receipt: KernelWorkerStartupReceiptV1) -> dict[str, Any]:
+    return {
+        "worker_id": receipt.worker_id,
+        "process_role": receipt.process_role,
+        "incarnation_sequence": receipt.incarnation_sequence,
+        "source_revision": receipt.source_revision,
+        "process_incarnation_id": receipt.process_incarnation_id,
+        "started_at_utc": receipt.started_at_utc,
+        "startup_transaction_commit_identity": receipt.startup_transaction_commit_identity,
+        "receipt_sha256": receipt.receipt_sha256,
+    }
+
+
+def _event_scalar_projection(event: RuntimeEventEnvelopeV2, receipt: RuntimeEventIngressReceiptV1) -> dict[str, Any]:
+    values = event.model_dump(mode="json")
+    return {
+        "event_id": event.event_id,
+        "runtime_id": event.runtime_id,
+        "sequence": event.sequence,
+        "event_type": event.event_type.value,
+        "event_time": event.event_time_utc,
+        "source": event.source.value,
+        "payload": values,
+        "event_contract_version": "KERNEL_V2",
+        "event_schema_version": event.schema_version,
+        "payload_schema_version": event.payload_schema_version,
+        "event_key_sha256": event.event_key_sha256,
+        "payload_sha256": event.payload_sha256,
+        "observed_at_utc": event.event_time_utc,
+        "logical_at_utc": event.event_time_utc,
+        "source_identity_json": values["source_identity"],
+        "correlation_json": values["correlation"],
+        "ingress_receipt_json": receipt.model_dump(mode="json"),
+        "ingress_receipt_sha256": receipt.receipt_sha256,
+        "routing_rule_version": receipt.routing_rule_version,
+        "transaction_commit_identity": receipt.transaction_commit_identity,
+    }
+
+
+def _transition_scalar_projection(
+    *,
+    receipt: AlgoTransitionReceiptV1 | AlgoFailureReceiptV1 | AlgoSkipReceiptV1,
+    kind: str,
+    transition_sequence: int,
+    projection_set: ExecutionProjectionSetV1 | None,
+    after_state: AlgoStateSnapshotV2 | None,
+) -> dict[str, Any]:
+    receipt_values = receipt.model_dump(mode="json")
+    transition_id = (
+        receipt.transition_id
+        if isinstance(receipt, AlgoTransitionReceiptV1)
+        else receipt.failure_receipt_id
+        if isinstance(receipt, AlgoFailureReceiptV1)
+        else receipt.skip_receipt_id
+    )
+    receipt_sha256 = (
+        receipt.receipt_sha256
+        if isinstance(receipt, AlgoTransitionReceiptV1)
+        else receipt.failure_receipt_sha256
+        if isinstance(receipt, AlgoFailureReceiptV1)
+        else receipt.skip_receipt_sha256
+    )
+    return {
+        "transition_id": transition_id,
+        "delivery_id": receipt.delivery_id,
+        "event_id": receipt.event_id,
+        "runtime_id": receipt.runtime_id,
+        "algo_instance_id": receipt.algo_instance_id,
+        "transition_sequence": transition_sequence,
+        "transition_kind": kind,
+        "transition_receipt_json": receipt_values if kind == "APPLIED" else None,
+        "failure_receipt_json": receipt_values if kind == "FAILED_TERMINAL" else None,
+        "skip_receipt_json": receipt_values if kind == "SKIPPED_TERMINAL" else None,
+        "receipt_sha256": receipt_sha256,
+        "execution_projection_set_json": None if projection_set is None else projection_set.model_dump(mode="json"),
+        "execution_projection_set_sha256": None if projection_set is None else projection_set.projection_set_sha256,
+        "after_state_json": None if after_state is None else after_state.model_dump(mode="json"),
+        "after_state_sha256": None if after_state is None else after_state.state_sha256,
+        "transaction_commit_identity": receipt.transaction_commit_identity,
+    }
+
+
+def _mapping_scalar_projection(mapping: ExecutionCommandChildMappingV1, *, child_price_type: int = 2) -> dict[str, Any]:
+    return {
+        "child_order_id": mapping.child_order_id,
+        "runtime_id": mapping.runtime_id,
+        "algo_instance_id": mapping.algo_instance_id,
+        "parent_intent_id": mapping.parent_intent_id,
+        "strategy_slot_id": mapping.strategy_slot_id,
+        "symbol": mapping.symbol,
+        "side": mapping.side.value,
+        "quantity": mapping.requested_quantity,
+        "price": mapping.requested_price_decimal,
+        "price_type": child_price_type,
+        "status": "SUBMITTING",
+        "broker_order_id": mapping.broker_order_id,
+        "updated_at": mapping.updated_at_utc,
+        "kernel_contract_version": "KERNEL_V2",
+        "mapping_id": mapping.mapping_id,
+        "command_id": mapping.command_id,
+        "local_vt_orderid": mapping.local_vt_orderid,
+        "deterministic_client_order_ref": mapping.deterministic_client_order_ref,
+        "order_remark": mapping.order_remark,
+        "mapping_status": mapping.mapping_status.value,
+        "mapping_version": mapping.mapping_version,
+        "mapping_payload_sha256": mapping.payload_sha256,
+        "mapping_receipt_sha256": mapping.mapping_receipt_sha256,
+        "broker_identity_source_event_id": mapping.broker_identity_source_event_id,
+        "last_order_event_id": mapping.last_order_event_id,
+        "last_trade_event_id": mapping.last_trade_event_id,
+        "created_transition_id": mapping.created_transition_id,
+        "updated_by_event_id": mapping.updated_by_event_id,
+        "mapping_created_at_utc": mapping.created_at_utc,
+        "mapping_updated_at_utc": mapping.updated_at_utc,
+    }
+
+
+def _dispatch_attempt_scalar_projection(attempt: BrokerDispatchAttemptV1) -> dict[str, Any]:
+    return {
+        "dispatch_attempt_id": attempt.dispatch_attempt_id,
+        "stage": attempt.stage.value,
+        "command_id": attempt.command_id,
+        "attempt_count": attempt.attempt_count,
+        "lease_epoch": attempt.lease_epoch,
+        "lease_fence_token": attempt.lease_fence_token,
+        "process_incarnation_id": attempt.process_incarnation_id,
+        "started_at_utc": attempt.started_at_utc,
+        "finished_at_utc": attempt.finished_at_utc,
+        "pre_call_complete": attempt.pre_call_complete,
+        "broker_called": attempt.broker_called,
+        "outcome": attempt.outcome,
+        "error_reason_code": attempt.error_reason_code,
+        "error_context_sha256": attempt.error_context_sha256,
+        "authority_receipt_sha256": attempt.authority_receipt_sha256,
+        "attempt_receipt_sha256": attempt.attempt_receipt_sha256,
+    }
+
+
+def _timer_schedule_scalar_projection(schedule: ExecutionAlgoTimerScheduleV1) -> dict[str, Any]:
+    lease_worker, lease_incarnation = _lease_owner_projection(schedule.lease_owner)
+    return {
+        "schedule_id": schedule.schedule_id,
+        "runtime_id": schedule.runtime_id,
+        "algo_instance_id": schedule.algo_instance_id,
+        "timer_name": schedule.timer_name,
+        "schedule_epoch": schedule.schedule_epoch,
+        "due_at_exchange_utc": schedule.due_at_exchange_utc,
+        "catch_up_policy": schedule.catch_up_policy,
+        "payload_json": schedule.model_dump(mode="json")["payload"],
+        "payload_sha256": schedule.payload_sha256,
+        "status": schedule.status.value,
+        "timer_occurrence_id": schedule.timer_occurrence_id,
+        "emitted_event_id": schedule.emitted_event_id,
+        "lease_owner": schedule.lease_owner,
+        "lease_worker_id": lease_worker,
+        "lease_process_incarnation_id": lease_incarnation,
+        "lease_epoch": schedule.lease_epoch,
+        "lease_fence_token": schedule.lease_fence_token,
+        "lease_expires_at_utc": schedule.lease_expires_at_utc,
+        "row_version": schedule.row_version,
+        "created_at_utc": schedule.created_at_utc,
+        "updated_at_utc": schedule.updated_at_utc,
+        "closed_at_utc": schedule.closed_at_utc,
+        "schedule_receipt_sha256": schedule.schedule_receipt_sha256,
+    }
+
+
+def _timer_occurrence_scalar_projection(occurrence: ExecutionAlgoTimerOccurrenceV1) -> dict[str, Any]:
+    lease_worker, lease_incarnation = _lease_owner_projection(occurrence.lease_owner)
+    return {
+        "timer_occurrence_id": occurrence.timer_occurrence_id,
+        "schedule_id": occurrence.schedule_id,
+        "runtime_id": occurrence.runtime_id,
+        "algo_instance_id": occurrence.algo_instance_id,
+        "due_at_exchange_utc": occurrence.due_at_exchange_utc,
+        "exchange_session_authority_sha256": occurrence.exchange_session_authority_sha256,
+        "status": occurrence.status.value,
+        "emitted_event_id": occurrence.emitted_event_id,
+        "catch_up_receipt_sha256": occurrence.catch_up_receipt_sha256,
+        "lease_owner": occurrence.lease_owner,
+        "lease_worker_id": lease_worker,
+        "lease_process_incarnation_id": lease_incarnation,
+        "lease_epoch": occurrence.lease_epoch,
+        "lease_fence_token": occurrence.lease_fence_token,
+        "lease_expires_at_utc": occurrence.lease_expires_at_utc,
+        "row_version": occurrence.row_version,
+        "created_at_utc": occurrence.created_at_utc,
+        "closed_at_utc": occurrence.closed_at_utc,
+        "occurrence_receipt_sha256": occurrence.occurrence_receipt_sha256,
+    }
+
+
+def _exchange_session_scalar_projection(authority: ExchangeSessionAuthorityV1) -> dict[str, Any]:
+    return {
+        "runtime_id": authority.runtime_id,
+        "exchange_trade_date": date.fromisoformat(authority.exchange_trade_date),
+        "calendar_snapshot_set_id": authority.calendar_snapshot_set_id,
+        "calendar_snapshot_set_sha256": authority.calendar_snapshot_set_sha256,
+        "session_definition_version": authority.session_definition_version,
+        "authority_sha256": authority.authority_sha256,
+    }
+
+
+def _assert_scalar_columns(row: Any, expected: dict[str, Any], *, carrier_name: str) -> None:
+    def normalized(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return canonical_utc_datetime_v1(value, field_name="durable_scalar")
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return format(value, "f")
+        return value
+
+    def equal(actual: Any, expected_value: Any) -> bool:
+        if isinstance(actual, Decimal) or isinstance(expected_value, Decimal):
+            try:
+                return Decimal(str(actual)) == Decimal(str(expected_value))
+            except (InvalidOperation, ValueError):
+                return False
+        return normalized(actual) == normalized(expected_value)
+
+    mismatches = {
+        key: {"expected": normalized(expected_value), "actual": normalized(row[key])}
+        for key, expected_value in expected.items()
+        if not equal(row[key], expected_value)
+    }
+    if mismatches:
+        raise KernelRepositoryConflict(f"{carrier_name} scalar columns drift from strict carrier: {mismatches}")
+
+
+def _delivery_creation_matches(
+    current: AlgoDeliveryPersistenceV1,
+    initial: AlgoDeliveryPersistenceV1,
+) -> bool:
+    fields = (
+        "delivery_id",
+        "event_id",
+        "runtime_id",
+        "algo_instance_id",
+        "plugin_manifest_sha256",
+        "algo_delivery_sequence",
+        "previous_delivery_id",
+        "created_at_utc",
+    )
+    return all(getattr(current, field) == getattr(initial, field) for field in fields)
+
+
+def _mapping_creation_matches(
+    current: ExecutionCommandChildMappingV1,
+    initial: ExecutionCommandChildMappingV1,
+) -> bool:
+    fields = (
+        "mapping_id",
+        "command_id",
+        "runtime_id",
+        "algo_instance_id",
+        "parent_intent_id",
+        "strategy_slot_id",
+        "local_vt_orderid",
+        "child_order_id",
+        "deterministic_client_order_ref",
+        "order_remark",
+        "payload_sha256",
+        "created_transition_id",
+        "created_at_utc",
+    )
+    return all(getattr(current, field) == getattr(initial, field) for field in fields)
+
+
+def _outbox_creation_matches(current: BrokerCommandOutboxV1, initial: BrokerCommandOutboxV1) -> bool:
+    fields = (
+        "command_id",
+        "transition_id",
+        "ordinal",
+        "runtime_id",
+        "algo_instance_id",
+        "parent_intent_id",
+        "mapping_id",
+        "command_type",
+        "local_vt_orderid",
+        "payload_sha256",
+        "deterministic_client_order_ref",
+        "created_at_utc",
+    )
+    return all(getattr(current, field) == getattr(initial, field) for field in fields)
+
+
+def _transition_retry_matches(
+    readback: dict[str, Any],
+    *,
+    receipt: AlgoTransitionReceiptV1 | AlgoFailureReceiptV1 | AlgoSkipReceiptV1,
+    projection_set: ExecutionProjectionSetV1 | None,
+    after_state: AlgoStateSnapshotV2 | None,
+    mappings: Sequence[ExecutionCommandChildMappingV1],
+    outboxes: Sequence[BrokerCommandOutboxV1],
+) -> bool:
+    if (
+        readback["receipt"] != receipt
+        or readback["projection_set"] != projection_set
+        or readback["after_state"] != after_state
+    ):
+        return False
+    current_mappings = {item.mapping_id: item for item in readback["new_child_mappings"]}
+    initial_mappings = {item.mapping_id: item for item in mappings}
+    if current_mappings.keys() != initial_mappings.keys() or any(
+        not _mapping_creation_matches(current_mappings[identity], initial)
+        for identity, initial in initial_mappings.items()
+    ):
+        return False
+    current_outboxes = {item.command_id: item for item in readback["command_outboxes"]}
+    initial_outboxes = {item.command_id: item for item in outboxes}
+    return current_outboxes.keys() == initial_outboxes.keys() and all(
+        _outbox_creation_matches(current_outboxes[identity], initial) for identity, initial in initial_outboxes.items()
+    )
 
 
 class PostgresMiniQMTKernelRepository:
@@ -138,8 +731,43 @@ class PostgresMiniQMTKernelRepository:
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 try:
-                    cur.execute("SELECT qmt_strategy.miniqmt_k2_catalog_fingerprint() AS catalog_sha256")
+                    cur.execute(
+                        """
+                        SELECT schema_name,language_name,volatility,arguments,result_type,function_body
+                        FROM (
+                            SELECT namespace.nspname AS schema_name,language.lanname AS language_name,
+                                   function_record.provolatile AS volatility,
+                                   pg_get_function_arguments(function_record.oid) AS arguments,
+                                   pg_get_function_result(function_record.oid) AS result_type,
+                                   function_record.prosrc AS function_body
+                            FROM pg_proc AS function_record
+                            JOIN pg_namespace AS namespace ON namespace.oid=function_record.pronamespace
+                            JOIN pg_language AS language ON language.oid=function_record.prolang
+                            WHERE function_record.oid=to_regprocedure('qmt_strategy.miniqmt_k2_catalog_fingerprint()')
+                        ) AS function_authority
+                        """
+                    )
+                    function_row = cur.fetchone()
+                    if function_row is None:
+                        raise KernelRepositorySchemaError("K2 schema fingerprint authority is unavailable")
+                    normalized_body = (
+                        str(function_row["function_body"])
+                        .replace(str(function_row["schema_name"]), "qmt_strategy")
+                        .strip()
+                        .rstrip(";")
+                    )
+                    if (
+                        function_row["language_name"] != "sql"
+                        or function_row["volatility"] != "s"
+                        or function_row["arguments"] != ""
+                        or function_row["result_type"] != "text"
+                        or normalized_body != _K2_CATALOG_QUERY.strip().rstrip(";")
+                    ):
+                        raise KernelRepositorySchemaError("K2 catalog function drift")
+                    cur.execute(f"SELECT * FROM ({_K2_CATALOG_QUERY}) AS catalog(catalog_sha256)")
                     catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
+                except KernelRepositorySchemaError:
+                    raise
                 except psycopg2.Error as exc:
                     raise KernelRepositorySchemaError("K2 schema fingerprint authority is unavailable") from exc
         if catalog_sha256 != _K2_SCHEMA_CATALOG_SHA256:
@@ -154,8 +782,12 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT delivery_id,status,attempt_count,lease_owner,lease_epoch,lease_fence_token,
-                           row_version,carrier_json
+                    SELECT delivery_id,event_id,runtime_id,algo_instance_id,plugin_manifest_sha256,
+                           algo_delivery_sequence,previous_delivery_sequence,previous_delivery_id,status,
+                           attempt_count,lease_owner,lease_worker_id,lease_process_incarnation_id,
+                           lease_epoch,lease_fence_token,lease_expires_at,transition_id,last_error_json,
+                           next_attempt_at_utc,failure_receipt_id,skip_receipt_id,row_version,
+                           created_at_utc,updated_at_utc,closed_at_utc,carrier_json
                     FROM qmt_strategy.execution_algo_event_delivery WHERE delivery_id=%s
                     """,
                     (delivery_id,),
@@ -164,16 +796,11 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError(delivery_id)
         delivery = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(row, "carrier_json"))
-        if (
-            delivery.delivery_id != row["delivery_id"]
-            or delivery.status.value != row["status"]
-            or delivery.attempt_count != row["attempt_count"]
-            or delivery.lease_owner != row["lease_owner"]
-            or delivery.lease_epoch != row["lease_epoch"]
-            or delivery.lease_fence_token != row["lease_fence_token"]
-            or delivery.row_version != row["row_version"]
-        ):
-            raise KernelRepositoryConflict("delivery scalar columns drift from strict carrier")
+        _assert_scalar_columns(
+            row,
+            _delivery_scalar_projection(delivery),
+            carrier_name="delivery",
+        )
         return delivery
 
     def read_outbox_command(self, command_id: str) -> BrokerCommandOutboxV1:
@@ -181,8 +808,14 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT command_id,status,attempt_count,lease_owner,lease_epoch,lease_fence_token,
-                           row_version,outbox_row_sha256,carrier_json
+                    SELECT command_id,transition_id,ordinal,runtime_id,algo_instance_id,parent_intent_id,
+                           mapping_id,command_type,local_vt_orderid,payload_json,payload_sha256,status,
+                           attempt_count,lease_owner,lease_worker_id,lease_process_incarnation_id,
+                           lease_epoch,lease_fence_token,lease_expires_at,dispatch_attempt_id,
+                           deterministic_client_order_ref,next_attempt_at_utc,broker_called,broker_order_id,
+                           ack_receipt_json,ack_receipt_sha256,non_acceptance_receipt_json,
+                           unknown_outcome_receipt_json,reconcile_receipt_json,last_error_json,row_version,
+                           created_at_utc,updated_at_utc,closed_at_utc,outbox_row_sha256,carrier_json
                     FROM qmt_strategy.execution_algo_command_outbox WHERE command_id=%s
                     """,
                     (command_id,),
@@ -191,17 +824,11 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError(command_id)
         outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json"))
-        if (
-            outbox.command_id != row["command_id"]
-            or outbox.status.value != row["status"]
-            or outbox.attempt_count != row["attempt_count"]
-            or outbox.lease_owner != row["lease_owner"]
-            or outbox.lease_epoch != row["lease_epoch"]
-            or outbox.lease_fence_token != row["lease_fence_token"]
-            or outbox.row_version != row["row_version"]
-            or outbox.outbox_row_sha256 != row["outbox_row_sha256"]
-        ):
-            raise KernelRepositoryConflict("outbox scalar columns drift from strict carrier")
+        _assert_scalar_columns(
+            row,
+            _outbox_scalar_projection(outbox),
+            carrier_name="outbox",
+        )
         return outbox
 
     def read_algo_instance(self, algo_instance_id: str) -> ExecutionAlgoInstancePersistenceV2:
@@ -209,8 +836,17 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT algo.kernel_carrier_json,algo.row_version,algo.active_child_count,
-                           algo.active_child_closure_status,
+                    SELECT algo.algo_instance_id,algo.runtime_id,algo.parent_intent_id,algo.strategy_slot_id,
+                           algo.symbol,algo.side,algo.target_quantity,algo.traded_quantity,
+                           algo.remaining_quantity,algo.algo_code,algo.status,algo.archived_at,algo.created_at,
+                           algo.updated_at,algo.kernel_contract_version,algo.plugin_id,algo.plugin_version,
+                           algo.plugin_manifest_sha256,algo.plugin_config_json,algo.plugin_config_sha256,
+                           algo.compatibility_receipt_sha256,algo.state_schema_version,algo.state_json,
+                           algo.state_sha256,algo.transition_sequence,algo.last_applied_delivery_sequence,
+                           algo.last_applied_delivery_id,algo.last_closed_delivery_sequence,
+                           algo.terminal_delivery_sequence,algo.failure_receipt_id,
+                           algo.active_child_closure_status,algo.active_child_count,algo.row_version,
+                           algo.terminal_at_utc,algo.kernel_carrier_json,
                            COUNT(child.child_order_id) FILTER (
                                WHERE child.kernel_contract_version='KERNEL_V2'
                                  AND child.mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
@@ -219,8 +855,7 @@ class PostgresMiniQMTKernelRepository:
                     LEFT JOIN qmt_strategy.execution_child_order AS child
                       ON child.runtime_id=algo.runtime_id AND child.algo_instance_id=algo.algo_instance_id
                     WHERE algo.algo_instance_id=%s AND algo.kernel_contract_version='KERNEL_V2'
-                    GROUP BY algo.kernel_carrier_json,algo.row_version,algo.active_child_count,
-                             algo.active_child_closure_status
+                    GROUP BY algo.algo_instance_id
                     """,
                     (algo_instance_id,),
                 )
@@ -228,12 +863,12 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError(algo_instance_id)
         algo = _model_from_json(ExecutionAlgoInstancePersistenceV2, _row_json(row, "kernel_carrier_json"))
-        if (
-            algo.row_version != row["row_version"]
-            or algo.active_child_count != row["active_child_count"]
-            or algo.active_child_closure_status.value != row["active_child_closure_status"]
-            or algo.active_child_count != row["reconstructed_active_child_count"]
-        ):
+        _assert_scalar_columns(
+            row,
+            _algo_scalar_projection(algo),
+            carrier_name="algo",
+        )
+        if algo.active_child_count != row["reconstructed_active_child_count"]:
             raise KernelRepositoryConflict("algo carrier does not close to durable active-child reconstruction")
         return algo
 
@@ -300,6 +935,7 @@ class PostgresMiniQMTKernelRepository:
                 )
                 if cur.rowcount != 1:
                     raise KernelRepositoryConflict("worker epoch CAS failed")
+                receipt_projection = _worker_startup_scalar_projection(receipt)
                 cur.execute(
                     """
                     INSERT INTO qmt_strategy.execution_kernel_worker_incarnation(
@@ -309,14 +945,14 @@ class PostgresMiniQMTKernelRepository:
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
-                        receipt.worker_id,
-                        receipt.process_role,
-                        receipt.incarnation_sequence,
-                        receipt.source_revision,
-                        receipt.process_incarnation_id,
-                        receipt.started_at_utc,
-                        receipt.startup_transaction_commit_identity,
-                        receipt.receipt_sha256,
+                        receipt_projection["worker_id"],
+                        receipt_projection["process_role"],
+                        receipt_projection["incarnation_sequence"],
+                        receipt_projection["source_revision"],
+                        receipt_projection["process_incarnation_id"],
+                        receipt_projection["started_at_utc"],
+                        receipt_projection["startup_transaction_commit_identity"],
+                        receipt_projection["receipt_sha256"],
                         _json(receipt.model_dump(mode="json")),
                     ),
                 )
@@ -327,7 +963,9 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT startup_receipt_json
+                    SELECT worker_id,process_role,incarnation_sequence,source_revision,
+                           process_incarnation_id,started_at_utc,startup_transaction_commit_identity,
+                           receipt_sha256,startup_receipt_json
                     FROM qmt_strategy.execution_kernel_worker_incarnation
                     WHERE process_incarnation_id = %s
                     """,
@@ -336,7 +974,13 @@ class PostgresMiniQMTKernelRepository:
                 row = cur.fetchone()
         if row is None:
             raise KeyError(process_incarnation_id)
-        return _model_from_json(KernelWorkerStartupReceiptV1, _row_json(row, "startup_receipt_json"))
+        receipt = _model_from_json(KernelWorkerStartupReceiptV1, _row_json(row, "startup_receipt_json"))
+        _assert_scalar_columns(
+            row,
+            _worker_startup_scalar_projection(receipt),
+            carrier_name="worker startup receipt",
+        )
+        return receipt
 
     def write_event_receipt_deliveries(
         self,
@@ -351,6 +995,11 @@ class PostgresMiniQMTKernelRepository:
             raise TypeError("deliveries must contain only AlgoDeliveryPersistenceV1")
         if any(item.event_id != event.event_id or item.runtime_id != event.runtime_id for item in strict_deliveries):
             raise ValueError("delivery owner conflicts with event")
+        for delivery in strict_deliveries:
+            try:
+                delivery.validate_initial_v1()
+            except ValueError as exc:
+                raise ValueError("first write requires initial PENDING delivery") from exc
         ordered = tuple(sorted(strict_deliveries, key=lambda item: item.algo_instance_id))
         targets = tuple(item.algo_instance_id for item in ordered)
         delivery_ids = tuple(item.delivery_id for item in ordered)
@@ -378,6 +1027,7 @@ class PostgresMiniQMTKernelRepository:
             ordered_delivery_ids=delivery_ids,
             transaction_commit_identity=transaction_id,
         )
+        event_projection = _event_scalar_projection(event, receipt)
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -392,33 +1042,33 @@ class PostgresMiniQMTKernelRepository:
                     ON CONFLICT (event_id) DO NOTHING
                     """,
                     (
-                        event.event_id,
-                        event.runtime_id,
-                        event.sequence,
-                        event.event_type.value,
-                        event.event_time_utc,
-                        event.source.value,
-                        _json(event.model_dump(mode="json")),
-                        event.schema_version,
-                        event.payload_schema_version,
-                        event.event_key_sha256,
-                        event.payload_sha256,
-                        event.event_time_utc,
-                        event.event_time_utc,
-                        _json(event.model_dump(mode="json")["source_identity"]),
-                        _json(event.model_dump(mode="json")["correlation"]),
-                        _json(receipt.model_dump(mode="json")),
-                        receipt.receipt_sha256,
-                        receipt.routing_rule_version,
-                        receipt.transaction_commit_identity,
+                        event_projection["event_id"],
+                        event_projection["runtime_id"],
+                        event_projection["sequence"],
+                        event_projection["event_type"],
+                        event_projection["event_time"],
+                        event_projection["source"],
+                        _json(event_projection["payload"]),
+                        event_projection["event_schema_version"],
+                        event_projection["payload_schema_version"],
+                        event_projection["event_key_sha256"],
+                        event_projection["payload_sha256"],
+                        event_projection["observed_at_utc"],
+                        event_projection["logical_at_utc"],
+                        _json(event_projection["source_identity_json"]),
+                        _json(event_projection["correlation_json"]),
+                        _json(event_projection["ingress_receipt_json"]),
+                        event_projection["ingress_receipt_sha256"],
+                        event_projection["routing_rule_version"],
+                        event_projection["transaction_commit_identity"],
                     ),
                 )
-                for delivery in ordered:
-                    previous_sequence = (
-                        None if delivery.previous_delivery_id is None else delivery.algo_delivery_sequence - 1
-                    )
-                    cur.execute(
-                        """
+                event_was_inserted = cur.rowcount == 1
+                if event_was_inserted:
+                    for delivery in ordered:
+                        delivery_projection = _delivery_scalar_projection(delivery)
+                        cur.execute(
+                            """
                         INSERT INTO qmt_strategy.execution_algo_event_delivery(
                             delivery_id,event_id,runtime_id,algo_instance_id,plugin_manifest_sha256,
                             algo_delivery_sequence,previous_delivery_sequence,previous_delivery_id,status,
@@ -429,37 +1079,37 @@ class PostgresMiniQMTKernelRepository:
                         ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT (delivery_id) DO NOTHING
                         """,
-                        (
-                            delivery.delivery_id,
-                            delivery.event_id,
-                            delivery.runtime_id,
-                            delivery.algo_instance_id,
-                            delivery.plugin_manifest_sha256,
-                            delivery.algo_delivery_sequence,
-                            previous_sequence,
-                            delivery.previous_delivery_id,
-                            delivery.status.value,
-                            delivery.attempt_count,
-                            delivery.lease_owner,
-                            None if delivery.lease_owner is None else delivery.lease_owner.partition(":")[0],
-                            None if delivery.lease_owner is None else delivery.lease_owner.partition(":")[2],
-                            delivery.lease_epoch,
-                            delivery.lease_fence_token,
-                            delivery.lease_expires_at,
-                            delivery.transition_id,
-                            None
-                            if delivery.last_error_json is None
-                            else _json(delivery.model_dump(mode="json")["last_error_json"]),
-                            delivery.next_attempt_at_utc,
-                            delivery.failure_receipt_id,
-                            delivery.skip_receipt_id,
-                            delivery.row_version,
-                            delivery.created_at_utc,
-                            delivery.updated_at_utc,
-                            delivery.closed_at_utc,
-                            _json(delivery.model_dump(mode="json")),
-                        ),
-                    )
+                            (
+                                delivery_projection["delivery_id"],
+                                delivery_projection["event_id"],
+                                delivery_projection["runtime_id"],
+                                delivery_projection["algo_instance_id"],
+                                delivery_projection["plugin_manifest_sha256"],
+                                delivery_projection["algo_delivery_sequence"],
+                                delivery_projection["previous_delivery_sequence"],
+                                delivery_projection["previous_delivery_id"],
+                                delivery_projection["status"],
+                                delivery_projection["attempt_count"],
+                                delivery_projection["lease_owner"],
+                                delivery_projection["lease_worker_id"],
+                                delivery_projection["lease_process_incarnation_id"],
+                                delivery_projection["lease_epoch"],
+                                delivery_projection["lease_fence_token"],
+                                delivery_projection["lease_expires_at"],
+                                delivery_projection["transition_id"],
+                                None
+                                if delivery_projection["last_error_json"] is None
+                                else _json(delivery_projection["last_error_json"]),
+                                delivery_projection["next_attempt_at_utc"],
+                                delivery_projection["failure_receipt_id"],
+                                delivery_projection["skip_receipt_id"],
+                                delivery_projection["row_version"],
+                                delivery_projection["created_at_utc"],
+                                delivery_projection["updated_at_utc"],
+                                delivery_projection["closed_at_utc"],
+                                _json(delivery.model_dump(mode="json")),
+                            ),
+                        )
                 cur.execute(
                     "SELECT payload, ingress_receipt_json FROM qmt_strategy.execution_runtime_event WHERE event_id=%s",
                     (event.event_id,),
@@ -480,11 +1130,23 @@ class PostgresMiniQMTKernelRepository:
                 if (
                     in_transaction_event != event
                     or in_transaction_receipt != receipt
-                    or in_transaction_deliveries != ordered
+                    or len(in_transaction_deliveries) != len(ordered)
+                    or any(
+                        not _delivery_creation_matches(current, initial)
+                        for current, initial in zip(in_transaction_deliveries, ordered, strict=True)
+                    )
                 ):
                     raise KernelRepositoryConflict("event identity exists with different immutable transaction payload")
         readback = self.read_event_transaction(event.event_id)
-        if readback["event"] != event or readback["receipt"] != receipt or readback["deliveries"] != ordered:
+        if (
+            readback["event"] != event
+            or readback["receipt"] != receipt
+            or len(readback["deliveries"]) != len(ordered)
+            or any(
+                not _delivery_creation_matches(current, initial)
+                for current, initial in zip(readback["deliveries"], ordered, strict=True)
+            )
+        ):
             raise KernelRepositoryConflict("event transaction readback closure differs from writer payload")
         return receipt
 
@@ -493,7 +1155,11 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT payload, ingress_receipt_json
+                    SELECT event_id,runtime_id,sequence,event_type,event_time,source,payload,
+                           event_contract_version,event_schema_version,payload_schema_version,
+                           event_key_sha256,payload_sha256,observed_at_utc,logical_at_utc,
+                           source_identity_json,correlation_json,ingress_receipt_json,
+                           ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
                     FROM qmt_strategy.execution_runtime_event
                     WHERE event_id = %s AND event_contract_version = 'KERNEL_V2'
                     """,
@@ -504,21 +1170,25 @@ class PostgresMiniQMTKernelRepository:
                     raise KeyError(event_id)
                 cur.execute(
                     """
-                    SELECT carrier_json
+                    SELECT delivery_id
                     FROM qmt_strategy.execution_algo_event_delivery
                     WHERE event_id = %s
                     ORDER BY algo_instance_id
                     """,
                     (event_id,),
                 )
-                delivery_rows = cur.fetchall()
-        return {
-            "event": _model_from_json(RuntimeEventEnvelopeV2, _row_json(event_row, "payload")),
-            "receipt": _model_from_json(RuntimeEventIngressReceiptV1, _row_json(event_row, "ingress_receipt_json")),
-            "deliveries": tuple(
-                _model_from_json(AlgoDeliveryPersistenceV1, _row_json(row, "carrier_json")) for row in delivery_rows
-            ),
-        }
+                delivery_ids = tuple(str(row["delivery_id"]) for row in cur.fetchall())
+        event = _model_from_json(RuntimeEventEnvelopeV2, _row_json(event_row, "payload"))
+        receipt = _model_from_json(RuntimeEventIngressReceiptV1, _row_json(event_row, "ingress_receipt_json"))
+        _assert_scalar_columns(
+            event_row,
+            _event_scalar_projection(event, receipt),
+            carrier_name="event",
+        )
+        deliveries = tuple(self.read_delivery(delivery_id) for delivery_id in delivery_ids)
+        if receipt.ordered_delivery_ids != tuple(item.delivery_id for item in deliveries):
+            raise KernelRepositoryConflict("event receipt scalar columns drift from strict carrier delivery order")
+        return {"event": event, "receipt": receipt, "deliveries": deliveries}
 
     def write_transition_bundle(
         self,
@@ -542,12 +1212,23 @@ class PostgresMiniQMTKernelRepository:
             raise TypeError("new_child_mappings must contain only ExecutionCommandChildMappingV1")
         if any(not isinstance(item, BrokerCommandOutboxV1) for item in outboxes):
             raise TypeError("command_outboxes must contain only BrokerCommandOutboxV1")
+        for mapping in mappings:
+            try:
+                mapping.validate_initial_v1()
+            except ValueError as exc:
+                raise ValueError("first write requires initial RESERVED mapping") from exc
+        for outbox in outboxes:
+            try:
+                outbox.validate_initial_v1()
+            except ValueError as exc:
+                raise ValueError("first write requires initial PENDING outbox") from exc
         if type(child_price_type) is not int:
             raise TypeError("child_price_type must be a strict integer")
+        if child_price_type != 2:
+            raise ValueError("K2 SUBMIT_LIMIT child_price_type authority must be 2")
         if isinstance(receipt, AlgoTransitionReceiptV1):
             kind = "APPLIED"
             transition_json, failure_json, skip_json = receipt.model_dump(mode="json"), None, None
-            receipt_hash = receipt.receipt_sha256
             transition_id = receipt.transition_id
             expected_command_ids = receipt.ordered_command_ids
             if projection_set is None or after_state is None:
@@ -555,7 +1236,6 @@ class PostgresMiniQMTKernelRepository:
         elif isinstance(receipt, AlgoFailureReceiptV1):
             kind = "FAILED_TERMINAL"
             transition_json, failure_json, skip_json = None, receipt.model_dump(mode="json"), None
-            receipt_hash = receipt.failure_receipt_sha256
             transition_id = receipt.failure_receipt_id
             expected_command_ids = receipt.ordered_cancel_command_ids
             if projection_set is not None or after_state is not None or mappings:
@@ -563,7 +1243,6 @@ class PostgresMiniQMTKernelRepository:
         elif isinstance(receipt, AlgoSkipReceiptV1):
             kind = "SKIPPED_TERMINAL"
             transition_json, failure_json, skip_json = None, None, receipt.model_dump(mode="json")
-            receipt_hash = receipt.skip_receipt_sha256
             transition_id = receipt.skip_receipt_id
             expected_command_ids = ()
             if projection_set is not None or after_state is not None or mappings or outboxes:
@@ -633,6 +1312,31 @@ class PostgresMiniQMTKernelRepository:
         )
         if receipt.transaction_commit_identity != expected_transaction_identity:
             raise ValueError("transition receipt does not use repository-owned transaction commit identity")
+        transition_sequence = (
+            receipt.transition_sequence if hasattr(receipt, "transition_sequence") else delivery.algo_delivery_sequence
+        )
+        transition_projection = _transition_scalar_projection(
+            receipt=receipt,
+            kind=kind,
+            transition_sequence=transition_sequence,
+            projection_set=projection_set,
+            after_state=after_state,
+        )
+        try:
+            existing_readback = self.read_transition_bundle(transition_id)
+        except KeyError:
+            existing_readback = None
+        if existing_readback is not None:
+            if not _transition_retry_matches(
+                existing_readback,
+                receipt=receipt,
+                projection_set=projection_set,
+                after_state=after_state,
+                mappings=mappings,
+                outboxes=outboxes,
+            ):
+                raise KernelRepositoryConflict("transition identity exists with different immutable bundle")
+            return existing_readback
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -646,24 +1350,32 @@ class PostgresMiniQMTKernelRepository:
                     ON CONFLICT (transition_id) DO NOTHING
                     """,
                     (
-                        transition_id,
-                        delivery.delivery_id,
-                        receipt.event_id,
-                        receipt.runtime_id,
-                        receipt.algo_instance_id,
-                        receipt.transition_sequence
-                        if hasattr(receipt, "transition_sequence")
-                        else delivery.algo_delivery_sequence,
-                        kind,
-                        None if transition_json is None else _json(transition_json),
-                        None if failure_json is None else _json(failure_json),
-                        None if skip_json is None else _json(skip_json),
-                        receipt_hash,
-                        None if projection_set is None else _json(projection_set.model_dump(mode="json")),
-                        None if projection_set is None else projection_set.projection_set_sha256,
-                        None if after_state is None else _json(after_state.model_dump(mode="json")),
-                        None if after_state is None else after_state.state_sha256,
-                        receipt.transaction_commit_identity,
+                        transition_projection["transition_id"],
+                        transition_projection["delivery_id"],
+                        transition_projection["event_id"],
+                        transition_projection["runtime_id"],
+                        transition_projection["algo_instance_id"],
+                        transition_projection["transition_sequence"],
+                        transition_projection["transition_kind"],
+                        None
+                        if transition_projection["transition_receipt_json"] is None
+                        else _json(transition_projection["transition_receipt_json"]),
+                        None
+                        if transition_projection["failure_receipt_json"] is None
+                        else _json(transition_projection["failure_receipt_json"]),
+                        None
+                        if transition_projection["skip_receipt_json"] is None
+                        else _json(transition_projection["skip_receipt_json"]),
+                        transition_projection["receipt_sha256"],
+                        None
+                        if transition_projection["execution_projection_set_json"] is None
+                        else _json(transition_projection["execution_projection_set_json"]),
+                        transition_projection["execution_projection_set_sha256"],
+                        None
+                        if transition_projection["after_state_json"] is None
+                        else _json(transition_projection["after_state_json"]),
+                        transition_projection["after_state_sha256"],
+                        transition_projection["transaction_commit_identity"],
                     ),
                 )
                 cur.execute(
@@ -723,6 +1435,7 @@ class PostgresMiniQMTKernelRepository:
                     raise KeyError(delivery.delivery_id)
                 previous = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(previous_row, "carrier_json"))
                 delivery.validate_successor_v1(previous)
+                delivery_projection = _delivery_scalar_projection(delivery)
                 cur.execute(
                     """
                     UPDATE qmt_strategy.execution_algo_event_delivery
@@ -738,24 +1451,24 @@ class PostgresMiniQMTKernelRepository:
                       AND lease_fence_token IS NOT DISTINCT FROM %s
                     """,
                     (
-                        delivery.status.value,
-                        delivery.attempt_count,
-                        delivery.lease_owner,
-                        None if delivery.lease_owner is None else delivery.lease_owner.partition(":")[0],
-                        None if delivery.lease_owner is None else delivery.lease_owner.partition(":")[2],
-                        delivery.lease_epoch,
-                        delivery.lease_fence_token,
-                        delivery.lease_expires_at,
-                        delivery.transition_id,
+                        delivery_projection["status"],
+                        delivery_projection["attempt_count"],
+                        delivery_projection["lease_owner"],
+                        delivery_projection["lease_worker_id"],
+                        delivery_projection["lease_process_incarnation_id"],
+                        delivery_projection["lease_epoch"],
+                        delivery_projection["lease_fence_token"],
+                        delivery_projection["lease_expires_at"],
+                        delivery_projection["transition_id"],
                         None
-                        if delivery.last_error_json is None
-                        else _json(delivery.model_dump(mode="json")["last_error_json"]),
-                        delivery.next_attempt_at_utc,
-                        delivery.failure_receipt_id,
-                        delivery.skip_receipt_id,
-                        delivery.row_version,
-                        delivery.updated_at_utc,
-                        delivery.closed_at_utc,
+                        if delivery_projection["last_error_json"] is None
+                        else _json(delivery_projection["last_error_json"]),
+                        delivery_projection["next_attempt_at_utc"],
+                        delivery_projection["failure_receipt_id"],
+                        delivery_projection["skip_receipt_id"],
+                        delivery_projection["row_version"],
+                        delivery_projection["updated_at_utc"],
+                        delivery_projection["closed_at_utc"],
                         _json(delivery.model_dump(mode="json")),
                         delivery.delivery_id,
                         expected_delivery_row_version,
@@ -767,7 +1480,14 @@ class PostgresMiniQMTKernelRepository:
                 if cur.rowcount != 1:
                     raise KernelRepositoryConflict("delivery CAS failed")
         readback = self.read_transition_bundle(transition_id)
-        if readback["command_outboxes"] != outboxes or readback["new_child_mappings"] != mappings:
+        if not _transition_retry_matches(
+            readback,
+            receipt=receipt,
+            projection_set=projection_set,
+            after_state=after_state,
+            mappings=mappings,
+            outboxes=outboxes,
+        ):
             raise KernelRepositoryConflict("transition command closure differs from writer payload")
         return readback
 
@@ -780,8 +1500,7 @@ class PostgresMiniQMTKernelRepository:
                 row = cur.fetchone()
                 cur.execute(
                     """
-                    SELECT outbox.carrier_json AS outbox_json, child.mapping_json,
-                           child.created_transition_id
+                    SELECT outbox.command_id,child.created_transition_id
                     FROM qmt_strategy.execution_algo_command_outbox AS outbox
                     JOIN qmt_strategy.execution_child_order AS child
                       ON child.mapping_id=outbox.mapping_id
@@ -804,22 +1523,46 @@ class PostgresMiniQMTKernelRepository:
             "FAILED_TERMINAL": "failure_receipt_json",
             "SKIPPED_TERMINAL": "skip_receipt_json",
         }[kind]
+        receipt = _model_from_json(receipt_model, _row_json(row, receipt_key))
+        projection_set = (
+            None
+            if row["execution_projection_set_json"] is None
+            else _model_from_json(ExecutionProjectionSetV1, _row_json(row, "execution_projection_set_json"))
+        )
+        after_state = (
+            None
+            if row["after_state_json"] is None
+            else _model_from_json(AlgoStateSnapshotV2, _row_json(row, "after_state_json"))
+        )
+        transition_sequence = (
+            receipt.transition_sequence
+            if hasattr(receipt, "transition_sequence")
+            else self.read_delivery(receipt.delivery_id).algo_delivery_sequence
+        )
+        _assert_scalar_columns(
+            row,
+            _transition_scalar_projection(
+                receipt=receipt,
+                kind=kind,
+                transition_sequence=transition_sequence,
+                projection_set=projection_set,
+                after_state=after_state,
+            ),
+            carrier_name="transition",
+        )
         mappings_by_id: dict[str, ExecutionCommandChildMappingV1] = {}
         outboxes: list[BrokerCommandOutboxV1] = []
         for command_row in command_rows:
-            outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(command_row, "outbox_json"))
-            mapping = _model_from_json(ExecutionCommandChildMappingV1, _row_json(command_row, "mapping_json"))
+            chain = self.read_command_identity_chain(str(command_row["command_id"]))
+            outbox = chain["outbox"]
+            mapping = chain["mapping"]
             outboxes.append(outbox)
             if command_row["created_transition_id"] == transition_id:
                 mappings_by_id.setdefault(mapping.mapping_id, mapping)
         return {
-            "receipt": _model_from_json(receipt_model, _row_json(row, receipt_key)),
-            "projection_set": None
-            if row["execution_projection_set_json"] is None
-            else _model_from_json(ExecutionProjectionSetV1, _row_json(row, "execution_projection_set_json")),
-            "after_state": None
-            if row["after_state_json"] is None
-            else _model_from_json(AlgoStateSnapshotV2, _row_json(row, "after_state_json")),
+            "receipt": receipt,
+            "projection_set": projection_set,
+            "after_state": after_state,
             "new_child_mappings": tuple(mappings_by_id.values()),
             "command_outboxes": tuple(outboxes),
         }
@@ -834,6 +1577,7 @@ class PostgresMiniQMTKernelRepository:
         child_price_type: int,
     ) -> None:
         for mapping in mappings:
+            mapping_projection = _mapping_scalar_projection(mapping, child_price_type=child_price_type)
             cur.execute(
                 """
                     INSERT INTO qmt_strategy.execution_child_order(
@@ -846,35 +1590,35 @@ class PostgresMiniQMTKernelRepository:
                         mapping_created_at_utc,mapping_updated_at_utc,mapping_json
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'SUBMITTING','{}'::jsonb,%s,'KERNEL_V2',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (child_order_id) DO NOTHING
-                    """,
+                """,
                 (
-                    mapping.child_order_id,
-                    mapping.runtime_id,
-                    mapping.algo_instance_id,
-                    mapping.parent_intent_id,
-                    mapping.strategy_slot_id,
-                    mapping.symbol,
-                    mapping.side.value,
-                    mapping.requested_quantity,
-                    mapping.requested_price_decimal,
-                    child_price_type,
-                    mapping.updated_at_utc,
-                    mapping.mapping_id,
-                    mapping.command_id,
-                    mapping.local_vt_orderid,
-                    mapping.deterministic_client_order_ref,
-                    mapping.order_remark,
-                    mapping.mapping_status.value,
-                    mapping.mapping_version,
-                    mapping.payload_sha256,
-                    mapping.mapping_receipt_sha256,
-                    mapping.broker_identity_source_event_id,
-                    mapping.last_order_event_id,
-                    mapping.last_trade_event_id,
-                    mapping.created_transition_id,
-                    mapping.updated_by_event_id,
-                    mapping.created_at_utc,
-                    mapping.updated_at_utc,
+                    mapping_projection["child_order_id"],
+                    mapping_projection["runtime_id"],
+                    mapping_projection["algo_instance_id"],
+                    mapping_projection["parent_intent_id"],
+                    mapping_projection["strategy_slot_id"],
+                    mapping_projection["symbol"],
+                    mapping_projection["side"],
+                    mapping_projection["quantity"],
+                    mapping_projection["price"],
+                    mapping_projection["price_type"],
+                    mapping_projection["updated_at"],
+                    mapping_projection["mapping_id"],
+                    mapping_projection["command_id"],
+                    mapping_projection["local_vt_orderid"],
+                    mapping_projection["deterministic_client_order_ref"],
+                    mapping_projection["order_remark"],
+                    mapping_projection["mapping_status"],
+                    mapping_projection["mapping_version"],
+                    mapping_projection["mapping_payload_sha256"],
+                    mapping_projection["mapping_receipt_sha256"],
+                    mapping_projection["broker_identity_source_event_id"],
+                    mapping_projection["last_order_event_id"],
+                    mapping_projection["last_trade_event_id"],
+                    mapping_projection["created_transition_id"],
+                    mapping_projection["updated_by_event_id"],
+                    mapping_projection["mapping_created_at_utc"],
+                    mapping_projection["mapping_updated_at_utc"],
                     _json(mapping.model_dump(mode="json")),
                 ),
             )
@@ -949,7 +1693,17 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT outbox.carrier_json AS outbox_json, child.mapping_json
+                    SELECT outbox.command_id AS requested_command_id,
+                           child.child_order_id,child.runtime_id,child.algo_instance_id,
+                           child.parent_intent_id,child.strategy_slot_id,child.symbol,child.side,
+                           child.quantity,child.price,child.price_type,child.status,child.broker_order_id,
+                           child.updated_at,child.kernel_contract_version,child.mapping_id,child.command_id,
+                           child.local_vt_orderid,child.deterministic_client_order_ref,child.order_remark,
+                           child.mapping_status,child.mapping_version,child.mapping_payload_sha256,
+                           child.mapping_receipt_sha256,child.broker_identity_source_event_id,
+                           child.last_order_event_id,child.last_trade_event_id,child.created_transition_id,
+                           child.updated_by_event_id,child.mapping_created_at_utc,
+                           child.mapping_updated_at_utc,child.mapping_json
                     FROM qmt_strategy.execution_algo_command_outbox AS outbox
                     JOIN qmt_strategy.execution_child_order AS child
                       ON child.mapping_id = outbox.mapping_id
@@ -960,10 +1714,13 @@ class PostgresMiniQMTKernelRepository:
                 row = cur.fetchone()
         if row is None:
             raise KeyError(command_id)
-        return {
-            "outbox": _model_from_json(BrokerCommandOutboxV1, _row_json(row, "outbox_json")),
-            "mapping": _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json")),
-        }
+        mapping = _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json"))
+        _assert_scalar_columns(
+            row,
+            _mapping_scalar_projection(mapping),
+            carrier_name="mapping",
+        )
+        return {"outbox": self.read_outbox_command(command_id), "mapping": mapping}
 
     def compare_and_swap_mapping_outbox(
         self,
@@ -1026,7 +1783,6 @@ class PostgresMiniQMTKernelRepository:
                 if (
                     outbox.status is not BrokerCommandOutboxStatusV1.ACKED
                     or ack is None
-                    or ack.source.value not in {"CALLBACK", "RECONCILIATION"}
                     or mapping.updated_by_event_id is None
                     or mapping.last_order_event_id != mapping.updated_by_event_id
                 ):
@@ -1074,12 +1830,24 @@ class PostgresMiniQMTKernelRepository:
                     raise KernelRepositoryConflict("outbox CAS expected lease differs from durable predecessor")
                 mapping_changed = mapping != previous_mapping
                 if mapping_changed:
+                    if (
+                        command.command_type is BrokerCommandTypeV2.CANCEL_ORDER
+                        and mapping.mapping_status is CommandChildMappingStatusV1.TERMINAL
+                        and (
+                            outbox.ack_receipt_json is None
+                            or outbox.ack_receipt_json.source.value not in {"CALLBACK", "RECONCILIATION"}
+                        )
+                    ):
+                        raise ValueError(
+                            "CANCEL terminal mapping may only be created by callback/reconciliation evidence"
+                        )
                     mapping.validate_successor_v1(previous_mapping)
                 elif mapping.mapping_version != expected_mapping_version:
                     raise KernelRepositoryConflict("unchanged CANCEL mapping version differs from durable predecessor")
                 outbox.validate_successor_v1(previous_outbox)
                 if mapping_changed:
                     mapping_values = mapping.model_dump(mode="json")
+                    mapping_projection = _mapping_scalar_projection(mapping)
                     cur.execute(
                         """
                         UPDATE qmt_strategy.execution_child_order
@@ -1090,26 +1858,26 @@ class PostgresMiniQMTKernelRepository:
                         WHERE mapping_id=%s AND mapping_version=%s
                         """,
                         (
-                            mapping.broker_order_id,
-                            mapping.broker_identity_source_event_id,
-                            mapping.mapping_status.value,
-                            mapping.mapping_version,
-                            mapping.payload_sha256,
-                            mapping.mapping_receipt_sha256,
-                            mapping.last_order_event_id,
-                            mapping.last_trade_event_id,
-                            mapping.updated_by_event_id,
-                            mapping.updated_at_utc,
-                            mapping.updated_at_utc,
+                            mapping_projection["broker_order_id"],
+                            mapping_projection["broker_identity_source_event_id"],
+                            mapping_projection["mapping_status"],
+                            mapping_projection["mapping_version"],
+                            mapping_projection["mapping_payload_sha256"],
+                            mapping_projection["mapping_receipt_sha256"],
+                            mapping_projection["last_order_event_id"],
+                            mapping_projection["last_trade_event_id"],
+                            mapping_projection["updated_by_event_id"],
+                            mapping_projection["mapping_updated_at_utc"],
+                            mapping_projection["updated_at"],
                             _json(mapping_values),
-                            mapping.mapping_id,
+                            mapping_projection["mapping_id"],
                             expected_mapping_version,
                         ),
                     )
                     if cur.rowcount != 1:
                         raise KernelRepositoryConflict("mapping CAS failed")
                 outbox_values = outbox.model_dump(mode="json")
-                lease_worker, _, lease_incarnation = (outbox.lease_owner or "").partition(":")
+                outbox_projection = _outbox_scalar_projection(outbox)
                 cur.execute(
                     """
                     UPDATE qmt_strategy.execution_algo_command_outbox
@@ -1126,34 +1894,40 @@ class PostgresMiniQMTKernelRepository:
                       AND lease_fence_token IS NOT DISTINCT FROM %s
                     """,
                     (
-                        outbox.status.value,
-                        outbox.attempt_count,
-                        outbox.lease_owner,
-                        lease_worker or None,
-                        lease_incarnation or None,
-                        outbox.lease_epoch,
-                        outbox.lease_fence_token,
-                        outbox.lease_expires_at,
-                        outbox.dispatch_attempt_id,
-                        outbox.next_attempt_at_utc,
-                        outbox.broker_called,
-                        outbox.broker_order_id,
-                        None if outbox.ack_receipt_json is None else _json(outbox_values["ack_receipt_json"]),
-                        outbox.ack_receipt_sha256,
+                        outbox_projection["status"],
+                        outbox_projection["attempt_count"],
+                        outbox_projection["lease_owner"],
+                        outbox_projection["lease_worker_id"],
+                        outbox_projection["lease_process_incarnation_id"],
+                        outbox_projection["lease_epoch"],
+                        outbox_projection["lease_fence_token"],
+                        outbox_projection["lease_expires_at"],
+                        outbox_projection["dispatch_attempt_id"],
+                        outbox_projection["next_attempt_at_utc"],
+                        outbox_projection["broker_called"],
+                        outbox_projection["broker_order_id"],
                         None
-                        if outbox.non_acceptance_receipt is None
-                        else _json(outbox_values["non_acceptance_receipt"]),
+                        if outbox_projection["ack_receipt_json"] is None
+                        else _json(outbox_projection["ack_receipt_json"]),
+                        outbox_projection["ack_receipt_sha256"],
                         None
-                        if outbox.unknown_outcome_receipt is None
-                        else _json(outbox_values["unknown_outcome_receipt"]),
-                        None if outbox.reconcile_receipt is None else _json(outbox_values["reconcile_receipt"]),
-                        None if outbox.last_error_json is None else _json(outbox_values["last_error_json"]),
-                        outbox.row_version,
-                        outbox.updated_at_utc,
-                        outbox.closed_at_utc,
+                        if outbox_projection["non_acceptance_receipt_json"] is None
+                        else _json(outbox_projection["non_acceptance_receipt_json"]),
+                        None
+                        if outbox_projection["unknown_outcome_receipt_json"] is None
+                        else _json(outbox_projection["unknown_outcome_receipt_json"]),
+                        None
+                        if outbox_projection["reconcile_receipt_json"] is None
+                        else _json(outbox_projection["reconcile_receipt_json"]),
+                        None
+                        if outbox_projection["last_error_json"] is None
+                        else _json(outbox_projection["last_error_json"]),
+                        outbox_projection["row_version"],
+                        outbox_projection["updated_at_utc"],
+                        outbox_projection["closed_at_utc"],
                         _json(outbox_values),
-                        outbox.outbox_row_sha256,
-                        outbox.command_id,
+                        outbox_projection["outbox_row_sha256"],
+                        outbox_projection["command_id"],
                         expected_outbox_row_version,
                         previous_outbox.lease_owner,
                         previous_outbox.lease_epoch,
@@ -1194,6 +1968,229 @@ class PostgresMiniQMTKernelRepository:
         if self.read_algo_instance(mapping.algo_instance_id) != updated_algo:
             raise KernelRepositoryConflict("mapping/outbox/algo post-commit readback differs from atomic bundle")
         return chain
+
+    def close_mapping_from_callback(
+        self,
+        *,
+        mapping: ExecutionCommandChildMappingV1,
+        callback_event: RuntimeEventEnvelopeV2,
+        cancel_command_id: str,
+        expected_mapping_version: int,
+        expected_algo_row_version: int,
+    ) -> dict[str, Any]:
+        if not isinstance(mapping, ExecutionCommandChildMappingV1):
+            raise TypeError("mapping must be ExecutionCommandChildMappingV1")
+        if not isinstance(callback_event, RuntimeEventEnvelopeV2):
+            raise TypeError("callback_event must be RuntimeEventEnvelopeV2")
+        if type(expected_mapping_version) is not int or type(expected_algo_row_version) is not int:
+            raise TypeError("expected callback closure versions must be strict integers")
+        if mapping.mapping_status is not CommandChildMappingStatusV1.TERMINAL:
+            raise ValueError("callback closure requires a TERMINAL mapping successor")
+        allowed_sources = {
+            EventTypeV2.ORDER: EventSourceV2.QMT_GATEWAY_CALLBACK,
+            EventTypeV2.TRADE: EventSourceV2.QMT_GATEWAY_CALLBACK,
+            EventTypeV2.RECONCILE: EventSourceV2.QMT_OMS_RECONCILIATION,
+        }
+        if (
+            callback_event.event_type not in allowed_sources
+            or callback_event.source is not allowed_sources[callback_event.event_type]
+        ):
+            raise ValueError("callback event identity conflicts with terminal mapping")
+        payload = callback_event.model_dump(mode="json")["payload"]
+        expected_payload = {
+            "runtime_id": mapping.runtime_id,
+            "algo_instance_id": mapping.algo_instance_id,
+            "parent_intent_id": mapping.parent_intent_id,
+            "mapping_id": mapping.mapping_id,
+            "local_vt_orderid": mapping.local_vt_orderid,
+            "broker_order_id": mapping.broker_order_id,
+            "terminal": True,
+        }
+        if any(payload.get(key) != value for key, value in expected_payload.items()):
+            raise ValueError("callback event identity conflicts with terminal mapping")
+        if mapping.updated_by_event_id != callback_event.event_id:
+            raise ValueError("callback event identity conflicts with terminal mapping")
+        if callback_event.event_type is EventTypeV2.ORDER and mapping.last_order_event_id != callback_event.event_id:
+            raise ValueError("callback event identity conflicts with terminal mapping")
+        if callback_event.event_type is EventTypeV2.TRADE and mapping.last_trade_event_id != callback_event.event_id:
+            raise ValueError("callback event identity conflicts with terminal mapping")
+
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT event.payload AS event_json,
+                           child.mapping_json,
+                           outbox.carrier_json AS outbox_json,
+                           algo.kernel_carrier_json AS algo_json
+                    FROM qmt_strategy.execution_runtime_event AS event
+                    JOIN qmt_strategy.execution_child_order AS child
+                      ON child.mapping_id=%s AND child.kernel_contract_version='KERNEL_V2'
+                    JOIN qmt_strategy.execution_algo_command_outbox AS outbox
+                      ON outbox.command_id=%s AND outbox.mapping_id=child.mapping_id
+                    JOIN qmt_strategy.execution_algo_instance AS algo
+                      ON algo.runtime_id=child.runtime_id AND algo.algo_instance_id=child.algo_instance_id
+                    WHERE event.event_id=%s AND event.runtime_id=child.runtime_id
+                      AND event.event_contract_version='KERNEL_V2'
+                    FOR UPDATE OF child, outbox, algo
+                    """,
+                    (mapping.mapping_id, cancel_command_id, callback_event.event_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise KeyError(cancel_command_id)
+                persisted_event = _model_from_json(RuntimeEventEnvelopeV2, _row_json(row, "event_json"))
+                previous_mapping = _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json"))
+                unchanged_outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(row, "outbox_json"))
+                previous_algo = _model_from_json(ExecutionAlgoInstancePersistenceV2, _row_json(row, "algo_json"))
+                command = BrokerCommandV2.model_validate_json(
+                    json.dumps(
+                        unchanged_outbox.model_dump(mode="json")["payload_json"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                if persisted_event != callback_event:
+                    raise KernelRepositoryConflict("callback event durable payload differs from closure authority")
+                if (
+                    command.command_type is not BrokerCommandTypeV2.CANCEL_ORDER
+                    or command.owned_broker_order_id != mapping.broker_order_id
+                    or unchanged_outbox.mapping_id != mapping.mapping_id
+                    or unchanged_outbox.runtime_id != mapping.runtime_id
+                    or unchanged_outbox.algo_instance_id != mapping.algo_instance_id
+                    or unchanged_outbox.parent_intent_id != mapping.parent_intent_id
+                ):
+                    raise ValueError("callback cancel command identity conflicts with terminal mapping")
+                if previous_mapping == mapping:
+                    if (
+                        expected_mapping_version != mapping.mapping_version
+                        or expected_algo_row_version != previous_algo.row_version
+                    ):
+                        raise KernelRepositoryConflict("idempotent callback closure versions differ from durable facts")
+                    updated_algo = previous_algo
+                else:
+                    if previous_mapping.mapping_version != expected_mapping_version:
+                        raise KernelRepositoryConflict(
+                            "callback mapping CAS expected version differs from durable predecessor"
+                        )
+                    if previous_algo.row_version != expected_algo_row_version:
+                        raise KernelRepositoryConflict(
+                            "callback algo CAS expected version differs from durable predecessor"
+                        )
+                    mapping.validate_successor_v1(previous_mapping)
+                    if previous_mapping.mapping_status is not CommandChildMappingStatusV1.BROKER_ACCEPTED:
+                        raise ValueError("callback closure requires a durable BROKER_ACCEPTED predecessor")
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS conflict_count
+                        FROM qmt_strategy.execution_child_order
+                        WHERE runtime_id=%s AND algo_instance_id=%s AND parent_intent_id=%s
+                          AND local_vt_orderid=%s AND broker_order_id=%s AND mapping_id<>%s
+                        """,
+                        (
+                            mapping.runtime_id,
+                            mapping.algo_instance_id,
+                            mapping.parent_intent_id,
+                            mapping.local_vt_orderid,
+                            mapping.broker_order_id,
+                            mapping.mapping_id,
+                        ),
+                    )
+                    if int(cur.fetchone()["conflict_count"]) != 0:
+                        raise KernelRepositoryConflict("callback identity matches multiple durable child mappings")
+                    mapping_projection = _mapping_scalar_projection(mapping)
+                    cur.execute(
+                        """
+                        UPDATE qmt_strategy.execution_child_order
+                        SET broker_order_id=%s,broker_identity_source_event_id=%s,mapping_status=%s,
+                            mapping_version=%s,mapping_payload_sha256=%s,mapping_receipt_sha256=%s,
+                            last_order_event_id=%s,last_trade_event_id=%s,updated_by_event_id=%s,
+                            mapping_updated_at_utc=%s,updated_at=%s,mapping_json=%s
+                        WHERE mapping_id=%s AND mapping_version=%s
+                        """,
+                        (
+                            mapping_projection["broker_order_id"],
+                            mapping_projection["broker_identity_source_event_id"],
+                            mapping_projection["mapping_status"],
+                            mapping_projection["mapping_version"],
+                            mapping_projection["mapping_payload_sha256"],
+                            mapping_projection["mapping_receipt_sha256"],
+                            mapping_projection["last_order_event_id"],
+                            mapping_projection["last_trade_event_id"],
+                            mapping_projection["updated_by_event_id"],
+                            mapping_projection["mapping_updated_at_utc"],
+                            mapping_projection["updated_at"],
+                            _json(mapping.model_dump(mode="json")),
+                            mapping_projection["mapping_id"],
+                            expected_mapping_version,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise KernelRepositoryConflict("callback mapping CAS failed")
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS active_child_count
+                        FROM qmt_strategy.execution_child_order
+                        WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
+                          AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                        """,
+                        (mapping.runtime_id, mapping.algo_instance_id),
+                    )
+                    active_count = int(cur.fetchone()["active_child_count"])
+                    closure = previous_algo.active_child_closure_status
+                    if previous_algo.status is ExecutionAlgoPersistenceStatusV2.FAILED and active_count == 0:
+                        closure = ActiveChildClosureStatusV1.CLEAN
+                    algo_payload = previous_algo.model_dump(mode="python")
+                    algo_payload.update(
+                        active_child_count=active_count,
+                        active_child_closure_status=closure,
+                        row_version=previous_algo.row_version + 1,
+                        updated_at_utc=max(previous_algo.updated_at_utc, mapping.updated_at_utc),
+                    )
+                    updated_algo = ExecutionAlgoInstancePersistenceV2.model_validate(algo_payload)
+                    self._cas_algo_with_cursor(
+                        cur,
+                        algo_instance=updated_algo,
+                        expected_row_version=previous_algo.row_version,
+                    )
+                cur.execute(
+                    """
+                    /* callback closure readback */
+                    SELECT child.mapping_json,outbox.carrier_json AS outbox_json,
+                           algo.kernel_carrier_json AS algo_json
+                    FROM qmt_strategy.execution_child_order AS child
+                    JOIN qmt_strategy.execution_algo_command_outbox AS outbox
+                      ON outbox.command_id=%s AND outbox.mapping_id=child.mapping_id
+                    JOIN qmt_strategy.execution_algo_instance AS algo
+                      ON algo.runtime_id=child.runtime_id AND algo.algo_instance_id=child.algo_instance_id
+                    WHERE child.mapping_id=%s
+                    """,
+                    (cancel_command_id, mapping.mapping_id),
+                )
+                readback_row = cur.fetchone()
+                if readback_row is None:
+                    raise KernelRepositoryConflict("callback closure readback is incomplete")
+                in_transaction_result = {
+                    "mapping": _model_from_json(
+                        ExecutionCommandChildMappingV1, _row_json(readback_row, "mapping_json")
+                    ),
+                    "outbox": _model_from_json(BrokerCommandOutboxV1, _row_json(readback_row, "outbox_json")),
+                    "algo": _model_from_json(ExecutionAlgoInstancePersistenceV2, _row_json(readback_row, "algo_json")),
+                }
+                expected_result = {"mapping": mapping, "outbox": unchanged_outbox, "algo": updated_algo}
+                if in_transaction_result != expected_result:
+                    raise KernelRepositoryConflict("callback closure readback differs from atomic bundle")
+
+        post_commit_chain = self.read_command_identity_chain(cancel_command_id)
+        post_commit_algo = self.read_algo_instance(mapping.algo_instance_id)
+        result = {
+            "mapping": post_commit_chain["mapping"],
+            "outbox": post_commit_chain["outbox"],
+            "algo": post_commit_algo,
+        }
+        if result != expected_result:
+            raise KernelRepositoryConflict("callback closure post-commit readback differs from atomic bundle")
+        return result
 
     def claim_delivery(
         self,
@@ -1241,6 +2238,7 @@ class PostgresMiniQMTKernelRepository:
                 )
                 claimed = AlgoDeliveryPersistenceV1.model_validate(payload)
                 claimed.validate_successor_v1(previous)
+                claimed_projection = _delivery_scalar_projection(claimed)
                 cur.execute(
                     """
                     UPDATE qmt_strategy.execution_algo_event_delivery
@@ -1251,15 +2249,15 @@ class PostgresMiniQMTKernelRepository:
                     WHERE delivery_id=%s AND row_version=%s
                     """,
                     (
-                        claimed.attempt_count,
-                        claimed.lease_owner,
-                        lease_owner.partition(":")[0],
-                        lease_owner.partition(":")[2],
-                        claimed.lease_epoch,
-                        claimed.lease_fence_token,
-                        claimed.lease_expires_at,
-                        claimed.row_version,
-                        claimed.updated_at_utc,
+                        claimed_projection["attempt_count"],
+                        claimed_projection["lease_owner"],
+                        claimed_projection["lease_worker_id"],
+                        claimed_projection["lease_process_incarnation_id"],
+                        claimed_projection["lease_epoch"],
+                        claimed_projection["lease_fence_token"],
+                        claimed_projection["lease_expires_at"],
+                        claimed_projection["row_version"],
+                        claimed_projection["updated_at_utc"],
                         _json(claimed.model_dump(mode="json")),
                         delivery_id,
                         expected_row_version,
@@ -1319,6 +2317,7 @@ class PostgresMiniQMTKernelRepository:
                 payload["outbox_row_sha256"] = self._outbox_hash(payload)
                 claimed = _model_from_json(BrokerCommandOutboxV1, payload)
                 claimed.validate_successor_v1(previous)
+                claimed_projection = _outbox_scalar_projection(claimed)
                 cur.execute(
                     """
                     UPDATE qmt_strategy.execution_algo_command_outbox
@@ -1329,17 +2328,17 @@ class PostgresMiniQMTKernelRepository:
                     WHERE command_id=%s AND row_version=%s
                     """,
                     (
-                        claimed.attempt_count,
-                        claimed.lease_owner,
-                        lease_owner.partition(":")[0],
-                        lease_owner.partition(":")[2],
-                        claimed.lease_epoch,
-                        claimed.lease_fence_token,
-                        claimed.lease_expires_at,
-                        claimed.row_version,
-                        claimed.updated_at_utc,
+                        claimed_projection["attempt_count"],
+                        claimed_projection["lease_owner"],
+                        claimed_projection["lease_worker_id"],
+                        claimed_projection["lease_process_incarnation_id"],
+                        claimed_projection["lease_epoch"],
+                        claimed_projection["lease_fence_token"],
+                        claimed_projection["lease_expires_at"],
+                        claimed_projection["row_version"],
+                        claimed_projection["updated_at_utc"],
                         _json(claimed.model_dump(mode="json")),
-                        claimed.outbox_row_sha256,
+                        claimed_projection["outbox_row_sha256"],
                         command_id,
                         expected_row_version,
                     ),
@@ -1395,27 +2394,34 @@ class PostgresMiniQMTKernelRepository:
                     )
                 ):
                     raise KernelRepositoryConflict("dispatch attempt does not close to the current outbox lease")
+                attempt_projection = _dispatch_attempt_scalar_projection(attempt)
                 cur.execute(
                     """
                     INSERT INTO qmt_strategy.execution_algo_command_dispatch_attempt(
                         dispatch_attempt_id,stage,command_id,attempt_count,lease_epoch,lease_fence_token,
-                        process_incarnation_id,started_at_utc,finished_at_utc,broker_called,
-                        attempt_receipt_sha256,carrier_json
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        process_incarnation_id,started_at_utc,finished_at_utc,pre_call_complete,
+                        broker_called,outcome,error_reason_code,error_context_sha256,
+                        authority_receipt_sha256,attempt_receipt_sha256,carrier_json
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (dispatch_attempt_id,stage) DO NOTHING
                     """,
                     (
-                        attempt.dispatch_attempt_id,
-                        attempt.stage.value,
-                        attempt.command_id,
-                        attempt.attempt_count,
-                        attempt.lease_epoch,
-                        attempt.lease_fence_token,
-                        attempt.process_incarnation_id,
-                        attempt.started_at_utc,
-                        attempt.finished_at_utc,
-                        attempt.broker_called,
-                        attempt.attempt_receipt_sha256,
+                        attempt_projection["dispatch_attempt_id"],
+                        attempt_projection["stage"],
+                        attempt_projection["command_id"],
+                        attempt_projection["attempt_count"],
+                        attempt_projection["lease_epoch"],
+                        attempt_projection["lease_fence_token"],
+                        attempt_projection["process_incarnation_id"],
+                        attempt_projection["started_at_utc"],
+                        attempt_projection["finished_at_utc"],
+                        attempt_projection["pre_call_complete"],
+                        attempt_projection["broker_called"],
+                        attempt_projection["outcome"],
+                        attempt_projection["error_reason_code"],
+                        attempt_projection["error_context_sha256"],
+                        attempt_projection["authority_receipt_sha256"],
+                        attempt_projection["attempt_receipt_sha256"],
                         _json(attempt.model_dump(mode="json")),
                     ),
                 )
@@ -1441,7 +2447,9 @@ class PostgresMiniQMTKernelRepository:
                 cur.execute(
                     """
                     SELECT dispatch_attempt_id,stage,command_id,attempt_count,lease_epoch,
-                           lease_fence_token,process_incarnation_id,attempt_receipt_sha256,carrier_json
+                           lease_fence_token,process_incarnation_id,started_at_utc,finished_at_utc,
+                           pre_call_complete,broker_called,outcome,error_reason_code,error_context_sha256,
+                           authority_receipt_sha256,attempt_receipt_sha256,carrier_json
                     FROM qmt_strategy.execution_algo_command_dispatch_attempt
                     WHERE dispatch_attempt_id=%s AND stage=%s
                     """,
@@ -1451,17 +2459,11 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError((dispatch_attempt_id, stage))
         attempt = _model_from_json(BrokerDispatchAttemptV1, _row_json(row, "carrier_json"))
-        if (
-            attempt.dispatch_attempt_id != row["dispatch_attempt_id"]
-            or attempt.stage.value != row["stage"]
-            or attempt.command_id != row["command_id"]
-            or attempt.attempt_count != row["attempt_count"]
-            or attempt.lease_epoch != row["lease_epoch"]
-            or attempt.lease_fence_token != row["lease_fence_token"]
-            or attempt.process_incarnation_id != row["process_incarnation_id"]
-            or attempt.attempt_receipt_sha256 != row["attempt_receipt_sha256"]
-        ):
-            raise KernelRepositoryConflict("dispatch attempt scalar columns drift from strict carrier")
+        _assert_scalar_columns(
+            row,
+            _dispatch_attempt_scalar_projection(attempt),
+            carrier_name="dispatch attempt",
+        )
         return attempt
 
     def write_timer_schedule(self, schedule: ExecutionAlgoTimerScheduleV1) -> ExecutionAlgoTimerScheduleV1:
@@ -1480,34 +2482,38 @@ class PostgresMiniQMTKernelRepository:
                     previous = _model_from_json(ExecutionAlgoTimerScheduleV1, _row_json(row, "carrier_json"))
                     if previous != schedule:
                         schedule.validate_successor_v1(previous)
-                elif (
-                    schedule.status is not ExecutionAlgoTimerScheduleStatusV1.SCHEDULED
-                    or schedule.lease_epoch != 0
-                    or schedule.lease_owner is not None
-                ):
-                    raise KernelRepositoryConflict("timer schedule first write must be unleased SCHEDULED epoch zero")
-                lease_worker, _, lease_incarnation = (schedule.lease_owner or "").partition(":")
+                else:
+                    try:
+                        schedule.validate_initial_v1()
+                    except ValueError as exc:
+                        raise KernelRepositoryConflict(
+                            "timer schedule first write requires exact initial state"
+                        ) from exc
+                schedule_projection = _timer_schedule_scalar_projection(schedule)
                 sql_values = (
-                    schedule.schedule_id,
-                    schedule.runtime_id,
-                    schedule.algo_instance_id,
-                    schedule.timer_name,
-                    schedule.schedule_epoch,
-                    schedule.due_at_exchange_utc,
-                    schedule.status.value,
-                    schedule.timer_occurrence_id,
-                    schedule.emitted_event_id,
-                    schedule.lease_owner,
-                    lease_worker or None,
-                    lease_incarnation or None,
-                    schedule.lease_epoch,
-                    schedule.lease_fence_token,
-                    schedule.lease_expires_at_utc,
-                    schedule.row_version,
-                    schedule.created_at_utc,
-                    schedule.updated_at_utc,
-                    schedule.closed_at_utc,
-                    schedule.schedule_receipt_sha256,
+                    schedule_projection["schedule_id"],
+                    schedule_projection["runtime_id"],
+                    schedule_projection["algo_instance_id"],
+                    schedule_projection["timer_name"],
+                    schedule_projection["schedule_epoch"],
+                    schedule_projection["due_at_exchange_utc"],
+                    schedule_projection["catch_up_policy"],
+                    _json(schedule_projection["payload_json"]),
+                    schedule_projection["payload_sha256"],
+                    schedule_projection["status"],
+                    schedule_projection["timer_occurrence_id"],
+                    schedule_projection["emitted_event_id"],
+                    schedule_projection["lease_owner"],
+                    schedule_projection["lease_worker_id"],
+                    schedule_projection["lease_process_incarnation_id"],
+                    schedule_projection["lease_epoch"],
+                    schedule_projection["lease_fence_token"],
+                    schedule_projection["lease_expires_at_utc"],
+                    schedule_projection["row_version"],
+                    schedule_projection["created_at_utc"],
+                    schedule_projection["updated_at_utc"],
+                    schedule_projection["closed_at_utc"],
+                    schedule_projection["schedule_receipt_sha256"],
                     _json(schedule.model_dump(mode="json")),
                 )
                 if row is None:
@@ -1515,10 +2521,11 @@ class PostgresMiniQMTKernelRepository:
                         """
                     INSERT INTO qmt_strategy.execution_algo_timer_schedule(
                         schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,due_at_exchange_utc,
+                        catch_up_policy,payload_json,payload_sha256,
                         status,timer_occurrence_id,emitted_event_id,lease_owner,lease_worker_id,
                         lease_process_incarnation_id,lease_epoch,lease_fence_token,lease_expires_at_utc,
                         row_version,created_at_utc,updated_at_utc,closed_at_utc,schedule_receipt_sha256,carrier_json
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT DO NOTHING
                         """,
                         sql_values,
@@ -1537,20 +2544,20 @@ class PostgresMiniQMTKernelRepository:
                           AND lease_fence_token IS NOT DISTINCT FROM %s
                         """,
                         (
-                            schedule.status.value,
-                            schedule.emitted_event_id,
-                            schedule.lease_owner,
-                            lease_worker or None,
-                            lease_incarnation or None,
-                            schedule.lease_epoch,
-                            schedule.lease_fence_token,
-                            schedule.lease_expires_at_utc,
-                            schedule.row_version,
-                            schedule.updated_at_utc,
-                            schedule.closed_at_utc,
-                            schedule.schedule_receipt_sha256,
+                            schedule_projection["status"],
+                            schedule_projection["emitted_event_id"],
+                            schedule_projection["lease_owner"],
+                            schedule_projection["lease_worker_id"],
+                            schedule_projection["lease_process_incarnation_id"],
+                            schedule_projection["lease_epoch"],
+                            schedule_projection["lease_fence_token"],
+                            schedule_projection["lease_expires_at_utc"],
+                            schedule_projection["row_version"],
+                            schedule_projection["updated_at_utc"],
+                            schedule_projection["closed_at_utc"],
+                            schedule_projection["schedule_receipt_sha256"],
                             _json(schedule.model_dump(mode="json")),
-                            schedule.schedule_id,
+                            schedule_projection["schedule_id"],
                             previous.row_version,
                             previous.lease_owner,
                             previous.lease_epoch,
@@ -1590,26 +2597,34 @@ class PostgresMiniQMTKernelRepository:
                     previous = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(row, "carrier_json"))
                     if previous != occurrence:
                         occurrence.validate_successor_v1(previous)
-                lease_worker, _, lease_incarnation = (occurrence.lease_owner or "").partition(":")
+                else:
+                    try:
+                        occurrence.validate_initial_v1()
+                    except ValueError as exc:
+                        raise KernelRepositoryConflict(
+                            "timer occurrence first write requires exact initial state"
+                        ) from exc
+                occurrence_projection = _timer_occurrence_scalar_projection(occurrence)
                 sql_values = (
-                    occurrence.timer_occurrence_id,
-                    occurrence.schedule_id,
-                    occurrence.runtime_id,
-                    occurrence.algo_instance_id,
-                    occurrence.due_at_exchange_utc,
-                    occurrence.exchange_session_authority_sha256,
-                    occurrence.status.value,
-                    occurrence.emitted_event_id,
-                    occurrence.lease_owner,
-                    lease_worker or None,
-                    lease_incarnation or None,
-                    occurrence.lease_epoch,
-                    occurrence.lease_fence_token,
-                    occurrence.lease_expires_at_utc,
-                    occurrence.row_version,
-                    occurrence.created_at_utc,
-                    occurrence.closed_at_utc,
-                    occurrence.occurrence_receipt_sha256,
+                    occurrence_projection["timer_occurrence_id"],
+                    occurrence_projection["schedule_id"],
+                    occurrence_projection["runtime_id"],
+                    occurrence_projection["algo_instance_id"],
+                    occurrence_projection["due_at_exchange_utc"],
+                    occurrence_projection["exchange_session_authority_sha256"],
+                    occurrence_projection["status"],
+                    occurrence_projection["emitted_event_id"],
+                    occurrence_projection["catch_up_receipt_sha256"],
+                    occurrence_projection["lease_owner"],
+                    occurrence_projection["lease_worker_id"],
+                    occurrence_projection["lease_process_incarnation_id"],
+                    occurrence_projection["lease_epoch"],
+                    occurrence_projection["lease_fence_token"],
+                    occurrence_projection["lease_expires_at_utc"],
+                    occurrence_projection["row_version"],
+                    occurrence_projection["created_at_utc"],
+                    occurrence_projection["closed_at_utc"],
+                    occurrence_projection["occurrence_receipt_sha256"],
                     _json(occurrence.model_dump(mode="json")),
                 )
                 if row is None:
@@ -1617,10 +2632,11 @@ class PostgresMiniQMTKernelRepository:
                         """
                     INSERT INTO qmt_strategy.execution_algo_timer_occurrence(
                         timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,
-                        exchange_session_authority_sha256,status,emitted_event_id,lease_owner,lease_worker_id,
+                        exchange_session_authority_sha256,status,emitted_event_id,catch_up_receipt_sha256,
+                        lease_owner,lease_worker_id,
                         lease_process_incarnation_id,lease_epoch,lease_fence_token,lease_expires_at_utc,row_version,
                         created_at_utc,closed_at_utc,occurrence_receipt_sha256,carrier_json
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT DO NOTHING
                         """,
                         sql_values,
@@ -1629,7 +2645,8 @@ class PostgresMiniQMTKernelRepository:
                     cur.execute(
                         """
                         UPDATE qmt_strategy.execution_algo_timer_occurrence
-                        SET status=%s,emitted_event_id=%s,lease_owner=%s,lease_worker_id=%s,
+                        SET status=%s,emitted_event_id=%s,catch_up_receipt_sha256=%s,
+                            lease_owner=%s,lease_worker_id=%s,
                             lease_process_incarnation_id=%s,lease_epoch=%s,lease_fence_token=%s,
                             lease_expires_at_utc=%s,row_version=%s,closed_at_utc=%s,
                             occurrence_receipt_sha256=%s,carrier_json=%s
@@ -1639,19 +2656,20 @@ class PostgresMiniQMTKernelRepository:
                           AND lease_fence_token IS NOT DISTINCT FROM %s
                         """,
                         (
-                            occurrence.status.value,
-                            occurrence.emitted_event_id,
-                            occurrence.lease_owner,
-                            lease_worker or None,
-                            lease_incarnation or None,
-                            occurrence.lease_epoch,
-                            occurrence.lease_fence_token,
-                            occurrence.lease_expires_at_utc,
-                            occurrence.row_version,
-                            occurrence.closed_at_utc,
-                            occurrence.occurrence_receipt_sha256,
+                            occurrence_projection["status"],
+                            occurrence_projection["emitted_event_id"],
+                            occurrence_projection["catch_up_receipt_sha256"],
+                            occurrence_projection["lease_owner"],
+                            occurrence_projection["lease_worker_id"],
+                            occurrence_projection["lease_process_incarnation_id"],
+                            occurrence_projection["lease_epoch"],
+                            occurrence_projection["lease_fence_token"],
+                            occurrence_projection["lease_expires_at_utc"],
+                            occurrence_projection["row_version"],
+                            occurrence_projection["closed_at_utc"],
+                            occurrence_projection["occurrence_receipt_sha256"],
                             _json(occurrence.model_dump(mode="json")),
-                            occurrence.timer_occurrence_id,
+                            occurrence_projection["timer_occurrence_id"],
                             previous.row_version,
                             previous.lease_owner,
                             previous.lease_epoch,
@@ -1680,8 +2698,12 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT schedule_id,status,lease_owner,lease_epoch,lease_fence_token,row_version,
-                           schedule_receipt_sha256,carrier_json
+                    SELECT schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,
+                           due_at_exchange_utc,catch_up_policy,payload_json,payload_sha256,
+                           status,timer_occurrence_id,emitted_event_id,
+                           lease_owner,lease_worker_id,lease_process_incarnation_id,lease_epoch,
+                           lease_fence_token,lease_expires_at_utc,row_version,created_at_utc,
+                           updated_at_utc,closed_at_utc,schedule_receipt_sha256,carrier_json
                     FROM qmt_strategy.execution_algo_timer_schedule WHERE schedule_id=%s
                     """,
                     (schedule_id,),
@@ -1690,16 +2712,11 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError(schedule_id)
         schedule = _model_from_json(ExecutionAlgoTimerScheduleV1, _row_json(row, "carrier_json"))
-        if (
-            schedule.schedule_id != row["schedule_id"]
-            or schedule.status.value != row["status"]
-            or schedule.lease_owner != row["lease_owner"]
-            or schedule.lease_epoch != row["lease_epoch"]
-            or schedule.lease_fence_token != row["lease_fence_token"]
-            or schedule.row_version != row["row_version"]
-            or schedule.schedule_receipt_sha256 != row["schedule_receipt_sha256"]
-        ):
-            raise KernelRepositoryConflict("timer schedule scalar columns drift from strict carrier")
+        _assert_scalar_columns(
+            row,
+            _timer_schedule_scalar_projection(schedule),
+            carrier_name="timer schedule",
+        )
         return schedule
 
     def read_timer_occurrence(self, timer_occurrence_id: str) -> ExecutionAlgoTimerOccurrenceV1:
@@ -1707,7 +2724,11 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT timer_occurrence_id,status,lease_owner,lease_epoch,lease_fence_token,row_version,
+                    SELECT timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,
+                           exchange_session_authority_sha256,status,emitted_event_id,
+                           catch_up_receipt_sha256,lease_owner,
+                           lease_worker_id,lease_process_incarnation_id,lease_epoch,lease_fence_token,
+                           lease_expires_at_utc,row_version,created_at_utc,closed_at_utc,
                            occurrence_receipt_sha256,carrier_json
                     FROM qmt_strategy.execution_algo_timer_occurrence WHERE timer_occurrence_id=%s
                     """,
@@ -1717,16 +2738,11 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError(timer_occurrence_id)
         occurrence = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(row, "carrier_json"))
-        if (
-            occurrence.timer_occurrence_id != row["timer_occurrence_id"]
-            or occurrence.status.value != row["status"]
-            or occurrence.lease_owner != row["lease_owner"]
-            or occurrence.lease_epoch != row["lease_epoch"]
-            or occurrence.lease_fence_token != row["lease_fence_token"]
-            or occurrence.row_version != row["row_version"]
-            or occurrence.occurrence_receipt_sha256 != row["occurrence_receipt_sha256"]
-        ):
-            raise KernelRepositoryConflict("timer occurrence scalar columns drift from strict carrier")
+        _assert_scalar_columns(
+            row,
+            _timer_occurrence_scalar_projection(occurrence),
+            carrier_name="timer occurrence",
+        )
         return occurrence
 
     def write_exchange_session_authority(self, authority: ExchangeSessionAuthorityV1) -> ExchangeSessionAuthorityV1:
@@ -1743,6 +2759,7 @@ class PostgresMiniQMTKernelRepository:
                     raise KeyError(authority.runtime_id)
                 if runtime_row["trade_date"] != date.fromisoformat(authority.exchange_trade_date):
                     raise KernelRepositoryConflict("exchange-session trade date conflicts with runtime owner")
+                authority_projection = _exchange_session_scalar_projection(authority)
                 cur.execute(
                     """
                     INSERT INTO qmt_strategy.execution_exchange_session_authority(
@@ -1752,12 +2769,12 @@ class PostgresMiniQMTKernelRepository:
                     ON CONFLICT (runtime_id,exchange_trade_date) DO NOTHING
                     """,
                     (
-                        authority.runtime_id,
-                        authority.exchange_trade_date,
-                        authority.calendar_snapshot_set_id,
-                        authority.calendar_snapshot_set_sha256,
-                        authority.session_definition_version,
-                        authority.authority_sha256,
+                        authority_projection["runtime_id"],
+                        authority_projection["exchange_trade_date"],
+                        authority_projection["calendar_snapshot_set_id"],
+                        authority_projection["calendar_snapshot_set_sha256"],
+                        authority_projection["session_definition_version"],
+                        authority_projection["authority_sha256"],
                         _json(authority.model_dump(mode="json")),
                     ),
                 )
@@ -1802,56 +2819,50 @@ class PostgresMiniQMTKernelRepository:
         if row is None:
             raise KeyError((runtime_id, exchange_trade_date))
         authority = _model_from_json(ExchangeSessionAuthorityV1, _row_json(row, "authority_json"))
-        if (
-            authority.runtime_id != row["runtime_id"]
-            or date.fromisoformat(authority.exchange_trade_date) != row["exchange_trade_date"]
-            or row["exchange_trade_date"] != row["runtime_trade_date"]
-            or authority.calendar_snapshot_set_id != row["calendar_snapshot_set_id"]
-            or authority.calendar_snapshot_set_sha256 != row["calendar_snapshot_set_sha256"]
-            or authority.session_definition_version != row["session_definition_version"]
-            or authority.authority_sha256 != row["authority_sha256"]
-        ):
-            raise KernelRepositoryConflict("exchange-session scalar columns drift from strict authority")
+        _assert_scalar_columns(
+            row,
+            _exchange_session_scalar_projection(authority),
+            carrier_name="exchange-session authority",
+        )
+        if row["exchange_trade_date"] != row["runtime_trade_date"]:
+            raise KernelRepositoryConflict("exchange-session trade date drifts from runtime owner")
         return authority
 
     def list_recovery_deliveries(
         self, *, runtime_id: str, trade_date: date, statuses: Sequence[str], limit: int
     ) -> tuple[AlgoDeliveryPersistenceV1, ...]:
-        rows = self._recovery_rows(
+        delivery_ids = self._recovery_identities(
             table="execution_algo_event_delivery",
-            json_column="carrier_json",
             runtime_id=runtime_id,
             trade_date=trade_date,
             statuses=statuses,
             limit=limit,
         )
-        return tuple(_model_from_json(AlgoDeliveryPersistenceV1, item) for item in rows)
+        return tuple(self.read_delivery(delivery_id) for delivery_id in delivery_ids)
 
     def list_recovery_outbox_commands(
         self, *, runtime_id: str, trade_date: date, statuses: Sequence[str], limit: int
     ) -> tuple[BrokerCommandOutboxV1, ...]:
-        rows = self._recovery_rows(
+        command_ids = self._recovery_identities(
             table="execution_algo_command_outbox",
-            json_column="carrier_json",
             runtime_id=runtime_id,
             trade_date=trade_date,
             statuses=statuses,
             limit=limit,
         )
-        return tuple(_model_from_json(BrokerCommandOutboxV1, item) for item in rows)
+        return tuple(self.read_outbox_command(command_id) for command_id in command_ids)
 
     def list_recovery_timer_occurrences(
         self, *, runtime_id: str, trade_date: date, statuses: Sequence[str], limit: int
     ) -> tuple[ExecutionAlgoTimerOccurrenceV1, ...]:
-        rows = self._recovery_rows(
+        occurrence_ids = self._recovery_identities(
             table="execution_algo_timer_occurrence",
-            json_column="carrier_json",
             runtime_id=runtime_id,
             trade_date=trade_date,
             statuses=statuses,
             limit=limit,
         )
-        return tuple(_model_from_json(ExecutionAlgoTimerOccurrenceV1, item) for item in rows)
+        return tuple(self.read_timer_occurrence(occurrence_id) for occurrence_id in occurrence_ids)
 
     def _cas_algo_with_cursor(
         self,
@@ -1888,6 +2899,7 @@ class PostgresMiniQMTKernelRepository:
         if algo_instance.active_child_count != active_count:
             raise KernelRepositoryConflict("active_child_count does not match durable mapping reconstruction")
         values = algo_instance.model_dump(mode="json")
+        projection = _algo_scalar_projection(algo_instance)
         cur.execute(
             """
             INSERT INTO qmt_strategy.execution_algo_instance(
@@ -1915,38 +2927,38 @@ class PostgresMiniQMTKernelRepository:
             WHERE qmt_strategy.execution_algo_instance.row_version=%s
             """,
             (
-                algo_instance.algo_instance_id,
-                algo_instance.runtime_id,
-                algo_instance.parent_intent_id,
-                algo_instance.strategy_slot_id,
-                algo_instance.symbol,
-                algo_instance.side.value,
-                algo_instance.target_quantity,
-                algo_instance.remaining_quantity,
-                algo_instance.algo_code,
-                algo_instance.status.value,
-                algo_instance.created_at_utc,
-                algo_instance.updated_at_utc,
-                algo_instance.traded_quantity,
-                algo_instance.plugin_id,
-                algo_instance.plugin_version,
-                algo_instance.plugin_manifest_sha256,
-                _json(values["plugin_config_json"]),
-                algo_instance.plugin_config_sha256,
-                algo_instance.compatibility_receipt_sha256,
-                algo_instance.state_schema_version,
-                None if algo_instance.state_json is None else _json(values["state_json"]),
-                algo_instance.state_sha256,
-                algo_instance.transition_sequence,
-                algo_instance.last_applied_delivery_sequence,
-                algo_instance.last_applied_delivery_id,
-                algo_instance.last_closed_delivery_sequence,
-                algo_instance.terminal_delivery_sequence,
-                algo_instance.failure_receipt_id,
-                algo_instance.active_child_closure_status.value,
-                algo_instance.active_child_count,
-                algo_instance.row_version,
-                algo_instance.terminal_at_utc,
+                projection["algo_instance_id"],
+                projection["runtime_id"],
+                projection["parent_intent_id"],
+                projection["strategy_slot_id"],
+                projection["symbol"],
+                projection["side"],
+                projection["target_quantity"],
+                projection["remaining_quantity"],
+                projection["algo_code"],
+                projection["status"],
+                projection["created_at"],
+                projection["updated_at"],
+                projection["traded_quantity"],
+                projection["plugin_id"],
+                projection["plugin_version"],
+                projection["plugin_manifest_sha256"],
+                _json(projection["plugin_config_json"]),
+                projection["plugin_config_sha256"],
+                projection["compatibility_receipt_sha256"],
+                projection["state_schema_version"],
+                None if projection["state_json"] is None else _json(projection["state_json"]),
+                projection["state_sha256"],
+                projection["transition_sequence"],
+                projection["last_applied_delivery_sequence"],
+                projection["last_applied_delivery_id"],
+                projection["last_closed_delivery_sequence"],
+                projection["terminal_delivery_sequence"],
+                projection["failure_receipt_id"],
+                projection["active_child_closure_status"],
+                projection["active_child_count"],
+                projection["row_version"],
+                projection["terminal_at_utc"],
                 _json(values),
                 expected_row_version,
             ),
@@ -1971,16 +2983,15 @@ class PostgresMiniQMTKernelRepository:
         if not exists:
             raise KernelRepositoryConflict("lease owner references unknown worker incarnation")
 
-    def _recovery_rows(
+    def _recovery_identities(
         self,
         *,
         table: str,
-        json_column: str,
         runtime_id: str,
         trade_date: date,
         statuses: Sequence[str],
         limit: int,
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> tuple[str, ...]:
         limit = _bounded_limit(limit)
         if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
             raise ValueError("runtime_id must be a non-empty trim-stable strict string")
@@ -1994,25 +3005,28 @@ class PostgresMiniQMTKernelRepository:
         table_authority = {
             "execution_algo_event_delivery": (
                 {status.value for status in DeliveryStatusV1},
+                "delivery_id",
                 "target.created_at_utc, target.algo_delivery_sequence, target.delivery_id",
             ),
             "execution_algo_command_outbox": (
                 {status.value for status in BrokerCommandOutboxStatusV1},
+                "command_id",
                 "target.next_attempt_at_utc NULLS FIRST, target.created_at_utc, target.command_id",
             ),
             "execution_algo_timer_occurrence": (
                 {status.value for status in ExecutionAlgoTimerOccurrenceStatusV1},
+                "timer_occurrence_id",
                 "target.due_at_exchange_utc, target.created_at_utc, target.timer_occurrence_id",
             ),
         }
-        if table not in table_authority or json_column != "carrier_json":
+        if table not in table_authority:
             raise ValueError("unsupported recovery table")
-        allowed_statuses, order_by = table_authority[table]
+        allowed_statuses, identity_column, order_by = table_authority[table]
         invalid = tuple(status for status in exact_statuses if status not in allowed_statuses)
         if invalid:
             raise ValueError(f"unsupported recovery statuses for {table}: {invalid}")
         query = f"""
-            SELECT target.{json_column}
+            SELECT target.{identity_column} AS recovery_identity
             FROM qmt_strategy.{table} AS target
             JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=target.runtime_id
             WHERE target.runtime_id=%s AND runtime.trade_date=%s AND target.status=ANY(%s::text[])
@@ -2023,46 +3037,51 @@ class PostgresMiniQMTKernelRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(query, (runtime_id, trade_date, list(exact_statuses), limit))
                 rows = cur.fetchall()
-        return tuple(_row_json(row, json_column) for row in rows)
+        return tuple(str(row["recovery_identity"]) for row in rows)
 
     @staticmethod
     def _outbox_sql_values(outbox: BrokerCommandOutboxV1) -> tuple[Any, ...]:
         values = outbox.model_dump(mode="json")
+        projection = _outbox_scalar_projection(outbox)
         return (
-            outbox.command_id,
-            outbox.transition_id,
-            outbox.ordinal,
-            outbox.runtime_id,
-            outbox.algo_instance_id,
-            outbox.parent_intent_id,
-            outbox.mapping_id,
-            outbox.command_type.value,
-            outbox.local_vt_orderid,
-            _json(values["payload_json"]),
-            outbox.payload_sha256,
-            outbox.status.value,
-            outbox.attempt_count,
-            outbox.lease_owner,
-            outbox.lease_epoch,
-            outbox.lease_fence_token,
-            outbox.lease_expires_at,
-            outbox.dispatch_attempt_id,
-            outbox.deterministic_client_order_ref,
-            outbox.next_attempt_at_utc,
-            outbox.broker_called,
-            outbox.broker_order_id,
-            None if outbox.ack_receipt_json is None else _json(values["ack_receipt_json"]),
-            outbox.ack_receipt_sha256,
-            None if outbox.non_acceptance_receipt is None else _json(values["non_acceptance_receipt"]),
-            None if outbox.unknown_outcome_receipt is None else _json(values["unknown_outcome_receipt"]),
-            None if outbox.reconcile_receipt is None else _json(values["reconcile_receipt"]),
-            None if outbox.last_error_json is None else _json(values["last_error_json"]),
-            outbox.row_version,
-            outbox.created_at_utc,
-            outbox.updated_at_utc,
-            outbox.closed_at_utc,
-            _json(outbox.model_dump(mode="json")),
-            outbox.outbox_row_sha256,
+            projection["command_id"],
+            projection["transition_id"],
+            projection["ordinal"],
+            projection["runtime_id"],
+            projection["algo_instance_id"],
+            projection["parent_intent_id"],
+            projection["mapping_id"],
+            projection["command_type"],
+            projection["local_vt_orderid"],
+            _json(projection["payload_json"]),
+            projection["payload_sha256"],
+            projection["status"],
+            projection["attempt_count"],
+            projection["lease_owner"],
+            projection["lease_epoch"],
+            projection["lease_fence_token"],
+            projection["lease_expires_at"],
+            projection["dispatch_attempt_id"],
+            projection["deterministic_client_order_ref"],
+            projection["next_attempt_at_utc"],
+            projection["broker_called"],
+            projection["broker_order_id"],
+            None if projection["ack_receipt_json"] is None else _json(projection["ack_receipt_json"]),
+            projection["ack_receipt_sha256"],
+            None
+            if projection["non_acceptance_receipt_json"] is None
+            else _json(projection["non_acceptance_receipt_json"]),
+            None
+            if projection["unknown_outcome_receipt_json"] is None
+            else _json(projection["unknown_outcome_receipt_json"]),
+            None if projection["reconcile_receipt_json"] is None else _json(projection["reconcile_receipt_json"]),
+            None if projection["last_error_json"] is None else _json(projection["last_error_json"]),
+            projection["row_version"],
+            projection["created_at_utc"],
+            projection["updated_at_utc"],
+            projection["closed_at_utc"],
+            _json(values),
+            projection["outbox_row_sha256"],
         )
 
     @staticmethod

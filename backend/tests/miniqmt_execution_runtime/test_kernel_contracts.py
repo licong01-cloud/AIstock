@@ -572,6 +572,167 @@ def test_mapping_and_outbox_close_deterministic_identity_versions_and_nullable_b
         BrokerCommandOutboxV1.model_validate(malformed)
 
 
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    (("lease_epoch", 99), ("attempt_count", 7), ("row_version", 12)),
+)
+def test_k2_initial_pending_delivery_rejects_forged_history(field_name: str, bad_value: object) -> None:
+    event_delivery = AlgoEventDeliveryV1.create(
+        event=_tick_event(),
+        algo_instance_id=_algo_id(),
+        plugin_manifest_sha256=_sha("1"),
+        algo_delivery_sequence=1,
+        previous_delivery_id=None,
+        status=DeliveryStatusV1.PENDING,
+        attempt_count=0,
+        lease_owner=None,
+        lease_expires_at=None,
+        transition_id=None,
+        last_error_json=None,
+        created_at_utc="2026-07-25T01:30:00Z",
+        updated_at_utc="2026-07-25T01:30:00Z",
+    )
+    values: dict[str, object] = {
+        "lease_epoch": 0,
+        "lease_fence_token": None,
+        "row_version": 1,
+        "next_attempt_at_utc": None,
+        "failure_receipt_id": None,
+        "skip_receipt_id": None,
+        "closed_at_utc": None,
+    }
+    if field_name == "attempt_count":
+        event_payload = event_delivery.model_dump(mode="python")
+        event_payload[field_name] = bad_value
+        event_delivery = AlgoEventDeliveryV1.model_validate(event_payload)
+    else:
+        values[field_name] = bad_value
+    with pytest.raises(ValidationError, match="initial PENDING delivery"):
+        AlgoDeliveryPersistenceV1.create(delivery=event_delivery, **values)
+
+
+@pytest.mark.parametrize(
+    "carrier_kind",
+    ("mapping_version", "outbox_epoch", "outbox_attempt", "outbox_version", "schedule_epoch", "occurrence_version"),
+)
+def test_k2_initial_mapping_outbox_and_timer_carriers_reject_forged_history(carrier_kind: str) -> None:
+    command = _submit_command()
+    if carrier_kind == "mapping_version":
+        with pytest.raises(ValidationError, match="initial RESERVED mapping"):
+            ExecutionCommandChildMappingV1.create(
+                command=command,
+                strategy_slot_id="slot_k2",
+                mapping_status=CommandChildMappingStatusV1.RESERVED,
+                mapping_version=2,
+                broker_order_id=None,
+                broker_identity_source_event_id=None,
+                last_order_event_id=None,
+                last_trade_event_id=None,
+                updated_by_event_id=None,
+                created_at_utc="2026-07-25T01:30:00Z",
+                updated_at_utc="2026-07-25T01:30:00Z",
+            )
+        return
+
+    mapping = _mapping(status=CommandChildMappingStatusV1.RESERVED, version=1)
+    if carrier_kind.startswith("outbox_"):
+        values = {
+            "status": BrokerCommandOutboxStatusV1.PENDING,
+            "attempt_count": 0,
+            "lease_owner": None,
+            "lease_epoch": 0,
+            "lease_fence_token": None,
+            "lease_expires_at": None,
+            "dispatch_attempt_id": None,
+            "next_attempt_at_utc": None,
+            "broker_called": None,
+            "broker_order_id": None,
+            "ack_receipt_json": None,
+            "ack_receipt_sha256": None,
+            "non_acceptance_receipt": None,
+            "unknown_outcome_receipt": None,
+            "reconcile_receipt": None,
+            "last_error_json": None,
+            "row_version": 1,
+            "created_at_utc": "2026-07-25T01:30:00Z",
+            "updated_at_utc": "2026-07-25T01:30:00Z",
+            "closed_at_utc": None,
+        }
+        target = {
+            "outbox_epoch": ("lease_epoch", 99),
+            "outbox_attempt": ("attempt_count", 7),
+            "outbox_version": ("row_version", 12),
+        }[carrier_kind]
+        values[target[0]] = target[1]
+        with pytest.raises(ValidationError, match="initial PENDING outbox"):
+            BrokerCommandOutboxV1.create(command=command, mapping_id=mapping.mapping_id, **values)
+        return
+
+    mutation = TimerMutationV1.create(
+        mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+        algo_instance_id=_algo_id(),
+        transition_id="transition_initial_timer_k2",
+        ordinal=0,
+        timer_name="initial_timer",
+        schedule_epoch="session_epoch_initial_k2",
+        due_at_exchange_utc="2026-07-25T02:00:00Z",
+        catch_up_policy="EXPIRE_IF_LATE",
+        payload={"slice": 1},
+    )
+    if carrier_kind == "schedule_epoch":
+        with pytest.raises(ValidationError, match="initial SCHEDULED timer"):
+            ExecutionAlgoTimerScheduleV1.create(
+                runtime_id="runtime_k2",
+                mutation=mutation,
+                status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+                emitted_event_id=None,
+                lease_owner=None,
+                lease_epoch=99,
+                lease_fence_token=None,
+                lease_expires_at_utc=None,
+                row_version=1,
+                created_at_utc="2026-07-25T01:30:00Z",
+                updated_at_utc="2026-07-25T01:30:00Z",
+                closed_at_utc=None,
+            )
+        return
+    schedule = ExecutionAlgoTimerScheduleV1.create(
+        runtime_id="runtime_k2",
+        mutation=mutation,
+        status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+        emitted_event_id=None,
+        lease_owner=None,
+        lease_epoch=0,
+        lease_fence_token=None,
+        lease_expires_at_utc=None,
+        row_version=1,
+        created_at_utc="2026-07-25T01:30:00Z",
+        updated_at_utc="2026-07-25T01:30:00Z",
+        closed_at_utc=None,
+    )
+    owner = "worker_k2:incarnation_k2"
+    with pytest.raises(ValidationError, match="initial CLAIMED occurrence"):
+        ExecutionAlgoTimerOccurrenceV1.create(
+            schedule=schedule,
+            exchange_session_authority_sha256=_sha("4"),
+            status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+            emitted_event_id=None,
+            catch_up_receipt_sha256=None,
+            lease_owner=owner,
+            lease_epoch=1,
+            lease_fence_token=kernel_lease_fence_token_v1(
+                owner_type="TIMER_OCCURRENCE",
+                owner_id=schedule.timer_occurrence_id,
+                lease_epoch=1,
+                lease_owner=owner,
+            ),
+            lease_expires_at_utc="2026-07-25T02:01:00Z",
+            row_version=2,
+            created_at_utc="2026-07-25T02:00:00Z",
+            closed_at_utc=None,
+        )
+
+
 def test_ack_unknown_and_reconciliation_receipts_reject_fake_success_and_ambiguous_identity() -> None:
     with pytest.raises(ValidationError, match="accepted ACK"):
         BrokerCommandAckReceiptV1.create(

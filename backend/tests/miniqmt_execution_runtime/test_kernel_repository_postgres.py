@@ -81,6 +81,7 @@ def test_repository_public_transaction_surface_is_complete() -> None:
         "read_transition_bundle",
         "read_command_identity_chain",
         "compare_and_swap_mapping_outbox",
+        "close_mapping_from_callback",
         "claim_delivery",
         "claim_outbox_command",
         "compare_and_swap_algo_instance",
@@ -167,6 +168,7 @@ class _FaultInjectionCursor(_SchemaCursor):
         "mapping": "UPDATE qmt_strategy.execution_child_order",
         "outbox": "UPDATE qmt_strategy.execution_algo_command_outbox",
         "algo": "INSERT INTO qmt_strategy.execution_algo_instance",
+        "callback_readback": "/* callback closure readback */",
     }
 
     def __init__(self, cursor: object, schema: str, fault_point: str) -> None:
@@ -266,7 +268,8 @@ def _post_commit_schedule_drift_factory(schema: str, schedule_id: str):
                 with connection.cursor() as cur:
                     cur.execute(
                         f"UPDATE {schema}.execution_algo_timer_schedule "
-                        "SET row_version=row_version+1 WHERE schedule_id=%s",
+                        "SET due_at_exchange_utc=due_at_exchange_utc + interval '1 second' "
+                        "WHERE schedule_id=%s",
                         (schedule_id,),
                     )
                 connection.commit()
@@ -289,6 +292,13 @@ def _conn_factory_without_keywords(schema: str):
             yield connection
 
     return factory
+
+
+@contextmanager
+def _forbidden_conn_factory(*, autocommit: bool = False, manage_transaction: bool = False):
+    del autocommit, manage_transaction
+    raise AssertionError("repository touched PostgreSQL before rejecting a forged initial fact")
+    yield  # pragma: no cover
 
 
 def _concurrent_first_write_factory(schema: str, barrier: Barrier):
@@ -459,11 +469,351 @@ def _submit_chain(transition_id: str) -> tuple[ExecutionCommandChildMappingV1, B
     return mapping, outbox
 
 
+def test_repository_public_writers_reject_noninitial_first_facts_before_database_access() -> None:
+    repository = PostgresMiniQMTKernelRepository(conn_factory=_forbidden_conn_factory)
+    event = _tick_event()
+    pending_delivery = _delivery(event, algo_instance_id=_algo_id())
+    claimed_payload = pending_delivery.model_dump(mode="python")
+    lease_owner = "worker_initial_k2:incarnation_initial_k2"
+    claimed_payload.update(
+        status=DeliveryStatusV1.CLAIMED,
+        attempt_count=1,
+        lease_owner=lease_owner,
+        lease_epoch=1,
+        lease_fence_token=kernel_lease_fence_token_v1(
+            owner_type="DELIVERY",
+            owner_id=pending_delivery.delivery_id,
+            lease_epoch=1,
+            lease_owner=lease_owner,
+        ),
+        lease_expires_at="2026-07-25T01:40:00Z",
+        row_version=2,
+        updated_at_utc="2026-07-25T01:31:00Z",
+    )
+    claimed_delivery = AlgoDeliveryPersistenceV1.model_validate(claimed_payload)
+    with pytest.raises(ValueError, match="first write requires initial PENDING delivery"):
+        repository.write_event_receipt_deliveries(event=event, deliveries=(claimed_delivery,))
+
+    mapping, outbox = _submit_chain("transition_forged_initial_k2")
+    command = BrokerCommandV2.model_validate_json(
+        json.dumps(outbox.model_dump(mode="json")["payload_json"], sort_keys=True, separators=(",", ":"))
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id="runtime_k2",
+        algo_instance_id=_algo_id(),
+        event_id=event.event_id,
+        delivery_id=claimed_delivery.delivery_id,
+        projection_refs=(),
+    )
+    algo = _algo(row_version=2, active_child_count=1)
+    after_state = AlgoStateSnapshotV2.model_validate(
+        {
+            "schema_version": "execution_algo_state_snapshot_v2",
+            "algo_instance_id": _algo_id(),
+            "plugin_id": algo.plugin_id,
+            "plugin_version": algo.plugin_version,
+            "plugin_manifest_sha256": algo.plugin_manifest_sha256,
+            "state_schema_version": algo.state_schema_version,
+            "transition_sequence": 1,
+            "last_applied_delivery_sequence": 1,
+            "last_applied_delivery_id": claimed_delivery.delivery_id,
+            "last_closed_delivery_sequence": 1,
+            "state": algo.model_dump(mode="python")["state_json"],
+            "state_sha256": algo.state_sha256,
+            "last_applied_event_id": event.event_id,
+            "updated_at_utc": "2026-07-25T01:31:00Z",
+        }
+    )
+
+    def receipt_for(
+        candidate_mapping: ExecutionCommandChildMappingV1,
+        candidate_outbox: BrokerCommandOutboxV1,
+    ) -> AlgoTransitionReceiptV1:
+        provisional = AlgoTransitionReceiptV1.create(
+            delivery_id=claimed_delivery.delivery_id,
+            event_id=event.event_id,
+            runtime_id="runtime_k2",
+            algo_instance_id=_algo_id(),
+            plugin_id=algo.plugin_id,
+            plugin_version=algo.plugin_version,
+            plugin_manifest_sha256=algo.plugin_manifest_sha256,
+            transition_sequence=2,
+            before_state_sha256_or_INIT=algo.state_sha256,
+            after_state_sha256=after_state.state_sha256,
+            ordered_command_ids=(candidate_outbox.command_id,),
+            ordered_timer_mutation_ids=(),
+            ordered_diagnostic_observation_ids=(),
+            ordered_consumed_lineage_refs=(),
+            execution_projection_set_sha256=projection_set.projection_set_sha256,
+            effect_set_sha256="9" * 64,
+            terminal_outcome=None,
+            logical_applied_at_utc="2026-07-25T01:31:00Z",
+            transaction_commit_identity="mqtx_pending_forged_initial_k2",
+        )
+        return AlgoTransitionReceiptV1.create(
+            **provisional.canonical_payload_v1(
+                exclude={"schema_version", "transition_id", "transaction_commit_identity", "receipt_sha256"}
+            ),
+            transaction_commit_identity=transaction_commit_identity_v1(
+                operation="WRITE_APPLIED_TRANSITION_BUNDLE",
+                owner_identities=("runtime_k2", _algo_id(), event.event_id, claimed_delivery.delivery_id),
+                input_hashes=(
+                    projection_set.projection_set_sha256,
+                    after_state.state_sha256,
+                    candidate_mapping.payload_sha256,
+                    candidate_outbox.payload_sha256,
+                ),
+                output_identities=(
+                    provisional.transition_id,
+                    candidate_mapping.mapping_id,
+                    candidate_outbox.command_id,
+                ),
+            ),
+        )
+
+    forged_mapping = ExecutionCommandChildMappingV1.create(
+        command=command,
+        strategy_slot_id="slot_k2",
+        mapping_status=CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        mapping_version=1,
+        broker_order_id="broker_forged_initial_k2",
+        broker_identity_source_event_id="event_forged_initial_k2",
+        last_order_event_id="event_forged_initial_k2",
+        last_trade_event_id=None,
+        updated_by_event_id="event_forged_initial_k2",
+        created_at_utc=mapping.created_at_utc,
+        updated_at_utc=mapping.updated_at_utc,
+    )
+    with pytest.raises(ValueError, match="first write requires initial RESERVED mapping"):
+        repository.write_transition_bundle(
+            algo_instance=algo,
+            delivery=claimed_delivery,
+            receipt=receipt_for(forged_mapping, outbox),
+            projection_set=projection_set,
+            after_state=after_state,
+            expected_algo_row_version=1,
+            expected_delivery_row_version=1,
+            new_child_mappings=(forged_mapping,),
+            command_outboxes=(outbox,),
+        )
+
+    ack = BrokerCommandAckReceiptV1.create(
+        command_id=command.command_id,
+        mapping_id=mapping.mapping_id,
+        deterministic_client_order_ref=outbox.deterministic_client_order_ref,
+        gateway_route_id="gateway_forged_initial_k2",
+        gateway_catalog_sha256="8" * 64,
+        source="SYNCHRONOUS_RETURN",
+        accepted=True,
+        broker_order_id="broker_forged_initial_k2",
+        reason_code="FORGED_ACK",
+        ack_payload_sha256="7" * 64,
+        observed_at_utc="2026-07-25T01:31:00Z",
+    )
+    forged_outbox = BrokerCommandOutboxV1.create(
+        command=command,
+        mapping_id=mapping.mapping_id,
+        status=BrokerCommandOutboxStatusV1.ACKED,
+        attempt_count=1,
+        lease_owner=None,
+        lease_epoch=1,
+        lease_fence_token=None,
+        lease_expires_at=None,
+        dispatch_attempt_id="dispatch_forged_initial_k2",
+        next_attempt_at_utc=None,
+        broker_called=True,
+        broker_order_id="broker_forged_initial_k2",
+        ack_receipt_json=ack,
+        ack_receipt_sha256=ack.receipt_sha256,
+        non_acceptance_receipt=None,
+        unknown_outcome_receipt=None,
+        reconcile_receipt=None,
+        last_error_json=None,
+        row_version=1,
+        created_at_utc=outbox.created_at_utc,
+        updated_at_utc="2026-07-25T01:31:00Z",
+        closed_at_utc="2026-07-25T01:31:00Z",
+    )
+    with pytest.raises(ValueError, match="first write requires initial PENDING outbox"):
+        repository.write_transition_bundle(
+            algo_instance=algo,
+            delivery=claimed_delivery,
+            receipt=receipt_for(mapping, forged_outbox),
+            projection_set=projection_set,
+            after_state=after_state,
+            expected_algo_row_version=1,
+            expected_delivery_row_version=1,
+            new_child_mappings=(mapping,),
+            command_outboxes=(forged_outbox,),
+        )
+
+
+@pytest.mark.parametrize("with_schema_drift", (False, True), ids=("function_only", "function_and_schema"))
+def test_repository_preflight_rejects_forged_constant_catalog_function_on_dev_postgres(
+    with_schema_drift: bool,
+) -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            if with_schema_drift:
+                cur.execute(
+                    f"ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP DEFAULT"
+                )
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2_catalog_fingerprint()
+                RETURNS TEXT LANGUAGE SQL STABLE
+                AS $forged$ SELECT '6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762'::TEXT $forged$
+                """
+            )
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        with pytest.raises(KernelRepositorySchemaError, match="catalog (function|schema) drift"):
+            repository.preflight_schema()
+    finally:
+        raw.autocommit = True
+        with raw.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("event", "delivery", "algo", "worker", "timer_schedule", "timer_occurrence"),
+)
+def test_repository_exact_scalar_readback_rejects_carrier_drift_on_dev_postgres(target: str) -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
+                ("runtime_k2", date(2026, 7, 25)),
+            )
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        algo = _algo(row_version=1, active_child_count=0)
+        repository.compare_and_swap_algo_instance(algo_instance=algo, expected_row_version=0)
+        worker = repository.start_worker_incarnation(
+            worker_id="worker_scalar_k2",
+            process_role="timer",
+            source_revision="revision_scalar_k2",
+            started_at_utc="2026-07-25T01:00:00Z",
+        )
+        event = _tick_event()
+        delivery = _delivery(event, algo_instance_id=_algo_id())
+        repository.write_event_receipt_deliveries(event=event, deliveries=(delivery,))
+        mutation = TimerMutationV1.create(
+            mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+            algo_instance_id=_algo_id(),
+            transition_id="transition_scalar_timer_k2",
+            ordinal=0,
+            timer_name="scalar_timer",
+            schedule_epoch="session_epoch_scalar_k2",
+            due_at_exchange_utc="2026-07-25T02:00:00Z",
+            catch_up_policy="EXPIRE_IF_LATE",
+            payload={"slice": 1},
+        )
+        schedule = ExecutionAlgoTimerScheduleV1.create(
+            runtime_id="runtime_k2",
+            mutation=mutation,
+            status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+            emitted_event_id=None,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=1,
+            created_at_utc="2026-07-25T01:30:00Z",
+            updated_at_utc="2026-07-25T01:30:00Z",
+            closed_at_utc=None,
+        )
+        repository.write_timer_schedule(schedule)
+        lease_owner = f"worker_scalar_k2:{worker.process_incarnation_id}"
+        occurrence = ExecutionAlgoTimerOccurrenceV1.create(
+            schedule=schedule,
+            exchange_session_authority_sha256="4" * 64,
+            status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+            emitted_event_id=None,
+            catch_up_receipt_sha256=None,
+            lease_owner=lease_owner,
+            lease_epoch=1,
+            lease_fence_token=kernel_lease_fence_token_v1(
+                owner_type="TIMER_OCCURRENCE",
+                owner_id=schedule.timer_occurrence_id,
+                lease_epoch=1,
+                lease_owner=lease_owner,
+            ),
+            lease_expires_at_utc="2026-07-25T02:01:00Z",
+            row_version=1,
+            created_at_utc="2026-07-25T02:00:00Z",
+            closed_at_utc=None,
+        )
+        repository.write_timer_occurrence(occurrence)
+        drift = {
+            "event": (
+                f"UPDATE {schema}.execution_runtime_event SET sequence=sequence+1000 WHERE event_id=%s",
+                (event.event_id,),
+                lambda: repository.read_event_transaction(event.event_id),
+            ),
+            "delivery": (
+                f"UPDATE {schema}.execution_algo_event_delivery SET plugin_manifest_sha256=%s WHERE delivery_id=%s",
+                ("2" * 64, delivery.delivery_id),
+                lambda: repository.read_delivery(delivery.delivery_id),
+            ),
+            "algo": (
+                f"UPDATE {schema}.execution_algo_instance "
+                "SET traded_quantity=traded_quantity+10,remaining_quantity=remaining_quantity-10 "
+                "WHERE algo_instance_id=%s",
+                (_algo_id(),),
+                lambda: repository.read_algo_instance(_algo_id()),
+            ),
+            "worker": (
+                f"UPDATE {schema}.execution_kernel_worker_incarnation "
+                "SET source_revision=source_revision || '_drift' WHERE process_incarnation_id=%s",
+                (worker.process_incarnation_id,),
+                lambda: repository.read_worker_startup_receipt(worker.process_incarnation_id),
+            ),
+            "timer_schedule": (
+                f"UPDATE {schema}.execution_algo_timer_schedule "
+                "SET due_at_exchange_utc=due_at_exchange_utc+interval '1 second' WHERE schedule_id=%s",
+                (schedule.schedule_id,),
+                lambda: repository.read_timer_schedule(schedule.schedule_id),
+            ),
+            "timer_occurrence": (
+                f"UPDATE {schema}.execution_algo_timer_occurrence "
+                "SET exchange_session_authority_sha256=%s "
+                "WHERE timer_occurrence_id=%s",
+                ("5" * 64, occurrence.timer_occurrence_id),
+                lambda: repository.read_timer_occurrence(occurrence.timer_occurrence_id),
+            ),
+        }[target]
+        with raw.cursor() as cur:
+            cur.execute(drift[0], drift[1])
+        with pytest.raises(KernelRepositoryConflict, match="scalar columns drift"):
+            drift[2]()
+    finally:
+        raw.autocommit = True
+        with raw.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
 def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_bounds() -> None:
     if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
         pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
     schema = _fixture_schema()
     incomplete_schema = _fixture_schema()
+    callback_schemas: list[str] = []
     raw = psycopg2.connect(**_dev_dsn())
     raw.autocommit = True
     try:
@@ -1257,7 +1607,10 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             algo_delivery_sequence=2,
             previous_delivery_id=submit_delivery.delivery_id,
         )
-        repository.write_event_receipt_deliveries(event=algo_event, deliveries=(algo_delivery,))
+        algo_event_receipt = repository.write_event_receipt_deliveries(
+            event=algo_event,
+            deliveries=(algo_delivery,),
+        )
         delivery_fence = kernel_lease_fence_token_v1(
             owner_type="DELIVERY",
             owner_id=algo_delivery.delivery_id,
@@ -1272,6 +1625,10 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_expires_at="2026-07-25T01:40:00Z",
             updated_at_utc="2026-07-25T01:32:00Z",
             expected_row_version=1,
+        )
+        assert (
+            repository.write_event_receipt_deliveries(event=algo_event, deliveries=(algo_delivery,))
+            == algo_event_receipt
         )
         assert repository.list_recovery_deliveries(
             runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=("CLAIMED",), limit=10
@@ -1435,6 +1792,19 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         assert transition_bundle["receipt"] == failure_receipt
         assert transition_bundle["new_child_mappings"] == ()
         assert transition_bundle["command_outboxes"] == (cancel_command_outbox,)
+        assert (
+            repository.write_transition_bundle(
+                algo_instance=failed_algo,
+                delivery=failed_delivery,
+                receipt=failure_receipt,
+                projection_set=None,
+                after_state=None,
+                expected_algo_row_version=current_algo.row_version,
+                expected_delivery_row_version=2,
+                command_outboxes=(cancel_command_outbox,),
+            )
+            == transition_bundle
+        )
 
         cancel_command = BrokerCommandV2.model_validate_json(
             json.dumps(
@@ -1508,6 +1878,193 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             expected_lease_epoch=claimed_cancel.lease_epoch,
             expected_lease_fence_token=claimed_cancel.lease_fence_token,
         ) == {"mapping": accepted_mapping, "outbox": dispatching_cancel}
+
+        accepted_cancel_ack = BrokerCommandAckReceiptV1.create(
+            command_id=cancel_command.command_id,
+            mapping_id=mapping.mapping_id,
+            deterministic_client_order_ref=dispatching_cancel.deterministic_client_order_ref,
+            gateway_route_id="gateway_route_cancel_callback_k2",
+            gateway_catalog_sha256="6" * 64,
+            source="SYNCHRONOUS_RETURN",
+            accepted=True,
+            broker_order_id=accepted_mapping.broker_order_id,
+            reason_code="CANCEL_ACCEPTED_AWAITING_ORDER_CALLBACK",
+            ack_payload_sha256="7" * 64,
+            observed_at_utc="2026-07-25T01:34:15Z",
+        )
+        accepted_cancel_outbox = BrokerCommandOutboxV1.create(
+            command=cancel_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.ACKED,
+            attempt_count=dispatching_cancel.attempt_count,
+            lease_owner=None,
+            lease_epoch=dispatching_cancel.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            next_attempt_at_utc=None,
+            broker_called=True,
+            broker_order_id=accepted_mapping.broker_order_id,
+            ack_receipt_json=accepted_cancel_ack,
+            ack_receipt_sha256=accepted_cancel_ack.receipt_sha256,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=dispatching_cancel.row_version + 1,
+            created_at_utc=dispatching_cancel.created_at_utc,
+            updated_at_utc="2026-07-25T01:34:15Z",
+            closed_at_utc="2026-07-25T01:34:15Z",
+        )
+
+        def clone_cancel_callback_state() -> tuple[str, PostgresMiniQMTKernelRepository]:
+            clone_schema = _fixture_schema()
+            callback_schemas.append(clone_schema)
+            with raw.cursor() as cur:
+                cur.execute(f"CREATE SCHEMA {clone_schema}")
+                for table_name in (
+                    "execution_runtime_event",
+                    "execution_algo_event_delivery",
+                    "execution_algo_instance",
+                    "execution_child_order",
+                    "execution_algo_command_outbox",
+                ):
+                    cur.execute(f"CREATE TABLE {clone_schema}.{table_name} (LIKE {schema}.{table_name} INCLUDING ALL)")
+                    cur.execute(f"INSERT INTO {clone_schema}.{table_name} SELECT * FROM {schema}.{table_name}")
+            return clone_schema, PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(clone_schema))
+
+        def callback_event(*, sequence: int, broker_order_id: str, suffix: str) -> RuntimeEventEnvelopeV2:
+            return RuntimeEventEnvelopeV2.create(
+                runtime_id="runtime_k2",
+                sequence=sequence,
+                event_type=EventTypeV2.ORDER,
+                event_time_utc="2026-07-25T01:34:30Z",
+                monotonic_ns=None,
+                source=EventSourceV2.QMT_GATEWAY_CALLBACK,
+                symbol=accepted_mapping.symbol,
+                payload_schema_version="miniqmt_order_event_v1",
+                payload={
+                    "runtime_id": accepted_mapping.runtime_id,
+                    "algo_instance_id": accepted_mapping.algo_instance_id,
+                    "parent_intent_id": accepted_mapping.parent_intent_id,
+                    "mapping_id": accepted_mapping.mapping_id,
+                    "local_vt_orderid": accepted_mapping.local_vt_orderid,
+                    "broker_order_id": broker_order_id,
+                    "terminal": True,
+                },
+                source_identity={"order_event_id": f"order_callback_{suffix}_k2"},
+                correlation={"trace_id": f"trace_callback_{suffix}_k2"},
+            )
+
+        def terminal_mapping_for(event_id: str) -> ExecutionCommandChildMappingV1:
+            return ExecutionCommandChildMappingV1.create(
+                command=submit_command,
+                strategy_slot_id="slot_k2",
+                mapping_status=CommandChildMappingStatusV1.TERMINAL,
+                mapping_version=accepted_mapping.mapping_version + 1,
+                broker_order_id=accepted_mapping.broker_order_id,
+                broker_identity_source_event_id=accepted_mapping.broker_identity_source_event_id,
+                last_order_event_id=event_id,
+                last_trade_event_id=None,
+                updated_by_event_id=event_id,
+                created_at_utc=accepted_mapping.created_at_utc,
+                updated_at_utc="2026-07-25T01:34:30Z",
+            )
+
+        _, sync_callback_repository = clone_cancel_callback_state()
+        sync_callback_repository.compare_and_swap_mapping_outbox(
+            mapping=accepted_mapping,
+            outbox=accepted_cancel_outbox,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_outbox_row_version=dispatching_cancel.row_version,
+            expected_lease_owner=dispatching_cancel.lease_owner,
+            expected_lease_epoch=dispatching_cancel.lease_epoch,
+            expected_lease_fence_token=dispatching_cancel.lease_fence_token,
+        )
+        wrong_event = callback_event(sequence=30, broker_order_id="wrong_broker_callback_k2", suffix="wrong")
+        sync_callback_repository.write_event_receipt_deliveries(event=wrong_event, deliveries=())
+        with pytest.raises(ValueError, match="callback event identity conflicts"):
+            sync_callback_repository.close_mapping_from_callback(
+                mapping=terminal_mapping_for(wrong_event.event_id),
+                callback_event=wrong_event,
+                cancel_command_id=cancel_command.command_id,
+                expected_mapping_version=accepted_mapping.mapping_version,
+                expected_algo_row_version=sync_callback_repository.read_algo_instance(_algo_id()).row_version,
+            )
+        order_event = callback_event(
+            sequence=31,
+            broker_order_id=accepted_mapping.broker_order_id,
+            suffix="sync_then_callback",
+        )
+        sync_callback_repository.write_event_receipt_deliveries(event=order_event, deliveries=())
+        callback_terminal_mapping = terminal_mapping_for(order_event.event_id)
+        pre_callback_algo = sync_callback_repository.read_algo_instance(_algo_id())
+        pre_callback_chain = sync_callback_repository.read_command_identity_chain(cancel_command.command_id)
+        for fault_point in ("mapping", "algo", "callback_readback"):
+            fault_repository = PostgresMiniQMTKernelRepository(
+                conn_factory=_fault_injection_factory(callback_schemas[-1], fault_point)
+            )
+            with pytest.raises(RuntimeError, match=f"injected {fault_point} write failure"):
+                fault_repository.close_mapping_from_callback(
+                    mapping=callback_terminal_mapping,
+                    callback_event=order_event,
+                    cancel_command_id=cancel_command.command_id,
+                    expected_mapping_version=accepted_mapping.mapping_version,
+                    expected_algo_row_version=pre_callback_algo.row_version,
+                )
+            assert sync_callback_repository.read_command_identity_chain(cancel_command.command_id) == pre_callback_chain
+            assert sync_callback_repository.read_algo_instance(_algo_id()) == pre_callback_algo
+        callback_result = sync_callback_repository.close_mapping_from_callback(
+            mapping=callback_terminal_mapping,
+            callback_event=order_event,
+            cancel_command_id=cancel_command.command_id,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_algo_row_version=pre_callback_algo.row_version,
+        )
+        assert callback_result["mapping"] == callback_terminal_mapping
+        assert callback_result["outbox"] == accepted_cancel_outbox
+        assert callback_result["algo"].status is ExecutionAlgoPersistenceStatusV2.FAILED
+        assert callback_result["algo"].failure_receipt_id == pre_callback_algo.failure_receipt_id
+        assert callback_result["algo"].terminal_delivery_sequence == pre_callback_algo.terminal_delivery_sequence
+        assert callback_result["algo"].active_child_count == 0
+        assert callback_result["algo"].active_child_closure_status is ActiveChildClosureStatusV1.CLEAN
+        assert (
+            sync_callback_repository.close_mapping_from_callback(
+                mapping=callback_terminal_mapping,
+                callback_event=order_event,
+                cancel_command_id=cancel_command.command_id,
+                expected_mapping_version=callback_terminal_mapping.mapping_version,
+                expected_algo_row_version=callback_result["algo"].row_version,
+            )
+            == callback_result
+        )
+
+        _, early_callback_repository = clone_cancel_callback_state()
+        early_event = callback_event(
+            sequence=32,
+            broker_order_id=accepted_mapping.broker_order_id,
+            suffix="callback_then_sync",
+        )
+        early_callback_repository.write_event_receipt_deliveries(event=early_event, deliveries=())
+        early_terminal_mapping = terminal_mapping_for(early_event.event_id)
+        early_algo = early_callback_repository.read_algo_instance(_algo_id())
+        early_result = early_callback_repository.close_mapping_from_callback(
+            mapping=early_terminal_mapping,
+            callback_event=early_event,
+            cancel_command_id=cancel_command.command_id,
+            expected_mapping_version=accepted_mapping.mapping_version,
+            expected_algo_row_version=early_algo.row_version,
+        )
+        assert early_result["outbox"] == dispatching_cancel
+        assert early_callback_repository.compare_and_swap_mapping_outbox(
+            mapping=early_terminal_mapping,
+            outbox=accepted_cancel_outbox,
+            expected_mapping_version=early_terminal_mapping.mapping_version,
+            expected_outbox_row_version=dispatching_cancel.row_version,
+            expected_lease_owner=dispatching_cancel.lease_owner,
+            expected_lease_epoch=dispatching_cancel.lease_epoch,
+            expected_lease_fence_token=dispatching_cancel.lease_fence_token,
+        ) == {"mapping": early_terminal_mapping, "outbox": accepted_cancel_outbox}
 
         rejected_ack = BrokerCommandAckReceiptV1.create(
             command_id=cancel_command.command_id,
@@ -1844,24 +2401,154 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 runtime_id="missing_runtime", exchange_trade_date=date(2026, 7, 25)
             )
 
+        exact_algo = repository.read_algo_instance(_algo_id())
+        exact_schedule = repository.read_timer_schedule(emitting_schedule.schedule_id)
+        exact_occurrence = repository.read_timer_occurrence(tie_occurrence.timer_occurrence_id)
+        terminal_cancel_json = terminal_cancel.model_dump(mode="json")
         scalar_drift_cases = (
+            (
+                f"UPDATE {schema}.execution_runtime_event SET sequence=sequence+1000 WHERE event_id=%s",
+                (submit_event.event_id,),
+                lambda: repository.read_event_transaction(submit_event.event_id),
+                f"UPDATE {schema}.execution_runtime_event SET sequence=sequence-1000 WHERE event_id=%s",
+                (submit_event.event_id,),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_transition SET transition_sequence=transition_sequence+1000 "
+                "WHERE transition_id=%s",
+                (transition_receipt.transition_id,),
+                lambda: repository.read_transition_bundle(transition_receipt.transition_id),
+                f"UPDATE {schema}.execution_algo_transition SET transition_sequence=transition_sequence-1000 "
+                "WHERE transition_id=%s",
+                (transition_receipt.transition_id,),
+            ),
+            (
+                f"UPDATE {schema}.execution_kernel_worker_incarnation "
+                "SET source_revision=source_revision || '_drift' WHERE process_incarnation_id=%s",
+                (first_start.process_incarnation_id,),
+                lambda: repository.read_worker_startup_receipt(first_start.process_incarnation_id),
+                f"UPDATE {schema}.execution_kernel_worker_incarnation "
+                "SET source_revision=%s WHERE process_incarnation_id=%s",
+                (first_start.source_revision, first_start.process_incarnation_id),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_instance "
+                "SET traded_quantity=traded_quantity+10,remaining_quantity=remaining_quantity-10 "
+                "WHERE algo_instance_id=%s",
+                (_algo_id(),),
+                lambda: repository.read_algo_instance(_algo_id()),
+                f"UPDATE {schema}.execution_algo_instance SET traded_quantity=%s,remaining_quantity=%s "
+                "WHERE algo_instance_id=%s",
+                (exact_algo.traded_quantity, exact_algo.remaining_quantity, _algo_id()),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_instance "
+                "SET state_schema_version=state_schema_version || '_drift',transition_sequence=transition_sequence-1 "
+                "WHERE algo_instance_id=%s",
+                (_algo_id(),),
+                lambda: repository.read_algo_instance(_algo_id()),
+                f"UPDATE {schema}.execution_algo_instance SET state_schema_version=%s,transition_sequence=%s "
+                "WHERE algo_instance_id=%s",
+                (exact_algo.state_schema_version, exact_algo.transition_sequence, _algo_id()),
+            ),
+            (
+                f"UPDATE {schema}.execution_child_order "
+                "SET quantity=quantity-1,broker_order_id=broker_order_id || '_drift',"
+                "updated_by_event_id=updated_by_event_id || '_drift' WHERE mapping_id=%s",
+                (terminal_mapping.mapping_id,),
+                lambda: repository.read_command_identity_chain(terminal_cancel.command_id),
+                f"UPDATE {schema}.execution_child_order SET quantity=%s,broker_order_id=%s,updated_by_event_id=%s "
+                "WHERE mapping_id=%s",
+                (
+                    terminal_mapping.requested_quantity,
+                    terminal_mapping.broker_order_id,
+                    terminal_mapping.updated_by_event_id,
+                    terminal_mapping.mapping_id,
+                ),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_command_outbox "
+                "SET broker_order_id=broker_order_id || '_drift',ack_receipt_sha256=%s,ack_receipt_json='{}'::jsonb "
+                "WHERE command_id=%s",
+                ("e" * 64, terminal_cancel.command_id),
+                lambda: repository.list_recovery_outbox_commands(
+                    runtime_id="runtime_k2",
+                    trade_date=date(2026, 7, 25),
+                    statuses=("ACKED",),
+                    limit=10,
+                ),
+                f"UPDATE {schema}.execution_algo_command_outbox "
+                "SET broker_order_id=%s,ack_receipt_sha256=%s,ack_receipt_json=%s WHERE command_id=%s",
+                (
+                    terminal_cancel.broker_order_id,
+                    terminal_cancel.ack_receipt_sha256,
+                    psycopg2.extras.Json(terminal_cancel_json["ack_receipt_json"]),
+                    terminal_cancel.command_id,
+                ),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_event_delivery "
+                "SET failure_receipt_id=failure_receipt_id || '_drift' WHERE delivery_id=%s",
+                (failed_delivery.delivery_id,),
+                lambda: repository.list_recovery_deliveries(
+                    runtime_id="runtime_k2",
+                    trade_date=date(2026, 7, 25),
+                    statuses=("FAILED_TERMINAL",),
+                    limit=10,
+                ),
+                f"UPDATE {schema}.execution_algo_event_delivery SET failure_receipt_id=%s WHERE delivery_id=%s",
+                (failed_delivery.failure_receipt_id, failed_delivery.delivery_id),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_timer_schedule "
+                "SET due_at_exchange_utc=due_at_exchange_utc + interval '1 second',"
+                "schedule_epoch=schedule_epoch || '_drift' WHERE schedule_id=%s",
+                (exact_schedule.schedule_id,),
+                lambda: repository.read_timer_schedule(exact_schedule.schedule_id),
+                f"UPDATE {schema}.execution_algo_timer_schedule SET due_at_exchange_utc=%s,schedule_epoch=%s "
+                "WHERE schedule_id=%s",
+                (exact_schedule.due_at_exchange_utc, exact_schedule.schedule_epoch, exact_schedule.schedule_id),
+            ),
+            (
+                f"UPDATE {schema}.execution_algo_timer_occurrence "
+                "SET due_at_exchange_utc=due_at_exchange_utc + interval '1 second',"
+                "exchange_session_authority_sha256=reverse(exchange_session_authority_sha256) "
+                "WHERE timer_occurrence_id=%s",
+                (exact_occurrence.timer_occurrence_id,),
+                lambda: repository.list_recovery_timer_occurrences(
+                    runtime_id="runtime_k2",
+                    trade_date=date(2026, 7, 25),
+                    statuses=("CLAIMED",),
+                    limit=10,
+                ),
+                f"UPDATE {schema}.execution_algo_timer_occurrence "
+                "SET due_at_exchange_utc=%s,exchange_session_authority_sha256=%s WHERE timer_occurrence_id=%s",
+                (
+                    exact_occurrence.due_at_exchange_utc,
+                    exact_occurrence.exchange_session_authority_sha256,
+                    exact_occurrence.timer_occurrence_id,
+                ),
+            ),
             (
                 f"UPDATE {schema}.execution_algo_event_delivery SET row_version=row_version+1 WHERE delivery_id=%s",
                 (failed_delivery.delivery_id,),
                 lambda: repository.read_delivery(failed_delivery.delivery_id),
                 f"UPDATE {schema}.execution_algo_event_delivery SET row_version=row_version-1 WHERE delivery_id=%s",
+                (failed_delivery.delivery_id,),
             ),
             (
                 f"UPDATE {schema}.execution_algo_command_outbox SET row_version=row_version+1 WHERE command_id=%s",
                 (terminal_cancel.command_id,),
                 lambda: repository.read_outbox_command(terminal_cancel.command_id),
                 f"UPDATE {schema}.execution_algo_command_outbox SET row_version=row_version-1 WHERE command_id=%s",
+                (terminal_cancel.command_id,),
             ),
             (
                 f"UPDATE {schema}.execution_algo_instance SET row_version=row_version+1 WHERE algo_instance_id=%s",
                 (_algo_id(),),
                 lambda: repository.read_algo_instance(_algo_id()),
                 f"UPDATE {schema}.execution_algo_instance SET row_version=row_version-1 WHERE algo_instance_id=%s",
+                (_algo_id(),),
             ),
             (
                 f"UPDATE {schema}.execution_algo_command_dispatch_attempt "
@@ -1870,14 +2557,17 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 lambda: repository.read_dispatch_attempt(cancel_attempt.dispatch_attempt_id, "CLAIMED"),
                 f"UPDATE {schema}.execution_algo_command_dispatch_attempt "
                 "SET attempt_count=attempt_count-1 WHERE dispatch_attempt_id=%s AND stage='CLAIMED'",
+                (cancel_attempt.dispatch_attempt_id,),
             ),
             (
-                f"UPDATE {schema}.execution_algo_timer_occurrence SET row_version=row_version+1 "
+                f"UPDATE {schema}.execution_algo_timer_occurrence "
+                "SET occurrence_receipt_sha256=reverse(occurrence_receipt_sha256) "
                 "WHERE timer_occurrence_id=%s",
                 (tie_occurrence.timer_occurrence_id,),
                 lambda: repository.read_timer_occurrence(tie_occurrence.timer_occurrence_id),
-                f"UPDATE {schema}.execution_algo_timer_occurrence SET row_version=row_version-1 "
+                f"UPDATE {schema}.execution_algo_timer_occurrence SET occurrence_receipt_sha256=%s "
                 "WHERE timer_occurrence_id=%s",
+                (tie_occurrence.occurrence_receipt_sha256, tie_occurrence.timer_occurrence_id),
             ),
             (
                 f"UPDATE {schema}.execution_exchange_session_authority SET authority_sha256=%s "
@@ -1888,21 +2578,21 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 ),
                 f"UPDATE {schema}.execution_exchange_session_authority SET authority_sha256=%s "
                 "WHERE runtime_id=%s AND exchange_trade_date=%s",
+                (authority.authority_sha256, authority.runtime_id, date(2026, 7, 25)),
             ),
         )
-        for drift_sql, parameters, readback, restore_sql in scalar_drift_cases:
+        for drift_sql, parameters, readback, restore_sql, restore_parameters in scalar_drift_cases:
             with raw.cursor() as cur:
                 cur.execute(drift_sql, parameters)
             with pytest.raises(KernelRepositoryConflict):
                 readback()
-            restore_parameters = parameters
-            if "execution_exchange_session_authority" in restore_sql:
-                restore_parameters = (authority.authority_sha256, authority.runtime_id, date(2026, 7, 25))
             with raw.cursor() as cur:
                 cur.execute(restore_sql, restore_parameters)
     finally:
         raw.autocommit = True
         with raw.cursor() as cur:
+            for callback_schema in callback_schemas:
+                cur.execute(f"DROP SCHEMA IF EXISTS {callback_schema} CASCADE")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
             cur.execute(f"DROP SCHEMA IF EXISTS {incomplete_schema} CASCADE")
         raw.close()

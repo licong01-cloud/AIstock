@@ -245,7 +245,12 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_algo_command_dispatch_attempt 
     process_incarnation_id TEXT NOT NULL,
     started_at_utc TIMESTAMPTZ NOT NULL,
     finished_at_utc TIMESTAMPTZ,
+    pre_call_complete BOOLEAN NOT NULL,
     broker_called BOOLEAN,
+    outcome TEXT,
+    error_reason_code TEXT,
+    error_context_sha256 TEXT,
+    authority_receipt_sha256 TEXT,
     attempt_receipt_sha256 TEXT NOT NULL,
     carrier_json JSONB NOT NULL,
     CONSTRAINT pk_miniqmt_k2_dispatch_attempt PRIMARY KEY (dispatch_attempt_id, stage),
@@ -264,9 +269,13 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_algo_timer_schedule (
     timer_name TEXT NOT NULL,
     schedule_epoch TEXT NOT NULL,
     due_at_exchange_utc TIMESTAMPTZ NOT NULL,
+    catch_up_policy TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    payload_sha256 TEXT NOT NULL,
     status TEXT NOT NULL,
     timer_occurrence_id TEXT NOT NULL,
     emitted_event_id TEXT,
+    catch_up_receipt_sha256 TEXT,
     lease_owner TEXT,
     lease_worker_id TEXT,
     lease_process_incarnation_id TEXT,
@@ -324,6 +333,29 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_algo_timer_occurrence (
     ),
     CONSTRAINT ck_miniqmt_k2_timer_occurrence_receipt CHECK (exchange_session_authority_sha256 ~ '^[0-9a-f]{64}$' AND occurrence_receipt_sha256 ~ '^[0-9a-f]{64}$')
 );
+
+ALTER TABLE qmt_strategy.execution_algo_command_dispatch_attempt
+    ADD COLUMN IF NOT EXISTS pre_call_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS outcome TEXT,
+    ADD COLUMN IF NOT EXISTS error_reason_code TEXT,
+    ADD COLUMN IF NOT EXISTS error_context_sha256 TEXT,
+    ADD COLUMN IF NOT EXISTS authority_receipt_sha256 TEXT;
+
+ALTER TABLE qmt_strategy.execution_algo_command_dispatch_attempt
+    ALTER COLUMN pre_call_complete DROP DEFAULT;
+
+ALTER TABLE qmt_strategy.execution_algo_timer_schedule
+    ADD COLUMN IF NOT EXISTS catch_up_policy TEXT NOT NULL DEFAULT 'EXPIRE_IF_LATE',
+    ADD COLUMN IF NOT EXISTS payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS payload_sha256 TEXT NOT NULL DEFAULT repeat('0', 64);
+
+ALTER TABLE qmt_strategy.execution_algo_timer_schedule
+    ALTER COLUMN catch_up_policy DROP DEFAULT,
+    ALTER COLUMN payload_json DROP DEFAULT,
+    ALTER COLUMN payload_sha256 DROP DEFAULT;
+
+ALTER TABLE qmt_strategy.execution_algo_timer_occurrence
+    ADD COLUMN IF NOT EXISTS catch_up_receipt_sha256 TEXT;
 
 CREATE TABLE IF NOT EXISTS qmt_strategy.execution_exchange_session_authority (
     runtime_id TEXT NOT NULL,
@@ -550,6 +582,60 @@ BEGIN
         ALTER TABLE qmt_strategy.execution_algo_diagnostic_observation ADD CONSTRAINT fk_miniqmt_k2_diagnostic_transition_owner
             FOREIGN KEY (runtime_id,algo_instance_id,transition_id) REFERENCES qmt_strategy.execution_algo_transition(runtime_id,algo_instance_id,transition_id) DEFERRABLE INITIALLY DEFERRED NOT VALID;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_miniqmt_k2_delivery_initial' AND conrelid = 'qmt_strategy.execution_algo_event_delivery'::regclass) THEN
+        ALTER TABLE qmt_strategy.execution_algo_event_delivery ADD CONSTRAINT ck_miniqmt_k2_delivery_initial CHECK (
+            status <> 'PENDING' OR (
+                attempt_count=0 AND lease_epoch=0 AND row_version=1
+                AND lease_owner IS NULL AND lease_worker_id IS NULL AND lease_process_incarnation_id IS NULL
+                AND lease_fence_token IS NULL AND lease_expires_at IS NULL AND transition_id IS NULL
+                AND last_error_json IS NULL AND next_attempt_at_utc IS NULL AND failure_receipt_id IS NULL
+                AND skip_receipt_id IS NULL AND closed_at_utc IS NULL AND created_at_utc=updated_at_utc
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_miniqmt_k2_child_mapping_initial' AND conrelid = 'qmt_strategy.execution_child_order'::regclass) THEN
+        ALTER TABLE qmt_strategy.execution_child_order ADD CONSTRAINT ck_miniqmt_k2_child_mapping_initial CHECK (
+            kernel_contract_version <> 'KERNEL_V2' OR mapping_status <> 'RESERVED' OR (
+                mapping_version=1 AND broker_order_id IS NULL AND broker_identity_source_event_id IS NULL
+                AND last_order_event_id IS NULL AND last_trade_event_id IS NULL AND updated_by_event_id IS NULL
+                AND mapping_created_at_utc=mapping_updated_at_utc
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_miniqmt_k2_outbox_initial' AND conrelid = 'qmt_strategy.execution_algo_command_outbox'::regclass) THEN
+        ALTER TABLE qmt_strategy.execution_algo_command_outbox ADD CONSTRAINT ck_miniqmt_k2_outbox_initial CHECK (
+            status <> 'PENDING' OR (
+                attempt_count=0 AND lease_epoch=0 AND row_version=1
+                AND lease_owner IS NULL AND lease_worker_id IS NULL AND lease_process_incarnation_id IS NULL
+                AND lease_fence_token IS NULL AND lease_expires_at IS NULL AND dispatch_attempt_id IS NULL
+                AND next_attempt_at_utc IS NULL AND broker_called IS NULL AND broker_order_id IS NULL
+                AND ack_receipt_json IS NULL AND ack_receipt_sha256 IS NULL
+                AND non_acceptance_receipt_json IS NULL AND unknown_outcome_receipt_json IS NULL
+                AND reconcile_receipt_json IS NULL AND last_error_json IS NULL AND closed_at_utc IS NULL
+                AND created_at_utc=updated_at_utc
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_miniqmt_k2_timer_schedule_initial' AND conrelid = 'qmt_strategy.execution_algo_timer_schedule'::regclass) THEN
+        ALTER TABLE qmt_strategy.execution_algo_timer_schedule ADD CONSTRAINT ck_miniqmt_k2_timer_schedule_initial CHECK (
+            status <> 'SCHEDULED' OR (
+                lease_epoch=0 AND row_version=1 AND emitted_event_id IS NULL AND lease_owner IS NULL
+                AND lease_worker_id IS NULL AND lease_process_incarnation_id IS NULL
+                AND lease_fence_token IS NULL AND lease_expires_at_utc IS NULL AND closed_at_utc IS NULL
+                AND created_at_utc=updated_at_utc
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_miniqmt_k2_timer_occurrence_initial' AND conrelid = 'qmt_strategy.execution_algo_timer_occurrence'::regclass) THEN
+        ALTER TABLE qmt_strategy.execution_algo_timer_occurrence ADD CONSTRAINT ck_miniqmt_k2_timer_occurrence_initial CHECK (
+            status <> 'CLAIMED' OR (
+                lease_epoch=1 AND row_version=1 AND emitted_event_id IS NULL
+                AND catch_up_receipt_sha256 IS NULL AND lease_owner IS NOT NULL
+                AND lease_worker_id IS NOT NULL AND lease_process_incarnation_id IS NOT NULL
+                AND lease_fence_token IS NOT NULL AND lease_expires_at_utc IS NOT NULL AND closed_at_utc IS NULL
+            )
+        ) NOT VALID;
+    END IF;
 END $$;
 
 CREATE OR REPLACE FUNCTION qmt_strategy.miniqmt_k2_catalog_fingerprint()
@@ -723,15 +809,192 @@ ALTER TABLE qmt_strategy.execution_algo_timer_schedule VALIDATE CONSTRAINT fk_mi
 ALTER TABLE qmt_strategy.execution_exchange_session_authority VALIDATE CONSTRAINT fk_miniqmt_k2_exchange_session_runtime;
 ALTER TABLE qmt_strategy.execution_algo_diagnostic_observation VALIDATE CONSTRAINT fk_miniqmt_k2_diagnostic_event_owner;
 ALTER TABLE qmt_strategy.execution_algo_diagnostic_observation VALIDATE CONSTRAINT fk_miniqmt_k2_diagnostic_transition_owner;
+ALTER TABLE qmt_strategy.execution_algo_event_delivery VALIDATE CONSTRAINT ck_miniqmt_k2_delivery_initial;
+ALTER TABLE qmt_strategy.execution_child_order VALIDATE CONSTRAINT ck_miniqmt_k2_child_mapping_initial;
+ALTER TABLE qmt_strategy.execution_algo_command_outbox VALIDATE CONSTRAINT ck_miniqmt_k2_outbox_initial;
+ALTER TABLE qmt_strategy.execution_algo_timer_schedule VALIDATE CONSTRAINT ck_miniqmt_k2_timer_schedule_initial;
+ALTER TABLE qmt_strategy.execution_algo_timer_occurrence VALIDATE CONSTRAINT ck_miniqmt_k2_timer_occurrence_initial;
 
 DO $$
 DECLARE
     actual_catalog_sha256 TEXT;
 BEGIN
-    SELECT qmt_strategy.miniqmt_k2_catalog_fingerprint() INTO actual_catalog_sha256;
-    IF actual_catalog_sha256 <> 'c9d5f192eb4522f54519c8e0c63540218c2674155471c1455c3150bea7a809c4' THEN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_proc AS function_record
+        JOIN pg_namespace AS function_schema ON function_schema.oid=function_record.pronamespace
+        JOIN pg_language AS function_language ON function_language.oid=function_record.prolang
+        WHERE function_record.oid=to_regprocedure('qmt_strategy.miniqmt_k2_catalog_fingerprint()')
+          AND function_language.lanname='sql'
+          AND function_record.provolatile='s'
+          AND pg_get_function_arguments(function_record.oid)=''
+          AND pg_get_function_result(function_record.oid)='text'
+          AND encode(
+                sha256(
+                    convert_to(
+                        btrim(
+                            replace(function_record.prosrc,function_schema.nspname,'<schema>'),
+                            E' \n\r\t;'
+                        ),
+                        'UTF8'
+                    )
+                ),
+                'hex'
+              )='8d9c8b09b5c27a0b0caeeaea3663556b9876b0eea179057d691bbf2fce29c107'
+    ) THEN
+        RAISE EXCEPTION 'K2 catalog function drift';
+    END IF;
+    WITH target_tables(relname) AS (
+        VALUES
+            ('execution_kernel_worker_epoch'),
+            ('execution_kernel_worker_incarnation'),
+            ('execution_algo_event_delivery'),
+            ('execution_algo_transition'),
+            ('execution_algo_command_outbox'),
+            ('execution_algo_command_dispatch_attempt'),
+            ('execution_algo_timer_schedule'),
+            ('execution_algo_timer_occurrence'),
+            ('execution_exchange_session_authority'),
+            ('execution_algo_diagnostic_observation')
+    ), additive_columns(relname,attname) AS (
+        VALUES
+            ('execution_runtime','runtime_id'),
+            ('execution_runtime','trade_date'),
+            ('execution_runtime_event','event_contract_version'),
+            ('execution_runtime_event','event_schema_version'),
+            ('execution_runtime_event','payload_schema_version'),
+            ('execution_runtime_event','event_key_sha256'),
+            ('execution_runtime_event','payload_sha256'),
+            ('execution_runtime_event','observed_at_utc'),
+            ('execution_runtime_event','logical_at_utc'),
+            ('execution_runtime_event','source_identity_json'),
+            ('execution_runtime_event','correlation_json'),
+            ('execution_runtime_event','ingress_receipt_json'),
+            ('execution_runtime_event','ingress_receipt_sha256'),
+            ('execution_runtime_event','routing_rule_version'),
+            ('execution_runtime_event','transaction_commit_identity'),
+            ('execution_algo_instance','kernel_contract_version'),
+            ('execution_algo_instance','traded_quantity'),
+            ('execution_algo_instance','plugin_id'),
+            ('execution_algo_instance','plugin_version'),
+            ('execution_algo_instance','plugin_manifest_sha256'),
+            ('execution_algo_instance','plugin_config_json'),
+            ('execution_algo_instance','plugin_config_sha256'),
+            ('execution_algo_instance','compatibility_receipt_sha256'),
+            ('execution_algo_instance','state_schema_version'),
+            ('execution_algo_instance','state_json'),
+            ('execution_algo_instance','state_sha256'),
+            ('execution_algo_instance','transition_sequence'),
+            ('execution_algo_instance','last_applied_delivery_sequence'),
+            ('execution_algo_instance','last_applied_delivery_id'),
+            ('execution_algo_instance','last_closed_delivery_sequence'),
+            ('execution_algo_instance','terminal_delivery_sequence'),
+            ('execution_algo_instance','failure_receipt_id'),
+            ('execution_algo_instance','active_child_closure_status'),
+            ('execution_algo_instance','active_child_count'),
+            ('execution_algo_instance','row_version'),
+            ('execution_algo_instance','terminal_at_utc'),
+            ('execution_algo_instance','kernel_carrier_json'),
+            ('execution_child_order','kernel_contract_version'),
+            ('execution_child_order','mapping_id'),
+            ('execution_child_order','command_id'),
+            ('execution_child_order','local_vt_orderid'),
+            ('execution_child_order','deterministic_client_order_ref'),
+            ('execution_child_order','order_remark'),
+            ('execution_child_order','mapping_status'),
+            ('execution_child_order','mapping_version'),
+            ('execution_child_order','mapping_payload_sha256'),
+            ('execution_child_order','mapping_receipt_sha256'),
+            ('execution_child_order','broker_identity_source_event_id'),
+            ('execution_child_order','last_order_event_id'),
+            ('execution_child_order','last_trade_event_id'),
+            ('execution_child_order','created_transition_id'),
+            ('execution_child_order','updated_by_event_id'),
+            ('execution_child_order','mapping_created_at_utc'),
+            ('execution_child_order','mapping_updated_at_utc'),
+            ('execution_child_order','mapping_json')
+    ), catalog_items(sort_key,item) AS (
+        SELECT
+            format('column:%s:%05s', table_class.relname, attribute.attnum),
+            jsonb_build_array(
+                'column', table_class.relname, attribute.attname,
+                format_type(attribute.atttypid, attribute.atttypmod),
+                attribute.attnotnull,
+                coalesce(pg_get_expr(attribute_default.adbin, attribute_default.adrelid), '')
+            )
+        FROM pg_class AS table_class
+        JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+        JOIN pg_attribute AS attribute
+          ON attribute.attrelid=table_class.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
+        LEFT JOIN pg_attrdef AS attribute_default
+          ON attribute_default.adrelid=table_class.oid AND attribute_default.adnum=attribute.attnum
+        WHERE table_schema.nspname='qmt_strategy'
+          AND (
+              table_class.relname IN (SELECT relname FROM target_tables)
+              OR (table_class.relname,attribute.attname) IN (SELECT relname,attname FROM additive_columns)
+          )
+
+        UNION ALL
+
+        SELECT
+            format('constraint:%s:%s', table_class.relname, constraint_record.conname),
+            jsonb_build_array(
+                'constraint', table_class.relname, constraint_record.conname,
+                constraint_record.contype, constraint_record.condeferrable,
+                constraint_record.condeferred, constraint_record.convalidated,
+                replace(
+                    pg_get_constraintdef(constraint_record.oid, true),
+                    table_schema.nspname || '.', '<schema>.'
+                )
+            )
+        FROM pg_constraint AS constraint_record
+        JOIN pg_class AS table_class ON table_class.oid=constraint_record.conrelid
+        JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+        WHERE table_schema.nspname='qmt_strategy'
+          AND (
+              table_class.relname IN (SELECT relname FROM target_tables)
+              OR constraint_record.conname LIKE '%miniqmt_k2%'
+          )
+
+        UNION ALL
+
+        SELECT
+            format('index:%s:%s', table_class.relname, index_class.relname),
+            jsonb_build_array(
+                'index', table_class.relname, index_class.relname,
+                index_record.indisunique, index_record.indisprimary,
+                index_record.indisvalid, index_record.indisready,
+                replace(
+                    pg_get_indexdef(index_record.indexrelid, 0, true),
+                    table_schema.nspname || '.', '<schema>.'
+                ),
+                coalesce(
+                    replace(
+                        pg_get_expr(index_record.indpred, index_record.indrelid, true),
+                        table_schema.nspname || '.', '<schema>.'
+                    ),
+                    ''
+                )
+            )
+        FROM pg_index AS index_record
+        JOIN pg_class AS table_class ON table_class.oid=index_record.indrelid
+        JOIN pg_class AS index_class ON index_class.oid=index_record.indexrelid
+        JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+        WHERE table_schema.nspname='qmt_strategy'
+          AND (
+              table_class.relname IN (SELECT relname FROM target_tables)
+              OR index_class.relname LIKE '%miniqmt_k2%'
+          )
+    ), canonical_catalog AS (
+        SELECT coalesce(jsonb_agg(item ORDER BY sort_key), '[]'::jsonb)::TEXT AS payload
+        FROM catalog_items
+    )
+    SELECT encode(sha256(convert_to(payload, 'UTF8')), 'hex')
+    INTO actual_catalog_sha256
+    FROM canonical_catalog;
+    IF actual_catalog_sha256 <> '6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762' THEN
         RAISE EXCEPTION 'K2 schema catalog drift: expected %, got %',
-            'c9d5f192eb4522f54519c8e0c63540218c2674155471c1455c3150bea7a809c4',
+            '6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762',
             actual_catalog_sha256;
     END IF;
 END $$;
@@ -849,6 +1112,205 @@ END $$;
 COMMIT;
 
 -- Independent readback: callers must verify these rows after every migration stage.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_proc AS function_record
+        JOIN pg_namespace AS function_schema ON function_schema.oid=function_record.pronamespace
+        JOIN pg_language AS function_language ON function_language.oid=function_record.prolang
+        WHERE function_record.oid=to_regprocedure('qmt_strategy.miniqmt_k2_catalog_fingerprint()')
+          AND function_language.lanname='sql'
+          AND function_record.provolatile='s'
+          AND pg_get_function_arguments(function_record.oid)=''
+          AND pg_get_function_result(function_record.oid)='text'
+          AND encode(
+                sha256(
+                    convert_to(
+                        btrim(
+                            replace(function_record.prosrc,function_schema.nspname,'<schema>'),
+                            E' \n\r\t;'
+                        ),
+                        'UTF8'
+                    )
+                ),
+                'hex'
+              )='8d9c8b09b5c27a0b0caeeaea3663556b9876b0eea179057d691bbf2fce29c107'
+    ) THEN
+        RAISE EXCEPTION 'K2 post-commit catalog function drift';
+    END IF;
+END $$;
+
+SELECT
+    function_language.lanname AS independently_read_function_language,
+    function_record.provolatile AS independently_read_function_volatility,
+    pg_get_function_arguments(function_record.oid) AS independently_read_function_arguments,
+    pg_get_function_result(function_record.oid) AS independently_read_function_result,
+    encode(
+        sha256(
+            convert_to(
+                btrim(
+                    replace(function_record.prosrc,function_schema.nspname,'<schema>'),
+                    E' \n\r\t;'
+                ),
+                'UTF8'
+            )
+        ),
+        'hex'
+    ) AS independently_recomputed_catalog_function_body_sha256
+FROM pg_proc AS function_record
+JOIN pg_namespace AS function_schema ON function_schema.oid=function_record.pronamespace
+JOIN pg_language AS function_language ON function_language.oid=function_record.prolang
+WHERE function_record.oid=to_regprocedure('qmt_strategy.miniqmt_k2_catalog_fingerprint()');
+
+WITH target_tables(relname) AS (
+    VALUES
+        ('execution_kernel_worker_epoch'),
+        ('execution_kernel_worker_incarnation'),
+        ('execution_algo_event_delivery'),
+        ('execution_algo_transition'),
+        ('execution_algo_command_outbox'),
+        ('execution_algo_command_dispatch_attempt'),
+        ('execution_algo_timer_schedule'),
+        ('execution_algo_timer_occurrence'),
+        ('execution_exchange_session_authority'),
+        ('execution_algo_diagnostic_observation')
+), additive_columns(relname,attname) AS (
+    VALUES
+        ('execution_runtime','runtime_id'),
+        ('execution_runtime','trade_date'),
+        ('execution_runtime_event','event_contract_version'),
+        ('execution_runtime_event','event_schema_version'),
+        ('execution_runtime_event','payload_schema_version'),
+        ('execution_runtime_event','event_key_sha256'),
+        ('execution_runtime_event','payload_sha256'),
+        ('execution_runtime_event','observed_at_utc'),
+        ('execution_runtime_event','logical_at_utc'),
+        ('execution_runtime_event','source_identity_json'),
+        ('execution_runtime_event','correlation_json'),
+        ('execution_runtime_event','ingress_receipt_json'),
+        ('execution_runtime_event','ingress_receipt_sha256'),
+        ('execution_runtime_event','routing_rule_version'),
+        ('execution_runtime_event','transaction_commit_identity'),
+        ('execution_algo_instance','kernel_contract_version'),
+        ('execution_algo_instance','traded_quantity'),
+        ('execution_algo_instance','plugin_id'),
+        ('execution_algo_instance','plugin_version'),
+        ('execution_algo_instance','plugin_manifest_sha256'),
+        ('execution_algo_instance','plugin_config_json'),
+        ('execution_algo_instance','plugin_config_sha256'),
+        ('execution_algo_instance','compatibility_receipt_sha256'),
+        ('execution_algo_instance','state_schema_version'),
+        ('execution_algo_instance','state_json'),
+        ('execution_algo_instance','state_sha256'),
+        ('execution_algo_instance','transition_sequence'),
+        ('execution_algo_instance','last_applied_delivery_sequence'),
+        ('execution_algo_instance','last_applied_delivery_id'),
+        ('execution_algo_instance','last_closed_delivery_sequence'),
+        ('execution_algo_instance','terminal_delivery_sequence'),
+        ('execution_algo_instance','failure_receipt_id'),
+        ('execution_algo_instance','active_child_closure_status'),
+        ('execution_algo_instance','active_child_count'),
+        ('execution_algo_instance','row_version'),
+        ('execution_algo_instance','terminal_at_utc'),
+        ('execution_algo_instance','kernel_carrier_json'),
+        ('execution_child_order','kernel_contract_version'),
+        ('execution_child_order','mapping_id'),
+        ('execution_child_order','command_id'),
+        ('execution_child_order','local_vt_orderid'),
+        ('execution_child_order','deterministic_client_order_ref'),
+        ('execution_child_order','order_remark'),
+        ('execution_child_order','mapping_status'),
+        ('execution_child_order','mapping_version'),
+        ('execution_child_order','mapping_payload_sha256'),
+        ('execution_child_order','mapping_receipt_sha256'),
+        ('execution_child_order','broker_identity_source_event_id'),
+        ('execution_child_order','last_order_event_id'),
+        ('execution_child_order','last_trade_event_id'),
+        ('execution_child_order','created_transition_id'),
+        ('execution_child_order','updated_by_event_id'),
+        ('execution_child_order','mapping_created_at_utc'),
+        ('execution_child_order','mapping_updated_at_utc'),
+        ('execution_child_order','mapping_json')
+), catalog_items(sort_key,item) AS (
+    SELECT
+        format('column:%s:%05s', table_class.relname, attribute.attnum),
+        jsonb_build_array(
+            'column', table_class.relname, attribute.attname,
+            format_type(attribute.atttypid, attribute.atttypmod),
+            attribute.attnotnull,
+            coalesce(pg_get_expr(attribute_default.adbin, attribute_default.adrelid), '')
+        )
+    FROM pg_class AS table_class
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    JOIN pg_attribute AS attribute
+      ON attribute.attrelid=table_class.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    LEFT JOIN pg_attrdef AS attribute_default
+      ON attribute_default.adrelid=table_class.oid AND attribute_default.adnum=attribute.attnum
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR (table_class.relname,attribute.attname) IN (SELECT relname,attname FROM additive_columns)
+      )
+
+    UNION ALL
+
+    SELECT
+        format('constraint:%s:%s', table_class.relname, constraint_record.conname),
+        jsonb_build_array(
+            'constraint', table_class.relname, constraint_record.conname,
+            constraint_record.contype, constraint_record.condeferrable,
+            constraint_record.condeferred, constraint_record.convalidated,
+            replace(
+                pg_get_constraintdef(constraint_record.oid, true),
+                table_schema.nspname || '.', '<schema>.'
+            )
+        )
+    FROM pg_constraint AS constraint_record
+    JOIN pg_class AS table_class ON table_class.oid=constraint_record.conrelid
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR constraint_record.conname LIKE '%miniqmt_k2%'
+      )
+
+    UNION ALL
+
+    SELECT
+        format('index:%s:%s', table_class.relname, index_class.relname),
+        jsonb_build_array(
+            'index', table_class.relname, index_class.relname,
+            index_record.indisunique, index_record.indisprimary,
+            index_record.indisvalid, index_record.indisready,
+            replace(
+                pg_get_indexdef(index_record.indexrelid, 0, true),
+                table_schema.nspname || '.', '<schema>.'
+            ),
+            coalesce(
+                replace(
+                    pg_get_expr(index_record.indpred, index_record.indrelid, true),
+                    table_schema.nspname || '.', '<schema>.'
+                ),
+                ''
+            )
+        )
+    FROM pg_index AS index_record
+    JOIN pg_class AS table_class ON table_class.oid=index_record.indrelid
+    JOIN pg_class AS index_class ON index_class.oid=index_record.indexrelid
+    JOIN pg_namespace AS table_schema ON table_schema.oid=table_class.relnamespace
+    WHERE table_schema.nspname='qmt_strategy'
+      AND (
+          table_class.relname IN (SELECT relname FROM target_tables)
+          OR index_class.relname LIKE '%miniqmt_k2%'
+      )
+), canonical_catalog AS (
+    SELECT coalesce(jsonb_agg(item ORDER BY sort_key), '[]'::jsonb)::TEXT AS payload
+    FROM catalog_items
+)
+SELECT encode(sha256(convert_to(payload, 'UTF8')), 'hex') AS independently_recomputed_schema_catalog_sha256
+FROM canonical_catalog;
+
 SELECT
     to_regclass('qmt_strategy.execution_algo_event_delivery') IS NOT NULL AS delivery_ready,
     to_regclass('qmt_strategy.execution_algo_transition') IS NOT NULL AS transition_ready,

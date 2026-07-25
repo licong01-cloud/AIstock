@@ -2859,6 +2859,30 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
             raise ValueError("delivery completion must preserve the claimed lease epoch")
         return self
 
+    def validate_initial_v1(self) -> Self:
+        if self.status is not DeliveryStatusV1.PENDING:
+            raise ValueError("initial delivery must be PENDING")
+        if self.attempt_count != 0 or self.lease_epoch != 0 or self.row_version != 1:
+            raise ValueError("initial PENDING delivery must start at attempt=0, lease_epoch=0 and row_version=1")
+        if any(
+            value is not None
+            for value in (
+                self.lease_owner,
+                self.lease_expires_at,
+                self.lease_fence_token,
+                self.transition_id,
+                self.last_error_json,
+                self.next_attempt_at_utc,
+                self.failure_receipt_id,
+                self.skip_receipt_id,
+                self.closed_at_utc,
+            )
+        ):
+            raise ValueError("initial PENDING delivery cannot carry lease or outcome history")
+        if self.created_at_utc != self.updated_at_utc:
+            raise ValueError("initial PENDING delivery timestamps must be equal")
+        return self
+
     @model_validator(mode="after")
     def _validate_persistence(self) -> Self:
         expected_id = _delivery_id_v1(
@@ -2927,6 +2951,8 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
             )
         if self.updated_at_utc < self.created_at_utc:
             raise ValueError("updated_at_utc cannot precede created_at_utc")
+        if self.status is DeliveryStatusV1.PENDING:
+            self.validate_initial_v1()
         return self
 
 
@@ -3946,6 +3972,26 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
             raise ValueError("illegal command-child mapping status transition")
         return self
 
+    def validate_initial_v1(self) -> Self:
+        if self.mapping_status is not CommandChildMappingStatusV1.RESERVED:
+            raise ValueError("initial mapping must be RESERVED")
+        if self.mapping_version != 1:
+            raise ValueError("initial RESERVED mapping must start at mapping_version=1")
+        if any(
+            value is not None
+            for value in (
+                self.broker_order_id,
+                self.broker_identity_source_event_id,
+                self.last_order_event_id,
+                self.last_trade_event_id,
+                self.updated_by_event_id,
+            )
+        ):
+            raise ValueError("initial RESERVED mapping cannot carry broker or event lineage")
+        if self.created_at_utc != self.updated_at_utc:
+            raise ValueError("initial RESERVED mapping timestamps must be equal")
+        return self
+
     @model_validator(mode="after")
     def _validate_mapping(self) -> Self:
         expected_child = execution_child_order_id_v1(command_id=self.command_id, local_vt_orderid=self.local_vt_orderid)
@@ -3979,6 +4025,8 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
         )
         if self.mapping_receipt_sha256 != expected_receipt:
             raise ValueError("mapping_receipt_sha256 does not match mapping closure")
+        if self.mapping_status is CommandChildMappingStatusV1.RESERVED:
+            self.validate_initial_v1()
         return self
 
 
@@ -4128,6 +4176,35 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
             raise ValueError("outbox completion must preserve the claimed lease epoch")
         return self
 
+    def validate_initial_v1(self) -> Self:
+        if self.status is not BrokerCommandOutboxStatusV1.PENDING:
+            raise ValueError("initial outbox must be PENDING")
+        if self.attempt_count != 0 or self.lease_epoch != 0 or self.row_version != 1:
+            raise ValueError("initial PENDING outbox must start at attempt=0, lease_epoch=0 and row_version=1")
+        if any(
+            value is not None
+            for value in (
+                self.lease_owner,
+                self.lease_fence_token,
+                self.lease_expires_at,
+                self.dispatch_attempt_id,
+                self.next_attempt_at_utc,
+                self.broker_called,
+                self.broker_order_id,
+                self.ack_receipt_json,
+                self.ack_receipt_sha256,
+                self.non_acceptance_receipt,
+                self.unknown_outcome_receipt,
+                self.reconcile_receipt,
+                self.last_error_json,
+                self.closed_at_utc,
+            )
+        ):
+            raise ValueError("initial PENDING outbox cannot carry lease, dispatch or broker outcome history")
+        if self.created_at_utc != self.updated_at_utc:
+            raise ValueError("initial PENDING outbox timestamps must be equal")
+        return self
+
     @model_validator(mode="after")
     def _validate_outbox(self) -> Self:
         command = BrokerCommandV2.model_validate_json(
@@ -4228,6 +4305,8 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         )
         if self.outbox_row_sha256 != expected_hash:
             raise ValueError("outbox_row_sha256 does not match current strict row")
+        if self.status is BrokerCommandOutboxStatusV1.PENDING:
+            self.validate_initial_v1()
         return self
 
 
@@ -4350,6 +4429,26 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
             raise ValueError("timer schedule completion must preserve the claimed lease epoch")
         return self
 
+    def validate_initial_v1(self) -> Self:
+        if self.status is not ExecutionAlgoTimerScheduleStatusV1.SCHEDULED:
+            raise ValueError("initial timer schedule must be SCHEDULED")
+        if self.lease_epoch != 0 or self.row_version != 1:
+            raise ValueError("initial SCHEDULED timer must start at lease_epoch=0 and row_version=1")
+        if any(
+            value is not None
+            for value in (
+                self.emitted_event_id,
+                self.lease_owner,
+                self.lease_fence_token,
+                self.lease_expires_at_utc,
+                self.closed_at_utc,
+            )
+        ):
+            raise ValueError("initial SCHEDULED timer cannot carry lease or outcome history")
+        if self.created_at_utc != self.updated_at_utc:
+            raise ValueError("initial SCHEDULED timer timestamps must be equal")
+        return self
+
     @model_validator(mode="after")
     def _validate_schedule(self) -> Self:
         expected_schedule = _timer_schedule_id_v1(
@@ -4403,6 +4502,8 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
         )
         if self.schedule_receipt_sha256 != expected_hash:
             raise ValueError("schedule_receipt_sha256 does not match timer schedule closure")
+        if self.status is ExecutionAlgoTimerScheduleStatusV1.SCHEDULED:
+            self.validate_initial_v1()
         return self
 
 
@@ -4479,6 +4580,15 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
             raise ValueError("timer occurrence completion must preserve the claimed lease epoch")
         return self
 
+    def validate_initial_v1(self) -> Self:
+        if self.status is not ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
+            raise ValueError("initial timer occurrence must be CLAIMED")
+        if self.lease_epoch != 1 or self.row_version != 1:
+            raise ValueError("initial CLAIMED occurrence must start at lease_epoch=1 and row_version=1")
+        if self.lease_owner is None or self.lease_fence_token is None or self.lease_expires_at_utc is None:
+            raise ValueError("initial CLAIMED occurrence requires an exact active fence")
+        return self
+
     @model_validator(mode="after")
     def _validate_occurrence(self) -> Self:
         expected = _timer_occurrence_id_v1(
@@ -4516,6 +4626,8 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
         )
         if self.occurrence_receipt_sha256 != expected_hash:
             raise ValueError("occurrence_receipt_sha256 does not match timer occurrence closure")
+        if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
+            self.validate_initial_v1()
         return self
 
 

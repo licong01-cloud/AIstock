@@ -6,15 +6,15 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration七项正式审核补修已完成本地source、direct/DEV PostgreSQL、coverage、classifier/L2/L0/F2与required CI run `30162089997`闭环，当前为`implemented_verified`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_user_authorization`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration 七项首轮审核补修后，第二轮独立复审新增 initial-state、CANCEL ACK→later callback、complete scalar/carrier projection、code-owned independent catalog fingerprint 四项阻断，当前为`review_fix_in_progress`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_review_fix`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`implemented_verified`，K2-B/C/D=`not_started`。K2-A PR #2729 review-fix required CI run `30162089997`已全绿，source merge仍待用户授权；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`review_fix_in_progress`，K2-B/C/D=`not_started`。第二轮 source 与 direct/DEV targeted 已转绿，classifier/F2/DESIGN-COMPLIANCE/required CI 正在闭合，source merge保持 pending review fix；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's seven formal-review blockers are closed with replacement RED/GREEN, DEV PostgreSQL, coverage, classifier, MiniQMT/Paper module plans, F2/L0 and required CI run `30162089997`. K2-A is `implemented_verified`; source merge remains pending user authorization, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's second-review fixes enforce exact initial facts, immutable terminal CANCEL outbox with later callback mapping/algo closure, complete carrier/scalar projection readback, and code-owned independent `pg_catalog` proof. K2-A remains `review_fix_in_progress`; source merge remains `pending_review_fix`, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -651,7 +651,7 @@ DDL 文件名、实际表 schema 和已有 constraint 必须在开发 issue 的 
 6. rollback migration test；
 7. independent connection production-style readback。
 
-K2-A migration/repository preflight共用DB内`miniqmt_k2_catalog_fingerprint()`，精确覆盖全部K2 table、additive column type/null/default、CHECK/FK/UNIQUE/index/predicate/deferrability/validation与enum集合；forward SHA-256由preflight committed checksum固定。writer事务commit后使用独立连接按business identity回读strict carrier和关键scalar，commit-return unknown只允许只读确认，不返回成功或重做broker side effect。
+K2-A expected catalog projection/hash由代码和committed SQL拥有；preflight、forward transaction、COMMIT后readback与repository preflight均直接查询并canonicalize `pg_catalog`，同时严格验证兼容 helper 的function definition/language/volatility/signature，mutable DB helper不再能自证READY。writer事务commit后使用独立连接按business identity重建完整carrier-to-scalar pure projection；recovery先列identity再逐行调用exact readback，commit-return unknown只允许只读确认，不返回成功或重做broker side effect。
 
 不要求执行数据库导出、快照或新增测试数据库。生产 DDL 必须与 source merge 分开，经用户明确授权后执行。
 

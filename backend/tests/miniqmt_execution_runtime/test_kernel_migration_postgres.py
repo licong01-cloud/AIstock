@@ -35,6 +35,13 @@ def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> No
     assert "NOT VALID" in forward
     assert "VALIDATE CONSTRAINT" in forward
     assert "COMMENT ON TABLE" in forward
+    assert "IF qmt_strategy.miniqmt_k2_catalog_fingerprint()" not in preflight
+    assert "SELECT qmt_strategy.miniqmt_k2_catalog_fingerprint() INTO actual_catalog_sha256" not in forward
+    assert "independently_recomputed_schema_catalog_sha256" in forward
+    assert "independently_recomputed_catalog_function_body_sha256" in forward
+    assert "K2 post-commit catalog function drift" in forward
+    assert preflight.count("FROM pg_index AS index_record") >= 1
+    assert forward.count("FROM pg_index AS index_record") >= 3
     assert "ack_receipt_json JSONB" in forward
     assert "non_acceptance_receipt_json JSONB" in forward
     assert "unknown_outcome_receipt_json JSONB" in forward
@@ -470,5 +477,130 @@ def test_k2_preflight_and_forward_reject_exact_catalog_drift_on_dev_postgres(dri
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+@pytest.mark.parametrize("with_schema_drift", (False, True), ids=("function_only", "function_and_schema"))
+def test_k2_preflight_rejects_forged_constant_catalog_function_on_dev_postgres(
+    with_schema_drift: bool,
+) -> None:
+    schema = _fixture_schema()
+    preflight = PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    forward = FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            cur.execute(preflight)
+            _apply_forward(cur, forward)
+            if with_schema_drift:
+                cur.execute(
+                    f"ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP DEFAULT"
+                )
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2_catalog_fingerprint()
+                RETURNS TEXT LANGUAGE SQL STABLE
+                AS $forged$ SELECT '6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762'::TEXT $forged$
+                """
+            )
+            with pytest.raises(psycopg2.Error, match="catalog (function|schema) drift"):
+                cur.execute(preflight)
+            cur.execute("ROLLBACK")
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_k2_migration_initial_state_checks_reject_forged_history_on_dev_postgres() -> None:
+    schema = _fixture_schema()
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            _insert_valid_k2_constraint_graph(cur, schema)
+            sha = "a" * 64
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_delivery_initial"):
+                cur.execute(
+                    f"""
+                    UPDATE {schema}.execution_algo_event_delivery
+                    SET status='PENDING',attempt_count=7,lease_epoch=99,row_version=12,
+                        transition_id=NULL,last_error_json=NULL,next_attempt_at_utc=NULL,
+                        failure_receipt_id=NULL,skip_receipt_id=NULL,closed_at_utc=NULL
+                    WHERE delivery_id='delivery_constraints'
+                    """
+                )
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_child_mapping_initial"):
+                cur.execute(
+                    f"UPDATE {schema}.execution_child_order SET mapping_version=2 "
+                    "WHERE mapping_id='mapping_constraints'"
+                )
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_outbox_initial"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_algo_command_outbox(
+                        command_id,transition_id,ordinal,runtime_id,algo_instance_id,parent_intent_id,
+                        mapping_id,command_type,local_vt_orderid,payload_json,payload_sha256,status,
+                        attempt_count,lease_epoch,deterministic_client_order_ref,row_version,
+                        created_at_utc,updated_at_utc,carrier_json,outbox_row_sha256
+                    ) VALUES (
+                        'command_constraints','transition_constraints',0,'runtime_constraints','algo_constraints',
+                        'intent_constraints','mapping_constraints','SUBMIT_LIMIT','local_constraints','{{}}'::jsonb,
+                        %s,'PENDING',7,99,'client_constraints',12,now(),now(),'{{}}'::jsonb,%s
+                    )
+                    """,
+                    (sha, sha),
+                )
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_timer_schedule_initial"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_algo_timer_schedule(
+                        schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,due_at_exchange_utc,
+                        catch_up_policy,payload_json,payload_sha256,status,timer_occurrence_id,
+                        lease_epoch,row_version,created_at_utc,updated_at_utc,schedule_receipt_sha256,carrier_json
+                    ) VALUES (
+                        'schedule_forged','runtime_constraints','algo_constraints','timer_forged','epoch_forged',now(),
+                        'EXPIRE_IF_LATE','{{}}'::jsonb,%s,'SCHEDULED','occurrence_forged',99,2,now(),now(),%s,'{{}}'::jsonb
+                    )
+                    """,
+                    (sha, sha),
+                )
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_algo_timer_schedule(
+                    schedule_id,runtime_id,algo_instance_id,timer_name,schedule_epoch,due_at_exchange_utc,
+                    catch_up_policy,payload_json,payload_sha256,status,timer_occurrence_id,
+                    lease_epoch,row_version,created_at_utc,updated_at_utc,schedule_receipt_sha256,carrier_json
+                ) VALUES (
+                    'schedule_valid','runtime_constraints','algo_constraints','timer_valid','epoch_valid',now(),
+                    'EXPIRE_IF_LATE','{{}}'::jsonb,%s,'SCHEDULED','occurrence_valid',0,1,now(),now(),%s,'{{}}'::jsonb
+                )
+                """,
+                (sha, sha),
+            )
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_timer_occurrence_initial"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_algo_timer_occurrence(
+                        timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,
+                        exchange_session_authority_sha256,status,lease_epoch,row_version,created_at_utc,
+                        occurrence_receipt_sha256,carrier_json
+                    ) VALUES (
+                        'occurrence_valid','schedule_valid','runtime_constraints','algo_constraints',now(),
+                        %s,'CLAIMED',2,2,now(),%s,'{{}}'::jsonb
+                    )
+                    """,
+                    (sha, sha),
+                )
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
