@@ -25,7 +25,8 @@ def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> No
 
     assert "SET TRANSACTION READ ONLY" in preflight
     assert "legacy_invalid_row_count" in preflight
-    expected_forward_sha256 = hashlib.sha256(FORWARD.read_bytes()).hexdigest()
+    canonical_forward = forward.replace("\r\n", "\n").replace("\r", "\n")
+    expected_forward_sha256 = hashlib.sha256(canonical_forward.encode("utf-8")).hexdigest()
     assert f"'{expected_forward_sha256}'::TEXT AS expected_migration_sha256" in preflight
     assert "runner_must_verify_committed_forward_sha256" not in preflight
     assert "event_contract_version" in forward

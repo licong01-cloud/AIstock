@@ -179,7 +179,7 @@ END $$;
 SELECT
     'miniqmt_execution_kernel_k2_20260725'::TEXT AS migration_id,
     'edd5bac639c001a254842a96594f7ab93c2fcf92'::TEXT AS design_source_revision,
-    'bd25f30033b40fd6ccf1877eec500e457cc90ba71e76f1f7c741d4d7b971e6f5'::TEXT AS expected_migration_sha256,
+    'ff16497da04755342f2ac1a605c6ef739a75baa6e56e4fcb0b7f7639cb4534b0'::TEXT AS expected_migration_sha256,
     COUNT(*) FILTER (WHERE btrim(event_id) = '' OR btrim(runtime_id) = '') AS legacy_invalid_row_count,
     COUNT(*) AS legacy_event_count,
     COUNT(DISTINCT event_type) AS legacy_event_type_count,
