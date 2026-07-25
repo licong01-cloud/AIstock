@@ -1,0 +1,213 @@
+{
+  "actual": "After BUG-858 runtime restart, a targeted R12P backtest_only recovery verifies and copies the frozen source artifact inventory, but constructs the successor artifact_manifest.json without the required l2_artifact binding. The same path immediately calls _verify_published_manifest, which fails with multi_alpha_artifact_manifest_invalid: durable artifact manifest has no L2 artifact binding. No successor run or remote task is created. Preserve exact frozen prediction/L2 bytes and recovery lineage; do not add fallback or alter research parameters.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260724_BUG-859-qe-multi-alpha-backtest-only-recovery-omits-l2-artifact-binding.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-859",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-24T20:31:01.637056Z",
+  "description": "After BUG-858 runtime restart, a targeted R12P backtest_only recovery verifies and copies the frozen source artifact inventory, but constructs the successor artifact_manifest.json without the required l2_artifact binding. The same path immediately calls _verify_published_manifest, which fails with multi_alpha_artifact_manifest_invalid: durable artifact manifest has no L2 artifact binding. No successor run or remote task is created. Preserve exact frozen prediction/L2 bytes and recovery lineage; do not add fallback or alter research parameters.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260724-d6ace8996bd0",
+      "timestamp": "2026-07-24T20:31:01.637017Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ]
+  },
+  "first_seen_at": "2026-07-24T20:31:01.637056Z",
+  "fix_branch": "bug/BUG-859-qe-multi-alpha-backtest-only-recovery-omits-l2-a-20260724",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2716,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2716",
+  "last_seen_at": "2026-07-24T20:31:01.637056Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE multi-alpha backtest-only recovery omits L2 artifact binding",
+  "trigger_condition": {
+    "fingerprint": "d6ace8996bd006eea013a798",
+    "source_event_id": "FE-20260724-d6ace8996bd0"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}

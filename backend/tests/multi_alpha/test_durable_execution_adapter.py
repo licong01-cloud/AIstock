@@ -478,6 +478,107 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert not list(published.workspace.parent.glob("*.tmp"))
 
 
+def test_backtest_only_recovery_preserves_l2_and_execution_identity_bindings(
+    tmp_path: Path,
+) -> None:
+    adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    execution_identity = build_execution_identity(
+        dataset={
+            "deployment_snapshot_id": "qe-dataset-20260720",
+            "dataset_manifest_sha256": "a" * 64,
+            "cutoff_trade_date": "2026-06-30",
+            "qlib_calendar_sha256": "b" * 64,
+            "qlib_instruments_sha256": "c" * 64,
+            "st_pit_snapshot_id": "st-pit-20260630",
+            "st_pit_manifest_sha256": "d" * 64,
+            "resolved_node_id": "wsl2-5080",
+            "resolved_data_root_uri": "/home/lc999/data/factor_data",
+        },
+        prediction_sources=[
+            {
+                "leg_id": "leg_a",
+                "seed_run_id": "a1",
+                "artifact_uri": "file:///predictions/a1.pkl",
+                "artifact_sha256": "e" * 64,
+            }
+        ],
+        runtime={
+            "qlib_runtime_template_sha256": "f" * 64,
+            "conda_environment_lock_sha256": "0" * 64,
+            "execution_environment_snapshot_id": "rdagent-gpu-20260720",
+            "execution_environment_manifest_sha256": "1" * 64,
+            "executor_code_commit": "abcdef012345",
+            "executor_file_set_sha256": "2" * 64,
+            "backtest_config_sha256": "3" * 64,
+        },
+        materializer={
+            "aistock_commit": "123456abcdef",
+            "planner_version": "multi_alpha_child_plan_v1",
+            "combiner_file_sha256": "4" * 64,
+            "panel_builder_file_sha256": "5" * 64,
+            "materializer_file_set_sha256": "6" * 64,
+        },
+        business_formula={
+            "formula_version": "durable_business_result_v1",
+            "assembler_file_sha256": "7" * 64,
+            "delta_formula_sha256": "8" * 64,
+        },
+    )
+    repository.child["input_manifest_json"] = {
+        **dict(repository.child["input_manifest_json"]),
+        "execution_identity": execution_identity.payload,
+        "execution_identity_hash": execution_identity.identity_hash,
+        "execution_identity_evidence": legacy_execution_identity_evidence(
+            execution_identity.payload
+        ),
+    }
+    repository.child["input_manifest_hash"] = artifact_manifest_hash_for(
+        repository.child["input_manifest_json"]
+    )
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    source = adapter.publish_artifacts(materialized)
+    successor_run_id = "macb_recovery_backtest_only"
+    successor_child_id = make_child_id(successor_run_id, "scheme:equal")
+    successor_attempt_id = make_attempt_id(successor_child_id, 1)
+
+    recovered = adapter.stage_backtest_only_recovery_artifacts(
+        source_run_id=RUN_ID,
+        source_child_id=CHILD_ID,
+        source_attempt_id=ATTEMPT_ID,
+        successor_run_id=successor_run_id,
+        successor_child_id=successor_child_id,
+        successor_attempt_id=successor_attempt_id,
+        successor_input_manifest_hash="9" * 64,
+        source_lineage_hash="a" * 64,
+    )
+
+    assert recovered.artifact_manifest["l2_artifact"] == {
+        "path": "combined_factors_df.parquet",
+        **recovered.artifact_manifest["files"]["combined_factors_df.parquet"],
+    }
+    assert recovered.artifact_manifest["execution_identity"] == execution_identity.payload
+    assert (
+        recovered.artifact_manifest["execution_identity_hash"]
+        == execution_identity.identity_hash
+    )
+    assert recovered.artifact_manifest["execution_identity_evidence"]["complete"] is True
+    assert recovered.artifact_manifest["recovery_source_lineage_hash"] == "a" * 64
+    assert recovered.artifact_manifest["manifest_hash"] == artifact_manifest_hash_for(
+        {
+            key: value
+            for key, value in recovered.artifact_manifest.items()
+            if key != "manifest_hash"
+        }
+    )
+    assert (recovered.workspace / "combined_factors_df.parquet").read_bytes() == (
+        source.workspace / "combined_factors_df.parquet"
+    ).read_bytes()
+
+
 def test_publish_rejects_missing_l2_artifact_before_artifact_manifest(tmp_path: Path) -> None:
     adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
     (tmp_path / "runtime" / "combined_factors_df.parquet").unlink()
