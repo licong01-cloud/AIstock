@@ -54,7 +54,9 @@ jobs:
             --base-ref "${BASE_REF}" \
             --base-sha "${BASE_SHA}" \
             --head-sha "${HEAD_SHA}" \
-            --diff-filter ACMRT
+            --diff-filter ACMRT \
+            > tmp/validation/dependency_update/changed-files-receipt.json
+          base_commit=$(python -c "import json; print(json.load(open('tmp/validation/dependency_update/changed-files-receipt.json', encoding='utf-8'))['base_commit'])")
           mapfile -t changed_files < tmp/validation/dependency_update/all-changed-files.txt
           dependency_files=()
           has_frontend=false
@@ -86,13 +88,28 @@ jobs:
             --output tmp/validation/dependency_update/selection.json
           python -c "import json; p=json.load(open('tmp/validation/dependency_update/selection.json', encoding='utf-8')); print({'required_plans': p.get('required_plans', []), 'production_gates': p.get('production_gates', {})})"
           echo "frontend=$has_frontend" >> "$GITHUB_OUTPUT"
+          echo "base_commit=$base_commit" >> "$GITHUB_OUTPUT"
+          echo "head_commit=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Validate changed Python dependency files
         run: |
           while IFS= read -r file; do
             case "$file" in
               requirements*.txt|.github/requirements/*.txt)
-                python -m pip install --dry-run -r "$file"
+                key=$(printf '%s' "$file" | sha256sum | cut -d' ' -f1)
+                changed="tmp/validation/dependency_update/${key}.changed.txt"
+                constraints="tmp/validation/dependency_update/${key}.constraints.txt"
+                summary="tmp/validation/dependency_update/${key}.summary.json"
+                python scripts/validate_changed_requirements.py \
+                  --base-commit "${{ steps.changes.outputs.base_commit }}" \
+                  --head-commit "${{ steps.changes.outputs.head_commit }}" \
+                  --file "$file" \
+                  --requirements-output "$changed" \
+                  --constraints-output "$constraints" \
+                  --summary-output "$summary"
+                if [[ -s "$changed" ]]; then
+                  python -m pip install --dry-run -r "$changed" -c "$constraints"
+                fi
                 ;;
               pyproject.toml)
                 python -m pip install --dry-run .
