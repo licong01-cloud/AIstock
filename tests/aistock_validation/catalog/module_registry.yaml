@@ -184,6 +184,17 @@ modules:
     test_plans:
       required_on_change: [l0, hmm_evolution_backend]
       recommended: [hmm_evolution_ui]
+  - module_id: hmm.risk
+    display_name: HMM Risk Research
+    parent_module: hmm
+    module_type: data_pipeline
+    risk_level: high
+    description: Advisory-only versioned HMM L1/L2 state generation, durable evidence, alerts, events, and retrospective reports.
+    description_zh: HMM 风险研究域，提供独立 direct L1/L2 状态模型集、版本化状态与证据、预警、事件和回溯报告，不产生交易副作用。
+    ui_routes: [/hmm-risk]
+    api_routes: [/api/v1/hmm-risk/*]
+    test_plans:
+      required_on_change: [l0, hmm_risk_backend]
   - module_id: factor_library
     display_name: Factor library
     module_type: product_feature

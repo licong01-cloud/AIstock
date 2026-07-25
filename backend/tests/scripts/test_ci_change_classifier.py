@@ -790,6 +790,18 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
+def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["backend-tests"]["steps"]
+    install = next(
+        step for step in steps if step.get("name") == "Install backend deps via venv (no conda on hosted runners)"
+    )
+
+    assert "hmmlearn==0.3.3" in str(install["run"])
+
+
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     import yaml
 

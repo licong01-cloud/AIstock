@@ -3048,6 +3048,46 @@ def hmm_evolution_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def hmm_risk_backend(session: nox.Session) -> None:
+    """Run the isolated HMM Risk schema and state-model-set contracts."""
+    evidence_dir = ROOT / "tmp" / "validation" / "hmm_risk"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = evidence_dir / "coverage.xml"
+    coverage_data = evidence_dir / ".coverage"
+    junit_xml = evidence_dir / "junit.xml"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/hmm_risk",
+        "backend/db/init_hmm_risk_schema.py",
+        "scripts/hmm_risk",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/hmm_risk",
+        "-m",
+        "not integration",
+        "--cov=backend.services.hmm_risk",
+        "--cov=backend.db.init_hmm_risk_schema",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        "--cov-report=term-missing",
+        "--cov-fail-under=70",
+        "--durations=10",
+        f"--junitxml={junit_xml}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def hmm_data_source_readonly_integration(session: nox.Session) -> None:
     """Run explicitly authorized read-only DB/QE smoke; never writes or runs DDL."""
     required_env = (
