@@ -1,8 +1,13 @@
 {
   "actual": "The dependency-update validation workflow runs pip install --dry-run against the entire UTF-16 Conda-exported requirements.txt whenever any dependency line changes. Existing file:// Windows and Conda build paths are not installable on the Ubuntu runner, so every legitimate backend dependency update fails before validating the changed requirement. Reproduced by PR #2732 run 30158110484. Fix must validate the changed dependency surface without silently skipping the new package, preserve frontend and pyproject handling, and add direct workflow tests.",
   "allowed_write_scope": [
+    ".github/workflows/dependency-update-validate.yml",
+    "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_validate_changed_requirements.py",
+    "scripts/validate_changed_requirements.py",
     "tests/aistock_validation/bugs/20260725_BUG-863-dependency-ci-dry-run-cannot-parse-conda-local-path-requirements.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-863",
@@ -22,21 +27,56 @@
       "timestamp": "2026-07-25T12:36:55.535386Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/30158110484/job/89678971512"
+  ],
+  "expected": "A requirements.txt change must validate every newly added or changed requirement on Linux without attempting to install unchanged Conda local-path exports; removed requirements must not be installed, and pyproject/frontend validation behavior must remain intact.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      ".github/workflows/dependency-update-validate.yml",
+      "backend/tests/scripts/test_issue_flow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/tests/scripts/test_validate_changed_requirements.py",
+      "scripts/validate_changed_requirements.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        ".github/workflows/dependency-update-validate.yml",
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_validate_changed_requirements.py",
+        "scripts/validate_changed_requirements.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
+      "impacted_modules": [
+        "platform.config",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        "repo_config_and_validation"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/dependency-update-validate.yml",
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_validate_changed_requirements.py",
+        "scripts/validate_changed_requirements.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      ".github/workflows/dependency-update-validate.yml",
+      "backend/tests/scripts/test_issue_flow.py",
+      "backend/tests/scripts/test_validate_changed_requirements.py",
+      "scripts/validate_changed_requirements.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
   },
   "first_seen_at": "2026-07-25T12:36:55.535390Z",
   "fix_branch": null,
@@ -52,7 +92,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pip install --dry-run -r requirements.txt on the Ubuntu dependency-update runner for PR #2732",
   "required_verification": [
     "l0",
     "validation_center_backend"
@@ -175,5 +215,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }

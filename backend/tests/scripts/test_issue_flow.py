@@ -1219,7 +1219,11 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     assert "--diff-filter ACMRT" in runs
     assert 'selection_args+=(--changed-file "$file")' in runs
     assert "--changed-file requirements.txt" not in runs
-    assert 'python -m pip install --dry-run -r "$file"' in runs
+    assert "python scripts/validate_changed_requirements.py" in runs
+    assert '--base-commit "${{ steps.changes.outputs.base_commit }}"' in runs
+    assert '--head-commit "${{ steps.changes.outputs.head_commit }}"' in runs
+    assert 'python -m pip install --dry-run -r "$changed" -c "$constraints"' in runs
+    assert 'python -m pip install --dry-run -r "$file"' not in runs
     assert "python -m pip install --dry-run ." in runs
     assert "npm ci" in runs
     assert "npx tsc --noEmit" in runs
