@@ -128,27 +128,31 @@ class PostgresStockFactReader:
         with self._conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT source_name,duplicate_groups FROM (
-                  SELECT 'kline_daily_raw' source_name,count(*) duplicate_groups FROM (
-                    SELECT trade_date,ts_code FROM market.kline_daily_raw
-                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code HAVING count(*)>1
+                SELECT source_name,conflict_groups FROM (
+                  SELECT 'kline_daily_raw' source_name,count(*) conflict_groups FROM (
+                    SELECT trade_date,ts_code FROM market.kline_daily_raw t
+                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code
+                    HAVING count(*)>1 AND count(DISTINCT to_jsonb(t))>1
                   ) q
                   UNION ALL
                   SELECT 'daily_basic',count(*) FROM (
-                    SELECT trade_date,ts_code FROM market.daily_basic
-                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code HAVING count(*)>1
+                    SELECT trade_date,ts_code FROM market.daily_basic t
+                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code
+                    HAVING count(*)>1 AND count(DISTINCT to_jsonb(t))>1
                   ) q
                   UNION ALL
                   SELECT 'moneyflow_ts',count(*) FROM (
-                    SELECT trade_date,ts_code FROM market.moneyflow_ts
-                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code HAVING count(*)>1
+                    SELECT trade_date,ts_code FROM market.moneyflow_ts t
+                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code
+                    HAVING count(*)>1 AND count(DISTINCT to_jsonb(t))>1
                   ) q
                   UNION ALL
                   SELECT 'stk_limit',count(*) FROM (
-                    SELECT trade_date,ts_code FROM market.stk_limit
-                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code HAVING count(*)>1
+                    SELECT trade_date,ts_code FROM market.stk_limit t
+                    WHERE trade_date BETWEEN %s AND %s GROUP BY trade_date,ts_code
+                    HAVING count(*)>1 AND count(DISTINCT to_jsonb(t))>1
                   ) q
-                ) duplicates WHERE duplicate_groups>0
+                ) duplicates WHERE conflict_groups>0
                 """,
                 (
                     self.spec.source_start,
@@ -163,7 +167,7 @@ class PostgresStockFactReader:
             )
             duplicates = cursor.fetchall()
         if duplicates:
-            raise StateModelSetError(f"stock-fact source contains duplicate keys: {duplicates}")
+            raise StateModelSetError(f"stock-fact source contains conflicting duplicate keys: {duplicates}")
 
     def iter_mapping_source_rows(self, *, fetch_size: int = 10_000) -> Iterator[dict[str, Any]]:
         cursor = self._conn.cursor(name="hmm_risk_mapping_source")
@@ -231,7 +235,16 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH price_history AS (
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
+              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), price_base AS (
+              SELECT DISTINCT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li
+              FROM market.kline_daily_raw
+              WHERE trade_date BETWEEN %s AND %s
+            ), price_history AS (
               SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
                      lag(trade_date,1) OVER w previous_price_date,
                      lag(close_li,1) OVER w previous_close_li,
@@ -239,16 +252,27 @@ class PostgresStockFactReader:
                      lag(close_li,5) OVER w previous_close_5_li,
                      lag(trade_date,10) OVER w previous_price_10_date,
                      lag(close_li,10) OVER w previous_close_10_li
-              FROM market.kline_daily_raw
-              WHERE trade_date BETWEEN %s AND %s
+              FROM price_base
               WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            ), basic_base AS (
+              SELECT DISTINCT trade_date,ts_code,total_mv,circ_mv
+              FROM market.daily_basic
+              WHERE trade_date BETWEEN %s AND %s
             ), basic_history AS (
               SELECT trade_date,ts_code,total_mv,
                      lag(trade_date,1) OVER w previous_basic_date,
                      lag(circ_mv,1) OVER w previous_circ_mv
-              FROM market.daily_basic
-              WHERE trade_date BETWEEN %s AND %s
+              FROM basic_base
               WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            ), moneyflow_base AS (
+              SELECT DISTINCT trade_date,ts_code,buy_sm_amount,sell_sm_amount,
+                              buy_elg_amount,sell_elg_amount,net_mf_amount
+              FROM market.moneyflow_ts
+              WHERE trade_date BETWEEN %s AND %s
+            ), limit_base AS (
+              SELECT DISTINCT trade_date,ts_code,up_limit
+              FROM market.stk_limit
+              WHERE trade_date BETWEEN %s AND %s
             ), mapping_source AS (
               SELECT p.trade_date,s.ts_code,s.eligible_start,s.eligible_end,
                      l1.index_code l1_code,l1.industry_name l1_name,
@@ -280,20 +304,27 @@ class PostgresStockFactReader:
                    p.open_li,p.high_li,p.low_li,p.close_li,p.volume_hand,p.amount_li,
                    p.previous_price_date,p.previous_close_li,p.previous_price_5_date,p.previous_close_5_li,
                    p.previous_price_10_date,p.previous_close_10_li,
-                   db.total_mv,db.previous_circ_mv,
+                   db.total_mv,ch.previous_trade_date,db.previous_basic_date,db.previous_circ_mv,
                    mf.buy_sm_amount,mf.sell_sm_amount,mf.buy_elg_amount,mf.sell_elg_amount,mf.net_mf_amount,
                    lim.up_limit
             FROM counted c
+            LEFT JOIN calendar_history ch ON ch.trade_date=c.trade_date
             LEFT JOIN price_history p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
             LEFT JOIN basic_history db ON db.trade_date=c.trade_date AND db.ts_code=c.ts_code
-            LEFT JOIN market.moneyflow_ts mf ON mf.trade_date=c.trade_date AND mf.ts_code=c.ts_code
-            LEFT JOIN market.stk_limit lim ON lim.trade_date=c.trade_date AND lim.ts_code=c.ts_code
+            LEFT JOIN moneyflow_base mf ON mf.trade_date=c.trade_date AND mf.ts_code=c.ts_code
+            LEFT JOIN limit_base lim ON lim.trade_date=c.trade_date AND lim.ts_code=c.ts_code
             ORDER BY {order_by}
             """,
             (
                 history_start,
                 self.spec.source_end,
                 history_start,
+                self.spec.source_end,
+                history_start,
+                self.spec.source_end,
+                self.spec.source_start,
+                self.spec.source_end,
+                self.spec.source_start,
                 self.spec.source_end,
                 self.spec.universe_key,
                 self.spec.source_start,
@@ -310,6 +341,9 @@ class PostgresStockFactReader:
                 previous_close = row[15] if row[14] is not None and row[14] >= eligible_start else None
                 previous_close_5 = row[17] if row[16] is not None and row[16] >= eligible_start else None
                 previous_close_10 = row[19] if row[18] is not None and row[18] >= eligible_start else None
+                previous_circ_mv = (
+                    row[23] if row[21] is not None and row[21] == row[22] and row[21] >= eligible_start else None
+                )
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],
@@ -328,13 +362,13 @@ class PostgresStockFactReader:
                     "prev_close_5_yuan": _scaled(previous_close_5, 1000.0),
                     "prev_close_10_yuan": _scaled(previous_close_10, 1000.0),
                     "total_mv_cny": _scaled(row[20], 0.0001),
-                    "prev_circ_mv_cny": _scaled(row[21], 0.0001),
-                    "buy_sm_amount_cny": _scaled(row[22], 0.0001),
-                    "sell_sm_amount_cny": _scaled(row[23], 0.0001),
-                    "buy_elg_amount_cny": _scaled(row[24], 0.0001),
-                    "sell_elg_amount_cny": _scaled(row[25], 0.0001),
-                    "net_mf_amount_cny": _scaled(row[26], 0.0001),
-                    "up_limit_yuan": None if row[27] is None else float(row[27]),
+                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
+                    "buy_sm_amount_cny": _scaled(row[24], 0.0001),
+                    "sell_sm_amount_cny": _scaled(row[25], 0.0001),
+                    "buy_elg_amount_cny": _scaled(row[26], 0.0001),
+                    "sell_elg_amount_cny": _scaled(row[27], 0.0001),
+                    "net_mf_amount_cny": _scaled(row[28], 0.0001),
+                    "up_limit_yuan": None if row[29] is None else float(row[29]),
                 }
         finally:
             cursor.close()
@@ -361,15 +395,28 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH calendar_base AS (
-              SELECT cal_date::date trade_date FROM market.trading_calendar
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
               WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), calendar_base AS (
+              SELECT trade_date,previous_trade_date FROM calendar_history
+              WHERE trade_date BETWEEN %s AND %s
+            ), basic_base AS (
+              SELECT DISTINCT trade_date,ts_code,total_mv,circ_mv
+              FROM market.daily_basic WHERE trade_date BETWEEN %s AND %s
             ), basic_history AS (
               SELECT trade_date,ts_code,total_mv,
-                     lag(circ_mv,1) OVER (PARTITION BY ts_code ORDER BY trade_date) previous_circ_mv
-              FROM market.daily_basic WHERE trade_date BETWEEN %s AND %s
+                     lag(trade_date,1) OVER w previous_basic_date,
+                     lag(circ_mv,1) OVER w previous_circ_mv
+              FROM basic_base
+              WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            ), price_base AS (
+              SELECT DISTINCT trade_date,ts_code FROM market.kline_daily_raw
+              WHERE trade_date BETWEEN %s AND %s
             ), mapping_source AS (
-              SELECT c.trade_date,s.ts_code,s.eligible_start,s.eligible_end,
+              SELECT c.trade_date,c.previous_trade_date,s.ts_code,s.eligible_start,s.eligible_end,
                      l1.index_code l1_code,l1.industry_name l1_name,
                      l2.index_code l2_code,l2.industry_name l2_name
               FROM calendar_base c
@@ -384,17 +431,20 @@ class PostgresStockFactReader:
               JOIN market.sw_index_classify l2
                 ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
             ), canonical_identity AS (
-              SELECT trade_date,ts_code,eligible_start,eligible_end,l1_code,l1_name,l2_code,l2_name
+              SELECT trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+                     l1_code,l1_name,l2_code,l2_name
               FROM mapping_source
-              GROUP BY trade_date,ts_code,eligible_start,eligible_end,l1_code,l1_name,l2_code,l2_name
+              GROUP BY trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+                       l1_code,l1_name,l2_code,l2_name
             ), counted AS (
               SELECT c.*,count(*) OVER (PARTITION BY trade_date,ts_code) canonical_identity_count
               FROM canonical_identity c
             )
             SELECT c.trade_date,c.ts_code,c.l1_code,c.l1_name,c.l2_code,c.l2_name,
-                   c.canonical_identity_count,db.total_mv,db.previous_circ_mv
+                   c.canonical_identity_count,c.eligible_start,db.total_mv,c.previous_trade_date,
+                   db.previous_basic_date,db.previous_circ_mv
             FROM counted c
-            LEFT JOIN market.kline_daily_raw p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
+            LEFT JOIN price_base p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
             LEFT JOIN basic_history db ON db.trade_date=c.trade_date AND db.ts_code=c.ts_code
             WHERE p.ts_code IS NULL
               AND NOT EXISTS (
@@ -404,7 +454,11 @@ class PostgresStockFactReader:
             ORDER BY {order_by}
             """,
             (
+                history_start,
+                self.spec.source_end,
                 self.spec.source_start,
+                self.spec.source_end,
+                history_start,
                 self.spec.source_end,
                 history_start,
                 self.spec.source_end,
@@ -417,6 +471,7 @@ class PostgresStockFactReader:
                     raise StateModelSetError(
                         f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
                     )
+                previous_circ_mv = row[11] if row[9] is not None and row[9] == row[10] and row[9] >= row[7] else None
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],
@@ -434,8 +489,8 @@ class PostgresStockFactReader:
                     "prev_close_yuan": None,
                     "prev_close_5_yuan": None,
                     "prev_close_10_yuan": None,
-                    "total_mv_cny": _scaled(row[7], 0.0001),
-                    "prev_circ_mv_cny": _scaled(row[8], 0.0001),
+                    "total_mv_cny": _scaled(row[8], 0.0001),
+                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,

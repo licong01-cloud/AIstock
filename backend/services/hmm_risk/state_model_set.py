@@ -528,6 +528,7 @@ class L1TrainingSeries:
     validation_future_components: Mapping[str, np.ndarray] = dataclass_field(default_factory=dict)
     validation_utility_source_cutoff: date | None = None
     validation_utility_formula_version: str = ""
+    validation_input_manifest: Mapping[str, Any] = dataclass_field(default_factory=dict)
 
     def validate(self, feature_count: int) -> None:
         if not self.sector_code.strip() or not self.sector_name.strip():
@@ -553,6 +554,34 @@ class L1TrainingSeries:
                 raise StateModelSetError(f"{self.sector_code} future utility source cutoff is not frozen")
             if self.validation_utility_formula_version != "hmm_risk_hard_future_excess_035_035_030_v1":
                 raise StateModelSetError(f"{self.sector_code} future utility formula version is invalid")
+            manifest = self.validation_input_manifest
+            if (
+                not isinstance(manifest, Mapping)
+                or manifest.get("schema_version") != "hmm_risk_d6_frozen_input_manifest_v1"
+                or manifest.get("direct_sector_level") not in {"L1", "L2"}
+                or manifest.get("sector_code") != self.sector_code
+                or manifest.get("validation_observation_sha256") != canonical_sha256(validation.tolist())
+            ):
+                raise StateModelSetError(f"{self.sector_code} validation frozen input manifest is missing")
+            for field in (
+                "dataset_manifest_hash",
+                "mapping_manifest_hash",
+                "calendar_manifest_hash",
+                "l2_stock_fact_manifest_hash",
+            ):
+                _require_sha256(str(manifest.get(field) or ""), field)
+            expected_dates = [value.isoformat() for value in self.validation_dates]
+            if manifest.get("validation_dates") != expected_dates or manifest.get(
+                "validation_dates_sha256"
+            ) != canonical_sha256(expected_dates):
+                raise StateModelSetError(f"{self.sector_code} validation frozen date identity differs")
+            for name, values in self.validation_future_components.items():
+                if manifest.get("utility_component_sha256", {}).get(name) != canonical_sha256(
+                    np.asarray(values, dtype=np.float64).tolist()
+                ):
+                    raise StateModelSetError(f"{self.sector_code} validation utility identity differs for {name}")
+            if manifest.get("combined_utility_sha256") != canonical_sha256(utility.tolist()):
+                raise StateModelSetError(f"{self.sector_code} combined validation utility identity differs")
         for field, values in (("train_dates", self.train_dates), ("validation_dates", self.validation_dates)):
             if any(not isinstance(value, date) for value in values):
                 raise StateModelSetError(f"{self.sector_code} {field} must contain dates")
@@ -2126,85 +2155,9 @@ def train_l1_models(
 ) -> dict[str, Any]:
     """Train all 31 independent direct L1 models or fail the whole family."""
 
-    expected_codes = tuple(sorted(series))
-    if len(expected_codes) != EXPECTED_L1_COUNT:
-        raise StateModelSetError(f"L1 training requires exactly 31 sectors; actual={len(expected_codes)}")
-    features = tuple(str(item) for item in feature_names)
-    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
-        raise StateModelSetError("L1 feature definition is not an approved 7/20-dimensional family")
-    for item in series.values():
-        item.validate(len(features))
-    preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
-
-    models: dict[str, Any] = {}
-    for code in expected_codes:
-        item = series[code]
-        evidence = _fit_l1_evidence(
-            item,
-            preprocess=preprocess,
-            feature_count=len(features),
-            random_seed=random_seed,
-        )
-        labels, utilities = _labels_from_validation(
-            evidence.posteriors,
-            item.validation_future_utility,
-            code,
-        )
-        prefix = causal_forward_posteriors(
-            evidence.validation[:-1],
-            startprob=evidence.startprob,
-            transmat=evidence.transmat,
-            means=evidence.means,
-            covars=evidence.covars,
-        )
-        if not np.allclose(prefix, evidence.posteriors[:-1], atol=1e-12, rtol=0):
-            raise StateModelSetError(f"causal prefix replay differs for {code}")
-        models[code] = {
-            "sector_code": code,
-            "sector_name": item.sector_name,
-            "sector_level": "L1",
-            "state_origin": "direct_hmm",
-            "n_states": 3,
-            "covariance_type": "diag",
-            "feature_names": list(features),
-            "startprob": evidence.startprob.tolist(),
-            "transmat": evidence.transmat.tolist(),
-            "means": evidence.means.tolist(),
-            "covars": evidence.covars.tolist(),
-            "covariance_fixed": evidence.covariance_anomaly_count > 0,
-            "covariance_anomaly_count": evidence.covariance_anomaly_count,
-            "covariance_min_after": float(evidence.covars.min()),
-            "covariance_max_after": float(evidence.covars.max()),
-            "state_labels": labels,
-            "state_validation_utilities": utilities,
-            "observation_version": observation_version,
-            "training_rows": int(evidence.train.shape[0]),
-            "validation_rows": int(evidence.validation.shape[0]),
-            "pit_l2_constituents": list(item.pit_l2_constituents),
-            "pit_constituent_manifest_hash": item.pit_constituent_manifest_hash,
-            "observation_manifest_hash": item.observation_manifest_hash,
-            "causal_replay": "passed",
-        }
-    return {
-        "schema_version": L1_ARTIFACT_SCHEMA,
-        "sector_level": "L1",
-        "sector_count": len(models),
-        "expected_sector_set_hash": canonical_sha256(expected_codes),
-        "feature_names": list(features),
-        "preprocess": preprocess,
-        "random_seed": random_seed,
-        "training_algorithm": {
-            "n_states": 3,
-            "covariance_type": "diag",
-            "n_iter": HMM_N_ITER,
-            "min_covar": HMM_MIN_COVAR,
-            "max_covar": HMM_MAX_COVAR,
-            "transition_alpha": HMM_TRANSITION_ALPHA,
-            "min_self_transition": HMM_MIN_SELF_TRANSITION,
-            "semantic_label": "validation_future_excess_5_10_20_weights_0.35_0.35_0.30_no_fallback",
-        },
-        "models": models,
-    }
+    raise StateModelSetError(
+        "legacy fixed-seed L1 training is disabled because it cannot satisfy the approved B3 D3-D6 contracts"
+    )
 
 
 @dataclass(frozen=True)
@@ -2263,74 +2216,9 @@ def build_state_model_set(
 ) -> tuple[dict[str, Any], bytes, bytes]:
     """Build a READY manifest only after both complete direct layers validate."""
 
-    spec.validate()
-    if l1_artifact.get("schema_version") != L1_ARTIFACT_SCHEMA or l1_artifact.get("sector_count") != EXPECTED_L1_COUNT:
-        raise StateModelSetError("L1 artifact is incomplete")
-    if l2_artifact.get("schema_version") != L2_ARTIFACT_SCHEMA or l2_artifact.get("sector_count") != EXPECTED_L2_COUNT:
-        raise StateModelSetError("L2 artifact is incomplete")
-    if tuple(l1_artifact.get("feature_names") or ()) != tuple(l2_artifact.get("feature_names") or ()):
-        raise StateModelSetError("L1/L2 feature families differ")
-    if l2_artifact.get("parser_contract") != spec.parser_contract:
-        raise StateModelSetError("L2 parser contract differs from the preparation spec")
-    if l2_artifact.get("source_artifact_sha256") != spec.source_l2_artifact_sha256:
-        raise StateModelSetError("L2 source identity differs from the preparation spec")
-
-    l1_bytes = canonical_json_bytes(l1_artifact)
-    l2_bytes = canonical_json_bytes(l2_artifact)
-    l1_sha256 = sha256_bytes(l1_bytes)
-    l2_sha256 = sha256_bytes(l2_bytes)
-    manifest_body = {
-        "schema_version": SCHEMA_VERSION,
-        "status": "READY",
-        "family": spec.family,
-        "family_version": spec.family_version,
-        "producer_commit": spec.producer_commit,
-        "created_at": spec.created_at,
-        "candidate_ids": list(spec.candidate_ids),
-        "train_start": spec.train_start.isoformat(),
-        "train_end": spec.train_end.isoformat(),
-        "validation_start": spec.validation_start.isoformat(),
-        "validation_end": spec.validation_end.isoformat(),
-        "common_data_watermark": spec.common_data_watermark.isoformat(),
-        "dataset_manifest": dict(spec.dataset_manifest),
-        "dataset_manifest_hash": canonical_sha256(spec.dataset_manifest),
-        "mapping_manifest": dict(spec.mapping_manifest),
-        "mapping_manifest_hash": canonical_sha256(spec.mapping_manifest),
-        "feature_definition": dict(spec.feature_definition),
-        "feature_definition_hash": canonical_sha256(spec.feature_definition),
-        "preprocess_family": spec.preprocess_family,
-        "random_seed": spec.random_seed,
-        "observation_version": spec.observation_version,
-        "source_l2_artifact_uri": spec.source_l2_artifact_uri,
-        "source_l2_artifact_sha256": spec.source_l2_artifact_sha256,
-        "layers": {
-            "L1": {
-                "artifact_uri": f"artifacts/{l1_sha256}.l1.json",
-                "artifact_sha256": l1_sha256,
-                "size_bytes": len(l1_bytes),
-                "parser_contract": L1_ARTIFACT_SCHEMA,
-                "sector_level": "L1",
-                "sector_count": EXPECTED_L1_COUNT,
-                "expected_sector_set_hash": l1_artifact["expected_sector_set_hash"],
-            },
-            "L2": {
-                "artifact_uri": f"artifacts/{l2_sha256}.l2.json",
-                "artifact_sha256": l2_sha256,
-                "size_bytes": len(l2_bytes),
-                "parser_contract": spec.parser_contract,
-                "sector_level": "L2",
-                "sector_count": EXPECTED_L2_COUNT,
-                "expected_sector_set_hash": l2_artifact["expected_sector_set_hash"],
-            },
-        },
-    }
-    state_model_set_hash = canonical_sha256(manifest_body)
-    manifest = {
-        **manifest_body,
-        "state_model_set_id": f"hmms_{state_model_set_hash[:24]}",
-        "state_model_set_hash": state_model_set_hash,
-    }
-    return manifest, l1_bytes, l2_bytes
+    raise StateModelSetError(
+        "legacy state-model-set READY construction is disabled; use the formal B3 four-layer writer"
+    )
 
 
 def _write_immutable(path: Path, payload: bytes) -> None:
@@ -2363,22 +2251,4 @@ def write_state_model_set(
 ) -> Path:
     """Atomically write a complete content-addressed set; never write partial READY."""
 
-    root = Path(output_root).resolve()
-    if not root.is_absolute():  # pragma: no cover - resolve always returns absolute; documents intent.
-        raise StateModelSetError("output_root must resolve to an absolute path")
-    if manifest.get("status") != "READY":
-        raise StateModelSetError("only a fully validated READY model set can be written")
-    set_id = str(manifest.get("state_model_set_id") or "")
-    if not set_id.startswith("hmms_"):
-        raise StateModelSetError("state_model_set_id is invalid")
-    set_root = root / set_id
-    l1 = manifest["layers"]["L1"]
-    l2 = manifest["layers"]["L2"]
-    if sha256_bytes(l1_bytes) != l1["artifact_sha256"] or sha256_bytes(l2_bytes) != l2["artifact_sha256"]:
-        raise StateModelSetError("artifact bytes differ from manifest hashes")
-    _write_immutable(set_root / l1["artifact_uri"], l1_bytes)
-    _write_immutable(set_root / l2["artifact_uri"], l2_bytes)
-    manifest_bytes = canonical_json_bytes(manifest)
-    manifest_path = set_root / "manifest.json"
-    _write_immutable(manifest_path, manifest_bytes)
-    return manifest_path
+    raise StateModelSetError("legacy state-model-set READY writing is disabled; use the formal B3 four-layer writer")

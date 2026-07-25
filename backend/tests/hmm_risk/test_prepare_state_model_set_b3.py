@@ -7,12 +7,14 @@ from scripts.hmm_risk import prepare_state_model_set as subject
 
 
 def _request() -> dict:
-    dataset = {"schema_version": "dataset_v1"}
+    dataset = {"schema_version": "dataset_v1", "calendar_benchmark": {"schema_version": "calendar_v1"}}
     mapping = {"schema_version": "mapping_v1"}
+    l2_stock_fact = {"schema_version": "l2_dataset_v1"}
     return {
         "producer_commit": "c" * 40,
         "dataset_manifest_hash": subject.canonical_sha256(dataset),
         "mapping_manifest_hash": subject.canonical_sha256(mapping),
+        "l2_stock_fact_manifest_hash": subject.canonical_sha256(l2_stock_fact),
         "families": [
             {
                 "family": "legacy_covfix",
@@ -36,7 +38,10 @@ def test_legacy_fixed_seed_ready_writer_is_disabled() -> None:
 def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_validation(monkeypatch) -> None:
     request = _request()
     inputs = {
-        "dataset_manifest": {"schema_version": "dataset_v1"},
+        "dataset_manifest": {
+            "schema_version": "dataset_v1",
+            "calendar_benchmark": {"schema_version": "calendar_v1"},
+        },
         "mapping_manifest": {"schema_version": "mapping_v1"},
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
@@ -82,6 +87,7 @@ def test_formal_single_pass_rejects_frozen_manifest_drift(monkeypatch) -> None:
         lambda request, db_prefix: {
             "dataset_manifest": {"schema_version": "drifted"},
             "mapping_manifest": {"schema_version": "mapping_v1"},
+            "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
         },
     )
     with pytest.raises(StateModelSetError, match="dataset manifest hash mismatch"):

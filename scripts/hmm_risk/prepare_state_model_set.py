@@ -93,6 +93,10 @@ def _load_request(path: Path) -> dict[str, Any]:
     families = value.get("families")
     if not isinstance(families, list) or len(families) != 2 or any(not isinstance(item, dict) for item in families):
         raise StateModelSetError("preparation request must contain exactly two family objects")
+    for field in ("dataset_manifest_hash", "mapping_manifest_hash", "l2_stock_fact_manifest_hash"):
+        identity = str(value.get(field) or "")
+        if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
+            raise StateModelSetError(f"preparation request {field} must be a SHA-256 identity")
     return value
 
 
@@ -311,6 +315,7 @@ def _diagnose_c008(request: dict[str, Any], *, db_prefix: str, include_b1_eviden
             validation_start=spec.validation_start,
             validation_end=spec.validation_end,
             constituent_manifest_by_l1=inputs["constituents"],
+            frozen_input_identity=_frozen_input_identity(inputs),
         )
         families.append(
             {
@@ -396,6 +401,7 @@ def diagnose_c008_b3_diag02(request: dict[str, Any], *, db_prefix: str) -> dict[
             validation_start=spec.validation_start,
             validation_end=spec.validation_end,
             constituent_manifest_by_l1=inputs["constituents"],
+            frozen_input_identity=_frozen_input_identity(inputs),
         )
         families.append(
             {
@@ -470,6 +476,7 @@ def diagnose_c008_b3_diag04(request: dict[str, Any], *, db_prefix: str) -> dict[
             validation_start=spec.validation_start,
             validation_end=spec.validation_end,
             constituent_manifest_by_l1=inputs["constituents"],
+            frozen_input_identity=_frozen_input_identity(inputs),
         )
         families.append(
             {
@@ -655,6 +662,15 @@ def _direct_l2_constituents(inputs: dict[str, Any]) -> dict[str, dict[str, Any]]
     return l2_constituents
 
 
+def _frozen_input_identity(inputs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+    }
+
+
 def _direct_series_for_family(
     inputs: dict[str, Any],
     family: dict[str, Any],
@@ -676,6 +692,7 @@ def _direct_series_for_family(
         constituent_manifest_by_l1=inputs["constituents"],
         expected_sector_count=31,
         direct_sector_level="L1",
+        frozen_input_identity=_frozen_input_identity(inputs),
     )
     l2 = build_l1_training_series(
         inputs["l2_panel"],
@@ -687,6 +704,7 @@ def _direct_series_for_family(
         constituent_manifest_by_l1=_direct_l2_constituents(inputs),
         expected_sector_count=131,
         direct_sector_level="L2",
+        frozen_input_identity=_frozen_input_identity(inputs),
     )
     return {"L1": l1, "L2": l2}
 
@@ -707,6 +725,7 @@ def _direct_train_series_for_family(
             constituent_manifest=inputs["constituents"],
             expected_sector_count=31,
             direct_sector_level="L1",
+            frozen_input_identity=_frozen_input_identity(inputs),
         ),
         "L2": build_train_only_series(
             inputs["l2_panel"],
@@ -716,6 +735,7 @@ def _direct_train_series_for_family(
             constituent_manifest=_direct_l2_constituents(inputs),
             expected_sector_count=131,
             direct_sector_level="L2",
+            frozen_input_identity=_frozen_input_identity(inputs),
         ),
     }
 
@@ -734,10 +754,17 @@ def prepare_b3_single_pass(
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
+    l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
     if str(request.get("dataset_manifest_hash") or "") != dataset_hash:
         raise StateModelSetError("B3 frozen dataset manifest hash mismatch")
     if str(request.get("mapping_manifest_hash") or "") != mapping_hash:
         raise StateModelSetError("B3 frozen mapping manifest hash mismatch")
+    if str(request.get("l2_stock_fact_manifest_hash") or "") != l2_stock_fact_hash:
+        raise StateModelSetError("B3 frozen L2 stock-fact manifest hash mismatch")
+    calendar_manifest = inputs["dataset_manifest"].get("calendar_benchmark")
+    if not isinstance(calendar_manifest, dict):
+        raise StateModelSetError("B3 frozen calendar manifest is missing")
+    calendar_hash = canonical_sha256(calendar_manifest)
     families = list(request.get("families") or ())
     family_names = {str(family.get("family") or "") for family in families}
     if family_names != {"legacy_covfix", "autocycle_all_core"} or len(families) != 2:
@@ -763,7 +790,8 @@ def prepare_b3_single_pass(
         "process_identity": process_identity,
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
-        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        "calendar_manifest_hash": calendar_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
         "level_repeats": level_repeats,
         "selection_performed": False,
         "validation_accessed_for_selection": False,
@@ -828,11 +856,19 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         raise StateModelSetError("formal B3 fresh processes used different dataset manifests")
     if repeats[0]["mapping_manifest_hash"] != repeats[1]["mapping_manifest_hash"]:
         raise StateModelSetError("formal B3 fresh processes used different mapping manifests")
+    if repeats[0]["calendar_manifest_hash"] != repeats[1]["calendar_manifest_hash"]:
+        raise StateModelSetError("formal B3 fresh processes used different calendar manifests")
+    if repeats[0]["l2_stock_fact_manifest_hash"] != repeats[1]["l2_stock_fact_manifest_hash"]:
+        raise StateModelSetError("formal B3 fresh processes used different L2 stock-fact manifests")
     inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix))
     if canonical_sha256(inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen dataset manifest")
     if canonical_sha256(inputs["mapping_manifest"]) != repeats[0]["mapping_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen mapping manifest")
+    if canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]) != repeats[0]["calendar_manifest_hash"]:
+        raise StateModelSetError("formal B3 D6 reload drifted from the frozen calendar manifest")
+    if canonical_sha256(inputs["l2_stock_fact_manifest"]) != repeats[0]["l2_stock_fact_manifest_hash"]:
+        raise StateModelSetError("formal B3 D6 reload drifted from the frozen L2 stock-fact manifest")
     selections: dict[tuple[str, str], dict[str, Any]] = {}
     selected_artifacts: dict[tuple[str, str], dict[str, Any]] = {}
     family_map = {str(item["family"]): item for item in request["families"]}
@@ -857,10 +893,19 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
                     selection,
                     models_from_repeat(first),
                     series_by_level[level],
+                    first,
                 )
     all_ready = len(selected_artifacts) == 4 and all(
         artifact.get("status") == "accepted" for artifact in selected_artifacts.values()
     )
+    family_model_set_statuses = {
+        family: (
+            "accepted"
+            if all(selected_artifacts.get((family, level), {}).get("status") == "accepted" for level in ("L1", "L2"))
+            else "blocked"
+        )
+        for family in ("legacy_covfix", "autocycle_all_core")
+    }
     manifest_path = None
     if all_ready:
         manifest_path = write_b3_ready_model_set(
@@ -869,6 +914,8 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
             selection_receipts=selections,
             dataset_manifest_hash=repeats[0]["dataset_manifest_hash"],
             mapping_manifest_hash=repeats[0]["mapping_manifest_hash"],
+            calendar_manifest_hash=repeats[0]["calendar_manifest_hash"],
+            l2_stock_fact_manifest_hash=repeats[0]["l2_stock_fact_manifest_hash"],
             producer_commit=_git_commit(),
         )
     body = {
@@ -877,11 +924,14 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         "producer_commit": _git_commit(),
         "dataset_manifest_hash": repeats[0]["dataset_manifest_hash"],
         "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
+        "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
         "selections": {f"{family}:{level}": selections[(family, level)] for family, level in sorted(selections)},
         "selected_artifacts": {
             f"{family}:{level}": selected_artifacts[(family, level)] for family, level in sorted(selected_artifacts)
         },
+        "family_model_set_statuses": family_model_set_statuses,
         "selection_performed": True,
         "selection_used_validation": False,
         "selection_used_future_utility": False,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -143,45 +142,10 @@ def _training_series(feature_count: int = 7) -> dict[str, subject.L1TrainingSeri
     return output
 
 
-@pytest.fixture(scope="module")
-def trained_l1() -> dict:
-    return subject.train_l1_models(
-        _training_series(),
-        feature_names=subject.BASE_FEATURES,
-        preprocess_family="identity",
-        random_seed=42,
-        observation_version="hmm_risk_l1_stock_fact_observation_v1",
-    )
-
-
-def test_train_l1_models_produces_31_direct_causal_three_state_entries(trained_l1: dict) -> None:
-    assert trained_l1["sector_count"] == 31
-    assert trained_l1["preprocess"]["family"] == "identity"
-    for entry in trained_l1["models"].values():
-        assert entry["state_origin"] == "direct_hmm"
-        assert set(entry["state_labels"].values()) == subject.SEMANTIC_LABELS
-        assert entry["causal_replay"] == "passed"
-        assert entry["training_rows"] == 150
-
-
-def test_train_l1_models_rejects_partial_layer_and_semantic_tie() -> None:
-    incomplete = _training_series()
-    incomplete.pop(next(iter(incomplete)))
-    with pytest.raises(subject.StateModelSetError, match="exactly 31"):
+def test_legacy_fixed_seed_training_is_disabled_before_any_partial_or_semantic_path() -> None:
+    with pytest.raises(subject.StateModelSetError, match="legacy fixed-seed L1 training is disabled"):
         subject.train_l1_models(
-            incomplete,
-            feature_names=subject.BASE_FEATURES,
-            preprocess_family="identity",
-            random_seed=42,
-            observation_version="hmm_risk_l1_stock_fact_observation_v1",
-        )
-
-    tied = _training_series()
-    first = next(iter(tied))
-    tied[first] = replace(tied[first], validation_future_utility=np.zeros(60))
-    with pytest.raises(subject.StateModelSetError, match="semantic utility tie"):
-        subject.train_l1_models(
-            tied,
+            _training_series(),
             feature_names=subject.BASE_FEATURES,
             preprocess_family="identity",
             random_seed=42,
@@ -680,91 +644,8 @@ def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> Non
         preparation._write_diagnostic_report(path, {**report, "status": "different"})
 
 
-def _spec(source_sha: str) -> subject.StateModelSetSpec:
-    return subject.StateModelSetSpec(
-        family="legacy_covfix",
-        family_version="legacy_covfix_l1_stock_fact_v1",
-        producer_commit="a" * 40,
-        created_at="2026-07-23T02:00:00+08:00",
-        candidate_ids=("hmmc_001",),
-        parser_contract=subject.PARSER_LEGACY_UNIFORM,
-        source_l2_artifact_uri="configured://approved/models.json",
-        source_l2_artifact_sha256=source_sha,
-        train_start=date(2022, 1, 1),
-        train_end=date(2024, 6, 30),
-        validation_start=date(2024, 7, 1),
-        validation_end=date(2025, 3, 31),
-        common_data_watermark=date(2025, 4, 30),
-        dataset_manifest={"schema_version": "dataset_v1", "hashes": ["a" * 64]},
-        mapping_manifest={"schema_version": "mapping_v1", "sector_count": 31},
-        feature_definition={"schema_version": "feature_v1", "features": list(subject.BASE_FEATURES)},
-        observation_version="hmm_risk_l1_stock_fact_observation_v1",
-        preprocess_family="identity",
-    )
-
-
-def test_build_and_write_ready_content_addressed_set(tmp_path, trained_l1: dict) -> None:
-    payload, codes = _l2_payload(include_startprob=False)
-    source_sha = subject.sha256_bytes(payload)
-    l2 = subject.parse_l2_artifact(
-        payload,
-        parser_contract=subject.PARSER_LEGACY_UNIFORM,
-        expected_sha256=source_sha,
-        expected_sector_codes=codes,
-        expected_features=subject.BASE_FEATURES,
-    )
-
-    manifest, l1_bytes, l2_bytes = subject.build_state_model_set(
-        spec=_spec(source_sha),
-        l1_artifact=trained_l1,
-        l2_artifact=l2,
-    )
-    manifest_path = subject.write_state_model_set(
-        tmp_path,
-        manifest=manifest,
-        l1_bytes=l1_bytes,
-        l2_bytes=l2_bytes,
-    )
-    repeated = subject.write_state_model_set(
-        tmp_path,
-        manifest=manifest,
-        l1_bytes=l1_bytes,
-        l2_bytes=l2_bytes,
-    )
-
-    assert repeated == manifest_path
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["status"] == "READY"
-    assert manifest["layers"]["L1"]["sector_count"] == 31
-    assert manifest["layers"]["L2"]["sector_count"] == 131
-    assert manifest["state_model_set_id"].startswith("hmms_")
-
-    with pytest.raises(subject.StateModelSetError, match="artifact bytes differ"):
-        subject.write_state_model_set(
-            tmp_path / "bad",
-            manifest=manifest,
-            l1_bytes=l1_bytes + b" ",
-            l2_bytes=l2_bytes,
-        )
-
-
-def test_build_model_set_rejects_cross_family_features(trained_l1: dict) -> None:
-    payload, codes = _l2_payload(include_startprob=True, feature_names=subject.ALL_CORE_FEATURES)
-    source_sha = subject.sha256_bytes(payload)
-    l2 = subject.parse_l2_artifact(
-        payload,
-        parser_contract=subject.PARSER_AUTOCYCLE,
-        expected_sha256=source_sha,
-        expected_sector_codes=codes,
-        expected_features=subject.ALL_CORE_FEATURES,
-    )
-
-    with pytest.raises(subject.StateModelSetError, match="feature families differ"):
-        subject.build_state_model_set(
-            spec=replace(
-                _spec(source_sha),
-                parser_contract=subject.PARSER_AUTOCYCLE,
-                preprocess_family="winsor_zscore_1_99_train_global_v1",
-            ),
-            l1_artifact=trained_l1,
-            l2_artifact=l2,
-        )
+def test_legacy_fixed_seed_build_and_ready_writer_are_disabled(tmp_path) -> None:
+    with pytest.raises(subject.StateModelSetError, match="legacy state-model-set READY construction is disabled"):
+        subject.build_state_model_set(spec=None, l1_artifact={}, l2_artifact={})
+    with pytest.raises(subject.StateModelSetError, match="legacy state-model-set READY writing is disabled"):
+        subject.write_state_model_set(tmp_path, manifest={}, l1_bytes=b"{}", l2_bytes=b"{}")

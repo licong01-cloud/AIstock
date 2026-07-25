@@ -596,6 +596,7 @@ def build_l1_training_series(
     constituent_manifest_by_l1: Mapping[str, Mapping[str, Any]],
     expected_sector_count: int = 31,
     direct_sector_level: str = "L1",
+    frozen_input_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, L1TrainingSeries]:
     """Freeze train/validation matrices and validation-only future utility."""
 
@@ -636,6 +637,32 @@ def build_l1_training_series(
         l2_codes = tuple(sorted(str(item) for item in constituent.get("l2_codes") or ()))
         if not l2_codes:
             raise StateModelSetError(f"{code} constituent manifest has no L2 codes")
+        validation_dates = [item.date().isoformat() for item in validation.index]
+        utility_components = {
+            "excess_return_5d": validation["validation_excess_return_5d"].to_numpy(dtype=np.float64),
+            "excess_return_10d": validation["validation_excess_return_10d"].to_numpy(dtype=np.float64),
+            "excess_return_20d": validation["validation_excess_return_20d"].to_numpy(dtype=np.float64),
+        }
+        validation_input_manifest = {
+            **dict(frozen_input_identity or {}),
+            "schema_version": "hmm_risk_d6_frozen_input_manifest_v1",
+            "direct_sector_level": direct_sector_level,
+            "sector_code": str(code),
+            "validation_dates": validation_dates,
+            "validation_dates_sha256": canonical_sha256(validation_dates),
+            "validation_observation_sha256": canonical_sha256(
+                validation.loc[:, list(features)].to_numpy(dtype=np.float64).tolist()
+            ),
+            "utility_component_sha256": {
+                name: canonical_sha256(values.tolist()) for name, values in sorted(utility_components.items())
+            },
+            "combined_utility_sha256": canonical_sha256(
+                validation["validation_future_utility"].to_numpy(dtype=np.float64).tolist()
+            ),
+            "source_cutoff": "2025-04-30",
+            "formula_version": "hmm_risk_hard_future_excess_035_035_030_v1",
+            "benchmark_identity": "000300.SH",
+        }
         output[str(code)] = L1TrainingSeries(
             sector_code=str(code),
             sector_name=str(sector["l1_name"].dropna().iloc[-1]),
@@ -658,13 +685,10 @@ def build_l1_training_series(
                     "validation_sha256": canonical_sha256(validation.to_numpy(dtype=np.float64).tolist()),
                 }
             ),
-            validation_future_components={
-                "excess_return_5d": validation["validation_excess_return_5d"].to_numpy(dtype=np.float64),
-                "excess_return_10d": validation["validation_excess_return_10d"].to_numpy(dtype=np.float64),
-                "excess_return_20d": validation["validation_excess_return_20d"].to_numpy(dtype=np.float64),
-            },
+            validation_future_components=utility_components,
             validation_utility_source_cutoff=date(2025, 4, 30),
             validation_utility_formula_version="hmm_risk_hard_future_excess_035_035_030_v1",
+            validation_input_manifest=validation_input_manifest,
         )
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("training series requires an approved L1/31 or L2/131 contract")

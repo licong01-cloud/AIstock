@@ -20,6 +20,11 @@ L2_RETRAIN_VERSION = "hmm_risk_c008_b3_l2_retrain_a_v1"
 RESTART_SCHEDULE = tuple(range(42, 50))
 
 
+def _valid_sha256(value: Any) -> bool:
+    identity = str(value or "")
+    return len(identity) == 64 and all(character in "0123456789abcdef" for character in identity.lower())
+
+
 def _finite_array(value: Any, *, shape: tuple[int, ...] | None = None) -> np.ndarray:
     result = np.asarray(value, dtype=np.float64)
     if shape is not None and result.shape != shape:
@@ -78,45 +83,119 @@ def _status_receipt(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def _status_value(
+    *,
+    failures: Sequence[str] = (),
+    blockers: Sequence[str] = (),
+    warnings: Sequence[str] = (),
+) -> tuple[str, bool]:
+    if failures:
+        return "failed", False
+    if blockers:
+        return "insufficient_evidence", False
+    if warnings:
+        return "accepted_with_warning", True
+    return "accepted", True
+
+
+def _named_status_receipt(
+    prefix: str,
+    *,
+    contract_version: str,
+    failures: Sequence[str] = (),
+    blockers: Sequence[str] = (),
+    warnings: Sequence[str] = (),
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    receipt = _status_receipt(
+        contract_version=contract_version,
+        failures=failures,
+        blockers=blockers,
+        warnings=warnings,
+        evidence=evidence,
+    )
+    receipt.pop("receipt_sha256")
+    receipt[f"{prefix}_status"] = receipt.pop("status")
+    receipt[f"{prefix}_valid"] = receipt.pop("valid")
+    return {**receipt, "receipt_sha256": canonical_sha256(receipt)}
+
+
 def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply D4-01-A without treating hmmlearn monitor convergence as likelihood acceptance."""
 
     if monitor is None:
-        return _status_receipt(
-            contract_version=D4_LIKELIHOOD_VERSION,
-            blockers=("hmm_risk_model_likelihood_evidence_missing",),
-            evidence={},
-        )
-    failures: list[str] = []
-    blockers: list[str] = []
+        body = {
+            "contract_version": D4_LIKELIHOOD_VERSION,
+            "monitor_status": "insufficient_evidence",
+            "convergence_valid": False,
+            "likelihood_status": "insufficient_evidence",
+            "likelihood_valid": False,
+            "failure_reason_codes": [],
+            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
+            "warning_reason_codes": [],
+            "primary_reason_code": "hmm_risk_model_likelihood_evidence_missing",
+            "evidence": {},
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
+    monitor_failures: list[str] = []
+    monitor_blockers: list[str] = []
+    likelihood_failures: list[str] = []
+    likelihood_blockers: list[str] = []
     warnings: list[str] = []
     required_fields = {"converged", "iterations", "maximum_iterations", "history"}
     if not required_fields.issubset(monitor):
-        return _status_receipt(
-            contract_version=D4_LIKELIHOOD_VERSION,
-            blockers=("hmm_risk_model_likelihood_evidence_missing",),
-            evidence={"monitor_fields_present": sorted(str(key) for key in monitor)},
-        )
+        body = {
+            "contract_version": D4_LIKELIHOOD_VERSION,
+            "monitor_status": "insufficient_evidence",
+            "convergence_valid": False,
+            "likelihood_status": "insufficient_evidence",
+            "likelihood_valid": False,
+            "failure_reason_codes": [],
+            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
+            "warning_reason_codes": [],
+            "primary_reason_code": "hmm_risk_model_likelihood_evidence_missing",
+            "evidence": {"monitor_fields_present": sorted(str(key) for key in monitor)},
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
     try:
-        converged = bool(monitor["converged"])
+        if not isinstance(monitor["converged"], bool):
+            raise TypeError("converged must be a bool")
+        converged = monitor["converged"]
+        if isinstance(monitor["iterations"], bool) or isinstance(monitor["maximum_iterations"], bool):
+            raise TypeError("iteration values must be integers")
         iterations = int(monitor["iterations"])
         maximum_iterations = int(monitor["maximum_iterations"])
         history = np.asarray(monitor["history"], dtype=np.float64)
     except (TypeError, ValueError):
-        return _status_receipt(
-            contract_version=D4_LIKELIHOOD_VERSION,
-            failures=("hmm_risk_model_likelihood_history_invalid",),
-            evidence={"history_parseable": False},
-        )
+        body = {
+            "contract_version": D4_LIKELIHOOD_VERSION,
+            "monitor_status": "failed",
+            "convergence_valid": False,
+            "likelihood_status": "insufficient_evidence",
+            "likelihood_valid": False,
+            "failure_reason_codes": ["hmm_risk_model_monitor_history_invalid"],
+            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
+            "warning_reason_codes": [],
+            "primary_reason_code": "hmm_risk_model_monitor_history_invalid",
+            "evidence": {"history_parseable": False},
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
     history_is_finite = bool(np.isfinite(history).all())
     if not history_is_finite:
-        failures.append("hmm_risk_model_likelihood_non_finite")
+        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
+        likelihood_failures.append("hmm_risk_model_likelihood_non_finite")
     if history.ndim != 1 or history.size < 2 or history.size != iterations:
-        failures.append("hmm_risk_model_likelihood_history_invalid")
+        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
+        likelihood_blockers.append("hmm_risk_model_likelihood_evidence_missing")
     if not converged:
-        failures.append("hmm_risk_model_monitor_not_converged")
-    if not 2 <= iterations < maximum_iterations or maximum_iterations != 300:
-        failures.append("hmm_risk_model_likelihood_iteration_contract_failed")
+        monitor_failures.append("hmm_risk_model_monitor_not_converged")
+    if maximum_iterations != 300 or iterations >= maximum_iterations:
+        monitor_failures.append("hmm_risk_model_max_iterations_reached")
+    elif iterations < 2:
+        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
 
     deltas: list[dict[str, Any]] = []
     if history.ndim == 1 and history.size >= 2 and history_is_finite:
@@ -137,14 +216,31 @@ def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[st
                 }
             )
             if not terminal and absolute < 0.0:
-                failures.append("hmm_risk_model_likelihood_nonterminal_decrease")
+                likelihood_failures.append("hmm_risk_model_likelihood_nonterminal_decrease")
             if terminal and absolute >= 0.0 and not absolute < 0.01:
-                failures.append("hmm_risk_model_likelihood_tolerance_failed")
+                likelihood_failures.append("hmm_risk_model_likelihood_tolerance_failed")
             if terminal and absolute < 0.0:
                 if relative < -2e-5:
-                    failures.append("hmm_risk_model_likelihood_tolerance_failed")
+                    likelihood_failures.append("hmm_risk_model_likelihood_tolerance_failed")
                 else:
                     warnings.append("hmm_risk_model_likelihood_terminal_decrease_warning")
+
+    monitor_failures = list(dict.fromkeys(monitor_failures))
+    monitor_blockers = list(dict.fromkeys(monitor_blockers))
+    likelihood_failures = list(dict.fromkeys(likelihood_failures))
+    likelihood_blockers = list(dict.fromkeys(likelihood_blockers))
+    warnings = list(dict.fromkeys(warnings))
+    monitor_status, convergence_valid = _status_value(
+        failures=monitor_failures,
+        blockers=monitor_blockers,
+    )
+    likelihood_status, likelihood_valid = _status_value(
+        failures=likelihood_failures,
+        blockers=likelihood_blockers,
+        warnings=warnings,
+    )
+    failures = [*monitor_failures, *likelihood_failures]
+    blockers = [*monitor_blockers, *likelihood_blockers]
     evidence = {
         "monitor_converged": converged,
         "iterations": iterations,
@@ -156,20 +252,28 @@ def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[st
         "fit_tolerance": 0.01,
         "terminal_relative_tolerance": -2e-5,
     }
-    return _status_receipt(
-        contract_version=D4_LIKELIHOOD_VERSION,
-        failures=failures,
-        blockers=blockers,
-        warnings=warnings,
-        evidence=evidence,
-    )
+    primary = failures[0] if failures else blockers[0] if blockers else warnings[0] if warnings else None
+    body = {
+        "contract_version": D4_LIKELIHOOD_VERSION,
+        "monitor_status": monitor_status,
+        "convergence_valid": convergence_valid,
+        "likelihood_status": likelihood_status,
+        "likelihood_valid": likelihood_valid,
+        "failure_reason_codes": failures,
+        "blocking_reason_codes": blockers,
+        "warning_reason_codes": warnings,
+        "primary_reason_code": primary,
+        "evidence": evidence,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def evaluate_covariance_acceptance(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply D4-02-A to raw fitted covariance; no clipping or projection is performed."""
 
     if evidence is None:
-        return _status_receipt(
+        return _named_status_receipt(
+            "covariance",
             contract_version=D4_COVARIANCE_VERSION,
             blockers=("hmm_risk_model_covariance_evidence_missing",),
             evidence={},
@@ -184,7 +288,8 @@ def evaluate_covariance_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
         "nu",
     }
     if not required_fields.issubset(evidence):
-        return _status_receipt(
+        return _named_status_receipt(
+            "covariance",
             contract_version=D4_COVARIANCE_VERSION,
             blockers=("hmm_risk_model_covariance_evidence_missing",),
             evidence={"available_fields": sorted(str(key) for key in evidence)},
@@ -197,7 +302,8 @@ def evaluate_covariance_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
         train_rows = int(evidence["train_rows"])
         nu = float(evidence["nu"])
     except (TypeError, ValueError):
-        return _status_receipt(
+        return _named_status_receipt(
+            "covariance",
             contract_version=D4_COVARIANCE_VERSION,
             failures=("hmm_risk_model_covariance_invalid",),
             evidence={"covariance_parseable": False},
@@ -261,7 +367,8 @@ def evaluate_covariance_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
     }
     if receipt_evidence["postfit_projection_performed"]:
         failures.append("hmm_risk_model_covariance_acceptance_failed")
-    return _status_receipt(
+    return _named_status_receipt(
+        "covariance",
         contract_version=D4_COVARIANCE_VERSION,
         failures=failures,
         evidence=receipt_evidence,
@@ -317,28 +424,60 @@ def _hard_sequence_metrics(posteriors: np.ndarray, dates: tuple[date, ...]) -> t
     }
 
 
-def evaluate_train_occupancy(posteriors: Any, dates: Sequence[date] | None) -> dict[str, Any]:
+def evaluate_train_occupancy(
+    posteriors: Any,
+    dates: Sequence[date] | None,
+    *,
+    frozen_input_manifest: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     """Apply D4-03-B to causal train hard assignments only."""
 
-    if dates is None:
-        return _status_receipt(
+    if dates is None or not isinstance(frozen_input_manifest, Mapping):
+        return _named_status_receipt(
+            "train_occupancy",
             contract_version=D4_OCCUPANCY_VERSION,
-            blockers=("hmm_risk_model_train_evidence_missing",),
+            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
             evidence={},
         )
     try:
         ordered_dates = _ordered_unique_dates(dates)
+    except (TypeError, ValueError):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            failures=("hmm_risk_model_train_date_sequence_invalid",),
+            evidence={},
+        )
+    ordered_date_strings = [value.isoformat() for value in ordered_dates]
+    required_hashes = ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash")
+    if (
+        frozen_input_manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
+        or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
+        or not str(frozen_input_manifest.get("sector_code") or "").strip()
+        or not _valid_sha256(frozen_input_manifest.get("train_observation_sha256"))
+        or frozen_input_manifest.get("train_dates") != ordered_date_strings
+        or frozen_input_manifest.get("train_dates_sha256") != canonical_sha256(ordered_date_strings)
+        or any(not _valid_sha256(frozen_input_manifest.get(field)) for field in required_hashes)
+    ):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
+            evidence={"frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest))},
+        )
+    try:
         probabilities = _finite_array(posteriors, shape=(len(ordered_dates), 3))
         hard, metrics = _hard_sequence_metrics(probabilities, ordered_dates)
     except (TypeError, ValueError):
-        return _status_receipt(
+        return _named_status_receipt(
+            "train_occupancy",
             contract_version=D4_OCCUPANCY_VERSION,
-            failures=("hmm_risk_model_train_posterior_invalid",),
+            failures=("hmm_risk_model_posterior_invalid",),
             evidence={},
         )
     failures: list[str] = []
     if metrics["row_sum_max_abs_error"] > 1e-12:
-        failures.append("hmm_risk_model_train_posterior_normalization_failed")
+        failures.append("hmm_risk_model_posterior_normalization_failed")
     if metrics["top1_top2_min_margin"] <= 1e-12:
         failures.append("hmm_risk_model_posterior_tie")
     count_threshold = max(5, math.ceil(0.01 * len(ordered_dates)))
@@ -354,11 +493,16 @@ def evaluate_train_occupancy(posteriors: Any, dates: Sequence[date] | None) -> d
         if state["incoming_transition_count"] < 2 or state["outgoing_transition_count"] < 2:
             failures.append("hmm_risk_model_train_transition_coverage_insufficient")
         if state["maximum_single_run_share"] is None or state["maximum_single_run_share"] > 0.8:
-            failures.append("hmm_risk_model_train_run_concentration_failed")
+            failures.append("hmm_risk_model_train_run_concentration_exceeded")
     evidence = {
+        "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
+        "sector_code": frozen_input_manifest.get("sector_code"),
+        "train_observation_sha256": frozen_input_manifest.get("train_observation_sha256"),
+        **{field: frozen_input_manifest.get(field) for field in required_hashes},
         "train_rows": len(ordered_dates),
-        "ordered_date_sha256": canonical_sha256([value.isoformat() for value in ordered_dates]),
+        "ordered_date_sha256": canonical_sha256(ordered_date_strings),
         "posterior_sha256": canonical_sha256(probabilities.tolist()),
+        "frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest)),
         "count_threshold": count_threshold,
         "occupancy_threshold": 0.01,
         "month_threshold": 3,
@@ -369,7 +513,8 @@ def evaluate_train_occupancy(posteriors: Any, dates: Sequence[date] | None) -> d
         "future_utility_accessed": False,
         **metrics,
     }
-    return _status_receipt(
+    return _named_status_receipt(
+        "train_occupancy",
         contract_version=D4_OCCUPANCY_VERSION,
         failures=failures,
         evidence=evidence,
@@ -379,10 +524,19 @@ def evaluate_train_occupancy(posteriors: Any, dates: Sequence[date] | None) -> d
 def _candidate_status(entry: Mapping[str, Any]) -> bool:
     return (
         entry.get("fit_status") == "accepted"
-        and bool(entry.get("likelihood", {}).get("valid"))
-        and bool(entry.get("covariance", {}).get("valid"))
-        and bool(entry.get("train_occupancy", {}).get("valid"))
+        and entry.get("model_entry_status") == "accepted"
+        and entry.get("model_entry_valid") is True
+        and entry.get("likelihood", {}).get("convergence_valid") is True
+        and entry.get("likelihood", {}).get("likelihood_valid") is True
+        and entry.get("covariance", {}).get("covariance_valid") is True
+        and entry.get("train_occupancy", {}).get("train_occupancy_valid") is True
     )
+
+
+def _canonical_receipt_hash_valid(receipt: Mapping[str, Any], field: str = "receipt_sha256") -> bool:
+    expected = str(receipt.get(field) or "")
+    body = {key: value for key, value in receipt.items() if key != field}
+    return len(expected) == 64 and canonical_sha256(body) == expected
 
 
 def select_level_restart(
@@ -401,14 +555,14 @@ def select_level_restart(
     blockers: list[str] = []
     failures: list[str] = []
     if len(codes) != expected_count or len(set(codes)) != expected_count:
-        failures.append("hmm_risk_model_restart_level_incomplete")
+        failures.append("hmm_risk_model_selection_level_incomplete")
     for repeat in (first_repeat, second_repeat):
         if tuple(repeat.get("schedule") or ()) != RESTART_SCHEDULE:
             blockers.append("hmm_risk_model_restart_schedule_incomplete")
         if repeat.get("family") != family or repeat.get("level") != level:
             failures.append("hmm_risk_model_selection_contract_unsatisfied")
         if tuple(repeat.get("canonical_sector_codes") or ()) != codes:
-            failures.append("hmm_risk_model_restart_level_incomplete")
+            failures.append("hmm_risk_model_selection_level_incomplete")
         if len(tuple(repeat.get("feature_names") or ())) != feature_count:
             failures.append("hmm_risk_model_selection_contract_unsatisfied")
         if repeat.get("validation_accessed") is not False or repeat.get("future_utility_accessed") is not False:
@@ -417,10 +571,62 @@ def select_level_restart(
             failures.append("hmm_risk_model_selection_contract_unsatisfied")
     first_entries = list(first_repeat.get("entries") or ())
     second_entries = list(second_repeat.get("entries") or ())
+    model_maps: list[dict[tuple[int, str], Mapping[str, Any]]] = []
     for repeat, entries in ((first_repeat, first_entries), (second_repeat, second_entries)):
         models = list(repeat.get("models") or ())
+        if len(entries) != len(RESTART_SCHEDULE) * expected_count:
+            failures.append("hmm_risk_model_selection_level_incomplete")
+        entry_keys: set[tuple[int, str]] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or not _canonical_receipt_hash_valid(entry, "entry_receipt_sha256"):
+                failures.append("hmm_risk_model_selection_repeat_mismatch")
+                continue
+            key = (int(entry.get("seed", -1)), str(entry.get("sector_code") or ""))
+            if key in entry_keys or key[0] not in RESTART_SCHEDULE or key[1] not in codes:
+                failures.append("hmm_risk_model_selection_level_incomplete")
+            entry_keys.add(key)
+            if entry.get("fit_status") == "accepted":
+                for field, contract in (
+                    ("likelihood", D4_LIKELIHOOD_VERSION),
+                    ("covariance", D4_COVARIANCE_VERSION),
+                    ("train_occupancy", D4_OCCUPANCY_VERSION),
+                ):
+                    receipt = entry.get(field)
+                    if (
+                        not isinstance(receipt, Mapping)
+                        or receipt.get("contract_version") != contract
+                        or not _canonical_receipt_hash_valid(receipt)
+                    ):
+                        failures.append("hmm_risk_model_selection_repeat_mismatch")
+        model_map: dict[tuple[int, str], Mapping[str, Any]] = {}
+        for model in models:
+            if not isinstance(model, Mapping):
+                failures.append("hmm_risk_model_selection_repeat_mismatch")
+                continue
+            expected_model_hash = str(model.get("model_payload_sha256") or "")
+            model_body = {key: value for key, value in model.items() if key != "model_payload_sha256"}
+            key = (int(model.get("seed", -1)), str(model.get("sector_code") or ""))
+            if (
+                len(expected_model_hash) != 64
+                or canonical_sha256(model_body) != expected_model_hash
+                or key in model_map
+                or key[0] not in RESTART_SCHEDULE
+                or key[1] not in codes
+                or model.get("family") != family
+                or model.get("level") != level
+            ):
+                failures.append("hmm_risk_model_selection_repeat_mismatch")
+                continue
+            model_map[key] = model
+        for entry in entries:
+            if isinstance(entry, Mapping) and entry.get("fit_status") == "accepted":
+                key = (int(entry.get("seed", -1)), str(entry.get("sector_code") or ""))
+                model = model_map.get(key)
+                if model is None or entry.get("model_payload_sha256") != model.get("model_payload_sha256"):
+                    failures.append("hmm_risk_model_selection_repeat_mismatch")
+        model_maps.append(model_map)
         if canonical_sha256(models) != repeat.get("model_payload_sha256"):
-            failures.append("hmm_risk_model_repeat_hash_mismatch")
+            failures.append("hmm_risk_model_selection_repeat_mismatch")
         candidate_payload = {
             "family": repeat.get("family"),
             "level": repeat.get("level"),
@@ -433,13 +639,13 @@ def select_level_restart(
             "models": models,
         }
         if canonical_sha256(candidate_payload) != repeat.get("candidate_payload_sha256"):
-            failures.append("hmm_risk_model_repeat_hash_mismatch")
+            failures.append("hmm_risk_model_selection_repeat_mismatch")
     if canonical_sha256(first_entries) != canonical_sha256(second_entries):
-        failures.append("hmm_risk_model_repeat_hash_mismatch")
+        failures.append("hmm_risk_model_selection_repeat_mismatch")
     if first_repeat.get("candidate_payload_sha256") != second_repeat.get("candidate_payload_sha256"):
-        failures.append("hmm_risk_model_repeat_hash_mismatch")
+        failures.append("hmm_risk_model_selection_repeat_mismatch")
     if first_repeat.get("model_payload_sha256") != second_repeat.get("model_payload_sha256"):
-        failures.append("hmm_risk_model_repeat_hash_mismatch")
+        failures.append("hmm_risk_model_selection_repeat_mismatch")
 
     candidates: list[dict[str, Any]] = []
     for schedule_index, seed in enumerate(RESTART_SCHEDULE):
@@ -452,7 +658,11 @@ def select_level_restart(
             key=lambda entry: str(entry.get("sector_code") or ""),
         )
         entry_codes = tuple(str(entry.get("sector_code") or "") for entry in entries)
-        eligible = entry_codes == codes and all(_candidate_status(entry) for entry in entries)
+        eligible = (
+            entry_codes == codes
+            and all(_candidate_status(entry) for entry in entries)
+            and all((seed, code) in model_maps[0] for code in codes)
+        )
         scores: list[float] = []
         if eligible:
             for entry in entries:
@@ -552,6 +762,9 @@ def evaluate_semantic_validation(
     posteriors: Any,
     dates: Sequence[date] | None,
     utility_components: Mapping[str, Any] | None,
+    *,
+    frozen_input_manifest: Mapping[str, Any] | None,
+    selected_model_payload_sha256: str,
 ) -> dict[str, Any]:
     """Apply D6-01-B after selection; hard argmax remains the sole semantic authority."""
 
@@ -559,8 +772,30 @@ def evaluate_semantic_validation(
     assignment_blockers: list[str] = []
     evidence_failures: list[str] = []
     evidence_blockers: list[str] = []
+    manifest_valid = isinstance(frozen_input_manifest, Mapping)
+    if not manifest_valid:
+        assignment_blockers.append("hmm_risk_semantic_validation_evidence_missing")
+        evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
+        frozen_input_manifest = {}
+    required_manifest_hashes = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+    )
+    if manifest_valid and (
+        frozen_input_manifest.get("schema_version") != "hmm_risk_d6_frozen_input_manifest_v1"
+        or frozen_input_manifest.get("benchmark_identity") != "000300.SH"
+        or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
+        or not str(frozen_input_manifest.get("sector_code") or "").strip()
+        or not _valid_sha256(frozen_input_manifest.get("validation_observation_sha256"))
+        or any(not _valid_sha256(frozen_input_manifest.get(field)) for field in required_manifest_hashes)
+        or not _valid_sha256(selected_model_payload_sha256)
+    ):
+        assignment_blockers.append("hmm_risk_semantic_validation_evidence_missing")
+        evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
     if dates is None:
-        assignment_blockers.append("hmm_risk_semantic_evidence_missing")
+        assignment_blockers.append("hmm_risk_semantic_validation_evidence_missing")
         ordered_dates: tuple[date, ...] = ()
         probabilities = np.empty((0, 3), dtype=np.float64)
         hard = np.empty((0,), dtype=np.int64)
@@ -571,7 +806,7 @@ def evaluate_semantic_validation(
             probabilities = _finite_array(posteriors, shape=(len(ordered_dates), 3))
             hard, metrics = _hard_sequence_metrics(probabilities, ordered_dates)
         except (TypeError, ValueError):
-            assignment_failures.append("hmm_risk_semantic_posterior_invalid")
+            assignment_failures.append("hmm_risk_semantic_validation_posterior_invalid")
             ordered_dates = ()
             probabilities = np.empty((0, 3), dtype=np.float64)
             hard = np.empty((0,), dtype=np.int64)
@@ -580,15 +815,27 @@ def evaluate_semantic_validation(
         len(ordered_dates) != 182 or ordered_dates[0] != date(2024, 7, 1) or ordered_dates[-1] != date(2025, 3, 31)
     ):
         assignment_failures.append("hmm_risk_semantic_validation_date_sequence_invalid")
+    ordered_date_strings = [value.isoformat() for value in ordered_dates]
+    if ordered_dates and (
+        frozen_input_manifest.get("validation_dates") != ordered_date_strings
+        or frozen_input_manifest.get("validation_dates_sha256") != canonical_sha256(ordered_date_strings)
+    ):
+        assignment_blockers.append("hmm_risk_semantic_validation_evidence_missing")
     if metrics:
         if metrics["row_sum_max_abs_error"] > 1e-12:
-            assignment_failures.append("hmm_risk_semantic_posterior_normalization_failed")
+            assignment_failures.append("hmm_risk_semantic_validation_posterior_normalization_failed")
         if metrics["top1_top2_min_margin"] <= 1e-12:
-            assignment_failures.append("hmm_risk_semantic_posterior_tie")
+            assignment_failures.append("hmm_risk_semantic_validation_posterior_tie")
     assignment_evidence = {
+        "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
+        "sector_code": frozen_input_manifest.get("sector_code"),
+        "validation_observation_sha256": frozen_input_manifest.get("validation_observation_sha256"),
+        **{field: frozen_input_manifest.get(field) for field in required_manifest_hashes},
         "validation_rows": len(ordered_dates),
-        "ordered_date_sha256": canonical_sha256([value.isoformat() for value in ordered_dates]),
+        "ordered_date_sha256": canonical_sha256(ordered_date_strings),
         "posterior_sha256": canonical_sha256(probabilities.tolist()),
+        "frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest)),
+        "selected_model_payload_sha256": selected_model_payload_sha256,
         **metrics,
     }
     assignment = _status_receipt(
@@ -605,12 +852,12 @@ def evaluate_semantic_validation(
     combined = np.empty((0,), dtype=np.float64)
     components: dict[str, np.ndarray] = {}
     if utility_components is None:
-        evidence_blockers.append("hmm_risk_semantic_evidence_missing")
+        evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
     else:
         if utility_components.get("source_cutoff") != "2025-04-30":
-            evidence_blockers.append("hmm_risk_semantic_evidence_missing")
+            evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
         if utility_components.get("formula_version") != "hmm_risk_hard_future_excess_035_035_030_v1":
-            evidence_blockers.append("hmm_risk_semantic_evidence_missing")
+            evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
         try:
             for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d"):
                 components[key] = _finite_array(utility_components[key], shape=(len(ordered_dates),))
@@ -621,6 +868,15 @@ def evaluate_semantic_validation(
             )
         except (KeyError, TypeError, ValueError):
             evidence_failures.append("hmm_risk_semantic_utility_non_finite")
+    if components:
+        component_hashes = {key: canonical_sha256(value.tolist()) for key, value in sorted(components.items())}
+        if frozen_input_manifest.get("utility_component_sha256") != component_hashes:
+            evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
+        if (
+            frozen_input_manifest.get("source_cutoff") != "2025-04-30"
+            or frozen_input_manifest.get("formula_version") != "hmm_risk_hard_future_excess_035_035_030_v1"
+        ):
+            evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
     semantic_mapping: dict[str, str] | None = None
     state_utility: dict[str, Any] = {}
     if assignment["semantic_assignment_valid"] and combined.shape == (len(ordered_dates),):
@@ -650,7 +906,7 @@ def evaluate_semantic_validation(
             if state_metrics["incoming_transition_count"] < 2 or state_metrics["outgoing_transition_count"] < 2:
                 evidence_failures.append("hmm_risk_semantic_validation_transition_coverage_insufficient")
             if state_metrics["maximum_single_run_share"] is None or state_metrics["maximum_single_run_share"] > 0.9:
-                evidence_failures.append("hmm_risk_semantic_validation_run_concentration_failed")
+                evidence_failures.append("hmm_risk_semantic_validation_run_concentration_exceeded")
             if not math.isfinite(mean):
                 evidence_failures.append("hmm_risk_semantic_utility_non_finite")
             elif not math.isfinite(variance):
@@ -671,13 +927,21 @@ def evaluate_semantic_validation(
                     str(ordered_states[2]): "trending",
                 }
     elif not assignment["semantic_assignment_valid"]:
-        evidence_blockers.append("hmm_risk_semantic_assignment_not_accepted")
+        evidence_blockers.append("hmm_risk_semantic_evidence_insufficient")
+    if combined.size and frozen_input_manifest.get("combined_utility_sha256") != canonical_sha256(combined.tolist()):
+        evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
     semantic_evidence = {
+        "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
+        "sector_code": frozen_input_manifest.get("sector_code"),
+        "validation_observation_sha256": frozen_input_manifest.get("validation_observation_sha256"),
+        **{field: frozen_input_manifest.get(field) for field in required_manifest_hashes},
         "utility_formula": "0.35*excess_return_5d+0.35*excess_return_10d+0.30*excess_return_20d",
         "utility_component_sha256": {
             key: canonical_sha256(value.tolist()) for key, value in sorted(components.items())
         },
         "combined_utility_sha256": canonical_sha256(combined.tolist()),
+        "frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest)),
+        "selected_model_payload_sha256": selected_model_payload_sha256,
         "state_utility": state_utility,
         "semantic_mapping": semantic_mapping,
         "hard_semantic_authority": True,

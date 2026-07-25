@@ -10,6 +10,9 @@ import numpy as np
 
 from backend.services.hmm_risk.b3_acceptance import (
     D3_CONTRACT_VERSION,
+    D4_COVARIANCE_VERSION,
+    D4_LIKELIHOOD_VERSION,
+    D4_OCCUPANCY_VERSION,
     D5_SELECTION_VERSION,
     D6_SEMANTIC_VERSION,
     L2_RETRAIN_VERSION,
@@ -25,6 +28,7 @@ from backend.services.hmm_risk.state_model_set import (
     C008_B3_DIAG04_NU,
     HMM_N_ITER,
     L1TrainingSeries,
+    SCHEMA_VERSION,
     StateModelSetError,
     _apply_preprocess,
     _b3_diag04_covariance_evidence,
@@ -104,6 +108,7 @@ class B3TrainOnlySeries:
     pit_l2_constituents: tuple[str, ...]
     pit_constituent_manifest_hash: str
     observation_manifest_hash: str
+    train_input_manifest: Mapping[str, Any]
 
     def validate(self, feature_count: int) -> None:
         if not self.sector_code.strip() or not self.sector_name.strip():
@@ -119,6 +124,20 @@ class B3TrainOnlySeries:
             raise StateModelSetError(f"{self.sector_code} train-only dates must be strictly increasing")
         if not self.pit_l2_constituents:
             raise StateModelSetError(f"{self.sector_code} train-only constituent identity is missing")
+        manifest = self.train_input_manifest
+        dates = [value.isoformat() for value in self.train_dates]
+        if (
+            not isinstance(manifest, Mapping)
+            or manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
+            or manifest.get("direct_sector_level") not in {"L1", "L2"}
+            or manifest.get("sector_code") != self.sector_code
+            or manifest.get("train_dates") != dates
+            or manifest.get("train_dates_sha256") != canonical_sha256(dates)
+            or manifest.get("train_observation_sha256") != canonical_sha256(train.tolist())
+        ):
+            raise StateModelSetError(f"{self.sector_code} train-only frozen input manifest is invalid")
+        for field in ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash"):
+            _require_hex_identity(str(manifest.get(field) or ""), length=64, label=field)
 
 
 def build_train_only_series(
@@ -130,6 +149,7 @@ def build_train_only_series(
     constituent_manifest: Mapping[str, Mapping[str, Any]],
     expected_sector_count: int,
     direct_sector_level: str,
+    frozen_input_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, B3TrainOnlySeries]:
     """Freeze only D3/D4/D5 train inputs; validation and future utility remain unread."""
 
@@ -162,6 +182,16 @@ def build_train_only_series(
             "train_dates": [item.date().isoformat() for item in train.index],
             "train_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
         }
+        train_dates = [item.date().isoformat() for item in train.index]
+        train_input_manifest = {
+            **dict(frozen_input_identity or {}),
+            "schema_version": "hmm_risk_d4_train_frozen_input_manifest_v1",
+            "direct_sector_level": direct_sector_level,
+            "sector_code": str(code),
+            "train_dates": train_dates,
+            "train_dates_sha256": canonical_sha256(train_dates),
+            "train_observation_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
+        }
         output[str(code)] = B3TrainOnlySeries(
             sector_code=str(code),
             sector_name=str(sector["l1_name"].dropna().iloc[-1]),
@@ -170,6 +200,7 @@ def build_train_only_series(
             pit_l2_constituents=l2_codes,
             pit_constituent_manifest_hash=canonical_sha256(constituent),
             observation_manifest_hash=canonical_sha256(body),
+            train_input_manifest=train_input_manifest,
         )
     if len(output) != expected_sector_count:
         raise StateModelSetError(
@@ -297,11 +328,15 @@ def _fit_b3_train_only(
             means=fitted_means,
             covars=raw_covars,
         )
-        occupancy = evaluate_train_occupancy(train_posteriors, item.train_dates)
+        occupancy = evaluate_train_occupancy(
+            train_posteriors,
+            item.train_dates,
+            frozen_input_manifest=item.train_input_manifest,
+        )
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         raise B3TrainingStageError(
             "train_posterior",
-            "hmm_risk_model_train_posterior_invalid",
+            "hmm_risk_model_posterior_invalid",
             exc,
         ) from exc
     monitor_history = list(monitor_evidence.get("history") or ())
@@ -343,6 +378,24 @@ def _fit_b3_train_only(
         pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
         model_payload_sha256=model_hash,
     )
+    independent_valid = (
+        likelihood.get("convergence_valid") is True
+        and likelihood.get("likelihood_valid") is True
+        and covariance.get("covariance_valid") is True
+        and occupancy.get("train_occupancy_valid") is True
+    )
+    independent_statuses = {
+        str(likelihood.get("monitor_status") or ""),
+        str(likelihood.get("likelihood_status") or ""),
+        str(covariance.get("covariance_status") or ""),
+        str(occupancy.get("train_occupancy_status") or ""),
+    }
+    if independent_valid:
+        model_entry_status = "accepted"
+    elif "insufficient_evidence" in independent_statuses:
+        model_entry_status = "insufficient_evidence"
+    else:
+        model_entry_status = "failed"
     entry_body = {
         "schema_version": "hmm_risk_b3_training_entry_receipt_v1",
         "contract_version": D3_CONTRACT_VERSION,
@@ -354,6 +407,8 @@ def _fit_b3_train_only(
         "feature_count": len(feature_names),
         "training_rows": int(train.shape[0]),
         "fit_status": "accepted",
+        "model_entry_status": model_entry_status,
+        "model_entry_valid": independent_valid,
         "initialization_evidence": initialization,
         "parameter_profile": formal_b3_parameter_profile(),
         "numeric_environment": dict(numeric_environment),
@@ -426,6 +481,8 @@ def run_level_repeat(
                     "feature_count": len(features),
                     "training_rows": int(item.train_observations.shape[0]),
                     "fit_status": "failed",
+                    "model_entry_status": "failed",
+                    "model_entry_valid": False,
                     "failure_stage": exc.stage,
                     "failure_reason_codes": [exc.reason_code],
                     "failure_type": exc.cause_type,
@@ -541,20 +598,55 @@ def build_selected_level_artifact(
     selection: Mapping[str, Any],
     models: Mapping[tuple[int, str], B3FittedModel],
     series: Mapping[str, L1TrainingSeries],
+    training_repeat: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Run D6 only for the frozen D5 selection; semantic failure never reselects another seed."""
 
-    if not bool(selection.get("level_selection_valid")):
+    if selection.get("level_selection_valid") is not True:
         raise StateModelSetError("D6 cannot run before an accepted D5 level selection")
-    selected_seed = selection.get("evidence", {}).get("selected_seed")
+    selection_evidence = selection.get("evidence")
+    if not isinstance(selection_evidence, Mapping):
+        raise StateModelSetError("D6 cannot run without D5 selection evidence")
+    expected_codes = tuple(sorted(str(code) for code in series))
+    if (
+        training_repeat.get("family") != selection_evidence.get("family")
+        or training_repeat.get("level") != selection_evidence.get("level")
+        or tuple(training_repeat.get("schedule") or ()) != RESTART_SCHEDULE
+        or tuple(training_repeat.get("canonical_sector_codes") or ()) != expected_codes
+        or tuple(selection_evidence.get("canonical_sector_codes") or ()) != expected_codes
+    ):
+        raise StateModelSetError("D6 frozen D5/training identity is inconsistent")
+    selected_seed = selection_evidence.get("selected_seed")
     if selected_seed not in RESTART_SCHEDULE:
         raise StateModelSetError("D5 selected seed is missing from the approved schedule")
+    _require_canonical_receipt_hash(selection, field="receipt_sha256", label="D5 selection")
+    repeat_entries = list(training_repeat.get("entries") or ())
     entries: list[dict[str, Any]] = []
     for code in sorted(series):
         fitted = models.get((int(selected_seed), code))
         if fitted is None:
             raise StateModelSetError(f"selected fitted model is missing for {code}")
         item = series[code]
+        item.validate(len(fitted.feature_names))
+        matching_receipts = [
+            receipt
+            for receipt in repeat_entries
+            if receipt.get("seed") == selected_seed and receipt.get("sector_code") == code
+        ]
+        if len(matching_receipts) != 1:
+            raise StateModelSetError(f"selected training receipt is missing or duplicated for {code}")
+        training_receipt = matching_receipts[0]
+        _require_canonical_receipt_hash(
+            training_receipt,
+            field="entry_receipt_sha256",
+            label=f"selected training receipt {code}",
+        )
+        if (
+            training_receipt.get("model_entry_status") != "accepted"
+            or training_receipt.get("model_entry_valid") is not True
+            or training_receipt.get("model_payload_sha256") != fitted.model_payload_sha256
+        ):
+            raise StateModelSetError(f"selected training receipt is not accepted for {code}")
         validation = _apply_preprocess(item.validation_observations, fitted.preprocess)
         posterior = causal_forward_posteriors(
             validation,
@@ -575,9 +667,12 @@ def build_selected_level_artifact(
                 ),
                 "formula_version": item.validation_utility_formula_version,
             },
+            frozen_input_manifest=item.validation_input_manifest,
+            selected_model_payload_sha256=fitted.model_payload_sha256,
         )
         entry_body = {
             **fitted.payload(),
+            "training_receipt": training_receipt,
             "semantic": semantic,
             "validation_accessed_after_selection": True,
             "future_utility_accessed_after_selection": True,
@@ -624,6 +719,10 @@ def _validate_ready_layer(
     family: str,
     level: str,
     expected_count: int,
+    dataset_manifest_hash: str,
+    mapping_manifest_hash: str,
+    calendar_manifest_hash: str,
+    l2_stock_fact_manifest_hash: str,
 ) -> None:
     if artifact.get("schema_version") != "hmm_risk_b3_selected_level_artifact_v1":
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
@@ -639,6 +738,8 @@ def _validate_ready_layer(
         selection.get("contract_version") != D5_SELECTION_VERSION
         or selection.get("level_selection_status") != "accepted"
         or selection.get("level_selection_valid") is not True
+        or selection.get("failure_reason_codes") != []
+        or selection.get("blocking_reason_codes") != []
         or evidence.get("family") != family
         or evidence.get("level") != level
         or evidence.get("selected_seed") != selected_seed
@@ -646,12 +747,45 @@ def _validate_ready_layer(
         or artifact.get("selection_receipt_sha256") != selection.get("receipt_sha256")
     ):
         raise StateModelSetError(f"B3 READY selection contract is invalid for {family}/{level}")
+    canonical_codes = tuple(str(value) for value in evidence.get("canonical_sector_codes") or ())
+    candidates = list(evidence.get("candidates") or ())
+    selected_candidates = [candidate for candidate in candidates if candidate.get("seed") == selected_seed]
+    expected_feature_count = len(BASE_FEATURES) if family == "legacy_covfix" else len(ALL_CORE_FEATURES)
+    expected_features = BASE_FEATURES if family == "legacy_covfix" else ALL_CORE_FEATURES
+    if (
+        len(canonical_codes) != expected_count
+        or tuple(sorted(set(canonical_codes))) != canonical_codes
+        or evidence.get("canonical_sector_set_sha256") != canonical_sha256(list(canonical_codes))
+        or tuple(evidence.get("schedule") or ()) != RESTART_SCHEDULE
+        or len(str(evidence.get("repeat_entries_sha256") or "")) != 64
+        or len(candidates) != len(RESTART_SCHEDULE)
+        or len(selected_candidates) != 1
+        or selected_candidates[0].get("eligible") is not True
+        or selected_candidates[0].get("schedule_index") != evidence.get("selected_schedule_index")
+        or evidence.get("feature_count") != expected_feature_count
+        or evidence.get("validation_accessed") is not False
+        or evidence.get("future_utility_accessed") is not False
+        or evidence.get("semantic_labelability_accessed") is not False
+        or evidence.get("d6_status_accessed") is not False
+        or evidence.get("selection_followed_by_refit") is not False
+        or len(evidence.get("lexicographic_filters") or ()) != 3
+        or len(selected_candidates[0].get("entry_receipt_hashes") or ()) != expected_count
+        or any(len(str(value or "")) != 64 for value in selected_candidates[0].get("entry_receipt_hashes") or ())
+    ):
+        raise StateModelSetError(f"B3 READY selection evidence is incomplete for {family}/{level}")
+    selected_receipt_hashes = tuple(str(value) for value in selected_candidates[0]["entry_receipt_hashes"])
     entries = list(artifact.get("entries") or ())
-    if artifact.get("status") != "accepted" or artifact.get("entry_count") != expected_count:
+    if (
+        artifact.get("status") != "accepted"
+        or artifact.get("entry_count") != expected_count
+        or artifact.get("selection_reexecuted") is not False
+        or artifact.get("ready") is not False
+    ):
         raise StateModelSetError(f"B3 READY blocked by incomplete semantic evidence for {family}/{level}")
     if len(entries) != expected_count:
         raise StateModelSetError(f"B3 READY selected entry count is invalid for {family}/{level}")
     codes: set[str] = set()
+    durable_training_receipt_hashes: dict[str, str] = {}
     model_keys = (
         "schema_version",
         "contract_version",
@@ -680,7 +814,63 @@ def _validate_ready_layer(
         model_body = {key: entry[key] for key in model_keys}
         if canonical_sha256(model_body) != entry.get("model_payload_sha256"):
             raise StateModelSetError(f"B3 READY model payload hash mismatch for {family}/{level}")
+        try:
+            features = tuple(str(value) for value in entry["feature_names"])
+            startprob = np.asarray(entry["startprob"], dtype=np.float64)
+            transmat = np.asarray(entry["transmat"], dtype=np.float64)
+            means = np.asarray(entry["means"], dtype=np.float64)
+            covars = np.asarray(entry["covars"], dtype=np.float64)
+        except (TypeError, ValueError):
+            raise StateModelSetError(f"B3 READY model parameters are invalid for {family}/{level}") from None
+        expected_preprocess = "identity" if family == "legacy_covfix" else "winsor_zscore_1_99_train_global_v1"
+        preprocess = entry.get("preprocess")
+        if (
+            entry.get("schema_version") != "hmm_risk_b3_fitted_model_v1"
+            or entry.get("contract_version") != D3_CONTRACT_VERSION
+            or features != expected_features
+            or not isinstance(preprocess, Mapping)
+            or preprocess.get("family") != expected_preprocess
+            or entry.get("covariance_type") != "diag"
+            or startprob.shape != (3,)
+            or transmat.shape != (3, 3)
+            or means.shape != (3, expected_feature_count)
+            or covars.shape != (3, expected_feature_count)
+            or not all(np.isfinite(value).all() for value in (startprob, transmat, means, covars))
+            or np.any(startprob < 0.0)
+            or not np.isclose(startprob.sum(), 1.0, atol=1e-12, rtol=0)
+            or np.any(transmat < 0.0)
+            or not np.allclose(transmat.sum(axis=1), 1.0, atol=1e-12, rtol=0)
+            or np.any(covars <= 0.0)
+        ):
+            raise StateModelSetError(f"B3 READY model parameter contract is invalid for {family}/{level}")
+        if family == "legacy_covfix":
+            if any(preprocess.get(field) is not None for field in ("winsor_low", "winsor_high", "center", "scale")):
+                raise StateModelSetError(f"B3 READY legacy preprocess contract is invalid for {family}/{level}")
+        else:
+            try:
+                low = np.asarray(preprocess["winsor_low"], dtype=np.float64)
+                high = np.asarray(preprocess["winsor_high"], dtype=np.float64)
+                center = np.asarray(preprocess["center"], dtype=np.float64)
+                scale = np.asarray(preprocess["scale"], dtype=np.float64)
+            except (KeyError, TypeError, ValueError):
+                raise StateModelSetError(f"B3 READY autocycle preprocess is invalid for {family}/{level}") from None
+            if (
+                any(value.shape != (expected_feature_count,) for value in (low, high, center, scale))
+                or not all(np.isfinite(value).all() for value in (low, high, center, scale))
+                or np.any(low > high)
+                or np.any(scale <= 0.0)
+            ):
+                raise StateModelSetError(f"B3 READY autocycle preprocess contract is invalid for {family}/{level}")
+        for field in (
+            "model_payload_sha256",
+            "parameter_profile_sha256",
+            "numeric_environment_sha256",
+            "observation_manifest_hash",
+            "pit_constituent_manifest_hash",
+        ):
+            _require_hex_identity(str(entry.get(field) or ""), length=64, label=f"{family}/{level}/{field}")
         code = str(entry.get("sector_code") or "")
+        training_receipt = entry.get("training_receipt")
         semantic = entry.get("semantic")
         if (
             entry.get("family") != family
@@ -688,11 +878,63 @@ def _validate_ready_layer(
             or entry.get("seed") != selected_seed
             or not code
             or code in codes
+            or code not in canonical_codes
+            or not isinstance(training_receipt, Mapping)
             or not isinstance(semantic, Mapping)
             or semantic.get("contract_version") != D6_SEMANTIC_VERSION
             or entry.get("semantic_mapping") != semantic.get("semantic_mapping")
+            or entry.get("validation_accessed_after_selection") is not True
+            or entry.get("future_utility_accessed_after_selection") is not True
+            or entry.get("selection_reexecuted") is not False
         ):
             raise StateModelSetError(f"B3 READY selected entry identity is invalid for {family}/{level}")
+        _require_canonical_receipt_hash(
+            training_receipt,
+            field="entry_receipt_sha256",
+            label=f"{family}/{level}/{code} training receipt",
+        )
+        durable_training_receipt_hashes[code] = str(training_receipt["entry_receipt_sha256"])
+        likelihood = training_receipt.get("likelihood")
+        covariance = training_receipt.get("covariance")
+        occupancy = training_receipt.get("train_occupancy")
+        if not all(isinstance(receipt, Mapping) for receipt in (likelihood, covariance, occupancy)):
+            raise StateModelSetError(f"B3 READY D4 receipt is missing for {family}/{level}/{code}")
+        for receipt, contract, label in (
+            (likelihood, D4_LIKELIHOOD_VERSION, "likelihood"),
+            (covariance, D4_COVARIANCE_VERSION, "covariance"),
+            (occupancy, D4_OCCUPANCY_VERSION, "train occupancy"),
+        ):
+            _require_canonical_receipt_hash(
+                receipt,
+                field="receipt_sha256",
+                label=f"{family}/{level}/{code} {label}",
+            )
+            if receipt.get("contract_version") != contract or not receipt.get("evidence"):
+                raise StateModelSetError(f"B3 READY {label} evidence is incomplete for {family}/{level}/{code}")
+        if (
+            training_receipt.get("fit_status") != "accepted"
+            or training_receipt.get("model_entry_status") != "accepted"
+            or training_receipt.get("model_entry_valid") is not True
+            or training_receipt.get("model_payload_sha256") != entry.get("model_payload_sha256")
+            or likelihood.get("monitor_status") != "accepted"
+            or likelihood.get("convergence_valid") is not True
+            or likelihood.get("likelihood_status") not in {"accepted", "accepted_with_warning"}
+            or likelihood.get("likelihood_valid") is not True
+            or covariance.get("covariance_status") != "accepted"
+            or covariance.get("covariance_valid") is not True
+            or occupancy.get("train_occupancy_status") != "accepted"
+            or occupancy.get("train_occupancy_valid") is not True
+        ):
+            raise StateModelSetError(f"B3 READY training evidence is not accepted for {family}/{level}/{code}")
+        occupancy_evidence = occupancy["evidence"]
+        if (
+            occupancy_evidence.get("direct_sector_level") != level
+            or occupancy_evidence.get("sector_code") != code
+            or occupancy_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
+            or occupancy_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
+            or occupancy_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
+        ):
+            raise StateModelSetError(f"B3 READY train input lineage is invalid for {family}/{level}/{code}")
         assignment = semantic.get("assignment")
         semantic_evidence = semantic.get("semantic_evidence")
         if not isinstance(assignment, Mapping) or not isinstance(semantic_evidence, Mapping):
@@ -714,9 +956,30 @@ def _validate_ready_layer(
             or semantic_evidence.get("semantic_evidence_valid") is not True
             or not isinstance(semantic.get("semantic_mapping"), Mapping)
             or set(semantic["semantic_mapping"].values()) != {"fading", "neutral", "trending"}
+            or not assignment.get("evidence")
+            or not semantic_evidence.get("evidence")
+            or assignment.get("evidence", {}).get("validation_rows") != 182
+            or assignment.get("evidence", {}).get("selected_model_payload_sha256") != entry.get("model_payload_sha256")
+            or semantic_evidence.get("evidence", {}).get("selected_model_payload_sha256")
+            != entry.get("model_payload_sha256")
         ):
             raise StateModelSetError(f"B3 READY semantic evidence is not accepted for {family}/{level}/{code}")
+        for evidence_receipt in (assignment, semantic_evidence):
+            receipt_evidence = evidence_receipt["evidence"]
+            if (
+                receipt_evidence.get("direct_sector_level") != level
+                or receipt_evidence.get("sector_code") != code
+                or receipt_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
+                or receipt_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
+                or receipt_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
+                or receipt_evidence.get("l2_stock_fact_manifest_hash") != l2_stock_fact_manifest_hash
+            ):
+                raise StateModelSetError(f"B3 READY frozen input lineage is invalid for {family}/{level}/{code}")
         codes.add(code)
+    if codes != set(canonical_codes):
+        raise StateModelSetError(f"B3 READY canonical sector set is incomplete for {family}/{level}")
+    if selected_receipt_hashes != tuple(durable_training_receipt_hashes[code] for code in canonical_codes):
+        raise StateModelSetError(f"B3 READY selection receipt lineage is invalid for {family}/{level}")
 
 
 def write_b3_ready_model_set(
@@ -726,6 +989,8 @@ def write_b3_ready_model_set(
     selection_receipts: Mapping[tuple[str, str], Mapping[str, Any]],
     dataset_manifest_hash: str,
     mapping_manifest_hash: str,
+    calendar_manifest_hash: str,
+    l2_stock_fact_manifest_hash: str,
     producer_commit: str,
 ) -> Path:
     """Write a complete four-level READY set; blocked or partial inputs write nothing."""
@@ -735,6 +1000,8 @@ def write_b3_ready_model_set(
         raise StateModelSetError("B3 READY requires both families and both direct levels")
     _require_hex_identity(dataset_manifest_hash, length=64, label="dataset manifest hash")
     _require_hex_identity(mapping_manifest_hash, length=64, label="mapping manifest hash")
+    _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
+    _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
     _require_hex_identity(producer_commit, length=40, label="producer commit")
     layers: dict[str, Any] = {}
     payloads: dict[str, bytes] = {}
@@ -748,6 +1015,10 @@ def write_b3_ready_model_set(
             family=family,
             level=level,
             expected_count=expected_count,
+            dataset_manifest_hash=dataset_manifest_hash,
+            mapping_manifest_hash=mapping_manifest_hash,
+            calendar_manifest_hash=calendar_manifest_hash,
+            l2_stock_fact_manifest_hash=l2_stock_fact_manifest_hash,
         )
         payload = canonical_json_bytes(artifact)
         payload_sha = canonical_sha256(artifact)
@@ -765,11 +1036,13 @@ def write_b3_ready_model_set(
             "selected_seed": selection.get("evidence", {}).get("selected_seed"),
         }
     body = {
-        "schema_version": "hmm_risk_state_model_set_v2",
+        "schema_version": SCHEMA_VERSION,
         "status": "READY",
         "producer_commit": producer_commit,
         "dataset_manifest_hash": dataset_manifest_hash,
         "mapping_manifest_hash": mapping_manifest_hash,
+        "calendar_manifest_hash": calendar_manifest_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
         "contracts": {
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,

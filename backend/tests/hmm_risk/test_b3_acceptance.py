@@ -20,13 +20,15 @@ def _monitor(history: list[float], *, converged: bool = True) -> dict:
 
 def test_d4_01_keeps_terminal_warning_distinct_and_rejects_nonterminal_decrease() -> None:
     warning = subject.evaluate_likelihood_acceptance(_monitor([-100.0, -90.0, -90.001]))
-    assert warning["status"] == "accepted_with_warning"
-    assert warning["valid"] is True
+    assert warning["monitor_status"] == "accepted"
+    assert warning["convergence_valid"] is True
+    assert warning["likelihood_status"] == "accepted_with_warning"
+    assert warning["likelihood_valid"] is True
     assert warning["warning_reason_codes"] == ["hmm_risk_model_likelihood_terminal_decrease_warning"]
 
     failure = subject.evaluate_likelihood_acceptance(_monitor([-100.0, -100.0001, -99.0]))
-    assert failure["status"] == "failed"
-    assert failure["valid"] is False
+    assert failure["likelihood_status"] == "failed"
+    assert failure["likelihood_valid"] is False
     assert "hmm_risk_model_likelihood_nonterminal_decrease" in failure["failure_reason_codes"]
 
 
@@ -37,11 +39,18 @@ def test_d4_01_exact_terminal_boundaries_and_missing_evidence_fail_closed() -> N
     below_warning = subject.evaluate_likelihood_acceptance(_monitor([0.0, float(np.nextafter(-2e-5, -1.0))]))
     missing = subject.evaluate_likelihood_acceptance(None)
 
-    assert accepted["status"] == "accepted"
+    assert accepted["likelihood_status"] == "accepted"
     assert "hmm_risk_model_likelihood_tolerance_failed" in rejected["failure_reason_codes"]
-    assert boundary_warning["status"] == "accepted_with_warning"
+    assert boundary_warning["likelihood_status"] == "accepted_with_warning"
     assert "hmm_risk_model_likelihood_tolerance_failed" in below_warning["failure_reason_codes"]
-    assert missing["status"] == "insufficient_evidence"
+    assert missing["likelihood_status"] == "insufficient_evidence"
+
+
+def test_d4_01_rejects_string_false_instead_of_coercing_it_to_true() -> None:
+    receipt = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.5]) | {"converged": "false"})
+    assert receipt["monitor_status"] == "failed"
+    assert receipt["convergence_valid"] is False
+    assert "hmm_risk_model_monitor_history_invalid" in receipt["failure_reason_codes"]
 
 
 def test_d4_numeric_evidence_non_finite_is_failed_not_missing_or_serialized_as_null_success() -> None:
@@ -50,9 +59,9 @@ def test_d4_numeric_evidence_non_finite_is_failed_not_missing_or_serialized_as_n
     covariance_input["raw_covars"][0][0] = float("inf")
     covariance = subject.evaluate_covariance_acceptance(covariance_input)
 
-    assert likelihood["status"] == "failed"
+    assert likelihood["likelihood_status"] == "failed"
     assert "hmm_risk_model_likelihood_non_finite" in likelihood["failure_reason_codes"]
-    assert covariance["status"] == "failed"
+    assert covariance["covariance_status"] == "failed"
     assert "hmm_risk_model_covariance_invalid" in covariance["failure_reason_codes"]
 
 
@@ -74,8 +83,8 @@ def test_d4_02_accepts_raw_consistent_covariance_and_rejects_bounds_projection_a
     residual = subject.evaluate_covariance_acceptance(_covariance_evidence(raw=1.03))
     projected = subject.evaluate_covariance_acceptance({**_covariance_evidence(), "postfit_projection_performed": True})
 
-    assert accepted["status"] == "accepted"
-    assert accepted["valid"] is True
+    assert accepted["covariance_status"] == "accepted"
+    assert accepted["covariance_valid"] is True
     assert "hmm_risk_model_covariance_bounds_failed" in bounded["failure_reason_codes"]
     assert "hmm_risk_model_covariance_acceptance_failed" in residual["failure_reason_codes"]
     assert "hmm_risk_model_covariance_acceptance_failed" in projected["failure_reason_codes"]
@@ -91,14 +100,34 @@ def _posterior(states: list[int]) -> np.ndarray:
     return result
 
 
+def _train_manifest(dates: tuple[date, ...]) -> dict:
+    encoded = [value.isoformat() for value in dates]
+    return {
+        "schema_version": "hmm_risk_d4_train_frozen_input_manifest_v1",
+        "direct_sector_level": "L1",
+        "sector_code": "S001",
+        "train_observation_sha256": "f" * 64,
+        "train_dates": encoded,
+        "train_dates_sha256": subject.canonical_sha256(encoded),
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+    }
+
+
 def test_d4_03_anti_singleton_train_contract() -> None:
     accepted_states = [index % 3 for index in range(30)]
-    accepted = subject.evaluate_train_occupancy(_posterior(accepted_states), _train_dates(30))
+    dates = _train_dates(30)
+    accepted = subject.evaluate_train_occupancy(
+        _posterior(accepted_states), dates, frozen_input_manifest=_train_manifest(dates)
+    )
     singleton_states = [0 if index % 2 == 0 else 1 for index in range(30)]
     singleton_states[-1] = 2
-    rejected = subject.evaluate_train_occupancy(_posterior(singleton_states), _train_dates(30))
+    rejected = subject.evaluate_train_occupancy(
+        _posterior(singleton_states), dates, frozen_input_manifest=_train_manifest(dates)
+    )
 
-    assert accepted["status"] == "accepted"
+    assert accepted["train_occupancy_status"] == "accepted"
     assert accepted["evidence"]["validation_accessed"] is False
     assert accepted["evidence"]["future_utility_accessed"] is False
     assert "hmm_risk_model_train_state_count_insufficient" in rejected["failure_reason_codes"]
@@ -109,25 +138,43 @@ def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
     count = 31 if level == "L1" else 131
     codes = [f"S{index:03d}" for index in range(count)]
     entries = []
+    models = []
+    likelihood = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.995]))
+    covariance = subject.evaluate_covariance_acceptance(_covariance_evidence())
+    train_dates = _train_dates(30)
+    train_occupancy = subject.evaluate_train_occupancy(
+        _posterior([index % 3 for index in range(30)]),
+        train_dates,
+        frozen_input_manifest=_train_manifest(train_dates),
+    )
     for seed in subject.RESTART_SCHEDULE:
         score = -1.0 if seed == preferred_seed else -2.0 - 0.01 * (seed - 42)
         for code in codes:
-            entries.append(
-                {
-                    "family": "legacy_covfix",
-                    "level": level,
-                    "seed": seed,
-                    "sector_code": code,
-                    "fit_status": "accepted",
-                    "likelihood": {"valid": True, "status": "accepted_with_warning" if seed == 42 else "accepted"},
-                    "covariance": {"valid": True},
-                    "train_occupancy": {"valid": True},
-                    "final_train_log_likelihood": score * 100 * 7,
-                    "training_rows": 100,
-                    "feature_count": 7,
-                    "entry_receipt_sha256": f"{seed:02d}{code}".ljust(64, "0")[:64],
-                }
-            )
+            model_body = {
+                "family": "legacy_covfix",
+                "level": level,
+                "seed": seed,
+                "sector_code": code,
+            }
+            model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+            models.append(model)
+            entry_body = {
+                "family": "legacy_covfix",
+                "level": level,
+                "seed": seed,
+                "sector_code": code,
+                "fit_status": "accepted",
+                "likelihood": likelihood,
+                "covariance": covariance,
+                "train_occupancy": train_occupancy,
+                "model_entry_status": "accepted",
+                "model_entry_valid": True,
+                "model_payload_sha256": model["model_payload_sha256"],
+                "final_train_log_likelihood": score * 100 * 7,
+                "training_rows": 100,
+                "feature_count": 7,
+            }
+            entries.append({**entry_body, "entry_receipt_sha256": subject.canonical_sha256(entry_body)})
     repeat = {
         "family": "legacy_covfix",
         "level": level,
@@ -137,7 +184,7 @@ def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
         "preprocess": {"family": "identity"},
         "numeric_environment": {"scope": "test"},
         "entries": entries,
-        "models": [],
+        "models": models,
         "validation_accessed": False,
         "future_utility_accessed": False,
         "semantic_labelability_accessed": False,
@@ -157,7 +204,7 @@ def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
             "models",
         )
     }
-    repeat["model_payload_sha256"] = subject.canonical_sha256([])
+    repeat["model_payload_sha256"] = subject.canonical_sha256(models)
     repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
     return repeat
 
@@ -199,7 +246,7 @@ def test_d5_repeat_mismatch_and_validation_access_fail_closed() -> None:
         feature_count=7,
     )
     assert receipt["level_selection_status"] == "failed"
-    assert "hmm_risk_model_repeat_hash_mismatch" in receipt["failure_reason_codes"]
+    assert "hmm_risk_model_selection_repeat_mismatch" in receipt["failure_reason_codes"]
     assert "hmm_risk_model_selection_contract_unsatisfied" in receipt["failure_reason_codes"]
 
 
@@ -227,15 +274,57 @@ def _utility(states: list[int]) -> dict:
     }
 
 
+def _validation_manifest(dates: tuple[date, ...], utility: dict) -> dict:
+    encoded = [value.isoformat() for value in dates]
+    components = {
+        key: np.asarray(utility[key], dtype=np.float64)
+        for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d")
+    }
+    combined = (
+        0.35 * components["excess_return_5d"]
+        + 0.35 * components["excess_return_10d"]
+        + 0.30 * components["excess_return_20d"]
+    )
+    return {
+        "schema_version": "hmm_risk_d6_frozen_input_manifest_v1",
+        "direct_sector_level": "L1",
+        "sector_code": "S001",
+        "benchmark_identity": "000300.SH",
+        "validation_observation_sha256": "f" * 64,
+        "validation_dates": encoded,
+        "validation_dates_sha256": subject.canonical_sha256(encoded),
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "source_cutoff": utility["source_cutoff"],
+        "formula_version": utility["formula_version"],
+        "utility_component_sha256": {
+            key: subject.canonical_sha256(value.tolist()) for key, value in sorted(components.items())
+        },
+        "combined_utility_sha256": subject.canonical_sha256(combined.tolist()),
+    }
+
+
 def test_d6_hard_semantic_mapping_is_post_selection_and_rejects_singleton_without_fallback() -> None:
     states = [(index // 3) % 3 for index in range(182)]
-    accepted = subject.evaluate_semantic_validation(_posterior(states), _validation_dates(), _utility(states))
+    dates = _validation_dates()
+    utility = _utility(states)
+    accepted = subject.evaluate_semantic_validation(
+        _posterior(states),
+        dates,
+        utility,
+        frozen_input_manifest=_validation_manifest(dates, utility),
+        selected_model_payload_sha256="e" * 64,
+    )
     singleton = [index % 2 for index in range(182)]
     singleton[-1] = 2
     rejected = subject.evaluate_semantic_validation(
         _posterior(singleton),
-        _validation_dates(),
+        dates,
         _utility(singleton),
+        frozen_input_manifest=_validation_manifest(dates, _utility(singleton)),
+        selected_model_payload_sha256="e" * 64,
     )
 
     assert accepted["assignment"]["semantic_assignment_valid"] is True
@@ -249,7 +338,15 @@ def test_d6_hard_semantic_mapping_is_post_selection_and_rejects_singleton_withou
 
 def test_d6_preserves_valid_assignment_when_utility_evidence_is_missing() -> None:
     states = [(index // 3) % 3 for index in range(182)]
-    receipt = subject.evaluate_semantic_validation(_posterior(states), _validation_dates(), None)
+    dates = _validation_dates()
+    utility = _utility(states)
+    receipt = subject.evaluate_semantic_validation(
+        _posterior(states),
+        dates,
+        None,
+        frozen_input_manifest=_validation_manifest(dates, utility),
+        selected_model_payload_sha256="e" * 64,
+    )
     assert receipt["assignment"]["semantic_assignment_valid"] is True
     assert receipt["semantic_evidence"]["semantic_evidence_status"] == "insufficient_evidence"
     assert receipt["semantic_mapping"] is None

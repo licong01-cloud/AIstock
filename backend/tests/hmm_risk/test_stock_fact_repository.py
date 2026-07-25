@@ -49,7 +49,7 @@ class _Cursor:
             rows = [("L1", f"L1-{index:02d}", f"I1-{index:02d}", f"L1 Sector {index}") for index in range(31)]
             rows.extend(("L2", f"L2-{index:03d}", f"I2-{index:03d}", f"L2 Sector {index}") for index in range(131))
             return rows
-        if "duplicates WHERE duplicate_groups>0" in self.sql:
+        if "duplicates WHERE conflict_groups>0" in self.sql:
             return self.connection.duplicates
         return []
 
@@ -84,7 +84,7 @@ def _spec() -> subject.StockFactSourceSpec:
     )
 
 
-def test_reader_validates_readonly_state_classification_and_duplicate_keys() -> None:
+def test_reader_allows_identical_duplicates_but_rejects_conflicting_duplicate_keys() -> None:
     connection = _Connection()
     reader = subject.PostgresStockFactReader(connection, _spec())
 
@@ -95,7 +95,7 @@ def test_reader_validates_readonly_state_classification_and_duplicate_keys() -> 
     assert state["universe_key"] == "immutable_v1"
     assert lookup[("L1", "I1-00")]["index_code"] == "L1-00"
     connection.duplicates = [("moneyflow_ts", 2)]
-    with pytest.raises(StateModelSetError, match="duplicate keys"):
+    with pytest.raises(StateModelSetError, match="conflicting duplicate keys"):
         reader.validate_fact_uniqueness()
 
 
@@ -140,6 +140,8 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
             date(2023, 12, 18),
             8_000,
             100.0,
+            date(2024, 1, 1),
+            date(2024, 1, 1),
             80.0,
             2.0,
             1.0,
@@ -154,6 +156,7 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     mapping = next(reader.iter_mapping_source_rows())
     stock = next(reader.iter_stock_fact_rows())
     l2_stock = next(reader.iter_stock_fact_rows(sector_level="L2"))
+    assert list(reader.iter_missing_price_rows()) == []
 
     assert mapping["source_l1_code"] == "I1-00"
     assert mapping["l1_code"] == "L1-00"
@@ -167,6 +170,47 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     assert len(l2_queries) == 1
     assert "ORDER BY c.trade_date,c.l2_code,c.ts_code,c.l1_code" in l2_queries[0]
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
+    assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
+
+
+def test_reader_requires_circ_mv_from_exact_previous_trading_day() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2024, 1, 2),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2020, 1, 1),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2024, 1, 1),
+            10_000,
+            date(2023, 12, 25),
+            9_000,
+            date(2023, 12, 18),
+            8_000,
+            100.0,
+            date(2024, 1, 1),
+            date(2023, 12, 29),
+            80.0,
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            11.0,
+        )
+    ]
+    row = next(subject.PostgresStockFactReader(connection, _spec()).iter_stock_fact_rows())
+    assert row["prev_circ_mv_cny"] is None
 
 
 class _MappingReader:
