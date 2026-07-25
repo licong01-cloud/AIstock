@@ -1,10 +1,10 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A review_fix_in_progress`，K2-B/C/D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified`，K2-B/C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2-A PR #2729 的七项 strict durable contract 审核补修已完成本地source与验证闭环，但新required CI尚未运行，因此当前仍为 `review_fix_in_progress`，source merge待用户授权；K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`；K2-A PR #2729 的七项 strict durable contract 审核补修已完成本地source、direct/DEV PostgreSQL、coverage、classifier/F2与required CI run `30162089997`闭环，当前为 `implemented_verified`，source merge待用户授权；K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
 > 本轮 K2-A 只实现 schema/repository slice，不启动 worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 migration/repository；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
@@ -13,7 +13,7 @@
 - K2-A source under review：`plugin_contracts.py` 中K2-A要求的§4 strict durable carriers；`kernel_repository.py` PostgreSQL writer/readback、row lock/CAS、DB-sequenced worker incarnation、event/delivery、transition/mapping/child/outbox、timer/session authority与有界恢复查询；三份 additive/preflight/guarded-rollback migration。
 - RED：审核基线 archive 的production public seam targeted matrix=`14 failed,21 passed`，精确暴露arbitrary/wrong fence、incomplete calendar、CANCEL mapping/outbox、repository/schema drift、migration checksum及同名错误CHECK/FK/index predicate/type/null/default。
 - GREEN：同三文件targeted=`35 passed`；DEV repository=`3 passed`；migration clean first/second apply、guarded rollback及六类drift通过；`kernel_repository.py` line=`88.29%`、branch=`75.17%`。classifier=`targeted_ci_required`、sessions=`miniqmt_execution_runtime_l2,paper_v2_backend`、`unmapped_code_files=[]`；MiniQMT L2=`709 passed,10 skipped`，Paper=`1050 passed,2 skipped,2 xfailed`，L0/registry与F2=`10/10,28/28,70/70`通过。
-- 当前状态为 `K2-A review_fix_in_progress`：七项source与本地验证已闭合，但新required CI尚未运行，故不得提前恢复`implemented_verified`。K2 overall仍需K2-B/C/D，不能由K2-A推断完成。
+- 当前状态为 `K2-A implemented_verified`：七项source、本地/DEV验证与required CI run `30162089997`已闭合；source merge仍为`pending_user_authorization`。K2 overall仍需K2-B/C/D，不能由K2-A推断完成。
 
 ## 0. Implementation Decision / 实施决策
 
@@ -493,7 +493,7 @@ dispatcher直接测试必须调用production dispatcher public seam和instrument
 
 preflight/forward/rollback、全部§4 strict persistence carriers、worker epoch/incarnation、projection set、command-child mapping、PostgreSQL transactions、constraint/readback、legacy inventory。只实现repository/startup receipt public seam；不启动worker、不调用Gateway。
 
-当前审核补修checkpoint：K2-A已实现command-aware SUBMIT/CANCEL mapping/outbox状态闭包、mapping/outbox/algo durable recount原子bundle、exact lease fence与stale-writer CAS、DB内schema fingerprint authority、全部writer commit后独立readback、strict recovery enum/排序、runtime/session composite owner及真实`CalendarSnapshotSet` strict-readback。targeted=`35 passed`、repository coverage=`88.29%/75.17%`、DEV repository=`3 passed`、DEV migration first/second/rollback/drift全绿；MiniQMT L2=`709 passed,10 skipped`，共享import-boundary触发的Paper计划=`1050 passed,2 skipped,2 xfailed`，L0/registry、classifier、三份F2 validator均通过。状态仍为`review_fix_in_progress`，只等待本轮required CI；不启动K2-B/C/D worker/clock/dispatcher，也不切换产品route。
+当前审核补修checkpoint：K2-A已实现command-aware SUBMIT/CANCEL mapping/outbox状态闭包、mapping/outbox/algo durable recount原子bundle、exact lease fence与stale-writer CAS、DB内schema fingerprint authority、全部writer commit后独立readback、strict recovery enum/排序、runtime/session composite owner及真实`CalendarSnapshotSet` strict-readback。targeted=`35 passed`、repository coverage=`88.29%/75.17%`、DEV repository=`3 passed`、DEV migration first/second/rollback/drift全绿；MiniQMT L2=`709 passed,10 skipped`，共享import-boundary触发的Paper计划=`1050 passed,2 skipped,2 xfailed`，L0/registry、classifier、三份F2 validator与required CI run `30162089997`均通过。K2-A状态为`implemented_verified`，source merge待用户授权；不启动K2-B/C/D worker/clock/dispatcher，也不切换产品route。
 
 ### K2-B — ingress, creation and delivery（5–7 人日）
 
@@ -535,7 +535,7 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 | gate | current state | explanation |
 | --- | --- | --- |
-| `source_merge` | `pending_user_authorization` | K2-A PR #2729尚未合入，当前正式审核补修状态为`review_fix_in_progress`；既有OPEN/CLEAN/MERGEABLE与required CI green不是本轮补修完成证据 |
+| `source_merge` | `pending_user_authorization` | K2-A PR #2729尚未合入；review-fix source、本地/DEV验证与required CI run `30162089997`已闭合，K2-A=`implemented_verified` |
 | `close_sync` | `not_applicable_feature` | 非BUG feature |
 | `production_ddl_gate` | `noop` | 未执行K2 migration |
 | `production_dml_gate` | `noop` | 无生产写入 |
@@ -573,7 +573,7 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | `F-067` | §4.8–§4.9、§8；timer schedule/occurrence、exchange-session authority schema/repository；K1 target-scoped calendar import authority | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`与`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`验证incomplete/fake CalendarSnapshotSet、SH/SZ/BJ/date/timezone/source/segments、runtime trade-date owner与timer lease/readback负例；K2-C再实现clock | design_ready | none |
 | `F-068` | §9；三份 migration + checksum/fingerprint/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV preflight、clean first/second apply、guarded rollback、CHECK/FK/partial predicate/type/null/default六类drift；production DDL未执行 | design_ready | none |
 | `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`=`709 passed,10 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` RED=`14 failed,21 passed`、GREEN targeted=`35 passed`、coverage line/branch=`88.29/75.17`；L0/registry PASS，classifier sessions=`miniqmt_execution_runtime_l2,paper_v2_backend`且unmapped=0，F2=`10/10,28/28,70/70`；source status保持`review_fix_in_progress`直到新required CI闭合 | design_ready | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`=`709 passed,10 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` RED=`14 failed,21 passed`、GREEN targeted=`35 passed`、coverage line/branch=`88.29/75.17`；L0/registry PASS，classifier sessions=`miniqmt_execution_runtime_l2,paper_v2_backend`且unmapped=0，F2=`10/10,28/28,70/70`；required CI run `30162089997` MiniQMT/Paper/static/verdict green | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 
@@ -589,4 +589,4 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 ## 17. Definition of Done / K2 完成定义
 
-K2-A 当前为`review_fix_in_progress`：补修后的source、direct/DEV PostgreSQL、coverage、三份F2 validator、classifier-selected MiniQMT/Paper plans与L0/registry已闭合，新required CI是恢复`implemented_verified`前唯一剩余技术证据；source merge仍需用户授权。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
+K2-A 当前为`implemented_verified`：补修后的source、direct/DEV PostgreSQL、coverage、三份F2 validator、classifier-selected MiniQMT/Paper plans、L0/registry与required CI run `30162089997`已闭合；source merge仍需用户授权。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。

@@ -6,15 +6,15 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration七项正式审核补修已完成本地source、direct/DEV PostgreSQL、coverage、classifier/L2/L0/F2闭环，但新required CI尚未运行，因此当前仍为`review_fix_in_progress`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_user_authorization`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration七项正式审核补修已完成本地source、direct/DEV PostgreSQL、coverage、classifier/L2/L0/F2与required CI run `30162089997`闭环，当前为`implemented_verified`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_user_authorization`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`review_fix_in_progress`，K2-B/C/D=`not_started`。K2-A PR #2729的既有OPEN/CLEAN/MERGEABLE与required CI green不关闭本轮正式审核阻断；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`implemented_verified`，K2-B/C/D=`not_started`。K2-A PR #2729 review-fix required CI run `30162089997`已全绿，source merge仍待用户授权；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's seven formal-review blockers are locally closed with replacement RED/GREEN, DEV PostgreSQL, coverage, classifier, MiniQMT/Paper module plans, F2 and L0 evidence, while the new required CI remains pending. Therefore K2-A stays `review_fix_in_progress`; source merge remains pending user authorization, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's seven formal-review blockers are closed with replacement RED/GREEN, DEV PostgreSQL, coverage, classifier, MiniQMT/Paper module plans, F2/L0 and required CI run `30162089997`. K2-A is `implemented_verified`; source merge remains pending user authorization, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -746,7 +746,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - current three manifest 化；
 - `LockedSurfaceV2` exact signature/object/enum receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1 overall 当前为 `implemented_verified + merged`：K1-A/B/C 均已实现验证并合入；K1-C PR #2685 的 dual-upstream authority、indirect/dynamic/transitive helper import boundary 与 malformed isolated carrier 已由 implementation `52e1c5a2`、final CI run `30119969033` 及 merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1` 闭合，`source_merge=merged_pr_2685`；K2 detailed design `design_ready`，K2 source、K3/K4 均 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
+- K1 overall 当前为 `implemented_verified + merged`：K1-A/B/C 均已实现验证并合入；K1-C PR #2685 的 dual-upstream authority、indirect/dynamic/transitive helper import boundary 与 malformed isolated carrier 已由 implementation `52e1c5a2`、final CI run `30119969033` 及 merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1` 闭合，`source_merge=merged_pr_2685`；K2 detailed design `implementation_in_progress`，K2-A=`implemented_verified`且`source_merge=pending_user_authorization`，K2-B/C/D与K3/K4 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -758,7 +758,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - ExchangeSessionClock使用B0 preload exact `CalendarSnapshotSet`派生的durable session authority、session epoch/event identities；
 - crash/DB-epoch process incarnation/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
 - 四个切片为 K2-A schema/repository、K2-B ingress/delivery、K2-C clock/timer、K2-D outbox/reconcile/observability；
-- 当前 `implementation_in_progress`、K2-A source `review_fix_in_progress`、K2-B/C/D `not_started`、shadow-only；七项正式审核阻断已完成本地source与RED/GREEN、DEV PostgreSQL、coverage、classifier、MiniQMT/Paper、L0/registry和F2闭环，旧`25 passed`与旧required CI只保留为审核基线，新required CI闭合后才恢复`implemented_verified`。source merge待用户授权；预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
+- 当前 `implementation_in_progress`、K2-A source `implemented_verified`、K2-B/C/D `not_started`、shadow-only；七项正式审核阻断已完成本地source与RED/GREEN、DEV PostgreSQL、coverage、classifier、MiniQMT/Paper、L0/registry、F2和required CI run `30162089997`闭环。source merge待用户授权；预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
 
 ### K3：迁移现有三个算法
 
@@ -972,7 +972,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-067` | K2 detailed design §4.8–§4.9、§8 calendar/session authority与exchange clock | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`与`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`验证真实CalendarSnapshotSet strict-readback、target-scoped import boundary、SH/SZ/BJ/date/timezone/source/segments与runtime trade-date owner负例；K2-C target clock | design_ready | none |
 | `F-068` | K2 detailed design §9 migration | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV clean first/second apply、guarded rollback及同名错误CHECK/FK/partial predicate/type/null/default六类drift | design_ready | none |
 | `F-069` | K2 detailed design §10 diagnostics/retention/runbook | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | K2 detailed design §11–§13 validation/rollout | `python -m nox -s miniqmt_execution_runtime_l2`=`709 passed,10 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` RED=`14 failed,21 passed`、GREEN=`35 passed`，repository line/branch=`88.29/75.17`；classifier sessions=`miniqmt_execution_runtime_l2,paper_v2_backend`且unmapped=0，L0/registry与F2=`10/10,28/28,70/70`；新required CI待运行 | design_ready | none |
+| `F-070` | K2 detailed design §11–§13 validation/rollout | `python -m nox -s miniqmt_execution_runtime_l2`=`709 passed,10 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` RED=`14 failed,21 passed`、GREEN=`35 passed`，repository line/branch=`88.29/75.17`；classifier sessions=`miniqmt_execution_runtime_l2,paper_v2_backend`且unmapped=0，L0/registry与F2=`10/10,28/28,70/70`；required CI run `30162089997` MiniQMT/Paper/static/verdict green | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
