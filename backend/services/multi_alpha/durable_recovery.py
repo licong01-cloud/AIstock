@@ -1012,6 +1012,11 @@ class DurableRecoveryWorker:
             entry.source_lineage.get("source_child_id"),
             field="entry.source_lineage.source_child_id",
         )
+        if str(source_attempt.get("execution_kind") or "") in {
+            "reference_result",
+            "derived_result",
+        }:
+            return _inline_reference_result_payload(source_attempt), source_attempt
         if not entry.source_lineage.get("remote_result_collection_required"):
             return (
                 self._adapter.load_recovery_source_result_payload(
@@ -2016,6 +2021,67 @@ def _reference_result_manifest(
         ),
         "business_formula_version": business_formula_version,
         "execution_disposition": execution_disposition,
+    }
+
+
+def _inline_reference_result_payload(
+    source_attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Load an immutable reference/derived result without inventing raw files.
+
+    Reference attempts intentionally persist the complete business payload in
+    their hashed result manifest and do not duplicate the source QE workspace.
+    A cumulative results-only successor must therefore validate and reuse that
+    inline payload instead of looking for an artifact_manifest.json under the
+    reference attempt's own workspace path.
+    """
+
+    if str(source_attempt.get("status") or "") != "succeeded":
+        raise DurableContractError(
+            "inline reference source attempt is not succeeded",
+            reason_code="results_only_artifact_missing",
+            context={
+                "source_attempt_id": source_attempt.get("attempt_id"),
+                "status": source_attempt.get("status"),
+            },
+        )
+    result_manifest = _mapping_or_error(
+        source_attempt.get("result_manifest_json"),
+        field="source_attempt.result_manifest_json",
+    )
+    persisted_hash = _required_text(
+        source_attempt.get("result_manifest_hash"),
+        field="source_attempt.result_manifest_hash",
+    )
+    if artifact_manifest_hash_for(result_manifest) != persisted_hash:
+        raise DurableContractError(
+            "reference result manifest content does not match its persisted hash",
+            reason_code="results_only_artifact_missing",
+            context={"source_attempt_id": source_attempt.get("attempt_id")},
+        )
+    if result_manifest.get("schema_version") != "multi_alpha_recovery_reference_result_v1":
+        raise DurableContractError(
+            "reference result manifest schema is unsupported",
+            reason_code="results_only_artifact_missing",
+            context={
+                "source_attempt_id": source_attempt.get("attempt_id"),
+                "schema_version": result_manifest.get("schema_version"),
+            },
+        )
+    return {
+        "metrics": _mapping_or_error(
+            result_manifest.get("metrics"),
+            field="source_attempt.result_manifest_json.metrics",
+        ),
+        "materialization_metadata": _mapping_or_error(
+            result_manifest.get("materialization_metadata"),
+            field="source_attempt.result_manifest_json.materialization_metadata",
+        ),
+        "artifact_manifest": _mapping_or_error(
+            source_attempt.get("artifact_manifest_json") or {},
+            field="source_attempt.artifact_manifest_json",
+        ),
+        "result_manifest": result_manifest,
     }
 
 
