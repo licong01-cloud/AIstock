@@ -63,6 +63,15 @@ RETRYABLE_RESULT_COLLECTION_REASON_CODES = frozenset(
         "qe_workspace_result_transport_unavailable",
     }
 )
+RETRYABLE_TERMINAL_RESERVATION_REASON_CODES = frozenset(
+    {
+        "qe_execution_reservation_owner_mismatch",
+        "qe_execution_reservation_stale_owner",
+        "qe_execution_reservation_stale_row_version",
+        "qe_execution_reservation_lease_expired",
+        "qe_execution_reservation_cas_failed",
+    }
+)
 
 
 class DurableOrchestratorError(RuntimeError):
@@ -1344,12 +1353,25 @@ class DurableMultiAlphaOrchestrator:
             )
             return
         if normalized == "completed":
-            await asyncio.to_thread(
-                self._adapter.record_remote_terminal,
-                intent=intent,
-                owner_id=self._owner_id,
-                remote_status="completed",
-            )
+            try:
+                await asyncio.to_thread(
+                    self._adapter.record_remote_terminal,
+                    intent=intent,
+                    owner_id=self._owner_id,
+                    remote_status="completed",
+                )
+            except Exception as exc:
+                error = _exception_payload(exc)
+                if error["reason_code"] not in RETRYABLE_TERMINAL_RESERVATION_REASON_CODES:
+                    raise
+                await self._keep_attempt_reconciling(
+                    attempt_id=attempt_id,
+                    token=token,
+                    child=child,
+                    phase="terminal_reservation_reconciliation_pending",
+                    error=exc,
+                )
+                return
             current = _required(
                 "attempt",
                 attempt_id,

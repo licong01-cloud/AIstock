@@ -28,7 +28,13 @@ SCHEME_PRIORITY = (
     "rank_fusion_rrf",
     "rank_fusion_borda",
 )
-TERMINAL_RUN_STATUSES = {"succeeded", "failed", "partial_failed"}
+TERMINAL_RUN_STATUSES = {
+    "succeeded",
+    "failed",
+    "partial_failed",
+    "partial_recovered",
+    "cancelled",
+}
 
 
 class CombineUIAdapterError(RuntimeError):
@@ -103,6 +109,8 @@ class CombineTaskItem(BaseModel):
     default_scheme: str = DEFAULT_SCHEME
     phase: str | None = None
     running_count: int = 0
+    queued_count: int = 0
+    reconciling_count: int = 0
     completed_count: int = 0
     partial_failed_count: int = 0
     failed_count: int = 0
@@ -150,9 +158,33 @@ class PostgresCombineUIRepository:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT *
-                    FROM strategy_pkg.multi_alpha_combine_backtest_run
-                    ORDER BY created_at DESC
+                    SELECT run.*,
+                           COALESCE(attempts.attempt_count, 0) AS attempt_count,
+                           COALESCE(attempts.remote_running_count, 0) AS remote_running_count,
+                           COALESCE(attempts.queued_count, 0) AS queued_count,
+                           COALESCE(attempts.reconciling_count, 0) AS reconciling_count,
+                           COALESCE(attempts.terminal_count, 0) AS terminal_attempt_count
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run AS run
+                    LEFT JOIN LATERAL (
+                        SELECT COUNT(*) AS attempt_count,
+                               COUNT(*) FILTER (
+                                   WHERE attempt.status IN ('submitting', 'running')
+                                     AND COALESCE(attempt.phase, '') <> 'waiting_capacity'
+                               ) AS remote_running_count,
+                               COUNT(*) FILTER (
+                                   WHERE attempt.status = 'queued'
+                                      OR attempt.phase = 'waiting_capacity'
+                               ) AS queued_count,
+                               COUNT(*) FILTER (
+                                   WHERE attempt.status = 'reconciling'
+                               ) AS reconciling_count,
+                               COUNT(*) FILTER (
+                                   WHERE attempt.status IN ('succeeded', 'failed', 'cancelled')
+                               ) AS terminal_count
+                        FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                        WHERE attempt.run_id = run.id
+                    ) AS attempts ON TRUE
+                    ORDER BY run.created_at DESC
                     """
                 )
                 return [dict(row) for row in cur.fetchall()]
@@ -321,9 +353,43 @@ class MultiAlphaCombineUIAdapter:
         default_scheme: str = DEFAULT_SCHEME,
     ) -> CombineTaskItem:
         statuses = [str(row.get("status") or "") for row in rows]
-        status = _task_status(statuses)
+        attempt_count = sum(int(row.get("attempt_count") or 0) for row in rows)
+        remote_running_count = sum(
+            int(row.get("remote_running_count") or 0) for row in rows
+        )
+        queued_count = sum(int(row.get("queued_count") or 0) for row in rows)
+        reconciling_count = sum(
+            int(row.get("reconciling_count") or 0) for row in rows
+        )
+        terminal_attempt_count = sum(
+            int(row.get("terminal_attempt_count") or 0) for row in rows
+        )
+        has_attempt_counters = any("attempt_count" in row for row in rows)
+        if remote_running_count or reconciling_count:
+            status = "running"
+        elif queued_count:
+            status = "pending"
+        else:
+            latest = max(
+                rows,
+                key=lambda row: _parse_timestamp(
+                    row.get("updated_at") or row.get("created_at")
+                ),
+            )
+            status = (
+                "partial_recovered"
+                if str(latest.get("status") or "") == "partial_recovered"
+                else _task_status(statuses)
+            )
         running_rows = sorted(
-            (row for row in rows if row.get("status") == "running"),
+            (
+                row
+                for row in rows
+                if int(row.get("remote_running_count") or 0) > 0
+                or int(row.get("reconciling_count") or 0) > 0
+            )
+            if has_attempt_counters
+            else (row for row in rows if row.get("status") == "running"),
             key=lambda row: _parse_timestamp(row.get("updated_at") or row.get("created_at")),
             reverse=True,
         )
@@ -344,11 +410,24 @@ class MultiAlphaCombineUIAdapter:
             available_schemes=available_schemes or [],
             default_scheme=default_scheme,
             phase=_running_phase(running_rows),
-            running_count=len(running_rows),
+            running_count=(remote_running_count if has_attempt_counters else len(running_rows)),
+            queued_count=queued_count,
+            reconciling_count=reconciling_count,
             completed_count=sum(1 for row in rows if row.get("status") == "succeeded"),
             partial_failed_count=sum(1 for row in rows if row.get("status") == "partial_failed"),
             failed_count=sum(1 for row in rows if row.get("status") == "failed"),
-            progress=_as_mapping(latest_running_reason.get("progress")),
+            progress=(
+                {
+                    "completed": terminal_attempt_count,
+                    "total": attempt_count,
+                    "pending": max(0, attempt_count - terminal_attempt_count),
+                    "running": remote_running_count,
+                    "queued": queued_count,
+                    "reconciling": reconciling_count,
+                }
+                if has_attempt_counters
+                else _as_mapping(latest_running_reason.get("progress"))
+            ),
             heartbeat_at=_iso(latest_running_reason.get("heartbeat_at") or (running_rows[0].get("updated_at") if running_rows else None)),
         )
 
@@ -436,8 +515,8 @@ def task_key_for_run(row: Mapping[str, Any]) -> str:
 
 def _normalize_run_status(row: dict[str, Any]) -> dict[str, Any]:
     reason = _as_mapping(row.get("reason"))
-    if reason.get("logical_status") == "partial_failed":
-        row["status"] = "partial_failed"
+    if reason.get("logical_status") in {"partial_failed", "partial_recovered"}:
+        row["status"] = str(reason["logical_status"])
     return row
 
 
@@ -461,6 +540,8 @@ def _task_status(statuses: Sequence[str]) -> str:
         return "running"
     if statuses and all(status == "succeeded" for status in statuses):
         return "completed"
+    if any(status == "partial_recovered" for status in statuses):
+        return "partial_recovered"
     if any(status in {"succeeded", "partial_failed"} for status in statuses) and any(
         status in {"failed", "partial_failed"} for status in statuses
     ):
@@ -473,7 +554,7 @@ def _task_status(statuses: Sequence[str]) -> str:
 
 
 def _loop_status(status: str) -> str:
-    if status == "succeeded":
+    if status in {"succeeded", "partial_recovered"}:
         return "completed"
     if status == "running":
         return "running"
