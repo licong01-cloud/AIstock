@@ -1836,7 +1836,7 @@ class MultiAlphaDurableRepository:
                              reason, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                                 'running', 'recovery_children_published', %s, %s, %s, %s, %s,
-                                %s, %s, NOW())
+                                %s, %s, %s, %s, NOW())
                         RETURNING *
                         """,
                         (
