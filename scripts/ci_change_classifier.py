@@ -77,6 +77,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    "backend/tests/scripts/test_validate_changed_requirements.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
@@ -110,6 +111,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
+    "scripts/validate_changed_requirements.py",
     "noxfile.py",
     ".pre-commit-config.yaml",
     ".semgrep.yml",
@@ -138,6 +140,9 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
     "scripts/nightly_silent_degradation_audit.py": (
         "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    ),
+    "scripts/validate_changed_requirements.py": (
+        "backend/tests/scripts/test_validate_changed_requirements.py",
     ),
     "noxfile.py": ("backend/tests/test_noxfile_validation_env.py",),
 }

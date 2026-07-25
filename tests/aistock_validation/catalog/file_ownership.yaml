@@ -197,6 +197,7 @@ rules:
       - backend/tests/scripts/test_ci_changed_files.py
       - scripts/ci_change_classifier.py
       - backend/tests/scripts/test_ci_change_classifier.py
+      - scripts/validate_changed_requirements.py
       - .pre-commit-config.yaml
       - .semgrep.yml
       - .semgrep/**
@@ -243,6 +244,7 @@ rules:
       - backend/tests/scripts/test_aistock_feature_workflow.py
       - backend/tests/scripts/test_issue_flow.py
       - backend/tests/scripts/test_issue_flow_pr_quality.py
+      - backend/tests/scripts/test_validate_changed_requirements.py
       - backend/tests/test_noxfile_validation_env.py
       - backend/tests/scripts/test_ci_failure_issue_summary.py
       - backend/tests/scripts/test_nightly_discovery_*.py
