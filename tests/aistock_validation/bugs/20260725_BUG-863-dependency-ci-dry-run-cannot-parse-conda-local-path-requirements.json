@@ -3,8 +3,10 @@
   "allowed_write_scope": [
     ".github/workflows/dependency-update-validate.yml",
     "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_validate_changed_requirements.py",
     "scripts/validate_changed_requirements.py",
+    "scripts/ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260725_BUG-863-dependency-ci-dry-run-cannot-parse-conda-local-path-requirements.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "tests/aistock_validation/catalog/file_ownership.yaml"
@@ -36,6 +38,8 @@
     "changed_files": [
       ".github/workflows/dependency-update-validate.yml",
       "backend/tests/scripts/test_issue_flow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/ci_change_classifier.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
@@ -46,8 +50,10 @@
       "changed_files": [
         ".github/workflows/dependency-update-validate.yml",
         "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_validate_changed_requirements.py",
         "scripts/validate_changed_requirements.py",
+        "scripts/ci_change_classifier.py",
         "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
@@ -63,8 +69,10 @@
       "suggested_scope": [
         ".github/workflows/dependency-update-validate.yml",
         "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_validate_changed_requirements.py",
         "scripts/validate_changed_requirements.py",
+        "scripts/ci_change_classifier.py",
         "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "unmatched_files": []
@@ -73,8 +81,10 @@
     "scope_files": [
       ".github/workflows/dependency-update-validate.yml",
       "backend/tests/scripts/test_issue_flow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_validate_changed_requirements.py",
       "scripts/validate_changed_requirements.py",
+      "scripts/ci_change_classifier.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
