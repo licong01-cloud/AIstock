@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-863",
-  "closed_at": null,
+  "closed_at": "2026-07-25T18:08:30Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,17 +34,16 @@
   ],
   "expected": "A requirements.txt change must validate every newly added or changed requirement on Linux without attempting to install unchanged Conda local-path exports; removed requirements must not be installed, and pyproject/frontend validation behavior must remain intact.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/scripts/test_validate_changed_requirements.py",
+      "scripts/validate_changed_requirements.py"
+    ],
     "changed_files": [
       ".github/workflows/dependency-update-validate.yml",
       "backend/tests/scripts/test_issue_flow.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/ci_change_classifier.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
-    ],
-    "added_files": [
-      "backend/tests/scripts/test_validate_changed_requirements.py",
-      "scripts/validate_changed_requirements.py"
     ],
     "ownership": {
       "changed_files": [
@@ -90,8 +89,8 @@
   },
   "first_seen_at": "2026-07-25T12:36:55.535390Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f56fb29c854a67c6a5e7d27504edfb5c330959a5",
+  "fixed_at": "2026-07-25T18:16:30.983324Z",
   "github_issue_number": 2733,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2733",
   "last_seen_at": "2026-07-25T12:36:55.535390Z",
@@ -99,6 +98,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2734",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -110,7 +110,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -119,6 +119,9 @@
     "fingerprint": "5d06e1e01c99ff91b4343213",
     "source_event_id": "FE-20260725-5d06e1e01c99"
   },
+  "validation_evidence": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/30168905342"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
