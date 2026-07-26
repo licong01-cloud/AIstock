@@ -1979,6 +1979,7 @@ class ConsumedLineageTypeV1(StrEnum):
 class KernelProjectionTypeV1(StrEnum):
     CONTRACT = "CONTRACT"
     ACCOUNT = "ACCOUNT"
+    MARKET_DATA = "MARKET_DATA"
     MARKET_CAPABILITY = "MARKET_CAPABILITY"
     OMS_PREFLIGHT = "OMS_PREFLIGHT"
     RISK_DECISION = "RISK_DECISION"
@@ -2141,6 +2142,137 @@ class ExecutionProjectionSetV1(FrozenStrictModel):
         )
         if self.projection_set_sha256 != expected:
             raise ValueError("projection_set_sha256 does not match execution projection set closure")
+        return self
+
+
+class AlgoReadOnlyServicesV1(FrozenStrictModel):
+    """Immutable transition inputs; never exposes side-effecting service owners."""
+
+    schema_version: Literal["miniqmt_algo_read_only_services_v1"]
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    event_id: IdentityV1
+    delivery_id: IdentityV1
+    contract_projection_id: IdentityV1 | None
+    contract_projection: FrozenJsonObjectFieldV1 | None
+    contract_projection_sha256: Sha256V1 | None
+    market_data_projection_id: IdentityV1 | None
+    market_data_projection: FrozenJsonObjectFieldV1 | None
+    market_data_projection_sha256: Sha256V1 | None
+    account_projection_id: IdentityV1 | None
+    account_projection: FrozenJsonObjectFieldV1 | None
+    account_projection_sha256: Sha256V1 | None
+    execution_projection_set: ExecutionProjectionSetV1
+    services_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+        event_id: str,
+        delivery_id: str,
+        contract_projection_id: str | None,
+        contract_projection: dict[str, Any] | None,
+        market_data_projection_id: str | None,
+        market_data_projection: dict[str, Any] | None,
+        account_projection_id: str | None,
+        account_projection: dict[str, Any] | None,
+        execution_projection_set: ExecutionProjectionSetV1,
+    ) -> Self:
+        projection_values = {
+            "contract": ("miniqmt_contract_projection_v1", contract_projection_id, contract_projection),
+            "market_data": (
+                "miniqmt_market_data_projection_v2",
+                market_data_projection_id,
+                market_data_projection,
+            ),
+            "account": ("miniqmt_account_projection_v1", account_projection_id, account_projection),
+        }
+        hashes = {
+            name: None if value is None else hash_hex_v1(domain, value)
+            for name, (domain, _identity, value) in projection_values.items()
+        }
+        payload = {
+            "schema_version": "miniqmt_algo_read_only_services_v1",
+            "runtime_id": runtime_id,
+            "algo_instance_id": algo_instance_id,
+            "event_id": event_id,
+            "delivery_id": delivery_id,
+            "contract_projection_id": contract_projection_id,
+            "contract_projection": contract_projection,
+            "contract_projection_sha256": hashes["contract"],
+            "market_data_projection_id": market_data_projection_id,
+            "market_data_projection": market_data_projection,
+            "market_data_projection_sha256": hashes["market_data"],
+            "account_projection_id": account_projection_id,
+            "account_projection": account_projection,
+            "account_projection_sha256": hashes["account"],
+            "execution_projection_set": execution_projection_set.model_dump(mode="json"),
+        }
+        return cls(
+            **{**payload, "execution_projection_set": execution_projection_set},
+            services_sha256=hash_hex_v1("miniqmt_algo_read_only_services_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_services(self) -> Self:
+        projection_set = self.execution_projection_set
+        if (
+            projection_set.runtime_id,
+            projection_set.algo_instance_id,
+            projection_set.event_id,
+            projection_set.delivery_id,
+        ) != (self.runtime_id, self.algo_instance_id, self.event_id, self.delivery_id):
+            raise ValueError("read-only services owner conflicts with execution projection set")
+        refs = {item.projection_type: item for item in projection_set.ordered_projection_refs}
+        projections = (
+            (
+                "contract",
+                KernelProjectionTypeV1.CONTRACT,
+                "miniqmt_contract_projection_v1",
+                self.contract_projection_id,
+                self.contract_projection,
+                self.contract_projection_sha256,
+            ),
+            (
+                "market_data",
+                KernelProjectionTypeV1.MARKET_DATA,
+                "miniqmt_market_data_projection_v2",
+                self.market_data_projection_id,
+                self.market_data_projection,
+                self.market_data_projection_sha256,
+            ),
+            (
+                "account",
+                KernelProjectionTypeV1.ACCOUNT,
+                "miniqmt_account_projection_v1",
+                self.account_projection_id,
+                self.account_projection,
+                self.account_projection_sha256,
+            ),
+        )
+        for name, projection_type, domain, identity, value, supplied_hash in projections:
+            presence = (identity is not None, value is not None, supplied_hash is not None)
+            if len(set(presence)) != 1:
+                raise ValueError(f"{name} projection identity, payload and hash must be present together")
+            ref = refs.get(projection_type)
+            if value is None:
+                if ref is not None:
+                    raise ValueError(f"{name} projection ref exists without an immutable payload")
+                continue
+            expected_hash = hash_hex_v1(domain, thaw_json_v1(value))
+            if supplied_hash != expected_hash:
+                raise ValueError(f"{name} projection hash does not match immutable payload")
+            if ref is None or ref.projection_id != identity or ref.payload_sha256 != supplied_hash:
+                raise ValueError(f"{name} projection does not close to its unique projection ref")
+        expected_services_hash = hash_hex_v1(
+            "miniqmt_algo_read_only_services_v1",
+            self.canonical_payload_v1(exclude={"services_sha256"}),
+        )
+        if self.services_sha256 != expected_services_hash:
+            raise ValueError("services_sha256 does not match read-only services closure")
         return self
 
 
@@ -2840,6 +2972,7 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
         allowed = {
             DeliveryStatusV1.PENDING: {DeliveryStatusV1.CLAIMED},
             DeliveryStatusV1.CLAIMED: {
+                DeliveryStatusV1.CLAIMED,
                 DeliveryStatusV1.APPLIED,
                 DeliveryStatusV1.FAILED_RETRYABLE,
                 DeliveryStatusV1.FAILED_TERMINAL,
@@ -2855,8 +2988,15 @@ class AlgoDeliveryPersistenceV1(FrozenStrictModel):
         if self.status is DeliveryStatusV1.CLAIMED:
             if self.lease_epoch != previous.lease_epoch + 1:
                 raise ValueError("delivery lease_epoch must advance from its durable predecessor")
+            expected_attempt_count = (
+                previous.attempt_count if previous.status is DeliveryStatusV1.CLAIMED else previous.attempt_count + 1
+            )
+            if self.attempt_count != expected_attempt_count:
+                raise ValueError("delivery claim attempt_count conflicts with durable predecessor")
         elif self.lease_epoch != previous.lease_epoch:
             raise ValueError("delivery completion must preserve the claimed lease epoch")
+        elif self.attempt_count != previous.attempt_count:
+            raise ValueError("delivery completion must preserve the claimed attempt_count")
         return self
 
     def validate_initial_v1(self) -> Self:
@@ -3131,12 +3271,18 @@ class AlgoTransitionReceiptV1(FrozenStrictModel):
         normalized_time = canonical_utc_datetime_v1(
             values["logical_applied_at_utc"], field_name="logical_applied_at_utc"
         )
+        normalized_terminal = (
+            None if values.get("terminal_outcome") is None else TerminalOutcomeV1(values["terminal_outcome"])
+        )
         payload = {
             "schema_version": "miniqmt_algo_transition_receipt_v1",
             "transition_id": transition_id,
             **{
-                key: values[key] for key in values if not key.startswith("ordered_") and key != "logical_applied_at_utc"
+                key: values[key]
+                for key in values
+                if not key.startswith("ordered_") and key not in {"logical_applied_at_utc", "terminal_outcome"}
             },
+            "terminal_outcome": None if normalized_terminal is None else normalized_terminal.value,
             "ordered_command_ids": list(command_ids),
             "command_set_sha256": hash_hex_v1(
                 "miniqmt_transition_command_set_v1",
@@ -3182,6 +3328,7 @@ class AlgoTransitionReceiptV1(FrozenStrictModel):
                 "ordered_timer_mutation_ids": timer_ids,
                 "ordered_diagnostic_observation_ids": diagnostic_ids,
                 "ordered_consumed_lineage_refs": lineage_refs,
+                "terminal_outcome": normalized_terminal,
             },
             receipt_sha256=hash_hex_v1("miniqmt_algo_transition_receipt_v1", payload),
         )
@@ -4042,6 +4189,50 @@ class BrokerCommandOutboxStatusV1(StrEnum):
     FAILED_TERMINAL = "FAILED_TERMINAL"
 
 
+class KernelCallbackMappingUpdateV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_kernel_callback_mapping_update_v1"]
+    mapping: ExecutionCommandChildMappingV1
+    reference_command_id: IdentityV1
+    expected_mapping_version: PositiveIntV1
+    expected_algo_row_version: PositiveIntV1
+    update_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        mapping: ExecutionCommandChildMappingV1,
+        reference_command_id: str,
+        expected_mapping_version: int,
+        expected_algo_row_version: int,
+    ) -> Self:
+        if not isinstance(mapping, ExecutionCommandChildMappingV1):
+            raise TypeError("mapping must be ExecutionCommandChildMappingV1")
+        payload = {
+            "schema_version": "miniqmt_kernel_callback_mapping_update_v1",
+            "mapping": mapping.model_dump(mode="json"),
+            "reference_command_id": reference_command_id,
+            "expected_mapping_version": expected_mapping_version,
+            "expected_algo_row_version": expected_algo_row_version,
+        }
+        return cls(
+            **{**payload, "mapping": mapping},
+            update_sha256=hash_hex_v1("miniqmt_kernel_callback_mapping_update_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_callback_update(self) -> Self:
+        if self.mapping.mapping_version != self.expected_mapping_version + 1:
+            raise ValueError("callback mapping must be the exact durable mapping successor")
+        expected = hash_hex_v1(
+            "miniqmt_kernel_callback_mapping_update_v1",
+            self.canonical_payload_v1(exclude={"update_sha256"}),
+        )
+        if self.update_sha256 != expected:
+            raise ValueError("callback mapping update hash does not match strict carrier")
+        return self
+
+
 class BrokerCommandOutboxV1(FrozenStrictModel):
     schema_version: Literal["miniqmt_broker_command_outbox_v1"]
     command_id: IdentityV1
@@ -4792,6 +4983,7 @@ __all__ = [
     "AlgoEventDeliveryV1",
     "AlgoFailureReceiptV1",
     "AlgoInitializationV1",
+    "AlgoReadOnlyServicesV1",
     "AlgoSkipReceiptV1",
     "AlgoStartContextV1",
     "AlgoStateSnapshotV2",
@@ -4838,6 +5030,7 @@ __all__ = [
     "FrozenStrictModel",
     "GatewayCapabilityCatalogV1",
     "KernelErrorEvidenceV1",
+    "KernelCallbackMappingUpdateV1",
     "KernelProjectionTypeV1",
     "KernelWorkerStartupReceiptV1",
     "MarketDataCapabilityV1",

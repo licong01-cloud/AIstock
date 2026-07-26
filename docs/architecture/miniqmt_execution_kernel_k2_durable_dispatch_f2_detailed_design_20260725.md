@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`，K2-B/C/D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`；K2-B=`implemented_verified_local`、`source_merge=not_committed`，K2-C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B 已完成本地实现与定向验证但尚未提交/创建PR，K2-C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
-> 本轮 K2-A 只实现 schema/repository slice，不启动 worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 migration/repository；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
+> 本轮 K2-B 只实现 shadow-only ingress/creation/delivery/materialization/repository transaction，不启动常驻worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 repository transaction；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
 ### K2-A second-review checkpoint（2026-07-26）
 
@@ -179,6 +179,8 @@ algo status 严格复用父蓝图，不新增业务状态：`INITIALIZING/ACTIVE
 
 `active_child_count` 必须等于同 runtime/algo 下§4.6 mapping处于 `RESERVED|DISPATCHING|BROKER_ACCEPTED|OUTCOME_UNKNOWN` 的行数；writer在映射状态事务内按相同owner lock重算，readback独立聚合验证。不得由metadata计数、递增/递减猜测或callback payload直接覆盖。
 
+K2-B materializer 对 state quantity 使用唯一 strict authority：state payload 必须包含与 durable algo `target_quantity` 完全相等的 strict integer `parent_quantity`，以及 non-negative strict integer `traded_quantity`；`traded_quantity` 不得超过 target，且相对 durable predecessor 不得回退。top-level `remaining_quantity` 只能由 `target_quantity - traded_quantity` 派生，禁止由 plugin、event 或 metadata 另行提供。只有 `traded_quantity == target_quantity` 才可把 `FILLED` 映射为 `COMPLETED`；任何 quantity drift 均形成 deterministic failure transaction，不得 APPLIED、补零或 fallback。
+
 ### 4.3 `AlgoDeliveryPersistenceV1`
 
 K1 `AlgoEventDeliveryV1` 保持唯一 delivery business carrier。K2 repository-only persistence carrier在其外增加：`lease_epoch,lease_fence_token,row_version,next_attempt_at_utc,failure_receipt_id,skip_receipt_id,closed_at_utc`。这些字段不参与 `delivery_id`，但 writer/readback 必须校验：
@@ -273,6 +275,8 @@ created_transition_id, updated_by_event_id|null, created_at_utc, updated_at_utc,
 
 transition writer 首次创建 mapping 时只接受 `RESERVED + mapping_version=1` 且 broker identity、order/trade lineage、`updated_by_event_id` 全空；`BROKER_ACCEPTED/TERMINAL` 等状态只能由 durable predecessor 和 exact callback/reconcile event 推进。
 
+ORDER/TRADE/RECONCILE callback 的唯一更新 carrier 是 `KernelCallbackMappingUpdateV1`，exact fields 为 `schema_version=miniqmt_kernel_callback_mapping_update_v1,mapping,reference_command_id,expected_mapping_version,expected_algo_row_version,update_sha256`。`update_sha256 = hash_hex_v1("miniqmt_kernel_callback_mapping_update_v1", exact preceding fields)`；mapping 中的 runtime/algo/event lineage、reference command、predecessor mapping version 与 algo row version 必须和被锁 durable facts 完全一致。一个 ingress event 最多携带一个该 carrier，且必须在 event/receipt/delivery-set/runtime-sequence transaction 内完成 mapping、existing child projection及FAILED algo active-child closure；禁止 service 在 ACK 后调用第二个 writer，禁止从 callback payload 猜测 mapping 或补齐 identity。
+
 SUBMIT command 必须在产生 outbox 的同一 transition transaction 中先写 `RESERVED` mapping 和现有 `execution_child_order` projection；该 child row 的 `child_order_id`、owner、symbol、side、quantity、price 与 mapping完全一致，并新增非空 `command_id/local_vt_orderid/deterministic_client_order_ref/order_remark/mapping_receipt_sha256`。dispatcher 只能消费已经 strict-readback 的 mapping；Gateway 调用前把 outbox 与 mapping 原子推进到 `DISPATCHING`。ACK/callback/reconcile 只能按 deterministic client ref、order remark、local id 或 exact broker id命中同一 mapping，并以 row-version CAS附加 broker identity；相同 identifier 命中多个 mapping、同 command 不同 child、同 broker id 不同 mapping全部 terminal conflict且不广播猜测。
 
 CANCEL command 不创建第二个 child；它必须引用目标 SUBMIT mapping 的 exact `local_vt_orderid + child_order_id + broker_order_id`。CANCEL outbox 在 broker call 前保持自己的 `broker_order_id=null`，取消目标只来自 command `owned_broker_order_id`；claim/DISPATCHING/ACK/REJECT/OUTCOME_UNKNOWN/RECONCILING 不得把既有 `BROKER_ACCEPTED` SUBMIT mapping 回退。只有 CALLBACK/RECONCILIATION 的真实 terminal order evidence 才能把 mapping 推进为 `TERMINAL`，broker reject只终结CANCEL outbox而不把algo改成REJECTED。callback-before-ACK 先更新 mapping和append order/trade event，synchronous completion 只验证已有 authoritative fact。mapping/outbox状态变化必须在同 owner lock/transaction 内从 durable mappings重算§4.2 active child，原子更新algo count/closure/row_version；三者任一CAS失败均整事务回滚。该链保证 event→delivery→transition→command→mapping→child→order/trade 可从数据库完整重建。
@@ -331,9 +335,13 @@ routing 先 strict-readback plugin catalog、manifest 和 route compatibility re
 
 deterministic config/plugin/state failure在同事务写 initialization-failed algo、FAILED_TERMINAL delivery和 failure receipt，零 broker command。repository/DB failure整事务回滚且不 ACK；禁止降级为 legacy create、空 state或固定成功。
 
+ALGO_START request 必须携带 exact contract/account/market-data projection refs，并由各 payload 的 canonical hash闭合；caller 不得提供或覆盖 route compatibility ref。coordinator 对 strict-readback catalog与gateway authority运行唯一 route evaluator，并生成 `projection_id="mqroutecompat_" + route_receipt.receipt_sha256` 的 frozen route ref，再与其它 refs 一同形成唯一 `ExecutionProjectionSetV1`。初始化成功和 deterministic failure均持久化该 exact projection set；失败不伪造 state，但必须保留触发失败时已验证的 immutable input authority。
+
 ### 6.2 External ingress
 
 一个事务内：`SELECT execution_runtime FOR UPDATE` → event key/hash dedupe → 分配 runtime sequence → 写 envelope → 对ORDER/TRADE/RECONCILE先strict-readback §4.6 mapping并原子更新mapping、existing child projection与FAILED algo active-child closure → 计算仍需plugin消费的ordered targets → 按 algo id排序锁 row → 为每个 target 分配 next delivery sequence/predecessor → 写 deliveries → 写 ingress receipt/hash → 更新 runtime sequence → commit。FAILED algo callback允许零plugin target，但mapping/OMS closure必须和event在同一事务提交；不能先ACK callback再异步猜测归属。
+
+callback transaction identity覆盖 `KernelCallbackMappingUpdateV1.update_sha256`、更新后mapping/child/algo闭包和ordered delivery set。same event retry必须从 durable runtime sequence与已提交callback事实重算同一 identity；caller-supplied sequence或新 mapping payload若与已提交事实漂移，typed conflict且零写。routing 在读取catalog/manifest之前先按durable algo status排除terminal/ineligible targets，使FAILED callback的零plugin-target闭包不依赖已terminal algo的历史plugin availability；对仍需plugin消费的target则继续strict-readback exact catalog/manifest，禁止把catalog failure静默当作空delivery set。
 
 同 event key同 payload/correlation返回原 receipt；同 key不同 payload/source/correlation typed conflict。event存在但 delivery set缺失、重复或 hash不闭合视为 durable corruption，不自动补行。
 
@@ -344,6 +352,13 @@ worker 只 claim 每个 algo 的最小非终态 delivery，并要求 predecessor
 插件 deterministic failure按 §4.4 写 failure receipt、保留 last-good state、取消未触发 timer，并为 active owned child按 child id排序生成 kernel-owned CANCEL outbox；algo 状态固定为父蓝图 `FAILED`，同时按真实 child facts写 `active_child_closure_status=CANCEL_PENDING|OUTCOME_UNKNOWN`。OMS/Gateway callback/reconcile闭合后只把 closure更新为CLEAN，不创建第二个plugin transition、不改写terminal delivery，也不伪报clean terminal。
 
 repository/serialization/deadlock/lease/provider暂时故障允许 bounded retry，且本次 state/transition/timer/outbox零提交。DB不可用导致 failure receipt也无法写时 consumer不 ACK、health FAILED；恢复后以同 delivery identity重试。
+
+K2-B service/repository seam 固定为两个专用原子入口，不开放 generic connection/context-manager 给 service，也不允许 service 串联多个 public writer 假装单事务：
+
+- `initialize_algo_atomic(request, bundle_builder)`：repository 锁 runtime/parent owner并分配 exact next runtime sequence，在同一 transaction 内向纯 `bundle_builder(runtime_sequence)` 提供 frozen sequence；builder 必须返回 exact final algo、ALGO_START event、initial PENDING delivery、initialization result、projection set、transition/failure receipt、mapping/outbox/timer/diagnostic集合。repository 逐项重算 owner/hash/ordered set/transaction identity，先写本事务内 initial facts，再推进 final algo/delivery并独立 readback；builder exception 仅可转换为同事务 deterministic initialization failure，repository/DB exception 整体 rollback且不 ACK。
+- `apply_claimed_delivery_atomic(delivery_id, expected lease/fence/row versions, bundle_builder)`：repository 在同一 transaction 内按顺序锁 delivery、predecessor、algo、event，strict-readback manifest/state owner后调用纯 builder；返回的 applied/failure/skip bundle必须由同一 cursor 写 transition/state/mapping/child/outbox/timer/diagnostic并推进 delivery。任何 CAS、projection、effect或readback失败整事务 rollback。plugin 调用前后均不得释放 algo/delivery lock。
+
+两个 builder 都是 K2 内部 production seam，只接收/返回 K1/K2 strict carriers；不得接收 connection/repository/Gateway/broker client，不得在 callback 内 commit。repository 对 callback 返回值进行 exact type closure，不能相信 caller supplied transaction identity。K2-B 的 `AlgoReadOnlyServicesV1`、factory/restore/transition binding 规则以父蓝图 §5.5 为唯一 authority；current-three façade仍属于 K4，K2-B 对不满足 pure contract 的既有 core binding fail-loud而不 fallback。
 
 ### 6.4 Command dispatch three-phase protocol
 
@@ -379,6 +394,8 @@ reconciler按 command id、client ref、order remark、callback watermark和brok
 delivery/repository pre-effect retry最多 5 次；outbox pre-DISPATCHING retry最多 5 次。延迟只由 durable attempt count确定，无随机 jitter、wall clock identity或进程内计数。attempt耗尽写 terminal receipt。
 
 `attempt_count` 表示已开始的总attempt，首次claim从0原子增至1；最大5次实际attempt。attempt 1–4失败后的next delay分别为 `1,2,4,8` 秒；attempt 5失败直接耗尽并写terminal receipt，不再设置next attempt。不存在第6次调用或未被计数的initial attempt。
+
+过期 `CLAIMED` delivery 只能经 repository `reclaim_stale_delivery` 执行 `CLAIMED -> CLAIMED` successor lease：要求 `lease_expires_at <= recovered_at_utc`，保持同一 `attempt_count`，按durable predecessor推进 lease epoch/fence/owner/row version，并由独立readback确认。reclaim不代表新attempt、不再次增加attempt_count；worker只可继续本process incarnation exact-owned的CLAIMED行。attempt 5 crash recovery仍在第5次attempt内完成或terminal，禁止产生第6次plugin调用。未过期、owner/fence/epoch不匹配或same identity payload drift均fail-loud且零写。
 
 retryable allowlist只包含：PostgreSQL serialization/deadlock、可识别的短暂connection unavailable、claim前lease竞争、plugin调用前required provider暂不可用。schema/hash/identity/ownership/quantity/capability/risk decision、plugin logic、broker rejection和任何DISPATCHING后异常均不可按此allowlist重试。未知异常默认terminal或OUTCOME_UNKNOWN（取决于是否已DISPATCHING），禁止宽泛`except Exception -> retry`。
 
@@ -528,6 +545,12 @@ K2-A-M1只改变repository内部物理职责，不新增业务能力、schema、
 
 ALGO_START、routing、delivery claim/predecessor、pure initialize/transition、state/failure/skip、diagnostics；保持 shadow-only。
 
+实现切片固定为 `kernel_ingress.py`、`kernel_creation.py`、`kernel_delivery.py`、`kernel_materializer.py` 与唯一public repository façade下的 `kernel_repository_k2b.py`：前四者只构造/校验 strict carriers，后者持有 ALGO_START、external ingress/callback、claimed delivery application、retry与stale reclaim的唯一transaction owner。callback mapping、child projection、FAILED active-child closure、event/receipt/delivery-set和runtime sequence必须单事务；ALGO_START initial/final facts必须单事务；delivery failure必须保留last-good state并原子terminalize timer/mapping/outbox/diagnostics。该切片不启动常驻worker、不接线产品runtime、不调用Gateway/broker；当前三算法K4 façade未实现前，真实旧binding不满足pure contract时必须fail-loud并留下durable initialization failure，禁止legacy route或fixture fallback。
+
+K2-B本地实现审核额外闭合两个阻断：external ingress不再把“predecessor已terminal”设为事件持久化门禁，而是允许按exact predecessor identity/sequence排队，terminal predecessor只在worker claim/apply时强制，避免处理中tick/callback无法durable ingress；FAILED algo保留last-good state时，repository以`state_sha256 + last_applied_delivery_sequence/id`验证state readback，不再错误要求last-good state sequence等于包含failure transition的algo总transition sequence。排队 successor在前驱失败后只能等待前驱terminal，再写同failure lineage的`SKIPPED_TERMINAL`，顺序与fail-loud语义均保留。
+
+本地证据：direct+disposable DEV matrix=`109 passed`；MiniQMT L2=`770 passed,23 skipped`；changed-files=`20`、classifier=`targeted_ci_required`且仅选择`miniqmt_execution_runtime_l2`、`unmapped_code_files=[]`。新模块line/branch分别为creation=`100/100`、delivery=`90.16/79.27`、ingress=`94.55/87.50`、materializer=`93.26/76.92`、repository K2-B=`82.77/70.55`，未使用omit/pragma/skip/xfail规避门槛。当前`source_merge=not_committed`，required PR CI尚未发生，因此不宣称source merged或runtime activated。
+
 ### K2-C — ExchangeSessionClock and timer（4–5 人日）
 
 session events、durable schedule/occurrence、午休/catch-up/EOD/restart；不迁移TWAP产品route。
@@ -595,14 +618,14 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | --- | --- | --- | --- | --- |
 | `F-061` | §1–§3；`runtime.py`、`client.py`、`repository.py`、现有migration定向事实 | artifact: `docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`；K2-A无产品route/runtime wiring | design_ready | none |
 | `F-062` | §4.0–§4.10、§9、§12 K2-A-M1；`plugin_contracts.py`、public `kernel_repository.py`、private projection/schema/operation modules、K2 migration triplet | `backend/tests/miniqmt_execution_runtime/test_kernel_repository_structure.py`=`4 passed`、`test_kernel_contracts.py`=`33 passed`、`test_kernel_repository_postgres.py` DEV=`12 passed`、`test_kernel_migration_postgres.py` DEV=`11 passed`；public signature SHA-256=`7045f3c2...`与migration canonical-LF bytes=`e2a244d0.../24b4e189.../cb408aaf...`证明唯一facade、唯一projection/schema authority及durable contract不变 | design_ready | none |
-| `F-063` | §4.1、§5、§6.1–6.2；repository event+receipt+ordered deliveries transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` event dedupe/conflict/rollback/commit readback；K2-B再实现ingress coordinator | design_ready | none |
-| `F-064` | §4.2–4.4、§6.3、§7、§12 K2-A-M1；event/delivery与transition/outbox mixin共用唯一`KernelRepositoryBase._connection` | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_repository_postgres.py`验证arbitrary/wrong fence、durable predecessor epoch、stale worker、dispatch-attempt lease closure、mapping/outbox/algo三点fault injection与post-commit readback；`test_kernel_repository_structure.py`验证MRO无同名method override或第二connection owner | design_ready | none |
-| `F-065` | §4.2–§4.4、§6.3、§7.2；strict failure/skip/parent closure schema与repository transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_migration_postgres.py` initialization failure、FAILED closure、failure/cancel/DB CHECK负例；恢复编排留在后续slice | design_ready | none |
+| `F-063` | §4.1、§4.6、§5、§6.1–6.2、§12 K2-B；`kernel_ingress.py`、`kernel_creation.py`、`kernel_repository_event_delivery.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py` exact routing/ownership/predecessor；`backend/tests/miniqmt_execution_runtime/test_kernel_creation.py` route/projection/success/failure；`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` event dedupe、nonterminal predecessor queue、callback mapping+event atomic rollback/readback；direct+DEV总矩阵=`109 passed` | implemented_verified_local | none |
+| `F-064` | §4.2–4.4、§6.3、§7、§12 K2-B；`kernel_delivery.py`、`kernel_materializer.py`、`kernel_repository_k2b.py`与唯一`KernelRepositoryBase._connection` | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` pure invoke/materialization/worker；`backend/tests/miniqmt_execution_runtime/test_kernel_repository_k2b_validation.py` bundle authority；DEV applied/failure/skip/reclaim；逐模块line/branch均≥80/70；`python -m nox -s miniqmt_execution_runtime_l2`=`770 passed,23 skipped` | implemented_verified_local | none |
+| `F-065` | §4.2–§4.4、§6.3、§7.2、§12 K2-B；strict failure/skip/parent closure与bounded retry transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py` attempts 1–5、no sixth attempt、provider-only retry、terminal input/plugin failure、FAILED skip；`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` DEV queue→failure→successor skip及last-good state readback；classifier只选择MiniQMT且`unmapped_code_files=[]` | implemented_verified_local | none |
 | `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3、§12 K2-A-M1；`kernel_repository_transition_outbox.py`唯一持有mapping/outbox/callback transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_repository_postgres.py`验证accepted mapping+CANCEL claim/DISPATCHING、wrong owned broker id、ACK/reject/unknown/reconcile/terminal matrix、terminal outbox immutable、FAILED+CLEAN原子闭包与整事务rollback；K2-D再实现dispatcher/reconciler | design_ready | none |
 | `F-067` | §4.8–§4.9、§8、§12 K2-A-M1；`kernel_repository_timer_session.py`持有timer/session/recovery，K1 target-scoped calendar import authority不变 | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`test_kernel_repository_postgres.py`与`test_plugin_import_boundaries.py`=`66 passed`验证CalendarSnapshotSet、session、timer lease/readback、bounded limit、stable ordering和fresh-process import；K2-C再实现clock | design_ready | none |
 | `F-068` | §9；三份 migration + checksum/fingerprint/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV preflight、clean first/second apply、guarded rollback、CHECK/FK/partial predicate/type/null/default六类drift；production DDL未执行 | design_ready | none |
 | `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`本地/CI=`723 passed,21 skipped`；structure/contracts/DEV repo/DEV migration/import=`4/33/12/11/66 passed`、combined=`49 passed`、aggregate line/branch=`87.83/72.04`；classifier仅MiniQMT、ownership=`11/0/0`，L0/registry与三份F2通过；PR #2753 initial run `30190525169`暴露跨平台换行测试缺陷，implementation HEAD `92c3910`的纠正run `30190835098`及pre-review docs-closeout checkpoint `75d9398a`的required CI run `30191268890`均全绿，后续source HEAD与required CI以PR实时readback为准 | design_ready | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_{contracts,ingress,delivery,creation,repository_k2b_validation,repository_structure,repository_postgres,migration_postgres}.py -q` with disposable DEV=`109 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`770 passed,23 skipped`；changed files=`20`、classifier=`targeted_ci_required`且仅MiniQMT、`unmapped_code_files=[]`；五个新模块line/branch=`100/100,90.16/79.27,94.55/87.50,93.26/76.92,82.77/70.55` | implemented_verified_local | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 

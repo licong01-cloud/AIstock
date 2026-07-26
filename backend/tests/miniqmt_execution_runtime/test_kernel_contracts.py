@@ -16,6 +16,7 @@ from backend.execution_algos.adaptive_is.contracts import (
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    AlgoReadOnlyServicesV1,
     ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
     AlgoEventDeliveryV1,
@@ -45,8 +46,9 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ExecutionProjectionRefV1,
     ExecutionProjectionSetV1,
     KernelErrorEvidenceV1,
-    KernelWorkerStartupReceiptV1,
+    KernelCallbackMappingUpdateV1,
     KernelProjectionTypeV1,
+    KernelWorkerStartupReceiptV1,
     MiniQMTRiskDecisionReceiptV1,
     OMSPreflightProjectionReceiptV1,
     RiskDecisionActionV1,
@@ -572,6 +574,26 @@ def test_mapping_and_outbox_close_deterministic_identity_versions_and_nullable_b
         BrokerCommandOutboxV1.model_validate(malformed)
 
 
+def test_callback_mapping_update_closes_exact_successor_versions_and_hash() -> None:
+    successor = _mapping(status=CommandChildMappingStatusV1.DISPATCHING, version=2)
+    update = KernelCallbackMappingUpdateV1.create(
+        mapping=successor,
+        reference_command_id=successor.command_id,
+        expected_mapping_version=1,
+        expected_algo_row_version=2,
+    )
+
+    assert KernelCallbackMappingUpdateV1.model_validate_json(update.model_dump_json()) == update
+    wrong_version = update.model_dump(mode="python")
+    wrong_version["expected_mapping_version"] = 2
+    with pytest.raises(ValidationError, match="exact durable mapping successor"):
+        KernelCallbackMappingUpdateV1.model_validate(wrong_version)
+    hash_drift = update.model_dump(mode="python")
+    hash_drift["update_sha256"] = _sha("f")
+    with pytest.raises(ValidationError, match="update hash"):
+        KernelCallbackMappingUpdateV1.model_validate(hash_drift)
+
+
 @pytest.mark.parametrize(
     ("field_name", "bad_value"),
     (("lease_epoch", 99), ("attempt_count", 7), ("row_version", 12)),
@@ -1045,4 +1067,104 @@ def test_timer_and_exchange_session_authority_reject_identity_and_calendar_drift
             ordered_market_calendar_sha256s=(_sha("6"), _sha("7"), _sha("8")),
             ordered_session_segments=({"start_local": "09:30:00", "end_local": "11:30:00"},),
             source_effective_at_utc="2026-07-24T16:00:00Z",
+        )
+
+
+def test_algo_read_only_services_close_payloads_to_unique_projection_refs() -> None:
+    event = _tick_event()
+    algo_instance_id = _algo_id()
+    delivery_id = "delivery_services_k2"
+    contract = {"symbol": "600000.SH", "volume_increment": 100}
+    market = {"market_data_id": "market_k2", "ask_price_decimal": "10.010000"}
+    account = {"projection_id": "account_k2", "available_cash_decimal": "100000.000000"}
+    refs = tuple(
+        sorted(
+            (
+                ExecutionProjectionRefV1.create(
+                    projection_type=KernelProjectionTypeV1.CONTRACT,
+                    projection_id="contract_k2",
+                    projection_version="contract_v1",
+                    payload_sha256=hash_hex_v1("miniqmt_contract_projection_v1", contract),
+                    source_event_id=None,
+                    logical_at_utc="2026-07-25T01:30:00Z",
+                ),
+                ExecutionProjectionRefV1.create(
+                    projection_type=KernelProjectionTypeV1.MARKET_DATA,
+                    projection_id="market_k2",
+                    projection_version="market_v2",
+                    payload_sha256=hash_hex_v1("miniqmt_market_data_projection_v2", market),
+                    source_event_id=event.event_id,
+                    logical_at_utc="2026-07-25T01:30:00Z",
+                ),
+                ExecutionProjectionRefV1.create(
+                    projection_type=KernelProjectionTypeV1.ACCOUNT,
+                    projection_id="account_k2",
+                    projection_version="account_v1",
+                    payload_sha256=hash_hex_v1("miniqmt_account_projection_v1", account),
+                    source_event_id=None,
+                    logical_at_utc="2026-07-25T01:30:00Z",
+                ),
+            ),
+            key=lambda item: (item.projection_type.value, item.projection_id),
+        )
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery_id,
+        projection_refs=refs,
+    )
+
+    services = AlgoReadOnlyServicesV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery_id,
+        contract_projection_id="contract_k2",
+        contract_projection=contract,
+        market_data_projection_id="market_k2",
+        market_data_projection=market,
+        account_projection_id="account_k2",
+        account_projection=account,
+        execution_projection_set=projection_set,
+    )
+
+    assert AlgoReadOnlyServicesV1.model_validate_json(services.model_dump_json()) == services
+    drift = services.model_dump(mode="python")
+    drift["market_data_projection"] = {"market_data_id": "market_k2", "ask_price_decimal": "10.020000"}
+    with pytest.raises(ValidationError, match="market_data projection hash"):
+        AlgoReadOnlyServicesV1.model_validate(drift, strict=True)
+
+
+def test_algo_read_only_services_reject_ref_without_payload() -> None:
+    event = _tick_event()
+    ref = ExecutionProjectionRefV1.create(
+        projection_type=KernelProjectionTypeV1.MARKET_DATA,
+        projection_id="market_k2",
+        projection_version="market_v2",
+        payload_sha256="a" * 64,
+        source_event_id=event.event_id,
+        logical_at_utc="2026-07-25T01:30:00Z",
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=_algo_id(),
+        event_id=event.event_id,
+        delivery_id="delivery_services_k2",
+        projection_refs=(ref,),
+    )
+    with pytest.raises(ValidationError, match="ref exists without"):
+        AlgoReadOnlyServicesV1.create(
+            runtime_id=event.runtime_id,
+            algo_instance_id=_algo_id(),
+            event_id=event.event_id,
+            delivery_id="delivery_services_k2",
+            contract_projection_id=None,
+            contract_projection=None,
+            market_data_projection_id=None,
+            market_data_projection=None,
+            account_projection_id=None,
+            account_projection=None,
+            execution_projection_set=projection_set,
         )
