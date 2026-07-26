@@ -1,6 +1,7 @@
 {
   "actual": "Retry run macb_453ca2d0c5b21b40_20240701_20260629_20260726T210750960167Z_05f4308d planned 6 children including 4 LOO children; a durable cancel command was submitted before remote execution.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/combine_backtest.py",
     "backend/services/multi_alpha/durable_submission.py",
     "backend/tests/multi_alpha/test_durable_submission.py",
     "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
@@ -32,12 +33,14 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/multi_alpha/combine_backtest.py",
       "backend/services/multi_alpha/durable_submission.py",
       "backend/tests/multi_alpha/test_durable_submission.py",
       "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
     ],
     "ownership": {
       "changed_files": [
+        "backend/services/multi_alpha/combine_backtest.py",
         "backend/services/multi_alpha/durable_submission.py",
         "backend/tests/multi_alpha/test_durable_submission.py",
         "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
@@ -52,6 +55,18 @@
         "qe.long_trend_evaluation"
       ],
       "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/combine_backtest.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
         {
           "file": "backend/services/multi_alpha/durable_submission.py",
           "impact_modules": [
@@ -94,6 +109,7 @@
         "high"
       ],
       "suggested_scope": [
+        "backend/services/multi_alpha/combine_backtest.py",
         "backend/services/multi_alpha/durable_submission.py",
         "backend/tests/multi_alpha/test_durable_submission.py",
         "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
@@ -102,6 +118,7 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/multi_alpha/combine_backtest.py",
       "backend/services/multi_alpha/durable_submission.py",
       "backend/tests/multi_alpha/test_durable_submission.py",
       "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
