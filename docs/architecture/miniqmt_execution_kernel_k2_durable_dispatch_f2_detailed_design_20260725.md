@@ -1,10 +1,10 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`；K2-B=`implemented_verified_local`、`source_merge=not_committed`，K2-C/D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`；K2-B=`implemented_verified`、PR #2773 OPEN、`source_merge=pending_user_authorization`，K2-C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B 已完成本地实现与定向验证但尚未提交/创建PR，K2-C/D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B implementation commit `ab9f9f63883394b1413619d3c58be0f99a333da9` 已推送并创建PR #2773，required CI正在执行；K2-C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
 > 本轮 K2-B 只实现 shadow-only ingress/creation/delivery/materialization/repository transaction，不启动常驻worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 repository transaction；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
@@ -549,7 +549,7 @@ ALGO_START、routing、delivery claim/predecessor、pure initialize/transition�
 
 K2-B本地实现审核额外闭合两个阻断：external ingress不再把“predecessor已terminal”设为事件持久化门禁，而是允许按exact predecessor identity/sequence排队，terminal predecessor只在worker claim/apply时强制，避免处理中tick/callback无法durable ingress；FAILED algo保留last-good state时，repository以`state_sha256 + last_applied_delivery_sequence/id`验证state readback，不再错误要求last-good state sequence等于包含failure transition的algo总transition sequence。排队 successor在前驱失败后只能等待前驱terminal，再写同failure lineage的`SKIPPED_TERMINAL`，顺序与fail-loud语义均保留。
 
-本地证据：direct+disposable DEV matrix=`109 passed`；MiniQMT L2=`770 passed,23 skipped`；changed-files=`20`、classifier=`targeted_ci_required`且仅选择`miniqmt_execution_runtime_l2`、`unmapped_code_files=[]`。新模块line/branch分别为creation=`100/100`、delivery=`90.16/79.27`、ingress=`94.55/87.50`、materializer=`93.26/76.92`、repository K2-B=`82.77/70.55`，未使用omit/pragma/skip/xfail规避门槛。当前`source_merge=not_committed`，required PR CI尚未发生，因此不宣称source merged或runtime activated。
+本地证据：direct+disposable DEV matrix=`109 passed`；MiniQMT L2=`770 passed,23 skipped`；changed-files=`20`、classifier=`targeted_ci_required`且仅选择`miniqmt_execution_runtime_l2`、`unmapped_code_files=[]`。新模块line/branch分别为creation=`100/100`、delivery=`90.16/79.27`、ingress=`94.55/87.50`、materializer=`93.26/76.92`、repository K2-B=`82.77/70.55`，未使用omit/pragma/skip/xfail规避门槛。PR #2773当前OPEN，`source_merge=pending_user_authorization`且required CI pending；不宣称source merged或runtime activated。
 
 ### K2-C — ExchangeSessionClock and timer（4–5 人日）
 
