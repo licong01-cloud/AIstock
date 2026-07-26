@@ -76,6 +76,10 @@ def test_real_k1_a_and_k1_c_modules_pass_ast_and_isolated_import() -> None:
         ("from backend.infra.qmt_client import QmtClient\n", "backend.infra.qmt_client"),
         ("import backend.services.simulation_runtime.scheduler\n", "backend.services.simulation_runtime.scheduler"),
         ("from backend.services.selection import service\n", "backend.services.selection"),
+        (
+            "from backend.execution_algos.adaptive_is.contracts import CalendarSnapshotSet\n",
+            "backend.execution_algos.adaptive_is.contracts",
+        ),
         ("from sqlalchemy.orm import Session\n", "sqlalchemy.orm"),
         ("import xtquant.xttrader as trader\n", "xtquant.xttrader"),
         ("import socket\n", "socket"),
