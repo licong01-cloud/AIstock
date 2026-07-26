@@ -413,7 +413,7 @@ class DurableRecoveryService:
         list_runs = getattr(self._repository, "list_runs", None)
         if not callable(list_runs):
             return None
-        expected_source_attempt_id = _nested_source_attempt_id(target)
+        expected_source_attempt_id = self._resolve_expected_source_attempt_id(target)
         if not expected_source_attempt_id:
             return None
         candidates: list[dict[str, Any]] = []
@@ -475,6 +475,73 @@ class DurableRecoveryService:
                 str(attempt.get("finished_at") or attempt.get("updated_at") or ""),
                 str(attempt.get("attempt_id") or ""),
             ),
+        )
+
+    def _resolve_expected_source_attempt_id(
+        self,
+        target: Mapping[str, Any],
+    ) -> str | None:
+        """Resolve a preserved child's original attempt through immutable ancestry."""
+
+        get_child = getattr(self._repository, "get_child", None)
+        current: Mapping[str, Any] = target
+        target_child_key = str(target.get("child_key") or "")
+        visited: set[str] = set()
+        for _depth in range(128):
+            source_attempt_id = _nested_source_attempt_id(current)
+            if source_attempt_id:
+                return source_attempt_id
+            current_child_id = str(current.get("child_id") or "").strip()
+            if current_child_id:
+                if current_child_id in visited:
+                    raise DurableContractError(
+                        "recovery source child ancestry contains a cycle",
+                        reason_code="source_lineage_mismatch",
+                        context={
+                            "target_child_key": target_child_key,
+                            "cycle_child_id": current_child_id,
+                        },
+                    )
+                visited.add(current_child_id)
+            source_child_id = _direct_source_child_id(current)
+            if not source_child_id:
+                return None
+            if source_child_id in visited:
+                raise DurableContractError(
+                    "recovery source child ancestry contains a cycle",
+                    reason_code="source_lineage_mismatch",
+                    context={
+                        "target_child_key": target_child_key,
+                        "cycle_child_id": source_child_id,
+                    },
+                )
+            if not callable(get_child):
+                return None
+            ancestor = get_child(source_child_id)
+            if ancestor is None:
+                raise DurableContractError(
+                    "recovery source child ancestor disappeared",
+                    reason_code="recovery_scope_stale",
+                    context={
+                        "target_child_key": target_child_key,
+                        "source_child_id": source_child_id,
+                    },
+                )
+            if str(ancestor.get("child_key") or "") != target_child_key:
+                raise DurableContractError(
+                    "recovery source child ancestry changed child identity",
+                    reason_code="source_lineage_mismatch",
+                    context={
+                        "target_child_key": target_child_key,
+                        "source_child_id": source_child_id,
+                        "ancestor_child_key": ancestor.get("child_key"),
+                    },
+                )
+            current = ancestor
+        raise DurableContractError(
+            "recovery source child ancestry exceeds the supported depth",
+            reason_code="source_lineage_mismatch",
+            context={"target_child_key": target_child_key, "max_depth": 128},
         )
 
     def _materializer_identity_for(
@@ -1780,6 +1847,25 @@ def _nested_source_attempt_id(value: Mapping[str, Any]) -> str | None:
             found = _nested_source_attempt_id(nested)
             if found:
                 return found
+    return None
+
+
+def _direct_source_child_id(value: Mapping[str, Any]) -> str | None:
+    direct = str(value.get("source_child_id") or "").strip()
+    if direct:
+        return direct
+    lineage = value.get("source_lineage_json")
+    if isinstance(lineage, Mapping):
+        direct = str(lineage.get("source_child_id") or "").strip()
+        if direct:
+            return direct
+    input_manifest = value.get("input_manifest_json")
+    if isinstance(input_manifest, Mapping):
+        recovery = input_manifest.get("recovery")
+        if isinstance(recovery, Mapping):
+            direct = str(recovery.get("source_child_id") or "").strip()
+            if direct:
+                return direct
     return None
 
 

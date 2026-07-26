@@ -301,6 +301,31 @@ class _SiblingCompletedRecoveryRepository(_RecoverySpecRepository):
         return deepcopy(self.children.get(child_id))
 
 
+class _CumulativeSiblingRecoveryRepository(_SiblingCompletedRecoveryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        original_attempt_id = str(self.sibling_attempt["source_attempt_id"])
+        self.ancestor_child = deepcopy(self.children[LOO_ID])
+        self.ancestor_child["child_id"] = "macbc_ancestor_loo"
+        self.ancestor_child["input_manifest_json"]["recovery"] = {
+            "source_attempt_id": original_attempt_id,
+        }
+        self.children[LOO_ID]["source_child_id"] = self.ancestor_child["child_id"]
+        self.children[LOO_ID]["input_manifest_json"]["recovery"] = {
+            "source_child_id": self.ancestor_child["child_id"],
+            "source_attempt_id": None,
+        }
+        self.children[LOO_ID]["source_lineage_json"] = {
+            "source_child_id": self.ancestor_child["child_id"],
+            "source_attempt_id": None,
+        }
+
+    def get_child(self, child_id: str) -> dict[str, Any] | None:
+        if child_id == self.ancestor_child["child_id"]:
+            return deepcopy(self.ancestor_child)
+        return super().get_child(child_id)
+
+
 class _RemoteCompletedRepairAdapter:
     def __init__(self, root: Path, *, remote_status: str = "completed") -> None:
         self.artifacts = DurablePublishedArtifacts(
@@ -515,6 +540,48 @@ def test_results_only_preview_finds_exact_completed_sibling_owner_race_attempt()
     assert "results_only_result_manifest_missing" not in preview.evidence[
         "evidence_gaps"
     ]
+
+
+def test_results_only_preview_resolves_original_attempt_through_source_child_ancestry() -> None:
+    repository = _CumulativeSiblingRecoveryRepository()
+
+    preview = DurableRecoveryService(repository).preview(
+        source_run_id=RUN_ID,
+        target_child_id=LOO_ID,
+        retry_mode="results_only",
+        idempotency_key="recover_cumulative_sibling",
+    )
+
+    assert preview.plan is not None
+    target = next(
+        entry for entry in preview.plan.entries if entry.source_child_id == LOO_ID
+    )
+    assert target.disposition == "reuse_result"
+    assert target.source_attempt_id == repository.sibling_attempt["attempt_id"]
+    assert target.source_lineage["source_run_id"] == repository.sibling_run["id"]
+
+
+def test_results_only_preview_rejects_cyclic_source_child_ancestry() -> None:
+    repository = _CumulativeSiblingRecoveryRepository()
+    repository.children[LOO_ID]["source_child_id"] = LOO_ID
+    repository.children[LOO_ID]["input_manifest_json"]["recovery"] = {
+        "source_child_id": LOO_ID,
+        "source_attempt_id": None,
+    }
+    repository.children[LOO_ID]["source_lineage_json"] = {
+        "source_child_id": LOO_ID,
+        "source_attempt_id": None,
+    }
+
+    with pytest.raises(ValueError) as caught:
+        DurableRecoveryService(repository).preview(
+            source_run_id=RUN_ID,
+            target_child_id=LOO_ID,
+            retry_mode="results_only",
+            idempotency_key="reject_cyclic_cumulative_source",
+        )
+
+    assert getattr(caught.value, "reason_code", None) == "source_lineage_mismatch"
 
 
 def test_results_only_worker_collects_exact_remote_completed_artifact_without_rerun(
