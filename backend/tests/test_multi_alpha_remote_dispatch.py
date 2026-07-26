@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,7 +13,9 @@ from backend.services.multi_alpha.remote_dispatch import (
     ComputeNodeInfo,
     RemotePredBacktestExecutor,
     WorkspaceArtifactSyncClient,
+    _remote_runtime_artifact_link_commands,
     _remote_small_files,
+    _sync_remote_runtime_artifacts,
     _remote_task_id,
     _remote_wsl_command,
     _resolve_l2_artifact_path,
@@ -189,7 +192,10 @@ class _FakeArtifactClient:
 
     def ensure_artifact(self, path: Path, *, node_id: str, verify_after_upload: bool = True) -> dict[str, Any]:
         self.calls.append(path)
-        sha256 = ("b" if path.suffix == ".pkl" else "a") * 64
+        if path.name not in {"combined_factors_df.parquet", "combined_prediction.pkl"}:
+            sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            sha256 = ("b" if path.suffix == ".pkl" else "a") * 64
         return {
             "sha256": sha256,
             "size": path.stat().st_size,
@@ -247,6 +253,7 @@ class _FakeSubmissionCoordinator:
 def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     template = _runtime_template(tmp_path)
+    (template / "qe_sector_risk_overlay.parquet").write_bytes(b"r" * (8 * 1024 * 1024))
     workspace.mkdir()
     pred = workspace / "combined_prediction.pkl"
     pd.DataFrame({"score": [1.0]}).to_pickle(pred)
@@ -277,7 +284,8 @@ def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: 
     )
 
     assert metrics["cagr"] == 1.0
-    assert fake_artifact.calls == [l2, pred]
+    runtime_overlay = workspace / "qe_sector_risk_overlay.parquet"
+    assert fake_artifact.calls == [l2, pred, runtime_overlay]
     assert fake_workspace.payloads
     payload = fake_workspace.payloads[0]
     assert payload["experiment_files"] == {}
@@ -285,10 +293,12 @@ def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: 
     assert small_sync_calls[0]["task_id"].endswith("_workspace")
     assert small_sync_calls[0]["loop_index"] == 1
     assert "combined_prediction.pkl.b64" not in small_sync_calls[0]["files"]
+    assert "qe_sector_risk_overlay.parquet.b64" not in small_sync_calls[0]["files"]
     assert "bash -lc" in payload["wsl_command"]
     assert "/remote/artifacts/" + "a" * 64 in payload["wsl_command"]
     assert "/remote/artifacts/" + "b" * 64 in payload["wsl_command"]
-    assert payload["wsl_command"].count("ln -sfn") == 2
+    assert payload["wsl_command"].count("ln -sfn") == 3
+    assert payload["config"]["runtime_artifact_bindings"][0]["name"] == "qe_sector_risk_overlay.parquet"
     assert "combined_prediction.pkl" in payload["wsl_command"]
     assert "*.b64" in payload["wsl_command"]
     assert "../combined_prediction.pkl.b64" not in payload["wsl_command"]
@@ -389,6 +399,121 @@ def test_remote_small_files_leave_oversized_prediction_to_artifact_store(tmp_pat
 
     assert "combined_prediction.pkl.b64" not in files
     assert set(files) == {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
+
+
+def test_oversized_runtime_parquet_uses_cas_and_is_not_small_file_payload(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    runtime_artifact = workspace / "qe_sector_risk_overlay.parquet"
+    runtime_artifact.write_bytes(b"r" * (8 * 1024 * 1024))
+    pred = workspace / "combined_prediction.pkl"
+    pred.write_bytes(b"pred")
+    client = _FakeArtifactClient()
+    node = ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000")
+
+    bindings = _sync_remote_runtime_artifacts(
+        workspace=workspace,
+        node=node,
+        node_id=node.node_id,
+        artifact_client=client,
+        remote_paths={"artifact_path": "/remote/artifacts/" + "a" * 64},
+    )
+    files = _remote_small_files(
+        workspace=workspace,
+        pred_pkl=pred,
+        include_prediction=False,
+        cas_bound_names={str(item["name"]) for item in bindings},
+    )
+
+    expected_sha = hashlib.sha256(runtime_artifact.read_bytes()).hexdigest()
+    assert client.calls == [runtime_artifact]
+    assert bindings == [
+        {
+            "name": runtime_artifact.name,
+            "binding": "workspace_artifact_cas",
+            "sha256": expected_sha,
+            "size": runtime_artifact.stat().st_size,
+            "remote_path": f"/remote/artifacts/{expected_sha}",
+            "artifact_store_root": "/remote/artifacts",
+            "cas_status": "reused",
+        }
+    ]
+    assert f"{runtime_artifact.name}.b64" not in files
+    command = _remote_runtime_artifact_link_commands(bindings)
+    assert "sha256sum --" in command
+    assert f"/remote/artifacts/{expected_sha}" in command
+    assert "ln -sfn" in command
+    assert runtime_artifact.name in command
+
+
+def test_runtime_artifact_binding_rejects_duplicate_workspace_name() -> None:
+    binding = {
+        "name": "overlay.parquet",
+        "binding": "workspace_artifact_cas",
+        "sha256": "a" * 64,
+        "size": 11,
+        "remote_path": "/remote/artifacts/" + "a" * 64,
+    }
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_runtime_artifact_link_commands([binding, binding])
+
+    assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
+
+
+def test_small_file_packager_does_not_silently_exclude_unbound_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    pred = workspace / "combined_prediction.pkl"
+    pred.write_bytes(b"pred")
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_small_files(
+            workspace=workspace,
+            pred_pkl=pred,
+            include_prediction=False,
+            cas_bound_names={"conf.yaml"},
+        )
+
+    assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
+
+
+def test_runtime_artifact_cas_receipt_mismatch_is_loud(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    runtime_artifact = workspace / "overlay.parquet"
+    runtime_artifact.write_bytes(b"r" * (8 * 1024 * 1024))
+
+    class _MismatchedReceiptClient:
+        def ensure_artifact(self, path: Path, *, node_id: str) -> dict[str, Any]:
+            return {
+                "sha256": "0" * 64,
+                "size": path.stat().st_size,
+                "uploaded": False,
+                "status": {
+                    "exists": True,
+                    "size": path.stat().st_size,
+                    "artifact_store_root": "/remote/artifacts",
+                },
+            }
+
+    node = ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000")
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _sync_remote_runtime_artifacts(
+            workspace=workspace,
+            node=node,
+            node_id=node.node_id,
+            artifact_client=_MismatchedReceiptClient(),  # type: ignore[arg-type]
+            remote_paths={"artifact_path": "/remote/artifacts/" + "a" * 64},
+        )
+
+    assert excinfo.value.reason_code == "remote_runtime_artifact_receipt_mismatch"
 
 
 def test_remote_small_file_sync_posts_loop_scoped_files(monkeypatch: pytest.MonkeyPatch) -> None:

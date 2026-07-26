@@ -1,0 +1,284 @@
+{
+  "actual": "Both canary attempts terminated with remote_small_file_too_large for qe_sector_risk_overlay.parquet.b64=25257152 and no backtest started.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
+    "tests/aistock_validation/bugs/20260726_BUG-878-qe-remote-multi-alpha-cannot-transport-large-runtime-artifacts-through-c.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-878",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-26T18:19:39.881393Z",
+  "description": "Both canary attempts terminated with remote_small_file_too_large for qe_sector_risk_overlay.parquet.b64=25257152 and no backtest started.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-0140ad908873",
+      "timestamp": "2026-07-26T18:19:39.881389Z"
+    }
+  ],
+  "evidence_uris": [
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260726T180239374150Z_642c23ee; attempts=macba_afb240818adc70a672463c9988d1112240d5c714be8539cfbdb394fceb284b51,macba_16ecf6e0cb6eb94241bab6c0a7e23461de3fbe624dc8e630312aefa685e6a6d4; reason=remote_small_file_too_large"
+  ],
+  "expected": "Runtime binary artifacts larger than the 10MB small-file contract are uploaded once through WorkspaceArtifactSyncClient CAS, bound into the remote workspace by content hash, verified before qrun, and frozen in durable child/attempt evidence.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+        "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db",
+        "qe.sector_risk_overlay",
+        "qe.long_trend_evaluation"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/test_multi_alpha_remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+        "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+    ]
+  },
+  "first_seen_at": "2026-07-26T18:19:39.881393Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2774,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2774",
+  "last_seen_at": "2026-07-26T18:19:39.881393Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/multi-alpha/combine-backtest/runs/macb_453ca2d0c5b21b40_20240701_20260629_20260726T180239374150Z_642c23ee/events",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE remote multi-alpha cannot transport large runtime artifacts through CAS",
+  "trigger_condition": {
+    "fingerprint": "0140ad9088735f19862c55ce",
+    "source_event_id": "FE-20260726-0140ad908873"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
