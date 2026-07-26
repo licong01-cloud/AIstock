@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.sql",
     "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.rollback.sql",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260726_BUG-879-advisory-phase1c3-snapshot-blob-ref-global-unique-constraint-rejects-two.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -34,6 +36,12 @@
       "actor": "codex",
       "note": "DEV rollback/apply idempotence, catalog readback, cross-snapshot sharing, same-snapshot duplicate rejection, L0, module ownership, code-intelligence scope, and diff checks passed.",
       "timestamp": "2026-07-26T19:06:37.013929Z"
+    },
+    {
+      "action": "allowed_scope_expanded",
+      "actor": "codex",
+      "note": "Added the exact ownership catalog and classifier regression files required to map the new Advisory migration into its existing targeted CI plan; the generic unmapped-code guard remains unchanged.",
+      "timestamp": "2026-07-26T19:15:10.592720Z"
     }
   ],
   "evidence_uris": [
@@ -42,6 +50,8 @@
     "DEV rollback x2 and forward x2 passed; final constraint=UNIQUE(snapshot_id, ref_content_hash); cross-snapshot shared hash rows=2; same-snapshot duplicate rejected by snapshot-scoped constraint",
     "python -m nox -s l0 -> passed, 0 findings",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "python -m nox -s advisory_historical_range_backend -> 106 passed, 3 skipped",
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 48 passed",
     "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-879 ... -> workflow_gate=ready"
   ],
   "expected": "Two sealed snapshots may reference identical immutable files while duplicate ref_content_hash values remain forbidden within one snapshot.",
@@ -124,6 +134,7 @@
   "reproduce_command": "Seal a second dataset snapshot whose SCHEMA_DESCRIPTOR blob refs share ref_content_hash values with the first snapshot.",
   "required_verification": [
     "l0",
+    "advisory_historical_range_backend",
     "validation_module_registry_l0"
   ],
   "risk_area": "bug",
@@ -173,7 +184,9 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "advisory_historical_range_backend",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -226,7 +239,9 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "advisory_historical_range_backend",
+        "validation_module_registry_l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
