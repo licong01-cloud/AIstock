@@ -104,3 +104,29 @@ def test_capacity_strategy_imports_with_aistock_scripts_only(monkeypatch):
     assert strategy.max_single_order_value == 1_000_000_000.0
     assert strategy.max_weight == 0.05
     assert strategy.max_position_ratio == 0.95
+
+
+def test_score_weighted_v2_overlay_hooks_are_exact_no_ops_by_default(monkeypatch):
+    _install_qlib_strategy_stubs(monkeypatch)
+    monkeypatch.syspath_prepend(str(PROJECT_ROOT / "scripts"))
+    for module_name in ("score_weighted_strategy", "score_weighted_strategy_v2"):
+        sys.modules.pop(module_name, None)
+    module = importlib.import_module("score_weighted_strategy_v2")
+    strategy = module.ScoreWeightedTopkStrategyV2(signal="signal", topk=3, n_drop=1)
+    original = {"000001.SZ": 0.5, "000002.SZ": 0.5}
+
+    adjusted = strategy._adjust_target_weight_map(original, "2026-01-05")
+    extra_orders = strategy._build_additional_rebalance_orders(
+        weight_map=adjusted,
+        current_holdings=[],
+        existing_sell_ids=set(),
+        planned_buy_orders=[],
+        total_account_value=1_000_000.0,
+        trade_step=0,
+        trade_start_time="2026-01-05",
+        trade_end_time="2026-01-05",
+    )
+
+    assert adjusted == original
+    assert adjusted is not original
+    assert extra_orders == []
