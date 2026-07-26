@@ -873,6 +873,61 @@ def test_combine_backtest_persists_loo_for_three_or_more_legs(tmp_path: Path) ->
     assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_b", "leg_c"}
 
 
+def test_combine_backtest_explicit_task_selection_disables_loo_without_extra_children(
+    tmp_path: Path,
+) -> None:
+    service, _repo, executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    assert run["loo"] == []
+    assert {call["workspace"].name for call in executor.calls} == {
+        "baseline_leg_a",
+        "combined_equal",
+    }
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        [],
+        {"include_loo": "false"},
+        {"include_loo": False, "unexpected": True},
+    ],
+)
+def test_parse_request_rejects_invalid_prediction_task_selection(selection: object) -> None:
+    payload = _payload_three_legs()
+    payload["prediction_task_selection"] = selection
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as caught:
+        parse_request(payload)
+
+    assert caught.value.reason_code == "prediction_task_selection_invalid"
+
+
+def test_request_snapshot_preserves_legacy_shape_and_explicit_selection() -> None:
+    legacy = parse_request(_payload_three_legs())
+    explicit_payload = _payload_three_legs()
+    explicit_payload["prediction_task_selection"] = {"include_loo": False}
+    explicit = parse_request(explicit_payload)
+
+    legacy_snapshot = combine_backtest_module.request_snapshot_for(legacy)
+    explicit_snapshot = combine_backtest_module.request_snapshot_for(explicit)
+
+    assert "prediction_task_selection" not in legacy_snapshot
+    assert explicit_snapshot["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+
 def test_combine_backtest_limits_intra_run_parallelism_to_node_cap(tmp_path: Path) -> None:
     executor = FakeExecutor(sleep_seconds=0.05)
     service, _repo, _executor, _checker = _service(tmp_path, executor=executor)

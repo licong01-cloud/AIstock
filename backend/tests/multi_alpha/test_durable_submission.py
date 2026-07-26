@@ -271,6 +271,24 @@ def test_task_identity_allows_distinct_run_scenarios_and_keeps_original_defaults
     assert repository.runs[second["run_id"]]["backtest_config_json"]["topk"] == 50
 
 
+def test_submission_freezes_explicit_prediction_task_selection_in_request_identity() -> None:
+    repository = FakeDurableRepository()
+    service = _service(repository)
+    payload = _payload()
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit(payload)
+    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
+
+    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+
 def test_same_payload_at_same_clock_creates_distinct_run_records() -> None:
     repository = FakeDurableRepository()
     service = _service(repository)

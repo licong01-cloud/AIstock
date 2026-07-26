@@ -1,6 +1,14 @@
 {
   "actual": "R13A requires exactly two frozen predictions (R12P equal and LGBM baseline) crossed with four sector-risk policy modes, for eight CPU pred-backtest children. The current combine-backtest request applies one global backtest_config and automatically expands LOO tasks for rosters larger than two, so it cannot select exact source tasks or attach per-child strategy_kwargs without producing extra children. Add an explicit auditable prediction-task matrix with per-child overrides, durable identity/restart/archive preservation, and backward-compatible legacy behavior when absent. Scope is QE multi-alpha backend/tests/design only; no training, GPU telemetry, DB schema, non-QE modules, service restart, or research approval gates.",
   "allowed_write_scope": [
+    "backend/routers/multi_alpha.py",
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/services/multi_alpha/durable_plan.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/tests/multi_alpha/test_durable_plan.py",
+    "backend/tests/multi_alpha/test_durable_submission.py",
+    "backend/tests/multi_alpha/test_durable_router.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
     "tests/aistock_validation/bugs/20260726_BUG-872-qe-multi-alpha-cannot-express-an-exact-prediction-by-policy-child-matrix.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +31,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A frozen prediction-task selection contract must let each policy-specific run execute exactly the baseline and requested scheme children without automatic LOO expansion, while requests without the contract retain the legacy child plan byte-for-byte.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +60,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_durable_plan.py -q",
   "required_verification": [
     "l0"
   ],

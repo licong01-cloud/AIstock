@@ -94,8 +94,8 @@ class InMemoryPlanningRepository:
         return deepcopy(row)
 
 
-def _request_and_run() -> tuple[Any, DurableRunSpec]:
-    request = parse_request(_payload())
+def _request_and_run(payload: dict[str, Any] | None = None) -> tuple[Any, DurableRunSpec]:
+    request = parse_request(payload or _payload())
     roster_hash = roster_hash_for(request.roster)
     roster = request_snapshot_for(request)["roster"]
     run_payload = durable_run_request_payload(
@@ -171,6 +171,91 @@ def test_child_manifest_contains_frozen_request_and_prediction_lineage() -> None
         {"leg_id": "leg_a", "seed_run_ids": ["qe_a_L1"]},
         {"leg_id": "leg_c", "seed_run_ids": ["qe_c_L1"]},
     ]
+
+
+def test_explicit_task_selection_builds_only_baseline_and_requested_scheme() -> None:
+    payload = _payload()
+    payload["weighting_schemes"] = ["equal"]
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+    request, run_spec = _request_and_run(payload)
+
+    specs = DeterministicChildPlanner.build_child_specs(
+        run_spec=run_spec,
+        request=request,
+    )
+
+    assert [spec.child_key for spec in specs] == ["baseline:leg_b", "scheme:equal"]
+    assert [spec.ordinal for spec in specs] == [0, 1]
+    assert all(
+        spec.input_manifest["prediction_task_selection"]
+        == {"include_baseline": True, "include_loo": False}
+        for spec in specs
+    )
+
+
+def test_legacy_task_plan_manifest_shape_omits_task_selection() -> None:
+    request, run_spec = _request_and_run()
+
+    specs = DeterministicChildPlanner.build_child_specs(
+        run_spec=run_spec,
+        request=request,
+    )
+
+    assert len(specs) == 9
+    assert all("prediction_task_selection" not in spec.input_manifest for spec in specs)
+
+
+def test_explicit_task_selection_can_omit_baseline_without_dangling_identity() -> None:
+    payload = _payload()
+    payload["weighting_schemes"] = ["equal"]
+    payload["prediction_task_selection"] = {
+        "include_baseline": False,
+        "include_loo": False,
+    }
+    request, run_spec = _request_and_run(payload)
+
+    specs = DeterministicChildPlanner.build_child_specs(
+        run_spec=run_spec,
+        request=request,
+    )
+
+    assert request.baseline_leg_id is None
+    assert [spec.child_key for spec in specs] == ["scheme:equal"]
+
+
+def test_r13a_four_policy_runs_plan_exactly_eight_children() -> None:
+    policy_modes = ("none", "entry_gate", "bounded_de_risk", "exit_reentry")
+    planned: list[tuple[str, str]] = []
+
+    for mode in policy_modes:
+        payload = _payload()
+        payload["weighting_schemes"] = ["equal"]
+        payload["prediction_task_selection"] = {
+            "include_baseline": True,
+            "include_loo": False,
+        }
+        payload["backtest_config"]["strategy_kwargs"] = {
+            "sector_risk_overlay_enabled": True,
+            "sector_risk_overlay_mode": mode,
+        }
+        request, run_spec = _request_and_run(payload)
+        specs = DeterministicChildPlanner.build_child_specs(
+            run_spec=run_spec,
+            request=request,
+        )
+
+        assert [spec.child_key for spec in specs] == ["baseline:leg_b", "scheme:equal"]
+        assert request_snapshot_for(request)["backtest_config"]["strategy_kwargs"] == {
+            "sector_risk_overlay_enabled": True,
+            "sector_risk_overlay_mode": mode,
+        }
+        planned.extend((mode, spec.child_key) for spec in specs)
+
+    assert len(planned) == 8
+    assert {mode for mode, _child_key in planned} == set(policy_modes)
 
 
 def test_initial_attempt_is_created_only_after_child_is_materialized_and_is_deterministic() -> None:
