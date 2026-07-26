@@ -140,6 +140,90 @@ class B3TrainOnlySeries:
             _require_hex_identity(str(manifest.get(field) or ""), length=64, label=field)
 
 
+def _train_only_frame(
+    panel: Any,
+    *,
+    sector_code: str,
+    feature_names: tuple[str, ...],
+    train_start: date,
+    train_end: date,
+) -> Any:
+    sector = panel.xs(sector_code, level="l1_code")
+    sector_dates = sector.index.date
+    return sector.loc[
+        (sector_dates >= train_start) & (sector_dates <= train_end),
+        list(feature_names),
+    ].dropna()
+
+
+def audit_train_only_coverage(
+    panel: Any,
+    *,
+    feature_names: Sequence[str],
+    train_start: date,
+    train_end: date,
+    expected_sector_count: int,
+    direct_sector_level: str,
+) -> dict[str, Any]:
+    """Audit the complete formal train matrix without fitting or reading validation evidence."""
+
+    features = tuple(str(value) for value in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("B3 train-only feature family is invalid")
+    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
+        raise StateModelSetError("B3 train-only level/count contract is invalid")
+    codes = tuple(sorted(str(value) for value in panel.index.get_level_values("l1_code").unique()))
+    entries = []
+    for code in codes:
+        train = _train_only_frame(
+            panel,
+            sector_code=code,
+            feature_names=features,
+            train_start=train_start,
+            train_end=train_end,
+        )
+        row_count = len(train)
+        entry_body = {
+            "sector_code": code,
+            "train_row_count": row_count,
+            "minimum_train_row_count": 120,
+            "train_coverage_valid": row_count >= 120,
+            "first_train_date": None if train.empty else train.index[0].date().isoformat(),
+            "last_train_date": None if train.empty else train.index[-1].date().isoformat(),
+            "train_dates_sha256": canonical_sha256([item.date().isoformat() for item in train.index]),
+        }
+        entries.append({**entry_body, "entry_sha256": canonical_sha256(entry_body)})
+    insufficient = [entry for entry in entries if not entry["train_coverage_valid"]]
+    sector_set_valid = len(codes) == expected_sector_count and len(set(codes)) == expected_sector_count
+    valid = sector_set_valid and not insufficient
+    body = {
+        "schema_version": "hmm_risk_b3_train_coverage_preflight_v1",
+        "direct_sector_level": direct_sector_level,
+        "feature_names": list(features),
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "minimum_train_row_count": 120,
+        "expected_sector_count": expected_sector_count,
+        "actual_sector_count": len(codes),
+        "canonical_sector_codes": list(codes),
+        "sector_set_valid": sector_set_valid,
+        "entry_count": len(entries),
+        "entries": entries,
+        "minimum_observed_train_row_count": min((entry["train_row_count"] for entry in entries), default=0),
+        "maximum_observed_train_row_count": max((entry["train_row_count"] for entry in entries), default=0),
+        "insufficient_sector_count": len(insufficient),
+        "insufficient_sector_codes": [entry["sector_code"] for entry in insufficient],
+        "failure_reason_codes": ([] if valid else ["hmm_risk_model_train_observation_coverage_insufficient"]),
+        "train_coverage_valid": valid,
+        "fit_performed": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "artifact_write_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def build_train_only_series(
     panel: Any,
     *,
@@ -161,11 +245,13 @@ def build_train_only_series(
     output: dict[str, B3TrainOnlySeries] = {}
     for code in sorted(panel.index.get_level_values("l1_code").unique()):
         sector = panel.xs(code, level="l1_code")
-        sector_dates = sector.index.date
-        train = sector.loc[
-            (sector_dates >= train_start) & (sector_dates <= train_end),
-            list(features),
-        ].dropna()
+        train = _train_only_frame(
+            panel,
+            sector_code=str(code),
+            feature_names=features,
+            train_start=train_start,
+            train_end=train_end,
+        )
         if len(train) < 120:
             raise StateModelSetError(f"{code} train-only observation coverage is insufficient: {len(train)}")
         constituent = constituent_manifest.get(str(code))
