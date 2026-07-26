@@ -42,6 +42,7 @@ rules:
       - backend/db/migrations/add_advisory_historical_range_phase1r_20260719.sql
       - backend/db/migrations/fix_advisory_historical_range_batch_queued_aggregate_20260721.sql
       - backend/db/migrations/fix_advisory_historical_range_r3_executor_contract_20260722.sql
+      - backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_*.sql
       - backend/services/advisory_list_transition.py
       - backend/services/advisory_program.py
       - backend/tests/test_advisory_program_transition_parity.py

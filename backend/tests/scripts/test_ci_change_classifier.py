@@ -226,6 +226,23 @@ def test_sector_data_materialization_files_select_only_local_data_plan(tmp_path:
     assert payload["unmapped_code_files"] == []
 
 
+def test_advisory_snapshot_blob_ref_migrations_select_historical_range_plan(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.sql",
+            "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.rollback.sql",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_plan_keys"] == ["l0", "advisory_historical_range_backend"]
+    assert payload["backend_sessions"] == ["advisory_historical_range_backend"]
+    assert payload["catalog_impacted_modules"] == ["advisory.historical_range", "tests.backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
