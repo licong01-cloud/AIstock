@@ -42,6 +42,12 @@
       "actor": "codex",
       "note": "Added the exact ownership catalog and classifier regression files required to map the new Advisory migration into its existing targeted CI plan; the generic unmapped-code guard remains unchanged.",
       "timestamp": "2026-07-26T19:15:10.592720Z"
+    },
+    {
+      "action": "production_ddl_applied_and_verified",
+      "actor": "codex",
+      "note": "Applied the merged BUG-879 migration to the .env TDX_DB production target after merged-script DEV validation; readback confirmed snapshot-scoped uniqueness and unchanged protected row digest.",
+      "timestamp": "2026-07-26T21:39:20.864867Z"
     }
   ],
   "evidence_uris": [
@@ -52,7 +58,9 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
     "python -m nox -s advisory_historical_range_backend -> 106 passed, 3 skipped",
     "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 48 passed",
-    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-879 ... -> workflow_gate=ready"
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-879 ... -> workflow_gate=ready",
+    "Merged migration DEV revalidation 2026-07-27: rollback x2 and forward x2 passed; cross-snapshot sharing succeeded; same-snapshot duplicate rejected",
+    "Production DDL 2026-07-27: migration sha256=01d485e7fcc41126ec931cd87a7e9a820c9a037ba86d34ba81cbbdf86e094d87; constraint=UNIQUE(snapshot_id, ref_content_hash); rows=24; snapshots=1; protected row digest before/after=329b4274135fc1cd4b9a613f55054597"
   ],
   "expected": "Two sealed snapshots may reference identical immutable files while duplicate ref_content_hash values remain forbidden within one snapshot.",
   "file_scope_contract": {
@@ -130,7 +138,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2777",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Seal a second dataset snapshot whose SCHEMA_DESCRIPTOR blob refs share ref_content_hash values with the first snapshot.",
   "required_verification": [
@@ -153,7 +161,9 @@
   "validation_evidence": [
     "PR #2777 CI verdict -> passed",
     "python -m nox -s l0 -> passed, 0 findings",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14"
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14",
+    "DEV merged migration rollback x2 + forward x2 and uniqueness contract smoke -> passed",
+    "Production migration sha256 01d485e7fcc41126ec931cd87a7e9a820c9a037ba86d34ba81cbbdf86e094d87 -> applied_and_verified; 24-row digest unchanged"
   ],
   "verification_budget": {
     "budget": "standard",
