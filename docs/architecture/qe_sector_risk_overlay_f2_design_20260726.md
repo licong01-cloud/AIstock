@@ -252,6 +252,18 @@ BUG-872 child 规划补证（2026-07-26）：现有 scheme 结果身份为 `(run
 
 BUG-878 远端运行时制品传输补证（2026-07-27）：BUG-872 两-child wiring canary 已准确规划 baseline 与 equal scheme，随后两个 child 均在 qrun 前因 `qe_sector_risk_overlay.parquet.b64=25,257,152` 超过 `qe_file_sync` 10MB 小文件契约而失败；失败 run/child/attempt 保留，未形成 Alpha 结论，正式 R13A 尚未提交。修复不提高小文件上限、不压缩或裁剪制品，也不手工复制远端文件：所有 Base64 后会超限的 portable runtime Parquet 统一经 `WorkspaceArtifactSyncClient` 内容寻址 CAS 上传，按 filename/SHA256/size/CAS root 冻结远端 binding；qrun 前校验 CAS 文件大小和 SHA256 后建立 workspace 链接。小文件继续走原 `qe_file_sync`，节点绑定的 QE 数据链接继续排除，legacy 与 durable 两条远端执行路径采用同一语义。代码合入和用户重启后只重试两-child wiring canary；canary 成功后再提交四个 policy run 的 8 个正式 child。
 
+BUG-883 运行资产协议加固（2026-07-27）：BUG-878 的真实 Parquet CAS
+路径保持不变，但不再依靠“顶层文件 + parquet 后缀”推断运行资产。每次远端
+提交先生成并持久化 `multi_alpha_remote_runtime_file_manifest_v1`，逐文件冻结
+安全相对路径、SHA256、size、text/binary 类型和 `small_text / small_binary /
+cas / empty_file` 传输语义。顶层契约内小文件继续使用 `qe_file_sync`；嵌套
+运行模块及超过 Base64 10MB 契约的任意非空运行资产使用内容寻址 CAS，qrun
+前逐项校验大小与 SHA256、建立必要父目录并链接；空文件按 manifest 显式创建。
+manifest 与本地字节不一致、CAS binding 缺失或路径不安全均显式失败，不静默
+遗漏。`__pycache__`、`.pyc`、`.pyo` 不进入传输清单或 runtime-template
+identity；真实 Python 源文件变化仍会改变身份。该修复只作用于 QE multi-alpha
+远端运行资产，不改变 overlay 计算、策略参数、研究方向或其他模块运行时。
+
 ## 12. DESIGN-COMPLIANCE-001
 
 - [x] 设计覆盖运行制品、策略、配置、组合回测、评价和隔离，不交付缺臂实现。

@@ -805,6 +805,11 @@ def _sha256_tree(root: Path, *, external_data_names: frozenset[str] = frozenset(
     external_data_bindings: list[str] = []
     for path in sorted(resolved.rglob("*")):
         relative = path.relative_to(resolved)
+        if any(
+            part in {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+            for part in relative.parts
+        ) or path.suffix.lower() in {".pyc", ".pyo"}:
+            continue
         if len(relative.parts) == 1 and path.name in external_data_names:
             try:
                 external_data_link = is_runtime_external_data_link(path)

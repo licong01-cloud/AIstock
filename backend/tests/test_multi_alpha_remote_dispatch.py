@@ -13,6 +13,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     ComputeNodeInfo,
     RemotePredBacktestExecutor,
     WorkspaceArtifactSyncClient,
+    _build_remote_runtime_file_manifest,
     _remote_runtime_artifact_link_commands,
     _remote_small_files,
     _sync_remote_runtime_artifacts,
@@ -446,6 +447,92 @@ def test_oversized_runtime_parquet_uses_cas_and_is_not_small_file_payload(tmp_pa
     assert f"/remote/artifacts/{expected_sha}" in command
     assert "ln -sfn" in command
     assert runtime_artifact.name in command
+
+
+def test_runtime_file_manifest_covers_nested_assets_and_excludes_python_cache(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    package = workspace / "aistock_models"
+    package.mkdir()
+    (package / "model.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "__init__.py").write_bytes(b"")
+    cache = package / "__pycache__"
+    cache.mkdir()
+    (cache / "model.cpython-310.pyc").write_bytes(b"cache")
+    weights = workspace / "weights.npz"
+    weights.write_bytes(b"w" * (8 * 1024 * 1024))
+
+    manifest = _build_remote_runtime_file_manifest(workspace=workspace)
+    entries = {item["path"]: item for item in manifest["files"]}
+
+    assert len(manifest["manifest_hash"]) == 64
+    assert entries["conf.yaml"]["transfer"] == "small_text"
+    assert entries["aistock_models/model.py"]["transfer"] == "cas"
+    assert entries["aistock_models/__init__.py"]["transfer"] == "empty_file"
+    assert entries["weights.npz"]["transfer"] == "cas"
+    assert all("__pycache__" not in path and not path.endswith(".pyc") for path in entries)
+
+    client = _FakeArtifactClient()
+    node = ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000")
+    bindings = _sync_remote_runtime_artifacts(
+        workspace=workspace,
+        node=node,
+        node_id=node.node_id,
+        artifact_client=client,
+        remote_paths={"artifact_path": "/remote/artifacts/" + "a" * 64},
+        runtime_file_manifest=manifest,
+    )
+    files = _remote_small_files(
+        workspace=workspace,
+        pred_pkl=workspace / "combined_prediction.pkl",
+        include_prediction=False,
+        cas_bound_names={str(item["name"]) for item in bindings},
+        runtime_file_manifest=manifest,
+    )
+    command = _remote_wsl_command(
+        workspace=workspace,
+        remote_paths={
+            "artifact_path": "/remote/artifacts/" + "a" * 64,
+            "prediction_artifact_path": "/remote/artifacts/" + "b" * 64,
+            "qlib_data_path": "/home/node/data/qlib_bin",
+            "factor_cache_dir": "/home/node/data/factors",
+        },
+        backtest_config={},
+        runtime_artifact_bindings=bindings,
+        runtime_file_manifest=manifest,
+    )
+
+    assert {path.relative_to(workspace).as_posix() for path in client.calls} == {
+        "aistock_models/model.py",
+        "weights.npz",
+    }
+    assert set(files) == {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
+    assert "mkdir -p" in command and "aistock_models" in command
+    assert ": >" in command and "aistock_models/__init__.py" in command
+    assert "rglob" in command and "*.b64" in command
+
+
+def test_runtime_file_manifest_detects_workspace_mutation(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_text("content", encoding="utf-8")
+    manifest = _build_remote_runtime_file_manifest(workspace=workspace)
+    (workspace / "conf.yaml").write_text("changed", encoding="utf-8")
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_small_files(
+            workspace=workspace,
+            pred_pkl=workspace / "combined_prediction.pkl",
+            include_prediction=False,
+            runtime_file_manifest=manifest,
+        )
+
+    assert excinfo.value.reason_code == "remote_runtime_file_manifest_mismatch"
 
 
 def test_runtime_artifact_binding_rejects_duplicate_workspace_name() -> None:
