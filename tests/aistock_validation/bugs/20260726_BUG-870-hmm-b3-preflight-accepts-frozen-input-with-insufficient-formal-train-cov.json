@@ -1,6 +1,11 @@
 {
-  "actual": "On clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371, approved preflight passes exact dataset/mapping/L2 identities but fresh_process_1 fails before the first HMM fit: 801010.SI train-only observation coverage is insufficient: 10. The approved autocycle 20D family requires cross-sectional features computed only on complete 31/31 or 131/131 sector dates; the re-frozen input contains 2491 invalid L1 sector-dates. Preflight does not validate the four family/level train-only coverage contracts, and the parent reports only stderr_sha256 instead of durable typed failure evidence. Fix must fail before grid launch with complete coverage evidence, persist child failure diagnostics, preserve exact previous-trading-date PIT and approved 7/20 features, and must not impute, drop features, relax cross-section completeness, select seeds, or write model/READY.",
+  "actual": "On clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371, approved preflight passes exact dataset/mapping/L2 identities but fresh_process_1 fails before the first HMM fit: 801010.SI train-only observation coverage is insufficient: 10. The approved autocycle 20D family requires cross-sectional features computed only on complete 31/31 or 131/131 sector dates; the re-frozen input contains 2491 invalid L1 sector-dates. Preflight does not validate the four family/level train-only coverage contracts, a previously written request candidate is not bound to a recomputed coverage receipt, and the parent reports only stderr_sha256 instead of durable typed failure evidence. Fix must fail before grid launch with complete coverage evidence, bind every formal child to a recomputed coverage receipt before fit, persist child failure diagnostics, preserve exact previous-trading-date PIT and approved 7/20 features, and must not impute, drop features, relax cross-section completeness, select seeds, or write model/READY.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/b3_training.py",
+    "backend/tests/hmm_risk/test_b3_training.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "scripts/hmm_risk/prepare_state_model_set.py",
     "tests/aistock_validation/bugs/20260726_BUG-870-hmm-b3-preflight-accepts-frozen-input-with-insufficient-formal-train-cov.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,11 +27,19 @@
       "timestamp": "2026-07-26T06:41:29.728901Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_1ad5ff62/formal_preflight.json"
+  ],
+  "expected": "B3 preflight must audit complete train-only feature coverage for both approved families and both direct levels before emitting a formal request. Any sector below 120 rows must produce a complete immutable blocked receipt and no request candidate or HMM fit. Every emitted formal request must bind the coverage contract version and receipt hash, and every child must recompute and compare that receipt before its first fit so a stale candidate fails closed. If a formal child later fails, the parent must persist bounded typed error evidence rather than return only stderr_sha256.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +49,13 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ]
   },
   "first_seen_at": "2026-07-26T06:41:29.728906Z",
   "fix_branch": null,
@@ -52,7 +71,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run the formal B3 command on clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371 with the approved request; fresh_process_1 fails before the first HMM fit with 801010.SI train-only observation coverage is insufficient: 10 and parent stderr_sha256 fae31c52178516b376a69ac89e1b155fc5a3c673132348b12779cc29e9d0e719.",
   "required_verification": [
     "l0",
     "hmm_risk_backend"

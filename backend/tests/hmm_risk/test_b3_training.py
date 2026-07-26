@@ -21,6 +21,8 @@ from backend.services.hmm_risk.b3_training import (
     B3TrainingStageError,
     B3TrainOnlySeries,
     B3FittedModel,
+    audit_train_only_coverage,
+    build_train_only_series,
     models_from_repeat,
     run_level_repeat,
     write_b3_ready_model_set,
@@ -28,7 +30,6 @@ from backend.services.hmm_risk.b3_training import (
 from backend.services.hmm_risk import b3_training as training_subject
 from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES
-from backend.services.hmm_risk.b3_training import build_train_only_series
 
 
 def _train_manifest(
@@ -147,6 +148,37 @@ def test_train_only_builder_does_not_materialize_validation_or_future_utility() 
     assert len(result) == 31
     assert not hasattr(result[codes[0]], "validation_observations")
     assert not hasattr(result[codes[0]], "validation_future_utility")
+
+
+def test_train_only_coverage_audit_collects_all_sectors_without_fit_or_validation() -> None:
+    dates = pd.bdate_range("2022-01-03", periods=120)
+    codes = [f"L1-{index:02d}" for index in range(31)]
+    index = pd.MultiIndex.from_product([dates, codes], names=["trade_date", "l1_code"])
+    panel = pd.DataFrame(index=index)
+    for feature_index, feature in enumerate(ALL_CORE_FEATURES):
+        panel[feature] = np.arange(len(panel), dtype=np.float64) + feature_index + 1.0
+    failing_code = codes[0]
+    failing_index = panel.xs(failing_code, level="l1_code").index[10:]
+    panel.loc[(failing_index, failing_code), list(ALL_CORE_FEATURES)] = np.nan
+
+    report = audit_train_only_coverage(
+        panel,
+        feature_names=ALL_CORE_FEATURES,
+        train_start=dates[0].date(),
+        train_end=dates[-1].date(),
+        expected_sector_count=31,
+        direct_sector_level="L1",
+    )
+
+    assert report["entry_count"] == 31
+    assert report["minimum_observed_train_row_count"] == 10
+    assert report["maximum_observed_train_row_count"] == 120
+    assert report["insufficient_sector_codes"] == [failing_code]
+    assert report["train_coverage_valid"] is False
+    assert report["failure_reason_codes"] == ["hmm_risk_model_train_observation_coverage_insufficient"]
+    assert report["fit_performed"] is False
+    assert report["validation_accessed"] is False
+    assert report["selection_performed"] is False
 
 
 def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkeypatch) -> None:

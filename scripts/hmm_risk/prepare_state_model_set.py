@@ -41,6 +41,7 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
 )
 from backend.services.hmm_risk.b3_acceptance import select_level_restart  # noqa: E402
 from backend.services.hmm_risk.b3_training import (  # noqa: E402
+    audit_train_only_coverage,
     build_train_only_series,
     build_selected_level_artifact,
     models_from_repeat,
@@ -63,6 +64,7 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
 
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
+B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
 B3_APPROVED_FROZEN_IDENTITIES = {
     "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
     "mapping_manifest_hash": "9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159",
@@ -120,6 +122,16 @@ def _require_approved_b3_identities(value: dict[str, Any]) -> None:
             mismatches.append(f"{field} expected={expected} actual={actual or '<missing>'}")
     if mismatches:
         raise StateModelSetError("formal B3 frozen identity mismatch: " + "; ".join(mismatches))
+
+
+def _require_formal_train_coverage_identity(value: dict[str, Any]) -> None:
+    identity = str(value.get("train_coverage_receipt_sha256") or "")
+    if (
+        value.get("train_coverage_contract_version") != B3_TRAIN_COVERAGE_PREFLIGHT_VERSION
+        or len(identity) != 64
+        or any(character not in "0123456789abcdef" for character in identity.lower())
+    ):
+        raise StateModelSetError("formal B3 request train coverage identity is missing or invalid")
 
 
 def _git_commit() -> str:
@@ -317,6 +329,42 @@ def _manifest_invalid_sector_date_count(manifest: dict[str, Any]) -> int:
     raise StateModelSetError("stock-fact manifest lacks invalid sector-date count")
 
 
+def _b3_train_coverage_preflight(inputs: dict[str, Any], request_template: dict[str, Any]) -> dict[str, Any]:
+    reports: dict[str, Any] = {}
+    for family in sorted(request_template["families"], key=lambda item: str(item.get("family") or "")):
+        family_name = str(family.get("family") or "")
+        features = tuple(str(value) for value in family.get("feature_names") or ())
+        train_start = _date(family.get("train_start"), "train_start")
+        train_end = _date(family.get("train_end"), "train_end")
+        for level, panel, expected_count in (
+            ("L1", inputs["panel"], 31),
+            ("L2", inputs["l2_panel"], 131),
+        ):
+            reports[f"{family_name}:{level}"] = audit_train_only_coverage(
+                panel,
+                feature_names=features,
+                train_start=train_start,
+                train_end=train_end,
+                expected_sector_count=expected_count,
+                direct_sector_level=level,
+            )
+    valid = len(reports) == 4 and all(report["train_coverage_valid"] for report in reports.values())
+    body = {
+        "schema_version": B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+        "reports": reports,
+        "report_count": len(reports),
+        "train_coverage_valid": valid,
+        "failure_reason_codes": [] if valid else ["hmm_risk_model_train_observation_coverage_insufficient"],
+        "fit_performed": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
     """Freeze current PIT identities without fitting, selecting, or writing model artifacts."""
 
@@ -331,6 +379,8 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
     }
     _require_approved_b3_identities(frozen_identities)
+    train_coverage = _b3_train_coverage_preflight(inputs, request_template)
+    train_coverage_valid = train_coverage["train_coverage_valid"] is True
     request_candidate = deepcopy(request_template)
     request_candidate.update(
         {
@@ -338,13 +388,15 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
             "dataset_manifest_hash": dataset_hash,
             "mapping_manifest_hash": mapping_hash,
             "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+            "train_coverage_contract_version": B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+            "train_coverage_receipt_sha256": train_coverage["receipt_sha256"],
         }
     )
     l1_stock_facts = inputs["dataset_manifest"]["stock_facts"]
     l2_stock_facts = inputs["l2_stock_fact_manifest"]
     body = {
         "schema_version": B3_PREFLIGHT_SCHEMA,
-        "status": "candidate_ready",
+        "status": "candidate_ready" if train_coverage_valid else "blocked",
         "source_template_producer_commit": str(request_template.get("producer_commit") or ""),
         "producer_commit": producer_commit,
         "database": inputs["database"],
@@ -363,6 +415,11 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "l2_aggregate_row_count": int(l2_stock_facts["aggregate_row_count"]),
         "l2_invalid_sector_date_count": _manifest_invalid_sector_date_count(l2_stock_facts),
         "l2_panel_row_count": len(inputs["l2_panel"]),
+        "train_coverage": train_coverage,
+        "train_coverage_valid": train_coverage_valid,
+        "failure_reason_codes": (
+            [] if train_coverage_valid else ["hmm_risk_model_train_observation_coverage_insufficient"]
+        ),
         "fit_performed": False,
         "selection_performed": False,
         "formal_acceptance_thresholds_applied": False,
@@ -372,6 +429,9 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if not train_coverage_valid:
+        body["request_candidate"] = None
+        body["request_candidate_sha256"] = None
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
@@ -851,6 +911,7 @@ def prepare_b3_single_pass(
 
     producer_commit = _formal_producer_commit()
     _require_approved_b3_identities(request)
+    _require_formal_train_coverage_identity(request)
     if str(request.get("producer_commit") or "") != producer_commit:
         raise StateModelSetError("B3 request producer_commit differs from current code")
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
@@ -863,6 +924,11 @@ def prepare_b3_single_pass(
         raise StateModelSetError("B3 frozen mapping manifest hash mismatch")
     if str(request.get("l2_stock_fact_manifest_hash") or "") != l2_stock_fact_hash:
         raise StateModelSetError("B3 frozen L2 stock-fact manifest hash mismatch")
+    train_coverage = _b3_train_coverage_preflight(inputs, request)
+    if train_coverage["train_coverage_valid"] is not True:
+        raise StateModelSetError("B3 formal train coverage is insufficient")
+    if request["train_coverage_receipt_sha256"] != train_coverage["receipt_sha256"]:
+        raise StateModelSetError("B3 formal train coverage receipt hash mismatch")
     calendar_manifest = inputs["dataset_manifest"].get("calendar_benchmark")
     if not isinstance(calendar_manifest, dict):
         raise StateModelSetError("B3 frozen calendar manifest is missing")
@@ -924,6 +990,51 @@ def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[s
     ]
 
 
+def _persist_b3_child_failure(
+    args: argparse.Namespace,
+    *,
+    process_identity: str,
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> tuple[Path, dict[str, Any]]:
+    decoded = stderr.decode("utf-8", errors="replace").strip()
+    parsed: dict[str, Any] = {}
+    if decoded:
+        try:
+            value = json.loads(decoded.splitlines()[-1])
+            if isinstance(value, dict):
+                parsed = value
+        except json.JSONDecodeError:
+            parsed = {}
+    error_type = str(parsed.get("error_type") or "unparsed_child_error")[:256]
+    error = str(parsed.get("error") or decoded[-4000:] or "child failed without stderr")[-4000:]
+    body = {
+        "schema_version": "hmm_risk_b3_child_failure_receipt_v1",
+        "status": "failed",
+        "process_identity": process_identity,
+        "returncode": returncode,
+        "error_type": error_type,
+        "error": error,
+        "child_error_schema_version": parsed.get("schema_version"),
+        "stdout_byte_count": len(stdout),
+        "stdout_sha256": sha256_bytes(stdout),
+        "stderr_byte_count": len(stderr),
+        "stderr_sha256": sha256_bytes(stderr),
+        "fit_grid_completed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**body, "receipt_sha256": canonical_sha256(body)}
+    preparation_path = Path(args.b3_preparation_output).resolve()
+    failure_path = preparation_path.with_name(f"{preparation_path.stem}.{process_identity}.failure.json")
+    _write_diagnostic_report(failure_path, report)
+    return failure_path, report
+
+
 def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
     """Run two fresh processes, select train-only identities, then execute D6 once."""
 
@@ -946,9 +1057,17 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
             timeout=7200,
         )
         if completed.returncode != 0:
+            failure_path, failure = _persist_b3_child_failure(
+                args,
+                process_identity=process_identity,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
             raise StateModelSetError(
                 f"formal B3 child failed process={process_identity} returncode={completed.returncode} "
-                f"stderr_sha256={sha256_bytes(completed.stderr)}"
+                f"error_type={failure['error_type']} error={failure['error']} "
+                f"failure_receipt={failure_path}"
             )
         try:
             repeats.append(json.loads(completed.stdout))
@@ -1127,13 +1246,18 @@ def main() -> int:
             request = _load_request(request_path)
         if args.b3_preflight_output:
             report = prepare_b3_preflight_candidate(request, db_prefix=str(args.db_env_prefix))
-            request_candidate_path = Path(args.b3_request_candidate_output).resolve()
-            request_candidate_sha256 = _write_diagnostic_report(
-                request_candidate_path,
-                report["request_candidate"],
-            )
-            if request_candidate_sha256 != report["request_candidate_sha256"]:
-                raise StateModelSetError("B3 preflight request candidate hash mismatch")
+            request_candidate_path = None
+            request_candidate_sha256 = None
+            if report["status"] == "candidate_ready":
+                request_candidate_path = Path(args.b3_request_candidate_output).resolve()
+                request_candidate_sha256 = _write_diagnostic_report(
+                    request_candidate_path,
+                    report["request_candidate"],
+                )
+                if request_candidate_sha256 != report["request_candidate_sha256"]:
+                    raise StateModelSetError("B3 preflight request candidate hash mismatch")
+            elif report["status"] != "blocked":
+                raise StateModelSetError("B3 preflight returned an invalid status")
             report_path = Path(args.b3_preflight_output).resolve()
             report_sha256 = _write_diagnostic_report(report_path, report)
             receipt = {
@@ -1141,11 +1265,13 @@ def main() -> int:
                 "status": report["status"],
                 "report_path": str(report_path),
                 "report_sha256": report_sha256,
-                "request_candidate_path": str(request_candidate_path),
+                "request_candidate_path": None if request_candidate_path is None else str(request_candidate_path),
                 "request_candidate_sha256": request_candidate_sha256,
                 "dataset_manifest_hash": report["dataset_manifest_hash"],
                 "mapping_manifest_hash": report["mapping_manifest_hash"],
                 "l2_stock_fact_manifest_hash": report["l2_stock_fact_manifest_hash"],
+                "train_coverage_valid": report["train_coverage_valid"],
+                "failure_reason_codes": report["failure_reason_codes"],
                 "fit_performed": False,
                 "selection_performed": False,
                 "formal_acceptance_thresholds_applied": False,
@@ -1155,7 +1281,7 @@ def main() -> int:
                 "runtime_action_performed": False,
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
-            return 0
+            return 0 if report["status"] == "candidate_ready" else 1
         if args._c008_b3_diag02_child:
             report = diagnose_c008_b3_diag02(request, db_prefix=str(args.db_env_prefix))
             sys.stdout.buffer.write(canonical_json_bytes(report))

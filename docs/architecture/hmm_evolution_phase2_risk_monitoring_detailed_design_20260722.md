@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-26
-- 状态：`C008_B3_BUG868_REFREEZE_PREFLIGHT_IMPLEMENTED_MERGE_PENDING`
+- 状态：`C008_B3_BUG870_TRAIN_COVERAGE_PREFLIGHT_FIX_IN_PROGRESS_GRID_BLOCKED`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.12
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、D5-01-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A。Slice 0 已实现正式 B3/L2 retrain 代码与边界测试。2026-07-26 正式执行前 preflight 发现旧 frozen dataset identity 与已审核的 exact previous-trading-date 事实不一致；用户批准 BUG-868-A 保留现行业务语义并重新冻结正式 dataset/mapping/direct-L2 identity。当前 BUG 只实现不可变 preflight 与设计回填，不运行 5184 fits、不执行 selection、不生成 model/READY、不写数据库、不激活 runtime。任何 PR 合入仍须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、D5-01-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A。Slice 0 已实现正式 B3/L2 retrain 代码与边界测试。BUG-868-A 已保留 exact previous-trading-date 语义、重新冻结正式 identities 并合入。2026-07-26 在 clean main `1ad5ff62…` 启动正式 grid 时，fresh_process_1 在首个 HMM fit 前因 autocycle L1 `801010.SI` 仅 10 行完整 train observation 而 fail-closed；fresh_process_2、D5、D6、model/READY 均未执行。BUG-870 修复 preflight coverage 与 child failure receipt，但不改变批准的 7/20维、31/31/131/131横截面、120行最低覆盖、PIT或缺失语义。正式 grid保持blocked，任何 PR 合入仍须用户逐 PR明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -692,6 +692,31 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    bitwise contract 验证。preflight 与 runner 之间的任何 source/code 漂移均 fail closed并重新进入 BUG 流程。
 6. **执行边界**：BUG-868-A 合入前禁止恢复正式 grid；本 BUG 的源码、设计和定向测试完成不授权 5184 fits、selection、D6、
    model/READY、数据库或 runtime。正式 grid 仅在本 BUG 合入且用户另行确认后恢复。
+
+##### BUG-870. 正式 train coverage preflight 与 child failure receipt
+
+1. **失败事实**：clean producer `1ad5ff6209d723c41537d51b1d2d750a95a2e371` 的 identity preflight 通过后，
+   fresh_process_1 在 `_direct_train_series_for_family` 阶段返回
+   `801010.SI train-only observation coverage is insufficient: 10`；该错误发生在首个 HMM fit 前。父进程原始失败只返回
+   `stderr_sha256=fae31c52178516b376a69ac89e1b155fc5a3c673132348b12779cc29e9d0e719`，没有 durable typed receipt。
+2. **四项 coverage authority**：preflight 必须在写 formal request 前，对 `legacy_covfix/autocycle_all_core × L1/L2`
+   四个 family/level 组合分别按批准 feature 顺序、train `2022-01-01..2024-06-30`、direct sector set 与逐行 `dropna`
+   语义审计。每个 direct sector 继续使用 C-007-A 已批准的最低 `120` 行；这不是新增阈值或人工审批。
+3. **完整 evidence**：每个组合保存 expected/actual sector count、canonical sector set、逐 sector row count与date hash、min/max row、
+   insufficient sector code全集、typed reason和canonical receipt。审计不得读取validation、future utility、semantic labelability，
+   不得执行fit、selection或model/READY write。
+4. **blocked 输出**：任一组合不满足时，preflight status=`blocked`，持久化完整 coverage receipt，
+   `request_candidate/request_candidate_sha256=null`，CLI返回非零；禁止生成可供formal child使用的request。不得early stop于首个sector，
+   不得删特征、填值、放宽31/31或131/131、降低120行、回退previous-available PIT或改用旧`fca206…`。
+5. **request 与 child 绑定**：仅 `candidate_ready` request 才能写入
+   `train_coverage_contract_version=hmm_risk_b3_train_coverage_preflight_set_v1` 与完整 coverage receipt SHA-256；每个 formal child
+   必须在首个 fit 前重新计算四项 coverage，并同时验证 status 与 receipt hash。磁盘上即使残留旧 request candidate，也不得因文件存在、
+   manifest identity 相同或历史 preflight 曾通过而复用；缺少 identity、coverage 已失效或 receipt 不一致均 fail-closed。
+6. **child failure durability**：若通过preflight后的future child仍异常退出，parent必须原子写
+   `hmm_risk_b3_child_failure_receipt_v1`，至少保存process identity、returncode、typed error、stdout/stderr bytes+hash及所有副作用false
+   标志；parent错误必须引用该receipt path，不能只返回不可诊断的stderr hash。
+7. **当前状态**：formal grid=`BLOCKED_TRAIN_INPUT_COVERAGE`，实际HMM fits=`0`；fresh_process_2、D5、D6、model/READY均未执行。
+   本BUG只修复fail-closed位置和evidence completeness，不擅自选择数据修复或模型语义变更方向。
 
 D4-02-A 于 2026-07-25 获用户明确批准，正式 covariance acceptance 合同如下：
 
@@ -1570,7 +1595,8 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D4-01 | convergence/likelihood exact tolerance 与 warning/failure 语义 | `RESOLVED_USER_APPROVED_D4_01_A` | `hmm_risk_c008_b3_d4_01_a_v1`：monitor/history 独立完整性；non-terminal negative fail；terminal positive `<0.01`；terminal negative relative `>=-2e-5` 为持久化 warning、低于边界 fail；不得自动放宽或把 warning 静默成普通 success |
 | C-008-B3-D4-L2-AUDIT-01 | 既有 L2 131/131 是否具备可按 D4-01-A/D4-02-A 回读的 immutable training/numeric receipt | `VERIFIED_FAIL_CLOSED_LIKELIHOOD_INSUFFICIENT_COVARIANCE_FAILED` | 13/13 candidate snapshot 收敛为 legacy 9 + autocycle 4 两份 exact SHA；两者均缺完整 D4-01 history，262/262 entry 均有 post-fit covariance 修正。likelihood 保持 insufficient、covariance 为 failed；禁止 grandfather、补 metadata、复制 L1 evidence 或 READY |
 | C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_EXECUTION_BLOCKED_BUG868` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、重新冻结的 dataset/mapping/direct-L2、seeds 42..49、两 fresh process；2096 L2 fits/process、4192 L2 fits total。源码、边界测试与 Conda 依赖已完成；实际 fit 在启动前被 BUG-868 阻断，selection、model/READY 和 runtime 均未执行 |
-| BUG-868-A | 正式 B3 是否保留 exact previous-trading-date 语义并重新冻结与当前 source 一致的 L1/L2 identities | `RESOLVED_USER_APPROVED_REFREEZE_PREFLIGHT_IMPLEMENTED_MERGE_PENDING` | 保留 `previous_basic_date == previous_trade_date`；正式 identity 固定为 dataset `c07177…`、mapping `9cdddd…`、direct L2 `d4a5cc…`。新增只读 immutable preflight；旧 `fca206…` 仅为历史诊断 identity。BUG 合入并另行确认前不恢复 5184 fits |
+| BUG-868-A | 正式 B3 是否保留 exact previous-trading-date 语义并重新冻结与当前 source 一致的 L1/L2 identities | `RESOLVED_USER_APPROVED_REFREEZE_PREFLIGHT_MERGED` | 保留 `previous_basic_date == previous_trade_date`；正式 identity 固定为 dataset `c07177…`、mapping `9cdddd…`、direct L2 `d4a5cc…`。source PR #2748 merge `44bc9e8a…`、close-sync PR #2752 merge `1ad5ff62…`；旧 `fca206…` 仅为历史诊断 identity |
+| BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
 | C-008-B3-D4-02 | covariance reference/bounds/floor/anomaly budget | `RESOLVED_USER_APPROVED_D4_02_A` | dynamic `L/U`、`τ_bound=0.005` 闭区间、tolerance 后 total/per-state/per-feature zero anomaly、M-step residual `<=0.02`、raw-only posterior 与禁止 clip/projection 已批准 |
@@ -1720,7 +1746,7 @@ L2 重训设计 A，并登记 DIAG-02/DIAG-03/DIAG-04 canonical evidence。C-008
 `PENDING_UPSTREAM_MODEL_SET`。源码实现不使任何 model set READY。
 
 生产 `sector_data` 不执行 identity DDL/DML；Conda `AIstock` 的批准依赖安装与 import/version smoke 已完成，但未启停服务、
-未运行 formal job、未写数据库，也未激活 Phase 2 runtime。AUDIT-01、D3-D7、Slice 0 源码/边界测试与 BUG-868-A 的
-frozen-identity/preflight 修复已完成；当前停止在 BUG-868-A 待 PR/合入验证边界。只有该修复合入且用户另行确认后，才以受控任务
-运行两个 fresh-process 的 L1/L2 grid（每 process 2592、总计 5184 fits）。实际fit、selection、D6、model/READY write、数据库或
-runtime action 均未在本次 BUG 修复中执行；合入、formal grid 和运行时动作继续分别授权和报告。
+未写数据库，也未激活 Phase 2 runtime。BUG-868-A 已合入并从 clean main启动formal job；identity preflight通过，但
+fresh_process_1在首个HMM fit前被批准的120行train coverage合同阻断。当前实际fits=0，fresh_process_2、selection、D6、
+model/READY write、数据库或runtime action均未执行。BUG-870只修复preflight与failure evidence；在其合入并获得完整coverage
+证据前不得恢复5184-fit grid，也不得把输入不足改写为模型失败或partial success。
