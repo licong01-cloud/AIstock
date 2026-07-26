@@ -1,6 +1,6 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_complete_local_verified_pr_pending`
+> 文档状态：`implementation_complete_pr_2754_ci_passed_merge_pending`
 > Feature tier：`F2`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
