@@ -4,12 +4,22 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from backend.services.quantevolver.backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
-from backend.services.quantevolver.sector_risk_overlay import build_sector_risk_runtime, canonical_json_sha256
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.services.quantevolver.backtest_base_data_memory_cache import (  # noqa: E402
+    BacktestBaseDataMemoryCache,
+)
+from backend.services.quantevolver.sector_risk_overlay import (  # noqa: E402
+    build_sector_risk_runtime,
+    canonical_json_sha256,
+)
 
 
 def _sha256(path: Path) -> str:

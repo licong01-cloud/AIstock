@@ -1,6 +1,13 @@
 {
   "actual": "Formal QE artifact build on the fixed 2026-06-30 snapshot fails globally when rolling components are incomplete. Missing source rows must remain explicit INCOMPLETE evidence with neutral passthrough policy, without imputing data or blocking research. The documented direct CLI invocation also fails to import backend from repository root. Scope is QE-only builder/runtime/tests/design progress; formulas, source data, non-QE modules, DB, and services remain unchanged.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/sector_risk_overlay.py",
+    "scripts/build_qe_sector_risk_overlay.py",
+    "scripts/qe_sector_risk_overlay.py",
+    "backend/tests/quantevolver/test_sector_risk_overlay.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_runtime.py",
+    "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
     "tests/aistock_validation/bugs/20260726_BUG-871-qe-sector-risk-artifact-rejects-explicit-incomplete-rows-and-direct-cli.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +30,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The QE-only builder must preserve incomplete component rows as explicit neutral evidence, keep all complete rows unchanged, and support the documented direct CLI invocation from the repository root.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +59,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "wsl bash -lc 'source /home/lc999/miniconda3/etc/profile.d/conda.sh && conda activate rdagent-gpu && cd /mnt/f/Dev/AIstock && python scripts/build_qe_sector_risk_overlay.py --factor-data-dir /home/lc999/data/factor_data --dataset-identity qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2 --start-date 2024-07-01 --end-date 2026-06-29 --output-dir /tmp/qe-sector-risk-bug-871'",
   "required_verification": [
     "l0"
   ],

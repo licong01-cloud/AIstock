@@ -9,7 +9,7 @@ import pandas as pd
 
 
 SUPPORTED_MODES = {"none", "entry_gate", "bounded_de_risk", "exit_reentry"}
-SUPPORTED_STATES = {"NORMAL", "CAUTION", "HIGH", "CRITICAL", "UNMAPPED"}
+SUPPORTED_STATES = {"NORMAL", "CAUTION", "HIGH", "CRITICAL", "UNMAPPED", "INCOMPLETE"}
 REQUIRED_COLUMNS = {
     "signal_date",
     "effective_trade_date",
@@ -24,10 +24,38 @@ REQUIRED_COLUMNS = {
     "vol_crowding_risk",
 }
 DEFAULT_MULTIPLIERS = {
-    "none": {"NORMAL": 1.0, "CAUTION": 1.0, "HIGH": 1.0, "CRITICAL": 1.0, "UNMAPPED": 1.0},
-    "entry_gate": {"NORMAL": 1.0, "CAUTION": 1.0, "HIGH": 1.0, "CRITICAL": 1.0, "UNMAPPED": 1.0},
-    "bounded_de_risk": {"NORMAL": 1.0, "CAUTION": 0.75, "HIGH": 0.50, "CRITICAL": 0.25, "UNMAPPED": 1.0},
-    "exit_reentry": {"NORMAL": 1.0, "CAUTION": 0.75, "HIGH": 0.50, "CRITICAL": 0.0, "UNMAPPED": 1.0},
+    "none": {
+        "NORMAL": 1.0,
+        "CAUTION": 1.0,
+        "HIGH": 1.0,
+        "CRITICAL": 1.0,
+        "UNMAPPED": 1.0,
+        "INCOMPLETE": 1.0,
+    },
+    "entry_gate": {
+        "NORMAL": 1.0,
+        "CAUTION": 1.0,
+        "HIGH": 1.0,
+        "CRITICAL": 1.0,
+        "UNMAPPED": 1.0,
+        "INCOMPLETE": 1.0,
+    },
+    "bounded_de_risk": {
+        "NORMAL": 1.0,
+        "CAUTION": 0.75,
+        "HIGH": 0.50,
+        "CRITICAL": 0.25,
+        "UNMAPPED": 1.0,
+        "INCOMPLETE": 1.0,
+    },
+    "exit_reentry": {
+        "NORMAL": 1.0,
+        "CAUTION": 0.75,
+        "HIGH": 0.50,
+        "CRITICAL": 0.0,
+        "UNMAPPED": 1.0,
+        "INCOMPLETE": 1.0,
+    },
 }
 
 
@@ -68,6 +96,16 @@ class QESectorRiskOverlayPolicy:
             unknown = set(state_multipliers) - SUPPORTED_STATES
             if unknown:
                 raise RuntimeError(f"sector-risk state_multipliers contains unknown states: {sorted(unknown)}")
+            non_neutral_missing = {
+                str(state): float(value)
+                for state, value in state_multipliers.items()
+                if state in {"UNMAPPED", "INCOMPLETE"} and float(value) != 1.0
+            }
+            if non_neutral_missing:
+                raise RuntimeError(
+                    "sector-risk UNMAPPED and INCOMPLETE multipliers must remain 1.0: "
+                    f"{non_neutral_missing}"
+                )
             self.multipliers.update({str(k): float(v) for k, v in state_multipliers.items()})
         if any(not 0.0 <= float(value) <= 1.0 for value in self.multipliers.values()):
             raise RuntimeError("sector-risk state multipliers must be in [0, 1]")
@@ -174,6 +212,8 @@ class QESectorRiskOverlayPolicy:
         if row is None:
             return True
         state = str(row["risk_state"])
+        if state in {"UNMAPPED", "INCOMPLETE"}:
+            return True
         if state in {"HIGH", "CRITICAL"}:
             return False
         if self.mode == "exit_reentry" and not bool(row["reentry_ready"]):

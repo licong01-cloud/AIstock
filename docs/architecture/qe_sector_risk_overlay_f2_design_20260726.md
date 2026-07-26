@@ -1,6 +1,6 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_complete_pr_2754_ci_passed_merge_pending`
+> 文档状态：`implementation_merged_runtime_active_bug871_fix_ready_pr_pending`
 > Feature tier：`F2`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
@@ -42,7 +42,7 @@ R11A 证明固定延长 `hold_thresh` 不能稳定改善收益或回撤；R12P �
 | ID | 验收项 |
 |---|---|
 | F-023 | 风险制品只读取显式 QE 快照，冻结文件 hash、数据日期、公式版本和 `signal_date → effective_trade_date` 映射；运行制品不含未来 outcome。 |
-| F-024 | 风险分数完整实现相对强弱拐点、价格宽度恶化、资金流背离、领导集中和波动/拥挤五个组件；缺字段、重复键、非 PIT 行业码和低覆盖必须显式失败。 |
+| F-024 | 风险分数完整实现相对强弱拐点、价格宽度恶化、资金流背离、领导集中和波动/拥挤五个组件；缺字段、重复键、非 PIT 行业码和低覆盖必须显式失败；局部源数据或滚动分量不完整时保留原始缺失并写入 `INCOMPLETE`，不得扩大为全制品失败。 |
 | F-025 | 同一策略 adapter 完整支持 `none/entry_gate/bounded_de_risk/exit_reentry` 四臂，状态到目标暴露映射和重入确认期可冻结、可归档。 |
 | F-026 | overlay 强制动作与常规 TopK 动作分离；仅配置允许时覆盖 `hold_thresh`，部分卖出按当前权威持仓、价格、factor 和交易单位计算。 |
 | F-027 | 配置组合器只对受支持的 ScoreWeighted V2 策略接线，复制并校验 manifest/parquet/helper；未知模式、文件 hash 不符或 class 不匹配时拒绝执行。 |
@@ -128,9 +128,11 @@ NORMAL    risk_score < 0.60
 CAUTION   0.60 <= risk_score < 0.80
 HIGH      0.80 <= risk_score < 0.90
 CRITICAL  risk_score >= 0.90
+INCOMPLETE one or more component values are unavailable
 ```
 
 阈值是首个 trial 的冻结参数，不是研究准入条件。artifact 同时记录阈值；后续敏感性实验另立 artifact identity。
+`INCOMPLETE` 不是风险等级，也不是研究准入或淘汰状态。它保留缺失分量及其 manifest 统计，四臂均以目标暴露 `1.00`、允许新买入的原策略语义处理；不得填零、前向填充或继承最近风险状态。
 
 ### 5.4 Runtime parquet
 
@@ -145,7 +147,7 @@ rs_turn_risk, breadth_deterioration, flow_divergence_risk,
 leadership_concentration, vol_crowding_risk
 ```
 
-未知 `l2_code_id=-1` 明确写入 `UNMAPPED`，策略不得把它当作 `NORMAL`。首轮实验对 `UNMAPPED` 保持原策略行为并单独统计覆盖，不借此淘汰样本或研究方向。
+未知 `l2_code_id=-1` 明确写入 `UNMAPPED`，策略不得把它当作 `NORMAL`。已映射但任一五分量缺失时写入 `INCOMPLETE`，并在 manifest 固化股票日数、板块日数和分量缺失计数。首轮实验对 `UNMAPPED/INCOMPLETE` 均保持原策略行为并单独统计覆盖，不借此淘汰样本或研究方向。
 
 ### 5.5 策略参数
 
@@ -163,12 +165,12 @@ sector_risk_overlay_action_log: str
 
 冻结首轮映射：
 
-| mode | NORMAL | CAUTION | HIGH | CRITICAL | 新买入 |
-|---|---:|---:|---:|---:|---|
-| none | 1.00 | 1.00 | 1.00 | 1.00 | 不过滤 |
-| entry_gate | 1.00 | 1.00 | 1.00 | 1.00 | HIGH/CRITICAL 阻止 |
-| bounded_de_risk | 1.00 | 0.75 | 0.50 | 0.25 | HIGH/CRITICAL 阻止 |
-| exit_reentry | 1.00 | 0.75 | 0.50 | 0.00 | HIGH/CRITICAL 阻止；降至 NORMAL/CAUTION 连续 3 日后允许重入 |
+| mode | NORMAL | CAUTION | HIGH | CRITICAL | UNMAPPED / INCOMPLETE | 新买入 |
+|---|---:|---:|---:|---:|---:|---|
+| none | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 不过滤 |
+| entry_gate | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | HIGH/CRITICAL 阻止 |
+| bounded_de_risk | 1.00 | 0.75 | 0.50 | 0.25 | 1.00 | HIGH/CRITICAL 阻止 |
+| exit_reentry | 1.00 | 0.75 | 0.50 | 0.00 | 1.00 | HIGH/CRITICAL 阻止；降至 NORMAL/CAUTION 连续 3 日后允许重入；缺失证据不阻止原策略动作 |
 
 ### 5.6 Action ledger
 
@@ -209,7 +211,7 @@ sector_risk_overlay_action_log: str
 ## 9. Rollout / Rollback / 发布与回滚
 
 - 源代码合入、后端重启、风险制品生成和 R13A 启动分别报告。
-- 合入前不生成生产制品、不启动实验、不重启服务。
+- PR #2754 已合入且用户已完成后端重启；BUG-871 合入前仅生成隔离候选制品，不启动正式 R13A。
 - 激活后先用 10 日 fixture artifact 做单 child canary，再提交 8 个正式 child；canary 只验证 wiring，不形成 Alpha 结论。
 - 回滚停止创建新 overlay child，保留已生成 artifact、action ledger、run/child/attempt 和结果；代码按 PR revert，不删除研究记录。
 - 默认策略 hook 为 no-op，关闭 overlay 后必须恢复原有订单语义。
@@ -220,9 +222,9 @@ sector_risk_overlay_action_log: str
 production_ddl_gate = noop
 production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
-runtime_restart = pending_separate_user_action_after_merge
-qe_artifact_build = pending_after_runtime_activation
-r13a_experiment = pending_after_runtime_activation
+runtime_restart = active_from_pr_2754
+qe_artifact_build = candidate_verified_bug871_formal_pending
+r13a_experiment = pending_bug871_source_merge
 non_qe_impact = prohibited
 ```
 
@@ -232,7 +234,7 @@ non_qe_impact = prohibited
 |---|---|---|---|---|
 | F-014 | `sector_risk_overlay_evaluation.py` 复用 F-014 holding episode 的 exit/MFE/MAE/capture 字段并输出局部证据状态 | `backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py` 的 episode/action alignment tests | implemented_verified | none |
 | F-023 | `sector_risk_overlay.py`、`build_qe_sector_risk_overlay.py` 的 immutable identity/hash/T+1 实现 | `backend/tests/quantevolver/test_sector_risk_overlay.py` 的 identity/hash/T+1/truncation tests | implemented_verified | none |
-| F-024 | `sector_risk_overlay.py` 的 five-component、schema、PIT coverage 与 incomplete-component 显式失败 | `backend/tests/quantevolver/test_sector_risk_overlay.py` | implemented_verified | none |
+| F-024 | `sector_risk_overlay.py` 的 five-component、schema、PIT coverage，以及 incomplete-component 显式保留和中性策略语义 | `backend/tests/quantevolver/test_sector_risk_overlay.py`、`backend/tests/quantevolver/test_qe_sector_risk_overlay_runtime.py` 与真实 2026-06-30 snapshot candidate build | implemented_verified | none |
 | F-025 | `qe_sector_risk_overlay.py`、`qe_sector_risk_overlay_strategy.py` 的 four-arm policy 与 order 实现 | `backend/tests/quantevolver/test_qe_sector_risk_overlay_runtime.py` 与 `backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py` | implemented_verified | none |
 | F-026 | `ScoreWeightedTopkStrategyV2` no-op hooks 与 overlay partial/full rebalance | `backend/tests/unified_engine/test_score_weighted_capacity_registration.py` 与 `backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py` | implemented_verified | none |
 | F-027 | `ConfigComposer._prepare_sector_risk_overlay_runtime`、helper packaging 与 wrapper routing | `backend/tests/quantevolver/test_sector_risk_overlay_config.py` | implemented_verified | none |
@@ -242,6 +244,8 @@ non_qe_impact = prohibited
 | F-031 | QE-only service/scripts、CPU pred-backtest、无 GPU telemetry | `tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py` 与 `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md --tier F2` | implemented_verified | none |
 
 本地验收记录（2026-07-26）：新增与受影响测试合计 `207 passed, 38 skipped`；builder/evaluator branch coverage 合计 `88%`，runtime/Recorder helper branch coverage 合计 `95%`；动态加载的策略 wrapper 以 entry、four-arm mapping、partial/full exit、hold override、factor/lot 和默认 no-op business oracle 补证。定向 lint、`py_compile`、`git diff --check` 通过。未生成正式风险制品、未启动 R13A、未启停服务、未修改数据库。
+
+BUG-871 真实数据补证（2026-07-26）：当前固定 snapshot 映射覆盖率 `99.9922%`，正式 OOS 候选包含 `2,198,910` 个股票日和 `63,273` 个板块日；其中 `138,393` 个股票日（`6.2937%`）、`4,495` 个板块日为 `INCOMPLETE`。缺失分量计数为 `rs_turn_risk=1,085`、`flow_divergence_risk=1,455`、`vol_crowding_risk=4,103`，宽度和领导集中分量无缺失。候选制品保留这些证据并完成 hash 固化，没有填补或伪造源数据；正式制品与 R13A 等 BUG-871 合入后生成、启动。
 
 ## 12. DESIGN-COMPLIANCE-001
 

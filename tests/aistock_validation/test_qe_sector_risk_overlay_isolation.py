@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -34,3 +36,16 @@ def test_overlay_builder_reads_only_explicit_qe_snapshot_files() -> None:
     assert 'allowed_files=("daily_pv.h5", "sector_data.h5")' in source
     assert "daily_basic.h5" not in source
     assert "moneyflow.h5" not in source
+
+
+def test_overlay_builder_supports_direct_cli_launch_from_repository_root() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/build_qe_sector_risk_overlay.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--factor-data-dir" in result.stdout
