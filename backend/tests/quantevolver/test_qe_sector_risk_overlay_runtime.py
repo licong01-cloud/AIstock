@@ -108,6 +108,8 @@ def test_runtime_strict_mode_rejects_missing_stock_date(tmp_path) -> None:
         ("entry_gate", "HIGH", 1.0, False),
         ("bounded_de_risk", "HIGH", 0.5, False),
         ("exit_reentry", "CRITICAL", 0.0, False),
+        ("bounded_de_risk", "INCOMPLETE", 1.0, True),
+        ("exit_reentry", "INCOMPLETE", 1.0, True),
     ],
 )
 def test_runtime_four_arm_policy_semantics(
@@ -140,6 +142,8 @@ def test_runtime_rejects_invalid_policy_configuration() -> None:
         QESectorRiskOverlayPolicy(state_multipliers=[])
     with pytest.raises(RuntimeError, match="unknown states"):
         QESectorRiskOverlayPolicy(state_multipliers={"MYSTERY": 0.5})
+    with pytest.raises(RuntimeError, match="must remain 1.0"):
+        QESectorRiskOverlayPolicy(state_multipliers={"INCOMPLETE": 0.5})
     with pytest.raises(RuntimeError, match=r"must be in \[0, 1\]"):
         QESectorRiskOverlayPolicy(state_multipliers={"HIGH": 1.5})
     with pytest.raises(RuntimeError, match="requires manifest_file"):

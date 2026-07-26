@@ -100,22 +100,18 @@ def _cross_section_rank(frame: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _state_from_score(score: pd.Series) -> pd.Series:
-    if score.isna().any():
-        raise QESectorRiskOverlayError(
-            "sector-risk score contains incomplete component rows",
-            reason_code="qe_sector_risk_components_incomplete",
-            context={"incomplete_rows": int(score.isna().sum())},
-        )
     conditions = [
         score.ge(STATE_THRESHOLDS["critical"]),
         score.ge(STATE_THRESHOLDS["high"]),
         score.ge(STATE_THRESHOLDS["caution"]),
     ]
-    return pd.Series(
+    result = pd.Series(
         np.select(conditions, ["CRITICAL", "HIGH", "CAUTION"], default="NORMAL"),
         index=score.index,
         dtype="string",
     )
+    result.loc[score.isna()] = "INCOMPLETE"
+    return result
 
 
 def _validate_sector_repetition(sector: pd.DataFrame) -> None:
@@ -286,6 +282,7 @@ def build_sector_risk_runtime(
         )
 
     complete = runtime["risk_state"].isin(["NORMAL", "CAUTION", "HIGH", "CRITICAL"])
+    incomplete_sector = sector_runtime["risk_state"].eq("INCOMPLETE")
     summary = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "runtime_schema_version": RUNTIME_SCHEMA_VERSION,
@@ -299,6 +296,15 @@ def build_sector_risk_runtime(
         "sector_rows": int(len(sector_runtime)),
         "mapped_rate": mapped_rate,
         "complete_component_rate": float(complete.mean()) if len(runtime) else 0.0,
+        "incomplete_component_rate": float(runtime["risk_state"].eq("INCOMPLETE").mean())
+        if len(runtime)
+        else 0.0,
+        "incomplete_component_rows": int(runtime["risk_state"].eq("INCOMPLETE").sum()),
+        "incomplete_sector_rows": int(incomplete_sector.sum()),
+        "incomplete_sector_component_counts": {
+            component: int(sector_runtime.loc[incomplete_sector, component].isna().sum())
+            for component in COMPONENT_COLUMNS
+        },
         "state_counts": {str(k): int(v) for k, v in runtime["risk_state"].value_counts(dropna=False).items()},
     }
     return SectorRiskBuildResult(runtime=runtime, sector_daily=sector_runtime, summary=summary)

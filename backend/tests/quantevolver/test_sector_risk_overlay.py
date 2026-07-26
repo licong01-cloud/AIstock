@@ -118,15 +118,21 @@ def test_builder_rejects_low_pit_mapping_coverage() -> None:
     assert exc.value.reason_code == "qe_sector_risk_mapping_coverage_low"
 
 
-def test_builder_rejects_mapped_rows_with_incomplete_components() -> None:
+def test_builder_preserves_mapped_rows_with_incomplete_components_as_explicit_evidence() -> None:
     daily, sector = _frames(days=80)
     dates = daily.index.get_level_values("datetime").unique().sort_values()
-    with pytest.raises(QESectorRiskOverlayError, match="incomplete component") as exc:
-        build_sector_risk_runtime(
-            daily,
-            sector,
-            output_start=str(dates[20].date()),
-            output_end=str(dates[30].date()),
-            dataset_identity="fixture-dataset-v1",
-        )
-    assert exc.value.reason_code == "qe_sector_risk_components_incomplete"
+    result = build_sector_risk_runtime(
+        daily,
+        sector,
+        output_start=str(dates[20].date()),
+        output_end=str(dates[30].date()),
+        dataset_identity="fixture-dataset-v1",
+    )
+
+    incomplete = result.runtime.loc[result.runtime["risk_state"].eq("INCOMPLETE")]
+    assert not incomplete.empty
+    assert incomplete["risk_score"].isna().all()
+    assert result.summary["incomplete_component_rows"] == len(incomplete)
+    assert result.summary["incomplete_sector_rows"] > 0
+    assert result.summary["incomplete_component_rate"] > 0.0
+    assert sum(result.summary["incomplete_sector_component_counts"].values()) > 0
