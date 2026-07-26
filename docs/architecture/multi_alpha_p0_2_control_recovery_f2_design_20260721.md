@@ -397,6 +397,28 @@ queued/preparing/running
 - 在途 attempt 仍 active 时状态保持 `pause_requested`，UI 显示 `remaining_active`。
 - drain 后若仍存在未执行 child，run 进入 `paused`；若全部计划 child 已权威终态，则直接执行正常 parent finalization 和 Archive，command 以 `pause_raced_with_completion` 收口，不能留下“已完成但 paused”的僵尸 run。
 
+#### 7.1.1 Control acceptance linearization clarification (BUG-882)
+
+Run-level `pause` / `cancel` acceptance and the corresponding parent status
+transition are one database transaction.  A successful API response therefore
+means the parent is already `pause_requested` / `cancel_requested`; it does not
+wait for `apply_one_local_command()` to expose that intent.  The transition
+clears the current planner lease and increments its fencing token so an
+in-flight materializer may finish private staging work but cannot publish a
+child, create/claim a dispatchable attempt, or issue a new remote POST.
+
+The control worker remains responsible for pause drain, queued-attempt
+cancellation, typed remote-cancel delivery, reconciliation, and terminal
+finalization.  This clarification changes only the acceptance-to-worker race;
+it does not infer a remote terminal state and does not alter any research
+result or direction.
+
+Resume preserves the existing durable-plan decision: both `pause_requested`
+and `paused` may return to `preparing` when planning is incomplete or to
+`running` when the child plan already exists.  The PostgreSQL lifecycle test
+covers `pause -> paused -> preparing -> cancel_requested -> cancelled` without
+requiring a fabricated child or remote result.
+
 ### 7.2 Cancel
 
 ```text

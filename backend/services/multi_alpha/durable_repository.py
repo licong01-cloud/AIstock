@@ -45,6 +45,7 @@ RUN_TRANSITIONS: Mapping[str, frozenset[str]] = {
     ),
     "pause_requested": frozenset(
         {
+            "preparing",
             "running",
             "paused",
             "cancel_requested",
@@ -54,7 +55,7 @@ RUN_TRANSITIONS: Mapping[str, frozenset[str]] = {
             "failed",
         },
     ),
-    "paused": frozenset({"running", "cancel_requested", "failed"}),
+    "paused": frozenset({"preparing", "running", "cancel_requested", "failed"}),
     "cancel_requested": frozenset({"cancelling", "cancelled", "succeeded", "partial_failed"}),
     "cancelling": frozenset({"cancelled", "succeeded", "partial_failed"}),
     "succeeded": frozenset(),
@@ -1480,7 +1481,7 @@ class MultiAlphaDurableRepository:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT id, status, row_version, fencing_token
+                    SELECT id, status, phase, progress_json, row_version, fencing_token
                     FROM strategy_pkg.multi_alpha_combine_backtest_run
                     WHERE id = %s
                     FOR UPDATE
@@ -1607,7 +1608,54 @@ class MultiAlphaDurableRepository:
                         "requested_by": spec.requested_by,
                     },
                 )
+                self._make_accepted_run_control_visible_in_transaction(
+                    cur,
+                    run=dict(run),
+                    spec=spec,
+                )
                 return row
+
+    def _make_accepted_run_control_visible_in_transaction(
+        self,
+        cur: Any,
+        *,
+        run: Mapping[str, Any],
+        spec: DurableCommandSpec,
+    ) -> None:
+        """Linearize run-level pause/cancel with command acceptance.
+
+        A planner or dispatcher may hold an older lease while the control
+        worker is busy materializing another child.  Persisting only an
+        accepted command leaves the parent in ``preparing``/``running`` and
+        therefore still eligible for publish and remote submission.  The
+        parent control state must become visible in the same transaction that
+        accepts the command; the normal command worker still owns drain and
+        remote-cancel delivery afterwards.
+        """
+
+        current_status = str(run["status"])
+        next_status: str | None = None
+        if spec.action == "pause" and current_status in {"queued", "preparing", "running"}:
+            next_status = "pause_requested"
+        elif spec.action == "cancel" and current_status in {
+            "queued",
+            "preparing",
+            "running",
+            "pause_requested",
+            "paused",
+        }:
+            next_status = "cancel_requested"
+        if next_status is None:
+            return
+        self._transition_run_from_control_in_transaction(
+            cur,
+            current=run,
+            next_status=next_status,
+            command_id=spec.command_id,
+            action=spec.action,
+            reason_code=f"{spec.action}_requested",
+            phase=f"{spec.action}_requested",
+        )
 
     def record_recovery_staging_manifest(
         self,

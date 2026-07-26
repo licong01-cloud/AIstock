@@ -11,17 +11,21 @@ import pytest
 from backend.services.multi_alpha.durable_models import (
     DurableAttemptSpec,
     DurableChildSpec,
+    DurableCommandSpec,
     DurableContractError,
     DurableRunSpec,
     DurableTaskSpec,
     OwnershipToken,
     artifact_manifest_hash_for,
+    control_command_payload,
+    command_target_key_for,
     durable_run_request_payload,
     implicit_task_group_key,
     make_attempt_id,
     make_child_id,
     make_remote_task_id,
     request_hash_for,
+    sha256_identity,
     submission_intent_hash_for,
 )
 from backend.services.multi_alpha.durable_repository import (
@@ -126,6 +130,103 @@ def _run_request() -> dict[str, Any]:
         walk_forward={"enabled": True},
         backtest_config={"topk": 25},
     )
+
+
+@pytest.mark.parametrize(
+    ("action", "source_status", "expected_status"),
+    [
+        ("pause", "preparing", "pause_requested"),
+        ("cancel", "preparing", "cancel_requested"),
+        ("cancel", "pause_requested", "cancel_requested"),
+    ],
+)
+def test_command_acceptance_atomically_publishes_parent_control_state(
+    action: str,
+    source_status: str,
+    expected_status: str,
+) -> None:
+    run_id = "macb_control_linearization"
+    command_id = f"macmd_{action}_linearization"
+    target_key = command_target_key_for(
+        action=action,
+        run_id=run_id,
+        child_id=None,
+        attempt_id=None,
+    )
+    payload_hash = sha256_identity(
+        control_command_payload(
+            action=action,
+            run_id=run_id,
+            child_id=None,
+            attempt_id=None,
+            request={},
+            scope=None,
+        )
+    )
+    run = {
+        "id": run_id,
+        "status": source_status,
+        "row_version": 7,
+        "fencing_token": 3,
+        "progress_json": {"completed_children": 0},
+    }
+    command = {
+        "command_id": command_id,
+        "run_id": run_id,
+        "child_id": None,
+        "attempt_id": None,
+        "action": action,
+        "target_key": target_key,
+        "idempotency_key": f"{action}-linearization",
+        "payload_hash": payload_hash,
+        "status": "accepted",
+        "row_version": 1,
+    }
+    controlled_run = {
+        **run,
+        "status": expected_status,
+        "phase": expected_status,
+        "row_version": 8,
+        "fencing_token": 4,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT id, status, phase, progress_json", one=run),
+            Step(contains="WHERE run_id = %s AND idempotency_key = %s", one=None),
+            Step(contains="AND status IN ('accepted', 'applying', 'reconciling')", one=None),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_command", one=command),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 1},
+            ),
+            Step(contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_run", one=controlled_run),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 2},
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    created = repository.create_or_get_command(
+        DurableCommandSpec(
+            command_id=command_id,
+            run_id=run_id,
+            action=action,
+            target_key=target_key,
+            idempotency_key=f"{action}-linearization",
+            payload_hash=payload_hash,
+            request={},
+            requested_by="test-worker",
+        )
+    )
+
+    assert created["command_id"] == command_id
+    assert provider.commits == 1
+    update_sql, update_params = provider.cursor.executions[5]
+    assert "owner_id = NULL" in update_sql
+    assert "fencing_token = fencing_token + 1" in update_sql
+    assert update_params[0] == expected_status
 
 
 def test_list_attempts_for_run_uses_one_run_scoped_join_query() -> None:
