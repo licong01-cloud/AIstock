@@ -63,6 +63,11 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
 
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
+B3_APPROVED_FROZEN_IDENTITIES = {
+    "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
+    "mapping_manifest_hash": "9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159",
+    "l2_stock_fact_manifest_hash": "d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730",
+}
 
 
 def _read_env_file(path: Path) -> None:
@@ -105,6 +110,16 @@ def _load_request(path: Path) -> dict[str, Any]:
         if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
             raise StateModelSetError(f"preparation request {field} must be a SHA-256 identity")
     return value
+
+
+def _require_approved_b3_identities(value: dict[str, Any]) -> None:
+    mismatches = []
+    for field, expected in B3_APPROVED_FROZEN_IDENTITIES.items():
+        actual = str(value.get(field) or "")
+        if actual != expected:
+            mismatches.append(f"{field} expected={expected} actual={actual or '<missing>'}")
+    if mismatches:
+        raise StateModelSetError("formal B3 frozen identity mismatch: " + "; ".join(mismatches))
 
 
 def _git_commit() -> str:
@@ -310,6 +325,12 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
+    frozen_identities = {
+        "dataset_manifest_hash": dataset_hash,
+        "mapping_manifest_hash": mapping_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+    }
+    _require_approved_b3_identities(frozen_identities)
     request_candidate = deepcopy(request_template)
     request_candidate.update(
         {
@@ -327,6 +348,8 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "source_template_producer_commit": str(request_template.get("producer_commit") or ""),
         "producer_commit": producer_commit,
         "database": inputs["database"],
+        "approved_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
+        "approved_frozen_identities_match": True,
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
@@ -827,6 +850,7 @@ def prepare_b3_single_pass(
     """Run one complete train-only B3 pass; selection and D6 are parent-only."""
 
     producer_commit = _formal_producer_commit()
+    _require_approved_b3_identities(request)
     if str(request.get("producer_commit") or "") != producer_commit:
         raise StateModelSetError("B3 request producer_commit differs from current code")
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)

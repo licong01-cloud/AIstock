@@ -63,6 +63,18 @@ def _preflight_inputs() -> dict:
     }
 
 
+def _approve_preflight_inputs(monkeypatch, inputs: dict) -> None:
+    monkeypatch.setattr(
+        subject,
+        "B3_APPROVED_FROZEN_IDENTITIES",
+        {
+            "dataset_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]),
+            "mapping_manifest_hash": subject.canonical_sha256(inputs["mapping_manifest"]),
+            "l2_stock_fact_manifest_hash": subject.canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        },
+    )
+
+
 def test_legacy_fixed_seed_ready_writer_is_disabled() -> None:
     with pytest.raises(StateModelSetError, match="legacy fixed-seed preparation is disabled"):
         subject.prepare({}, artifact_root=None, output_root=None, db_prefix="TDX_DB_DEV_")
@@ -80,10 +92,28 @@ def test_formal_producer_identity_rejects_dirty_worktree(monkeypatch) -> None:
         subject._formal_producer_commit()
 
 
+def test_formal_b3_rejects_well_formed_but_unapproved_frozen_identity() -> None:
+    identities = dict(subject.B3_APPROVED_FROZEN_IDENTITIES)
+    identities["dataset_manifest_hash"] = "f" * 64
+
+    with pytest.raises(StateModelSetError, match="formal B3 frozen identity mismatch: dataset_manifest_hash"):
+        subject._require_approved_b3_identities(identities)
+
+
+def test_preflight_rejects_live_manifest_drift_before_candidate_ready(monkeypatch) -> None:
+    inputs = _preflight_inputs()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+
+    with pytest.raises(StateModelSetError, match="formal B3 frozen identity mismatch"):
+        subject.prepare_b3_preflight_candidate(_request(), db_prefix="TDX_DB_")
+
+
 def test_preflight_freezes_current_identities_without_fit_selection_or_writes(monkeypatch) -> None:
     request = _request()
     old_producer = request["producer_commit"]
     inputs = _preflight_inputs()
+    _approve_preflight_inputs(monkeypatch, inputs)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
 
@@ -139,6 +169,7 @@ def test_main_preflight_writes_immutable_candidate_and_receipt(monkeypatch, tmp_
     candidate_path = tmp_path / "candidate.json"
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
+    _approve_preflight_inputs(monkeypatch, inputs)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
@@ -178,6 +209,7 @@ def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_v
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
     monkeypatch.setattr(
         subject,
@@ -213,6 +245,7 @@ def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_v
 def test_formal_single_pass_rejects_frozen_manifest_drift(monkeypatch) -> None:
     request = _request()
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
     monkeypatch.setattr(
         subject,
         "_load_l1_source_inputs",

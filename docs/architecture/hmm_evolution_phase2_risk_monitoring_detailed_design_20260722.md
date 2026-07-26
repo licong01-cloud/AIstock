@@ -676,7 +676,9 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    previous-available `daily_basic`、填补缺失日或改变 PIT/coverage 语义。当前 source/mapping 未变；重聚合后的 L1 aggregate
    为 `33221` rows、invalid L1 sector-date 为 `2491`，direct L2 aggregate 为 `145805` rows、invalid L2 sector-date 为 `4067`。
 2. **唯一正式 identity**：正式 request 必须同时携带本节批准的 `c07177…` dataset、`9cdddd…` mapping 与 `d4a5cc…`
-   direct-L2 hash；三者任一漂移均在第一个 fit 前 fail closed，禁止由 operator、child process 或 selection 路径静默替换。
+   direct-L2 hash；实现以 `B3_APPROVED_FROZEN_IDENTITIES` 对 preflight 的 live recomputation 和每个 formal child request 分别
+   精确比较。三者任一漂移均在第一个 fit 前 fail closed，且 preflight 不得写 `candidate_ready`；禁止由 operator、child process
+   或 selection 路径静默替换。历史 C-008 diagnostic loader 可回读旧 identity，但该兼容边界不得进入 formal preflight/child。
 3. **preflight 输出**：`hmm_risk_b3_formal_preflight_v1` 只从同一 read-only PIT source 计算当前三个 identity，并以 canonical
    JSON 原子写入 immutable request candidate 与 preflight receipt；保存 source-template producer、当前 producer、数据库非秘密
    identity、L1/L2 aggregate/panel/invalid counts、candidate hash 和 receipt hash。preflight 与 formal child 都必须先验证 producer
