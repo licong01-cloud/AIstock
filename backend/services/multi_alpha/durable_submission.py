@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
@@ -501,23 +502,7 @@ def _optional_prefixed_identity(value: Any, *, prefix: str, field_name: str) -> 
 
 
 def _replace_run_async(request: CombineBacktestRequest, run_async: bool) -> CombineBacktestRequest:
-    return CombineBacktestRequest(
-        roster=request.roster,
-        oos_start=request.oos_start,
-        oos_end=request.oos_end,
-        weighting_schemes=request.weighting_schemes,
-        normalize_method=request.normalize_method,
-        walk_forward=request.walk_forward,
-        rank_fusion=request.rank_fusion,
-        backtest_config=request.backtest_config,
-        prediction_task_selection=request.prediction_task_selection,
-        baseline_leg_id=request.baseline_leg_id,
-        topk=request.topk,
-        min_date_coverage=request.min_date_coverage,
-        run_async=run_async,
-        scheme_timeout_seconds=request.scheme_timeout_seconds,
-        run_timeout_seconds=request.run_timeout_seconds,
-    )
+    return replace(request, run_async=run_async)
 
 
 def _repository_error(exc: MultiAlphaDurableRepositoryError) -> DurableCombineSubmissionError:
