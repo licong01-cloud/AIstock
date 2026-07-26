@@ -1117,6 +1117,7 @@ def _remote_wsl_command(
     workspace_cd = _remote_workspace_cd(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
     runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings)
     runtime_empty_files = _remote_runtime_empty_file_commands(runtime_file_manifest or {})
+    runtime_file_verification = _remote_runtime_file_verify_commands(runtime_file_manifest or {})
     command = "".join(
         [
             "set -euo pipefail; ",
@@ -1125,6 +1126,7 @@ def _remote_wsl_command(
             "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').rglob('*.b64')]\"; ",
             runtime_artifact_links,
             runtime_empty_files,
+            runtime_file_verification,
             "ln -sfn " + artifact_path + " combined_factors_df.parquet; ",
             "test -f combined_factors_df.parquet; ",
             "ln -sfn " + prediction_artifact_path + " combined_prediction.pkl; ",
@@ -1234,6 +1236,60 @@ def _remote_runtime_empty_file_commands(manifest: Mapping[str, Any]) -> str:
                 "mkdir -p -- " + quoted_parent + "; ",
                 ": > " + quoted_name + "; ",
                 "test -f " + quoted_name + "; ",
+            ]
+        )
+    return "".join(commands)
+
+
+def _remote_runtime_file_verify_commands(manifest: Mapping[str, Any]) -> str:
+    if not manifest:
+        return ""
+    payload = dict(manifest)
+    manifest_hash = str(payload.pop("manifest_hash", ""))
+    raw_files = payload.get("files")
+    if (
+        payload.get("schema_version") != _REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA
+        or manifest_hash != _runtime_manifest_hash(payload)
+        or not isinstance(raw_files, list)
+    ):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest is invalid while building verification commands",
+            reason_code="remote_runtime_file_manifest_invalid",
+        )
+    commands: list[str] = []
+    observed: set[str] = set()
+    for raw in raw_files:
+        if not isinstance(raw, Mapping):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime verification entry must be an object",
+                reason_code="remote_runtime_file_manifest_invalid",
+            )
+        name = str(raw.get("path") or "")
+        sha256 = str(raw.get("sha256") or "")
+        try:
+            size = int(raw.get("size"))
+        except (TypeError, ValueError):
+            size = -1
+        if (
+            not _is_safe_runtime_relative_path(name)
+            or name in observed
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or size < 0
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime verification entry is invalid",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"entry": dict(raw)},
+            )
+        observed.add(name)
+        quoted_name = _shell_quote(name)
+        commands.extend(
+            [
+                "test -f " + quoted_name + "; ",
+                "test \"$(stat -c %s -- " + quoted_name + ")\" -eq " + str(size) + "; ",
+                "test \"$(sha256sum -- " + quoted_name + " | awk '{print $1}')\" = "
+                + _shell_quote(sha256)
+                + "; ",
             ]
         )
     return "".join(commands)

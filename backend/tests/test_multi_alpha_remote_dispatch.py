@@ -514,6 +514,8 @@ def test_runtime_file_manifest_covers_nested_assets_and_excludes_python_cache(
     assert "mkdir -p" in command and "aistock_models" in command
     assert ": >" in command and "aistock_models/__init__.py" in command
     assert "rglob" in command and "*.b64" in command
+    assert entries["conf.yaml"]["sha256"] in command
+    assert entries["aistock_models/model.py"]["sha256"] in command
 
 
 def test_runtime_file_manifest_detects_workspace_mutation(tmp_path: Path) -> None:
