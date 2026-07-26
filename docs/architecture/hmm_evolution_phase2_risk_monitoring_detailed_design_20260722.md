@@ -2,13 +2,13 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 修订日期：2026-07-25
-- 状态：`C008_B3_SLICE0_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING`
+- 修订日期：2026-07-26
+- 状态：`C008_B3_BUG868_REFREEZE_PREFLIGHT_IMPLEMENTED_MERGE_PENDING`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.12
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、D5-01-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A。随后用户明确授权下一阶段源码开发：Slice 0 已实现正式 B3/L2 retrain 代码与边界测试，但本 PR 未运行完整 fresh-process grid、实际 selection 或生成 model/READY，也未安装生产依赖、写数据库或激活 runtime。任何 PR 合入仍须用户逐 PR 明确确认
+- 当前边界：C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准；C-006-A/C-007-A/C-008-D1/C-008-B1 已于 2026-07-23 获用户明确批准；C-008-B3-DESIGN、C-008-B3-STRUCTURAL-A、D3-01-A、D3-02-B、D5-01-B、固定数值环境内的 D5-02-B 与 D7-01-A 已获批准。DIAG-02、D4-02-DIAG-03 与 D3-03/D4-02-DIAG-04 均已完成且只构成 diagnostic evidence；用户于 2026-07-25 明确批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B 的精确公式和阈值，并批准 C-008-B3-D4-L2-AUDIT-01 的 fail-closed 结论与受控 L2 重训方案 A。Slice 0 已实现正式 B3/L2 retrain 代码与边界测试。2026-07-26 正式执行前 preflight 发现旧 frozen dataset identity 与已审核的 exact previous-trading-date 事实不一致；用户批准 BUG-868-A 保留现行业务语义并重新冻结正式 dataset/mapping/direct-L2 identity。当前 BUG 只实现不可变 preflight 与设计回填，不运行 5184 fits、不执行 selection、不生成 model/READY、不写数据库、不激活 runtime。任何 PR 合入仍须用户逐 PR 明确确认
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -617,18 +617,22 @@ AUDIT-01 的正式状态闭包为：
 - 两个 family 均保持 blocked；不得 grandfather、补 metadata、复制 L1 evidence、把 `completed` 当 numeric acceptance、
   只交付其中一个 family 或写任何 READY artifact。
 
-##### D4-L2-RETRAIN-A. 受控 L2 重训精确合同（设计方向已批准，执行未授权）
+##### D4-L2-RETRAIN-A. 受控 L2 重训精确合同（设计已批准，正式执行因 BUG-868 合入前阻塞）
 
 用户于 2026-07-25 批准受控 L2 重训方案 A 的设计方向。algorithm/receipt version 固定为
 `hmm_risk_c008_b3_l2_retrain_a_v1`；本节只闭合未来实现合同，不授权当前文档任务执行 fit、安装依赖、选择 seed、生成
 candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime。
 
-1. **冻结输入与 direct L2 边界**：重训只允许使用 C-008 已冻结的 dataset manifest
-   `fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366`、mapping manifest
-   `9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159`、共同水位 `2025-04-30`、train
+1. **冻结输入与 direct L2 边界**：BUG-868-A 重新冻结后的正式训练只允许使用 dataset manifest
+   `c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f`、mapping manifest
+   `9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159`、direct L2 stock-fact manifest
+   `d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730`、共同水位 `2025-04-30`、train
    `2022-01-01..2024-06-30` 和唯一 validation `2024-07-01..2025-03-31`。L2 sector set 必须严格等于 frozen
    mapping 的 canonical 131 个集合并保存 ordered set/hash；缺 sector、额外 sector、row/hash 漂移均 fail closed。
    L2 observation 直接从 canonical L2 facts 构造，禁止从 L1、L2 posterior、semantic state 或旧 coefficient 反推。
+   历史 dataset manifest `fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366` 只保留为
+   C-008-A/B1/DIAG historical evidence identity；它使用 previous-available `daily_basic`，不满足已审核的
+   `previous_basic_date == previous_trade_date` 精确语义，因此不得用于正式 B3 request、fit、selection 或 READY。
 2. **两个 family 不缩减**：legacy/covfix 固定 7 个批准 feature、identity preprocess；autocycle/all-core 固定 20 个
    批准 feature、train-only `winsor_zscore_1_99_train_global_v1`。preprocess 只在 train 拟合并进入 immutable receipt；
    任何一个 family 缺失都不能形成完整 model set。既有两份 L2 SHA 只作为 historical source identity，不作为初始化、
@@ -661,9 +665,31 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
 9. **失败与停止语义**：输入/sector/preprocess/fit/monitor/likelihood/covariance/occupancy/repeat/selection/semantic 任一
    failed、blocked、insufficient 或 pending 均禁止 READY；使用最具体现有 reason code。无 eligible candidate 时 family
    保持 blocked，不扩大 seed、不切换 family、不改变 threshold、不回退旧 L2 model，也不触发人工运行时审批。
-10. **授权边界**：D4-03-B、D5-01-B与D6-01-B均已获用户精确确认。随后B3/L2 retrain源码、依赖安装、
-    实际 4192 fits、selection、model/READY write、PR merge、生产依赖与 runtime 激活分别执行和报告。本文批准不推导其中
-    任何一项已获授权或完成。
+10. **授权边界**：D4-03-B、D5-01-B与D6-01-B均已获用户精确确认。B3/L2 retrain源码和 Conda `AIstock` 依赖安装已分别完成；
+    用户随后曾授权实际 5184 fits、selection 与完整验收，但执行在第一个 fit 前被 BUG-868 fail-closed 阻断。BUG-868 修复合入、
+    formal grid恢复、model/READY write、PR merge与 runtime 激活继续分别执行和报告；先前执行授权不得绕过新的 frozen identity、
+    clean producer 与合入边界。
+
+##### BUG-868-A. 正式 frozen identity 与不可变 preflight 合同
+
+1. **业务语义不回退**：保留现行 `previous_basic_date == previous_trade_date`，禁止为匹配旧 hash 回退到
+   previous-available `daily_basic`、填补缺失日或改变 PIT/coverage 语义。当前 source/mapping 未变；重聚合后的 L1 aggregate
+   为 `33221` rows、invalid L1 sector-date 为 `2491`，direct L2 aggregate 为 `145805` rows、invalid L2 sector-date 为 `4067`。
+2. **唯一正式 identity**：正式 request 必须同时携带本节批准的 `c07177…` dataset、`9cdddd…` mapping 与 `d4a5cc…`
+   direct-L2 hash；三者任一漂移均在第一个 fit 前 fail closed，禁止由 operator、child process 或 selection 路径静默替换。
+3. **preflight 输出**：`hmm_risk_b3_formal_preflight_v1` 只从同一 read-only PIT source 计算当前三个 identity，并以 canonical
+   JSON 原子写入 immutable request candidate 与 preflight receipt；保存 source-template producer、当前 producer、数据库非秘密
+   identity、L1/L2 aggregate/panel/invalid counts、candidate hash 和 receipt hash。preflight 与 formal child 都必须先验证 producer
+   worktree clean；禁止用 dirty source 搭配 `rev-parse HEAD` 冒充 committed producer identity。目标路径存在但字节不同必须
+   collision failure。
+4. **无模型副作用**：preflight 必须固定记录 `fit_performed=false`、`selection_performed=false`、
+   `formal_acceptance_thresholds_applied=false`、`hard_semantic_authority_changed=false`、model/READY/database/runtime write/action
+   全部为 false；不得把 `candidate_ready` 解释为 model candidate、D4 acceptance、selection 或 READY。
+5. **正式 runner 仍独立复核**：preflight 产出的 request 不是绕过校验的 receipt。两个 fresh process 必须各自从 source 重算
+   dataset/mapping/direct-L2 hash，与 request 精确相等后才允许第一个 fit；两个 process 的 identity 和完整 payload 仍按 D5-02-B
+   bitwise contract 验证。preflight 与 runner 之间的任何 source/code 漂移均 fail closed并重新进入 BUG 流程。
+6. **执行边界**：BUG-868-A 合入前禁止恢复正式 grid；本 BUG 的源码、设计和定向测试完成不授权 5184 fits、selection、D6、
+   model/READY、数据库或 runtime。正式 grid 仅在本 BUG 合入且用户另行确认后恢复。
 
 D4-02-A 于 2026-07-25 获用户明确批准，正式 covariance acceptance 合同如下：
 
@@ -862,10 +888,9 @@ fit/convergence/likelihood/covariance/occupancy/selection/semantic evidence、co
 `READY` model set。D5-01-B固定每个family分别保存L1与L2 level-global selected identity；最终state-model-set identity必须
 包含四个selected level receipt/hash及其family配对关系。任一level不得替代、重写或推导另一level的selection/acceptance，
 也不得把既有L2 final parameters推导为数值验收通过。
-D7-01-A 已批准未来 B3 实现精确声明 `hmmlearn==0.3.3`；当前版本仅存在于诊断执行环境，尚未进入
-`requirements.txt`。当前文档 PR 的 backend dependency gate 为 `noop`；未来 B3 实现合入后，
-`production_backend_dependency_gate` 必须保持 `pending`，直至依赖安装获得独立授权并完成 import/version smoke。
-上述状态不是新增人工审批，而是现有依赖 gate 的准确记录。
+D7-01-A 已批准并已在仓库 `requirements.txt` 精确声明 `hmmlearn==0.3.3`。用户另行授权在 Conda `AIstock` 环境执行
+no-deps 安装，以保持既有 NumPy `2.4.0` 不变；import/version 与单线程 environment smoke 已通过。该依赖状态不推导
+formal grid、runtime activation 或服务重启已完成。上述分离不是新增人工审批，而是 source、environment 与 runtime 的准确状态。
 
 ### 4.4 InputManifest
 
@@ -1542,7 +1567,8 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-DIAG-02 | 是否在固定数值环境按批准结构运行两次完整只读结构诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | 992 fits、两次 canonical payload hash 相同；补齐 likelihood、covariance、month/run/transition/occupancy evidence，未执行正式 D4/D5-01/D6 |
 | C-008-B3-D4-01 | convergence/likelihood exact tolerance 与 warning/failure 语义 | `RESOLVED_USER_APPROVED_D4_01_A` | `hmm_risk_c008_b3_d4_01_a_v1`：monitor/history 独立完整性；non-terminal negative fail；terminal positive `<0.01`；terminal negative relative `>=-2e-5` 为持久化 warning、低于边界 fail；不得自动放宽或把 warning 静默成普通 success |
 | C-008-B3-D4-L2-AUDIT-01 | 既有 L2 131/131 是否具备可按 D4-01-A/D4-02-A 回读的 immutable training/numeric receipt | `VERIFIED_FAIL_CLOSED_LIKELIHOOD_INSUFFICIENT_COVARIANCE_FAILED` | 13/13 candidate snapshot 收敛为 legacy 9 + autocycle 4 两份 exact SHA；两者均缺完整 D4-01 history，262/262 entry 均有 post-fit covariance 修正。likelihood 保持 insufficient、covariance 为 failed；禁止 grandfather、补 metadata、复制 L1 evidence 或 READY |
-| C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_EXECUTION_PENDING` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、冻结 dataset/mapping/window、seeds 42..49、两 fresh process；2096 L2 fits/process、4192 L2 fits total。源码与边界测试已实现；实际 fit、selection、model/READY、依赖安装和 runtime 均未执行 |
+| C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_EXECUTION_BLOCKED_BUG868` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、重新冻结的 dataset/mapping/direct-L2、seeds 42..49、两 fresh process；2096 L2 fits/process、4192 L2 fits total。源码、边界测试与 Conda 依赖已完成；实际 fit 在启动前被 BUG-868 阻断，selection、model/READY 和 runtime 均未执行 |
+| BUG-868-A | 正式 B3 是否保留 exact previous-trading-date 语义并重新冻结与当前 source 一致的 L1/L2 identities | `RESOLVED_USER_APPROVED_REFREEZE_PREFLIGHT_IMPLEMENTED_MERGE_PENDING` | 保留 `previous_basic_date == previous_trade_date`；正式 identity 固定为 dataset `c07177…`、mapping `9cdddd…`、direct L2 `d4a5cc…`。新增只读 immutable preflight；旧 `fca206…` 仅为历史诊断 identity。BUG 合入并另行确认前不恢复 5184 fits |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
 | C-008-B3-D4-02 | covariance reference/bounds/floor/anomaly budget | `RESOLVED_USER_APPROVED_D4_02_A` | dynamic `L/U`、`τ_bound=0.005` 闭区间、tolerance 后 total/per-state/per-feature zero anomaly、M-step residual `<=0.02`、raw-only posterior 与禁止 clip/projection 已批准 |
@@ -1651,9 +1677,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 - 本设计 PR：`production_runtime_activation_gate=noop`。
 - `sector_data` identity DDL/DML：`noop`，生产表保持 fact-only，行业 mapping 动态解析。
 - 未来 schema implementation：DEV `applied_and_verified` 后，production DDL 仍为 `pending`，需要目标明确授权。
-- 未来 C-008-B3 implementation：当前环境存在 `hmmlearn==0.3.3`，但仓库 `requirements.txt` 未声明该依赖；实现 PR 必须
-  先提交并验证明确版本。合入后、运行时激活前 `production_backend_dependency_gate=pending`，直至获得独立安装授权并完成
-  import/version smoke；不得把当前文档 PR 的 `noop` 误报为未来实现也无需依赖处理。
+- C-008-B3 controlled execution dependency：仓库已声明 `hmmlearn==0.3.3`；用户已授权并在 Conda `AIstock` 环境完成
+  no-deps 安装与 import/version smoke。该环境固定为 CPython `3.12.12`、NumPy `2.4.0`（按用户要求禁止降级或改写）、
+  SciPy `1.16.3`、scikit-learn `1.8.0`、hmmlearn `0.3.3`、threadpoolctl `3.6.0`，正式执行时五个线程环境与实际
+  threadpool count 必须为 1。历史 DIAG 的 CPython `3.13.5`/NumPy `2.3.3` 只保留为 historical evidence，不冒充本次
+  formal environment。依赖安装不推导 grid、runtime activation 或服务重启已获授权。
 - 未来源码合入不等于 API/UI/worker 激活；首次 production manual worker run 单独授权。
 - Phase 2 scheduler：未批准、未实现、未启用。
 
@@ -1689,7 +1717,8 @@ L2 重训设计 A，并登记 DIAG-02/DIAG-03/DIAG-04 canonical evidence。C-008
 `SLICE0_SOURCE_IMPLEMENTED_VALIDATED_CONTROLLED_EXECUTION_PENDING`，F-012 保持 `DESIGN_READY_USER_APPROVED`，F-013 为
 `PENDING_UPSTREAM_MODEL_SET`。源码实现不使任何 model set READY。
 
-生产 `sector_data` 不执行 identity DDL/DML；当前设计修订未安装依赖、未启停服务、未运行 job、未写数据库，也未激活
-Phase 2 runtime。AUDIT-01与D3-D7全部设计决策以及 Slice 0 源码/边界测试已完成；下一步是在本 PR 经用户明确确认合入后，
-独立执行 production backend dependency gate，再以受控任务运行两个 fresh-process 的 L1/L2 grid。实际fit、selection、model/READY
-write、数据库或 runtime action 均未在本次源码开发中执行；任何合入、依赖安装和运行时动作仍分别授权和报告。
+生产 `sector_data` 不执行 identity DDL/DML；Conda `AIstock` 的批准依赖安装与 import/version smoke 已完成，但未启停服务、
+未运行 formal job、未写数据库，也未激活 Phase 2 runtime。AUDIT-01、D3-D7、Slice 0 源码/边界测试与 BUG-868-A 的
+frozen-identity/preflight 修复已完成；当前停止在 BUG-868-A 待 PR/合入验证边界。只有该修复合入且用户另行确认后，才以受控任务
+运行两个 fresh-process 的 L1/L2 grid（每 process 2592、总计 5184 fits）。实际fit、selection、D6、model/READY write、数据库或
+runtime action 均未在本次 BUG 修复中执行；合入、formal grid 和运行时动作继续分别授权和报告。

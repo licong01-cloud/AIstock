@@ -1,6 +1,9 @@
 {
-  "actual": "At producer commit 837bc304938a83b7f2e0baecfe28fe95f69754dd, the authorized formal C-008-B3 preflight reconstructs dataset_manifest_hash c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f, while the approved frozen contract requires fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366. The mapping manifest remains 9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159. The formal CLI therefore must fail before any of 5184 fits. Fix must preserve approved PIT/previous-trading-date semantics, identify whether source implementation or frozen contract is inconsistent, and must not silently replace the approved hash, select seeds, write model/READY, modify DB, or activate runtime.",
+  "actual": "Root cause confirmed: the historical fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366 dataset identity used previous-available daily_basic, while the reviewed source correctly requires previous_basic_date == previous_trade_date. Reverting source semantics would change approved PIT behavior. BUG-868-A therefore retains current business logic and re-freezes the formal request to dataset c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f, mapping 9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159, and direct L2 d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730. The previous runner had no immutable identity-only preflight and could identify dirty source only by rev-parse HEAD; both gaps are fixed before formal execution resumes.",
   "allowed_write_scope": [
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "scripts/hmm_risk/prepare_state_model_set.py",
     "tests/aistock_validation/bugs/20260725_BUG-868-hmm-b3-formal-grid-cannot-satisfy-approved-frozen-dataset-manifest.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-25T19:52:12.366715Z",
-  "description": "At producer commit 837bc304938a83b7f2e0baecfe28fe95f69754dd, the authorized formal C-008-B3 preflight reconstructs dataset_manifest_hash c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f, while the approved frozen contract requires fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366. The mapping manifest remains 9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159. The formal CLI therefore must fail before any of 5184 fits. Fix must preserve approved PIT/previous-trading-date semantics, identify whether source implementation or frozen contract is inconsistent, and must not silently replace the approved hash, select seeds, write model/READY, modify DB, or activate runtime.",
+  "description": "The formal C-008-B3 execution request was frozen to a historical dataset identity that is incompatible with the approved exact previous-trading-date stock-fact implementation. Preserve the reviewed PIT behavior, re-freeze all three formal identities, add an immutable read-only preflight, and reject dirty producer worktrees before any fit. Do not select seeds, apply D4/D5/D6 acceptance, write model/READY, modify DB, or activate runtime in this BUG.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -22,11 +25,18 @@
       "timestamp": "2026-07-25T19:52:12.366710Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726/b3_formal_preflight_candidate_receipt.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726/bug868_a_preflight_receipt.json"
+  ],
+  "expected": "The formal B3 workflow must expose an immutable preflight that derives the exact current producer dataset, mapping, and direct L2 stock-fact identities without fitting, selection, model/READY writes, database writes, or runtime actions. The user-approved BUG-868-A re-freeze must preserve exact previous-trading-date PIT semantics and bind the formal request to dataset c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f, mapping 9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159, and direct L2 d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730 before any fit can start.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +46,11 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ]
   },
   "first_seen_at": "2026-07-25T19:52:12.366715Z",
   "fix_branch": null,
@@ -52,7 +66,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run the formal B3 preflight on producer 837bc304938a83b7f2e0baecfe28fe95f69754dd and compare the reconstructed dataset manifest hash with the approved fca2069459ec730f13aa622ef4dd1631f98c43fc98e2ce0d9c6548815ade8366 identity.",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
