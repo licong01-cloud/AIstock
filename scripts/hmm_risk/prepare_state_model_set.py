@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import subprocess
@@ -61,6 +62,12 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
 
 
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
+B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
+B3_APPROVED_FROZEN_IDENTITIES = {
+    "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
+    "mapping_manifest_hash": "9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159",
+    "l2_stock_fact_manifest_hash": "d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730",
+}
 
 
 def _read_env_file(path: Path) -> None:
@@ -81,7 +88,7 @@ def _date(value: Any, field: str) -> date:
         raise StateModelSetError(f"{field} must be ISO YYYY-MM-DD") from exc
 
 
-def _load_request(path: Path) -> dict[str, Any]:
+def _load_request_template(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -93,11 +100,26 @@ def _load_request(path: Path) -> dict[str, Any]:
     families = value.get("families")
     if not isinstance(families, list) or len(families) != 2 or any(not isinstance(item, dict) for item in families):
         raise StateModelSetError("preparation request must contain exactly two family objects")
+    return value
+
+
+def _load_request(path: Path) -> dict[str, Any]:
+    value = _load_request_template(path)
     for field in ("dataset_manifest_hash", "mapping_manifest_hash", "l2_stock_fact_manifest_hash"):
         identity = str(value.get(field) or "")
         if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
             raise StateModelSetError(f"preparation request {field} must be a SHA-256 identity")
     return value
+
+
+def _require_approved_b3_identities(value: dict[str, Any]) -> None:
+    mismatches = []
+    for field, expected in B3_APPROVED_FROZEN_IDENTITIES.items():
+        actual = str(value.get(field) or "")
+        if actual != expected:
+            mismatches.append(f"{field} expected={expected} actual={actual or '<missing>'}")
+    if mismatches:
+        raise StateModelSetError("formal B3 frozen identity mismatch: " + "; ".join(mismatches))
 
 
 def _git_commit() -> str:
@@ -109,6 +131,20 @@ def _git_commit() -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def _formal_producer_commit() -> str:
+    producer_commit = _git_commit()
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if status.stdout.strip():
+        raise StateModelSetError("formal B3 producer worktree must be clean")
+    return producer_commit
 
 
 def _resolve_artifact(root: Path, relative_path: str) -> Path:
@@ -272,6 +308,71 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         "l2_stock_fact_manifest": l2_stock_fact_manifest,
         "dataset_manifest": dataset_manifest,
     }
+
+
+def _manifest_invalid_sector_date_count(manifest: dict[str, Any]) -> int:
+    for field in ("invalid_sector_date_count", "invalid_l1_date_count"):
+        if field in manifest:
+            return int(manifest[field])
+    raise StateModelSetError("stock-fact manifest lacks invalid sector-date count")
+
+
+def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Freeze current PIT identities without fitting, selecting, or writing model artifacts."""
+
+    producer_commit = _formal_producer_commit()
+    inputs = _load_l1_source_inputs(request_template, db_prefix=db_prefix)
+    dataset_hash = canonical_sha256(inputs["dataset_manifest"])
+    mapping_hash = canonical_sha256(inputs["mapping_manifest"])
+    l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
+    frozen_identities = {
+        "dataset_manifest_hash": dataset_hash,
+        "mapping_manifest_hash": mapping_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+    }
+    _require_approved_b3_identities(frozen_identities)
+    request_candidate = deepcopy(request_template)
+    request_candidate.update(
+        {
+            "producer_commit": producer_commit,
+            "dataset_manifest_hash": dataset_hash,
+            "mapping_manifest_hash": mapping_hash,
+            "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+        }
+    )
+    l1_stock_facts = inputs["dataset_manifest"]["stock_facts"]
+    l2_stock_facts = inputs["l2_stock_fact_manifest"]
+    body = {
+        "schema_version": B3_PREFLIGHT_SCHEMA,
+        "status": "candidate_ready",
+        "source_template_producer_commit": str(request_template.get("producer_commit") or ""),
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "approved_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
+        "approved_frozen_identities_match": True,
+        "dataset_manifest_hash": dataset_hash,
+        "mapping_manifest_hash": mapping_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+        "request_candidate": request_candidate,
+        "request_candidate_sha256": canonical_sha256(request_candidate),
+        "l1_sector_count": 31,
+        "l1_aggregate_row_count": int(l1_stock_facts["aggregate_row_count"]),
+        "l1_invalid_sector_date_count": _manifest_invalid_sector_date_count(l1_stock_facts),
+        "l1_panel_row_count": len(inputs["panel"]),
+        "l2_sector_count": 131,
+        "l2_aggregate_row_count": int(l2_stock_facts["aggregate_row_count"]),
+        "l2_invalid_sector_date_count": _manifest_invalid_sector_date_count(l2_stock_facts),
+        "l2_panel_row_count": len(inputs["l2_panel"]),
+        "fit_performed": False,
+        "selection_performed": False,
+        "formal_acceptance_thresholds_applied": False,
+        "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
@@ -748,7 +849,8 @@ def prepare_b3_single_pass(
 ) -> dict[str, Any]:
     """Run one complete train-only B3 pass; selection and D6 are parent-only."""
 
-    producer_commit = _git_commit()
+    producer_commit = _formal_producer_commit()
+    _require_approved_b3_identities(request)
     if str(request.get("producer_commit") or "") != producer_commit:
         raise StateModelSetError("B3 request producer_commit differs from current code")
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
@@ -992,8 +1094,16 @@ def parse_args() -> argparse.Namespace:
         help="Run approved C-008-B3 DIAG-04 scale-aware refits twice without selection/formal acceptance/model writes.",
     )
     diagnostic_group.add_argument(
+        "--b3-preflight-output",
+        help="Freeze current B3 PIT identities without fitting, selection, or model/READY writes.",
+    )
+    diagnostic_group.add_argument(
         "--b3-preparation-output",
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
+    )
+    parser.add_argument(
+        "--b3-request-candidate-output",
+        help="Immutable request candidate output; required only with --b3-preflight-output.",
     )
     parser.add_argument("--_c008-b3-diag02-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_c008-b3-diag04-child", action="store_true", help=argparse.SUPPRESS)
@@ -1006,7 +1116,46 @@ def main() -> int:
     args = parse_args()
     try:
         _read_env_file(Path(args.env_file).resolve())
-        request = _load_request(Path(args.request).resolve())
+        request_path = Path(args.request).resolve()
+        if args.b3_preflight_output:
+            if not args.b3_request_candidate_output:
+                raise StateModelSetError("--b3-request-candidate-output is required with --b3-preflight-output")
+            request = _load_request_template(request_path)
+        else:
+            if args.b3_request_candidate_output:
+                raise StateModelSetError("--b3-request-candidate-output is only valid with --b3-preflight-output")
+            request = _load_request(request_path)
+        if args.b3_preflight_output:
+            report = prepare_b3_preflight_candidate(request, db_prefix=str(args.db_env_prefix))
+            request_candidate_path = Path(args.b3_request_candidate_output).resolve()
+            request_candidate_sha256 = _write_diagnostic_report(
+                request_candidate_path,
+                report["request_candidate"],
+            )
+            if request_candidate_sha256 != report["request_candidate_sha256"]:
+                raise StateModelSetError("B3 preflight request candidate hash mismatch")
+            report_path = Path(args.b3_preflight_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_b3_formal_preflight_cli_receipt_v1",
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "request_candidate_path": str(request_candidate_path),
+                "request_candidate_sha256": request_candidate_sha256,
+                "dataset_manifest_hash": report["dataset_manifest_hash"],
+                "mapping_manifest_hash": report["mapping_manifest_hash"],
+                "l2_stock_fact_manifest_hash": report["l2_stock_fact_manifest_hash"],
+                "fit_performed": False,
+                "selection_performed": False,
+                "formal_acceptance_thresholds_applied": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
         if args._c008_b3_diag02_child:
             report = diagnose_c008_b3_diag02(request, db_prefix=str(args.db_env_prefix))
             sys.stdout.buffer.write(canonical_json_bytes(report))
@@ -1119,7 +1268,8 @@ def main() -> int:
                 receipt.pop("hard_semantic_authority_changed")
         else:
             raise StateModelSetError(
-                "an explicit diagnostic mode or --b3-preparation-output is required; legacy preparation is disabled"
+                "an explicit diagnostic/preflight mode or --b3-preparation-output is required; "
+                "legacy preparation is disabled"
             )
     except Exception as exc:
         error = {
