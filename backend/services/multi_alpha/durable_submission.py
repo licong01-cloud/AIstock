@@ -510,6 +510,7 @@ def _replace_run_async(request: CombineBacktestRequest, run_async: bool) -> Comb
         walk_forward=request.walk_forward,
         rank_fusion=request.rank_fusion,
         backtest_config=request.backtest_config,
+        prediction_task_selection=request.prediction_task_selection,
         baseline_leg_id=request.baseline_leg_id,
         topk=request.topk,
         min_date_coverage=request.min_date_coverage,

@@ -289,6 +289,27 @@ def test_submission_freezes_explicit_prediction_task_selection_in_request_identi
     }
 
 
+def test_run_async_override_preserves_explicit_prediction_task_selection() -> None:
+    repository = FakeDurableRepository()
+    service = _service(repository)
+    payload = _payload()
+    payload["run_async"] = False
+    payload["wait_timeout_seconds"] = 1
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit(payload, run_async_override=True)
+    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
+
+    assert result["status"] == "queued"
+    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+
 def test_same_payload_at_same_clock_creates_distinct_run_records() -> None:
     repository = FakeDurableRepository()
     service = _service(repository)
