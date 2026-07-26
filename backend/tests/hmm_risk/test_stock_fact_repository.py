@@ -58,6 +58,8 @@ class _Cursor:
             return iter(self.connection.mapping_rows)
         if self.name in {"hmm_risk_stock_fact_source", "hmm_risk_stock_fact_source_l2"}:
             return iter(self.connection.stock_rows)
+        if self.name in {"hmm_risk_missing_price_source", "hmm_risk_missing_price_source_l2"}:
+            return iter(self.connection.missing_price_rows)
         return iter(())
 
     def close(self) -> None:
@@ -70,6 +72,7 @@ class _Connection:
         self.duplicates = []
         self.mapping_rows = []
         self.stock_rows = []
+        self.missing_price_rows = []
 
     def cursor(self, name=None):
         return _Cursor(self, name=name)
@@ -211,6 +214,70 @@ def test_reader_requires_circ_mv_from_exact_previous_trading_day() -> None:
     ]
     row = next(subject.PostgresStockFactReader(connection, _spec()).iter_stock_fact_rows())
     assert row["prev_circ_mv_cny"] is None
+
+
+def test_reader_accepts_exact_previous_day_circ_mv_before_current_pit_entry() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2024, 1, 2),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2024, 1, 2),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2024, 1, 1),
+            10_000,
+            date(2023, 12, 25),
+            9_000,
+            date(2023, 12, 18),
+            8_000,
+            100.0,
+            date(2024, 1, 1),
+            date(2024, 1, 1),
+            80.0,
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            11.0,
+        )
+    ]
+    connection.missing_price_rows = [
+        (
+            date(2024, 1, 2),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            1,
+            date(2024, 1, 2),
+            100.0,
+            date(2024, 1, 1),
+            date(2024, 1, 1),
+            80.0,
+        )
+    ]
+    reader = subject.PostgresStockFactReader(connection, _spec())
+
+    stock_row = next(reader.iter_stock_fact_rows())
+    missing_price_row = next(reader.iter_missing_price_rows())
+
+    assert stock_row["prev_circ_mv_cny"] == 800_000.0
+    assert stock_row["prev_close_yuan"] is None
+    assert stock_row["prev_close_5_yuan"] is None
+    assert stock_row["prev_close_10_yuan"] is None
+    assert missing_price_row["prev_circ_mv_cny"] == 800_000.0
 
 
 class _MappingReader:

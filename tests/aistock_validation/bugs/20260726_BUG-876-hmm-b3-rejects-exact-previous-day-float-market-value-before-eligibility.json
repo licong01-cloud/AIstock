@@ -23,10 +23,28 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260726-20bfa9ab6103",
       "timestamp": "2026-07-26T16:32:50.528518Z"
+    },
+    {
+      "action": "fix_implemented",
+      "actor": "codex",
+      "note": "Removed the eligibility-start restriction from exact previous-trading-day circ_mv in both stock-fact reader paths while retaining exact-date equality and all price-history PIT boundaries.",
+      "timestamp": "2026-07-26T17:07:06.956624Z"
+    },
+    {
+      "action": "validation_completed",
+      "actor": "codex",
+      "note": "RED/GREEN fix-point, hmm_risk_backend, l0, validation_module_registry_l0, scope/diff checks, and read-only database lineage validation completed without database or runtime writes.",
+      "timestamp": "2026-07-26T17:07:06.956624Z"
     }
   ],
   "evidence_uris": [
-    "receipt 2d59f04898a97755505de8f8d1fc0af481ee531751b76c65f1f56474ade862ff"
+    "receipt 2d59f04898a97755505de8f8d1fc0af481ee531751b76c65f1f56474ade862ff",
+    "RED: test_reader_accepts_exact_previous_day_circ_mv_before_current_pit_entry failed with prev_circ_mv_cny=None",
+    "GREEN: backend/tests/hmm_risk/test_stock_fact_repository.py -> 6 passed",
+    "python -m nox -s hmm_risk_backend -> 76 passed; total coverage 74.27%",
+    "python -m nox -s l0 -> blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped",
+    "read-only DB train lineage: 601 dates; false missing removed=955; exact-date daily_basic gaps remaining=466; conflicting duplicate groups=0; current missing-price rows=0"
   ],
   "expected": "For a symbol eligible on t, exact calendar prev(t) circ_mv is accepted as the causal weight even when prev(t) predates the current eligible span; previous_basic_date must still equal previous_trade_date. Price return history remains forbidden before eligible_start.",
   "file_scope_contract": {
@@ -91,12 +109,12 @@
     ]
   },
   "first_seen_at": "2026-07-26T16:32:50.528522Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-876-hmm-b3-rejects-exact-previous-day-float-market-v-20260726",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2769,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2769",
-  "last_seen_at": "2026-07-26T16:32:50.528522Z",
+  "last_seen_at": "2026-07-26T17:07:06.956624Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -166,7 +184,7 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "verification_run_id": null,
+  "verification_run_id": "BUG-876-local-20260726T170706Z",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,

@@ -341,9 +341,7 @@ class PostgresStockFactReader:
                 previous_close = row[15] if row[14] is not None and row[14] >= eligible_start else None
                 previous_close_5 = row[17] if row[16] is not None and row[16] >= eligible_start else None
                 previous_close_10 = row[19] if row[18] is not None and row[18] >= eligible_start else None
-                previous_circ_mv = (
-                    row[23] if row[21] is not None and row[21] == row[22] and row[21] >= eligible_start else None
-                )
+                previous_circ_mv = row[23] if row[21] is not None and row[21] == row[22] else None
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],
@@ -471,7 +469,7 @@ class PostgresStockFactReader:
                     raise StateModelSetError(
                         f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
                     )
-                previous_circ_mv = row[11] if row[9] is not None and row[9] == row[10] and row[9] >= row[7] else None
+                previous_circ_mv = row[11] if row[9] is not None and row[9] == row[10] else None
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],

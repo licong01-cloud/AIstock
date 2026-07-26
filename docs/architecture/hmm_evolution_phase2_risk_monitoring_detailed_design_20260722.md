@@ -250,6 +250,12 @@ symbol，不进入当日 observed denominator；缺 `suspend_d` 证据的无 kli
 `w(i,t)=circ_mv(i,prev(t)) / sum(circ_mv(j,prev(t)))`，其中 `prev(t)` 是 calendar 中 `t` 的前一交易日。
 当日市值不参与当日权重；权重只使用前一完整交易日市值，且不使用未来数据。每个 L1/date 先计算以下原始量：
 
+BUG-876 明确该公式的 PIT 边界：`S(g,t)` 的成员资格由 `t` 当日的股票池与行业 PIT identity 决定；一旦股票在 `t`
+属于 `S(g,t)`，其权重只要求 `daily_basic.previous_basic_date == calendar.prev(t)`，不得再要求 `prev(t) >= eligible_start`。
+因此刚在 `t` 进入当前 eligible span 的股票可以使用精确 `prev(t)` 已发布的 `circ_mv`，这仍是因果的前一交易日事实。
+该规则不允许 previous-available fallback，也不放宽价格历史边界：`prev_observed_i`、5D/10D close 仍不得跨越该 symbol
+的 listing/PIT entry。精确 `prev(t)` 的 `daily_basic` 缺失时必须继续记录为 missing evidence 并 fail closed。
+
 - `l1_return(t) = sum_i w(i,t) * (close(i,t)/close(i,prev_observed_i)-1)`；`prev_observed_i` 必须 `< t`，
   不得跨越该 symbol 的 listing/PIT entry 之前取值；
 - `l1_volume(t) = sum_i volume_shares(i,t)`，`l1_amount(t) = sum_i amount_cny(i,t)`，
@@ -692,6 +698,23 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    bitwise contract 验证。preflight 与 runner 之间的任何 source/code 漂移均 fail closed并重新进入 BUG 流程。
 6. **执行边界**：BUG-868-A 合入前禁止恢复正式 grid；本 BUG 的源码、设计和定向测试完成不授权 5184 fits、selection、D6、
    model/READY、数据库或 runtime。正式 grid 仅在本 BUG 合入且用户另行确认后恢复。
+
+##### BUG-876. 精确前一交易日流通市值与当前 eligible span 的边界
+
+1. **诊断事实**：C-008-B3 INPUT-COVERAGE-DIAG-01 在冻结 dataset `c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f`、
+   mapping `9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159`、direct-L2
+   `d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730` 上生成只读 receipt
+   `2d59f04898a97755505de8f8d1fc0af481ee531751b76c65f1f56474ade862ff`。原 reader 把 955 个 symbol-date
+   归为 `previous_basic_before_eligible_start`，但 SQL lineage 证明这些行均存在精确 `prev(t)` 的 `circ_mv`；另有 466 行是
+   `previous_basic_date != previous_trade_date` 的真实 exact-date 缺口，两类不得混合。
+2. **修复合同**：`iter_stock_fact_rows` 与 `iter_missing_price_rows` 对 `prev_circ_mv_cny` 只执行 exact-date equality；不得对其应用
+   `eligible_start` 下界。previous close、5D/10D close 继续执行原 listing/PIT-entry 边界，不得因本 BUG 放宽。
+3. **失败语义**：exact `prev(t)` 的 `daily_basic` 缺失、非有限、非正或重复冲突仍保持具体 missing/invalid evidence；不得使用更早
+   available row、当日 `circ_mv`、0、neutral 或其他股票替代。该修复不改变 90% coverage、120/30 行、7/20 维 feature、
+   hard semantic authority、D4/D5/D6 或两-family completeness。
+4. **数据边界**：955 行是 reader 误拒绝并由源码修复消除，不授权数据库写入。剩余 466 行 exact-date `daily_basic` 缺口、
+   `689009.SH` 训练窗口内 moneyflow 仅 104/601 日等真实源数据缺口必须进入独立数据 BUG、DEV 设计与验证；未经明确授权不得执行
+   production DML。
 
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 
@@ -1600,6 +1623,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D4-L2-AUDIT-01 | 既有 L2 131/131 是否具备可按 D4-01-A/D4-02-A 回读的 immutable training/numeric receipt | `VERIFIED_FAIL_CLOSED_LIKELIHOOD_INSUFFICIENT_COVARIANCE_FAILED` | 13/13 candidate snapshot 收敛为 legacy 9 + autocycle 4 两份 exact SHA；两者均缺完整 D4-01 history，262/262 entry 均有 post-fit covariance 修正。likelihood 保持 insufficient、covariance 为 failed；禁止 grandfather、补 metadata、复制 L1 evidence 或 READY |
 | C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_EXECUTION_BLOCKED_BUG868` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、重新冻结的 dataset/mapping/direct-L2、seeds 42..49、两 fresh process；2096 L2 fits/process、4192 L2 fits total。源码、边界测试与 Conda 依赖已完成；实际 fit 在启动前被 BUG-868 阻断，selection、model/READY 和 runtime 均未执行 |
 | BUG-868-A | 正式 B3 是否保留 exact previous-trading-date 语义并重新冻结与当前 source 一致的 L1/L2 identities | `RESOLVED_USER_APPROVED_REFREEZE_PREFLIGHT_MERGED` | 保留 `previous_basic_date == previous_trade_date`；正式 identity 固定为 dataset `c07177…`、mapping `9cdddd…`、direct L2 `d4a5cc…`。source PR #2748 merge `44bc9e8a…`、close-sync PR #2752 merge `1ad5ff62…`；旧 `fca206…` 仅为历史诊断 identity |
+| BUG-876 | exact `prev(t)` 流通市值是否还应受当前 `eligible_start` 下界限制 | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | 不应；当日 membership 与前一交易日因果权重分离。两条 reader 路径只保留 `previous_basic_date == previous_trade_date`，价格历史 PIT 边界不变；955 个 false-missing 由源码修复，真实数据缺口另行登记，未执行 DML |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
