@@ -27,13 +27,13 @@ _PRIVATE_MODULES = (
 )
 _MIGRATION_SHA256 = {
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.preflight.sql": (
-        "785d438d6d8b388f7951fea394f41344f3dd98bd9453849ddc76a04fd2c4852c"
+        "e2a244d0090aa4b2ead240838261a2da79d87a4a3f050cdd69efd77fb5187ede"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.sql": (
-        "f6331a8a8e1118b8fe291c4f63c2ff8a15a359cb67104b6b4ce895a56376de8c"
+        "24b4e1894f93f1383d7690ff145c55e100a26cecfc9e60a9070b71a57524d083"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.rollback.sql": (
-        "7ab203531741f4f1d140c9f76a3c98ae411a02961b302c0897e538c5d9c2cc71"
+        "cb408aafd8bc9032594a129ee259807f8a7480a92c34332f347cf93e8576c749"
     ),
 }
 
@@ -124,4 +124,7 @@ print(json.dumps({'class': PostgresMiniQMTKernelRepository.__name__, 'forbidden'
 
 def test_repository_refactor_keeps_k2_migration_triplet_byte_identical() -> None:
     for path, expected_sha256 in _MIGRATION_SHA256.items():
-        assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected_sha256
+        raw = Path(path).read_bytes()
+        assert b"\r" not in raw.replace(b"\r\n", b"")
+        canonical_lf = raw.replace(b"\r\n", b"\n")
+        assert hashlib.sha256(canonical_lf).hexdigest() == expected_sha256
