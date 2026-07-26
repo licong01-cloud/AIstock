@@ -31,6 +31,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_advisory_historical_range_backend": "advisory_historical_range_backend",
     "nox_qe_data_contract_backend": "qe_data_contract_backend",
     "nox_qe_long_trend_phase2_backend": "qe_long_trend_phase2_backend",
+    "nox_qe_sector_risk_overlay_backend": "qe_sector_risk_overlay_backend",
     "nox_hmm_evolution_backend": "hmm_evolution_backend",
     "nox_hmm_risk_backend": "hmm_risk_backend",
     "nox_qe_archive_backend": "qe_archive_backend",
