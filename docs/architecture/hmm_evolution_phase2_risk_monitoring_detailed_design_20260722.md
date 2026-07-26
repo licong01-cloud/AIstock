@@ -716,7 +716,11 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    `hmm_risk_b3_child_failure_receipt_v1`，至少保存process identity、returncode、typed error、stdout/stderr bytes+hash及所有副作用false
    标志；parent错误必须引用该receipt path，不能只返回不可诊断的stderr hash。
 7. **当前状态**：formal grid=`BLOCKED_TRAIN_INPUT_COVERAGE`，实际HMM fits=`0`；fresh_process_2、D5、D6、model/READY均未执行。
-   本BUG只修复fail-closed位置和evidence completeness，不擅自选择数据修复或模型语义变更方向。
+   BUG-870 source commit `0660262ac47dcdd685682dcc2ab46732dc71b926f` 的真实 preflight receipt canonical SHA-256 为
+   `10d503b49af4e394a960596a592b58e014e399a22e5fe4907e466a0286084b9d`：legacy L1 31/31有效；legacy L2有1个sector不足，
+   最低96行；autocycle L1 31个sector全部不足，范围2至10行；autocycle L2 131个sector全部不足，范围0至5行。
+   request candidate未生成，fit/selection/model/READY/database/runtime flags全为false。本BUG只修复fail-closed位置和evidence
+   completeness，不擅自选择数据修复或模型语义变更方向。
 
 D4-02-A 于 2026-07-25 获用户明确批准，正式 covariance acceptance 合同如下：
 

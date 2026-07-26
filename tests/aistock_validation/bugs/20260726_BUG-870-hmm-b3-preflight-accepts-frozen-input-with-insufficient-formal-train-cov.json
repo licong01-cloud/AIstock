@@ -28,7 +28,8 @@
     }
   ],
   "evidence_uris": [
-    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_1ad5ff62/formal_preflight.json"
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_1ad5ff62/formal_preflight.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_bug870_0660262a/formal_preflight.json"
   ],
   "expected": "B3 preflight must audit complete train-only feature coverage for both approved families and both direct levels before emitting a formal request. Any sector below 120 rows must produce a complete immutable blocked receipt and no request candidate or HMM fit. Every emitted formal request must bind the coverage contract version and receipt hash, and every child must recompute and compare that receipt before its first fit so a stale candidate fails closed. If a formal child later fails, the parent must persist bounded typed error evidence rather than return only stderr_sha256.",
   "file_scope_contract": {
