@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 from typing import Any
 
 from .kernel_delivery import KernelTransitionWriteBundleV1
@@ -19,6 +20,7 @@ from .plugin_contracts import (
     BrokerCommandV2,
     BrokerCommandTypeV2,
     CommandChildMappingStatusV1,
+    ConsumedLineageTypeV1,
     ConsumedLineageRefV1,
     DeliveryStatusV1,
     ExecutionAlgoInstancePersistenceV2,
@@ -27,6 +29,8 @@ from .plugin_contracts import (
     ExecutionAlgoTimerScheduleV1,
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
+    EventTypeV2,
+    KernelProjectionTypeV1,
     KernelErrorEvidenceV1,
     OrderTypeV1,
     RuntimeEventEnvelopeV2,
@@ -36,6 +40,7 @@ from .plugin_contracts import (
     TimerMutationV1,
     canonical_utc_datetime_v1,
     transaction_commit_identity_v1,
+    safe_exception_summary_v1,
 )
 
 
@@ -76,6 +81,67 @@ def _pending_outbox(
         updated_at_utc=logical_time_utc,
         closed_at_utc=None,
     )
+
+
+def _terminalize_reserved_mapping_v1(
+    *, previous: ExecutionCommandChildMappingV1, logical_time_utc: Any
+) -> ExecutionCommandChildMappingV1:
+    payload = previous.model_dump(mode="python")
+    payload.update(
+        mapping_status=CommandChildMappingStatusV1.TERMINAL,
+        mapping_version=previous.mapping_version + 1,
+        updated_at_utc=canonical_utc_datetime_v1(logical_time_utc, field_name="updated_at_utc"),
+    )
+    receipt_payload = previous.canonical_payload_v1(exclude={"mapping_receipt_sha256"})
+    receipt_payload.update(
+        mapping_status=CommandChildMappingStatusV1.TERMINAL.value,
+        mapping_version=previous.mapping_version + 1,
+        updated_at_utc=payload["updated_at_utc"],
+    )
+    payload["mapping_receipt_sha256"] = hash_hex_v1(
+        "miniqmt_command_child_mapping_receipt_v1",
+        receipt_payload,
+    )
+    successor = ExecutionCommandChildMappingV1.model_validate(payload)
+    successor.validate_successor_v1(previous)
+    return successor
+
+
+def _terminalize_pre_call_outbox_v1(
+    *,
+    previous: BrokerCommandOutboxV1,
+    error_evidence: KernelErrorEvidenceV1,
+    logical_time_utc: Any,
+) -> BrokerCommandOutboxV1:
+    command = BrokerCommandV2.model_validate_json(
+        json.dumps(thaw_json_v1(previous.payload_json), sort_keys=True, separators=(",", ":"))
+    )
+    successor = BrokerCommandOutboxV1.create(
+        command=command,
+        mapping_id=previous.mapping_id,
+        status=BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+        attempt_count=previous.attempt_count,
+        lease_owner=None,
+        lease_epoch=previous.lease_epoch,
+        lease_fence_token=None,
+        lease_expires_at=None,
+        dispatch_attempt_id=previous.dispatch_attempt_id,
+        next_attempt_at_utc=None,
+        broker_called=False,
+        broker_order_id=None,
+        ack_receipt_json=None,
+        ack_receipt_sha256=None,
+        non_acceptance_receipt=None,
+        unknown_outcome_receipt=None,
+        reconcile_receipt=None,
+        last_error_json=error_evidence.model_dump(mode="json"),
+        row_version=previous.row_version + 1,
+        created_at_utc=previous.created_at_utc,
+        updated_at_utc=logical_time_utc,
+        closed_at_utc=logical_time_utc,
+    )
+    successor.validate_successor_v1(previous)
+    return successor
 
 
 def _materialize_commands(
@@ -217,6 +283,100 @@ def _terminal_status(
     return status
 
 
+def _validate_projection_lineage_v1(
+    *,
+    event: RuntimeEventEnvelopeV2,
+    projection_set: ExecutionProjectionSetV1,
+    consumed_lineage_refs: Sequence[ConsumedLineageRefV1],
+    has_broker_commands: bool,
+) -> None:
+    lineages = tuple(consumed_lineage_refs)
+    if any(not isinstance(item, ConsumedLineageRefV1) for item in lineages):
+        raise TypeError("consumed_lineage_refs must contain only ConsumedLineageRefV1")
+    identities = tuple((item.lineage_type, item.identity) for item in lineages)
+    if len(identities) != len(set(identities)):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LINEAGE_DUPLICATE",
+            "transition consumed lineage contains duplicate authority identity",
+            context={"event_id": event.event_id},
+        )
+    event_lineage = next((item for item in lineages if item.lineage_type is ConsumedLineageTypeV1.EVENT), None)
+    if (
+        event_lineage is None
+        or event_lineage.identity != event.event_id
+        or event_lineage.payload_sha256 != event.payload_sha256
+    ):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_EVENT_LINEAGE_INVALID",
+            "transition must consume the exact durable runtime event envelope",
+            context={"event_id": event.event_id, "payload_sha256": event.payload_sha256},
+        )
+    refs = {item.projection_type: item for item in projection_set.ordered_projection_refs}
+    if event.event_type is EventTypeV2.TICK:
+        source_identity = thaw_json_v1(event.source_identity)
+        market_data_id = source_identity.get("market_data_id")
+        market_ref = refs.get(KernelProjectionTypeV1.MARKET_DATA)
+        market_lineage = next(
+            (item for item in lineages if item.lineage_type is ConsumedLineageTypeV1.MARKET_DATA),
+            None,
+        )
+        if (
+            type(market_data_id) is not str
+            or market_ref is None
+            or market_lineage is None
+            or market_ref.projection_id != market_data_id
+            or market_lineage.identity != market_data_id
+            or market_lineage.payload_sha256 != market_ref.payload_sha256
+            or market_ref.source_event_id != event.event_id
+        ):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_MARKET_DATA_LINEAGE_INVALID",
+                "TICK transition must close to exact market-data projection and lineage",
+                context={"event_id": event.event_id, "market_data_id": market_data_id},
+            )
+    if has_broker_commands:
+        required = {
+            KernelProjectionTypeV1.ROUTE_COMPATIBILITY: (
+                "plugin_route_compatibility_receipt_v1",
+                "mqroutecompat_",
+            ),
+            KernelProjectionTypeV1.OMS_PREFLIGHT: (
+                "miniqmt_oms_preflight_projection_receipt_v1",
+                "mqomspreflight_",
+            ),
+            KernelProjectionTypeV1.RISK_DECISION: (
+                "miniqmt_risk_decision_receipt_v1",
+                "mqriskdecision_",
+            ),
+            KernelProjectionTypeV1.KILL_SWITCH_STATE: (
+                "miniqmt_kill_switch_state_v1",
+                "mqkillswitch_",
+            ),
+        }
+        missing = tuple(sorted(item.value for item in set(required) - set(refs)))
+        if missing:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_COMMAND_AUTHORITY_MISSING",
+                "broker command lacks exact route, OMS, risk or kill-switch projection authority",
+                context={"event_id": event.event_id, "missing_projection_types": missing},
+            )
+        invalid = tuple(
+            sorted(
+                projection_type.value
+                for projection_type, (version, identity_prefix) in required.items()
+                if refs[projection_type].projection_version != version
+                or not refs[projection_type].projection_id.startswith(identity_prefix)
+                or refs[projection_type].source_event_id != event.event_id
+            )
+        )
+        if invalid:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_COMMAND_AUTHORITY_INVALID",
+                "broker command projection authority has invalid schema, identity or event owner",
+                context={"event_id": event.event_id, "invalid_projection_types": invalid},
+            )
+
+
 def materialize_applied_transition_v1(
     *,
     event: RuntimeEventEnvelopeV2,
@@ -253,6 +413,12 @@ def materialize_applied_transition_v1(
             "event, delivery, state and projection owners do not close",
             context={"event_id": event.event_id, "delivery_id": predecessor_delivery.delivery_id},
         )
+    _validate_projection_lineage_v1(
+        event=event,
+        projection_set=projection_set,
+        consumed_lineage_refs=consumed_lineage_refs,
+        has_broker_commands=bool(transition.broker_commands),
+    )
     provisional = AlgoTransitionReceiptV1.create(
         delivery_id=predecessor_delivery.delivery_id,
         event_id=event.event_id,
@@ -454,8 +620,15 @@ def materialize_applied_transition_v1(
     )
     receipt = AlgoTransitionReceiptV1.create(
         **provisional.canonical_payload_v1(
-            exclude={"schema_version", "transition_id", "transaction_commit_identity", "receipt_sha256"}
+            exclude={
+                "schema_version",
+                "transition_id",
+                "ordered_consumed_lineage_refs",
+                "transaction_commit_identity",
+                "receipt_sha256",
+            }
         ),
+        ordered_consumed_lineage_refs=provisional.ordered_consumed_lineage_refs,
         transaction_commit_identity=tx_identity,
     )
     delivery_payload = predecessor_delivery.model_dump(mode="python")
@@ -510,6 +683,7 @@ def materialize_failure_transition_v1(
     failure_context: dict[str, Any],
     projection_set: ExecutionProjectionSetV1 | None = None,
     active_mappings: Sequence[ExecutionCommandChildMappingV1],
+    active_command_outboxes: Sequence[BrokerCommandOutboxV1] = (),
     active_timer_schedules: Sequence[ExecutionAlgoTimerScheduleV1],
     logical_time_utc: Any,
     initialization: bool,
@@ -524,6 +698,27 @@ def materialize_failure_transition_v1(
             context={"algo_instance_id": predecessor_delivery.algo_instance_id},
         )
     transition_sequence = 1 if previous_algo is None else previous_algo.transition_sequence + 1
+    exception_summary = safe_exception_summary_v1(exception)
+    evidence_context = {**failure_context}
+    if "renderer_error_type" in exception_summary:
+        evidence_context["renderer_error_type"] = exception_summary["renderer_error_type"]
+    error_evidence = KernelErrorEvidenceV1.create(
+        stage="ALGO_INITIALIZATION" if initialization else "ALGO_DELIVERY_APPLY",
+        stable_reason_code=stable_reason_code,
+        exception=exception,
+        message=exception_summary["exception_message"],
+        retryable=False,
+        terminal=True,
+        broker_called=False,
+        primary_context={
+            "runtime_id": event.runtime_id,
+            "algo_instance_id": predecessor_delivery.algo_instance_id,
+            "event_id": event.event_id,
+            "delivery_id": predecessor_delivery.delivery_id,
+            **evidence_context,
+        },
+        secondary_errors=[],
+    )
     provisional_failure = AlgoFailureReceiptV1.create(
         delivery_id=predecessor_delivery.delivery_id,
         event_id=event.event_id,
@@ -534,9 +729,9 @@ def materialize_failure_transition_v1(
         plugin_manifest_sha256=plugin_manifest_sha256,
         transition_sequence=transition_sequence,
         stable_reason_code=stable_reason_code,
-        exception_type=type(exception).__name__,
-        message=str(exception) or type(exception).__name__,
-        context=failure_context,
+        exception_type=exception_summary["exception_type"],
+        message=exception_summary["exception_message"],
+        context=evidence_context,
         last_good_state_sha256_or_ABSENT_INITIAL_STATE=(
             "ABSENT_INITIAL_STATE" if previous_algo is None else previous_algo.state_sha256
         ),
@@ -551,8 +746,46 @@ def materialize_failure_transition_v1(
     )
     cancel_commands: list[BrokerCommandV2] = []
     outboxes: list[BrokerCommandOutboxV1] = []
+    updated_mappings: list[ExecutionCommandChildMappingV1] = []
+    updated_outboxes: list[BrokerCommandOutboxV1] = []
+    outbox_by_mapping = {item.mapping_id: item for item in active_command_outboxes}
+    if len(outbox_by_mapping) != len(tuple(active_command_outboxes)):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_FAILURE_OUTBOX_DUPLICATE",
+            "failure materialization received duplicate active command outbox ownership",
+            context={"algo_instance_id": predecessor_delivery.algo_instance_id},
+        )
     any_unknown = False
     for mapping in ordered_mappings:
+        submit_outbox = outbox_by_mapping.get(mapping.mapping_id)
+        if mapping.mapping_status is CommandChildMappingStatusV1.RESERVED:
+            if submit_outbox is None or submit_outbox.command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT:
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_FAILURE_SUBMIT_OUTBOX_MISSING",
+                    "RESERVED child has no exact durable SUBMIT outbox",
+                    context={"mapping_id": mapping.mapping_id},
+                )
+            if submit_outbox.status not in {
+                BrokerCommandOutboxStatusV1.PENDING,
+                BrokerCommandOutboxStatusV1.CLAIMED,
+                BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+            }:
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_FAILURE_SUBMIT_OUTBOX_STATE_CONFLICT",
+                    "RESERVED child is paired with a post-dispatch SUBMIT outbox",
+                    context={"mapping_id": mapping.mapping_id, "outbox_status": submit_outbox.status.value},
+                )
+            updated_mappings.append(
+                _terminalize_reserved_mapping_v1(previous=mapping, logical_time_utc=logical_time_utc)
+            )
+            updated_outboxes.append(
+                _terminalize_pre_call_outbox_v1(
+                    previous=submit_outbox,
+                    error_evidence=error_evidence,
+                    logical_time_utc=logical_time_utc,
+                )
+            )
+            continue
         if mapping.broker_order_id is None:
             any_unknown = True
             continue
@@ -600,30 +833,13 @@ def materialize_failure_transition_v1(
         successor = _cancel_timer_schedule(previous=schedule, logical_time_utc=logical_time_utc)
         timer_mutations.append(mutation)
         cancelled_schedules.append(successor)
-    active_child_count = len(ordered_mappings)
+    active_child_count = len(ordered_mappings) - len(updated_mappings)
     closure = (
         ActiveChildClosureStatusV1.CLEAN
         if active_child_count == 0
         else ActiveChildClosureStatusV1.OUTCOME_UNKNOWN
         if any_unknown
         else ActiveChildClosureStatusV1.CANCEL_PENDING
-    )
-    error_evidence = KernelErrorEvidenceV1.create(
-        stage="ALGO_INITIALIZATION" if initialization else "ALGO_DELIVERY_APPLY",
-        stable_reason_code=stable_reason_code,
-        exception=exception,
-        message=str(exception) or type(exception).__name__,
-        retryable=False,
-        terminal=True,
-        broker_called=False,
-        primary_context={
-            "runtime_id": event.runtime_id,
-            "algo_instance_id": predecessor_delivery.algo_instance_id,
-            "event_id": event.event_id,
-            "delivery_id": predecessor_delivery.delivery_id,
-            **failure_context,
-        },
-        secondary_errors=[],
     )
     provisional_failure = AlgoFailureReceiptV1.create(
         **provisional_failure.canonical_payload_v1(
@@ -638,7 +854,7 @@ def materialize_failure_transition_v1(
                 "failure_receipt_sha256",
             }
         ),
-        context=failure_context,
+        context=evidence_context,
         ordered_cancel_command_ids=tuple(item.command_id for item in cancel_commands),
         active_child_closure_status=closure.value,
         transaction_commit_identity="mqtx_pending_failure",
@@ -648,11 +864,15 @@ def materialize_failure_transition_v1(
         provisional_failure.context_sha256,
         *((projection_set.projection_set_sha256,) if projection_set is not None else ()),
         *(item.payload_sha256 for item in outboxes),
+        *(item.payload_sha256 for item in updated_mappings),
+        *(item.payload_sha256 for item in updated_outboxes),
         *(item.schedule_receipt_sha256 for item in cancelled_schedules),
     )
     transition_outputs = (
         provisional_failure.failure_receipt_id,
         *(item.command_id for item in outboxes),
+        *(item.mapping_id for item in updated_mappings),
+        *(item.command_id for item in updated_outboxes),
         *(item.schedule_id for item in cancelled_schedules),
     )
     if initialization:
@@ -778,6 +998,8 @@ def materialize_failure_transition_v1(
         after_state=None,
         new_child_mappings=(),
         command_outboxes=tuple(outboxes),
+        updated_child_mappings=tuple(updated_mappings),
+        updated_command_outboxes=tuple(updated_outboxes),
         timer_mutations=tuple(timer_mutations),
         timer_schedules=tuple(cancelled_schedules),
         diagnostic_observations=(),

@@ -16,7 +16,7 @@ from backend.services.miniqmt_execution_runtime.kernel_ingress import (
     KernelIngressCoordinatorV1,
     route_event_targets_v1,
 )
-from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
+from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AlgoDeliveryPersistenceV1,
     AlgoEventDeliveryV1,
@@ -260,16 +260,77 @@ class _IngressRepository:
         self.missing_tail = missing_tail
         self.received = None
 
-    def read_delivery_tail(self, *, runtime_id: str, algo_instance_id: str):
-        assert runtime_id == self.algo.runtime_id
-        assert algo_instance_id == self.algo.algo_instance_id
+    def ingest_routed_event_atomic(
+        self, *, event, catalog_runtime, correlated_algo_instance_ids, callback_mapping_update=None
+    ):
+        targets = route_event_targets_v1(
+            event=event,
+            algo_instances=(self.algo,),
+            catalog_runtime=catalog_runtime,
+            correlated_algo_instance_ids=correlated_algo_instance_ids,
+        )
         if self.missing_tail:
-            raise KeyError(algo_instance_id)
-        return _tail(self.algo)
+            raise KernelEventRoutingError(
+                "MINIQMT_RUNTIME_EVENT_ROUTING_PREDECESSOR_MISSING",
+                "repository-owned target has no durable predecessor",
+                context={"algo_instance_id": self.algo.algo_instance_id},
+            )
+        predecessor = _tail(self.algo)
+        self.received = {
+            "event": event,
+            "targets": targets,
+            "deliveries": tuple(
+                AlgoDeliveryPersistenceV1.create(
+                    delivery=AlgoEventDeliveryV1.create(
+                        event=event,
+                        algo_instance_id=algo_instance_id,
+                        plugin_manifest_sha256=self.algo.plugin_manifest_sha256,
+                        algo_delivery_sequence=predecessor.algo_delivery_sequence + 1,
+                        previous_delivery_id=predecessor.delivery_id,
+                        status=DeliveryStatusV1.PENDING,
+                        attempt_count=0,
+                        lease_owner=None,
+                        lease_expires_at=None,
+                        transition_id=None,
+                        last_error_json=None,
+                        created_at_utc=event.event_time_utc,
+                        updated_at_utc=event.event_time_utc,
+                    ),
+                    lease_epoch=0,
+                    lease_fence_token=None,
+                    row_version=1,
+                    next_attempt_at_utc=None,
+                    failure_receipt_id=None,
+                    skip_receipt_id=None,
+                    closed_at_utc=None,
+                )
+                for algo_instance_id in targets
+            ),
+            "callback_mapping_update": callback_mapping_update,
+        }
+        return self.received
 
-    def ingest_routed_event_atomic(self, **values):
-        self.received = values
-        return values
+
+class _AuthoritativeIngressRepository:
+    def __init__(self, algos) -> None:
+        self.algos = tuple(algos)
+        self.received = None
+
+    def ingest_routed_event_atomic(
+        self, *, event, catalog_runtime, correlated_algo_instance_ids, callback_mapping_update=None
+    ):
+        targets = route_event_targets_v1(
+            event=event,
+            algo_instances=self.algos,
+            catalog_runtime=catalog_runtime,
+            correlated_algo_instance_ids=correlated_algo_instance_ids,
+        )
+        self.received = {
+            "event": event,
+            "targets": targets,
+            "callback_mapping_update": callback_mapping_update,
+        }
+        return self.received
 
 
 def test_tick_routes_only_same_symbol_active_subscribers_in_stable_order() -> None:
@@ -286,6 +347,45 @@ def test_tick_routes_only_same_symbol_active_subscribers_in_stable_order() -> No
     )
 
     assert targets == tuple(sorted((active_a.algo_instance_id, active_b.algo_instance_id)))
+
+
+def test_ingress_coordinator_routes_from_repository_owned_complete_algo_set() -> None:
+    active = _algo(slot="slot_repository_authority", status=ExecutionAlgoPersistenceStatusV2.ACTIVE)
+    repository = _AuthoritativeIngressRepository((active,))
+
+    result = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog()).ingest(
+        event=_event(EventTypeV2.TICK),
+    )
+
+    assert result["targets"] == (active.algo_instance_id,)
+    assert repository.received == result
+
+
+def test_owner_scoped_coordinator_requires_and_routes_exact_durable_algo_identity() -> None:
+    active = _algo(slot="slot_owner_coordinator", status=ExecutionAlgoPersistenceStatusV2.ACTIVE)
+    repository = _AuthoritativeIngressRepository((active,))
+    coordinator = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog())
+    missing_owner = _owner_event(EventTypeV2.TIMER, algo=active)
+    with pytest.raises(KernelEventRoutingError) as raised:
+        coordinator.ingest(event=missing_owner)
+    assert raised.value.reason_code == "MINIQMT_RUNTIME_EVENT_ROUTING_OWNER_MISSING"
+
+    owned = RuntimeEventEnvelopeV2.create(
+        runtime_id=missing_owner.runtime_id,
+        sequence=missing_owner.sequence,
+        event_type=missing_owner.event_type,
+        event_time_utc=missing_owner.event_time_utc,
+        monotonic_ns=missing_owner.monotonic_ns,
+        source=missing_owner.source,
+        symbol=missing_owner.symbol,
+        payload_schema_version=missing_owner.payload_schema_version,
+        payload=thaw_json_v1(missing_owner.payload),
+        source_identity=thaw_json_v1(missing_owner.source_identity),
+        correlation={"algo_instance_id": active.algo_instance_id},
+    )
+    result = coordinator.ingest(event=owned)
+    assert result["targets"] == ()
+    assert repository.received == result
 
 
 def test_account_subscription_and_eod_status_semantics_are_exact() -> None:
@@ -354,14 +454,11 @@ def test_failed_callback_owner_is_zero_target_without_reinvoking_terminal_plugin
 
 
 def test_callback_coordinator_rejects_event_only_ingress_without_atomic_mapping_update() -> None:
-    active = _algo(slot="slot_active", status=ExecutionAlgoPersistenceStatusV2.ACTIVE)
     coordinator = KernelIngressCoordinatorV1(repository=object(), catalog_runtime=_catalog())
 
     try:
         coordinator.ingest(
             event=_event(EventTypeV2.ORDER),
-            algo_instances=(active,),
-            correlated_algo_instance_ids=(active.algo_instance_id,),
         )
     except KernelEventRoutingError as exc:
         assert exc.reason_code == "MINIQMT_RUNTIME_EVENT_CALLBACK_MAPPING_UPDATE_MISSING"
@@ -503,8 +600,6 @@ def test_ingress_coordinator_builds_exact_successor_and_fails_loud_without_prede
     coordinator = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog())
     result = coordinator.ingest(
         event=event,
-        algo_instances=(algo,),
-        correlated_algo_instance_ids=(),
     )
     delivery = result["deliveries"][0]
     assert delivery.algo_delivery_sequence == 2
@@ -516,7 +611,7 @@ def test_ingress_coordinator_builds_exact_successor_and_fails_loud_without_prede
         catalog_runtime=_catalog(),
     )
     with pytest.raises(KernelEventRoutingError) as raised:
-        missing.ingest(event=event, algo_instances=(algo,), correlated_algo_instance_ids=())
+        missing.ingest(event=event)
     assert raised.value.reason_code == "MINIQMT_RUNTIME_EVENT_ROUTING_PREDECESSOR_MISSING"
 
 
@@ -526,8 +621,6 @@ def test_non_callback_ingress_rejects_callback_mapping_mutation() -> None:
     with pytest.raises(KernelEventRoutingError) as raised:
         coordinator.ingest(
             event=_event(EventTypeV2.TICK),
-            algo_instances=(algo,),
-            correlated_algo_instance_ids=(),
             callback_mapping_update=object(),
         )
     assert raised.value.reason_code == "MINIQMT_RUNTIME_EVENT_CALLBACK_MAPPING_UPDATE_UNEXPECTED"

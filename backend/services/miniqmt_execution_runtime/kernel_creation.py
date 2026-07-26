@@ -20,6 +20,8 @@ from .plugin_contracts import (
     AlgoTransitionV1,
     DeliveryStatusV1,
     DeterministicExecutionContextV1,
+    ConsumedLineageRefV1,
+    ConsumedLineageTypeV1,
     EventSourceV2,
     EventTypeV2,
     ExecutionProjectionSetV1,
@@ -28,6 +30,7 @@ from .plugin_contracts import (
     KernelProjectionTypeV1,
     RuntimeEventEnvelopeV2,
     _algo_instance_id_v2,
+    stable_exception_reason_code_v1,
 )
 from .plugin_registry import (
     CompatibilityStatusV1,
@@ -43,6 +46,7 @@ class KernelAlgoCreationRepositoryV1(Protocol):
         *,
         runtime_id: str,
         event_key_sha256: str,
+        creation_authority: KernelAlgoCreationRequestV1,
         bundle_builder: Any,
     ) -> dict[str, Any]: ...
 
@@ -143,9 +147,15 @@ class KernelAlgoCreationCoordinatorV1:
                     "strategy_slot_id": request.strategy_slot_id,
                     "target_quantity": request.parent_quantity,
                     "execution_plan_id": request.execution_plan_id,
+                    "execution_plan_sha256": request.execution_plan_sha256,
                     "release_id": request.release_id,
+                    "release_sha256": request.release_sha256,
                     "policy_id": request.policy_id,
+                    "policy_sha256": request.policy_sha256,
                     "route_receipt_sha256": route_receipt.receipt_sha256,
+                    "route_compatibility_receipt": route_receipt.model_dump(mode="json"),
+                    "gateway_capability_catalog": self._gateway_catalog.model_dump(mode="json"),
+                    "plugin_catalog_sha256": self._catalog_snapshot.catalog_sha256,
                 },
                 source_identity={
                     "algo_instance_id": algo_instance_id,
@@ -272,7 +282,13 @@ class KernelAlgoCreationCoordinatorV1:
                     previous_algo=None,
                     transition=transition,
                     projection_set=projection_set,
-                    consumed_lineage_refs=(),
+                    consumed_lineage_refs=(
+                        ConsumedLineageRefV1.create(
+                            lineage_type=ConsumedLineageTypeV1.EVENT,
+                            identity=event.event_id,
+                            payload_sha256=event.payload_sha256,
+                        ),
+                    ),
                     strategy_slot_id=request.strategy_slot_id,
                     parent_intent_id=request.parent_intent_id,
                     compatibility_receipt_sha256=route_receipt.receipt_sha256,
@@ -287,8 +303,6 @@ class KernelAlgoCreationCoordinatorV1:
                     initialization=True,
                 )
             except Exception as exc:
-                reason_code = getattr(exc, "reason_code", "MINIQMT_ALGO_INITIALIZATION_FAILED")
-                reason_value = reason_code.value if hasattr(reason_code, "value") else str(reason_code)
                 transition_bundle = materialize_failure_transition_v1(
                     event=event,
                     predecessor_delivery=initial_delivery,
@@ -305,7 +319,9 @@ class KernelAlgoCreationCoordinatorV1:
                     symbol=request.symbol,
                     side=request.side,
                     target_quantity=request.parent_quantity,
-                    stable_reason_code=reason_value,
+                    stable_reason_code=stable_exception_reason_code_v1(
+                        exc, default="MINIQMT_ALGO_INITIALIZATION_FAILED"
+                    ),
                     exception=exc,
                     failure_context=getattr(exc, "context", {"stage": "ALGO_INITIALIZATION"}),
                     projection_set=projection_set,
@@ -324,6 +340,7 @@ class KernelAlgoCreationCoordinatorV1:
         return self._repository.initialize_algo_atomic(
             runtime_id=request.runtime_id,
             event_key_sha256=probe.event_key_sha256,
+            creation_authority=request,
             bundle_builder=build_bundle,
         )
 

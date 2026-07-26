@@ -7,9 +7,6 @@ from typing import Any, Protocol, Sequence
 
 from .plugin_canonical import json_safe_evidence_v1, thaw_json_v1
 from .plugin_contracts import (
-    AlgoDeliveryPersistenceV1,
-    AlgoEventDeliveryV1,
-    DeliveryStatusV1,
     EventTypeV2,
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
@@ -47,13 +44,12 @@ _ACTIVE_OR_PAUSED = frozenset(
 
 
 class KernelIngressRepositoryV1(Protocol):
-    def read_delivery_tail(self, *, runtime_id: str, algo_instance_id: str) -> AlgoDeliveryPersistenceV1: ...
-
     def ingest_routed_event_atomic(
         self,
         *,
         event: RuntimeEventEnvelopeV2,
-        deliveries: Sequence[AlgoDeliveryPersistenceV1],
+        catalog_runtime: PluginCatalogRuntimeV2,
+        correlated_algo_instance_ids: tuple[str, ...],
         callback_mapping_update: KernelCallbackMappingUpdateV1 | None = None,
     ) -> RuntimeEventIngressReceiptV1: ...
 
@@ -67,10 +63,12 @@ class KernelIngressCoordinatorV1:
         self,
         *,
         event: RuntimeEventEnvelopeV2,
-        algo_instances: Sequence[ExecutionAlgoInstancePersistenceV2],
-        correlated_algo_instance_ids: Sequence[str],
         callback_mapping_update: KernelCallbackMappingUpdateV1 | None = None,
     ) -> RuntimeEventIngressReceiptV1:
+        correlated_algo_instance_ids = _correlated_algo_instance_ids_v1(
+            event=event,
+            callback_mapping_update=callback_mapping_update,
+        )
         callback_types = {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}
         if event.event_type in callback_types:
             if callback_mapping_update is None:
@@ -98,63 +96,45 @@ class KernelIngressCoordinatorV1:
                 "non-callback ingress cannot mutate a durable child mapping",
                 context={"event_id": event.event_id, "event_type": event.event_type.value},
             )
-        targets = route_event_targets_v1(
-            event=event,
-            algo_instances=algo_instances,
-            catalog_runtime=self.catalog_runtime,
-            correlated_algo_instance_ids=correlated_algo_instance_ids,
-        )
-        by_id = {item.algo_instance_id: item for item in algo_instances}
-        deliveries: list[AlgoDeliveryPersistenceV1] = []
-        for algo_instance_id in targets:
-            algo = by_id[algo_instance_id]
-            try:
-                predecessor = self.repository.read_delivery_tail(
-                    runtime_id=event.runtime_id,
-                    algo_instance_id=algo_instance_id,
-                )
-            except KeyError as exc:
-                raise KernelEventRoutingError(
-                    "MINIQMT_RUNTIME_EVENT_ROUTING_PREDECESSOR_MISSING",
-                    "routed existing algo has no durable delivery predecessor",
-                    context={
-                        "runtime_id": event.runtime_id,
-                        "event_id": event.event_id,
-                        "algo_instance_id": algo_instance_id,
-                    },
-                ) from exc
-            delivery = AlgoEventDeliveryV1.create(
-                event=event,
-                algo_instance_id=algo_instance_id,
-                plugin_manifest_sha256=algo.plugin_manifest_sha256,
-                algo_delivery_sequence=predecessor.algo_delivery_sequence + 1,
-                previous_delivery_id=predecessor.delivery_id,
-                status=DeliveryStatusV1.PENDING,
-                attempt_count=0,
-                lease_owner=None,
-                lease_expires_at=None,
-                transition_id=None,
-                last_error_json=None,
-                created_at_utc=event.event_time_utc,
-                updated_at_utc=event.event_time_utc,
-            )
-            deliveries.append(
-                AlgoDeliveryPersistenceV1.create(
-                    delivery=delivery,
-                    lease_epoch=0,
-                    lease_fence_token=None,
-                    row_version=1,
-                    next_attempt_at_utc=None,
-                    failure_receipt_id=None,
-                    skip_receipt_id=None,
-                    closed_at_utc=None,
-                )
-            )
         return self.repository.ingest_routed_event_atomic(
             event=event,
-            deliveries=tuple(deliveries),
+            catalog_runtime=self.catalog_runtime,
+            correlated_algo_instance_ids=correlated_algo_instance_ids,
             callback_mapping_update=callback_mapping_update,
         )
+
+
+def _correlated_algo_instance_ids_v1(
+    *,
+    event: RuntimeEventEnvelopeV2,
+    callback_mapping_update: KernelCallbackMappingUpdateV1 | None,
+) -> tuple[str, ...]:
+    correlation = thaw_json_v1(event.correlation)
+    if event.event_type in {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}:
+        if not isinstance(callback_mapping_update, KernelCallbackMappingUpdateV1):
+            return ()
+        expected = {
+            "algo_instance_id": callback_mapping_update.mapping.algo_instance_id,
+            "mapping_id": callback_mapping_update.mapping.mapping_id,
+            "reference_command_id": callback_mapping_update.reference_command_id,
+        }
+        if any(correlation.get(key) != value for key, value in expected.items()):
+            raise KernelEventRoutingError(
+                "MINIQMT_RUNTIME_EVENT_CALLBACK_CORRELATION_CONFLICT",
+                "callback correlation does not close to its durable mapping authority",
+                context={"event_id": event.event_id, "expected": expected, "actual": correlation},
+            )
+        return (callback_mapping_update.mapping.algo_instance_id,)
+    if event.event_type in {EventTypeV2.TIMER, EventTypeV2.OPERATOR}:
+        algo_instance_id = correlation.get("algo_instance_id")
+        if type(algo_instance_id) is not str or not algo_instance_id.strip():
+            raise KernelEventRoutingError(
+                "MINIQMT_RUNTIME_EVENT_ROUTING_OWNER_MISSING",
+                "owner-scoped event correlation has no strict algo_instance_id",
+                context={"event_id": event.event_id, "event_type": event.event_type.value},
+            )
+        return (algo_instance_id,)
+    return ()
 
 
 def _strict_catalog(runtime: PluginCatalogRuntimeV2) -> PluginCatalogSnapshotV1:

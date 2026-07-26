@@ -18,14 +18,16 @@ from .kernel_repository_common import (
 from .plugin_canonical import canonical_utc_datetime_v1, thaw_json_v1
 from .kernel_repository_projection import (
     _assert_scalar_columns,
-    _delivery_creation_matches,
     _delivery_scalar_projection,
     _event_scalar_projection,
     _mapping_scalar_projection,
 )
+from .kernel_ingress import route_event_targets_v1
+from .plugin_registry import PluginCatalogRuntimeV2
 from .plugin_contracts import (
     ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
+    AlgoEventDeliveryV1,
     BrokerCommandOutboxV1,
     BrokerCommandTypeV2,
     BrokerCommandV2,
@@ -293,72 +295,30 @@ class KernelRepositoryEventDeliveryMixin:
         self,
         *,
         event: RuntimeEventEnvelopeV2,
-        deliveries: Sequence[AlgoDeliveryPersistenceV1],
+        catalog_runtime: PluginCatalogRuntimeV2,
+        correlated_algo_instance_ids: tuple[str, ...],
         callback_mapping_update: KernelCallbackMappingUpdateV1 | None = None,
     ) -> RuntimeEventIngressReceiptV1:
         """Append one externally sourced event and its complete ordered fan-out."""
 
         if not isinstance(event, RuntimeEventEnvelopeV2):
             raise TypeError("event must be RuntimeEventEnvelopeV2")
+        if not isinstance(catalog_runtime, PluginCatalogRuntimeV2):
+            raise TypeError("catalog_runtime must be PluginCatalogRuntimeV2")
+        if not isinstance(correlated_algo_instance_ids, tuple) or any(
+            type(item) is not str or not item.strip() for item in correlated_algo_instance_ids
+        ):
+            raise TypeError("correlated_algo_instance_ids must be a strict tuple of identities")
         if event.event_type is EventTypeV2.ALGO_START:
             raise ValueError("ALGO_START must use the dedicated atomic initialization transaction")
         self._validate_callback_mapping_update(event=event, update=callback_mapping_update)
-        strict_deliveries = tuple(deliveries)
-        if any(not isinstance(item, AlgoDeliveryPersistenceV1) for item in strict_deliveries):
-            raise TypeError("deliveries must contain only AlgoDeliveryPersistenceV1")
-        if any(item.event_id != event.event_id or item.runtime_id != event.runtime_id for item in strict_deliveries):
-            raise ValueError("delivery owner conflicts with event")
-        for delivery in strict_deliveries:
-            try:
-                delivery.validate_initial_v1()
-            except ValueError as exc:
-                raise ValueError("first write requires initial PENDING delivery") from exc
-        ordered = tuple(sorted(strict_deliveries, key=lambda item: item.algo_instance_id))
-        if strict_deliveries != ordered:
-            raise ValueError("deliveries must be supplied in canonical algo_instance_id order")
-        targets = tuple(item.algo_instance_id for item in ordered)
-        if len(targets) != len(set(targets)):
-            raise ValueError("event routing contains duplicate algo target")
-        delivery_ids = tuple(item.delivery_id for item in ordered)
-        provisional = RuntimeEventIngressReceiptV1.create(
-            runtime_id=event.runtime_id,
-            event_id=event.event_id,
-            event_key_sha256=event.event_key_sha256,
-            runtime_sequence=event.sequence,
-            ordered_target_algo_instance_ids=targets,
-            ordered_delivery_ids=delivery_ids,
-            transaction_commit_identity="mqtx_pending_routed_event",
-        )
         callback_input_hashes = () if callback_mapping_update is None else (callback_mapping_update.update_sha256,)
         callback_output_identities = (
             () if callback_mapping_update is None else (callback_mapping_update.mapping.mapping_id,)
         )
-        transaction_id = transaction_commit_identity_v1(
-            operation=(
-                "INGEST_ROUTED_EVENT_ATOMIC"
-                if callback_mapping_update is None
-                else "INGEST_CALLBACK_EVENT_MAPPING_DELIVERIES_ATOMIC"
-            ),
-            owner_identities=(event.runtime_id,),
-            input_hashes=(event.event_key_sha256, event.payload_sha256, *callback_input_hashes),
-            output_identities=(
-                event.event_id,
-                provisional.ingress_receipt_id,
-                *callback_output_identities,
-                *delivery_ids,
-            ),
-        )
-        receipt = RuntimeEventIngressReceiptV1.create(
-            runtime_id=event.runtime_id,
-            event_id=event.event_id,
-            event_key_sha256=event.event_key_sha256,
-            runtime_sequence=event.sequence,
-            ordered_target_algo_instance_ids=targets,
-            ordered_delivery_ids=delivery_ids,
-            transaction_commit_identity=transaction_id,
-        )
-        event_projection = _event_scalar_projection(event, receipt)
         existing_receipt: RuntimeEventIngressReceiptV1 | None = None
+        receipt: RuntimeEventIngressReceiptV1 | None = None
+        ordered: tuple[AlgoDeliveryPersistenceV1, ...] = ()
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -383,58 +343,14 @@ class KernelRepositoryEventDeliveryMixin:
                         RuntimeEventIngressReceiptV1,
                         _row_json(existing_event_row, "ingress_receipt_json"),
                     )
-                    expected_payload = event.canonical_payload_v1(exclude={"sequence"})
-                    actual_payload = persisted_event.canonical_payload_v1(exclude={"sequence"})
-                    if expected_payload != actual_payload:
+                    if persisted_event != event:
                         raise KernelRepositoryConflict(
-                            "event key exists with different immutable payload or correlation"
+                            "event key exists with different immutable envelope, sequence, payload or correlation"
                         )
-                    retry_provisional = RuntimeEventIngressReceiptV1.create(
-                        runtime_id=persisted_event.runtime_id,
-                        event_id=persisted_event.event_id,
-                        event_key_sha256=persisted_event.event_key_sha256,
-                        runtime_sequence=persisted_event.sequence,
-                        ordered_target_algo_instance_ids=targets,
-                        ordered_delivery_ids=delivery_ids,
-                        transaction_commit_identity="mqtx_pending_routed_event_retry",
-                    )
-                    retry_transaction_id = transaction_commit_identity_v1(
-                        operation=(
-                            "INGEST_ROUTED_EVENT_ATOMIC"
-                            if callback_mapping_update is None
-                            else "INGEST_CALLBACK_EVENT_MAPPING_DELIVERIES_ATOMIC"
-                        ),
-                        owner_identities=(persisted_event.runtime_id,),
-                        input_hashes=(
-                            persisted_event.event_key_sha256,
-                            persisted_event.payload_sha256,
-                            *callback_input_hashes,
-                        ),
-                        output_identities=(
-                            persisted_event.event_id,
-                            retry_provisional.ingress_receipt_id,
-                            *callback_output_identities,
-                            *delivery_ids,
-                        ),
-                    )
-                    expected_retry_receipt = RuntimeEventIngressReceiptV1.create(
-                        runtime_id=persisted_event.runtime_id,
-                        event_id=persisted_event.event_id,
-                        event_key_sha256=persisted_event.event_key_sha256,
-                        runtime_sequence=persisted_event.sequence,
-                        ordered_target_algo_instance_ids=targets,
-                        ordered_delivery_ids=delivery_ids,
-                        transaction_commit_identity=retry_transaction_id,
-                    )
-                    if existing_receipt != expected_retry_receipt:
+                    if int(runtime_row["last_event_sequence"]) < persisted_event.sequence:
                         raise KernelRepositoryConflict(
-                            "event key exists with a different transaction or callback update authority"
+                            "durable runtime sequence regressed behind an existing routed event"
                         )
-                    if (
-                        existing_receipt.ordered_target_algo_instance_ids != targets
-                        or existing_receipt.ordered_delivery_ids != delivery_ids
-                    ):
-                        raise KernelRepositoryConflict("event key exists with a different durable routing set")
                     if callback_mapping_update is not None:
                         self._assert_callback_mapping_update_readback_with_cursor(cur, update=callback_mapping_update)
                 else:
@@ -447,30 +363,46 @@ class KernelRepositoryEventDeliveryMixin:
                             event=event,
                             update=callback_mapping_update,
                         )
-                    for delivery in ordered:
-                        cur.execute(
-                            "SELECT kernel_carrier_json FROM qmt_strategy.execution_algo_instance "
-                            "WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2' "
-                            "FOR UPDATE",
-                            (event.runtime_id, delivery.algo_instance_id),
-                        )
-                        algo_row = cur.fetchone()
-                        if algo_row is None:
-                            raise KeyError(delivery.algo_instance_id)
-                        algo = _model_from_json(
+                    cur.execute(
+                        "SELECT kernel_carrier_json FROM qmt_strategy.execution_algo_instance "
+                        "WHERE runtime_id=%s AND kernel_contract_version='KERNEL_V2' "
+                        "ORDER BY algo_instance_id FOR UPDATE",
+                        (event.runtime_id,),
+                    )
+                    durable_algos = tuple(
+                        _model_from_json(
                             ExecutionAlgoInstancePersistenceV2,
-                            _row_json(algo_row, "kernel_carrier_json"),
+                            _row_json(row, "kernel_carrier_json"),
                         )
-                        if algo.plugin_manifest_sha256 != delivery.plugin_manifest_sha256 or algo.status not in {
-                            ExecutionAlgoPersistenceStatusV2.ACTIVE,
-                            ExecutionAlgoPersistenceStatusV2.PAUSED,
-                        }:
-                            raise KernelRepositoryConflict("delivery target is not an eligible frozen algo owner")
+                        for row in cur.fetchall()
+                    )
+                    targets = route_event_targets_v1(
+                        event=event,
+                        algo_instances=durable_algos,
+                        catalog_runtime=catalog_runtime,
+                        correlated_algo_instance_ids=correlated_algo_instance_ids,
+                    )
+                    if (
+                        not isinstance(targets, tuple)
+                        or any(type(item) is not str or not item.strip() for item in targets)
+                        or targets != tuple(sorted(targets))
+                        or len(targets) != len(set(targets))
+                    ):
+                        raise ValueError("code-owned routing must return one canonical unique tuple of algo identities")
+                    by_id = {item.algo_instance_id: item for item in durable_algos}
+                    missing = sorted(set(targets) - set(by_id))
+                    if missing:
+                        raise KernelRepositoryConflict(
+                            f"routing target does not belong to the locked runtime: {missing}"
+                        )
+                    built: list[AlgoDeliveryPersistenceV1] = []
+                    for algo_instance_id in targets:
+                        algo = by_id[algo_instance_id]
                         cur.execute(
                             "SELECT carrier_json FROM qmt_strategy.execution_algo_event_delivery "
                             "WHERE runtime_id=%s AND algo_instance_id=%s "
                             "ORDER BY algo_delivery_sequence DESC LIMIT 1 FOR UPDATE",
-                            (event.runtime_id, delivery.algo_instance_id),
+                            (event.runtime_id, algo_instance_id),
                         )
                         previous_row = cur.fetchone()
                         if previous_row is None:
@@ -479,11 +411,69 @@ class KernelRepositoryEventDeliveryMixin:
                             AlgoDeliveryPersistenceV1,
                             _row_json(previous_row, "carrier_json"),
                         )
-                        if (
-                            delivery.algo_delivery_sequence != previous.algo_delivery_sequence + 1
-                            or delivery.previous_delivery_id != previous.delivery_id
-                        ):
-                            raise KernelRepositoryConflict("delivery predecessor identity or sequence is not exact")
+                        delivery = AlgoEventDeliveryV1.create(
+                            event=event,
+                            algo_instance_id=algo_instance_id,
+                            plugin_manifest_sha256=algo.plugin_manifest_sha256,
+                            algo_delivery_sequence=previous.algo_delivery_sequence + 1,
+                            previous_delivery_id=previous.delivery_id,
+                            status=DeliveryStatusV1.PENDING,
+                            attempt_count=0,
+                            lease_owner=None,
+                            lease_expires_at=None,
+                            transition_id=None,
+                            last_error_json=None,
+                            created_at_utc=event.event_time_utc,
+                            updated_at_utc=event.event_time_utc,
+                        )
+                        built.append(
+                            AlgoDeliveryPersistenceV1.create(
+                                delivery=delivery,
+                                lease_epoch=0,
+                                lease_fence_token=None,
+                                row_version=1,
+                                next_attempt_at_utc=None,
+                                failure_receipt_id=None,
+                                skip_receipt_id=None,
+                                closed_at_utc=None,
+                            )
+                        )
+                    ordered = tuple(built)
+                    delivery_ids = tuple(item.delivery_id for item in ordered)
+                    provisional = RuntimeEventIngressReceiptV1.create(
+                        runtime_id=event.runtime_id,
+                        event_id=event.event_id,
+                        event_key_sha256=event.event_key_sha256,
+                        runtime_sequence=event.sequence,
+                        ordered_target_algo_instance_ids=targets,
+                        ordered_delivery_ids=delivery_ids,
+                        transaction_commit_identity="mqtx_pending_routed_event",
+                    )
+                    transaction_id = transaction_commit_identity_v1(
+                        operation=(
+                            "INGEST_ROUTED_EVENT_ATOMIC"
+                            if callback_mapping_update is None
+                            else "INGEST_CALLBACK_EVENT_MAPPING_DELIVERIES_ATOMIC"
+                        ),
+                        owner_identities=(event.runtime_id,),
+                        input_hashes=(event.event_key_sha256, event.payload_sha256, *callback_input_hashes),
+                        output_identities=(
+                            event.event_id,
+                            provisional.ingress_receipt_id,
+                            *callback_output_identities,
+                            *delivery_ids,
+                        ),
+                    )
+                    receipt = RuntimeEventIngressReceiptV1.create(
+                        runtime_id=event.runtime_id,
+                        event_id=event.event_id,
+                        event_key_sha256=event.event_key_sha256,
+                        runtime_sequence=event.sequence,
+                        ordered_target_algo_instance_ids=targets,
+                        ordered_delivery_ids=delivery_ids,
+                        transaction_commit_identity=transaction_id,
+                    )
+                    event_projection = _event_scalar_projection(event, receipt)
                     cur.execute(
                         """
                         INSERT INTO qmt_strategy.execution_runtime_event(
@@ -573,6 +563,8 @@ class KernelRepositoryEventDeliveryMixin:
                 if chain["mapping"] != callback_mapping_update.mapping:
                     raise KernelRepositoryConflict("idempotent callback mapping post-commit readback differs")
             return existing_receipt
+        if receipt is None:
+            raise KernelRepositoryConflict("routed event transaction exited without a receipt")
         readback = self.read_event_transaction(event.event_id)
         if readback["event"] != event or readback["receipt"] != receipt:
             raise KernelRepositoryConflict("routed event post-commit readback differs from writer payload")
@@ -588,167 +580,12 @@ class KernelRepositoryEventDeliveryMixin:
         event: RuntimeEventEnvelopeV2,
         deliveries: Sequence[AlgoDeliveryPersistenceV1],
     ) -> RuntimeEventIngressReceiptV1:
+        del deliveries
         if not isinstance(event, RuntimeEventEnvelopeV2):
             raise TypeError("event must be RuntimeEventEnvelopeV2")
-        strict_deliveries = tuple(deliveries)
-        if any(not isinstance(item, AlgoDeliveryPersistenceV1) for item in strict_deliveries):
-            raise TypeError("deliveries must contain only AlgoDeliveryPersistenceV1")
-        if any(item.event_id != event.event_id or item.runtime_id != event.runtime_id for item in strict_deliveries):
-            raise ValueError("delivery owner conflicts with event")
-        for delivery in strict_deliveries:
-            try:
-                delivery.validate_initial_v1()
-            except ValueError as exc:
-                raise ValueError("first write requires initial PENDING delivery") from exc
-        ordered = tuple(sorted(strict_deliveries, key=lambda item: item.algo_instance_id))
-        targets = tuple(item.algo_instance_id for item in ordered)
-        delivery_ids = tuple(item.delivery_id for item in ordered)
-        provisional = RuntimeEventIngressReceiptV1.create(
-            runtime_id=event.runtime_id,
-            event_id=event.event_id,
-            event_key_sha256=event.event_key_sha256,
-            runtime_sequence=event.sequence,
-            ordered_target_algo_instance_ids=targets,
-            ordered_delivery_ids=delivery_ids,
-            transaction_commit_identity="mqtx_pending_event_write",
+        raise KernelRepositoryConflict(
+            "direct event/delivery writes are disabled; use initialize_algo_atomic or ingest_routed_event_atomic"
         )
-        transaction_id = transaction_commit_identity_v1(
-            operation="WRITE_EVENT_RECEIPT_DELIVERIES",
-            owner_identities=(event.runtime_id,),
-            input_hashes=(event.event_key_sha256, event.payload_sha256),
-            output_identities=(event.event_id, provisional.ingress_receipt_id, *delivery_ids),
-        )
-        receipt = RuntimeEventIngressReceiptV1.create(
-            runtime_id=event.runtime_id,
-            event_id=event.event_id,
-            event_key_sha256=event.event_key_sha256,
-            runtime_sequence=event.sequence,
-            ordered_target_algo_instance_ids=targets,
-            ordered_delivery_ids=delivery_ids,
-            transaction_commit_identity=transaction_id,
-        )
-        event_projection = _event_scalar_projection(event, receipt)
-        with self._connection(transaction=True) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    INSERT INTO qmt_strategy.execution_runtime_event(
-                        event_id, runtime_id, sequence, event_type, event_time, source, payload,
-                        event_contract_version, event_schema_version, payload_schema_version, event_key_sha256, payload_sha256,
-                        observed_at_utc, logical_at_utc, source_identity_json, correlation_json,
-                        ingress_receipt_json, ingress_receipt_sha256, routing_rule_version,
-                        transaction_commit_identity
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,'KERNEL_V2',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT (event_id) DO NOTHING
-                    """,
-                    (
-                        event_projection["event_id"],
-                        event_projection["runtime_id"],
-                        event_projection["sequence"],
-                        event_projection["event_type"],
-                        event_projection["event_time"],
-                        event_projection["source"],
-                        _json(event_projection["payload"]),
-                        event_projection["event_schema_version"],
-                        event_projection["payload_schema_version"],
-                        event_projection["event_key_sha256"],
-                        event_projection["payload_sha256"],
-                        event_projection["observed_at_utc"],
-                        event_projection["logical_at_utc"],
-                        _json(event_projection["source_identity_json"]),
-                        _json(event_projection["correlation_json"]),
-                        _json(event_projection["ingress_receipt_json"]),
-                        event_projection["ingress_receipt_sha256"],
-                        event_projection["routing_rule_version"],
-                        event_projection["transaction_commit_identity"],
-                    ),
-                )
-                event_was_inserted = cur.rowcount == 1
-                if event_was_inserted:
-                    for delivery in ordered:
-                        delivery_projection = _delivery_scalar_projection(delivery)
-                        cur.execute(
-                            """
-                        INSERT INTO qmt_strategy.execution_algo_event_delivery(
-                            delivery_id,event_id,runtime_id,algo_instance_id,plugin_manifest_sha256,
-                            algo_delivery_sequence,previous_delivery_sequence,previous_delivery_id,status,
-                            attempt_count,lease_owner,lease_worker_id,lease_process_incarnation_id,
-                            lease_epoch,lease_fence_token,lease_expires_at,
-                            transition_id,last_error_json,next_attempt_at_utc,failure_receipt_id,skip_receipt_id,
-                            row_version,created_at_utc,updated_at_utc,closed_at_utc,carrier_json
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        ON CONFLICT (delivery_id) DO NOTHING
-                        """,
-                            (
-                                delivery_projection["delivery_id"],
-                                delivery_projection["event_id"],
-                                delivery_projection["runtime_id"],
-                                delivery_projection["algo_instance_id"],
-                                delivery_projection["plugin_manifest_sha256"],
-                                delivery_projection["algo_delivery_sequence"],
-                                delivery_projection["previous_delivery_sequence"],
-                                delivery_projection["previous_delivery_id"],
-                                delivery_projection["status"],
-                                delivery_projection["attempt_count"],
-                                delivery_projection["lease_owner"],
-                                delivery_projection["lease_worker_id"],
-                                delivery_projection["lease_process_incarnation_id"],
-                                delivery_projection["lease_epoch"],
-                                delivery_projection["lease_fence_token"],
-                                delivery_projection["lease_expires_at"],
-                                delivery_projection["transition_id"],
-                                None
-                                if delivery_projection["last_error_json"] is None
-                                else _json(delivery_projection["last_error_json"]),
-                                delivery_projection["next_attempt_at_utc"],
-                                delivery_projection["failure_receipt_id"],
-                                delivery_projection["skip_receipt_id"],
-                                delivery_projection["row_version"],
-                                delivery_projection["created_at_utc"],
-                                delivery_projection["updated_at_utc"],
-                                delivery_projection["closed_at_utc"],
-                                _json(delivery.model_dump(mode="json")),
-                            ),
-                        )
-                cur.execute(
-                    "SELECT payload, ingress_receipt_json FROM qmt_strategy.execution_runtime_event WHERE event_id=%s",
-                    (event.event_id,),
-                )
-                event_row = cur.fetchone()
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_algo_event_delivery WHERE event_id=%s ORDER BY algo_instance_id",
-                    (event.event_id,),
-                )
-                delivery_rows = cur.fetchall()
-                in_transaction_event = _model_from_json(RuntimeEventEnvelopeV2, _row_json(event_row, "payload"))
-                in_transaction_receipt = _model_from_json(
-                    RuntimeEventIngressReceiptV1, _row_json(event_row, "ingress_receipt_json")
-                )
-                in_transaction_deliveries = tuple(
-                    _model_from_json(AlgoDeliveryPersistenceV1, _row_json(row, "carrier_json")) for row in delivery_rows
-                )
-                if (
-                    in_transaction_event != event
-                    or in_transaction_receipt != receipt
-                    or len(in_transaction_deliveries) != len(ordered)
-                    or any(
-                        not _delivery_creation_matches(current, initial)
-                        for current, initial in zip(in_transaction_deliveries, ordered, strict=True)
-                    )
-                ):
-                    raise KernelRepositoryConflict("event identity exists with different immutable transaction payload")
-        readback = self.read_event_transaction(event.event_id)
-        if (
-            readback["event"] != event
-            or readback["receipt"] != receipt
-            or len(readback["deliveries"]) != len(ordered)
-            or any(
-                not _delivery_creation_matches(current, initial)
-                for current, initial in zip(readback["deliveries"], ordered, strict=True)
-            )
-        ):
-            raise KernelRepositoryConflict("event transaction readback closure differs from writer payload")
-        return receipt
 
     def read_event_transaction(self, event_id: str) -> dict[str, Any]:
         with self._connection(transaction=False) as conn:
@@ -786,6 +623,8 @@ class KernelRepositoryEventDeliveryMixin:
             carrier_name="event",
         )
         deliveries = tuple(self.read_delivery(delivery_id) for delivery_id in delivery_ids)
+        if receipt.ordered_target_algo_instance_ids != tuple(item.algo_instance_id for item in deliveries):
+            raise KernelRepositoryConflict("event receipt target set drifts from strict delivery owner order")
         if receipt.ordered_delivery_ids != tuple(item.delivery_id for item in deliveries):
             raise KernelRepositoryConflict("event receipt scalar columns drift from strict carrier delivery order")
         return {"event": event, "receipt": receipt, "deliveries": deliveries}

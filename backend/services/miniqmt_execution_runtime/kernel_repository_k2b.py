@@ -7,20 +7,25 @@ from typing import Any
 
 import psycopg2.extras
 
-from .kernel_delivery import KernelAlgoStartWriteBundleV1, KernelTransitionWriteBundleV1
+from .kernel_delivery import KernelAlgoCreationRequestV1, KernelAlgoStartWriteBundleV1, KernelTransitionWriteBundleV1
+from .kernel_materializer import _validate_projection_lineage_v1
 from .kernel_repository_common import KernelRepositoryConflict, _json, _model_from_json, _row_json
 from .kernel_repository_projection import (
     _delivery_creation_matches,
     _delivery_scalar_projection,
     _event_scalar_projection,
+    _mapping_scalar_projection,
+    _outbox_scalar_projection,
     _transition_scalar_projection,
 )
 from .plugin_contracts import (
+    ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
     AlgoFailureReceiptV1,
     AlgoSkipReceiptV1,
     AlgoStateSnapshotV2,
     AlgoTransitionReceiptV1,
+    BrokerCommandOutboxV1,
     DeliveryStatusV1,
     EventTypeV2,
     ExecutionAlgoInstancePersistenceV2,
@@ -41,6 +46,7 @@ class KernelRepositoryK2BMixin:
         *,
         runtime_id: str,
         event_key_sha256: str,
+        creation_authority: KernelAlgoCreationRequestV1,
         bundle_builder: Callable[[int], KernelAlgoStartWriteBundleV1],
     ) -> dict[str, Any]:
         if type(runtime_id) is not str or not runtime_id.strip():
@@ -49,6 +55,11 @@ class KernelRepositoryK2BMixin:
             raise TypeError("event_key_sha256 must be a SHA-256 hex string")
         if not callable(bundle_builder):
             raise TypeError("bundle_builder must be callable")
+        if not isinstance(creation_authority, KernelAlgoCreationRequestV1):
+            raise TypeError("creation_authority must be KernelAlgoCreationRequestV1")
+        creation_authority.validate_hashes_v1()
+        if creation_authority.runtime_id != runtime_id:
+            raise ValueError("creation authority runtime differs from repository owner")
         expected_start: KernelAlgoStartWriteBundleV1 | None = None
         transition_identity: str | None = None
         with self._connection(transaction=True) as conn:
@@ -63,6 +74,9 @@ class KernelRepositoryK2BMixin:
                     raise KeyError(runtime_id)
                 if runtime_row["archived_at"] is not None:
                     raise KernelRepositoryConflict("cannot initialize an algo under an archived runtime")
+                existing_parent_slot_algos = self._lock_and_validate_creation_authority_with_cursor(
+                    cur, creation_authority
+                )
                 cur.execute(
                     "SELECT sequence FROM qmt_strategy.execution_runtime_event "
                     "WHERE runtime_id=%s AND event_key_sha256=%s AND event_contract_version='KERNEL_V2'",
@@ -97,6 +111,18 @@ class KernelRepositoryK2BMixin:
                     or bundle.algo_instance.algo_instance_id != initial.algo_instance_id
                 ):
                     raise ValueError("ALGO_START event/delivery/algo identity closure differs")
+                if (
+                    bundle.algo_instance.parent_intent_id != creation_authority.parent_intent_id
+                    or bundle.algo_instance.strategy_slot_id != creation_authority.strategy_slot_id
+                    or bundle.algo_instance.symbol != creation_authority.symbol
+                    or bundle.algo_instance.side != creation_authority.side
+                    or bundle.algo_instance.target_quantity != creation_authority.parent_quantity
+                ):
+                    raise ValueError("ALGO_START algo owner differs from locked parent authority")
+                if existing_parent_slot_algos and existing_parent_slot_algos != (
+                    bundle.algo_instance.algo_instance_id,
+                ):
+                    raise KernelRepositoryConflict("parent/slot is already owned by a different KERNEL_V2 algo")
                 receipt = bundle.receipt
                 if isinstance(receipt, AlgoTransitionReceiptV1):
                     kind = "APPLIED"
@@ -162,6 +188,7 @@ class KernelRepositoryK2BMixin:
                 )
                 self._validate_k2b_bundle(
                     bundle,
+                    event=event,
                     previous_delivery=initial,
                     previous_algo=None,
                     expected_delivery_row_version=1,
@@ -273,6 +300,73 @@ class KernelRepositoryK2BMixin:
         transition_readback = self._readback_k2b_bundle(transition_identity, expected_start.transition_bundle)
         return {"event": event_readback["event"], "ingress_receipt": event_readback["receipt"], **transition_readback}
 
+    def _lock_and_validate_creation_authority_with_cursor(
+        self,
+        cur: Any,
+        authority: KernelAlgoCreationRequestV1,
+    ) -> tuple[str, ...]:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            (f"{authority.runtime_id}|{authority.parent_intent_id}|{authority.strategy_slot_id}",),
+        )
+        cur.execute(
+            """
+            SELECT runtime_id,execution_plan_id,execution_plan_hash,release_id,symbol,side,
+                   emitted_parent_quantity,execution_policy_id,execution_policy_sha256
+            FROM qmt_strategy.execution_parent_benchmark
+            WHERE parent_intent_id=%s
+            ORDER BY parent_revision DESC LIMIT 1 FOR SHARE
+            """,
+            (authority.parent_intent_id,),
+        )
+        parent = cur.fetchone()
+        if parent is None:
+            raise KernelRepositoryConflict("ALGO_START parent benchmark authority is missing")
+        expected_parent = {
+            "runtime_id": authority.runtime_id,
+            "execution_plan_id": authority.execution_plan_id,
+            "execution_plan_hash": authority.execution_plan_sha256,
+            "release_id": authority.release_id,
+            "symbol": authority.symbol,
+            "side": authority.side.value,
+            "emitted_parent_quantity": authority.parent_quantity,
+            "execution_policy_id": authority.policy_id,
+            "execution_policy_sha256": authority.policy_sha256,
+        }
+        actual_parent = {key: parent[key] for key in expected_parent}
+        actual_parent["emitted_parent_quantity"] = int(actual_parent["emitted_parent_quantity"])
+        if actual_parent != expected_parent:
+            raise KernelRepositoryConflict("ALGO_START parent benchmark authority conflicts with request")
+        cur.execute(
+            """
+            SELECT release_hash,execution_policy_version_id,execution_policy_sha256
+            FROM strategy_pkg.strategy_runtime_release WHERE release_id=%s FOR SHARE
+            """,
+            (authority.release_id,),
+        )
+        release = cur.fetchone()
+        if release is None:
+            raise KernelRepositoryConflict("ALGO_START runtime release authority is missing")
+        if (
+            str(release["release_hash"]) != authority.release_sha256
+            or str(release["execution_policy_version_id"]) != authority.policy_id
+            or str(release["execution_policy_sha256"]) != authority.policy_sha256
+        ):
+            raise KernelRepositoryConflict("ALGO_START release/policy authority conflicts with request")
+        cur.execute(
+            """
+            SELECT algo_instance_id FROM qmt_strategy.execution_algo_instance
+            WHERE runtime_id=%s AND parent_intent_id=%s AND strategy_slot_id=%s
+              AND kernel_contract_version='KERNEL_V2'
+            ORDER BY algo_instance_id FOR UPDATE
+            """,
+            (authority.runtime_id, authority.parent_intent_id, authority.strategy_slot_id),
+        )
+        existing = tuple(str(row["algo_instance_id"]) for row in cur.fetchall())
+        if len(existing) > 1:
+            raise KernelRepositoryConflict("multiple KERNEL_V2 algos own the same parent/slot authority")
+        return existing
+
     def apply_claimed_delivery_atomic(
         self,
         *,
@@ -289,6 +383,7 @@ class KernelRepositoryK2BMixin:
                 ExecutionAlgoInstancePersistenceV2,
                 AlgoStateSnapshotV2 | None,
                 tuple[ExecutionCommandChildMappingV1, ...],
+                tuple[BrokerCommandOutboxV1, ...],
                 tuple[ExecutionAlgoTimerScheduleV1, ...],
             ],
             KernelTransitionWriteBundleV1,
@@ -416,6 +511,18 @@ class KernelRepositoryK2BMixin:
                 )
                 cur.execute(
                     """
+                    SELECT carrier_json FROM qmt_strategy.execution_algo_command_outbox
+                    WHERE runtime_id=%s AND algo_instance_id=%s AND command_type='SUBMIT_LIMIT'
+                      AND status IN ('PENDING','CLAIMED','FAILED_RETRYABLE','DISPATCHING','OUTCOME_UNKNOWN','RECONCILING')
+                    ORDER BY mapping_id,command_id FOR UPDATE
+                    """,
+                    (claimed.runtime_id, claimed.algo_instance_id),
+                )
+                active_command_outboxes = tuple(
+                    _model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in cur.fetchall()
+                )
+                cur.execute(
+                    """
                     SELECT carrier_json FROM qmt_strategy.execution_algo_timer_schedule
                     WHERE runtime_id=%s AND algo_instance_id=%s AND status='SCHEDULED'
                     ORDER BY schedule_id FOR UPDATE
@@ -432,12 +539,54 @@ class KernelRepositoryK2BMixin:
                     algo,
                     previous_state,
                     active_mappings,
+                    active_command_outboxes,
                     active_timer_schedules,
                 )
                 if not isinstance(bundle, KernelTransitionWriteBundleV1):
                     raise TypeError("bundle_builder must return KernelTransitionWriteBundleV1")
+                if isinstance(bundle.receipt, AlgoFailureReceiptV1):
+                    durable_active_child_ids = tuple(item.child_order_id for item in active_mappings)
+                    if bundle.receipt.ordered_active_child_ids != durable_active_child_ids:
+                        raise KernelRepositoryConflict(
+                            "failure receipt active-child set differs from locked durable authority"
+                        )
+                    durable_pre_call_mapping_ids = tuple(
+                        item.mapping_id for item in active_mappings if item.mapping_status.value == "RESERVED"
+                    )
+                    if tuple(item.mapping_id for item in bundle.updated_child_mappings) != durable_pre_call_mapping_ids:
+                        raise KernelRepositoryConflict(
+                            "failure terminal mapping set differs from locked pre-call authority"
+                        )
+                    durable_cancel_mapping_ids = tuple(
+                        item.mapping_id for item in active_mappings if item.broker_order_id is not None
+                    )
+                    if tuple(item.mapping_id for item in bundle.command_outboxes) != durable_cancel_mapping_ids:
+                        raise KernelRepositoryConflict(
+                            "failure CANCEL outbox set differs from locked broker-accepted child authority"
+                        )
+                    expected_active_count = len(active_mappings) - len(bundle.updated_child_mappings)
+                    if bundle.algo_instance.active_child_count != expected_active_count:
+                        raise KernelRepositoryConflict(
+                            "failure algo active-child count differs from post-update durable authority"
+                        )
+                    has_unknown = any(
+                        item.broker_order_id is None and item.mapping_status.value != "RESERVED"
+                        for item in active_mappings
+                    )
+                    expected_closure = (
+                        ActiveChildClosureStatusV1.CLEAN
+                        if expected_active_count == 0
+                        else ActiveChildClosureStatusV1.OUTCOME_UNKNOWN
+                        if has_unknown
+                        else ActiveChildClosureStatusV1.CANCEL_PENDING
+                    )
+                    if bundle.algo_instance.active_child_closure_status is not expected_closure:
+                        raise KernelRepositoryConflict(
+                            "failure algo active-child closure differs from locked durable authority"
+                        )
                 self._validate_k2b_bundle(
                     bundle,
+                    event=event,
                     previous_delivery=claimed,
                     previous_algo=algo,
                     expected_delivery_row_version=expected_delivery_row_version,
@@ -459,6 +608,7 @@ class KernelRepositoryK2BMixin:
         self,
         bundle: KernelTransitionWriteBundleV1,
         *,
+        event: RuntimeEventEnvelopeV2 | None = None,
         previous_delivery: AlgoDeliveryPersistenceV1,
         previous_algo: ExecutionAlgoInstancePersistenceV2 | None,
         expected_delivery_row_version: int,
@@ -511,6 +661,15 @@ class KernelRepositoryK2BMixin:
         if isinstance(receipt, AlgoTransitionReceiptV1):
             if bundle.projection_set is None or bundle.after_state is None:
                 raise ValueError("applied K2-B bundle requires projection set and after state")
+            if bundle.updated_child_mappings or bundle.updated_command_outboxes:
+                raise ValueError("applied K2-B bundle cannot terminalize prior submit authority")
+            if event is not None:
+                _validate_projection_lineage_v1(
+                    event=event,
+                    projection_set=bundle.projection_set,
+                    consumed_lineage_refs=receipt.ordered_consumed_lineage_refs,
+                    has_broker_commands=bool(bundle.command_outboxes),
+                )
             transition_id = receipt.transition_id
             kind = "APPLIED"
             expected_commands = receipt.ordered_command_ids
@@ -538,6 +697,8 @@ class KernelRepositoryK2BMixin:
                     bundle.after_state is not None,
                     bool(bundle.new_child_mappings),
                     bool(bundle.command_outboxes),
+                    bool(bundle.updated_child_mappings),
+                    bool(bundle.updated_command_outboxes),
                     bool(bundle.timer_mutations),
                     bool(bundle.timer_schedules),
                     bool(bundle.diagnostic_observations),
@@ -579,6 +740,21 @@ class KernelRepositoryK2BMixin:
             mapping = mapping_by_command.get(outbox.command_id)
             if mapping is not None and mapping.mapping_id != outbox.mapping_id:
                 raise ValueError("K2-B mapping/outbox identity closure differs")
+        if len(bundle.updated_child_mappings) != len(bundle.updated_command_outboxes):
+            raise ValueError("K2-B mapping/outbox terminal update cardinality differs")
+        for mapping, outbox in zip(
+            bundle.updated_child_mappings,
+            bundle.updated_command_outboxes,
+            strict=True,
+        ):
+            if (
+                mapping.mapping_id != outbox.mapping_id
+                or mapping.command_id != outbox.command_id
+                or mapping.mapping_status.value != "TERMINAL"
+                or outbox.status.value != "FAILED_TERMINAL"
+                or outbox.broker_called is not False
+            ):
+                raise ValueError("K2-B pre-call terminal mapping/outbox closure differs")
         input_hashes: tuple[str, ...]
         if kind == "APPLIED":
             assert bundle.projection_set is not None and bundle.after_state is not None
@@ -587,6 +763,8 @@ class KernelRepositoryK2BMixin:
                 bundle.after_state.state_sha256,
                 *(item.payload_sha256 for item in bundle.new_child_mappings),
                 *(item.payload_sha256 for item in bundle.command_outboxes),
+                *(item.payload_sha256 for item in bundle.updated_child_mappings),
+                *(item.payload_sha256 for item in bundle.updated_command_outboxes),
                 *(item.schedule_receipt_sha256 for item in bundle.timer_schedules),
                 *(item.context_sha256 for item in bundle.diagnostic_observations),
             )
@@ -596,6 +774,8 @@ class KernelRepositoryK2BMixin:
                 receipt.context_sha256,
                 *((bundle.projection_set.projection_set_sha256,) if bundle.projection_set is not None else ()),
                 *(item.payload_sha256 for item in bundle.command_outboxes),
+                *(item.payload_sha256 for item in bundle.updated_child_mappings),
+                *(item.payload_sha256 for item in bundle.updated_command_outboxes),
                 *(item.schedule_receipt_sha256 for item in bundle.timer_schedules),
             )
         else:
@@ -608,6 +788,8 @@ class KernelRepositoryK2BMixin:
                 transition_id,
                 *(item.mapping_id for item in bundle.new_child_mappings),
                 *(item.command_id for item in bundle.command_outboxes),
+                *(item.mapping_id for item in bundle.updated_child_mappings),
+                *(item.command_id for item in bundle.updated_command_outboxes),
                 *(item.schedule_id for item in bundle.timer_schedules),
                 *(item.observation_id for item in bundle.diagnostic_observations),
             ),
@@ -710,6 +892,11 @@ class KernelRepositoryK2BMixin:
             )
             if cur.rowcount != 1:
                 raise KernelRepositoryConflict("diagnostic observation identity already exists inside new transition")
+        self._write_failure_terminal_updates_with_cursor(
+            cur,
+            mappings=bundle.updated_child_mappings,
+            outboxes=bundle.updated_command_outboxes,
+        )
         self._cas_algo_with_cursor(
             cur,
             algo_instance=bundle.algo_instance,
@@ -760,6 +947,113 @@ class KernelRepositoryK2BMixin:
             raise KernelRepositoryConflict("K2-B delivery CAS failed")
         return transition_id
 
+    def _write_failure_terminal_updates_with_cursor(
+        self,
+        cur: Any,
+        *,
+        mappings: tuple[ExecutionCommandChildMappingV1, ...],
+        outboxes: tuple[BrokerCommandOutboxV1, ...],
+    ) -> None:
+        for mapping, outbox in zip(mappings, outboxes, strict=True):
+            cur.execute(
+                """
+                SELECT child.mapping_json,current_outbox.carrier_json AS outbox_json
+                FROM qmt_strategy.execution_child_order AS child
+                JOIN qmt_strategy.execution_algo_command_outbox AS current_outbox
+                  ON current_outbox.mapping_id=child.mapping_id
+                WHERE child.mapping_id=%s AND current_outbox.command_id=%s
+                FOR UPDATE OF child,current_outbox
+                """,
+                (mapping.mapping_id, outbox.command_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KernelRepositoryConflict("failure terminalization lost mapping/outbox authority")
+            previous_mapping = _model_from_json(
+                ExecutionCommandChildMappingV1,
+                _row_json(row, "mapping_json"),
+            )
+            previous_outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(row, "outbox_json"))
+            mapping.validate_successor_v1(previous_mapping)
+            outbox.validate_successor_v1(previous_outbox)
+            mapping_projection = _mapping_scalar_projection(mapping)
+            cur.execute(
+                """
+                UPDATE qmt_strategy.execution_child_order
+                SET broker_order_id=%s,broker_identity_source_event_id=%s,mapping_status=%s,
+                    mapping_version=%s,mapping_payload_sha256=%s,mapping_receipt_sha256=%s,
+                    last_order_event_id=%s,last_trade_event_id=%s,updated_by_event_id=%s,
+                    mapping_updated_at_utc=%s,updated_at=%s,mapping_json=%s
+                WHERE mapping_id=%s AND mapping_version=%s
+                """,
+                (
+                    mapping_projection["broker_order_id"],
+                    mapping_projection["broker_identity_source_event_id"],
+                    mapping_projection["mapping_status"],
+                    mapping_projection["mapping_version"],
+                    mapping_projection["mapping_payload_sha256"],
+                    mapping_projection["mapping_receipt_sha256"],
+                    mapping_projection["last_order_event_id"],
+                    mapping_projection["last_trade_event_id"],
+                    mapping_projection["updated_by_event_id"],
+                    mapping_projection["mapping_updated_at_utc"],
+                    mapping_projection["updated_at"],
+                    _json(mapping.model_dump(mode="json")),
+                    mapping.mapping_id,
+                    previous_mapping.mapping_version,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise KernelRepositoryConflict("failure mapping terminalization CAS failed")
+            outbox_projection = _outbox_scalar_projection(outbox)
+            cur.execute(
+                """
+                UPDATE qmt_strategy.execution_algo_command_outbox
+                SET status=%s,attempt_count=%s,lease_owner=%s,lease_worker_id=%s,
+                    lease_process_incarnation_id=%s,lease_epoch=%s,lease_fence_token=%s,
+                    lease_expires_at=%s,dispatch_attempt_id=%s,next_attempt_at_utc=%s,
+                    broker_called=%s,broker_order_id=%s,ack_receipt_json=%s,ack_receipt_sha256=%s,
+                    non_acceptance_receipt_json=%s,unknown_outcome_receipt_json=%s,
+                    reconcile_receipt_json=%s,last_error_json=%s,row_version=%s,
+                    updated_at_utc=%s,closed_at_utc=%s,carrier_json=%s,outbox_row_sha256=%s
+                WHERE command_id=%s AND row_version=%s
+                  AND lease_owner IS NOT DISTINCT FROM %s AND lease_epoch=%s
+                  AND lease_fence_token IS NOT DISTINCT FROM %s
+                """,
+                (
+                    outbox_projection["status"],
+                    outbox_projection["attempt_count"],
+                    outbox_projection["lease_owner"],
+                    outbox_projection["lease_worker_id"],
+                    outbox_projection["lease_process_incarnation_id"],
+                    outbox_projection["lease_epoch"],
+                    outbox_projection["lease_fence_token"],
+                    outbox_projection["lease_expires_at"],
+                    outbox_projection["dispatch_attempt_id"],
+                    outbox_projection["next_attempt_at_utc"],
+                    outbox_projection["broker_called"],
+                    outbox_projection["broker_order_id"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    _json(outbox_projection["last_error_json"]),
+                    outbox_projection["row_version"],
+                    outbox_projection["updated_at_utc"],
+                    outbox_projection["closed_at_utc"],
+                    _json(outbox.model_dump(mode="json")),
+                    outbox_projection["outbox_row_sha256"],
+                    outbox.command_id,
+                    previous_outbox.row_version,
+                    previous_outbox.lease_owner,
+                    previous_outbox.lease_epoch,
+                    previous_outbox.lease_fence_token,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise KernelRepositoryConflict("failure outbox terminalization CAS failed")
+
     def _readback_k2b_bundle(
         self,
         transition_identity: str,
@@ -774,6 +1068,14 @@ class KernelRepositoryK2BMixin:
         for schedule in expected.timer_schedules:
             if self.read_timer_schedule(schedule.schedule_id) != schedule:
                 raise KernelRepositoryConflict("K2-B timer schedule post-commit readback differs")
+        for mapping, outbox in zip(
+            expected.updated_child_mappings,
+            expected.updated_command_outboxes,
+            strict=True,
+        ):
+            chain = self.read_command_identity_chain(outbox.command_id)
+            if chain["mapping"] != mapping or chain["outbox"] != outbox:
+                raise KernelRepositoryConflict("K2-B failure mapping/outbox post-commit readback differs")
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(

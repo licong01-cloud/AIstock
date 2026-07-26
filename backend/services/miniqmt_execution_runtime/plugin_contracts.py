@@ -2493,6 +2493,48 @@ def _qualified_exception_type_v1(error: BaseException) -> str:
     return f"{error_type.__module__}.{error_type.__qualname__}"
 
 
+def safe_exception_summary_v1(error: BaseException) -> dict[str, str]:
+    """Render one exception without allowing a broken renderer to hide the primary failure."""
+
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+    error_type = _qualified_exception_type_v1(error)
+    try:
+        rendered = str(error)
+    except Exception as renderer_error:
+        return {
+            "exception_type": error_type,
+            "exception_message": f"<{type(error).__name__}: unrenderable>",
+            "renderer_error_type": _qualified_exception_type_v1(renderer_error),
+        }
+    return {
+        "exception_type": error_type,
+        "exception_message": rendered or type(error).__name__,
+    }
+
+
+def stable_exception_reason_code_v1(error: BaseException, *, default: str) -> str:
+    """Read a typed reason code without invoking an arbitrary renderer."""
+
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+    if type(default) is not str or not default.strip():
+        raise TypeError("default must be a non-empty string")
+    try:
+        candidate = getattr(error, "reason_code", None)
+    except Exception:
+        return default
+    if type(candidate) is str and candidate.strip():
+        return candidate
+    try:
+        value = getattr(candidate, "value", None)
+    except Exception:
+        return default
+    if type(value) is str and value.strip():
+        return value
+    return default
+
+
 def _safe_error_object_v1(value: Any) -> dict[str, Any]:
     rendered = json_safe_evidence_v1(value)
     if isinstance(rendered, dict):
@@ -4100,7 +4142,10 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
         if self.mapping_version != previous.mapping_version + 1:
             raise ValueError("mapping_version must increment exactly once")
         allowed = {
-            CommandChildMappingStatusV1.RESERVED: {CommandChildMappingStatusV1.DISPATCHING},
+            CommandChildMappingStatusV1.RESERVED: {
+                CommandChildMappingStatusV1.DISPATCHING,
+                CommandChildMappingStatusV1.TERMINAL,
+            },
             CommandChildMappingStatusV1.DISPATCHING: {
                 CommandChildMappingStatusV1.BROKER_ACCEPTED,
                 CommandChildMappingStatusV1.BROKER_REJECTED,
@@ -4336,7 +4381,10 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         if self.row_version != previous.row_version + 1:
             raise ValueError("outbox row_version must increment exactly once")
         allowed = {
-            BrokerCommandOutboxStatusV1.PENDING: {BrokerCommandOutboxStatusV1.CLAIMED},
+            BrokerCommandOutboxStatusV1.PENDING: {
+                BrokerCommandOutboxStatusV1.CLAIMED,
+                BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+            },
             BrokerCommandOutboxStatusV1.CLAIMED: {
                 BrokerCommandOutboxStatusV1.DISPATCHING,
                 BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
@@ -4347,7 +4395,10 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
                 BrokerCommandOutboxStatusV1.ACKED_REJECTED,
                 BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
             },
-            BrokerCommandOutboxStatusV1.FAILED_RETRYABLE: {BrokerCommandOutboxStatusV1.CLAIMED},
+            BrokerCommandOutboxStatusV1.FAILED_RETRYABLE: {
+                BrokerCommandOutboxStatusV1.CLAIMED,
+                BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+            },
             BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN: {BrokerCommandOutboxStatusV1.RECONCILING},
             BrokerCommandOutboxStatusV1.RECONCILING: {
                 BrokerCommandOutboxStatusV1.ACKED,
@@ -4467,12 +4518,19 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         elif self.status is BrokerCommandOutboxStatusV1.RECONCILING:
             if self.broker_called is not None or self.unknown_outcome_receipt is None:
                 raise ValueError("RECONCILING requires unresolved unknown-outcome authority")
-        elif not any(receipt is not None for receipt in authority_receipts) or self.broker_called not in (
-            False,
-            None,
-            True,
-        ):
-            raise ValueError("terminal outbox failure requires explicit broker outcome authority")
+        elif self.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL:
+            pre_call_terminal = (
+                self.broker_called is False
+                and self.last_error_json is not None
+                and not any(receipt is not None for receipt in authority_receipts)
+            )
+            authority_terminal = any(receipt is not None for receipt in authority_receipts) and self.broker_called in (
+                False,
+                None,
+                True,
+            )
+            if not (pre_call_terminal or authority_terminal):
+                raise ValueError("terminal outbox failure requires pre-call evidence or broker outcome authority")
         if self.non_acceptance_receipt is not None and self.broker_called is not False:
             raise ValueError("non-acceptance authority requires broker_called=false")
         if self.last_error_json is not None:
@@ -5070,6 +5128,8 @@ __all__ = [
     "deterministic_client_order_ref_v1",
     "execution_child_order_id_v1",
     "kernel_lease_fence_token_v1",
+    "safe_exception_summary_v1",
+    "stable_exception_reason_code_v1",
     "transaction_commit_identity_v1",
     "validate_json_schema_instance_v1",
 ]

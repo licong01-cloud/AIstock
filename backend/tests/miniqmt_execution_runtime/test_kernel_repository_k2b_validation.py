@@ -4,6 +4,8 @@ from dataclasses import replace
 
 import pytest
 
+from backend.tests.miniqmt_execution_runtime.test_kernel_creation import _request
+
 from backend.services.miniqmt_execution_runtime.kernel_delivery import KernelTransitionWriteBundleV1
 from backend.services.miniqmt_execution_runtime.kernel_materializer import (
     materialize_failure_transition_v1,
@@ -156,13 +158,26 @@ def _validate(repository, bundle, claimed, algo) -> None:
 def test_k2b_public_entry_guards_fail_before_database_access() -> None:
     repository = _repository()
     with pytest.raises(TypeError, match="runtime_id"):
-        repository.initialize_algo_atomic(runtime_id="", event_key_sha256="a" * 64, bundle_builder=lambda _: None)
+        repository.initialize_algo_atomic(
+            runtime_id="",
+            event_key_sha256="a" * 64,
+            creation_authority=object(),
+            bundle_builder=lambda _: None,
+        )
     with pytest.raises(TypeError, match="event_key_sha256"):
         repository.initialize_algo_atomic(
-            runtime_id="runtime_k2b", event_key_sha256="bad", bundle_builder=lambda _: None
+            runtime_id="runtime_k2b",
+            event_key_sha256="bad",
+            creation_authority=object(),
+            bundle_builder=lambda _: None,
         )
     with pytest.raises(TypeError, match="bundle_builder"):
-        repository.initialize_algo_atomic(runtime_id="runtime_k2b", event_key_sha256="a" * 64, bundle_builder=None)
+        repository.initialize_algo_atomic(
+            runtime_id="runtime_k2b",
+            event_key_sha256="a" * 64,
+            creation_authority=_request(),
+            bundle_builder=None,
+        )
     with pytest.raises(TypeError, match="delivery_id"):
         repository.apply_claimed_delivery_atomic(
             delivery_id="",

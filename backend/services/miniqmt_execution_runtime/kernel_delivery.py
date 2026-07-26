@@ -35,6 +35,8 @@ from .plugin_contracts import (
     SideV1,
     ConsumedLineageRefV1,
     kernel_lease_fence_token_v1,
+    safe_exception_summary_v1,
+    stable_exception_reason_code_v1,
     TimerMutationV1,
 )
 from .plugin_registry import (
@@ -272,6 +274,7 @@ class KernelDeliveryWorkerV1:
             locked_algo: ExecutionAlgoInstancePersistenceV2,
             previous_state: AlgoStateSnapshotV2 | None,
             active_mappings: tuple[ExecutionCommandChildMappingV1, ...],
+            active_command_outboxes: tuple[BrokerCommandOutboxV1, ...],
             active_timers: tuple[ExecutionAlgoTimerScheduleV1, ...],
         ) -> KernelTransitionWriteBundleV1:
             def terminal_failure(
@@ -302,6 +305,7 @@ class KernelDeliveryWorkerV1:
                     failure_context=(context if context is not None else {"stage": "ALGO_DELIVERY_APPLY"}),
                     projection_set=projection_set,
                     active_mappings=active_mappings,
+                    active_command_outboxes=active_command_outboxes,
                     active_timer_schedules=active_timers,
                     logical_time_utc=logical_time_utc,
                     initialization=False,
@@ -398,10 +402,9 @@ class KernelDeliveryWorkerV1:
                     initialization=False,
                 )
             except Exception as exc:
-                reason_code = getattr(exc, "reason_code", "MINIQMT_ALGO_TRANSITION_FAILED")
                 return terminal_failure(
                     exc,
-                    reason_code=(reason_code.value if hasattr(reason_code, "value") else str(reason_code)),
+                    reason_code=stable_exception_reason_code_v1(exc, default="MINIQMT_ALGO_TRANSITION_FAILED"),
                     context=getattr(exc, "context", {"stage": "ALGO_DELIVERY_APPLY"}),
                     projection_set=inputs.services.execution_projection_set,
                 )
@@ -454,6 +457,8 @@ class KernelTransitionWriteBundleV1:
     after_state: AlgoStateSnapshotV2 | None
     new_child_mappings: tuple[ExecutionCommandChildMappingV1, ...] = ()
     command_outboxes: tuple[BrokerCommandOutboxV1, ...] = ()
+    updated_child_mappings: tuple[ExecutionCommandChildMappingV1, ...] = ()
+    updated_command_outboxes: tuple[BrokerCommandOutboxV1, ...] = ()
     timer_mutations: tuple[TimerMutationV1, ...] = ()
     timer_schedules: tuple[ExecutionAlgoTimerScheduleV1, ...] = ()
     diagnostic_observations: tuple[DiagnosticObservationV1, ...] = ()
@@ -469,6 +474,8 @@ class KernelTransitionWriteBundleV1:
         after_state: AlgoStateSnapshotV2 | None,
         new_child_mappings: Sequence[ExecutionCommandChildMappingV1] = (),
         command_outboxes: Sequence[BrokerCommandOutboxV1] = (),
+        updated_child_mappings: Sequence[ExecutionCommandChildMappingV1] = (),
+        updated_command_outboxes: Sequence[BrokerCommandOutboxV1] = (),
         timer_mutations: Sequence[TimerMutationV1] = (),
         timer_schedules: Sequence[ExecutionAlgoTimerScheduleV1] = (),
         diagnostic_observations: Sequence[DiagnosticObservationV1] = (),
@@ -476,6 +483,8 @@ class KernelTransitionWriteBundleV1:
         values = {
             "new_child_mappings": tuple(new_child_mappings),
             "command_outboxes": tuple(command_outboxes),
+            "updated_child_mappings": tuple(updated_child_mappings),
+            "updated_command_outboxes": tuple(updated_command_outboxes),
             "timer_mutations": tuple(timer_mutations),
             "timer_schedules": tuple(timer_schedules),
             "diagnostic_observations": tuple(diagnostic_observations),
@@ -483,6 +492,8 @@ class KernelTransitionWriteBundleV1:
         typed = (
             ("new_child_mappings", values["new_child_mappings"], ExecutionCommandChildMappingV1),
             ("command_outboxes", values["command_outboxes"], BrokerCommandOutboxV1),
+            ("updated_child_mappings", values["updated_child_mappings"], ExecutionCommandChildMappingV1),
+            ("updated_command_outboxes", values["updated_command_outboxes"], BrokerCommandOutboxV1),
             ("timer_mutations", values["timer_mutations"], TimerMutationV1),
             ("timer_schedules", values["timer_schedules"], ExecutionAlgoTimerScheduleV1),
             ("diagnostic_observations", values["diagnostic_observations"], DiagnosticObservationV1),
@@ -517,7 +528,7 @@ def _invocation_error(
 ) -> KernelPluginInvocationError:
     evidence = {"stage": stage, **context}
     if exception is not None:
-        evidence.update(exception_type=type(exception).__name__, exception_message=str(exception))
+        evidence.update(safe_exception_summary_v1(exception))
     return KernelPluginInvocationError(reason_code, message, context=evidence, broker_called=False)
 
 

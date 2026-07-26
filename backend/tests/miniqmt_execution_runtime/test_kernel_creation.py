@@ -33,7 +33,8 @@ class _CapturingRepository:
     def __init__(self) -> None:
         self.bundle = None
 
-    def initialize_algo_atomic(self, *, runtime_id, event_key_sha256, bundle_builder):
+    def initialize_algo_atomic(self, *, runtime_id, event_key_sha256, creation_authority, bundle_builder):
+        assert creation_authority.runtime_id == runtime_id
         self.bundle = bundle_builder(1)
         assert self.bundle.event.runtime_id == runtime_id
         assert self.bundle.event.event_key_sha256 == event_key_sha256

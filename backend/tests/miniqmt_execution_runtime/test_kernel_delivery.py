@@ -34,8 +34,12 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AlgoStartContextV1,
     AlgoStateSnapshotV2,
     AlgoTransitionV1,
+    BrokerCommandOutboxStatusV1,
+    BrokerCommandOutboxV1,
     BrokerCommandTypeV2,
     BrokerCommandV2,
+    ConsumedLineageRefV1,
+    ConsumedLineageTypeV1,
     CommandChildMappingStatusV1,
     DeliveryStatusV1,
     DeterministicExecutionContextV1,
@@ -44,6 +48,8 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     EventSourceV2,
     EventTypeV2,
     ExecutionProjectionSetV1,
+    ExecutionProjectionRefV1,
+    KernelProjectionTypeV1,
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
     ExecutionAlgoTimerScheduleStatusV1,
@@ -252,6 +258,79 @@ def test_current_pre_k4_binding_fails_loud_without_legacy_fallback() -> None:
     assert raised.value.broker_called is False
 
 
+def _event_lineage(
+    event: RuntimeEventEnvelopeV2,
+    projection_set: ExecutionProjectionSetV1,
+) -> tuple[ConsumedLineageRefV1, ...]:
+    refs = [
+        ConsumedLineageRefV1.create(
+            lineage_type=ConsumedLineageTypeV1.EVENT,
+            identity=event.event_id,
+            payload_sha256=event.payload_sha256,
+        )
+    ]
+    market_ref = next(
+        (
+            item
+            for item in projection_set.ordered_projection_refs
+            if item.projection_type is KernelProjectionTypeV1.MARKET_DATA
+        ),
+        None,
+    )
+    if event.event_type is EventTypeV2.TICK and market_ref is not None:
+        refs.append(
+            ConsumedLineageRefV1.create(
+                lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
+                identity=market_ref.projection_id,
+                payload_sha256=market_ref.payload_sha256,
+            )
+        )
+    return tuple(refs)
+
+
+def _market_ref(event: RuntimeEventEnvelopeV2) -> ExecutionProjectionRefV1:
+    return ExecutionProjectionRefV1.create(
+        projection_type=KernelProjectionTypeV1.MARKET_DATA,
+        projection_id="market_k2b",
+        projection_version="miniqmt_market_data_projection_v2",
+        payload_sha256=hash_hex_v1(
+            "miniqmt_market_data_projection_v2",
+            {"last_price_decimal": "10.000000"},
+        ),
+        source_event_id=event.event_id,
+        logical_at_utc=event.event_time_utc,
+    )
+
+
+def _command_projection_refs(event: RuntimeEventEnvelopeV2) -> tuple[ExecutionProjectionRefV1, ...]:
+    refs = [_market_ref(event)]
+    for projection_type, version, projection_id in (
+        (KernelProjectionTypeV1.KILL_SWITCH_STATE, "miniqmt_kill_switch_state_v1", "mqkillswitch_k2b"),
+        (
+            KernelProjectionTypeV1.OMS_PREFLIGHT,
+            "miniqmt_oms_preflight_projection_receipt_v1",
+            "mqomspreflight_k2b",
+        ),
+        (KernelProjectionTypeV1.RISK_DECISION, "miniqmt_risk_decision_receipt_v1", "mqriskdecision_k2b"),
+        (
+            KernelProjectionTypeV1.ROUTE_COMPATIBILITY,
+            "plugin_route_compatibility_receipt_v1",
+            "mqroutecompat_k2b",
+        ),
+    ):
+        refs.append(
+            ExecutionProjectionRefV1.create(
+                projection_type=projection_type,
+                projection_id=projection_id,
+                projection_version=version,
+                payload_sha256=hash_hex_v1(version, {"status": "PASS"}),
+                source_event_id=event.event_id,
+                logical_at_utc=event.event_time_utc,
+            )
+        )
+    return tuple(sorted(refs, key=lambda item: (item.projection_type.value, item.projection_id)))
+
+
 def test_pure_transition_is_rebuilt_from_durable_state_and_immutable_services() -> None:
     descriptor = next(
         item for item in _catalog().snapshot.registration_descriptors if item.manifest.algo_code == "SNIPER_MINIQMT"
@@ -295,12 +374,22 @@ def test_pure_transition_is_rebuilt_from_durable_state_and_immutable_services() 
         state=_state("SNIPER_MINIQMT"),
         last_applied_event_id=previous_context.event_id,
     )
+    market_projection = {"last_price_decimal": "10.000000"}
+    market_projection_hash = hash_hex_v1("miniqmt_market_data_projection_v2", market_projection)
+    market_ref = ExecutionProjectionRefV1.create(
+        projection_type=KernelProjectionTypeV1.MARKET_DATA,
+        projection_id="market_k2b",
+        projection_version="miniqmt_market_data_projection_v2",
+        payload_sha256=market_projection_hash,
+        source_event_id=event.event_id,
+        logical_at_utc=event.event_time_utc,
+    )
     projection_set = ExecutionProjectionSetV1.create(
         runtime_id=event.runtime_id,
         algo_instance_id=algo_instance_id,
         event_id=event.event_id,
         delivery_id=delivery_id,
-        projection_refs=(),
+        projection_refs=(market_ref,),
     )
     services = AlgoReadOnlyServicesV1.create(
         runtime_id=event.runtime_id,
@@ -309,8 +398,8 @@ def test_pure_transition_is_rebuilt_from_durable_state_and_immutable_services() 
         delivery_id=delivery_id,
         contract_projection_id=None,
         contract_projection=None,
-        market_data_projection_id=None,
-        market_data_projection=None,
+        market_data_projection_id="market_k2b",
+        market_data_projection=market_projection,
         account_projection_id=None,
         account_projection=None,
         execution_projection_set=projection_set,
@@ -355,7 +444,7 @@ def test_transition_invocation_strictly_rejects_bad_types_owner_codec_and_result
         algo_instance_id=algo.algo_instance_id,
         event_id=event.event_id,
         delivery_id=delivery.delivery_id,
-        projection_refs=(),
+        projection_refs=_command_projection_refs(event),
     )
     services = AlgoReadOnlyServicesV1.create(
         runtime_id=event.runtime_id,
@@ -364,8 +453,8 @@ def test_transition_invocation_strictly_rejects_bad_types_owner_codec_and_result
         delivery_id=delivery.delivery_id,
         contract_projection_id=None,
         contract_projection=None,
-        market_data_projection_id=None,
-        market_data_projection=None,
+        market_data_projection_id="market_k2b",
+        market_data_projection={"last_price_decimal": "10.000000"},
         account_projection_id=None,
         account_projection=None,
         execution_projection_set=projection_set,
@@ -496,6 +585,25 @@ def test_initialize_invocation_uses_exact_manifest_and_rejects_plugin_or_result_
         )
     assert raised.value.reason_code == "MINIQMT_ALGO_INITIALIZATION_PLUGIN_FAILED"
 
+    class _UnrenderableError(RuntimeError):
+        def __str__(self) -> str:
+            raise RuntimeError("renderer exploded")
+
+    class _UnrenderableFailure(_InitializingPlugin):
+        def initialize(self, _context):
+            raise _UnrenderableError()
+
+    with pytest.raises(KernelPluginInvocationError) as unrenderable:
+        invoke_plugin_initialize_v1(
+            plugin=_UnrenderableFailure(descriptor.manifest),
+            expected_manifest=descriptor.manifest,
+            start_context=context,
+        )
+    assert unrenderable.value.reason_code == "MINIQMT_ALGO_INITIALIZATION_PLUGIN_FAILED"
+    assert unrenderable.value.context["exception_type"].endswith("._UnrenderableError")
+    assert unrenderable.value.context["exception_message"] == "<_UnrenderableError: unrenderable>"
+    assert unrenderable.value.context["renderer_error_type"].endswith("RuntimeError")
+
     class _InvalidResult(_InitializingPlugin):
         def initialize(self, _context):
             return object()
@@ -520,12 +628,22 @@ def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback
         if item.manifest.manifest_sha256 == algo.plugin_manifest_sha256
     )
     owner = "worker_k2b:incarnation_k2b"
+    market_projection = {"last_price_decimal": "10.000000"}
+    market_projection_hash = hash_hex_v1("miniqmt_market_data_projection_v2", market_projection)
+    market_ref = ExecutionProjectionRefV1.create(
+        projection_type=KernelProjectionTypeV1.MARKET_DATA,
+        projection_id="market_k2b",
+        projection_version="miniqmt_market_data_projection_v2",
+        payload_sha256=market_projection_hash,
+        source_event_id=event.event_id,
+        logical_at_utc=event.event_time_utc,
+    )
     projection_set = ExecutionProjectionSetV1.create(
         runtime_id=event.runtime_id,
         algo_instance_id=algo.algo_instance_id,
         event_id=event.event_id,
         delivery_id=delivery.delivery_id,
-        projection_refs=(),
+        projection_refs=(market_ref,),
     )
     services = AlgoReadOnlyServicesV1.create(
         runtime_id=event.runtime_id,
@@ -534,8 +652,8 @@ def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback
         delivery_id=delivery.delivery_id,
         contract_projection_id=None,
         contract_projection=None,
-        market_data_projection_id=None,
-        market_data_projection=None,
+        market_data_projection_id="market_k2b",
+        market_data_projection=market_projection,
         account_projection_id=None,
         account_projection=None,
         execution_projection_set=projection_set,
@@ -575,7 +693,18 @@ def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback
         input_builder=lambda *_args: KernelDeliveryExecutionInputV1(
             services=services,
             deterministic_context=context,
-            consumed_lineage_refs=(),
+            consumed_lineage_refs=(
+                ConsumedLineageRefV1.create(
+                    lineage_type=ConsumedLineageTypeV1.EVENT,
+                    identity=event.event_id,
+                    payload_sha256=event.payload_sha256,
+                ),
+                ConsumedLineageRefV1.create(
+                    lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
+                    identity="market_k2b",
+                    payload_sha256=market_projection_hash,
+                ),
+            ),
         ),
     )
     assert repository.delivery.lease_owner == owner
@@ -870,7 +999,7 @@ class _WorkerRepository:
         return self.delivery
 
     def apply_claimed_delivery_atomic(self, **values):
-        self.bundle = values["bundle_builder"](self.event, self.delivery, self.algo, self.state, (), ())
+        self.bundle = values["bundle_builder"](self.event, self.delivery, self.algo, self.state, (), (), ())
         return {"bundle": self.bundle}
 
     def mark_delivery_retryable(self, **values):
@@ -1153,7 +1282,7 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
         algo_instance_id=algo.algo_instance_id,
         event_id=event.event_id,
         delivery_id=claimed.delivery_id,
-        projection_refs=(),
+        projection_refs=_command_projection_refs(event),
     )
     services = AlgoReadOnlyServicesV1.create(
         runtime_id=event.runtime_id,
@@ -1162,8 +1291,8 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
         delivery_id=claimed.delivery_id,
         contract_projection_id=None,
         contract_projection=None,
-        market_data_projection_id=None,
-        market_data_projection=None,
+        market_data_projection_id="market_k2b",
+        market_data_projection={"last_price_decimal": "10.000000"},
         account_projection_id=None,
         account_projection=None,
         execution_projection_set=projection_set,
@@ -1196,7 +1325,7 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
         previous_algo=algo,
         transition=transition,
         projection_set=projection_set,
-        consumed_lineage_refs=(),
+        consumed_lineage_refs=_event_lineage(event, projection_set),
         strategy_slot_id=algo.strategy_slot_id,
         parent_intent_id=algo.parent_intent_id,
         compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1230,7 +1359,7 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
             previous_algo=algo,
             transition=false_filled,
             projection_set=projection_set,
-            consumed_lineage_refs=(),
+            consumed_lineage_refs=_event_lineage(event, projection_set),
             strategy_slot_id=algo.strategy_slot_id,
             parent_intent_id=algo.parent_intent_id,
             compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1269,7 +1398,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         algo_instance_id=algo.algo_instance_id,
         event_id=event.event_id,
         delivery_id=claimed.delivery_id,
-        projection_refs=(),
+        projection_refs=_command_projection_refs(event),
     )
     context = DeterministicExecutionContextV1.create(
         runtime_id=event.runtime_id,
@@ -1363,7 +1492,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         previous_algo=algo,
         transition=transition,
         projection_set=projection_set,
-        consumed_lineage_refs=(),
+        consumed_lineage_refs=_event_lineage(event, projection_set),
         strategy_slot_id=algo.strategy_slot_id,
         parent_intent_id=algo.parent_intent_id,
         compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1381,6 +1510,169 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
     assert bundle.command_outboxes[0].mapping_id == bundle.new_child_mappings[0].mapping_id
     assert bundle.timer_schedules[0].schedule_id == timer.schedule_id
     assert bundle.diagnostic_observations == (diagnostic,)
+
+    with pytest.raises(KernelEffectMaterializationError) as missing_event:
+        materialize_applied_transition_v1(
+            event=event,
+            predecessor_delivery=claimed,
+            previous_algo=algo,
+            transition=transition,
+            projection_set=projection_set,
+            consumed_lineage_refs=(),
+            strategy_slot_id=algo.strategy_slot_id,
+            parent_intent_id=algo.parent_intent_id,
+            compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
+            plugin_config=thaw_json_v1(algo.plugin_config_json),
+            plugin_config_sha256=algo.plugin_config_sha256,
+            target_quantity=algo.target_quantity,
+            algo_code=algo.algo_code,
+            symbol=algo.symbol,
+            side=algo.side,
+            existing_mappings_by_local_vt_orderid={},
+            existing_timer_schedules={},
+            initialization=False,
+        )
+    assert missing_event.value.reason_code == "MINIQMT_ALGO_TRANSITION_EVENT_LINEAGE_INVALID"
+
+    market_only = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=claimed.delivery_id,
+        projection_refs=(_market_ref(event),),
+    )
+    with pytest.raises(KernelEffectMaterializationError) as missing_command_authority:
+        materialize_applied_transition_v1(
+            event=event,
+            predecessor_delivery=claimed,
+            previous_algo=algo,
+            transition=transition,
+            projection_set=market_only,
+            consumed_lineage_refs=_event_lineage(event, market_only),
+            strategy_slot_id=algo.strategy_slot_id,
+            parent_intent_id=algo.parent_intent_id,
+            compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
+            plugin_config=thaw_json_v1(algo.plugin_config_json),
+            plugin_config_sha256=algo.plugin_config_sha256,
+            target_quantity=algo.target_quantity,
+            algo_code=algo.algo_code,
+            symbol=algo.symbol,
+            side=algo.side,
+            existing_mappings_by_local_vt_orderid={},
+            existing_timer_schedules={},
+            initialization=False,
+        )
+    assert missing_command_authority.value.reason_code == "MINIQMT_ALGO_TRANSITION_COMMAND_AUTHORITY_MISSING"
+
+    invalid_refs = list(_command_projection_refs(event))
+    risk_index = next(
+        index for index, item in enumerate(invalid_refs) if item.projection_type is KernelProjectionTypeV1.RISK_DECISION
+    )
+    invalid_refs[risk_index] = ExecutionProjectionRefV1.create(
+        projection_type=KernelProjectionTypeV1.RISK_DECISION,
+        projection_id="risk_not_a_durable_receipt",
+        projection_version="miniqmt_risk_decision_receipt_v0",
+        payload_sha256="7" * 64,
+        source_event_id=event.event_id,
+        logical_at_utc=event.event_time_utc,
+    )
+    invalid_command_authority_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=claimed.delivery_id,
+        projection_refs=tuple(sorted(invalid_refs, key=lambda item: (item.projection_type.value, item.projection_id))),
+    )
+    with pytest.raises(KernelEffectMaterializationError) as invalid_command_authority:
+        materialize_applied_transition_v1(
+            event=event,
+            predecessor_delivery=claimed,
+            previous_algo=algo,
+            transition=transition,
+            projection_set=invalid_command_authority_set,
+            consumed_lineage_refs=_event_lineage(event, invalid_command_authority_set),
+            strategy_slot_id=algo.strategy_slot_id,
+            parent_intent_id=algo.parent_intent_id,
+            compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
+            plugin_config=thaw_json_v1(algo.plugin_config_json),
+            plugin_config_sha256=algo.plugin_config_sha256,
+            target_quantity=algo.target_quantity,
+            algo_code=algo.algo_code,
+            symbol=algo.symbol,
+            side=algo.side,
+            existing_mappings_by_local_vt_orderid={},
+            existing_timer_schedules={},
+            initialization=False,
+        )
+    assert invalid_command_authority.value.reason_code == "MINIQMT_ALGO_TRANSITION_COMMAND_AUTHORITY_INVALID"
+
+    def assert_market_authority_rejected(
+        market_projection_ref: ExecutionProjectionRefV1,
+        *,
+        lineage_payload_sha256: str | None = None,
+    ) -> None:
+        refs = [
+            market_projection_ref if item.projection_type is KernelProjectionTypeV1.MARKET_DATA else item
+            for item in _command_projection_refs(event)
+        ]
+        candidate_set = ExecutionProjectionSetV1.create(
+            runtime_id=event.runtime_id,
+            algo_instance_id=algo.algo_instance_id,
+            event_id=event.event_id,
+            delivery_id=claimed.delivery_id,
+            projection_refs=tuple(sorted(refs, key=lambda item: (item.projection_type.value, item.projection_id))),
+        )
+        lineages = list(_event_lineage(event, candidate_set))
+        if lineage_payload_sha256 is not None:
+            lineages[-1] = ConsumedLineageRefV1.create(
+                lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
+                identity=market_projection_ref.projection_id,
+                payload_sha256=lineage_payload_sha256,
+            )
+        with pytest.raises(KernelEffectMaterializationError) as raised:
+            materialize_applied_transition_v1(
+                event=event,
+                predecessor_delivery=claimed,
+                previous_algo=algo,
+                transition=transition,
+                projection_set=candidate_set,
+                consumed_lineage_refs=tuple(lineages),
+                strategy_slot_id=algo.strategy_slot_id,
+                parent_intent_id=algo.parent_intent_id,
+                compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
+                plugin_config=thaw_json_v1(algo.plugin_config_json),
+                plugin_config_sha256=algo.plugin_config_sha256,
+                target_quantity=algo.target_quantity,
+                algo_code=algo.algo_code,
+                symbol=algo.symbol,
+                side=algo.side,
+                existing_mappings_by_local_vt_orderid={},
+                existing_timer_schedules={},
+                initialization=False,
+            )
+        assert raised.value.reason_code == "MINIQMT_ALGO_TRANSITION_MARKET_DATA_LINEAGE_INVALID"
+
+    assert_market_authority_rejected(
+        ExecutionProjectionRefV1.create(
+            projection_type=KernelProjectionTypeV1.MARKET_DATA,
+            projection_id="wrong_market_k2b",
+            projection_version="miniqmt_market_data_projection_v2",
+            payload_sha256="6" * 64,
+            source_event_id=event.event_id,
+            logical_at_utc=event.event_time_utc,
+        )
+    )
+    assert_market_authority_rejected(
+        ExecutionProjectionRefV1.create(
+            projection_type=KernelProjectionTypeV1.MARKET_DATA,
+            projection_id="market_k2b",
+            projection_version="miniqmt_market_data_projection_v2",
+            payload_sha256="6" * 64,
+            source_event_id="event_wrong_market_owner",
+            logical_at_utc=event.event_time_utc,
+        )
+    )
+    assert_market_authority_rejected(_market_ref(event), lineage_payload_sha256="6" * 64)
 
     cancel = BrokerCommandV2.create(
         command_type=BrokerCommandTypeV2.CANCEL_ORDER,
@@ -1422,7 +1714,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             previous_algo=algo,
             transition=cancel_transition,
             projection_set=projection_set,
-            consumed_lineage_refs=(),
+            consumed_lineage_refs=_event_lineage(event, projection_set),
             strategy_slot_id=algo.strategy_slot_id,
             parent_intent_id=algo.parent_intent_id,
             compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1472,7 +1764,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             previous_algo=algo,
             transition=timer_transition,
             projection_set=projection_set,
-            consumed_lineage_refs=(),
+            consumed_lineage_refs=_event_lineage(event, projection_set),
             strategy_slot_id=algo.strategy_slot_id,
             parent_intent_id=algo.parent_intent_id,
             compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1511,7 +1803,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             previous_algo=algo,
             transition=rejected,
             projection_set=projection_set,
-            consumed_lineage_refs=(),
+            consumed_lineage_refs=_event_lineage(event, projection_set),
             strategy_slot_id=algo.strategy_slot_id,
             parent_intent_id=algo.parent_intent_id,
             compatibility_receipt_sha256=algo.compatibility_receipt_sha256,
@@ -1552,7 +1844,7 @@ def test_failure_materializer_cancels_owned_child_and_timer_but_does_not_invent_
     algo_payload["active_child_count"] = 2
     algo = ExecutionAlgoInstancePersistenceV2.model_validate(algo_payload)
 
-    def mapping(*, ordinal: int, broker_order_id: str | None) -> ExecutionCommandChildMappingV1:
+    def mapping(*, ordinal: int, broker_order_id: str | None):
         command = BrokerCommandV2.create(
             command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
             runtime_id=event.runtime_id,
@@ -1586,10 +1878,34 @@ def test_failure_materializer_cancels_owned_child_and_timer_but_does_not_invent_
             updated_by_event_id=event.event_id if broker_order_id is not None else None,
             created_at_utc="2026-07-26T01:29:00Z",
             updated_at_utc=("2026-07-26T01:29:30Z" if broker_order_id is not None else "2026-07-26T01:29:00Z"),
-        )
+        ), command
 
-    accepted = mapping(ordinal=0, broker_order_id="broker_owned_k2b")
-    unknown = mapping(ordinal=1, broker_order_id=None)
+    (accepted, _accepted_command) = mapping(ordinal=0, broker_order_id="broker_owned_k2b")
+    (unknown, unknown_command) = mapping(ordinal=1, broker_order_id=None)
+    unknown_outbox = BrokerCommandOutboxV1.create(
+        command=unknown_command,
+        mapping_id=unknown.mapping_id,
+        status=BrokerCommandOutboxStatusV1.PENDING,
+        attempt_count=0,
+        lease_owner=None,
+        lease_epoch=0,
+        lease_fence_token=None,
+        lease_expires_at=None,
+        dispatch_attempt_id=None,
+        next_attempt_at_utc=None,
+        broker_called=None,
+        broker_order_id=None,
+        ack_receipt_json=None,
+        ack_receipt_sha256=None,
+        non_acceptance_receipt=None,
+        unknown_outcome_receipt=None,
+        reconcile_receipt=None,
+        last_error_json=None,
+        row_version=1,
+        created_at_utc="2026-07-26T01:29:00Z",
+        updated_at_utc="2026-07-26T01:29:00Z",
+        closed_at_utc=None,
+    )
     timer_mutation = TimerMutationV1.create(
         mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
         algo_instance_id=algo.algo_instance_id,
@@ -1636,17 +1952,21 @@ def test_failure_materializer_cancels_owned_child_and_timer_but_does_not_invent_
         exception=RuntimeError("deterministic plugin failure"),
         failure_context={"stage": "TRANSITION"},
         active_mappings=(accepted, unknown),
+        active_command_outboxes=(unknown_outbox,),
         active_timer_schedules=(timer,),
         logical_time_utc=event.event_time_utc,
         initialization=False,
     )
 
-    assert bundle.algo_instance.active_child_closure_status is ActiveChildClosureStatusV1.OUTCOME_UNKNOWN
-    assert bundle.algo_instance.active_child_count == 2
+    assert bundle.algo_instance.active_child_closure_status is ActiveChildClosureStatusV1.CANCEL_PENDING
+    assert bundle.algo_instance.active_child_count == 1
     assert len(bundle.command_outboxes) == 1
     cancel_payload = thaw_json_v1(bundle.command_outboxes[0].payload_json)
     assert cancel_payload["owned_broker_order_id"] == "broker_owned_k2b"
     assert cancel_payload["local_vt_orderid"] == accepted.local_vt_orderid
     assert bundle.timer_schedules[0].status is ExecutionAlgoTimerScheduleStatusV1.CANCELLED
     assert bundle.timer_schedules[0].schedule_id == timer.schedule_id
-    assert unknown.mapping_id not in {item.mapping_id for item in bundle.command_outboxes}
+    assert bundle.updated_child_mappings[0].mapping_status is CommandChildMappingStatusV1.TERMINAL
+    assert bundle.updated_child_mappings[0].mapping_id == unknown.mapping_id
+    assert bundle.updated_command_outboxes[0].status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+    assert bundle.updated_command_outboxes[0].broker_called is False
