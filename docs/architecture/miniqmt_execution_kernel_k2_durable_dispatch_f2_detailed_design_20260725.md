@@ -1,19 +1,19 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified`，K2-B/C/D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-B/C/D `not_started`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 required CI run `30171598474`闭合；当前为 `implemented_verified`，`source_merge=pending_user_authorization`。K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B/C/D与K3/K4 `not_started`，产品 runtime 未切换。
 >
 > 本轮 K2-A 只实现 schema/repository slice，不启动 worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 migration/repository；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
 ### K2-A second-review checkpoint（2026-07-26）
 
-- K2-A source under review：`plugin_contracts.py` 中K2-A要求的§4 strict durable carriers；`kernel_repository.py` PostgreSQL writer/readback、row lock/CAS、DB-sequenced worker incarnation、event/delivery、transition/mapping/child/outbox、timer/session authority与有界恢复查询；三份 additive/preflight/guarded-rollback migration。
+- K2-A merged source：最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入；`plugin_contracts.py` 中K2-A要求的§4 strict durable carriers；`kernel_repository.py` PostgreSQL writer/readback、row lock/CAS、DB-sequenced worker incarnation、event/delivery、transition/mapping/child/outbox、timer/session authority与有界恢复查询；三份 additive/preflight/guarded-rollback migration。
 - 第二轮 RED：public carrier/repository/migration seam 证明首次 PENDING/RESERVED row 可携带伪造历史、CANCEL synchronous accepted 后 terminal outbox 无 successor 导致 later callback 不能原子闭合 mapping/algo、carrier JSON 与重复 scalar 只做部分比对、目标数据库可把 fingerprint helper 替换为预期常量并自证 READY。
-- 第二轮 GREEN：contracts=`33 passed`；DEV repository=`12 passed`；DEV migration=`11 passed`；import-boundary=`66 passed`；repository+contracts coverage run=`45 passed`，`kernel_repository.py` line=`87.21%`、branch=`72.04%`；MiniQMT L2=`719 passed,21 skipped`，Paper impact plan=`1050 passed,2 skipped,2 xfailed`；L0/registry、classifier、三份F2 validator=`10/10,28/28,70/70`、DESIGN-COMPLIANCE-001与required CI run `30171598474`全绿。catalog projection SHA-256=`6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762`，helper body SHA-256=`8d9c8b09b5c27a0b0caeeaea3663556b9876b0eea179057d691bbf2fce29c107`，canonical-LF forward SHA-256=`24b4e1894f93f1383d7690ff145c55e100a26cecfc9e60a9070b71a57524d083`。
-- 当前状态恢复为 `K2-A implemented_verified`、`source_merge=pending_user_authorization`。classifier主选择为`miniqmt_execution_runtime_l2`且`unmapped_code_files=[]`；ownership将runtime/migration标为影响`paper_v2`，因此Paper计划作为真实依赖补充执行。K2 overall仍需K2-B/C/D，不能由K2-A推断完成。
+- 第二轮 GREEN：contracts=`33 passed`；DEV repository=`12 passed`；DEV migration=`11 passed`；import-boundary=`66 passed`；repository+contracts coverage run=`45 passed`，`kernel_repository.py` line=`87.21%`、branch=`72.04%`；MiniQMT L2=`719 passed,21 skipped`，Paper impact plan=`1050 passed,2 skipped,2 xfailed`；L0/registry、classifier、三份F2 validator=`10/10,28/28,70/70`、DESIGN-COMPLIANCE-001与final required CI run `30172230466`全绿。catalog projection SHA-256=`6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762`，helper body SHA-256=`8d9c8b09b5c27a0b0caeeaea3663556b9876b0eea179057d691bbf2fce29c107`，canonical-LF forward SHA-256=`24b4e1894f93f1383d7690ff145c55e100a26cecfc9e60a9070b71a57524d083`。
+- 当前状态为 `K2-A implemented_verified + merged`、`source_merge=merged_pr_2729`、`close_sync=not_applicable_feature`。classifier主选择为`miniqmt_execution_runtime_l2`且`unmapped_code_files=[]`；ownership将runtime/migration标为影响`paper_v2`，因此Paper计划作为真实依赖补充执行。K2 overall仍需K2-B/C/D，不能由K2-A推断完成。
 
 ## 0. Implementation Decision / 实施决策
 
@@ -507,7 +507,7 @@ dispatcher直接测试必须调用production dispatcher public seam和instrument
 
 preflight/forward/rollback、全部§4 strict persistence carriers、worker epoch/incarnation、projection set、command-child mapping、PostgreSQL transactions、constraint/readback、legacy inventory。只实现repository/startup receipt public seam；不启动worker、不调用Gateway。
 
-当前第二轮审核补修checkpoint：K2-A已实现exact initial-state authority、same-identity progressed latest-view幂等、terminal CANCEL outbox不变的later callback mapping/algo atomic closure、complete pure carrier-to-scalar projection与identity-first recovery exact readback、code-owned independent `pg_catalog` recomputation及COMMIT后function-definition proof；并保留首轮command-aware mapping/outbox、active-child recount、exact fence、session owner与真实`CalendarSnapshotSet`闭包。contracts=`33 passed`、DEV repository=`12 passed`、DEV migration=`11 passed`、import-boundary=`66 passed`、repository coverage=`87.21%/72.04%`；MiniQMT L2=`719 passed,21 skipped`，Paper impact plan=`1050 passed,2 skipped,2 xfailed`，L0/registry、classifier、三份F2 validator、DESIGN-COMPLIANCE-001与required CI run `30171598474`均通过。K2-A状态为`implemented_verified`，source merge待用户授权；不启动K2-B/C/D worker/clock/dispatcher，也不切换产品route。
+当前第二轮审核补修checkpoint：K2-A已实现exact initial-state authority、same-identity progressed latest-view幂等、terminal CANCEL outbox不变的later callback mapping/algo atomic closure、complete pure carrier-to-scalar projection与identity-first recovery exact readback、code-owned independent `pg_catalog` recomputation及COMMIT后function-definition proof；并保留首轮command-aware mapping/outbox、active-child recount、exact fence、session owner与真实`CalendarSnapshotSet`闭包。contracts=`33 passed`、DEV repository=`12 passed`、DEV migration=`11 passed`、import-boundary=`66 passed`、repository coverage=`87.21%/72.04%`；MiniQMT L2=`719 passed,21 skipped`，Paper impact plan=`1050 passed,2 skipped,2 xfailed`，L0/registry、classifier、三份F2 validator、DESIGN-COMPLIANCE-001与final required CI run `30172230466`均通过。K2-A最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，状态为`implemented_verified + merged`；不启动K2-B/C/D worker/clock/dispatcher，也不切换产品route。
 
 ### K2-B — ingress, creation and delivery（5–7 人日）
 
@@ -549,7 +549,7 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 | gate | current state | explanation |
 | --- | --- | --- |
-| `source_merge` | `pending_user_authorization` | K2-A PR #2729尚未合入；第二轮review-fix source、本地/DEV验证与required CI run `30171598474`已闭合，K2-A=`implemented_verified` |
+| `source_merge` | `merged_pr_2729` | K2-A最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入；final required CI run `30172230466`全绿，K2-A=`implemented_verified + merged` |
 | `close_sync` | `not_applicable_feature` | 非BUG feature |
 | `production_ddl_gate` | `noop` | 未执行K2 migration |
 | `production_dml_gate` | `noop` | 无生产写入 |
@@ -587,7 +587,7 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | `F-067` | §4.8–§4.9、§8；timer schedule/occurrence、exchange-session authority schema/repository；K1 target-scoped calendar import authority | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`与`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`验证incomplete/fake CalendarSnapshotSet、SH/SZ/BJ/date/timezone/source/segments、runtime trade-date owner与timer lease/readback负例；K2-C再实现clock | design_ready | none |
 | `F-068` | §9；三份 migration + checksum/fingerprint/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV preflight、clean first/second apply、guarded rollback、CHECK/FK/partial predicate/type/null/default六类drift；production DDL未执行 | design_ready | none |
 | `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`=`719 passed,21 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`test_plugin_import_boundaries.py`=`66 passed`、repository coverage=`87.21/72.04`；`scripts/ci_change_classifier.py`选择MiniQMT且unmapped=0，Paper由ownership impact补充；`python -m nox -s l0`、`validation_module_registry_l0` PASS，三份`aistock_feature_workflow.py validate --tier F2`=`10/10,28/28,70/70`；required CI run `30171598474` green | design_ready | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`=`719 passed,21 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`test_plugin_import_boundaries.py`=`66 passed`、repository coverage=`87.21/72.04`；`scripts/ci_change_classifier.py`选择MiniQMT且unmapped=0，Paper由ownership impact补充；`python -m nox -s l0`、`validation_module_registry_l0` PASS，三份`aistock_feature_workflow.py validate --tier F2`=`10/10,28/28,70/70`；final required CI run `30172230466` green；PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` | design_ready | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 
@@ -603,4 +603,4 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 ## 17. Definition of Done / K2 完成定义
 
-K2-A 当前为`implemented_verified`：第二轮补修后的source、direct/DEV PostgreSQL、coverage、三份F2 validator、classifier-selected MiniQMT plan、ownership-impact Paper plan、L0/registry、DESIGN-COMPLIANCE-001与required CI run `30171598474`已闭合；source merge仍需用户授权。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
+K2-A 当前为`implemented_verified + merged`：第二轮补修后的source、direct/DEV PostgreSQL、coverage、三份F2 validator、classifier-selected MiniQMT plan、ownership-impact Paper plan、L0/registry、DESIGN-COMPLIANCE-001与final required CI run `30172230466`已闭合，最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
