@@ -6,15 +6,15 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration 七项首轮审核补修后，第二轮 initial-state、CANCEL ACK→later callback、complete scalar/carrier projection、code-owned independent catalog fingerprint 四项阻断已由direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001和required CI run `30171598474`闭合，当前为`implemented_verified`；K2-B/C/D、K3/K4 `not_started`。`source_merge=pending_user_authorization`仅指K2-A，现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A schema/repository/migration 七项首轮审核补修后，第二轮 initial-state、CANCEL ACK→later callback、complete scalar/carrier projection、code-owned independent catalog fingerprint 四项阻断已由direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001和final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为`implemented_verified + merged`；K2-B/C/D、K3/K4 `not_started`。`source_merge=merged_pr_2729`仅指K2-A source，现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`implemented_verified`，K2-B/C/D=`not_started`。第二轮 source、direct/DEV、coverage、classifier/F2/DESIGN-COMPLIANCE与required CI已闭合，source merge待用户授权；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_in_progress`；K2-A=`implemented_verified + merged`，K2-B/C/D=`not_started`。第二轮 source、direct/DEV、coverage、classifier/F2/DESIGN-COMPLIANCE与final required CI已闭合，source已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入；未启动worker、未调用Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's second-review fixes enforce exact initial facts and progressed-view idempotency, immutable terminal CANCEL outbox with later callback mapping/algo closure, complete carrier/scalar projection readback, and code-owned independent `pg_catalog` plus post-COMMIT function proof. K2-A is `implemented_verified`; source merge remains `pending_user_authorization`, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design remains `implementation_in_progress`: K2-A's second-review fixes enforce exact initial facts and progressed-view idempotency, immutable terminal CANCEL outbox with later callback mapping/algo closure, complete carrier/scalar projection readback, and code-owned independent `pg_catalog` plus post-COMMIT function proof. K2-A is `implemented_verified + merged` through final source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235`, PR #2729, and merge `0b46f7819f4147c97a36908e25ca948ce5450661`; `source_merge=merged_pr_2729`, K2-B/C/D and K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -746,7 +746,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - current three manifest 化；
 - `LockedSurfaceV2` exact signature/object/enum receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1 overall 当前为 `implemented_verified + merged`：K1-A/B/C 均已实现验证并合入；K1-C PR #2685 的 dual-upstream authority、indirect/dynamic/transitive helper import boundary 与 malformed isolated carrier 已由 implementation `52e1c5a2`、final CI run `30119969033` 及 merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1` 闭合，`source_merge=merged_pr_2685`；K2 detailed design `implementation_in_progress`，K2-A=`implemented_verified`且`source_merge=pending_user_authorization`，K2-B/C/D与K3/K4 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
+- K1 overall 当前为 `implemented_verified + merged`：K1-A/B/C 均已实现验证并合入；K1-C PR #2685 的 dual-upstream authority、indirect/dynamic/transitive helper import boundary 与 malformed isolated carrier 已由 implementation `52e1c5a2`、final CI run `30119969033` 及 merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1` 闭合，`source_merge=merged_pr_2685`；K2 detailed design `implementation_in_progress`，K2-A=`implemented_verified + merged`且`source_merge=merged_pr_2729`，最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235`、PR #2729、merge `0b46f7819f4147c97a36908e25ca948ce5450661`闭合，K2-B/C/D与K3/K4 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -758,7 +758,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - ExchangeSessionClock使用B0 preload exact `CalendarSnapshotSet`派生的durable session authority、session epoch/event identities；
 - crash/DB-epoch process incarnation/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
 - 四个切片为 K2-A schema/repository、K2-B ingress/delivery、K2-C clock/timer、K2-D outbox/reconcile/observability；
-- 当前 `implementation_in_progress`、K2-A source `implemented_verified`、K2-B/C/D `not_started`、shadow-only；首轮七项与第二轮四项正式审核阻断已完成production-seam RED/GREEN、DEV PostgreSQL、coverage、classifier、MiniQMT/Paper、L0/registry、F2、DESIGN-COMPLIANCE-001和required CI run `30171598474`闭环。source merge待用户授权；预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
+- 当前 `implementation_in_progress`、K2-A source `implemented_verified + merged`、K2-B/C/D `not_started`、shadow-only；首轮七项与第二轮四项正式审核阻断已完成production-seam RED/GREEN、DEV PostgreSQL、coverage、classifier、MiniQMT/Paper、L0/registry、F2、DESIGN-COMPLIANCE-001和final required CI run `30172230466`闭环。K2-A source已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661`合入；预计K2整体仍为4 PR，K2-B/C/D不得由本slice推断完成。
 
 ### K3：迁移现有三个算法
 
@@ -972,7 +972,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-067` | K2 detailed design §4.8–§4.9、§8 calendar/session authority与exchange clock | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`与`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`验证真实CalendarSnapshotSet strict-readback、target-scoped import boundary、SH/SZ/BJ/date/timezone/source/segments与runtime trade-date owner负例；K2-C target clock | design_ready | none |
 | `F-068` | K2 detailed design §9 migration | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV clean first/second apply、guarded rollback及同名错误CHECK/FK/partial predicate/type/null/default六类drift | design_ready | none |
 | `F-069` | K2 detailed design §10 diagnostics/retention/runbook | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | K2 detailed design §11–§13 validation/rollout | `python -m nox -s miniqmt_execution_runtime_l2`=`719 passed,21 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`，`test_plugin_import_boundaries.py`=`66 passed`，repository line/branch=`87.21/72.04`；classifier MiniQMT且unmapped=0，Paper由ownership impact补充；L0/registry与三份F2通过，DESIGN-COMPLIANCE-001和required CI run `30171598474` green | design_ready | none |
+| `F-070` | K2 detailed design §11–§13 validation/rollout | `python -m nox -s miniqmt_execution_runtime_l2`=`719 passed,21 skipped`，`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`，`test_plugin_import_boundaries.py`=`66 passed`，repository line/branch=`87.21/72.04`；classifier MiniQMT且unmapped=0，Paper由ownership impact补充；L0/registry与三份F2通过，DESIGN-COMPLIANCE-001和final required CI run `30172230466` green；PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
@@ -983,7 +983,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | no business semantic drift | pass | per-algo predecessor CAS 和 event owner routing 固定 callback order/slot isolation；K1 固定 current-three exact state 与 TWAP exchange-active seconds/午休/EOD/restart，legacy alias drift 不自动重解释；signal/target/plan、方向数量、B0 authority、A 股规则、OMS/Gateway 和唯一 broker route 保持 owner 不变 |
 | no unauthorized gates | pass | route-independent plugin catalog 与 per-plugin/per-route capability receipt 分离；单 route/plugin unsupported 不阻止其它 plugin；当前暂缺/非法 observation 按既有自动语义处理并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
 | no parallel product route | pass | 在现有 `MiniQMTExecutionRuntime` 内原地抽取 kernel/SPI，完整 vn.py runtime、legacy compiler/raw route 均不恢复 |
-| production state separation | pass | K1-B source 已通过 PR #2655 / merge `ae1035a1` 合入，K1-C source 已通过 PR #2685 / merge `e4faeb53` 合入，`source_merge=merged_pr_2685`、`close_sync=not_applicable_feature`；文档、DDL/DML、dependency、config、restart、binding、broker 和 runtime evidence 继续分别追踪且生产/runtime gates 均为 `noop` |
+| production state separation | pass | K1-B source 已通过 PR #2655 / merge `ae1035a1` 合入，K1-C source 已通过 PR #2685 / merge `e4faeb53` 合入；K2-A source 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，`source_merge=merged_pr_2729`、`close_sync=not_applicable_feature`；文档、DDL/DML、dependency、config、restart、binding、broker 和 runtime evidence 继续分别追踪且生产/runtime gates 均为 `noop` |
 
 ## 20. Definition of Done / 完成定义
 
