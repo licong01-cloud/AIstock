@@ -1070,7 +1070,11 @@ def _is_safe_runtime_relative_path(name: str) -> bool:
     if not name or "\\" in name:
         return False
     path = PurePosixPath(name)
-    return not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == name
+        and all(part not in {"", ".", ".."} for part in path.parts)
+    )
 
 
 def _workspace_runtime_path(workspace: Path, name: str) -> Path:
@@ -1190,7 +1194,7 @@ def _remote_runtime_artifact_link_commands(
                 "test \"$(stat -c %s -- " + quoted_remote_path + ")\" -eq " + str(size) + "; ",
                 "test \"$(sha256sum -- " + quoted_remote_path + " | awk '{print $1}')\" = " + _shell_quote(sha256) + "; ",
                 "mkdir -p -- " + quoted_parent + "; ",
-                "ln -sfn " + quoted_remote_path + " " + quoted_name + "; ",
+                "ln -sfn -- " + quoted_remote_path + " " + quoted_name + "; ",
                 "test -f " + quoted_name + "; ",
             ]
         )
