@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-870",
-  "closed_at": null,
+  "closed_at": "2026-07-26T13:53:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -60,8 +60,8 @@
   },
   "first_seen_at": "2026-07-26T06:41:29.728906Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e8f78649007b0933908cfb65d44277cecce19445",
+  "fixed_at": "2026-07-26T13:59:09.456538Z",
   "github_issue_number": 2755,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2755",
   "last_seen_at": "2026-07-26T06:41:29.728906Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2756",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,7 +81,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -89,6 +90,9 @@
     "fingerprint": "75b1d82834a5e514cb3bf41c",
     "source_event_id": "FE-20260726-75b1d82834a5"
   },
+  "validation_evidence": [
+    "python -m nox -s hmm_risk_backend -> 75 passed; coverage 74.11%"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -134,11 +138,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "validation_evidence": [
-    "validation-receipt: id=7f4f48183626336e commit=fd7d949c183427b3a6f5c7aa2da8fbf6a680722d kind=nox plan=hmm_risk_backend status=passed command=`python -m nox -s hmm_risk_backend` result=`75 passed; coverage 74.11%; successful`",
-    "validation-receipt: id=2f0861840412356e commit=fd7d949c183427b3a6f5c7aa2da8fbf6a680722d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`successful; blocking 0`",
-    "validation-receipt: id=9ce5b21dd439dd75 commit=fd7d949c183427b3a6f5c7aa2da8fbf6a680722d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; 14 of 14 mapped; successful`"
-  ],
   "verification_run_id": "BUG-870-local-fd7d949c-20260726",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
