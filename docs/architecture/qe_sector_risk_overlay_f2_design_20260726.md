@@ -1,6 +1,6 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_merged_runtime_active_artifact_built_bug872_fix_ready_pr_pending`
+> 文档状态：`implementation_merged_runtime_active_artifact_built_bug878_transport_fix_in_review`
 > Feature tier：`F2`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
@@ -224,7 +224,7 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = pending_bug872_exact_child_selection
+r13a_experiment = wiring_canary_failed_bug878_transport_fix_in_review
 non_qe_impact = prohibited
 ```
 
@@ -242,12 +242,15 @@ non_qe_impact = prohibited
 | F-029 | JSONL action ledger + `qe_sector_risk_overlay_artifacts.py` Recorder 三制品持久化 | `backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py` 与 `backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py` | implemented_verified | none |
 | F-030 | `evaluate_sector_risk_overlay` 的 lead/avoided drawdown/false exit/post-exit MFE/reentry/capture/cost 指标族 | `backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py` | implemented_verified | none |
 | F-031 | QE-only service/scripts、CPU pred-backtest、无 GPU telemetry | `tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py` 与 `python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md --tier F2` | implemented_verified | none |
+| F-032 | 超过 small-file 契约的 portable runtime Parquet 经 CAS 上传、冻结 binding，并在 qrun 前校验 size/SHA256 后链接；legacy/durable 语义一致 | `backend/tests/test_multi_alpha_remote_dispatch.py`、`backend/tests/multi_alpha/test_durable_execution_adapter.py` 的 oversized runtime CAS、无静默排除、binding evidence tests | implemented_verified | none |
 
 本地验收记录（2026-07-26）：新增与受影响测试合计 `207 passed, 38 skipped`；builder/evaluator branch coverage 合计 `88%`，runtime/Recorder helper branch coverage 合计 `95%`；动态加载的策略 wrapper 以 entry、four-arm mapping、partial/full exit、hold override、factor/lot 和默认 no-op business oracle 补证。定向 lint、`py_compile`、`git diff --check` 通过。未生成正式风险制品、未启动 R13A、未启停服务、未修改数据库。
 
 BUG-871 真实数据补证（2026-07-26）：当前固定 snapshot 映射覆盖率 `99.9922%`，正式 OOS 制品包含 `2,198,910` 个股票日和 `63,273` 个板块日；其中 `138,393` 个股票日（`6.2937%`）、`4,495` 个板块日为 `INCOMPLETE`。缺失分量计数为 `rs_turn_risk=1,085`、`flow_divergence_risk=1,455`、`vol_crowding_risk=4,103`，宽度和领导集中分量无缺失。制品保留这些证据并完成 hash 固化，没有填补或伪造源数据；R13A 尚未启动。
 
 BUG-872 child 规划补证（2026-07-26）：现有 scheme 结果身份为 `(run_id, weighting_scheme)`，因此单 run 内复制四个同名 `equal` child 会破坏持久化与 Archive 语义。R13A 改为四个 policy run，每个 run 使用同一 roster、`weighting_schemes=[equal]`、`include_baseline=true`、`include_loo=false`，由持久化 request snapshot、request hash 和 child input manifest 共同冻结选择。该结构无需 DDL，仍得到严格的 `4 × 2 = 8` 个 child；不是裁剪实验臂，也不改变任何 Alpha 结论。
+
+BUG-878 远端运行时制品传输补证（2026-07-27）：BUG-872 两-child wiring canary 已准确规划 baseline 与 equal scheme，随后两个 child 均在 qrun 前因 `qe_sector_risk_overlay.parquet.b64=25,257,152` 超过 `qe_file_sync` 10MB 小文件契约而失败；失败 run/child/attempt 保留，未形成 Alpha 结论，正式 R13A 尚未提交。修复不提高小文件上限、不压缩或裁剪制品，也不手工复制远端文件：所有 Base64 后会超限的 portable runtime Parquet 统一经 `WorkspaceArtifactSyncClient` 内容寻址 CAS 上传，按 filename/SHA256/size/CAS root 冻结远端 binding；qrun 前校验 CAS 文件大小和 SHA256 后建立 workspace 链接。小文件继续走原 `qe_file_sync`，节点绑定的 QE 数据链接继续排除，legacy 与 durable 两条远端执行路径采用同一语义。代码合入和用户重启后只重试两-child wiring canary；canary 成功后再提交四个 policy run 的 8 个正式 child。
 
 ## 12. DESIGN-COMPLIANCE-001
 

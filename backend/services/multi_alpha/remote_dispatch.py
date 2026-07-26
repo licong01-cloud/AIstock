@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping, Sequence
 from urllib.parse import urlparse
 
 import requests
@@ -62,6 +62,7 @@ _REMOTE_SMALL_EXCLUDED_NAMES = {
     "static_factors.parquet",
 }
 _REMOTE_SMALL_EXCLUDED_PREFIXES = ("minute_trades", "minute_summary")
+_REMOTE_RUNTIME_CAS_BINDING = "workspace_artifact_cas"
 
 
 @dataclass(frozen=True)
@@ -307,12 +308,29 @@ class RemotePredBacktestExecutor:
             artifact_manifest=artifact_manifest,
             prediction_artifact_sha256=str(prediction_artifact_manifest["sha256"]),
         )
+        runtime_artifact_bindings = _sync_remote_runtime_artifacts(
+            workspace=workspace,
+            node=node,
+            node_id=node_id,
+            artifact_client=artifact_client,
+            remote_paths=remote_paths,
+        )
         task_id = _remote_task_id(backtest_config=backtest_config, workspace=workspace)
         loop_index = _remote_loop_index(backtest_config=backtest_config)
         timeout_seconds = int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS))
-        small_files = _remote_small_files(workspace=workspace, pred_pkl=pred_pkl, include_prediction=False)
+        small_files = _remote_small_files(
+            workspace=workspace,
+            pred_pkl=pred_pkl,
+            include_prediction=False,
+            cas_bound_names={str(item["name"]) for item in runtime_artifact_bindings},
+        )
         self._sync_small_files(node=node, task_id=task_id, loop_index=loop_index, files=small_files, timeout_seconds=timeout_seconds)
-        wsl_command = _remote_wsl_command(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
+        wsl_command = _remote_wsl_command(
+            workspace=workspace,
+            remote_paths=remote_paths,
+            backtest_config=backtest_config,
+            runtime_artifact_bindings=runtime_artifact_bindings,
+        )
         try:
             loop_id, enhanced = asyncio.run(
                 self._run_remote_loop(
@@ -325,6 +343,7 @@ class RemotePredBacktestExecutor:
                         "backtest_name": str(backtest_config.get("backtest_name") or workspace.name),
                         "artifact_manifest": artifact_manifest,
                         "prediction_artifact_manifest": prediction_artifact_manifest,
+                        "runtime_artifact_bindings": runtime_artifact_bindings,
                         "remote_paths": remote_paths,
                     },
                     experiment_files={},
@@ -352,6 +371,7 @@ class RemotePredBacktestExecutor:
             "loop_id": loop_id,
             "artifact_manifest": artifact_manifest,
             "prediction_artifact_manifest": prediction_artifact_manifest,
+            "runtime_artifact_bindings": runtime_artifact_bindings,
         }
         return metrics
 
@@ -646,9 +666,18 @@ def _remote_loop_index(*, backtest_config: Mapping[str, Any]) -> int:
     return loop_index
 
 
-def _remote_small_files(*, workspace: Path, pred_pkl: Path, include_prediction: bool) -> dict[str, str]:
+def _remote_small_files(
+    *,
+    workspace: Path,
+    pred_pkl: Path,
+    include_prediction: bool,
+    cas_bound_names: Collection[str] = (),
+) -> dict[str, str]:
+    excluded = _validated_cas_bound_names(cas_bound_names, workspace=workspace)
     files: dict[str, str] = {}
     for name in sorted(_iter_remote_small_file_names(workspace=workspace)):
+        if name in excluded:
+            continue
         path = workspace / name
         if name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py") and not path.exists():
             raise MultiAlphaCombineBacktestError(
@@ -677,6 +706,136 @@ def _remote_small_files(*, workspace: Path, pred_pkl: Path, include_prediction: 
             context={"workspace": str(workspace), "too_large": too_large, "limit_bytes": _QE_FILE_SYNC_MAX_FILE_SIZE},
         )
     return files
+
+
+def _validated_cas_bound_names(names: Collection[str], *, workspace: Path) -> set[str]:
+    validated: set[str] = set()
+    for raw_name in names:
+        name = str(raw_name)
+        if not name or Path(name).name != name or name in {".", ".."} or name in validated:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime CAS binding contains an invalid or duplicate workspace filename",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name},
+            )
+        path = workspace / name
+        try:
+            is_oversized_binary = (
+                path.suffix.lower() in _REMOTE_SMALL_BINARY_SUFFIXES
+                and path.is_file()
+                and _base64_encoded_size(path.stat().st_size) > _QE_FILE_SYNC_MAX_FILE_SIZE
+            )
+        except OSError as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"failed to verify remote runtime CAS binding: {type(exc).__name__}: {exc}",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name, "workspace": str(workspace)},
+            ) from exc
+        if not is_oversized_binary:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime CAS binding contains an invalid or duplicate workspace filename",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name},
+            )
+        validated.add(name)
+    return validated
+
+
+def _base64_encoded_size(size: int) -> int:
+    return 4 * ((int(size) + 2) // 3)
+
+
+def _sync_remote_runtime_artifacts(
+    *,
+    workspace: Path,
+    node: ComputeNodeInfo,
+    node_id: str,
+    artifact_client: WorkspaceArtifactSyncClient,
+    remote_paths: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Route oversized portable runtime binaries through the workspace CAS.
+
+    Small files retain the qe_file_sync contract.  Only binary files whose
+    encoded payload would exceed that contract are promoted; canonical QE data
+    links and the dedicated L2/prediction artifacts are excluded by the common
+    workspace scanner before this function runs.
+    """
+
+    artifact_path = str(remote_paths.get("artifact_path") or "")
+    if "/" not in artifact_path:
+        raise MultiAlphaCombineBacktestError(
+            "remote artifact path cannot provide a CAS root for runtime artifacts",
+            reason_code="remote_artifact_store_root_missing",
+            context={"node_id": node_id, "artifact_path": artifact_path},
+        )
+    expected_root = artifact_path.rsplit("/", 1)[0].rstrip("/")
+    _require_remote_linux_path(path_name="artifact_store_root", value=expected_root, node=node)
+
+    bindings: list[dict[str, Any]] = []
+    observed_names: set[str] = set()
+    for name in sorted(_iter_remote_small_file_names(workspace=workspace)):
+        path = workspace / name
+        if path.suffix.lower() not in _REMOTE_SMALL_BINARY_SUFFIXES:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"failed to inspect remote runtime artifact: {type(exc).__name__}: {exc}",
+                reason_code="remote_workspace_file_scan_failed",
+                context={"path": str(path), "workspace": str(workspace)},
+            ) from exc
+        if _base64_encoded_size(size) <= _QE_FILE_SYNC_MAX_FILE_SIZE:
+            continue
+        if Path(name).name != name or name in observed_names:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact filename is unsafe or duplicated",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name, "workspace": str(workspace)},
+            )
+        observed_names.add(name)
+        local_sha256, local_size = sha256_file(path)
+        manifest = artifact_client.ensure_artifact(path, node_id=node_id)
+        status = manifest.get("status") if isinstance(manifest.get("status"), Mapping) else None
+        actual_sha256 = str(manifest.get("sha256") or "")
+        actual_size = int(manifest.get("size") or -1)
+        remote_size = int((status or {}).get("size") or -1)
+        remote_root = str((status or {}).get("artifact_store_root") or "").rstrip("/")
+        if (
+            actual_sha256 != local_sha256
+            or actual_size != local_size
+            or status is None
+            or status.get("exists") is not True
+            or remote_size != local_size
+            or not remote_root
+            or remote_root != expected_root
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact CAS receipt does not match the local artifact",
+                reason_code="remote_runtime_artifact_receipt_mismatch",
+                context={
+                    "node_id": node_id,
+                    "name": name,
+                    "local_sha256": local_sha256,
+                    "local_size": local_size,
+                    "expected_artifact_store_root": expected_root,
+                    "manifest": dict(manifest),
+                },
+            )
+        remote_path = f"{remote_root}/{local_sha256}"
+        _require_remote_linux_path(path_name=f"runtime_artifact:{name}", value=remote_path, node=node)
+        bindings.append(
+            {
+                "name": name,
+                "binding": _REMOTE_RUNTIME_CAS_BINDING,
+                "sha256": local_sha256,
+                "size": local_size,
+                "remote_path": remote_path,
+                "artifact_store_root": remote_root,
+                "cas_status": "uploaded" if manifest.get("uploaded") is True else "reused",
+            }
+        )
+    return bindings
 
 
 def _iter_remote_small_file_names(*, workspace: Path) -> set[str]:
@@ -713,7 +872,13 @@ def _b64_file(path: Path) -> str:
         ) from exc
 
 
-def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:
+def _remote_wsl_command(
+    *,
+    workspace: Path,
+    remote_paths: Mapping[str, str],
+    backtest_config: Mapping[str, Any],
+    runtime_artifact_bindings: Sequence[Mapping[str, Any]] = (),
+) -> str:
     conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "").strip()
     conda_activation = ""
     if conda_env:
@@ -727,12 +892,14 @@ def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], bac
     factor_cache = _shell_quote(remote_paths["factor_cache_dir"])
     env_exports = _remote_env_exports(backtest_config)
     workspace_cd = _remote_workspace_cd(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
+    runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings)
     command = "".join(
         [
             "set -euo pipefail; ",
             workspace_cd,
             "test -f conf.yaml; test -f qrun_limit_minute.py; test -f read_exp_res.py; ",
             "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').glob('*.b64')]\"; ",
+            runtime_artifact_links,
             "ln -sfn " + artifact_path + " combined_factors_df.parquet; ",
             "test -f combined_factors_df.parquet; ",
             "ln -sfn " + prediction_artifact_path + " combined_prediction.pkl; ",
@@ -751,6 +918,54 @@ def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], bac
         ]
     )
     return "bash -lc " + _shell_quote(command)
+
+
+def _remote_runtime_artifact_link_commands(
+    bindings: Sequence[Mapping[str, Any]],
+) -> str:
+    commands: list[str] = []
+    observed_names: set[str] = set()
+    for raw_binding in bindings:
+        binding = dict(raw_binding)
+        name = str(binding.get("name") or "")
+        sha256 = str(binding.get("sha256") or "")
+        remote_path = str(binding.get("remote_path") or "")
+        try:
+            size = int(binding.get("size") or -1)
+        except (TypeError, ValueError):
+            size = -1
+        invalid = (
+            binding.get("binding") != _REMOTE_RUNTIME_CAS_BINDING
+            or not name
+            or Path(name).name != name
+            or name in observed_names
+            or name in _REMOTE_SMALL_EXCLUDED_NAMES
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or size <= 0
+            or "\\" in remote_path
+            or not remote_path.startswith("/")
+            or remote_path.startswith("/mnt/")
+            or remote_path.rsplit("/", 1)[-1] != sha256
+        )
+        if invalid:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact binding is invalid",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"binding": binding},
+            )
+        observed_names.add(name)
+        quoted_remote_path = _shell_quote(remote_path)
+        quoted_name = _shell_quote(name)
+        commands.extend(
+            [
+                "test -f " + quoted_remote_path + "; ",
+                "test \"$(stat -c %s -- " + quoted_remote_path + ")\" -eq " + str(size) + "; ",
+                "test \"$(sha256sum -- " + quoted_remote_path + " | awk '{print $1}')\" = " + _shell_quote(sha256) + "; ",
+                "ln -sfn " + quoted_remote_path + " " + quoted_name + "; ",
+                "test -f " + quoted_name + "; ",
+            ]
+        )
+    return "".join(commands)
 
 
 def _remote_workspace_cd(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:

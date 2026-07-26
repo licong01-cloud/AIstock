@@ -186,8 +186,12 @@ class _ArtifactClient:
 
     def ensure_artifact(self, path: Path, *, node_id: str) -> dict[str, Any]:
         self.paths.append(path)
+        if path.name not in {"combined_factors_df.parquet", "combined_prediction.pkl"}:
+            digest = _sha256(path)
+        else:
+            digest = ("a" if path.suffix == ".parquet" else "b") * 64
         return {
-            "sha256": ("a" if path.suffix == ".parquet" else "b") * 64,
+            "sha256": digest,
             "size": path.stat().st_size,
             "uploaded": False,
             "status": {
@@ -867,6 +871,59 @@ def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp
     )
     assert fallback_task_id not in remote_payload.wsl_command
     assert len(artifact_client.paths) + len(remote_artifact_client.paths) == 4
+
+
+def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path: Path) -> None:
+    adapter, repository, coordinator, artifact_client, _used_nodes = _adapter(tmp_path)
+    repository.attempt["node_id"] = "rdagent-node1"
+    runtime_overlay = tmp_path / "runtime" / "qe_sector_risk_overlay.parquet"
+    runtime_overlay.write_bytes(b"r" * (8 * 1024 * 1024))
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="rdagent-node1",
+    )
+    token = OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=1)
+
+    outcome = asyncio.run(
+        adapter.submit(
+            artifacts=published,
+            intent=intent,
+            attempt_token=token,
+        )
+    )
+
+    published_overlay = published.workspace / runtime_overlay.name
+    expected_sha = _sha256(published_overlay)
+    assert outcome.state == "submitted"
+    assert artifact_client.paths == [
+        published.workspace / "combined_factors_df.parquet",
+        published.prediction_path,
+        published_overlay,
+    ]
+    payload = coordinator.calls[0]["payload"]
+    bindings = payload.config["runtime_artifact_bindings"]
+    assert bindings[0]["remote_path"] == f"/remote/artifacts/{expected_sha}"
+    assert f"{runtime_overlay.name}.b64" not in payload.experiment_files
+    assert "sha256sum --" in payload.wsl_command
+    assert f"/remote/artifacts/{expected_sha}" in payload.wsl_command
+    claimed_manifest = repository.claim_calls[0]["artifact_manifest"]
+    assert claimed_manifest["remote_runtime_artifact_bindings"] == bindings
+    assert claimed_manifest["manifest_hash"] == artifact_manifest_hash_for(
+        {key: value for key, value in claimed_manifest.items() if key != "manifest_hash"}
+    )
+    assert "remote_runtime_artifact_bindings" not in published.artifact_manifest
+    repository.attempt["artifact_manifest_json"] = claimed_manifest
+    collected = asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
+    assert collected.result_manifest["submission_artifact_manifest_hash"] == claimed_manifest["manifest_hash"]
+    assert collected.result_manifest["remote_runtime_artifact_bindings"] == bindings
 
 
 def test_submission_intent_is_deterministic_and_attempt_scoped(tmp_path: Path) -> None:

@@ -50,6 +50,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     WorkspaceArtifactSyncClient,
     _remote_paths,
     _remote_small_files,
+    _sync_remote_runtime_artifacts,
     _remote_wsl_command,
     get_compute_node_info,
 )
@@ -1273,6 +1274,22 @@ class QEWorkspacePredBacktestAdapter:
             artifact_manifest=l2_manifest,
             prediction_artifact_sha256=str(prediction_manifest["sha256"]),
         )
+        runtime_artifact_bindings = _sync_remote_runtime_artifacts(
+            workspace=artifacts.workspace,
+            node=node,
+            node_id=intent.node_id,
+            artifact_client=artifact_client,
+            remote_paths=remote_paths,
+        )
+        submission_artifact_manifest = dict(artifacts.artifact_manifest)
+        if runtime_artifact_bindings:
+            submission_artifact_manifest.pop("manifest_hash", None)
+            submission_artifact_manifest["remote_runtime_artifact_bindings"] = [
+                dict(item) for item in runtime_artifact_bindings
+            ]
+            submission_artifact_manifest["manifest_hash"] = artifact_manifest_hash_for(
+                submission_artifact_manifest
+            )
         remote_loop_index = _remote_loop_index_from_intent(intent.qe_loop_id)
         submission_backtest_config = {
             **dict(request.backtest_config),
@@ -1283,11 +1300,13 @@ class QEWorkspacePredBacktestAdapter:
             workspace=artifacts.workspace,
             remote_paths=remote_paths,
             backtest_config=submission_backtest_config,
+            runtime_artifact_bindings=runtime_artifact_bindings,
         )
         experiment_files = _remote_small_files(
             workspace=artifacts.workspace,
             pred_pkl=artifacts.prediction_path,
             include_prediction=False,
+            cas_bound_names={str(item["name"]) for item in runtime_artifact_bindings},
         )
 
         def claim_source(cur: Any) -> Mapping[str, Any] | None:
@@ -1299,7 +1318,7 @@ class QEWorkspacePredBacktestAdapter:
                 qe_task_id=intent.qe_task_id,
                 qe_loop_id=intent.qe_loop_id,
                 submission_intent_hash=intent.submission_intent_hash,
-                artifact_manifest=artifacts.artifact_manifest,
+                artifact_manifest=submission_artifact_manifest,
             )
 
         def record_waiting(
@@ -1339,9 +1358,10 @@ class QEWorkspacePredBacktestAdapter:
                 "run_id": intent.run_id,
                 "child_id": intent.child_id,
                 "attempt_id": intent.attempt_id,
-                "artifact_manifest": dict(artifacts.artifact_manifest),
+                "artifact_manifest": submission_artifact_manifest,
                 "l2_artifact_manifest": dict(l2_manifest),
                 "prediction_artifact_manifest": dict(prediction_manifest),
+                "runtime_artifact_bindings": runtime_artifact_bindings,
                 "remote_paths": remote_paths,
             },
             experiment_files=experiment_files,
@@ -1579,6 +1599,40 @@ class QEWorkspacePredBacktestAdapter:
             "prediction_store_manifest": prediction_store_manifest,
             "completed_after_deadline": bool(deadline_evidence),
         }
+        attempt = self._required_row(
+            "attempt",
+            intent.attempt_id,
+            self._repository.get_attempt(intent.attempt_id),
+        )
+        submitted_artifact_manifest = attempt.get("artifact_manifest_json")
+        if isinstance(submitted_artifact_manifest, Mapping) and submitted_artifact_manifest:
+            submitted_manifest = dict(submitted_artifact_manifest)
+            submitted_manifest_hash = submitted_manifest.get("manifest_hash")
+            submitted_without_hash = {
+                key: value
+                for key, value in submitted_manifest.items()
+                if key != "manifest_hash"
+            }
+            if submitted_manifest_hash != artifact_manifest_hash_for(submitted_without_hash):
+                raise DurableExecutionAdapterError(
+                    "persisted submission artifact manifest hash is invalid",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"attempt_id": intent.attempt_id},
+                )
+            runtime_bindings = submitted_manifest.get("remote_runtime_artifact_bindings")
+            if runtime_bindings is not None:
+                if not isinstance(runtime_bindings, list) or not all(
+                    isinstance(item, Mapping) for item in runtime_bindings
+                ):
+                    raise DurableExecutionAdapterError(
+                        "persisted runtime artifact bindings are invalid",
+                        reason_code="multi_alpha_artifact_manifest_invalid",
+                        context={"attempt_id": intent.attempt_id},
+                    )
+                result_manifest["submission_artifact_manifest_hash"] = submitted_manifest_hash
+                result_manifest["remote_runtime_artifact_bindings"] = [
+                    dict(item) for item in runtime_bindings
+                ]
         if deadline_evidence:
             result_manifest["execution_deadline"] = deadline_evidence
         result_manifest["manifest_hash"] = artifact_manifest_hash_for(result_manifest)
