@@ -118,6 +118,7 @@ class CombineBacktestRequest:
     walk_forward: Mapping[str, Any] = field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
     rank_fusion: Mapping[str, Any] = field(default_factory=dict)
     backtest_config: Mapping[str, Any] = field(default_factory=dict)
+    prediction_task_selection: Mapping[str, bool] | None = None
     baseline_leg_id: str | None = None
     topk: int = 20
     min_date_coverage: float = 0.8
@@ -1874,7 +1875,8 @@ class MultiAlphaCombineBacktestService:
             )
 
         task_specs: list[_PredictionTask] = []
-        if request.baseline_leg_id:
+        task_selection = resolved_prediction_task_selection(request)
+        if request.baseline_leg_id and task_selection["include_baseline"]:
             task_specs.append(
                 _PredictionTask(
                     name=f"baseline_{request.baseline_leg_id}",
@@ -1941,7 +1943,7 @@ class MultiAlphaCombineBacktestService:
                     per_window_weights_json=per_window_weights_payload(result, scheme=scheme),
                 )
             )
-            if len(panels) <= 2:
+            if len(panels) <= 2 or not task_selection["include_loo"]:
                 continue
             for dropped_leg in sorted(leg_by_id):
                 source_legs = prediction_legs if is_rank_fusion_scheme(scheme) else panels
@@ -2436,6 +2438,15 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     schemes = tuple(_normalize_scheme(item) for item in (payload.get("weighting_schemes") or DEFAULT_WEIGHTING_SCHEMES))
     if not schemes:
         raise MultiAlphaCombineBacktestError("weighting_schemes cannot be empty", reason_code="scheme_missing")
+    prediction_task_selection = _parse_prediction_task_selection(
+        payload.get("prediction_task_selection")
+    )
+    selection = resolved_prediction_task_selection_value(prediction_task_selection)
+    baseline_leg_id = (
+        str(payload.get("baseline_leg_id") or roster[0].leg_id)
+        if selection["include_baseline"]
+        else None
+    )
     raw_backtest_config = payload.get("backtest_config") if isinstance(payload.get("backtest_config"), Mapping) else {}
     topk = _positive_int(payload.get("topk") or raw_backtest_config.get("topk") or 20, field_name="topk")
     subprocess_timeout_seconds = _positive_int(
@@ -2448,7 +2459,15 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     )
     raw_run_timeout = payload.get("run_timeout_seconds") or raw_backtest_config.get("run_timeout_seconds")
     if raw_run_timeout is None:
-        task_count = 1 + len(schemes) + (len(schemes) * len(roster) if len(roster) > 2 else 0)
+        task_count = (
+            int(selection["include_baseline"])
+            + len(schemes)
+            + (
+                len(schemes) * len(roster)
+                if len(roster) > 2 and selection["include_loo"]
+                else 0
+            )
+        )
         node_id = str(raw_backtest_config.get("node_id") or "wsl2-5080")
         try:
             node_parallelism = validate_node_parallelism(node_id=node_id, backtest_config=raw_backtest_config)[node_id]
@@ -2474,7 +2493,8 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         walk_forward=dict(payload.get("walk_forward") or {"enabled": True, "window": 60, "min_periods": 2}),
         rank_fusion=dict(payload.get("rank_fusion") or {}),
         backtest_config=backtest_config,
-        baseline_leg_id=str(payload.get("baseline_leg_id") or roster[0].leg_id),
+        prediction_task_selection=prediction_task_selection,
+        baseline_leg_id=baseline_leg_id,
         topk=topk,
         min_date_coverage=float(payload.get("min_date_coverage") or 0.8),
         run_async=bool(payload.get("run_async", True)),
@@ -2493,6 +2513,7 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
         "walk_forward": request.walk_forward,
         "rank_fusion": request.rank_fusion,
         "backtest_config": request.backtest_config,
+        "prediction_task_selection": request.prediction_task_selection,
         "baseline_leg_id": request.baseline_leg_id,
         "topk": request.topk,
         "min_date_coverage": request.min_date_coverage,
@@ -2507,7 +2528,7 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
 def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
     backtest_config = dict(request.backtest_config)
     backtest_config.pop(REQUEST_SNAPSHOT_KEY, None)
-    return {
+    snapshot = {
         "roster": _roster_payload(request.roster),
         "oos_start": request.oos_start,
         "oos_end": request.oos_end,
@@ -2523,6 +2544,54 @@ def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
         "scheme_timeout_seconds": request.scheme_timeout_seconds,
         "run_timeout_seconds": request.run_timeout_seconds,
     }
+    if request.prediction_task_selection is not None:
+        snapshot["prediction_task_selection"] = dict(request.prediction_task_selection)
+    return snapshot
+
+
+def resolved_prediction_task_selection(
+    request: CombineBacktestRequest,
+) -> dict[str, bool]:
+    return resolved_prediction_task_selection_value(request.prediction_task_selection)
+
+
+def resolved_prediction_task_selection_value(
+    selection: Mapping[str, bool] | None,
+) -> dict[str, bool]:
+    normalized = _parse_prediction_task_selection(selection)
+    if normalized is None:
+        return {"include_baseline": True, "include_loo": True}
+    return normalized
+
+
+def _parse_prediction_task_selection(value: Any) -> dict[str, bool] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise MultiAlphaCombineBacktestError(
+            "prediction_task_selection must be an object",
+            reason_code="prediction_task_selection_invalid",
+            context={"value_type": type(value).__name__},
+        )
+    supported = {"include_baseline", "include_loo"}
+    unknown = sorted(str(key) for key in value if key not in supported)
+    if unknown:
+        raise MultiAlphaCombineBacktestError(
+            "prediction_task_selection contains unsupported fields",
+            reason_code="prediction_task_selection_invalid",
+            context={"unsupported_fields": unknown, "supported_fields": sorted(supported)},
+        )
+    result: dict[str, bool] = {}
+    for key in sorted(supported):
+        raw = value.get(key, True)
+        if not isinstance(raw, bool):
+            raise MultiAlphaCombineBacktestError(
+                f"prediction_task_selection.{key} must be boolean",
+                reason_code="prediction_task_selection_invalid",
+                context={"field": key, "value": raw},
+            )
+        result[key] = raw
+    return result
 
 
 def persisted_backtest_config_for(request: CombineBacktestRequest) -> dict[str, Any]:
