@@ -51,6 +51,42 @@ def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytes
     ]
 
 
+def test_l0_changed_files_excludes_upstream_only_origin_main_commits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+    git("init", "--initial-branch=main")
+    git("config", "user.email", "validation@example.invalid")
+    git("config", "user.name", "Validation Test")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-b", "task")
+    (repo / "task.txt").write_text("task\n", encoding="utf-8")
+    git("add", "task.txt")
+    git("commit", "-m", "task")
+    git("checkout", "main")
+    (repo / "base.txt").write_text("upstream-only modification\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "-m", "upstream")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "task")
+    (repo / "untracked.txt").write_text("local\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", repo)
+
+    changed = noxfile._l0_changed_files()
+
+    assert "task.txt" in changed
+    assert "untracked.txt" in changed
+    assert "base.txt" not in changed
+
+
 def test_l0_skill_validation_stays_within_changed_path_scope() -> None:
     paths = [".codex/skills/verify-aistock-feature/SKILL.md", "scripts/issue_flow.py"]
 

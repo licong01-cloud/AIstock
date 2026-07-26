@@ -22,10 +22,22 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260726-55915a40b661",
       "timestamp": "2026-07-26T19:46:28.085809Z"
+    },
+    {
+      "action": "fix_validated",
+      "actor": "codex",
+      "note": "Changed the branch delta to origin/main...HEAD and added a real temporary-repository regression proving upstream-only modifications are excluded while branch and untracked paths remain included.",
+      "timestamp": "2026-07-26T19:55:14.3081177Z"
     }
   ],
   "evidence_uris": [
-    "BUG-877 l0 output included backend/services/multi_alpha/durable_execution_adapter.py, backend/services/multi_alpha/remote_dispatch.py and related tests/docs although git diff origin/main...HEAD contains only BUG registry metadata."
+    "BUG-877 l0 output included backend/services/multi_alpha/durable_execution_adapter.py, backend/services/multi_alpha/remote_dispatch.py and related tests/docs although git diff origin/main...HEAD contains only BUG registry metadata.",
+    "RED: test_l0_changed_files_excludes_upstream_only_origin_main_commits failed because base.txt from an upstream-only modification was classified as changed",
+    "GREEN: backend/tests/test_noxfile_validation_env.py 16 passed",
+    "nox l0 PASS and scanned exactly BUG-880 registry metadata, noxfile.py, and backend/tests/test_noxfile_validation_env.py",
+    "nox validation_catalog_integrity PASS: 6 passed and findings=0",
+    "nox validation_module_registry_l0 PASS: 8 passed and 14/14 mapped",
+    "changed-file ownership scan PASS: 4/4 mapped, unmapped=0, ambiguous=0"
   ],
   "expected": "L0 must include only the task branch delta from the merge base plus staged, unstaged, and untracked task files; upstream-only origin/main files must not be classified as task changes.",
   "file_scope_contract": {
@@ -93,7 +105,7 @@
     ]
   },
   "first_seen_at": "2026-07-26T19:46:28.085809Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-880-l0-changed-files-routing-includes-upstream-only-20260726",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2778,
