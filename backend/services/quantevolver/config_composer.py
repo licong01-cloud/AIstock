@@ -428,6 +428,9 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 RISK_POLICY_FILE = "qe_event_risk_policy.json"
+SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
+SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
+SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
 PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "backend" / "rebalance_strategies",
@@ -1120,6 +1123,138 @@ class ConfigComposer:
                 "QE blocks this request instead of silently ignoring forced-exit semantics."
             )
 
+    @staticmethod
+    def _is_sector_risk_overlay_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
+        return bool((custom_params or {}).get("sector_risk_overlay_enabled", False))
+
+    @staticmethod
+    def _ensure_sector_risk_overlay_supported(strategy_class: str) -> None:
+        supported = {
+            "ScoreWeightedTopkStrategyV2",
+            "SuspendFilterScoreWeightedTopkStrategyV2",
+            "ScoreWeightedTopkStrategyV2CapacityV1",
+            "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+        }
+        if strategy_class not in supported:
+            raise ValueError(
+                "sector_risk_overlay_enabled=True is not supported by strategy "
+                f"'{strategy_class}'. Supported strategies: {sorted(supported)}."
+            )
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _prepare_sector_risk_overlay_runtime(
+        self,
+        *,
+        custom_params: Optional[Dict[str, Any]],
+        data_split: Dict[str, str],
+        strategy_info: Optional[Dict],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str], Optional[bytes]]:
+        """Validate and package an immutable QE-only sector-risk runtime artifact."""
+
+        if not self._is_sector_risk_overlay_enabled(custom_params):
+            return custom_params, None, None
+        if custom_params is None:
+            custom_params = {}
+
+        mode = str(custom_params.get("sector_risk_overlay_mode") or "").strip()
+        supported_modes = {"none", "entry_gate", "bounded_de_risk", "exit_reentry"}
+        if mode not in supported_modes:
+            raise ValueError(
+                "sector_risk_overlay_mode must be one of "
+                f"{sorted(supported_modes)}; received={mode!r}"
+            )
+        if not bool(custom_params.get("sector_risk_overlay_strict", True)):
+            raise ValueError(
+                "enabled QE sector-risk overlay requires sector_risk_overlay_strict=True; "
+                "missing stock-date rows cannot be silently ignored"
+            )
+
+        strategy_class = self._get_strategy_class_name(strategy_info)
+        self._ensure_sector_risk_overlay_supported(strategy_class)
+        manifest_source = Path(
+            str(custom_params.get("sector_risk_overlay_manifest_source") or "")
+        ).expanduser()
+        data_source = Path(
+            str(custom_params.get("sector_risk_overlay_data_source") or "")
+        ).expanduser()
+        if not manifest_source.is_file() or not data_source.is_file():
+            raise FileNotFoundError(
+                "enabled QE sector-risk overlay requires existing explicit source files: "
+                f"manifest={manifest_source} data={data_source}"
+            )
+        manifest_source = manifest_source.resolve()
+        data_source = data_source.resolve()
+        manifest_text = manifest_source.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+        if manifest.get("schema_version") != "qe_sector_risk_overlay_manifest_v1":
+            raise ValueError(
+                "invalid QE sector-risk manifest schema: "
+                f"{manifest.get('schema_version')!r}"
+            )
+        payload_hash = str(manifest.get("manifest_payload_sha256") or "")
+        payload_without_hash = dict(manifest)
+        payload_without_hash.pop("manifest_payload_sha256", None)
+        actual_payload_hash = hashlib.sha256(
+            json.dumps(
+                payload_without_hash,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if not payload_hash or payload_hash != actual_payload_hash:
+            raise ValueError(
+                "QE sector-risk manifest payload hash mismatch: "
+                f"expected={payload_hash!r} actual={actual_payload_hash}"
+            )
+        runtime_meta = (manifest.get("artifacts") or {}).get("runtime") or {}
+        expected_runtime_hash = str(runtime_meta.get("sha256") or "")
+        actual_runtime_hash = self._file_sha256(data_source)
+        if not expected_runtime_hash or expected_runtime_hash != actual_runtime_hash:
+            raise ValueError(
+                "QE sector-risk runtime hash mismatch: "
+                f"expected={expected_runtime_hash!r} actual={actual_runtime_hash}"
+            )
+        if not str(manifest.get("dataset_identity") or "").strip():
+            raise ValueError("QE sector-risk manifest is missing dataset_identity")
+
+        artifact_start = self._parse_date(str(manifest.get("output_start") or ""))
+        artifact_end = self._parse_date(str(manifest.get("output_end") or ""))
+        requested_start = self._parse_date(data_split["test_start"])
+        requested_end = self._parse_date(data_split["backtest_end"])
+        if artifact_start > requested_start or artifact_end < requested_end:
+            raise ValueError(
+                "QE sector-risk artifact does not cover the requested backtest window: "
+                f"artifact={artifact_start}..{artifact_end} "
+                f"requested={requested_start}..{requested_end}"
+            )
+
+        custom_params["sector_risk_overlay_mode"] = mode
+        custom_params["sector_risk_overlay_manifest_file"] = SECTOR_RISK_OVERLAY_MANIFEST_FILE
+        custom_params["sector_risk_overlay_data_file"] = SECTOR_RISK_OVERLAY_DATA_FILE
+        action_log = Path(
+            str(
+                custom_params.get("sector_risk_overlay_action_log")
+                or SECTOR_RISK_OVERLAY_ACTION_LOG
+            )
+        )
+        if action_log.is_absolute() or ".." in action_log.parts:
+            raise ValueError(
+                "sector_risk_overlay_action_log must be a workspace-relative path without '..'"
+            )
+        custom_params["sector_risk_overlay_action_log"] = action_log.as_posix()
+        custom_params["sector_risk_overlay_strict"] = True
+        custom_params.pop("sector_risk_overlay_manifest_source", None)
+        custom_params.pop("sector_risk_overlay_data_source", None)
+        return custom_params, manifest_text, data_source.read_bytes()
+
     def _prepare_suspend_filter_runtime(
         self,
         *,
@@ -1600,6 +1735,13 @@ class ConfigComposer:
             strategy_info=strategy_info,
             execution_algo=execution_algo,
         )
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
+        )
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -1639,6 +1781,12 @@ class ConfigComposer:
             (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
         if risk_policy_json:
             (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
+                sector_risk_manifest_json,
+                encoding="utf-8",
+            )
+            (exp_dir / SECTOR_RISK_OVERLAY_DATA_FILE).write_bytes(sector_risk_runtime_bytes)
 
         # 写入因子原始代码到 factors/ 子目录（保持原始格式不变）
         if has_factor_files:
@@ -1675,7 +1823,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1683,7 +1831,7 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1968,6 +2116,20 @@ class ConfigComposer:
         )
         if suspend_filter_json:
             experiment_files[SUSPEND_FILTER_FILE] = suspend_filter_json
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
+        )
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            import base64
+
+            experiment_files[SECTOR_RISK_OVERLAY_MANIFEST_FILE] = sector_risk_manifest_json
+            experiment_files[f"{SECTOR_RISK_OVERLAY_DATA_FILE}.b64"] = base64.b64encode(
+                sector_risk_runtime_bytes
+            ).decode("ascii")
 
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -2075,7 +2237,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2086,7 +2248,7 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
             helper_path = scripts_dir / helper_name
             if helper_path.exists():
                 experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2230,7 +2392,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -2710,6 +2872,13 @@ class ConfigComposer:
             strategy_info=strategy_info,
             execution_algo=execution_algo,
         )
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
+        )
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -2743,6 +2912,12 @@ class ConfigComposer:
             (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
         if risk_policy_json:
             (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
+                sector_risk_manifest_json,
+                encoding="utf-8",
+            )
+            (exp_dir / SECTOR_RISK_OVERLAY_DATA_FILE).write_bytes(sector_risk_runtime_bytes)
 
         if has_factor_files:
             self._write_factor_files(exp_dir, factors_info)
@@ -2777,14 +2952,14 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -3378,6 +3553,8 @@ class ConfigComposer:
             "risk_policy_enabled",
             "risk_policy_file",
             "risk_policy_strict",
+            "sector_risk_overlay_manifest_source",
+            "sector_risk_overlay_data_source",
             "_seed_ensemble_config",
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
@@ -3524,6 +3701,22 @@ class ConfigComposer:
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
+        sector_risk_overlay_enabled = self._is_sector_risk_overlay_enabled(custom_params)
+        if sector_risk_overlay_enabled:
+            self._ensure_sector_risk_overlay_supported(strategy_class)
+            if strategy_class in {
+                "ScoreWeightedTopkStrategyV2",
+                "SuspendFilterScoreWeightedTopkStrategyV2",
+            }:
+                strategy_class = "QESectorRiskOverlayScoreWeightedTopkStrategyV2"
+                strategy_module = "qe_sector_risk_overlay_strategy"
+            elif strategy_class in {
+                "ScoreWeightedTopkStrategyV2CapacityV1",
+                "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+            }:
+                strategy_class = "QESectorRiskOverlayScoreWeightedTopkStrategyV2CapacityV1"
+                strategy_module = "qe_sector_risk_overlay_strategy"
+
         # 安全过滤：只保留策略支持的参数
         # 避免不支持的参数通过 **kwargs 传递到 BaseStrategy 导致 TypeError
         _HMM_KEYS = {
@@ -3539,6 +3732,17 @@ class ConfigComposer:
         }
         _RISK_POLICY_KEYS = {
             "risk_policy_enabled", "risk_policy_file", "risk_policy_strict",
+        }
+        _SECTOR_RISK_OVERLAY_KEYS = {
+            "sector_risk_overlay_enabled",
+            "sector_risk_overlay_mode",
+            "sector_risk_overlay_manifest_file",
+            "sector_risk_overlay_data_file",
+            "sector_risk_overlay_strict",
+            "sector_risk_overlay_override_hold_thresh",
+            "sector_risk_overlay_reentry_confirm_days",
+            "sector_risk_overlay_state_multipliers",
+            "sector_risk_overlay_action_log",
         }
         _TOPK_DROPOUT_ALLOWED_KEYS = {
             "signal", "topk", "n_drop", "method_sell", "method_buy",
@@ -3566,7 +3770,7 @@ class ConfigComposer:
             "threshold_method", "min_improvement", "adaptive_multiplier",
             "threshold_floor", "min_trade_price", "max_trade_price",
             "max_single_order_value", "lot_size",
-        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS
+        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS | _SECTOR_RISK_OVERLAY_KEYS
 
         if strategy_class in {"TopkDropoutStrategy", "SuspendFilterTopkDropoutStrategy"}:
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
@@ -3608,6 +3812,8 @@ class ConfigComposer:
             "SuspendFilterScoreWeightedTopkStrategyV2",
             "ScoreWeightedTopkStrategyV2CapacityV1",
             "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+            "QESectorRiskOverlayScoreWeightedTopkStrategyV2",
+            "QESectorRiskOverlayScoreWeightedTopkStrategyV2CapacityV1",
         }:
             # V2 and the capacity variant share parameters; only defaults differ.
             _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
@@ -5579,7 +5785,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

@@ -1013,6 +1013,25 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
+    """Run QE-only sector-risk artifact, strategy, persistence, and evaluation contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/quantevolver/test_sector_risk_overlay.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_runtime.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
+        "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
+        "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path backend regression tests only."""
     _run_pytest(

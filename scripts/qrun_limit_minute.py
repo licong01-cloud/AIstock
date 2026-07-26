@@ -65,6 +65,13 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
     maybe_upload_prediction_artifacts = None
 
 try:
+    from qe_sector_risk_overlay_artifacts import persist_sector_risk_overlay_artifacts
+except ModuleNotFoundError as exc:
+    if exc.name != "qe_sector_risk_overlay_artifacts":
+        raise
+    persist_sector_risk_overlay_artifacts = None
+
+try:
     from qe_runtime_resource import (
         defer_runtime_phase_events,
         finalize_gpu_phase_lifecycle,
@@ -404,6 +411,24 @@ def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment
         mode=mode,
         config=config,
     )
+
+
+def _persist_sector_risk_overlay(recorder, config):
+    def contains_enabled(value):
+        if isinstance(value, dict):
+            if value.get("sector_risk_overlay_enabled") is True:
+                return True
+            return any(contains_enabled(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_enabled(item) for item in value)
+        return False
+
+    enabled = contains_enabled(config)
+    if persist_sector_risk_overlay_artifacts is None:
+        if enabled:
+            raise RuntimeError("QE_SECTOR_RISK_OVERLAY_ARTIFACT_HELPER_MISSING")
+        return None
+    return persist_sector_risk_overlay_artifacts(recorder, config)
 
 
 class BacktestRecorderIsolationError(RuntimeError):
@@ -1376,6 +1401,7 @@ def _run_full_backtest(
     )
     recorder_ref = _write_qe_current_recorder(recorder, mode, experiment_name)
     recorder.save_objects(config=config)
+    _persist_sector_risk_overlay(recorder, config)
     _maybe_upload_prediction_store(recorder, recorder_ref, mode, experiment_name, config)
     save_minute_trades_from_recorder(recorder, output_dir=output_dir or os.getcwd())
     return recorder
@@ -1579,6 +1605,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
         if "label.pkl" in save_payload:
             _run_seed_analysis_records(config, recorder, label_obj)
         recorder.save_objects(config=config)
+        _persist_sector_risk_overlay(recorder, config)
         _maybe_upload_prediction_store(recorder, recorder_ref, "seed_portfolio_ensemble", experiment_name, config)
         manifest["final_recorder_id"] = str((getattr(recorder, "info", {}) or {}).get("id") or "")
 
@@ -1815,6 +1842,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             print(f"[INFO] Completed: {rec_class}")
 
         recorder.save_objects(config=config)
+        _persist_sector_risk_overlay(recorder, config)
         _maybe_upload_prediction_store(recorder, recorder_ref, "pred_backtest", experiment_name, config)
         
         # 保存分钟级交易记录（环境变量控制）
@@ -1953,6 +1981,7 @@ def _run_backtest_only(config: dict, experiment_name: str):
             )
             r.generate()
         recorder.save_objects(config=config, params_pkl=model)
+        _persist_sector_risk_overlay(recorder, config)
         _maybe_upload_prediction_store(recorder, recorder_ref, "backtest_only", experiment_name, config)
 
     print("[INFO] Backtest-only completed successfully")

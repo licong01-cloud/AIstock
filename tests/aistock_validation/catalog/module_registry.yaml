@@ -37,6 +37,16 @@ modules:
     test_plans:
       required_on_change: [l0, qe_long_trend_phase2_backend]
       recommended: [qe_read_backend]
+  - module_id: qe.sector_risk_overlay
+    display_name: QE sector-risk overlay
+    parent_module: qe
+    module_type: data_pipeline
+    risk_level: high
+    description: QE-only causal sector-risk artifacts, four-arm portfolio overlays, Recorder evidence, and F-014 aligned evaluation.
+    description_zh: QE 专属因果板块风险制品、四臂组合覆盖策略、Recorder 证据及 F-014 对齐评价。
+    test_plans:
+      required_on_change: [l0, qe_sector_risk_overlay_backend]
+      recommended: [qe_read_backend]
   - module_id: qe.core
     display_name: QE core services
     parent_module: qe

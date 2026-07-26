@@ -32,6 +32,13 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
     maybe_upload_prediction_artifacts = None
 
 try:
+    from qe_sector_risk_overlay_artifacts import persist_sector_risk_overlay_artifacts
+except ModuleNotFoundError as exc:
+    if exc.name != "qe_sector_risk_overlay_artifacts":
+        raise
+    persist_sector_risk_overlay_artifacts = None
+
+try:
     from qe_runtime_resource import (
         finish_phase_publisher,
         start_phase_publisher,
@@ -111,6 +118,24 @@ def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment
         mode=mode,
         config=config,
     )
+
+
+def _persist_sector_risk_overlay(recorder, config):
+    def contains_enabled(value):
+        if isinstance(value, dict):
+            if value.get("sector_risk_overlay_enabled") is True:
+                return True
+            return any(contains_enabled(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_enabled(item) for item in value)
+        return False
+
+    enabled = contains_enabled(config)
+    if persist_sector_risk_overlay_artifacts is None:
+        if enabled:
+            raise RuntimeError("QE_SECTOR_RISK_OVERLAY_ARTIFACT_HELPER_MISSING")
+        return None
+    return persist_sector_risk_overlay_artifacts(recorder, config)
 
 
 def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
@@ -325,6 +350,7 @@ def _run_main(yaml_path):
     recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
     recorder_ref = _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
+    _persist_sector_risk_overlay(recorder, config)
     _maybe_upload_prediction_store(recorder, recorder_ref, "full", experiment_name, config)
     transition_runtime_phase("finalize", metadata={"runner_mode": "full"})
 
