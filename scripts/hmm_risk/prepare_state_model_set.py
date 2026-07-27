@@ -54,16 +54,21 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     build_l1_feature_panel,
     build_l1_training_series,
 )
+from backend.services.hmm_risk.security_identity import (  # noqa: E402
+    load_security_source_identity_manifest,
+)
+from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest  # noqa: E402
 from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
     PostgresStockFactReader,
     StockFactSourceSpec,
-    load_daily_aggregates,
+    load_direct_daily_aggregates,
     load_mapping_manifest,
 )
 
 
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
+C009_STOCK_FACT_PREFLIGHT_SCHEMA = "hmm_risk_c009_stock_fact_preflight_v1"
 B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
 B3_APPROVED_FROZEN_IDENTITIES = {
     "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
@@ -174,6 +179,36 @@ def _resolve_artifact(root: Path, relative_path: str) -> Path:
     return target
 
 
+def _load_security_identity_manifest(source: dict[str, Any]):
+    relative_path = str(source.get("security_identity_manifest_path") or "")
+    expected_sha256 = str(source.get("security_identity_manifest_sha256") or "").lower()
+    normalized = relative_path.replace("\\", "/")
+    parts = normalized.split("/")
+    if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+        raise StateModelSetError("security_identity_manifest_path must be a normalized repository-relative path")
+    path = ROOT.joinpath(*parts).resolve()
+    try:
+        path.relative_to(ROOT)
+    except ValueError as exc:
+        raise StateModelSetError("security identity manifest escapes the repository root") from exc
+    return load_security_source_identity_manifest(path, expected_sha256=expected_sha256)
+
+
+def _load_provider_absence_manifest(source: dict[str, Any]):
+    relative_path = str(source.get("provider_absence_manifest_path") or "")
+    expected_sha256 = str(source.get("provider_absence_manifest_sha256") or "").lower()
+    normalized = relative_path.replace("\\", "/")
+    parts = normalized.split("/")
+    if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+        raise StateModelSetError("provider_absence_manifest_path must be a normalized repository-relative path")
+    path = ROOT.joinpath(*parts).resolve()
+    try:
+        path.relative_to(ROOT)
+    except ValueError as exc:
+        raise StateModelSetError("provider absence manifest escapes the repository root") from exc
+    return load_provider_absence_manifest(path, expected_sha256=expected_sha256)
+
+
 def _connect_readonly(prefix: str):
     names = {
         name: os.environ.get(f"{prefix}{name}", "").strip() for name in ("HOST", "PORT", "NAME", "USER", "PASSWORD")
@@ -259,6 +294,8 @@ def _family_spec(
 
 def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
     source = request["source"]
+    security_identity_manifest = _load_security_identity_manifest(source)
+    provider_absence_manifest = _load_provider_absence_manifest(source)
     source_spec = StockFactSourceSpec(
         universe_key=str(source.get("universe_key") or ""),
         universe_rule_version=str(source.get("universe_rule_version") or ""),
@@ -267,20 +304,29 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
     )
     conn, db_identity = _connect_readonly(db_prefix)
     try:
-        reader = PostgresStockFactReader(conn, source_spec)
+        with conn.cursor() as cursor:
+            cursor.execute("SET LOCAL cursor_tuple_fraction=1.0")
+        reader = PostgresStockFactReader(
+            conn,
+            source_spec,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+        )
         source_state = reader.validate_source()
+        source_state["query_plan_contract"] = {
+            "cursor_tuple_fraction": 1.0,
+            "stock_fact_batching": "calendar_month_split_fact_stream_v1",
+            "price_mapping_stream": "server_side_cursor",
+            "fact_lookup": "date_bounded_exact_key_maps",
+            "causal_circ_mv": "python_state_from_authoritative_daily_basic_only",
+            "direct_l1_l2_single_stream": True,
+        }
         reader.load_classification_lookup()
         reader.validate_fact_uniqueness()
         mapping_manifest, constituents = load_mapping_manifest(reader)
-        aggregates, stock_fact_manifest = load_daily_aggregates(
+        aggregates, stock_fact_manifest, l2_aggregates, l2_stock_fact_manifest = load_direct_daily_aggregates(
             reader,
             min_coverage=MIN_COVERAGE,
-            sector_level="L1",
-        )
-        l2_aggregates, l2_stock_fact_manifest = load_daily_aggregates(
-            reader,
-            min_coverage=MIN_COVERAGE,
-            sector_level="L2",
         )
         calendar, benchmark, benchmark_manifest = _load_calendar_and_benchmark(
             conn,
@@ -307,6 +353,8 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         "source_state": source_state,
         "stock_facts": stock_fact_manifest,
         "calendar_benchmark": benchmark_manifest,
+        "security_source_identity": security_identity_manifest.evidence(),
+        "provider_absence_authority": provider_absence_manifest.evidence(),
     }
     return {
         "source_spec": source_spec,
@@ -319,6 +367,8 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         "l2_feature_definition": l2_feature_definition,
         "l2_stock_fact_manifest": l2_stock_fact_manifest,
         "dataset_manifest": dataset_manifest,
+        "security_identity_manifest": security_identity_manifest.evidence(),
+        "provider_absence_manifest": provider_absence_manifest.evidence(),
     }
 
 
@@ -432,6 +482,96 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     if not train_coverage_valid:
         body["request_candidate"] = None
         body["request_candidate_sha256"] = None
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _c009_train_source_request(request_template: dict[str, Any]) -> dict[str, Any]:
+    windows = {
+        (
+            _date(family.get("train_start"), "train_start"),
+            _date(family.get("train_end"), "train_end"),
+        )
+        for family in request_template["families"]
+    }
+    if len(windows) != 1:
+        raise StateModelSetError("C-009 preflight requires one immutable train window across both families")
+    train_start, train_end = next(iter(windows))
+    if train_start > train_end:
+        raise StateModelSetError("C-009 preflight train window is invalid")
+    source_start = _date(request_template["source"].get("source_start"), "source_start")
+    source_end = _date(request_template["source"].get("source_end"), "source_end")
+    if train_start < source_start or train_end > source_end:
+        raise StateModelSetError("C-009 train window escapes the immutable source window")
+    request = deepcopy(request_template)
+    request["source"]["source_start"] = train_start.isoformat()
+    request["source"]["source_end"] = train_end.isoformat()
+    return request
+
+
+def _c009_source_statistics(inputs: dict[str, Any]) -> dict[str, Any]:
+    l1 = inputs["dataset_manifest"]["stock_facts"]
+    l2 = inputs["l2_stock_fact_manifest"]
+    fields = (
+        "moneyflow_provider_absence_count",
+        "moneyflow_provider_absence_key_sha256",
+        "moneyflow_alias_resolution_count",
+        "moneyflow_alias_resolution_key_sha256",
+        "circ_mv_asof_stale_count",
+        "circ_mv_asof_max_staleness_trading_days",
+        "circ_mv_asof_stale_key_sha256",
+    )
+    mismatches = [field for field in fields if l1.get(field) != l2.get(field)]
+    if mismatches:
+        raise StateModelSetError("C-009 L1/L2 source evidence mismatch: " + ", ".join(sorted(mismatches)))
+    return {field: l1.get(field) for field in fields}
+
+
+def prepare_c009_stock_fact_preflight(request_template: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Run the approved 601-day C-009 source-only preflight without fitting or selection."""
+
+    producer_commit = _formal_producer_commit()
+    train_request = _c009_train_source_request(request_template)
+    inputs = _load_l1_source_inputs(train_request, db_prefix=db_prefix)
+    train_coverage = _b3_train_coverage_preflight(inputs, train_request)
+    source_statistics = _c009_source_statistics(inputs)
+    calendar = inputs["dataset_manifest"]["calendar_benchmark"]
+    if int(calendar.get("row_count") or 0) != 601:
+        raise StateModelSetError(
+            f"C-009 frozen train calendar must contain 601 trading dates, got {calendar.get('row_count')}"
+        )
+    train_coverage_valid = train_coverage["train_coverage_valid"] is True
+    body = {
+        "schema_version": C009_STOCK_FACT_PREFLIGHT_SCHEMA,
+        "status": "preflight_complete" if train_coverage_valid else "blocked",
+        "producer_commit": producer_commit,
+        "database": inputs["database"],
+        "source_start": train_request["source"]["source_start"],
+        "source_end": train_request["source"]["source_end"],
+        "trading_date_count": int(calendar["row_count"]),
+        "calendar_manifest_sha256": canonical_sha256(calendar),
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        "security_source_identity": inputs["security_identity_manifest"],
+        "provider_absence_authority": inputs["provider_absence_manifest"],
+        "source_statistics": source_statistics,
+        "l1_invalid_sector_date_count": _manifest_invalid_sector_date_count(inputs["dataset_manifest"]["stock_facts"]),
+        "l2_invalid_sector_date_count": _manifest_invalid_sector_date_count(inputs["l2_stock_fact_manifest"]),
+        "train_coverage": train_coverage,
+        "train_coverage_valid": train_coverage_valid,
+        "failure_reason_codes": list(train_coverage["failure_reason_codes"]),
+        "approved_source_coverage_contract_applied": True,
+        "fit_performed": False,
+        "selection_performed": False,
+        "d5_performed": False,
+        "d6_performed": False,
+        "formal_model_acceptance_thresholds_applied": False,
+        "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
@@ -1217,6 +1357,10 @@ def parse_args() -> argparse.Namespace:
         help="Freeze current B3 PIT identities without fitting, selection, or model/READY writes.",
     )
     diagnostic_group.add_argument(
+        "--c009-stock-fact-preflight-output",
+        help="Run the approved 601-day C-009 stock-fact source preflight without HMM fits or writes.",
+    )
+    diagnostic_group.add_argument(
         "--b3-preparation-output",
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
     )
@@ -1236,14 +1380,46 @@ def main() -> int:
     try:
         _read_env_file(Path(args.env_file).resolve())
         request_path = Path(args.request).resolve()
-        if args.b3_preflight_output:
+        c009_preflight_output = getattr(args, "c009_stock_fact_preflight_output", None)
+        if args.b3_preflight_output or c009_preflight_output:
             if not args.b3_request_candidate_output:
-                raise StateModelSetError("--b3-request-candidate-output is required with --b3-preflight-output")
+                if args.b3_preflight_output:
+                    raise StateModelSetError("--b3-request-candidate-output is required with --b3-preflight-output")
             request = _load_request_template(request_path)
         else:
             if args.b3_request_candidate_output:
                 raise StateModelSetError("--b3-request-candidate-output is only valid with --b3-preflight-output")
             request = _load_request(request_path)
+        if c009_preflight_output:
+            if args.b3_request_candidate_output:
+                raise StateModelSetError(
+                    "--b3-request-candidate-output is not valid with --c009-stock-fact-preflight-output"
+                )
+            report = prepare_c009_stock_fact_preflight(request, db_prefix=str(args.db_env_prefix))
+            report_path = Path(c009_preflight_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c009_stock_fact_preflight_cli_receipt_v1",
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "dataset_manifest_hash": report["dataset_manifest_hash"],
+                "mapping_manifest_hash": report["mapping_manifest_hash"],
+                "l2_stock_fact_manifest_hash": report["l2_stock_fact_manifest_hash"],
+                "security_identity_manifest_sha256": report["security_source_identity"]["manifest_sha256"],
+                "provider_absence_manifest_sha256": report["provider_absence_authority"]["manifest_sha256"],
+                "train_coverage_valid": report["train_coverage_valid"],
+                "failure_reason_codes": report["failure_reason_codes"],
+                "fit_performed": False,
+                "selection_performed": False,
+                "d6_performed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if report["status"] == "preflight_complete" else 1
         if args.b3_preflight_output:
             report = prepare_b3_preflight_candidate(request, db_prefix=str(args.db_env_prefix))
             request_candidate_path = None

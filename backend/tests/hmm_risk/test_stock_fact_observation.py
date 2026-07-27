@@ -92,10 +92,29 @@ def _stock_row(index: int, *, complete: bool = True) -> dict:
         "buy_elg_amount_cny": 200.0,
         "sell_elg_amount_cny": 150.0,
         "net_mf_amount_cny": 70.0,
+        "moneyflow_fact_status": "available",
+        "moneyflow_source_identity": {
+            "security_identity_id": f"canonical:000{index:03d}.SZ",
+            "canonical_ts_code": f"000{index:03d}.SZ",
+            "source_dataset": "market.moneyflow_ts",
+            "source_ts_code": f"000{index:03d}.SZ",
+            "resolution_kind": "canonical_same_code",
+        },
         "up_limit_yuan": close if index == 0 else close + 1.0,
     }
     if not complete:
         row["net_mf_amount_cny"] = None
+        row["moneyflow_fact_status"] = "provider_absence"
+        row["moneyflow_provider_absence"] = {
+            "fact_status": "provider_absence",
+            "canonical_ts_code": row["symbol"],
+            "source_dataset": "market.moneyflow_ts",
+            "source_ts_code": row["symbol"],
+            "trade_date": row["trade_date"].isoformat(),
+            "missing_fields": ["net_mf_amount_cny"],
+            "provider_audit_receipt_sha256": "a" * 64,
+            "row_hash": "b" * 64,
+        }
     return row
 
 
@@ -109,7 +128,15 @@ def test_stock_fact_aggregation_is_weighted_recomputed_and_records_missing_evide
     assert result.l1_return == pytest.approx(0.01)
     assert result.limit_up_ratio == pytest.approx(1 / 9)
     assert result.net_mf_amount == pytest.approx(9 * 70.0)
-    assert result.missing_evidence == ({"symbol": "000009.SZ", "fields": ["net_mf_amount_cny"]},)
+    assert result.missing_evidence == (
+        {
+            "symbol": "000009.SZ",
+            "fields": ["net_mf_amount_cny"],
+            "moneyflow_fact_status": "provider_absence",
+            "moneyflow_source_identity": rows[9]["moneyflow_source_identity"],
+            "moneyflow_provider_absence": rows[9]["moneyflow_provider_absence"],
+        },
+    )
     assert result.breadth_1d == 1.0
     assert result.breadth_5d == 1.0
 

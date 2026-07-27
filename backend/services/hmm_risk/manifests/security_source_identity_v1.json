@@ -1,0 +1,18 @@
+{
+  "schema_version": "hmm_risk_security_source_identity_manifest_v1",
+  "manifest_version": "hmm_risk_security_source_identity_20260727_v1",
+  "default_resolution": "canonical_same_code",
+  "rows": [
+    {
+      "security_identity_id": "szse_300114_302132",
+      "canonical_ts_code": "302132.SZ",
+      "source_dataset": "market.moneyflow_ts",
+      "source_ts_code": "300114.SZ",
+      "effective_start": "2010-08-27",
+      "effective_end": "2025-02-16",
+      "authority_ref": "https://disc.static.szse.cn/disc/disk03/finalpage/2025-01-23/446cadc3-e9af-4adb-912c-9f25d17a4607.PDF",
+      "authority_hash": "808b825b3831707c1246826d03ce80cd1565ffdd57c2f3f61d2d1f38a7482d18",
+      "row_hash": "12df0874a894ed58542e0d9c054526549c9d53cd8888b9278230e2de34c982e2"
+    }
+  ]
+}
