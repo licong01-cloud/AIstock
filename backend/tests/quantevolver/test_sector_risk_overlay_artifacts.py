@@ -79,6 +79,72 @@ def test_recorder_persistence_rejects_multiple_overlay_strategies(tmp_path) -> N
         )
 
 
+def test_recorder_persistence_uses_executable_record_not_yaml_anchor_definition(
+    tmp_path, monkeypatch
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    data_path = tmp_path / "runtime.parquet"
+    action_path = tmp_path / "actions.jsonl"
+    manifest_path.write_text(
+        json.dumps({"dataset_identity": "fixture-v1", "manifest_payload_sha256": "hash"}),
+        encoding="utf-8",
+    )
+    data_path.write_bytes(b"runtime")
+    action_path.write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    strategy = {
+        "class": "QESectorRiskOverlayScoreWeightedTopkStrategyV2",
+        "kwargs": {
+            "sector_risk_overlay_enabled": True,
+            "sector_risk_overlay_mode": "none",
+            "sector_risk_overlay_manifest_file": manifest_path.name,
+            "sector_risk_overlay_data_file": data_path.name,
+            "sector_risk_overlay_action_log": action_path.name,
+        },
+    }
+    port_analysis_config = {"strategy": strategy}
+    config = {
+        "port_analysis_config": port_analysis_config,
+        "task": {
+            "record": [
+                {
+                    "class": "PortAnaRecord",
+                    "kwargs": {"config": port_analysis_config},
+                }
+            ]
+        },
+    }
+
+    receipt = persist_sector_risk_overlay_artifacts(Recorder(), config)
+
+    assert receipt["mode"] == "none"
+    assert receipt["action_count"] == 0
+
+
+def test_recorder_persistence_rejects_multiple_executable_portfolio_records() -> None:
+    def port_record(mode):
+        return {
+            "class": "PortAnaRecord",
+            "kwargs": {
+                "config": {
+                    "strategy": {
+                        "class": "QESectorRiskOverlayScoreWeightedTopkStrategyV2",
+                        "kwargs": {
+                            "sector_risk_overlay_enabled": True,
+                            "sector_risk_overlay_mode": mode,
+                        },
+                    }
+                }
+            },
+        }
+
+    config = {"task": {"record": [port_record("none"), port_record("entry_gate")]}}
+
+    with pytest.raises(RuntimeError, match="multiple executable overlay strategies: 2"):
+        persist_sector_risk_overlay_artifacts(Recorder(), config)
+
+
 def test_recorder_persistence_rejects_missing_and_invalid_action_assets(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     kwargs = {
