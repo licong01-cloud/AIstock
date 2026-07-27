@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K3 Current-Three Runtime Migration F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready_for_review`；PR #2816；`source_merge=pending_user_review`。
+> Feature tier：`F2`。文档状态：`design_revised_ready_for_review`；PR #2816；`source_merge=pending_user_review`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -133,17 +133,25 @@ backend/execution_algos/vnpy_style/best_limit_plugin.py
 backend/execution_algos/vnpy_style/twap_lite_plugin.py
 backend/execution_algos/vnpy_style/plugin_factories.py
 backend/execution_algos/vnpy_style/plugin_manifests.py
-backend/services/miniqmt_execution_runtime/plugin_contracts.py # additive public transition-id authority only
-backend/services/miniqmt_execution_runtime/kernel_materializer.py # v3 state-to-mapping closure only
+backend/services/miniqmt_execution_runtime/plugin_contracts.py # transition ID、v3 state、callback/outcome payload和lifecycle projection
+backend/services/miniqmt_execution_runtime/kernel_callback_events.py # ORDER/TRADE/COMMAND_OUTCOME唯一strict builder/readback
+backend/services/miniqmt_execution_runtime/kernel_delivery.py # 同一input snapshot携带mapping/outbox lifecycle projection
+backend/services/miniqmt_execution_runtime/kernel_materializer.py # v3 state-to-mapping/outbox closure
+backend/services/miniqmt_execution_runtime/kernel_outbox.py # terminal outcome触发确定性COMMAND_OUTCOME ingress，不伪装ACK/OMS事件
+backend/services/miniqmt_execution_runtime/kernel_repository.py
+backend/services/miniqmt_execution_runtime/kernel_repository_event_delivery.py
+backend/services/miniqmt_execution_runtime/kernel_repository_transition_outbox.py
 ```
 
-`plugin_registry.py`必须保持generic且预计零产品diff；K3通过其现有public catalog/binding API验收3.0.0 manifests。若direct RED证明generic registry合同自身有缺陷，必须单独登记BUG或先更新本设计的明确write scope，不能以“顺手补丁”扩大K3。
+`plugin_registry.py`必须保持generic且预计零产品diff；K3通过其现有public catalog/binding API验收3.0.0 manifests。`kernel_delivery/outbox/repository`的新增范围只闭合K2 generic event/lifecycle seam，不得出现三个algo code分支。若direct RED证明registry或其它generic合同存在本设计未列出的缺陷，必须先更新write scope并说明共享契约影响；不能以“顺手补丁”扩大K3。
 
 K3-B production/validation target：
 
 ```text
 backend/services/miniqmt_execution_runtime/kernel_current_three_parity.py
 backend/services/miniqmt_execution_runtime/kernel_current_three_inventory.py
+backend/services/miniqmt_execution_runtime/kernel_current_three_shadow_source.py
+backend/services/miniqmt_execution_runtime/repository.py # 单事务只读legacy shadow snapshot public seam
 scripts/miniqmt_current_three_inventory.py
 backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py
 backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py
@@ -203,10 +211,11 @@ TWAP_LITE_MINIQMT  -> aistock.vnpy.twap_lite / 3.0.0
 
 每个 manifest：
 
-- `implementation_ref` 指向 exact plugin class；
+- `implementation_ref`按K1 descriptor不变量指向exact external factory callable，并与`factory_callable_ref` byte-identical；factory返回的plugin class必须匹配§4.3穷举表；
 - `aistock_files` 覆盖 plugin class、shared plugin base/factory 和实际消费的 deterministic helper；
 - upstream repo/commit/source/license 与 K1-C pinned authority不变；
-- config/market-data/subscription/capability schema不变；state采用§5.1.1定义的v3 exact schema；
+- config/market-data/capability schema shape不变；subscription tuple按下一条显式演进，state采用§5.1.1定义的v3 exact schema；
+- v3 common subscriptions精确为`ALGO_START,COMMAND_OUTCOME,EOD,ORDER,RECONCILE,SESSION,TICK,TRADE`，TWAP另含`TIMER`；新增COMMAND_OUTCOME和真实OMS RECONCILE只闭合broker/order lifecycle，不赋予其它event或owner；
 - manifest hash、descriptor hash、catalog hash、creation binding hash 和 route compatibility receipt全部重算；
 - `2.0.0` 与 `3.0.0` 不得共享 manifest/catalog identity。
 
@@ -214,13 +223,13 @@ TWAP_LITE_MINIQMT  -> aistock.vnpy.twap_lite / 3.0.0
 
 Durable descriptor 与 live callable 继续分层：
 
-```text
-manifest.implementation_ref = exact plugin class ref
-factory_binding_id          = aistock.vnpy.<algo>.factory.v3
-factory_callable_ref        = plugin_factories:create_<algo>_plugin_v3
-config_validator_binding_id = existing current-three strict config authority
-state_codec_binding_id      = aistock.vnpy.<algo>.state.v3
-```
+| algo_code | manifest.implementation_ref = factory_callable_ref | factory_binding_id | returned plugin class | state_codec_binding_id |
+| --- | --- | --- | --- | --- |
+| `SNIPER_MINIQMT` | `backend.execution_algos.vnpy_style.plugin_factories:create_sniper_miniqmt_plugin_v3` | `aistock.vnpy.sniper.factory` | `backend.execution_algos.vnpy_style.sniper_plugin:SniperMiniQMTPluginV3` | `aistock.vnpy.sniper.state_codec` |
+| `BEST_LIMIT_MINIQMT` | `backend.execution_algos.vnpy_style.plugin_factories:create_best_limit_miniqmt_plugin_v3` | `aistock.vnpy.best_limit.factory` | `backend.execution_algos.vnpy_style.best_limit_plugin:BestLimitMiniQMTPluginV3` | `aistock.vnpy.best_limit.state_codec` |
+| `TWAP_LITE_MINIQMT` | `backend.execution_algos.vnpy_style.plugin_factories:create_twap_lite_miniqmt_plugin_v3` | `aistock.vnpy.twap_lite.factory` | `backend.execution_algos.vnpy_style.twap_lite_plugin:TwapLiteMiniQMTPluginV3` | `aistock.vnpy.twap_lite.state_codec` |
+
+三个 descriptor 的 `config_validator_binding_id` 精确为`aistock.vnpy.sniper.config_validator`、`aistock.vnpy.best_limit.config_validator`、`aistock.vnpy.twap_lite.config_validator`，callable ref均为`backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_config_v2`；三个 `state_codec_callable_ref`统一为`backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_state_v3`。writer/readback测试必须逐个核验三个literal并拒绝第四个值。factory/config/state callable signature SHA均由K1唯一`callable_signature_sha256_v1`从上述真实callable重算，不在文档硬编码一个尚未存在的hash。
 
 factory exact contract为 `factory(canonical_plugin_config) -> ExecutionAlgoPluginV2`。返回对象必须持有与 descriptor byte-identical 的 manifest，并真实实现 `initialize/restore_state/transition`。factory ref/signature/source drift 产生 `MINIQMT_K3_PLUGIN_BINDING_INVALID`，阻止整个 current-three catalog publication；不得返回 legacy core、adapter、fixture 或 partial catalog。
 
@@ -236,7 +245,7 @@ plugin_registry.py caller -> descriptors from plugin_manifests
                            + live bindings from plugin_factories
 ```
 
-`plugin_manifests.py` 不导入 plugin class或live factory；descriptor只保存class/factory的冻结ref/signature/source facts。三个external factory仍只有一个参数，内部按algo code从 `current_three_manifests_v3()` strict取得唯一manifest，再调用 `PluginClass(manifest=manifest, canonical_config=config)`。plugin constructor本身不公开为catalog factory。missing/duplicate manifest、class/manifest algo mismatch、config output drift、factory返回非protocol对象均在catalog build阶段aggregate fail，零catalog publication。
+`plugin_manifests.py` 不导入 plugin class或live factory；descriptor只保存factory/config/state callable的冻结ref/signature/source facts，returned class ref由§4.3 code-owned exact table和factory return-type validator闭合。三个external factory仍只有一个参数，内部按algo code从 `current_three_manifests_v3()` strict取得唯一manifest，再调用对应`PluginClass(manifest=manifest, canonical_config=config)`。plugin constructor本身不公开为catalog factory。missing/duplicate manifest、class/manifest algo mismatch、config output drift、factory返回错误class或非protocol对象均在catalog build阶段aggregate fail，零catalog publication。
 
 ## 5. Contracts and Common State/Event Semantics / 契约与公共状态事件语义
 
@@ -259,7 +268,18 @@ algo_transition_id_v1(
 )
 ```
 
-`AlgoTransitionReceiptV1.create`、三个plugin/shared plugin base、tests和K2 materializer预检全部调用该helper；原inline公式删除，禁止第二实现。plugin构造顺序固定为：strict input/state readback → next state → public transition ID → ordered commands/timers/diagnostics → `effect_set_sha256` → `AlgoTransitionV1`。ordinal在各effect类别内由业务表规定且identity唯一；same transition retry得到byte-identical ID/effect set。helper参数类型/空值、caller-supplied wrong ID、same identity/different payload和writer/readback drift均需直接负测。
+`AlgoTransitionReceiptV1.create`、三个plugin/shared plugin base、tests和K2 materializer预检全部调用该helper；原inline公式删除，禁止第二实现。构造依赖固定为：
+
+```text
+strict event/context/predecessor-state readback
+  -> public transition_id（只依赖delivery/event/runtime/algo/sequence）
+  -> ordered command identities/local_vt_orderids/timer/diagnostic identities
+  -> next state（引用已经确定的command/local/timer identities）
+  -> effect_set_sha256
+  -> AlgoTransitionV1 + AlgoTransitionReceiptV1
+```
+
+禁止先构造含placeholder command/local ID的state，也禁止materializer回填或改写plugin state。ordinal在各effect类别内由业务表规定且identity唯一；same transition retry得到byte-identical ID/state/effect set。helper参数类型/空值、caller-supplied wrong ID、same identity/different payload、construction-order回填尝试和writer/readback drift均需直接负测。
 
 ### 5.1 Initialize
 
@@ -269,7 +289,7 @@ algo_transition_id_v1(
 2. 创建 K1 exact common state：`RUNNING`、`traded_quantity=0`、`traded_price_decimal=0`、空 active orders、null market lineage；
 3. 使用 frozen `pricetick/min_volume/volume_increment`，不硬编码 `0.01/100`；
 4. 只返回 `AlgoInitializationV1`，不写 DB、不调用 broker；
-5. Sniper/BestLimit 初始 command/timer为空；TWAP 创建唯一下一 exchange-active second one-shot timer；
+5. Sniper/BestLimit 初始 command/timer为空；TWAP只创建`raw_due_at_utc=deterministic_context.logical_time_utc+1s`的一次性timer mutation，下一exchange-active second由K2 clock按§8.1唯一解析；
 6. 任一 config/context/state closure失败生成 deterministic initialization failure receipt，零 state/effect commit、零 broker side effect。
 
 ### 5.1.1 V3 active-order and mapping closure
@@ -280,25 +300,117 @@ algo_transition_id_v1(
 local_vt_orderid, submit_command_id
 broker_order_id|null
 symbol, side
-status=COMMAND_PENDING|SUBMITTED|PARTIALLY_FILLED|CANCEL_PENDING|OUTCOME_UNKNOWN
+status=COMMAND_PENDING|SUBMITTED|PARTIALLY_FILLED|CANCEL_PENDING|OUTCOME_UNKNOWN|TERMINAL_TRADE_PENDING
+pending_command_type=SUBMIT_LIMIT|CANCEL_ORDER|null
+pending_command_id|null
 requested_price_decimal, requested_quantity
 cumulative_filled_quantity, remaining_quantity
 last_order_event_id|null, last_trade_event_id|null
+last_command_outcome_event_id|null
+last_oms_reconcile_event_id|null
+terminal_order_status=FILLED|CANCELLED|REJECTED|null
+terminal_observed_cumulative_filled_quantity|null
 market_data_lineage
-mapping_payload_sha256
+active_order_state_sha256
 ```
 
-`mapping_payload_sha256 = hash_hex_v1("miniqmt_plugin_active_order_state_v3", exact preceding fields)`。state items按local id排序且唯一；`vt_orderid`/BestLimit order price继续精确引用唯一item。`COMMAND_PENDING`必须broker ID为null、cumulative fill为0、remaining=requested；其它状态必须有exact broker ID。terminal broker mapping不得留在active state。
+`active_order_state_sha256 = hash_hex_v1("miniqmt_plugin_active_order_state_v3", exact preceding fields)`。它不得冒充K2 mapping payload hash；两者由§5.1.2逐字段比较。state items按local id排序且唯一；`vt_orderid`/BestLimit order price继续精确引用唯一item。conditional schema固定为：
 
-SUBMIT transition在同一K2 transaction中同时形成v3 `COMMAND_PENDING` state、`ExecutionCommandChildMappingV1.RESERVED`和`BrokerCommandOutboxV1.PENDING`，三者local/command/parent/symbol/side/price/quantity必须byte-exact。后续ACK/ORDER/TRADE/reconcile event才把state推进为broker-identified状态；禁止根据local ID猜broker ID。`kernel_materializer.py`必须使用K2 mapping projection authority逐item验证：
+- `COMMAND_PENDING`：`pending_command_type=SUBMIT_LIMIT`、`pending_command_id=submit_command_id`、broker ID为null、fill为0、remaining=requested；
+- `SUBMITTED|PARTIALLY_FILLED`：pending两字段为null且必须持有exact broker ID；
+- `CANCEL_PENDING`：`pending_command_type=CANCEL_ORDER`、`pending_command_id`为当前exact cancel command ID且必须持有broker ID；
+- `OUTCOME_UNKNOWN`：pending两字段必须同时存在；SUBMIT unknown允许broker ID为null，CANCEL unknown必须持有原order broker ID；
+- `TERMINAL_TRADE_PENDING`：pending command两字段为null，broker ID、terminal order status和last order event必填；只在terminal ORDER已到但其observed cumulative为null或大于已应用exact TRADE总量时存在，不能产生SUBMIT/CANCEL；
+- terminal mapping通常不得留在state；唯一例外是`TERMINAL_TRADE_PENDING`对同一terminal mapping的只读引用，它不计入active broker child count，且必须由尚未闭合的trade/reconcile lineage证明；null/type/command-kind/broker-ID/terminal组合不符合上述任一分支时strict readback失败，不能回退为SUBMITTED。
 
-- new SUBMIT item ↔ same-transition RESERVED mapping/outbox；
-- existing COMMAND_PENDING item ↔ durable RESERVED/DISPATCHING，或尚未有ORDER/RECONCILE delivery应用到plugin state的BROKER_ACCEPTED mapping；后者保留显式state lag且仍禁止新command；
+### 5.1.2 `KernelCommandLifecycleProjectionV1`
+
+K3-A新增materializer专用、非plugin service的immutable projection，解决现有delivery只传mapping而无法验证outbox的问题：
+
+```text
+schema_version=miniqmt_kernel_command_lifecycle_projection_v1
+runtime_id, algo_instance_id, event_id, delivery_id
+ordered_items[
+  mapping_id, mapping_version, mapping_payload_sha256,
+  local_vt_orderid, submit_command_id, broker_order_id|null, mapping_status,
+  current_outbox_command_id, current_outbox_command_type,
+  current_outbox_status, current_outbox_row_version,
+  current_outbox_payload_sha256, outcome_receipt_sha256|null,
+  latest_command_outcome_event_id|null, latest_command_outcome_payload_sha256|null,
+  command_outcome_delivery_id|null, command_outcome_delivery_status|null
+]
+projection_sha256
+```
+
+repository以同一read-only transaction锁定algo owner后，按`local_vt_orderid`读取active mapping及其当前SUBMIT/CANCEL outbox，并left-join由该outbox exact receipt派生的COMMAND_OUTCOME event/delivery；event/delivery字段必须全null或全套存在。拒绝missing/multiple/orphan、跨runtime/algo/parent/slot、wrong command type、event source/hash mismatch和same identity/different payload。`KernelDeliveryExecutionInputV1`携带该projection；`materialize_applied_transition_v1`新增`command_lifecycle_projection`参数，并在写事务内重新锁定相同mapping/outbox/event/delivery、重算projection SHA和row versions后才允许commit。它不是新的业务admission gate，而是现有single-writer/CAS的完整readback；stale projection产生typed transaction failure和零state/effect commit。
+
+SUBMIT transition在同一K2 transaction中形成v3 `COMMAND_PENDING` state、`ExecutionCommandChildMappingV1.RESERVED`和`BrokerCommandOutboxV1.PENDING`；CANCEL transition不创建第二mapping，而是以同一mapping identity创建exact CANCEL outbox并把state推进`CANCEL_PENDING`。materializer逐item验证：
+
+- new SUBMIT item ↔ same-transition RESERVED mapping/SUBMIT outbox；
+- existing COMMAND_PENDING ↔ RESERVED/DISPATCHING/OUTCOME_UNKNOWN mapping与exact SUBMIT outbox的PENDING/CLAIMED/DISPATCHING/FAILED_RETRYABLE/OUTCOME_UNKNOWN生命周期；若mapping已BROKER_ACCEPTED/BROKER_REJECTED或outbox已terminal，必须存在同receipt派生、尚未APPLIED的exact COMMAND_OUTCOME delivery，作为显式state lag；
 - broker-identified item ↔ durable BROKER_ACCEPTED mapping和exact broker ID；
-- terminal mapping不得留在state，active mapping不得被state静默丢弃；
+- CANCEL_PENDING/unknown ↔ 同mapping的exact CANCEL outbox及pending command ID；outbox outcome已terminal但state尚未推进时同样必须由未APPLIED COMMAND_OUTCOME delivery闭合；
+- OUTCOME_UNKNOWN ↔ exact outbox OUTCOME_UNKNOWN/RECONCILING及首次unknown COMMAND_OUTCOME lineage；later reconciliation形成terminal successor时，旧unknown state只可在exact successor COMMAND_OUTCOME delivery尚未APPLIED期间保留；
+- terminal mapping只有在`TERMINAL_TRADE_PENDING`且observed/applied trade closure未完成时可保留只读state ref；其它terminal mapping不得留在state，active mapping不得被state静默丢弃；
+- COMMAND_OUTCOME delivery APPLIED后不得继续以state lag为由保留旧pending state；FAILED/SKIPPED delivery按K2 failure/active-child contract显式终结，不回退或越过predecessor；
 - same local/command identity任一payload drift终止整个transition transaction。
 
-因此下一TICK/TIMER看到COMMAND_PENDING时不得再SUBMIT。需要cancel但尚无broker ID时写`K3_COMMAND_PENDING_CANCEL_WAIT`并等待真实callback/reconcile；有broker ID后才生成exact CANCEL。EOD/expiry同样保留STOPPED nonterminal state直至pending submit获得可取消/terminal事实，不得用空cancel或假terminal越过broker uncertainty。
+### 5.1.3 Durable outbox-outcome ingress
+
+同步ACK和reconciliation receipt保持K2既有事实：它们不是ORDER/TRADE/OMS RECONCILE event，不能直接改写mapping event lineage。K3向K1 generic enum/composite additive增加`EventTypeV2.COMMAND_OUTCOME`，source固定`EventSourceV2.MINIQMT_EXECUTION_KERNEL`，schema固定`miniqmt_command_outcome_v1`，source identity固定`(receipt_id,receipt_sha256)`；current-three 3.0.0 manifests显式订阅该event。`KernelOutboxOutcomeIngressV1`只把已持久化outbox terminal/unknown outcome转换为该exact runtime event；禁止把ACK伪装为ORDER/TRADE或OMS RECONCILE：
+
+```text
+outcome_receipt_payload = {
+  command_id, mapping_id, command_type, outbox_row_version, outbox_status,
+  outcome_receipt_sha256, broker_order_id_or_null
+}
+receipt_sha256 = hash_hex_v1(
+  "miniqmt_kernel_outbox_outcome_receipt_v1", outcome_receipt_payload
+)
+receipt_id = "mqoutcomercpt_" + receipt_sha256
+source_identity = {receipt_id, receipt_sha256}
+event_id = RuntimeEventEnvelopeV2.create(
+  event_type=COMMAND_OUTCOME,
+  source=MINIQMT_EXECUTION_KERNEL,
+  source_identity=source_identity,
+  ...strict payload/correlation...
+).event_id
+```
+
+`RuntimeEventEnvelopeV2`继续使用K1既有`miniqmt_runtime_event_key_v2`唯一event identity公式，K3不得建立第二套event ID。上述`receipt_id/receipt_sha256`作为其source identity；payload内同名字段必须byte-identical。wrapper receipt只证明durable outbox outcome到event的关联，不替代或改写底层ACK/non-acceptance/unknown/reconcile/error authority。非current-three plugin若manifest未订阅该event，不创建其delivery；这属于现有subscription routing，不是人工门禁。
+
+scanner使用bounded stable page，逐row锁定outbox+mapping并检查该deterministic event是否已存在；不存在时通过K2 callback-mapping single-transaction authority的generic扩展写COMMAND_OUTCOME event、下述mapping closure和delivery，存在时strict-readback同一payload/hash并返回idempotent receipt。该扩展复用同一row lock/CAS/event sequence/delivery owner，不新建第二repository或transaction owner。事务/进程在event commit前失败可重试；commit后重试不创建第二event/delivery，不调用broker。映射规则固定为：
+
+触发owner固定为两处且共用同一`ingest_outbox_outcome_v1`：`KernelOutboxDispatcherV1/ReconcilerV1`在outbox outcome commit并完成独立readback后立即尝试一次；`KernelOutboxRecoveryV1.run_once`按`(runtime_id,updated_at_utc,command_id)`稳定keyset扫描尚无exact COMMAND_OUTCOME event的eligible rows，默认page size 100、单轮上限1000，不sleep、不无限重试。即时尝试失败不得回滚或伪报outbox commit；它写typed diagnostic并由recovery继续，直到event成功或底层outbox被更高版本真实outcome取代。相同command较新的row version只产生新的outcome receipt/event，plugin按event sequence单调应用。
+
+`outcome_receipt_sha256`不得由caller任选：`ACKED/ACKED_REJECTED`取strict `ack_receipt_sha256`；首次`OUTCOME_UNKNOWN`取`unknown_outcome_receipt.receipt_sha256`；`FAILED_TERMINAL`按`reconcile_receipt > non_acceptance_receipt > unknown_outcome_receipt > KernelErrorEvidenceV1.evidence_sha256`选择第一个存在的最终authority，并验证更高优先级缺失/更低优先级只属于历史链；PENDING/CLAIMED/DISPATCHING/FAILED_RETRYABLE/RECONCILING不生成outcome event。任一status与required carrier不闭合时停止该row并记录typed corruption，不能选择任意available hash继续。
+
+`broker_order_id_or_null`同样不是caller字段：SUBMIT取outbox/ACK/reconcile确认的broker ID，reject/pre-call/unknown可null；CANCEL始终取既有mapping和CANCEL command target共同闭合的原order broker ID，即使cancel ACK rejected或pre-call terminal也不得清空。两侧同时存在但不同立即identity conflict。
+
+callback-before-ACK使用strict `KernelCommandOutcomeMappingClosureV1`，只能二选一：
+
+```text
+ADVANCE_MAPPING
+  expected_mapping_version + exact mapping successor
+VERIFY_CALLBACK_PRECEDENCE
+  unchanged mapping identity/version/hash
+  preceding_callback_event_id + callback payload hash + delivery status
+closure_sha256
+```
+
+mapping仍为RESERVED/DISPATCHING/OUTCOME_UNKNOWN时使用`ADVANCE_MAPPING`；若ORDER/TRADE/真实OMS RECONCILE已以同broker identity推进mapping，则使用`VERIFY_CALLBACK_PRECEDENCE`，COMMAND_OUTCOME event仍按sequence持久化，但不得覆盖`broker_identity_source_event_id/last_order_event_id/last_trade_event_id`，也不得把TERMINAL mapping重新打开。plugin收到后到outcome时，若state已经由preceding callback推进或清理，只返回byte-identical state和`K3_COMMAND_OUTCOME_CALLBACK_PRECEDED` diagnostic；若callback delivery尚未APPLIED，per-algo sequence保证callback先执行。不同broker ID、callback/outcome acceptance冲突或伪造preceding delivery立即terminal conflict。
+
+delivery set也必须可重建：`ADVANCE_MAPPING`产生该algo唯一delivery；`VERIFY_CALLBACK_PRECEDENCE`且preceding callback delivery未APPLIED时仍产生排在其后的唯一delivery；preceding callback已APPLIED并使algo terminal时，COMMAND_OUTCOME event保留zero-owner delivery-set receipt并不重新激活algo。除这三种情况外，empty/multiple owner均为routing conflict。
+
+- SUBMIT accepted + broker ID：mapping→BROKER_ACCEPTED，plugin state→SUBMITTED；
+- SUBMIT explicit reject或terminal pre-call failure：mapping→BROKER_REJECTED，active item移除并保留visible diagnostic；下一合法市场事件可按原算法规则重新决策；
+- SUBMIT unknown：mapping/state→OUTCOME_UNKNOWN，broker ID可null且禁止新submit/cancel，直到later reconcile得到accepted/rejected/conflict；
+- CANCEL accepted：state保持CANCEL_PENDING，等待真实terminal ORDER/TRADE；
+- CANCEL explicit reject或terminal pre-call failure：原order mapping保持BROKER_ACCEPTED，清除pending cancel并恢复SUBMITTED/PARTIALLY_FILLED；后续合法事件可生成新的cancel lifecycle；
+- CANCEL unknown：state→OUTCOME_UNKNOWN并保留broker ID/current cancel command，禁止重复cancel；
+- conflict：typed terminal failure，保留active/outcome evidence，不伪报CLEAN或residual terminal。
+
+因此下一TICK/TIMER看到任一pending/unknown状态不得重复对应command。需要cancel但SUBMIT尚无broker ID时写`K3_COMMAND_PENDING_CANCEL_WAIT`并等待outcome ingress；有broker ID后才生成exact CANCEL。EOD/expiry同样保留STOPPED nonterminal state直至真实outcome/callback闭合，不得用空cancel或假terminal越过broker uncertainty。
 
 ### 5.2 TICK
 
@@ -307,12 +419,73 @@ SUBMIT transition在同一K2 transaction中同时形成v3 `COMMAND_PENDING` stat
 - 当前 observation 暂缺时 state保持不变，写 `WAITING_FOR_MARKET_DATA` diagnostic且零 command；这不是新 algo status或人工门禁；
 - 已提供但非法/冲突 observation在 plugin 前失败，delivery不假 ACK；
 - OPEN_AUCTION/CLOSE_AUCTION/LUNCH_BREAK/CLOSED 不触发 current-three submit；禁止从 minute/last/cache/另一侧报价合成字段。
+- 任一`TERMINAL_TRADE_PENDING`存在时三个算法均只更新合法market lineage并写wait diagnostic，零SUBMIT/CANCEL；必须先由逐笔TRADE/OMS RECONCILE闭合parent remaining，防止迟到成交导致超买/超卖。
 
-### 5.3 ORDER and TRADE
+### 5.3 ORDER, TRADE and COMMAND_OUTCOME
+
+现有`RuntimeEventEnvelopeV2`只固定event/source/schema组合和source identity，不足以约束算法所需业务字段。K3-A必须在`plugin_contracts.py`定义并由`kernel_callback_events.py`唯一构造/strict-readback以下payload；`RuntimeEventEnvelopeV2`对ORDER/TRADE/RECONCILE/COMMAND_OUTCOME按`payload_schema_version`调用同一payload authority，不能只检查dict键子集。
+
+`KernelOrderEventPayloadV1`（schema=`miniqmt_order_event_v1`）exact fields：
+
+```text
+order_event_id, runtime_id, algo_instance_id, parent_intent_id, strategy_slot_id
+mapping_id, command_id, local_vt_orderid, broker_order_id
+symbol, side
+normalized_order_status=ACCEPTED|PARTIALLY_FILLED|FILLED|CANCELLED|REJECTED
+observed_cumulative_filled_quantity|null, observed_remaining_quantity|null
+terminal
+source_payload_sha256, fact_sha256
+```
+
+`KernelTradeEventPayloadV1`（schema=`miniqmt_trade_fact_v1`）exact fields：
+
+```text
+trade_id, runtime_id, algo_instance_id, parent_intent_id, strategy_slot_id
+mapping_id, command_id, local_vt_orderid, broker_order_id
+symbol, side
+trade_quantity, trade_price_decimal
+source_payload_sha256, fact_sha256
+```
+
+`KernelCommandOutcomeEventPayloadV1`（schema=`miniqmt_command_outcome_v1`）exact fields：
+
+```text
+receipt_id, receipt_sha256
+runtime_id, algo_instance_id, parent_intent_id, strategy_slot_id
+mapping_id, command_id, command_type, local_vt_orderid
+broker_order_id|null
+outcome=ACCEPTED|REJECTED|PRE_CALL_TERMINAL|OUTCOME_UNKNOWN|CONFLICT
+outbox_status, outbox_row_version, outcome_receipt_sha256
+outbox_terminal, order_terminal, fact_sha256
+```
+
+`KernelOrderReconcileEventPayloadV1`（保留K2 schema=`miniqmt_reconciliation_receipt_v1`、source=`QMT_OMS_RECONCILIATION`）exact fields：
+
+```text
+receipt_id, receipt_sha256
+runtime_id, algo_instance_id, parent_intent_id, strategy_slot_id
+mapping_id, local_vt_orderid, broker_order_id
+symbol, side
+normalized_order_status=ACCEPTED|PARTIALLY_FILLED|FILLED|CANCELLED|REJECTED
+authoritative_cumulative_filled_quantity, authoritative_remaining_quantity
+ordered_trade_refs[trade_id,trade_fact_sha256]
+trade_set_sha256, callback_watermark, snapshot_sha256
+terminal, fact_sha256
+```
+
+OMS reconciliation若发现尚未进入K2 event log的trade，必须先按`(trade_time_utc,trade_id)`生成逐笔strict TRADE event并提交，最后才提交RECONCILE；不得用aggregate cumulative直接增加plugin traded quantity。RECONCILE只证明ordered trade set、order terminal和watermark closure：全部trade delivery APPLIED且plugin cumulative等于authoritative cumulative后，才能移除`TERMINAL_TRADE_PENDING`；缺失trade identity、set/hash/watermark冲突或cumulative仍不等时保持pending并typed fail/diagnostic，不伪报CLEAN。
+
+ORDER raw status使用qmt_strategy_ledger唯一code authority：`48/49/50/51 -> ACCEPTED`，`52/53/55 -> PARTIALLY_FILLED`，`54 -> CANCELLED`，`56 -> FILLED`，`57 -> REJECTED`；允许的text literals固定为`OPEN|SUBMITTED|PENDING|CANCEL_REQUESTED|ACTIVE|ACCEPTED`、`PARTIALLY_FILLED|PARTIAL_FILLED|PART_TRADED`、`CANCELLED|CANCELED`、`FILLED|ALL_TRADED`、`REJECTED|BROKER_REJECTED`并映射到相同normalized值。numeric/text aliases同时存在时必须一致；unknown code/text一律失败，不能映射为ACCEPTED或OUTCOME_UNKNOWN。`OUTCOME_UNKNOWN`只来自COMMAND_OUTCOME，不由未知ORDER status制造。
+
+ORDER累计量只接受`traded_volume|filled_quantity|filled_volume|cumulative_quantity|traded_quantity`中的strict nonnegative int；多个alias必须相等。全部缺失时两个observed字段均为null并写`K3_ORDER_CUMULATIVE_UNAVAILABLE`，不得默认0；存在时`observed_remaining_quantity=requested_quantity-observed_cumulative`由builder唯一派生并验证范围。TRADE必须有raw broker trade identity（`trade_id|traded_id|deal_id|qmt_trade_id|native_trade_id`唯一非空alias）或已由OMS持久化且hash闭合的`qmt_strategy_trade_id`，两者同时存在必须由同一trade fact关联；缺失时失败，不以runtime event ID或价量组合伪造trade identity。
+
+所有identity必须非空严格字符串；quantity为非负strict int，trade quantity为positive int；price为positive canonical Decimal。ORDER/RECONCILE `terminal`必须与normalized status一致；COMMAND_OUTCOME的`outbox_terminal`只对ACKED/ACKED_REJECTED/FAILED_TERMINAL为true，`order_terminal`只在SUBMIT明确reject/pre-call terminal导致该order identity结束时为true，CANCEL reject/pre-call terminal不得把原order伪报terminal。`fact_sha256`分别使用`miniqmt_kernel_order_event_payload_v1`、`miniqmt_kernel_trade_event_payload_v1`、`miniqmt_kernel_command_outcome_payload_v1`、`miniqmt_kernel_order_reconcile_payload_v1`覆盖此前全部字段。source identity、correlation、payload owner和mapping successor必须byte-exact；unknown enum、alias conflict、float/number-to-string强转、missing/extra field、hash-correct forged payload均typed fail-loud并保留raw source hash。OMS RECONCILE与COMMAND_OUTCOME schema/source/identity保持分离，不能互相代替。
+
+`source_payload_sha256 = hash_hex_v1("miniqmt_gateway_source_payload_v1", exact JSON-safe raw callback payload)`；shadow source使用committed legacy event payload的同一canonical bytes。non-string key、non-finite number、unsupported object或同alias不同值在hash前失败，不能以`str/repr`替换；raw大字段只进入现有event retention，不进入metric label或错误消息，error context保留field path、type和bounded digest。
 
 - 事件必须通过 K2 command-child mapping 唯一命中 `local_vt_orderid`；missing/multiple/cross-parent/cross-slot typed terminal conflict；
-- ORDER 只更新broker/status projection，不增加parent traded quantity。nonterminal ORDER累计量小于当前state时视为stale并写diagnostic；大于已应用TRADE总量时保留原active cumulative并写`K3_ORDER_AHEAD_OF_TRADE_PENDING`，raw durable event保留observed value，不能提前计成交或丢弃异常；terminal order从active tuple移除，历史留在 command/child/order facts；
-- TRADE 按 exact trade identity一次应用，使用canonical Decimal计算`new_notional = previous_traded_price * previous_traded_quantity + trade_price * trade_quantity`和加权`traded_price_decimal`，同步推进命中active order的cumulative/remaining；top-level traded quantity单调不降且不超过 parent，duplicate trade不重复累计；
+- ORDER 只更新broker/status projection，不增加parent traded quantity。observed cumulative为null时只更新status并保留缺失诊断；非null且小于当前state时视为stale，大于已应用TRADE总量时保留原cumulative并写`K3_ORDER_AHEAD_OF_TRADE_PENDING`，raw durable event保留observed value，不能提前计成交或丢弃异常。terminal ORDER在observed cumulative非null且`<=`已应用TRADE总量时移除state item（小于时保留stale diagnostic）；为null或大于已应用TRADE时转`TERMINAL_TRADE_PENDING`，等待逐笔TRADE/strict OMS RECONCILE，不直接清理；
+- TRADE 按 exact trade identity一次应用，使用canonical Decimal计算`new_notional = previous_traded_price * previous_traded_quantity + trade_price * trade_quantity`和加权`traded_price_decimal`，同步推进命中active或TERMINAL_TRADE_PENDING order的cumulative/remaining；top-level traded quantity单调不降且不超过 parent，duplicate trade不重复累计；达到terminal observed cumulative时可移除pending item，observed为null时仍等待strict RECONCILE；
 - cumulative fill、active child fill sum、parent traded和remaining quantity必须闭合；
 - traded达到parent quantity时 terminal outcome=`FILLED`，active orders必须已CLEAN；否则先生成exact cancel commands并等待callback；
 - callback transition不得直接调用 Gateway或递归执行另一插件方法。
@@ -322,6 +495,7 @@ SUBMIT transition在同一K2 transaction中同时形成v3 `COMMAND_PENDING` stat
 - lunch/非连续阶段不累计 TWAP timer、不提交 child；state不靠wall clock自动改变；
 - EOD 若无 active child，未完成数量以 `EXPIRED_WITH_RESIDUAL`终结；
 - EOD 若有 active child，第一 transition 取消 timers、按 local id排序对已有broker ID的child生成 exact CANCEL commands；COMMAND_PENDING只记录等待事实；state进入 `STOPPED` + `K3_EOD_CANCEL_PENDING` diagnostic，terminal outcome为null；
+- EOD 若仅剩`TERMINAL_TRADE_PENDING`，不得再CANCEL；state保持STOPPED nonterminal并触发既有OMS fresh reconciliation，待missing TRADE→RECONCILE sequence闭合后再计算FILLED或EXPIRED_WITH_RESIDUAL；
 - 全部 child terminal后的 ORDER/TRADE callback transition 才返回 `EXPIRED_WITH_RESIDUAL`；
 - CANCEL outcome unknown 经 K2 reconcile后仍无法闭合时走既有 `FAILED + OUTCOME_UNKNOWN` active-child contract，不伪报 residual terminal；
 - 不新增人工 reconcile、acknowledge 或无限等待状态。
@@ -351,7 +525,7 @@ SUBMIT transition在同一K2 transaction中同时形成v3 `COMMAND_PENDING` stat
 ### 7.1 Quote and replace
 
 - BUY无active order时以 `bid_price_1` 提交；SELL以 `ask_price_1` 提交；
-- active order price等于当前same-side best price时零 command；COMMAND_PENDING/CANCEL_PENDING/OUTCOME_UNKNOWN一律不re-submit；
+- active order price等于当前same-side best price时零 command；COMMAND_PENDING/CANCEL_PENDING/OUTCOME_UNKNOWN/TERMINAL_TRADE_PENDING一律不re-submit；
 - price变化时只生成 exact CANCEL；replacement 等 terminal ORDER callback后由下一合法 TICK生成；
 - 不将对手盘、last price、minute bar或旧cache作为best price。
 
@@ -378,10 +552,11 @@ submit_quantity = min(draw_quantity, parent_remaining)
 ### 8.1 Timer schedule
 
 - `duration_seconds=config.time`、`interval_seconds=config.interval`，均为 strict exchange-active seconds；
-- initialize 创建 due于下一 exchange-active second的 `TWAP_ACTIVE_SECOND` one-shot；
+- plugin不读取calendar、wall clock或复制session segments。initialize/每次TIMER transition仅用K1 canonical UTC helper计算`raw_due_at_utc = current deterministic logical_time_utc + 1 second`并创建`TWAP_ACTIVE_SECOND` one-shot；
+- K2 `ExchangeSessionClockV1`是唯一session authority：materialize时strict-readback该runtime/trade-date的`ExchangeSessionAuthorityV1`，持久化raw due；claim/emission使用既有`effective_timer_due_at_v1(authority, raw_due)`映射到下一exchange-active second。11:29:59的raw 11:30:00必须映射PM首个active second，午休内不得生成occurrence或catch-up burst；
 - 每个首次 APPLIED TIMER occurrence令 `active_elapsed_seconds += 1`、`interval_elapsed_seconds += 1`，并安排下一 active second；
 - 午休、auction、closed阶段无 occurrence，PM顺延且无catch-up burst；
-- duplicate/replayed occurrence以 `last_timer_occurrence_id` 去重，不重复计时或发单。
+- duplicate/replayed occurrence以 `last_timer_occurrence_id` 去重，不重复计时或发单；raw due、effective due、session authority identity/hash和occurrence identity必须在schedule/event lineage中闭合，authority missing/drift时零TIMER ACK、零state推进。
 
 ### 8.2 Duration boundary
 
@@ -394,7 +569,7 @@ submit_quantity = min(draw_quantity, parent_remaining)
 1. `interval_elapsed_seconds` 归零；
 2. 读取 state中与common `last_tick_lineage` exact相等的 durable latest view；
 3. 无合法view时写 `TWAP_WAITING_FOR_TICK` diagnostic并继续下一timer；
-4. 若存在COMMAND_PENDING/CANCEL_PENDING/OUTCOME_UNKNOWN，写visible wait diagnostic且本次不生成新slice；否则按local id排序对全部active orders生成CANCEL；
+4. 若存在COMMAND_PENDING/CANCEL_PENDING/OUTCOME_UNKNOWN/TERMINAL_TRADE_PENDING，写visible wait diagnostic且本次不生成新slice；否则按local id排序对全部active orders生成CANCEL；
 5. `slice_quantity=min(order_volume,parent_remaining)`；为0时写 `TWAP_SLICE_VOLUME_ROUNDED_ZERO`，零SUBMIT；
 6. BUY仅在`ask_price_1 <= limit_price`时以limit price提交；SELL仅在`bid_price_1 >= limit_price`时以limit price提交；
 7. CANCEL与SUBMIT可在同一 transition 形成有序commands，ordinal固定为全部CANCEL在前、唯一SUBMIT在后；K2 outbox依序处理，不绕过unknown/callback语义。
@@ -549,6 +724,37 @@ input_sha256
 
 `event_set_sha256 = hash_hex_v1("miniqmt_current_three_parity_event_set_v1", ordered event identity/hash refs)`；`input_sha256 = hash_hex_v1("miniqmt_current_three_parity_input_v1", exact preceding fields)`。writer/readback strict重算config、coordination scope、event refs/set和input hash；相同input identity任一business field/hash变化立即conflict。K3 parity只能声明`ALGO_LOCAL_ONLY`，禁止用普通PASSED receipt暗示 dependent-BUY cross-parent coordinator 已等价。
 
+### 10.1.1 Production-shape shadow source
+
+K3-B不得只用手工fixture构造parity input。`repository.py`新增唯一`read_current_three_shadow_snapshot(runtime_id, include_archived)` public seam：PostgreSQL实现使用一个read-only repeatable-read transaction，在同一database snapshot读取runtime、committed `MiniQMTExecutionEvent`、algo instance、child order及关联legacy metadata；in-memory/file实现持有其既有repository lock并一次复制同一版本。`kernel_current_three_shadow_source.py`只消费该carrier，禁止依次调用`list_events/list_algo_instances/list_child_orders`后自行拼接：
+
+```text
+CurrentThreeShadowSourceSnapshotV1
+  repository_commit_sha
+  runtime_id, trade_date, database_snapshot_at_utc
+  ordered_legacy_event_refs(event_id,sequence,event_type,payload_sha256,event_time_utc)
+  ordered_child_fact_refs
+  ordered_algo_instance_refs
+source_set_sha256
+```
+
+snapshot preflight先读取counts；单runtime最多100000 events、1000 algo instances、10000 child orders，超限以`MINIQMT_K3_SHADOW_SOURCE_CAPACITY_EXCEEDED`显式失败并报告actual/limit，不截断、不采样、不继续生成receipt。events按`(sequence,event_id)`严格连续/唯一，algos按`algo_instance_id`、children按`child_order_id`排序；snapshot carrier和独立readback同时携带database transaction timestamp及各集合count/hash。只接受真实`TICK/TIMER/ORDER_EVENT/TRADE_EVENT/RUNTIME_STOPPED`及其authoritative legacy child/event lineage；ORDER/TRADE在完成下述association后通过§5.3同一`kernel_callback_events.py` strict builder转换。缺少status、quantity、price、trade identity、source hash或存在alias conflict时snapshot/receipt必须FAILED，不能补默认值、跳过event或用测试DTO替代。writer/readback从相同source refs独立重算`source_set_sha256`；K3-B完成证据至少包含DEV PostgreSQL disposable schema中经真实repository append/readback得到的positive、capacity和corruption rollback矩阵。纯in-memory/helper fixture只计单元测试，不计K3-B `implemented_verified`证据。
+
+legacy事实本身没有K2 `mapping_id/local_vt_orderid`，禁止通过parent+symbol猜归属。shadow runner在K3 transition经真实materializer产生command/mapping后，构造严格`CurrentThreeShadowCommandAssociationV1`：
+
+```text
+schema_version=miniqmt_current_three_shadow_command_association_v1
+parity_input_sha256, step_ordinal, business_effect_ordinal
+legacy_algo_instance_id, legacy_child_order_id, legacy_broker_order_id
+legacy_child_payload_sha256
+kernel_runtime_id, kernel_algo_instance_id, transition_id
+kernel_command_id, mapping_id, local_vt_orderid
+symbol, side, canonical_price, quantity, reason_code
+association_sha256
+```
+
+association只能在同step/effect ordinal且symbol/side/price/quantity/reason全部exact相等时一对一建立；missing/multiple/reuse legacy child、同broker ID不同payload或额外K3 command均使parity FAILED。随后ORDER/TRADE builder使用association提供的K2 mapping/local identity和committed legacy event提供的broker/status/trade事实，通过K2真实callback-before-ACK atomic ingress推进mapping/delivery；不得向shadow outbox写假的ACK或`broker_called=true`。shadow runtime只存在于CI/DEV disposable schema，dispatcher/reconciler不实例化，outbox保持其真实pre-dispatch状态并在测试后随schema销毁；任何生产或现有SIM数据库不得创建该shadow runtime。`CurrentThreeParityReceiptV1.broker_called=false`由未实例化Gateway/dispatcher和zero dispatch-attempt readback共同证明。
+
 ### 10.2 Trace normalization
 
 Legacy oracle和K3 plugin必须消费同一个 `CurrentThreeParityInputV1`：frozen parent/slot/contract/config、ordered immutable events、projection refs、logical time和deterministic context。两侧都禁止Gateway/broker call。
@@ -560,12 +766,21 @@ step_ordinal, event_type, event_payload_sha256, logical_time_utc
 state_status, traded_quantity, remaining_quantity
 algo_specific_state_projection
 ordered_business_effects
+ordered_transport_duplicate_observations
 ordered_timer_effects
 ordered_diagnostic_reason_codes
 terminal_outcome|null
 ```
 
 business effect exact fields为`kind,side,symbol,canonical_price,quantity,cancel_target_ordinal,reason_code,market_data_lineage_sha256`。legacy/K3不同ID格式不直接比较字符串，但必须分别证明event→state/effect owner关系和本侧identity/hash readback；不得通过删除price/quantity/reason/timer/lineage字段伪造等价。
+
+legacy Sniper/BestLimit在active order存在时可对连续TICK重复发出同target CANCEL，legacy TWAP也可能在前一cancel lifecycle尚未得到callback时再次形成相同transport call；K2 durable outbox按command lifecycle禁止broker duplicate。该差异不得由normalizer静默删除，固定采用以下等价合同：
+
+- 首个CANCEL是`DURABLE_BUSINESS_EFFECT`，两侧price/quantity/target/reason/lineage必须exact相等；
+- 只有在同一broker order、同一cancel target、同一reason、前一K2 cancel仍为PENDING/DISPATCHING/OUTCOME_UNKNOWN且没有新ORDER/TRADE/COMMAND_OUTCOME/OMS RECONCILE事实时，legacy后续cancel才标为`TRANSPORT_DUPLICATE_SUPPRESSED`；
+- suppression observation记录legacy step/event、original cancel ordinal、pending command ID/status和payload hash，进入trace/receipt hash并要求K3零新command；
+- 前一cancel已REJECTED/PRE_CALL_TERMINAL后，下一legacy cancel是新的business effect，K3也必须允许新cancel lifecycle；target/reason变化或缺少pending evidence一律`K3_PARITY_DRIFT`；
+- 该规则只消除重复broker transport，不改变何时产生cancel意图、replacement、slice、price或quantity；不得扩展到SUBMIT或跨parent effect。
 
 每个 normalized trace step 增加 `step_sha256 = hash_hex_v1("miniqmt_current_three_parity_trace_step_v1", exact preceding step fields)`；`trace_sha256 = hash_hex_v1("miniqmt_current_three_parity_trace_v1", {algo_code,side,ordered_step_ordinal_and_hash_refs})`。step ordinal必须与event ref一一对应，除ALGO_START初始化step外不得增删或重排。legacy/kernel writer使用同一normalizer schema但独立构造，不允许一侧直接复用另一侧输出。
 
@@ -609,7 +824,7 @@ K3不新增transaction owner。所有production transition继续由K2处理：
 3. pure plugin invocation；
 4. state/timer/diagnostic/command mapping/outbox single commit；
 5. external Gateway call outside transaction；
-6. ACK/reject/unknown/reconcile transaction。
+6. ACK/reject/unknown先只闭合outbox事实；`KernelOutboxOutcomeIngressV1`随后生成deterministic COMMAND_OUTCOME event并复用现有atomic callback-mapping transaction，闭合mapping/event/delivery；ORDER/TRADE与真正OMS RECONCILE继续走各自registered ingress。
 
 这六步只适用于已经通过现有 admission 并可合法形成broker command的单algo effect。`SELL_PROCEEDS_REQUIRED`不得被转换为PENDING outbox、timer retry或plugin diagnostic；dependent-BUY durable transaction由K6新增协调合同单独设计，且release成功后才进入上述正常K2 command transaction。
 
@@ -623,9 +838,19 @@ MINIQMT_K3_PLUGIN_CONFIG_INVALID
 MINIQMT_K3_PLUGIN_STATE_INVALID
 MINIQMT_K3_EVENT_UNSUPPORTED
 MINIQMT_K3_EVENT_PAYLOAD_INVALID
+MINIQMT_K3_ORDER_EVENT_PAYLOAD_INVALID
+MINIQMT_K3_TRADE_EVENT_PAYLOAD_INVALID
+MINIQMT_K3_COMMAND_OUTCOME_EVENT_PAYLOAD_INVALID
+MINIQMT_K3_ORDER_RECONCILE_EVENT_PAYLOAD_INVALID
+MINIQMT_K3_COMMAND_LIFECYCLE_PROJECTION_INVALID
+MINIQMT_K3_OUTBOX_OUTCOME_INGRESS_CONFLICT
 MINIQMT_K3_MARKET_DATA_LINEAGE_INVALID
 MINIQMT_K3_TIMER_LINEAGE_INVALID
 MINIQMT_K3_PARITY_DRIFT
+MINIQMT_K3_PARITY_TRANSPORT_SUPPRESSION_INVALID
+MINIQMT_K3_SHADOW_SOURCE_INVALID
+MINIQMT_K3_SHADOW_SOURCE_CAPACITY_EXCEEDED
+MINIQMT_K3_SHADOW_ASSOCIATION_INVALID
 MINIQMT_K3_PARITY_SCOPE_INVALID
 MINIQMT_K3_LEGACY_STATE_INVENTORY_INVALID
 MINIQMT_K3_DEPENDENT_BUY_INVENTORY_INVALID
@@ -638,28 +863,31 @@ MINIQMT_K3_ACTIVE_LEGACY_CUTOVER_FORBIDDEN
 ## 12. Diagnostics, Metrics and Retention / 诊断
 
 - 使用现有 K2 diagnostic observation/repository；K3不新增生产schema；
-- 低基数metrics：`algo_code`、`event_type`、`outcome`、`reason_family`、`parity_status`、`inventory_disposition`、`coordination_inventory_status`；
+- 低基数metrics：`algo_code`、`event_type`、`command_type`、`outcome`、`reason_family`、`parity_status`、`inventory_disposition`、`coordination_inventory_status`；
 - runtime/algo/event/command IDs只进入diagnostics/log，不进入metric labels；
+- diagnostics增加`eligible_outbox_outcome_without_event_count`、oldest lag、last ingress failure reason和recovery page cursor；eligible row超过K2既有critical lag阈值触发`MINIQMT_K3_COMMAND_OUTCOME_INGRESS_LAG`，exact event闭合后自动clear，不需要人工ack；
 - parity receipt为CI/validation immutable artifact；若K6正常交易日shadow observation需要持久化，只能引用existing diagnostic evidence和artifact URI/hash，不把大trace塞入metrics；
 - K2既有event/transition/outbox/diagnostic retention不变；
 - alerts自动clear，不新增人工acknowledge或发布审批。
 
 ## 13. Implementation Plan and Slices / 实施方案与切片
 
-### K3-A — Pure plugins, v3 state and bindings（6–9 人日）
+### K3-A — Pure plugins, strict event/lifecycle seam and bindings（8–12 人日）
 
 - 三个plugin class、shared pure helpers和factories；
 - manifest 3.0.0/source/descriptor/process binding/catalog closure；
-- v3 state/active-order codec、public transition-id helper和materializer mapping closure；
+- v3 state/active-order codec、public transition-id helper、strict ORDER/TRADE/COMMAND_OUTCOME payload、mapping/outbox lifecycle projection和materializer closure；
+- deterministic outbox-outcome→COMMAND_OUTCOME ingress、bounded recovery和restart idempotency；
 - initialize/restore/TICK/ORDER/TRADE/SESSION/EOD与TWAP TIMER；
 - import boundary、direct behavior、state/config/factory negative matrix；
 - 不接产品runtime、不调用Gateway/broker、不修改legacy product path。
 
-### K3-B — Parity, inventory and shadow orchestration（4–6 人日）
+### K3-B — Parity, inventory and production-shape shadow orchestration（5–8 人日）
 
 - parity input/trace/receipt writer-readback；
 - legacy policy/state及dependent-BUY coordinator read-only inventory；
-- K2 public creation/ingress/delivery/materializer/outbox seam的broker-neutral shadow run；
+- 真实legacy repository snapshot→strict K2 event adapter，以及K2 public creation/ingress/delivery/materializer/outbox seam的broker-neutral shadow run；
+- visible transport-duplicate suppression receipt，不能通过删除legacy cancel effect伪造parity；
 - restart/replay/multi-slot/concurrency/failure/equivalence矩阵；
 - K6 cutover evidence清单；
 - 不执行production cutover。
@@ -675,6 +903,9 @@ backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py
 backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py
 backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py
 backend/tests/miniqmt_execution_runtime/test_current_three_legacy_inventory.py
+backend/tests/miniqmt_execution_runtime/test_current_three_shadow_source.py
+backend/tests/miniqmt_execution_runtime/test_kernel_callback_events.py
+backend/tests/miniqmt_execution_runtime/test_kernel_outbox_outcome_ingress.py
 backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py
 backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py
 backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py
@@ -688,12 +919,17 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 - ALGO_START→initial state/timer/command；
 - TICK/ORDER/TRADE/TIMER/SESSION/EOD exact routing；
 - state/effect transaction rollback；
-- SUBMIT→COMMAND_PENDING→ACK/callback/reconcile→broker-identified active state；pending期间tick/timer/EOD不重复submit且不伪造cancel；
-- callback-before-ACK、duplicate/out-of-order、stale delivery；
+- SUBMIT→COMMAND_PENDING→durable ACK/outbox outcome→deterministic COMMAND_OUTCOME event→broker-identified active state；accepted/rejected/pre-call terminal/unknown/conflict与CANCEL各分支均闭合，pending期间tick/timer/EOD不重复command且不伪造broker identity；
+- outcome event committed但delivery未APPLIED时mapping/state lag由exact event/delivery闭合；更早sequence TICK/TIMER仍零新command，outcome APPLIED后旧pending state必须消失；
+- callback-before-ACK、callback-terminal-before-outcome、`ADVANCE_MAPPING/VERIFY_CALLBACK_PRECEDENCE`、zero-owner terminal receipt、duplicate/out-of-order/stale delivery；
+- terminal ORDER before final TRADE、ORDER cumulative null/ahead/stale、`TERMINAL_TRADE_PENDING` restart、missing TRADE逐笔补入后OMS RECONCILE closure；ORDER累计量不得直接增加traded quantity；
 - current-three command→mapping→child→broker callback identity chain；
 - no broker duplicate；
 - same-symbol multi-slot和bad-plugin isolation。
 - dependent-BUY算法候选effect与cross-parent coordinator inventory分离；K3 plugin不得读取ledger/其他parent，也不得制造defer/release state。
+- production-shape shadow source必须由DEV repository committed legacy events/child facts构造；malformed source、missing mapping和事务rollback不能用in-memory fixture冒充通过。
+- shadow association覆盖missing/multiple/reused child、价量/reason drift、callback-before-ACK mapping和zero dispatch-attempt/Gateway proof；禁止把legacy broker fact写成shadow ACK。
+- legacy repeated cancel必须生成hash-covered suppression observation；只有同target、同reason、同pending lifecycle可等价，terminal negative outcome后的新cancel不得被抑制。
 
 ### 14.3 Coverage and routing
 
@@ -709,9 +945,12 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 必须分别证明：
 
 - exact config/state/source/manifest/binding；
+- transition-first construction与零placeholder/backpatch；
+- strict ORDER/TRADE/COMMAND_OUTCOME payload、mapping/outbox lifecycle projection及outcome ingress；
 - Sniper/BestLimit/TWAP每条业务分支；
 - TWAP AM/lunch/PM/EOD/restart；
-- parity receipt正负/截断/readback；
+- committed-fact shadow source和parity receipt正负/截断/readback；
+- visible cancel transport suppression与negative outcome后新lifecycle；
 - active legacy inventory zero-write；
 - no direct broker/import/runtime owner；
 - crash/retry/concurrency/no-duplicate；
@@ -725,14 +964,17 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 | risk | mandatory mitigation |
 | --- | --- |
 | pure plugin再次持有legacy mutable core | factory/return-type/import boundary直接测试；每transition新对象；state只来自strict snapshot |
-| parity normalizer隐藏真实差异 | price/quantity/reason/timer/lineage全部进入normalized effect；difference writer/readback和negative vectors |
+| parity normalizer隐藏真实差异 | price/quantity/reason/timer/lineage全部进入normalized effect；重复cancel suppression单独hash-covered且只允许同target/reason pending lifecycle；difference writer/readback和negative vectors |
 | dependent-BUY被遗漏或错误塞进算法state | §3.4证明K2 carrier缺口；K3只生成zero-write coordinator inventory；K6切换前必须实现独立durable coordinator，plugins禁止ledger/cross-parent访问 |
 | K3被误用为临时产品route | K3-A/K3-B均shadow-only且`broker_called=false`；产品cutover仅K6执行 |
 | active legacy instance被in-place升级 | zero-write inventory disposition；active/open-child固定legacy owner至terminal |
-| TWAP用wall clock或午休catch-up | K2 ExchangeSessionClock one-shot occurrence；AM/lunch/PM/EOD/restart直接测试 |
+| TWAP用wall clock或午休catch-up | plugin只产raw due，K2 ExchangeSessionClock解析effective due；11:29:59/lunch/PM/EOD/restart直接测试 |
 | BestLimit restart重新抽签 | raw-digest u53 + persisted ordinal；retry/restart同effect hash |
 | EOD有active child却伪报terminal | STOPPED + cancel pending两阶段closure；unknown进入既有FAILED contract |
-| pre-ACK active order无法表示 | 三个state schema升v3；COMMAND_PENDING + RESERVED mapping + PENDING outbox同事务闭合；broker ID只来自ACK/callback/reconcile |
+| SUBMIT/CANCEL pending或unknown无法表示 | 三个state schema升v3并持久化pending command type/id；mapping/outbox lifecycle projection同snapshot回读；SUBMIT unknown允许null broker ID，CANCEL pending/unknown要求exact broker ID |
+| sync ACK/reject/pre-call outcome未推进plugin state | ACK保持outbox fact；deterministic `KernelOutboxOutcomeIngressV1`生成exact COMMAND_OUTCOME event，restart幂等且不调用broker |
+| ORDER/TRADE payload由plugin猜字段 | 三个strict payload carrier和唯一builder/readback；unknown enum、alias、missing/extra/hash drift fail-loud |
+| shadow parity只由fixture自证 | committed legacy repository snapshot和DEV PostgreSQL append/readback为K3-B完成证据；in-memory仅计单元测试 |
 | ORDER cumulative先于TRADE造成死锁或双计 | ORDER不增加成交，ahead事实留在durable event+diagnostic；TRADE唯一推进top-level/active cumulative；EOD reconcile显式闭合 |
 | 新控制演变为人工门禁 | parity/inventory仅开发/运维证据；无RBAC、审批、acknowledge或per-run switch |
 
@@ -740,7 +982,7 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 
 1. 合入K3-A pure plugins，不改变产品route；
 2. 合入K3-B parity/inventory，不改变产品route；
-3. 在CI/DEV disposable schema运行完整parity、restart和K2 integration；
+3. 在CI/DEV disposable schema运行strict callback/outcome、committed-fact shadow source、完整parity、restart和K2 integration；
 4. K3 source完成只表示current-three算法迁移证据ready，不表示dependent-BUY coordinator或K6 cutover ready，也不表示production DDL、配置、重启或runtime activation；
 5. K6先以独立F2设计和代码闭合§3.4 durable coordinator，再在独立授权下执行唯一route切换并退役legacy product calls；两项不能以一次状态声明合并。
 
@@ -779,38 +1021,38 @@ runtime_activation=noop
 | design_item | acceptance |
 | --- | --- |
 | `F-071` | current legacy side-effect chain、dependent-BUY coordinator carrier缺口、K2/K3/K4/K6边界、信号/执行隔离和唯一route事实完整 |
-| `F-072` | current-three plugin identity/version/source/manifest/factory/catalog、v3 state和public transition identity writer-readback可直接实施，零partial catalog |
+| `F-072` | current-three exact factory/class/binding refs、transition-first construction、v3 pending command state和mapping/outbox lifecycle projection writer-readback可直接实施，零placeholder/partial catalog |
 | `F-073` | Sniper BUY/SELL/active-cancel/depth/fill/EOD exact行为与state lineage完整 |
 | `F-074` | BestLimit quote/replace/deterministic draw ordinal/restart exact且无global random |
-| `F-075` | TWAP exchange-active TIMER、午休、PM、duration、slice、missing view、EOD/restart语义完整 |
-| `F-076` | pre-ACK COMMAND_PENDING、ORDER/TRADE因果、active-order/mapping/outbox、traded quantity/terminal/unknown-cancel transaction与identity closure完整 |
+| `F-075` | TWAP raw due由plugin确定、effective due由唯一K2 session authority解析，午休、PM、duration、slice、missing view、EOD/restart语义完整 |
+| `F-076` | strict ORDER/TRADE/OMS RECONCILE/COMMAND_OUTCOME payload、pre-ACK/pending command、terminal-trade-pending、outbox outcome、active-order/mapping/outbox及traded quantity transaction closure完整 |
 | `F-077` | legacy policy/state/dependent-BUY read-only inventory和ALGO_LOCAL immutable parity receipt schema/hash/truncation/readback完整 |
-| `F-078` | K2 public seam shadow orchestration无algo branch、无direct broker、无第二runtime/route/fallback，且不把cross-parent coordination塞入plugin |
+| `F-078` | committed legacy repository facts驱动production-shape K2 public seam shadow orchestration，无algo branch/direct broker/第二runtime/route/fallback，且不把cross-parent coordination塞入plugin |
 | `F-079` | typed failure、diagnostics/metrics/retention、concurrency/retry/rollback和无人工门禁完整 |
-| `F-080` | direct/parity/restart/integration测试、coverage、changed-file routing、K6 coordinator cutover prerequisite和生产状态分离可执行 |
+| `F-080` | direct/parity/restart/integration/DEV repository shadow-source测试、visible cancel transport suppression、coverage/routing、K6 coordinator prerequisite和生产状态分离可执行 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-071` | §1–§3.4；`runtime.py::_ensure_vnpy_core/_handle_vnpy_actions/_defer_dependent_buy_action_if_needed/_try_release_deferred_buys_after_sell_trade`定向事实；父蓝图K3/K6 | artifact: `docs/architecture/miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` route/import/ledger-cross-parent static tests | design_ready | none |
-| `F-072` | §3–§5.1.1；target current-three plugin/factory/manifest/catalog、v3 state与public transition-ID modules | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` | design_ready | none |
+| `F-072` | §3–§5.1.3；exact three factory/class/binding table、transition-first construction、v3 pending command state、`KernelCommandLifecycleProjectionV1` | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py`；placeholder/backpatch、state/outbox drift negative matrix | design_ready | none |
 | `F-073` | §5–§6 Sniper exact transition table | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` Sniper positive/negative/restart vectors | design_ready | none |
 | `F-074` | §5、§7；`best_limit_quantity_v1`唯一draw authority | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` deterministic ordinal/retry/restart/price-change vectors | design_ready | none |
-| `F-075` | §5、§8；K2 `ExchangeSessionClockV1`/timer occurrence | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` AM/lunch/PM/duration/EOD/restart vectors | design_ready | none |
-| `F-076` | §5.1.1、§5.3–§5.4、§11；K2 callback mapping/materializer/outbox | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py` pre-ACK pending、callback-before-ACK、ORDER-ahead-of-TRADE、fill closure、EOD cancel/unknown/no-duplicate cases | design_ready | none |
+| `F-075` | §5、§8；plugin raw due + K2 `ExchangeSessionClockV1/effective_timer_due_at_v1`唯一authority | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` 11:29:59→PM、午休零occurrence、PM无burst、duration/EOD/restart及authority drift vectors | design_ready | none |
+| `F-076` | §5.1.1–§5.4、§11；strict callback/reconcile payload、lifecycle projection、outbox-outcome→COMMAND_OUTCOME ingress | target `backend/tests/miniqmt_execution_runtime/test_kernel_callback_events.py`、`test_kernel_outbox_outcome_ingress.py`、`test_current_three_kernel_plugins.py` accepted/rejected/pre-call/unknown/conflict、callback-before-ACK、terminal ORDER before TRADE、OMS closure、fill/EOD/no-duplicate matrix | design_ready | none |
 | `F-077` | §9–§10 strict policy/state/dependent-BUY inventory与ALGO_LOCAL parity carriers | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_legacy_inventory.py` positive/negative/truncation/readback/scope separation | design_ready | none |
-| `F-078` | §3–§3.4、§13；K2 creation/ingress/delivery/materializer public seams | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` shadow/no-branch/no-broker/no-ledger/no-cross-parent tests | design_ready | none |
+| `F-078` | §3–§3.4、§10.1.1、§13；committed legacy repository snapshot→strict event adapter→K2 public seams | target `backend/tests/miniqmt_execution_runtime/test_current_three_shadow_source.py` DEV PostgreSQL append/readback/corruption rollback；`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`证明no-branch/no-broker/no-ledger/no-cross-parent | design_ready | none |
 | `F-079` | §11–§12、§15；typed failure/diagnostics/rollback | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` malformed input、plugin-local isolation、DB failure、source rollback cases | design_ready | none |
-| `F-080` | §14–§16；ownership/classifier/F2/coverage/gates和K6 prerequisite | target commands `python -m nox -s miniqmt_execution_runtime_l2`、`python -m nox -s paper_v2_backend`及真实依赖plans；line>=80/branch>=70，`unmapped_code_files=[]` | design_ready | none |
+| `F-080` | §10.2、§14–§16；visible transport suppression、direct/DEV/integration、ownership/classifier/F2/coverage/gates和K6 prerequisite | target cancel pending/rejected/retry exact parity；`python -m nox -s miniqmt_execution_runtime_l2`、`paper_v2_backend`及真实依赖plans；line>=80/branch>=70，`unmapped_code_files=[]` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 正式复核
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified/subset/POC | pass | 三算法全部event/state/effect/timer/restart/parity/inventory路径均有实施合同；K3-A不被冒充K3 complete；dependent-BUY未被忽略或伪装进普通state/outbox |
-| no silent error | pass | malformed config/state/event/binding/parity/inventory均typed fail-loud；无空PASSED、默认state、固定ACK或exception swallowing |
-| no business semantic drift | pass | Sniper/BestLimit/TWAP既有price/quantity/reason/timer顺序、A股规则、Selection/Target/B0/OMS/Gateway authority不变；dependent-BUY现有ledger-cash因果语义被列为K6显式前置而非删除；任何算法差异由FAILED parity receipt显式暴露 |
+| no simplified/subset/POC | pass | 三算法全部event/state/effect/timer/restart/parity/inventory路径均有实施合同；K3-B必须由committed legacy repository facts驱动production-shape shadow source和DEV readback，in-memory/mock-only不计完成证据；K3-A不被冒充K3 complete |
+| no silent error | pass | malformed config/state/event/binding/lifecycle projection/outbox outcome/shadow source/parity/inventory均typed fail-loud；ACK不伪装ORDER/TRADE/OMS事件，terminal outbox通过deterministic COMMAND_OUTCOME推进state；无空PASSED、默认state、固定ACK或exception swallowing |
+| no business semantic drift | pass | Sniper/BestLimit/TWAP既有price/quantity/reason/timer顺序、A股规则、Selection/Target/B0/OMS/Gateway authority不变；legacy重复cancel只在同target/reason且同pending lifecycle时记录hash-covered transport suppression，terminal negative后新cancel仍为business effect；dependent-BUY ledger-cash因果语义列为K6显式前置 |
 | no unauthorized gates | pass | parity/inventory是开发证据而非run gate；无RBAC、审批、acknowledge、人工恢复、永久enable flag或package二次校验 |
 | no parallel route/fallback | pass | K3 shadow两侧均broker_called=false；产品route退役仅由K6一次完成，不双submit、不fallback到legacy |
 | production state separation | pass | design/source/DDL/config/binding/restart/runtime observation分别记录；本设计全部production/runtime gates为noop |
@@ -820,12 +1062,13 @@ runtime_activation=noop
 K3 implementation只有同时满足以下条件才可标记`implemented_verified`：
 
 1. F-071..F-080全部具有真实code/test receipt；
-2. 三个factory返回真实`ExecutionAlgoPluginV2`，catalog零partial publication；v3 state能无伪造地表示pre-ACK COMMAND_PENDING并与mapping/outbox闭合；
-3. current-three ALGO_LOCAL mandatory parity vectors全部PASSED，任一drift保持FAILED而非被normalize隐藏；dependent-BUY coordinator仅形成strict inventory，不计入算法PASSED；
-4. TWAP上午/午休/下午/duration/EOD/restart使用真实K2 timer semantics；
-5. event→delivery→transition→command→mapping→child→callback链可重建且不重复broker effect；
-6. active legacy state只inventory、不in-place cutover；
-7. line/branch coverage、changed-file routing、F2 validators、DESIGN-COMPLIANCE-001和required CI通过；
-8. K3 source state、K6 dependent-BUY coordinator、production DDL/config/restart/runtime activation明确分离。
+2. 三个exact factory返回真实`ExecutionAlgoPluginV2`，catalog零placeholder/partial publication；transition-first construction无state回填，v3 state完整表示SUBMIT/CANCEL pending/unknown并与mapping/outbox lifecycle projection闭合；
+3. strict ORDER/TRADE/COMMAND_OUTCOME payload writer/readback和outbox-outcome ingress闭合accepted/rejected/pre-call/unknown/conflict，restart不丢state推进、不重复event/delivery/broker effect；
+4. current-three ALGO_LOCAL mandatory parity vectors全部PASSED，transport suppression可见且hash-covered，任一业务drift保持FAILED；parity input来自committed legacy repository facts，dependent-BUY coordinator仅形成strict inventory；
+5. TWAP上午/午休/下午/duration/EOD/restart使用真实K2 timer semantics，plugin raw due与clock effective due authority分离；
+6. event→delivery→transition→command→mapping→child→outbox outcome/callback链可重建且不重复broker effect；
+7. active legacy state只inventory、不in-place cutover；
+8. line/branch coverage、changed-file routing、F2 validators、DESIGN-COMPLIANCE-001和required CI通过；
+9. K3 source state、K6 dependent-BUY coordinator、production DDL/config/restart/runtime activation明确分离。
 
 即使K3 source已合入，产品runtime仍为`not_switched`。K6必须先完成§3.4独立durable coordinator设计/实现及其DEV/CI验收，再在独立授权和真实SIM observation下完成唯一route cutover；两者缺一不可。
