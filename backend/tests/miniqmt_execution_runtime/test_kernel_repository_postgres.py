@@ -82,6 +82,7 @@ from backend.tests.miniqmt_execution_runtime.test_kernel_contracts import (
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres import (
     FORWARD,
+    K2C_ROLLBACK,
     _apply_forward,
     _base_fixture_sql,
     _dev_dsn,
@@ -268,6 +269,9 @@ def test_repository_public_transaction_surface_is_complete() -> None:
         "append_dispatch_attempt",
         "write_timer_schedule",
         "write_timer_occurrence",
+        "claim_due_timer_schedules_atomic",
+        "finalize_timer_claim_atomic",
+        "read_runtime_last_event_sequence",
         "write_exchange_session_authority",
         "list_recovery_deliveries",
         "list_recovery_outbox_commands",
@@ -2914,6 +2918,187 @@ def test_repository_concurrent_timer_first_write_rejects_immutable_payload_confl
         assert len(successes) == 1
         assert len(failures) == 1
         assert isinstance(failures[0], KernelRepositoryConflict)
+    finally:
+        with raw.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+def test_repository_clock_claim_reclaim_and_finalize_are_atomic_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
+                ("runtime_k2", date(2026, 7, 25)),
+            )
+            cur.execute(
+                f"INSERT INTO {schema}.execution_algo_instance("
+                "algo_instance_id,runtime_id,parent_intent_id,strategy_slot_id,symbol,side,target_quantity,"
+                "remaining_quantity,algo_code,status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    _algo_id(),
+                    "runtime_k2",
+                    "intent_k2",
+                    "slot_k2",
+                    "600000.SH",
+                    "BUY",
+                    100,
+                    100,
+                    "TWAP",
+                    "ACTIVE",
+                ),
+            )
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        authority = ExchangeSessionAuthorityV1.create(
+            runtime_id="runtime_k2",
+            exchange_trade_date="2026-07-25",
+            **_calendar_authority_values(snapshot_set_id="calendar_set_k2c_atomic"),
+        )
+        repository.write_exchange_session_authority(authority)
+        worker = repository.start_worker_incarnation(
+            worker_id="clock_worker_k2c",
+            process_role="exchange_session_clock",
+            source_revision="revision_k2c",
+            started_at_utc="2026-07-25T01:00:00Z",
+        )
+        lease_owner = f"{worker.worker_id}:{worker.process_incarnation_id}"
+
+        def scheduled(timer_name: str, due: str) -> ExecutionAlgoTimerScheduleV1:
+            mutation = TimerMutationV1.create(
+                mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+                algo_instance_id=_algo_id(),
+                transition_id=f"transition_{timer_name}",
+                ordinal=0,
+                timer_name=timer_name,
+                schedule_epoch="session_epoch_k2c",
+                due_at_exchange_utc=due,
+                catch_up_policy="APPLY_ONCE",
+                payload={"timer_name": timer_name},
+            )
+            return ExecutionAlgoTimerScheduleV1.create(
+                runtime_id="runtime_k2",
+                mutation=mutation,
+                status=ExecutionAlgoTimerScheduleStatusV1.SCHEDULED,
+                emitted_event_id=None,
+                lease_owner=None,
+                lease_epoch=0,
+                lease_fence_token=None,
+                lease_expires_at_utc=None,
+                row_version=1,
+                created_at_utc="2026-07-25T01:30:00Z",
+                updated_at_utc="2026-07-25T01:30:00Z",
+                closed_at_utc=None,
+            )
+
+        first = scheduled("clock_atomic", "2026-07-25T02:00:00Z")
+        second = scheduled("clock_reclaim", "2026-07-25T02:02:00Z")
+        repository.write_timer_schedule(first)
+        repository.write_timer_schedule(second)
+        first_claim = repository.claim_due_timer_schedules_atomic(
+            runtime_id="runtime_k2",
+            exchange_trade_date=date(2026, 7, 25),
+            exchange_session_authority_sha256=authority.authority_sha256,
+            due_cutoff_at_utc="2026-07-25T02:00:00Z",
+            observed_at_utc="2026-07-25T02:00:00Z",
+            lease_owner=lease_owner,
+            lease_expires_at_utc="2026-07-25T02:01:00Z",
+            eligible_algo_statuses=("ACTIVE",),
+            limit=200,
+        )
+        assert len(first_claim) == 1
+        claimed_schedule, claimed_occurrence = first_claim[0]
+        assert claimed_schedule.status is ExecutionAlgoTimerScheduleStatusV1.EMITTING
+        assert claimed_occurrence.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED
+        assert repository.read_timer_schedule(first.schedule_id) == claimed_schedule
+        assert repository.read_timer_occurrence(first.timer_occurrence_id) == claimed_occurrence
+
+        first_mutation = TimerMutationV1.create(
+            mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+            algo_instance_id=claimed_schedule.algo_instance_id,
+            transition_id="transition_clock_atomic_complete",
+            ordinal=0,
+            timer_name=claimed_schedule.timer_name,
+            schedule_epoch=claimed_schedule.schedule_epoch,
+            due_at_exchange_utc=claimed_schedule.due_at_exchange_utc,
+            catch_up_policy=claimed_schedule.catch_up_policy,
+            payload=thaw_json_v1(claimed_schedule.payload),
+        )
+        completed_schedule = ExecutionAlgoTimerScheduleV1.create(
+            runtime_id=claimed_schedule.runtime_id,
+            mutation=first_mutation,
+            status=ExecutionAlgoTimerScheduleStatusV1.EMITTED,
+            emitted_event_id="mqrtevt_clock_atomic",
+            lease_owner=None,
+            lease_epoch=claimed_schedule.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=claimed_schedule.row_version + 1,
+            created_at_utc=claimed_schedule.created_at_utc,
+            updated_at_utc="2026-07-25T02:00:30Z",
+            closed_at_utc="2026-07-25T02:00:30Z",
+        )
+        completed_occurrence = ExecutionAlgoTimerOccurrenceV1.create(
+            schedule=completed_schedule,
+            exchange_session_authority_sha256=authority.authority_sha256,
+            status=ExecutionAlgoTimerOccurrenceStatusV1.EVENT_COMMITTED,
+            emitted_event_id="mqrtevt_clock_atomic",
+            catch_up_receipt_sha256=None,
+            lease_owner=None,
+            lease_epoch=claimed_occurrence.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at_utc=None,
+            row_version=claimed_occurrence.row_version + 1,
+            created_at_utc=claimed_occurrence.created_at_utc,
+            closed_at_utc="2026-07-25T02:00:30Z",
+        )
+        assert repository.finalize_timer_claim_atomic(
+            schedule=completed_schedule,
+            occurrence=completed_occurrence,
+        ) == (completed_schedule, completed_occurrence)
+
+        initial_second = repository.claim_due_timer_schedules_atomic(
+            runtime_id="runtime_k2",
+            exchange_trade_date=date(2026, 7, 25),
+            exchange_session_authority_sha256=authority.authority_sha256,
+            due_cutoff_at_utc="2026-07-25T02:02:00Z",
+            observed_at_utc="2026-07-25T02:02:00Z",
+            lease_owner=lease_owner,
+            lease_expires_at_utc="2026-07-25T02:03:00Z",
+            eligible_algo_statuses=("ACTIVE",),
+            limit=200,
+        )[0]
+        reclaimed_second = repository.claim_due_timer_schedules_atomic(
+            runtime_id="runtime_k2",
+            exchange_trade_date=date(2026, 7, 25),
+            exchange_session_authority_sha256=authority.authority_sha256,
+            due_cutoff_at_utc="2026-07-25T02:04:00Z",
+            observed_at_utc="2026-07-25T02:04:00Z",
+            lease_owner=lease_owner,
+            lease_expires_at_utc="2026-07-25T02:05:00Z",
+            eligible_algo_statuses=("ACTIVE",),
+            limit=200,
+        )[0]
+        assert reclaimed_second[0].lease_epoch == initial_second[0].lease_epoch + 1
+        assert reclaimed_second[1].lease_epoch == initial_second[1].lease_epoch + 1
+        assert reclaimed_second[1].timer_occurrence_id == initial_second[1].timer_occurrence_id
+        with raw.cursor() as cur, pytest.raises(psycopg2.Error, match="K2-C destructive rollback refused"):
+            cur.execute(K2C_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+        with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
+        with pytest.raises(ValueError, match="status pair is not registered"):
+            repository.finalize_timer_claim_atomic(
+                schedule=completed_schedule,
+                occurrence=reclaimed_second[1],
+            )
+        assert repository.read_timer_schedule(second.schedule_id) == reclaimed_second[0]
+        assert repository.read_timer_occurrence(second.timer_occurrence_id) == reclaimed_second[1]
     finally:
         with raw.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")

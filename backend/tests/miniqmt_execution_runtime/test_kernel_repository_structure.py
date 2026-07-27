@@ -16,7 +16,7 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "ed5af50134537ab366c118461cf8050b27dc71ee2b6e43599c63878040018ecb"
+_PUBLIC_SIGNATURE_SHA256 = "80dd1fa076bf94638adbc0bd51fb8d740a498cdc01d5b0780c0912319ae2d8a3"
 _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
     "backend.services.miniqmt_execution_runtime.kernel_repository_projection",
@@ -35,6 +35,15 @@ _MIGRATION_SHA256 = {
     ),
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.rollback.sql": (
         "cb408aafd8bc9032594a129ee259807f8a7480a92c34332f347cf93e8576c749"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2c_timer_reclaim_20260727.preflight.sql": (
+        "833e7af7f3a12b1cbd8db29f768088752b4bf4fcc7aafd4afa91774464698d21"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2c_timer_reclaim_20260727.sql": (
+        "3552277b61c4035924bb787396565101a1403774a0c2c72ba5d8356965d3ec50"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2c_timer_reclaim_20260727.rollback.sql": (
+        "11ca28e7981a4898fdcecc14067852f4e1129bef0a1a8bb31298ac886312fd13"
     ),
 }
 
@@ -124,7 +133,7 @@ print(json.dumps({'class': PostgresMiniQMTKernelRepository.__name__, 'forbidden'
     assert payload == {"class": "PostgresMiniQMTKernelRepository", "forbidden": []}
 
 
-def test_repository_refactor_keeps_k2_migration_triplet_byte_identical() -> None:
+def test_repository_refactor_keeps_k2_migration_chain_byte_identical() -> None:
     for path, expected_sha256 in _MIGRATION_SHA256.items():
         raw = Path(path).read_bytes()
         assert b"\r" not in raw.replace(b"\r\n", b"")

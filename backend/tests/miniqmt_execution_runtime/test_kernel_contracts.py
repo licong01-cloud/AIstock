@@ -733,26 +733,27 @@ def test_k2_initial_mapping_outbox_and_timer_carriers_reject_forged_history(carr
         closed_at_utc=None,
     )
     owner = "worker_k2:incarnation_k2"
-    with pytest.raises(ValidationError, match="initial CLAIMED occurrence"):
-        ExecutionAlgoTimerOccurrenceV1.create(
-            schedule=schedule,
-            exchange_session_authority_sha256=_sha("4"),
-            status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
-            emitted_event_id=None,
-            catch_up_receipt_sha256=None,
-            lease_owner=owner,
+    forged = ExecutionAlgoTimerOccurrenceV1.create(
+        schedule=schedule,
+        exchange_session_authority_sha256=_sha("4"),
+        status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+        emitted_event_id=None,
+        catch_up_receipt_sha256=None,
+        lease_owner=owner,
+        lease_epoch=1,
+        lease_fence_token=kernel_lease_fence_token_v1(
+            owner_type="TIMER_OCCURRENCE",
+            owner_id=schedule.timer_occurrence_id,
             lease_epoch=1,
-            lease_fence_token=kernel_lease_fence_token_v1(
-                owner_type="TIMER_OCCURRENCE",
-                owner_id=schedule.timer_occurrence_id,
-                lease_epoch=1,
-                lease_owner=owner,
-            ),
-            lease_expires_at_utc="2026-07-25T02:01:00Z",
-            row_version=2,
-            created_at_utc="2026-07-25T02:00:00Z",
-            closed_at_utc=None,
-        )
+            lease_owner=owner,
+        ),
+        lease_expires_at_utc="2026-07-25T02:01:00Z",
+        row_version=2,
+        created_at_utc="2026-07-25T02:00:00Z",
+        closed_at_utc=None,
+    )
+    with pytest.raises(ValueError, match="initial CLAIMED occurrence"):
+        forged.validate_initial_v1()
 
 
 def test_ack_unknown_and_reconciliation_receipts_reject_fake_success_and_ambiguous_identity() -> None:
