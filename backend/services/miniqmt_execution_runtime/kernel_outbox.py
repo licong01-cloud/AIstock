@@ -15,7 +15,12 @@ from typing import Any, Protocol, Sequence
 
 from backend.services.trading_core.models import OrderSide
 
-from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
+from .gateway import (
+    MiniQMTGateway,
+    MiniQMTGatewayCancelAck,
+    MiniQMTGatewayEventSourceError,
+    MiniQMTGatewayOrderAck,
+)
 from .models import MiniQMTChildOrder, MiniQMTChildOrderStatus
 from .plugin_canonical import canonical_decimal_string_v1, hash_hex_v1, thaw_json_v1
 from .plugin_contracts import (
@@ -168,6 +173,31 @@ class MiniQMTKernelGatewayAdapterV1:
                 "configured MiniQMT gateway does not expose the required broker method",
                 context={"command_id": command.command_id, "command_type": command.command_type.value},
             )
+        validator = getattr(self._gateway, "validate_child_order_pre_call", None)
+        if not callable(validator):
+            raise KernelGatewayPreCallError(
+                "MINIQMT_COMMAND_OUTBOX_PRE_CALL_VALIDATOR_UNAVAILABLE",
+                "configured MiniQMT gateway does not expose the required pre-call validator",
+                context={"command_id": command.command_id, "command_type": command.command_type.value},
+            )
+        try:
+            validator(_child_order(command=command, mapping=mapping), operation=command.command_type.value)
+        except MiniQMTGatewayEventSourceError as exc:
+            raise KernelGatewayPreCallError(
+                exc.reason_code,
+                "MiniQMT gateway pre-call validation failed",
+                context={"command_id": command.command_id, **exc.context},
+            ) from exc
+        except Exception as exc:
+            raise KernelGatewayPreCallError(
+                "MINIQMT_COMMAND_OUTBOX_PRE_CALL_VALIDATION_FAILED",
+                "MiniQMT gateway pre-call validation failed",
+                context={
+                    "command_id": command.command_id,
+                    "exception_type": type(exc).__name__,
+                    "message": _bounded_text(exc),
+                },
+            ) from exc
 
     def dispatch(
         self, *, command: BrokerCommandV2, mapping: ExecutionCommandChildMappingV1

@@ -36,6 +36,8 @@ class MiniQMTGateway(Protocol):
 
     def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]: ...
 
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None: ...
+
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck: ...
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck: ...
@@ -125,6 +127,12 @@ class FakeMiniQMTGateway:
 
     def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
         return [dict(item, runtime_id=runtime_id) for item in self._positions]
+
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None:
+        if operation not in {"SUBMIT_LIMIT", "CANCEL_ORDER"}:
+            raise ValueError("unsupported child-order broker operation")
+        if operation == "CANCEL_ORDER" and not order.broker_order_id:
+            raise ValueError("CANCEL_ORDER requires the exact broker order identity")
 
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
         self.submitted_orders.append(order)
@@ -220,6 +228,32 @@ class QmtClientMiniQMTGateway:
             runtime_id=runtime_id,
         )
 
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None:
+        if operation == "SUBMIT_LIMIT":
+            method_name = "place_order"
+            reason_code = "MINIQMT_COMMAND_OUTBOX_PLACE_ORDER_UNAVAILABLE"
+        elif operation == "CANCEL_ORDER":
+            if not (order.broker_order_id or _metadata_broker_order_id(order)):
+                raise MiniQMTGatewayEventSourceError(
+                    "CANCEL_ORDER has no exact broker order identity",
+                    reason_code="MINIQMT_COMMAND_OUTBOX_CANCEL_IDENTITY_MISSING",
+                    context={"operation": operation},
+                )
+            method_name = "cancel_order"
+            reason_code = "MINIQMT_COMMAND_OUTBOX_CANCEL_ORDER_UNAVAILABLE"
+        else:
+            raise MiniQMTGatewayEventSourceError(
+                "child-order broker operation is unsupported",
+                reason_code="MINIQMT_COMMAND_OUTBOX_OPERATION_UNSUPPORTED",
+                context={"operation": operation},
+            )
+        if not callable(getattr(self.qmt_client, method_name, None)):
+            raise MiniQMTGatewayEventSourceError(
+                "qmt client does not expose the required broker method",
+                reason_code=reason_code,
+                context={"operation": operation, "method_name": method_name},
+            )
+
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
         self.submitted_orders.append(order)
         submitter = getattr(self.qmt_client, "place_order", None)
@@ -260,7 +294,7 @@ class QmtClientMiniQMTGateway:
                     "broker_called": True,
                 },
             )
-        diagnostic = _maybe_call(self.qmt_client, "get_last_order_diagnostic") or {}
+        diagnostic = _diagnostic_call(self.qmt_client, "get_last_order_diagnostic")
         try:
             parsed_order_id = int(broker_order_id)
         except (TypeError, ValueError):
@@ -316,7 +350,7 @@ class QmtClientMiniQMTGateway:
                     "broker_called": True,
                 },
             )
-        diagnostic = _maybe_call(self.qmt_client, "get_last_cancel_diagnostic") or {}
+        diagnostic = _diagnostic_call(self.qmt_client, "get_last_cancel_diagnostic")
         return MiniQMTGatewayCancelAck(
             accepted=bool(accepted),
             broker_order_id=str(order_id),
@@ -346,14 +380,24 @@ def _metadata_broker_order_id(order: MiniQMTChildOrder) -> str | None:
     return None
 
 
-def _maybe_call(obj: Any, method_name: str) -> Any:
+def _diagnostic_call(obj: Any, method_name: str) -> Any:
     method = getattr(obj, method_name, None)
     if not callable(method):
-        return None
+        return {"status": "UNAVAILABLE", "method_name": method_name}
     try:
-        return method()
-    except Exception:  # noqa: BLE001
-        return None
+        value = method()
+    except Exception as exc:  # noqa: BLE001 - observation failure remains explicit in broker ACK evidence.
+        try:
+            message = str(exc)[:512]
+        except Exception as render_error:  # noqa: BLE001
+            message = f"<{type(exc).__name__}; renderer={type(render_error).__name__}>"
+        return {
+            "status": "FAILED",
+            "method_name": method_name,
+            "exception_type": type(exc).__name__,
+            "message": message,
+        }
+    return value if value is not None else {"status": "EMPTY", "method_name": method_name}
 
 
 class QmtClientMiniQMTEventLoopGateway(QmtClientMiniQMTGateway):

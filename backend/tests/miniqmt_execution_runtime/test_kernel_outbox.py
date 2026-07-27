@@ -673,6 +673,59 @@ def test_production_gateway_adapter_fails_loud_when_reconciliation_queries_are_m
         adapter.reconciliation_snapshot(runtime_id="runtime_k2d")
 
 
+def test_missing_qmt_mutation_method_is_classified_before_dispatching_commit() -> None:
+    repository = _Repository()
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=QmtClientMiniQMTGateway(qmt_client=object()))
+    result = KernelOutboxDispatcherV1(
+        repository=repository,
+        gateway=adapter,
+        gateway_catalog=_catalog(),
+        lease_owner="worker_k2d:incarnation_k2d",
+        process_incarnation_id="incarnation_k2d",
+    ).dispatch_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:01Z",
+        lease_expires_at_utc="2026-07-27T01:31:01Z",
+    )
+    assert result.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
+    assert result.broker_called is False
+    assert result.callback_watermark_before_call is None
+    assert repository.callback_watermark_reads == 0
+
+    mapping = _accepted_mapping()
+    with pytest.raises(KernelGatewayPreCallError, match="CANCEL_ORDER_UNAVAILABLE"):
+        adapter.validate_pre_call(
+            command=_cancel_command(mapping),
+            mapping=mapping,
+            gateway_catalog=_catalog(),
+        )
+
+
+def test_qmt_diagnostic_failure_is_explicit_but_does_not_change_broker_ack() -> None:
+    class Client:
+        @staticmethod
+        def place_order(**values: Any) -> tuple[int, str]:
+            assert values["stock_code"] == "600000.SH"
+            return 123456, "accepted"
+
+        @staticmethod
+        def get_last_order_diagnostic() -> dict[str, Any]:
+            raise RuntimeError("diagnostic unavailable")
+
+    mapping, _ = _initial_chain()
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=QmtClientMiniQMTGateway(qmt_client=Client()))
+    adapter.validate_pre_call(command=_command(), mapping=mapping, gateway_catalog=_catalog())
+    ack = adapter.dispatch(command=_command(), mapping=mapping)
+    assert ack.accepted is True
+    assert ack.broker_order_id == "123456"
+    assert ack.raw["diagnostic"] == {
+        "status": "FAILED",
+        "method_name": "get_last_order_diagnostic",
+        "exception_type": "RuntimeError",
+        "message": "diagnostic unavailable",
+    }
+
+
 def test_production_gateway_adapter_cancel_rejection_does_not_forge_accepted_identity() -> None:
     class RejectCancelGateway(FakeMiniQMTGateway):
         def cancel_child_order(self, order, *, reason):  # type: ignore[no-untyped-def]

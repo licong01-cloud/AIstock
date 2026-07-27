@@ -832,6 +832,11 @@ critical DB readback failure, and automatic clearing without acknowledgement. Th
 technical execution contracts, not approval or runtime admission gates; K2-D remains
 shadow-only and K3/K4/product activation remain unchanged.
 
+The concrete Gateway validates the required underlying mutation method before the
+durable broker-call boundary. Missing `place_order`/`cancel_order` is a typed pre-call
+failure with `broker_called=false`; optional diagnostic-reader failure is retained in ACK
+evidence and never converted to success, rejection, or an unknown broker outcome.
+
 ## 13. Verification Plan / 验证方案
 
 ### 13.1 Direct contract tests
