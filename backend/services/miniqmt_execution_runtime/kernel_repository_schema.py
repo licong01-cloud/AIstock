@@ -8,7 +8,7 @@ import psycopg2.extras
 from .kernel_repository_common import KernelRepositorySchemaError
 
 
-_K2_SCHEMA_CATALOG_SHA256 = "4c613f119a828c7ce3d1a9bac92113b803c93455802fb5b71b8a7ca2ac2743a5"
+_K2_SCHEMA_CATALOG_SHA256 = "8f1534aae7b0362de2061fafec2f16e056f52fd66251c0d67698ef33a2915d9d"
 
 _K2_CATALOG_QUERY = """
 WITH target_tables(relname) AS (
@@ -176,6 +176,7 @@ class KernelRepositorySchemaMixin:
             "execution_kernel_worker_incarnation",
             "execution_exchange_session_authority",
             "execution_algo_diagnostic_observation",
+            "execution_broker_reconciliation_attempt",
         )
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

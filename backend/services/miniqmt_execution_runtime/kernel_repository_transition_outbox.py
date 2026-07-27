@@ -37,6 +37,7 @@ from .plugin_contracts import (
     BrokerCommandOutboxStatusV1,
     BrokerCommandOutboxV1,
     BrokerDispatchAttemptV1,
+    BrokerOutcomeReconciliationReceiptV1,
     CommandChildMappingStatusV1,
     EventSourceV2,
     EventTypeV2,
@@ -80,6 +81,99 @@ class KernelRepositoryTransitionOutboxMixin:
             carrier_name="outbox",
         )
         return outbox
+
+    def read_reconciliation_receipt(
+        self,
+        command_id: str,
+        reconcile_attempt: int,
+    ) -> BrokerOutcomeReconciliationReceiptV1 | None:
+        if type(command_id) is not str or not command_id.strip():
+            raise ValueError("command_id must be a non-empty strict string")
+        if type(reconcile_attempt) is not int or reconcile_attempt <= 0:
+            raise ValueError("reconcile_attempt must be a positive strict integer")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT receipt_json FROM qmt_strategy.execution_broker_reconciliation_attempt
+                    WHERE command_id=%s AND reconcile_attempt=%s
+                    """,
+                    (command_id, reconcile_attempt),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return _model_from_json(BrokerOutcomeReconciliationReceiptV1, _row_json(row, "receipt_json"))
+
+    def append_reconciliation_receipt(
+        self,
+        receipt: BrokerOutcomeReconciliationReceiptV1,
+    ) -> BrokerOutcomeReconciliationReceiptV1:
+        if not isinstance(receipt, BrokerOutcomeReconciliationReceiptV1):
+            raise TypeError("receipt must be BrokerOutcomeReconciliationReceiptV1")
+        idempotent_existing = False
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT runtime_id,reconcile_receipt_json FROM qmt_strategy.execution_algo_command_outbox "
+                    "WHERE command_id=%s FOR SHARE",
+                    (receipt.command_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise KeyError(receipt.command_id)
+                previous = (
+                    None
+                    if row["reconcile_receipt_json"] is None
+                    else _model_from_json(
+                        BrokerOutcomeReconciliationReceiptV1,
+                        _row_json(row, "reconcile_receipt_json"),
+                    )
+                )
+                expected_attempt = 1 if previous is None else previous.reconcile_attempt + 1
+                if receipt.reconcile_attempt != expected_attempt:
+                    cur.execute(
+                        "SELECT receipt_json FROM qmt_strategy.execution_broker_reconciliation_attempt "
+                        "WHERE command_id=%s AND reconcile_attempt=%s",
+                        (receipt.command_id, receipt.reconcile_attempt),
+                    )
+                    existing_row = cur.fetchone()
+                    existing = (
+                        None
+                        if existing_row is None
+                        else _model_from_json(
+                            BrokerOutcomeReconciliationReceiptV1,
+                            _row_json(existing_row, "receipt_json"),
+                        )
+                    )
+                    if existing == receipt:
+                        idempotent_existing = True
+                    else:
+                        raise KernelRepositoryConflict("reconciliation attempt is not the exact durable successor")
+                if not idempotent_existing:
+                    cur.execute(
+                        """
+                        INSERT INTO qmt_strategy.execution_broker_reconciliation_attempt(
+                            receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,
+                            outcome,observed_at_utc,receipt_json
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (receipt_sha256) DO NOTHING
+                        """,
+                        (
+                            receipt.receipt_sha256,
+                            receipt.command_id,
+                            row["runtime_id"],
+                            receipt.reconcile_attempt,
+                            receipt.callback_watermark,
+                            receipt.outcome.value,
+                            receipt.observed_at_utc,
+                            _json(receipt.model_dump(mode="json")),
+                        ),
+                    )
+        readback = self.read_reconciliation_receipt(receipt.command_id, receipt.reconcile_attempt)
+        if readback != receipt:
+            raise KernelRepositoryConflict("reconciliation receipt post-commit readback differs")
+        return readback
 
     def read_algo_instance(self, algo_instance_id: str) -> ExecutionAlgoInstancePersistenceV2:
         with self._connection(transaction=False) as conn:
@@ -681,17 +775,38 @@ class KernelRepositoryTransitionOutboxMixin:
             if (
                 mapping.command_id != outbox.command_id
                 or mapping.deterministic_client_order_ref != outbox.deterministic_client_order_ref
-                or mapping.broker_order_id != outbox.broker_order_id
             ):
+                raise ValueError("SUBMIT mapping/outbox identity does not close")
+            accepted_ack_without_event = (
+                outbox.status is BrokerCommandOutboxStatusV1.ACKED
+                and outbox.ack_receipt_json is not None
+                and outbox.ack_receipt_json.accepted
+                and outbox.broker_order_id is not None
+                and mapping.broker_order_id is None
+                and mapping.broker_identity_source_event_id is None
+            )
+            if mapping.broker_order_id != outbox.broker_order_id and not accepted_ack_without_event:
                 raise ValueError("SUBMIT mapping/outbox broker identity does not close")
             coupled_states = {
-                CommandChildMappingStatusV1.DISPATCHING: {BrokerCommandOutboxStatusV1.DISPATCHING},
+                CommandChildMappingStatusV1.RESERVED: {
+                    BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+                    BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+                },
+                CommandChildMappingStatusV1.DISPATCHING: {
+                    BrokerCommandOutboxStatusV1.DISPATCHING,
+                    BrokerCommandOutboxStatusV1.ACKED,
+                },
                 CommandChildMappingStatusV1.BROKER_ACCEPTED: {BrokerCommandOutboxStatusV1.ACKED},
                 CommandChildMappingStatusV1.BROKER_REJECTED: {BrokerCommandOutboxStatusV1.ACKED_REJECTED},
                 CommandChildMappingStatusV1.OUTCOME_UNKNOWN: {
                     BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
                     BrokerCommandOutboxStatusV1.RECONCILING,
+                    BrokerCommandOutboxStatusV1.ACKED,
+                    BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+                    BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+                    BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
                 },
+                CommandChildMappingStatusV1.TERMINAL: {BrokerCommandOutboxStatusV1.FAILED_TERMINAL},
             }
             if outbox.status not in coupled_states.get(mapping.mapping_status, set()):
                 raise ValueError("mapping/outbox coupled state conflicts")
@@ -762,6 +877,11 @@ class KernelRepositoryTransitionOutboxMixin:
                     raise KernelRepositoryConflict("outbox CAS expected lease differs from durable predecessor")
                 mapping_changed = mapping != previous_mapping
                 if mapping_changed:
+                    if (
+                        command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+                        and mapping.mapping_status is CommandChildMappingStatusV1.BROKER_ACCEPTED
+                    ):
+                        raise ValueError("SUBMIT BROKER_ACCEPTED mapping must use atomic ORDER/TRADE/RECONCILE ingress")
                     if (
                         command.command_type is BrokerCommandTypeV2.CANCEL_ORDER
                         and mapping.mapping_status is CommandChildMappingStatusV1.TERMINAL
@@ -1167,6 +1287,15 @@ class KernelRepositoryTransitionOutboxMixin:
                     row_version=expected_row_version + 1,
                     updated_at_utc=canonical_utc_datetime_v1(updated_at_utc, field_name="updated_at_utc"),
                     next_attempt_at_utc=None,
+                    dispatch_attempt_id=None,
+                    broker_called=None,
+                    broker_order_id=None,
+                    ack_receipt_json=None,
+                    ack_receipt_sha256=None,
+                    non_acceptance_receipt=None,
+                    unknown_outcome_receipt=None,
+                    reconcile_receipt=None,
+                    last_error_json=None,
                 )
                 payload["outbox_row_sha256"] = self._outbox_hash(payload)
                 claimed = _model_from_json(BrokerCommandOutboxV1, payload)
@@ -1178,6 +1307,10 @@ class KernelRepositoryTransitionOutboxMixin:
                     SET status='CLAIMED', attempt_count=%s, lease_owner=%s,
                         lease_worker_id=%s, lease_process_incarnation_id=%s, lease_epoch=%s,
                         lease_fence_token=%s, lease_expires_at=%s, next_attempt_at_utc=NULL,
+                        dispatch_attempt_id=NULL,broker_called=NULL,broker_order_id=NULL,
+                        ack_receipt_json=NULL,ack_receipt_sha256=NULL,
+                        non_acceptance_receipt_json=NULL,unknown_outcome_receipt_json=NULL,
+                        reconcile_receipt_json=NULL,last_error_json=NULL,
                         row_version=%s, updated_at_utc=%s, carrier_json=%s, outbox_row_sha256=%s
                     WHERE command_id=%s AND row_version=%s
                     """,
@@ -1236,17 +1369,41 @@ class KernelRepositoryTransitionOutboxMixin:
                     raise KeyError(attempt.command_id)
                 outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(outbox_row, "carrier_json"))
                 _, separator, process_incarnation_id = (outbox.lease_owner or "").partition(":")
-                if (
-                    not separator
-                    or outbox.attempt_count != attempt.attempt_count
-                    or outbox.lease_epoch != attempt.lease_epoch
-                    or outbox.lease_fence_token != attempt.lease_fence_token
-                    or process_incarnation_id != attempt.process_incarnation_id
-                    or (
-                        outbox.dispatch_attempt_id is not None
-                        and outbox.dispatch_attempt_id != attempt.dispatch_attempt_id
+                active_lease_match = (
+                    bool(separator)
+                    and outbox.attempt_count == attempt.attempt_count
+                    and outbox.lease_epoch == attempt.lease_epoch
+                    and outbox.lease_fence_token == attempt.lease_fence_token
+                    and process_incarnation_id == attempt.process_incarnation_id
+                    and (
+                        outbox.dispatch_attempt_id is None or outbox.dispatch_attempt_id == attempt.dispatch_attempt_id
                     )
-                ):
+                )
+                historical_completion_match = False
+                if not active_lease_match and outbox.dispatch_attempt_id == attempt.dispatch_attempt_id:
+                    cur.execute(
+                        """
+                        SELECT carrier_json FROM qmt_strategy.execution_algo_command_dispatch_attempt
+                        WHERE dispatch_attempt_id=%s AND stage='CLAIMED'
+                        """,
+                        (attempt.dispatch_attempt_id,),
+                    )
+                    claimed_row = cur.fetchone()
+                    if claimed_row is not None:
+                        claimed_attempt = _model_from_json(
+                            BrokerDispatchAttemptV1,
+                            _row_json(claimed_row, "carrier_json"),
+                        )
+                        historical_completion_match = (
+                            attempt.stage.value in {"COMPLETION_COMMITTED", "CLOSED"}
+                            and outbox.attempt_count == attempt.attempt_count
+                            and outbox.lease_epoch == attempt.lease_epoch
+                            and claimed_attempt.lease_fence_token == attempt.lease_fence_token
+                            and claimed_attempt.process_incarnation_id == attempt.process_incarnation_id
+                        )
+                if not (active_lease_match or historical_completion_match):
+                    raise KernelRepositoryConflict("dispatch attempt does not close to the current outbox lease")
+                if not separator and not historical_completion_match:
                     raise KernelRepositoryConflict("dispatch attempt does not close to the current outbox lease")
                 attempt_projection = _dispatch_attempt_scalar_projection(attempt)
                 cur.execute(

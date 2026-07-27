@@ -7,7 +7,7 @@ import json
 import os
 from collections import Counter
 from datetime import UTC, date, datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
 from backend.services.miniqmt_execution_runtime.models import (
@@ -779,6 +779,7 @@ class SimulationRuntimeOpsService:
         *,
         repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         scheduler: SimulationLifecycleScheduler | SimulationLifecycleBackgroundScheduler | None = None,
+        kernel_diagnostics_reader: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
         self.scheduler = scheduler or (
@@ -786,6 +787,7 @@ class SimulationRuntimeOpsService:
             if repository is None
             else SimulationLifecycleScheduler(repository=self.repository)
         )
+        self.kernel_diagnostics_reader = kernel_diagnostics_reader
 
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
@@ -1037,6 +1039,24 @@ class SimulationRuntimeOpsService:
                 runtime_id=runtime_id,
             )
         effective_trade_date = trade_date or scan_trade_date or (selected_runs[0].trade_date if selected_runs else None)
+        kernel_diagnostics = None
+        if self.kernel_diagnostics_reader is not None and runtime_id is not None and effective_trade_date is not None:
+            try:
+                kernel_diagnostics = self.kernel_diagnostics_reader(
+                    runtime_id=runtime_id,
+                    trade_date=effective_trade_date,
+                    limit=min(limit, 500),
+                )
+            except Exception as exc:  # noqa: BLE001 - read-only diagnostics cannot return false green.
+                raise DataUnavailableError(
+                    "failed to read MiniQMT K2 durable diagnostics",
+                    context={
+                        "reason_code": "MINIQMT_KERNEL_DIAGNOSTIC_READBACK_FAILED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_QUERY",
+                        "runtime_id": runtime_id,
+                        "trade_date": effective_trade_date.isoformat(),
+                    },
+                ) from exc
         query = {
             "schema_version": "simulation_platform_diagnostic_query_v1",
             "trade_date": effective_trade_date.isoformat() if effective_trade_date else None,
@@ -1057,6 +1077,7 @@ class SimulationRuntimeOpsService:
             query=query,
             quote_diagnostics=quote_diagnostics,
             runtime_projection_consistency=runtime_projection_consistency,
+            kernel_diagnostics=kernel_diagnostics,
             generated_at=generated_at,
         )
 

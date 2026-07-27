@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from backend.services.qmt_strategy_ledger.models import OrderBatchStatus
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import project_kernel_diagnostics_v1
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 from .models import (
@@ -38,6 +39,9 @@ METRIC_LABEL_ALLOWLIST = frozenset(
         "reason_code",
         "market_phase",
         "source",
+        "event_type",
+        "command_type",
+        "reason_family",
     }
 )
 METRIC_HIGH_CARDINALITY_LABELS = frozenset(
@@ -429,6 +433,7 @@ class SimulationPlatformObservability:
         query: Mapping[str, Any],
         quote_diagnostics: Mapping[str, Any] | None = None,
         runtime_projection_consistency: Mapping[str, Any] | None = None,
+        kernel_diagnostics: Mapping[str, Any] | None = None,
         generated_at: datetime | None = None,
     ) -> dict[str, Any]:
         now = generated_at or datetime.now(UTC)
@@ -455,6 +460,9 @@ class SimulationPlatformObservability:
             runs=exact_runs,
             quote_diagnostics=quote_diagnostics,
         )
+        kernel_projection = (
+            project_kernel_diagnostics_v1(kernel_diagnostics) if kernel_diagnostics is not None else None
+        )
         lifecycle_layer = self._lifecycle_layer(
             scheduler_status=exact_scheduler,
             runs=exact_runs,
@@ -471,6 +479,18 @@ class SimulationPlatformObservability:
             backend_layers=backend_layers,
             market_phase=market_phase,
         )
+        if kernel_projection is not None:
+            alerts.extend(
+                _alert(
+                    alert_type=item["alert_type"],
+                    status=item["status"],
+                    reason_code=item["reason_code"],
+                    source=item["source"],
+                    identity=item["identity"],
+                    context=item["context"],
+                )
+                for item in kernel_projection.alerts
+            )
         metrics = self._metrics(
             scheduler_status=exact_scheduler,
             process_layer=process_layer,
@@ -483,6 +503,26 @@ class SimulationPlatformObservability:
             active_alert_count=len(alerts),
             generated_at=now,
         )
+        if kernel_projection is not None:
+            metrics.extend(
+                _metric(
+                    name=item["name"],
+                    kind=item["kind"],
+                    value=item["value"],
+                    labels=item["labels"],
+                )
+                for item in kernel_projection.metrics
+            )
+            if len(metrics) > METRIC_SERIES_LIMIT:
+                raise RuntimeConfigInvalidError(
+                    "simulation platform metric series exceed the bounded contract",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_METRIC_CARDINALITY_EXCEEDED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                        "series_count": len(metrics),
+                        "bounded_limit": METRIC_SERIES_LIMIT,
+                    },
+                )
         overall = self._overall_health(
             process_layer=process_layer,
             lifecycle_layer=lifecycle_layer,
@@ -490,6 +530,7 @@ class SimulationPlatformObservability:
             durability_layers=durability_layers,
             business_layers=business_layers,
             backend_layers=backend_layers,
+            kernel_layer=None if kernel_projection is None else kernel_projection.layer,
             market_phase=market_phase,
         )
         bounded_alerts = sorted(alerts, key=lambda item: (item["alert_type"], item["alert_id"]))[:ALERT_LIMIT]
@@ -508,6 +549,7 @@ class SimulationPlatformObservability:
                 "backends": backend_layers,
                 "durability": durability_layers,
                 "business": business_layers,
+                **({} if kernel_projection is None else {"miniqmt_kernel": kernel_projection.layer}),
             },
             "metrics": {
                 "schema_version": PLATFORM_METRICS_SCHEMA_VERSION,
@@ -1082,10 +1124,10 @@ class SimulationPlatformObservability:
             ):
                 status = "DEGRADED"
                 reason_code = "LOCAL_SIM_VALUATION_PENDING_STALE"
-            elif (
-                persistence_status == "INTRADAY_VALUATION_PENDING"
-                and outbox_status in {"PENDING", "PROJECTION_RETRYABLE"}
-            ):
+            elif persistence_status == "INTRADAY_VALUATION_PENDING" and outbox_status in {
+                "PENDING",
+                "PROJECTION_RETRYABLE",
+            }:
                 status = "IN_PROGRESS"
                 reason_code = "LOCAL_SIM_VALUATION_PENDING"
             elif (
@@ -1126,11 +1168,8 @@ class SimulationPlatformObservability:
                     "outbox_backlog_alert_seconds": LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS,
                     "terminal_failure_present": terminal_failure is not None or readback_terminal is not None,
                     "readback_failure_present": readback_failure is not None,
-                    "valuation_pending": persistence_status
-                    == "INTRADAY_VALUATION_PENDING",
-                    "missing_mark_symbols": list(
-                        persistence.get("missing_mark_symbols") or []
-                    )
+                    "valuation_pending": persistence_status == "INTRADAY_VALUATION_PENDING",
+                    "missing_mark_symbols": list(persistence.get("missing_mark_symbols") or [])
                     if isinstance(persistence, Mapping)
                     else [],
                     "projected_submitted_intents": projected_submitted,
@@ -1379,10 +1418,7 @@ class SimulationPlatformObservability:
             parsed_states = []
             state_statuses = Counter()
         residual_count = state_statuses.get("EXPIRED_WITH_RESIDUAL", 0)
-        active_algo_count = sum(
-            state_statuses.get(status, 0)
-            for status in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES
-        )
+        active_algo_count = sum(state_statuses.get(status, 0) for status in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES)
         partial_count = sum(state.filled_quantity > 0 and state.remaining_quantity > 0 for state in parsed_states)
         bar_lag_candidates = [
             SimulationPlatformObservability._local_sim_bar_lag_seconds(
@@ -2054,6 +2090,7 @@ class SimulationPlatformObservability:
         durability_layers: Sequence[Mapping[str, Any]],
         business_layers: Sequence[Mapping[str, Any]],
         backend_layers: Sequence[Mapping[str, Any]],
+        kernel_layer: Mapping[str, Any] | None,
         market_phase: str,
     ) -> dict[str, Any]:
         all_layers = [
@@ -2063,6 +2100,7 @@ class SimulationPlatformObservability:
             *durability_layers,
             *business_layers,
             *backend_layers,
+            *([] if kernel_layer is None else [kernel_layer]),
         ]
         blocked_reasons = sorted({str(layer["reason_code"]) for layer in all_layers if layer["status"] == "BLOCKED"})
         degraded_reasons = sorted({str(layer["reason_code"]) for layer in all_layers if layer["status"] == "DEGRADED"})

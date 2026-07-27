@@ -8,6 +8,7 @@ from .kernel_repository_common import (
     KernelRepositoryConflict,
     KernelRepositorySchemaError,
 )
+from .kernel_repository_diagnostics import KernelRepositoryDiagnosticsMixin
 from .kernel_repository_event_delivery import KernelRepositoryEventDeliveryMixin
 from .kernel_repository_k2b import KernelRepositoryK2BMixin
 from .kernel_repository_schema import KernelRepositorySchemaMixin
@@ -27,6 +28,7 @@ class PostgresMiniQMTKernelRepository(
     KernelRepositoryK2BMixin,
     KernelRepositoryTransitionOutboxMixin,
     KernelRepositoryTimerSessionMixin,
+    KernelRepositoryDiagnosticsMixin,
     KernelRepositoryBase,
 ):
     """Strict K2 persistence with one public facade and one connection owner."""

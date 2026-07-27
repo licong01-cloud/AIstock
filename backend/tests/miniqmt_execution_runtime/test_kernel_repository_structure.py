@@ -16,7 +16,7 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "80dd1fa076bf94638adbc0bd51fb8d740a498cdc01d5b0780c0912319ae2d8a3"
+_PUBLIC_SIGNATURE_SHA256 = "00b0ec1b271c92f9f97098d97829babad4ad031ea8357bab63ecfb8012ba71d7"
 _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
     "backend.services.miniqmt_execution_runtime.kernel_repository_projection",
@@ -25,6 +25,7 @@ _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_repository_k2b",
     "backend.services.miniqmt_execution_runtime.kernel_repository_transition_outbox",
     "backend.services.miniqmt_execution_runtime.kernel_repository_timer_session",
+    "backend.services.miniqmt_execution_runtime.kernel_repository_diagnostics",
 )
 _MIGRATION_SHA256 = {
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.preflight.sql": (
@@ -44,6 +45,15 @@ _MIGRATION_SHA256 = {
     ),
     "backend/migrations/miniqmt_execution_kernel_k2c_timer_reclaim_20260727.rollback.sql": (
         "11ca28e7981a4898fdcecc14067852f4e1129bef0a1a8bb31298ac886312fd13"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.preflight.sql": (
+        "61dc5ddbf13fb24b5d562410be1e58dfd99e3e93070d9a64a0c17a678ad8c0b2"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.sql": (
+        "bb88b20556bd6e8fe847ad451abcf1496f9e1869ed94183756f3fda8e3015b98"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.rollback.sql": (
+        "ded28156e2424ffa22b5210f89658ffe90bb4b8120f0772e755ffc6ce1176a20"
     ),
 }
 
@@ -94,6 +104,7 @@ def test_repository_private_responsibility_modules_have_one_public_facade() -> N
         "KernelRepositoryK2BMixin",
         "KernelRepositoryTransitionOutboxMixin",
         "KernelRepositoryTimerSessionMixin",
+        "KernelRepositoryDiagnosticsMixin",
         "KernelRepositoryBase",
         "object",
     ]

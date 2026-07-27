@@ -91,11 +91,17 @@ MiniQMT：
 
 ```powershell
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>"
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>&trade_date=<YYYY-MM-DD>&limit=100"
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/miniqmt/quote-diagnostics?runtime_id=<runtime_id>&limit=100"
 ```
 
 MiniQMT canonical health 必须来自 quote diagnostics 的 durable health、subscription、writer、controller、gateway 与 OMS 联合投影；legacy `/monitor/miniqmt/status` 不参与模拟盘健康判定。
 `FAILED/DEGRADED` 形成 `MINIQMT_QUOTE_PROGRESS` 告警；durable health 恢复并通过 readback 后自动解除。
+
+K2 durable kernel 只在提供 exact `runtime_id + trade_date` 时加入 `layers.miniqmt_kernel`。`schema_status=NOT_APPLIED` 明确返回
+`NOT_DEPLOYED/MINIQMT_KERNEL_SCHEMA_NOT_APPLIED`，不伪报 healthy，也不形成每日执行门禁；`READY` 时核对 event type、delivery、
+outbox command/status、timer、diagnostic reason family、predecessor gap 及 bounded recent command→mapping chain。该查询不启动
+dispatcher/reconciler，不 claim lease，不调用 Gateway/broker，不写数据库。
 
 ### 3.5 Durable facts
 
@@ -115,6 +121,11 @@ MiniQMT 核对：batch/runtime identity 唯一；`results` cardinality 等于 `t
 - `SIMULATION_PLATFORM_DURABLE_BATCH_COUNT_MISMATCH`；
 - `SIMULATION_PLATFORM_BUSINESS_COUNT_CONFLICT`。
 
+K2 outbox 另外核对：`PENDING/CLAIMED/DISPATCHING/FAILED_RETRYABLE/OUTCOME_UNKNOWN/RECONCILING/ACKED/ACKED_REJECTED/FAILED_TERMINAL`
+计数、`SUBMIT_LIMIT/CANCEL_ORDER`计数、predecessor gap、最新 command→mapping→broker receipt。`OUTCOME_UNKNOWN/RECONCILING`只说明
+自动 exact reconcile 尚未闭合，不授权重复 SUBMIT；`FAILED_TERMINAL`或 predecessor gap 形成 BLOCKED。不得通过编辑 carrier JSON、
+移动 outbox status、补 broker order id 或重放 command 来“修复”。
+
 ### 3.6 Broker / Reconcile
 
 ```powershell
@@ -122,7 +133,10 @@ curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/<run_id>"
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/execution-parents?binding_id=<binding_id>&trade_date=2026-07-17&limit=100"
 ```
 
-仅检查 parent/algo/child/order/trade/reconcile 链和 mismatch count。不要从 runbook 调用 broker reconcile 写路径。
+仅检查 parent/algo/child/order/trade/reconcile 链和 mismatch count。不要从 runbook 调用 broker reconcile 写路径。K2 reconcile 顺序固定为
+exact command/client-ref/order-remark/callback-watermark/order+trade snapshot；唯一匹配、明确 non-acceptance、冲突和 unresolved 必须保留各自
+durable receipt。`idempotent_submit_by_client_ref=false` 时 NOT_FOUND 不得重复下单，达到有界次数后以
+`MINIQMT_COMMAND_OUTCOME_UNRESOLVED`终结并保留 parent residual。
 MiniQMT pending algo、submitted child 和 reconcile mismatch 均从 durable fact 精确计数；terminal run 仍有 active/pending work 返回
 `SIMULATION_TERMINAL_RUN_HAS_ACTIVE_WORK`。
 
@@ -136,10 +150,10 @@ curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/execution-parents/
 
 ## 4. Metrics 与 cardinality
 
-metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source`。
+metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source/plugin_id/event_type/command_type/reason_family`。
 禁止 `run/order/symbol/package/strategy/binding/runtime/plan` 等高基数 label。单次响应最多 256 个 series；超限 typed fail loud，不裁剪后报成功。
 
-平台至少投影：scheduler success/failure/tick lag、binding/run status、LocalSIM active/partial/residual/bar lag/transaction failure/outbox backlog、MiniQMT callback age/recent normalized/rejected/pending/submitted/reconcile mismatch、invalid payload、false-green prevention、durable readback mismatch。
+平台至少投影：scheduler success/failure/tick lag、binding/run status、LocalSIM active/partial/residual/bar lag/transaction failure/outbox backlog、MiniQMT callback age/recent normalized/rejected/pending/submitted/reconcile mismatch、K2 schema/event/outbox/command/predecessor/diagnostic reason family、invalid payload、false-green prevention、durable readback mismatch。
 
 ## 5. Alerts 与自动恢复
 
@@ -152,6 +166,7 @@ metric labels 只允许：`backend/control_revision/status/reason_code/market_ph
 - LocalSIM causal bar lag超过 120 秒；
 - LocalSIM outbox/readback/terminal failure；
 - MiniQMT quote health failed/degraded；
+- MiniQMT K2 delivery/outbox terminal、predecessor gap、OUTCOME_UNKNOWN/reconcile pending；
 - active algo 在收盘后仍无 terminal classification；
 - retired route 被调用。
 

@@ -39,6 +39,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerCommandTypeV2,
     BrokerCommandV2,
     BrokerDispatchAttemptV1,
+    BrokerNonAcceptanceReceiptV1,
     BrokerOutcomeReconciliationReceiptV1,
     BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
@@ -276,6 +277,9 @@ def test_repository_public_transaction_surface_is_complete() -> None:
         "list_recovery_deliveries",
         "list_recovery_outbox_commands",
         "list_recovery_timer_occurrences",
+        "read_kernel_diagnostics",
+        "read_reconciliation_receipt",
+        "append_reconciliation_receipt",
     }
 
     assert required_methods <= set(dir(PostgresMiniQMTKernelRepository))
@@ -1057,10 +1061,19 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 "execution_kernel_worker_incarnation",
                 "execution_exchange_session_authority",
                 "execution_algo_diagnostic_observation",
+                "execution_broker_reconciliation_attempt",
             ):
                 cur.execute(f"CREATE TABLE {incomplete_schema}.{table_name}(id INTEGER)")
         with pytest.raises(KernelRepositorySchemaError, match="fingerprint authority is unavailable"):
             PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(incomplete_schema)).preflight_schema()
+        not_applied_diagnostics = PostgresMiniQMTKernelRepository(
+            conn_factory=_conn_factory(incomplete_schema)
+        ).read_kernel_diagnostics(
+            runtime_id="runtime_k2",
+            trade_date=date(2026, 7, 25),
+        )
+        assert not_applied_diagnostics["schema_status"] == "NOT_APPLIED"
+        assert not_applied_diagnostics["missing_tables"]
         first_start = repository.start_worker_incarnation(
             worker_id="worker_repo_k2",
             process_role="dispatcher",
@@ -1347,6 +1360,101 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         )
         assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
         assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
+        retry_evidence = KernelErrorEvidenceV1.create(
+            stage="OUTBOX_RECONCILE",
+            stable_reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
+            exception=RuntimeError("exact non-acceptance proven"),
+            message="exact non-acceptance proven",
+            retryable=True,
+            terminal=False,
+            broker_called=False,
+            primary_context={"command_id": outbox.command_id},
+            secondary_errors=(),
+        )
+        non_acceptance = BrokerNonAcceptanceReceiptV1.create(
+            command_id=outbox.command_id,
+            deterministic_client_order_ref=outbox.deterministic_client_order_ref,
+            gateway_route_id="gateway_route_repo_k2",
+            gateway_catalog_sha256="3" * 64,
+            query_criteria_sha256="4" * 64,
+            callback_watermark_before="watermark_before_repo_k2",
+            callback_watermark_after="watermark_after_repo_k2",
+            order_snapshot_sha256="5" * 64,
+            trade_snapshot_sha256="6" * 64,
+            observed_at_utc="2026-07-25T01:31:00Z",
+            reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
+        )
+        retryable_outbox = BrokerCommandOutboxV1.create(
+            command=submit_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+            attempt_count=claimed_outbox.attempt_count,
+            lease_owner=None,
+            lease_epoch=claimed_outbox.lease_epoch,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=dispatch_attempt.dispatch_attempt_id,
+            next_attempt_at_utc="2026-07-25T01:31:01Z",
+            broker_called=False,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=non_acceptance,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=retry_evidence.model_dump(mode="json"),
+            row_version=claimed_outbox.row_version + 1,
+            created_at_utc=claimed_outbox.created_at_utc,
+            updated_at_utc="2026-07-25T01:31:00Z",
+            closed_at_utc=None,
+        )
+        repository.compare_and_swap_mapping_outbox(
+            mapping=mapping,
+            outbox=retryable_outbox,
+            expected_mapping_version=mapping.mapping_version,
+            expected_outbox_row_version=claimed_outbox.row_version,
+            expected_lease_owner=claimed_outbox.lease_owner,
+            expected_lease_epoch=claimed_outbox.lease_epoch,
+            expected_lease_fence_token=claimed_outbox.lease_fence_token,
+        )
+        retry_fence = kernel_lease_fence_token_v1(
+            owner_type="OUTBOX_COMMAND",
+            owner_id=outbox.command_id,
+            lease_epoch=2,
+            lease_owner=lease_owner,
+        )
+        claimed_outbox = repository.claim_outbox_command(
+            command_id=outbox.command_id,
+            lease_owner=lease_owner,
+            lease_epoch=2,
+            lease_fence_token=retry_fence,
+            lease_expires_at="2026-07-25T01:40:00Z",
+            updated_at_utc="2026-07-25T01:31:01Z",
+            expected_row_version=retryable_outbox.row_version,
+        )
+        assert claimed_outbox.status is BrokerCommandOutboxStatusV1.CLAIMED
+        assert claimed_outbox.attempt_count == 2
+        assert claimed_outbox.dispatch_attempt_id is None
+        assert claimed_outbox.broker_called is None
+        assert claimed_outbox.non_acceptance_receipt is None
+        assert claimed_outbox.last_error_json is None
+        dispatch_attempt = BrokerDispatchAttemptV1.create(
+            command_id=outbox.command_id,
+            attempt_count=claimed_outbox.attempt_count,
+            lease_epoch=claimed_outbox.lease_epoch,
+            lease_fence_token=claimed_outbox.lease_fence_token,
+            process_incarnation_id=second_start.process_incarnation_id,
+            stage="CLAIMED",
+            started_at_utc="2026-07-25T01:31:01Z",
+            finished_at_utc=None,
+            pre_call_complete=False,
+            broker_called=None,
+            outcome=None,
+            error_reason_code=None,
+            error_context_sha256=None,
+            authority_receipt_sha256=None,
+        )
+        assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
         dispatching_mapping = ExecutionCommandChildMappingV1.create(
             command=submit_command,
             strategy_slot_id="slot_k2",
@@ -1468,19 +1576,6 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             ack_payload_sha256="4" * 64,
             observed_at_utc="2026-07-25T01:32:30Z",
         )
-        accepted_mapping = ExecutionCommandChildMappingV1.create(
-            command=submit_command,
-            strategy_slot_id="slot_k2",
-            mapping_status=CommandChildMappingStatusV1.BROKER_ACCEPTED,
-            mapping_version=3,
-            broker_order_id="broker_repo_k2",
-            broker_identity_source_event_id="event_broker_ack_k2",
-            last_order_event_id="event_broker_ack_k2",
-            last_trade_event_id=None,
-            updated_by_event_id="event_broker_ack_k2",
-            created_at_utc=mapping.created_at_utc,
-            updated_at_utc="2026-07-25T01:32:30Z",
-        )
         accepted_outbox = BrokerCommandOutboxV1.create(
             command=submit_command,
             mapping_id=mapping.mapping_id,
@@ -1506,14 +1601,129 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             closed_at_utc="2026-07-25T01:32:30Z",
         )
         assert repository.compare_and_swap_mapping_outbox(
-            mapping=accepted_mapping,
+            mapping=dispatching_mapping,
             outbox=accepted_outbox,
             expected_mapping_version=2,
             expected_outbox_row_version=dispatching_outbox.row_version,
             expected_lease_owner=dispatching_outbox.lease_owner,
             expected_lease_epoch=dispatching_outbox.lease_epoch,
             expected_lease_fence_token=dispatching_outbox.lease_fence_token,
-        ) == {"mapping": accepted_mapping, "outbox": accepted_outbox}
+        ) == {"mapping": dispatching_mapping, "outbox": accepted_outbox}
+        completion_attempt = BrokerDispatchAttemptV1.create(
+            command_id=dispatch_attempt.command_id,
+            attempt_count=dispatch_attempt.attempt_count,
+            lease_epoch=dispatch_attempt.lease_epoch,
+            lease_fence_token=dispatch_attempt.lease_fence_token,
+            process_incarnation_id=dispatch_attempt.process_incarnation_id,
+            stage="COMPLETION_COMMITTED",
+            started_at_utc=dispatch_attempt.started_at_utc,
+            finished_at_utc="2026-07-25T01:32:30Z",
+            pre_call_complete=True,
+            broker_called=True,
+            outcome="ACKED",
+            error_reason_code=None,
+            error_context_sha256=None,
+            authority_receipt_sha256=ack_receipt.receipt_sha256,
+        )
+        assert repository.append_dispatch_attempt(completion_attempt) == completion_attempt
+        ack_pending_diagnostics = repository.read_kernel_diagnostics(
+            runtime_id="runtime_k2",
+            trade_date=date(2026, 7, 25),
+        )
+        assert ack_pending_diagnostics["runtime_status"] == "ACTIVE"
+        assert ack_pending_diagnostics["mapping_lineage_pending_count"] == 1
+        not_activated_diagnostics = repository.read_kernel_diagnostics(
+            runtime_id="runtime_repo_k2",
+            trade_date=date(2026, 7, 25),
+        )
+        assert not_activated_diagnostics["runtime_status"] == "NOT_ACTIVATED"
+        assert (
+            repository.read_kernel_diagnostics(
+                runtime_id="missing_runtime_k2",
+                trade_date=date(2026, 7, 25),
+            )["runtime_status"]
+            == "NOT_FOUND"
+        )
+        with pytest.raises(ValueError, match="different trade_date"):
+            repository.read_kernel_diagnostics(
+                runtime_id="runtime_k2",
+                trade_date=date(2026, 7, 26),
+            )
+        with raw.cursor() as cur:
+            cur.execute(
+                f"SELECT COALESCE(MAX(sequence),0) FROM {schema}.execution_runtime_event WHERE runtime_id='runtime_k2'"
+            )
+            # Keep this callback fixture outside the legacy hard-coded
+            # sequence values used by later independent fixture sections.
+            accepted_event_sequence = int(cur.fetchone()[0]) + 1_000_000
+            cur.execute(
+                f"UPDATE {schema}.execution_runtime SET last_event_sequence=%s WHERE runtime_id='runtime_k2'",
+                (accepted_event_sequence - 1,),
+            )
+        accepted_event = RuntimeEventEnvelopeV2.create(
+            runtime_id="runtime_k2",
+            sequence=accepted_event_sequence,
+            event_type=EventTypeV2.RECONCILE,
+            event_time_utc="2026-07-25T01:32:31Z",
+            monotonic_ns=None,
+            source=EventSourceV2.QMT_OMS_RECONCILIATION,
+            symbol=dispatching_mapping.symbol,
+            payload_schema_version="miniqmt_reconciliation_receipt_v1",
+            payload={
+                "runtime_id": dispatching_mapping.runtime_id,
+                "algo_instance_id": dispatching_mapping.algo_instance_id,
+                "parent_intent_id": dispatching_mapping.parent_intent_id,
+                "mapping_id": dispatching_mapping.mapping_id,
+                "local_vt_orderid": dispatching_mapping.local_vt_orderid,
+                "broker_order_id": "broker_repo_k2",
+                "terminal": False,
+            },
+            source_identity={"receipt_id": "reconcile_broker_ack_k2", "receipt_sha256": "5" * 64},
+            correlation={
+                "algo_instance_id": dispatching_mapping.algo_instance_id,
+                "mapping_id": dispatching_mapping.mapping_id,
+                "reference_command_id": submit_command.command_id,
+            },
+        )
+        accepted_mapping = ExecutionCommandChildMappingV1.create(
+            command=submit_command,
+            strategy_slot_id="slot_k2",
+            mapping_status=CommandChildMappingStatusV1.BROKER_ACCEPTED,
+            mapping_version=3,
+            broker_order_id="broker_repo_k2",
+            broker_identity_source_event_id=accepted_event.event_id,
+            last_order_event_id=None,
+            last_trade_event_id=None,
+            updated_by_event_id=accepted_event.event_id,
+            created_at_utc=mapping.created_at_utc,
+            updated_at_utc="2026-07-25T01:32:31Z",
+        )
+        accepted_algo = repository.read_algo_instance(_algo_id())
+        accepted_update = KernelCallbackMappingUpdateV1.create(
+            mapping=accepted_mapping,
+            reference_command_id=submit_command.command_id,
+            expected_mapping_version=dispatching_mapping.mapping_version,
+            expected_algo_row_version=accepted_algo.row_version,
+        )
+        repository.ingest_routed_event_atomic(
+            event=accepted_event,
+            catalog_runtime=_ingress_catalog(),
+            correlated_algo_instance_ids=(accepted_mapping.algo_instance_id,),
+            callback_mapping_update=accepted_update,
+        )
+        assert repository.read_command_identity_chain(submit_command.command_id) == {
+            "mapping": accepted_mapping,
+            "outbox": accepted_outbox,
+        }
+        closed_lineage_diagnostics = repository.read_kernel_diagnostics(
+            runtime_id="runtime_k2",
+            trade_date=date(2026, 7, 25),
+        )
+        assert closed_lineage_diagnostics["mapping_lineage_pending_count"] == 0
+        assert closed_lineage_diagnostics["event_type_counts"]["RECONCILE"] == 1
+        assert closed_lineage_diagnostics["recent_command_chains"][0]["mapping"] == accepted_mapping.model_dump(
+            mode="json"
+        )
         mutation = TimerMutationV1.create(
             mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
             algo_instance_id=_algo_id(),
@@ -2420,6 +2630,8 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             reason_code="CANCEL_NOT_FOUND_YET",
             observed_at_utc="2026-07-25T01:34:40Z",
         )
+        assert repository.append_reconciliation_receipt(not_found) == not_found
+        assert repository.read_reconciliation_receipt(cancel_command.command_id, 1) == not_found
         reconciling_cancel = BrokerCommandOutboxV1.create(
             command=cancel_command,
             mapping_id=mapping.mapping_id,
@@ -2482,6 +2694,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             reason_code="CANCEL_TERMINAL_CONFIRMED",
             observed_at_utc="2026-07-25T01:35:00Z",
         )
+        assert repository.append_reconciliation_receipt(reconciled) == reconciled
         terminal_ack = BrokerCommandAckReceiptV1.create(
             command_id=cancel_command.command_id,
             mapping_id=mapping.mapping_id,

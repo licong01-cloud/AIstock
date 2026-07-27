@@ -14,6 +14,7 @@ from backend.services.miniqmt_execution_runtime import (
     QmtClientMiniQMTEventLoopGateway,
     default_miniqmt_execution_runtime_repository,
 )
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import KernelDiagnosticsReadServiceV1
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
@@ -35,7 +36,7 @@ DESTRUCTIVE_MINIQMT_OPERATOR_COMMANDS = frozenset(
 
 
 def get_simulation_runtime_ops_service() -> SimulationRuntimeOpsService:
-    return SimulationRuntimeOpsService()
+    return SimulationRuntimeOpsService(kernel_diagnostics_reader=KernelDiagnosticsReadServiceV1().read)
 
 
 def get_miniqmt_runtime_client() -> MiniQMTExecutionRuntimeClient:

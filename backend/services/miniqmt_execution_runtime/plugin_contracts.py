@@ -4152,6 +4152,7 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
                 CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
             },
             CommandChildMappingStatusV1.OUTCOME_UNKNOWN: {
+                CommandChildMappingStatusV1.DISPATCHING,
                 CommandChildMappingStatusV1.BROKER_ACCEPTED,
                 CommandChildMappingStatusV1.BROKER_REJECTED,
                 CommandChildMappingStatusV1.TERMINAL,
@@ -4401,8 +4402,10 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
             },
             BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN: {BrokerCommandOutboxStatusV1.RECONCILING},
             BrokerCommandOutboxStatusV1.RECONCILING: {
+                BrokerCommandOutboxStatusV1.RECONCILING,
                 BrokerCommandOutboxStatusV1.ACKED,
                 BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+                BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
                 BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
             },
             BrokerCommandOutboxStatusV1.ACKED: set(),

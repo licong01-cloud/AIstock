@@ -178,6 +178,11 @@ class KernelRepositoryEventDeliveryMixin:
         if reference_command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
             if reference_command.command_id != mapping.command_id:
                 raise ValueError("callback SUBMIT reference does not own the durable mapping")
+            if (
+                unchanged_outbox.broker_order_id is not None
+                and unchanged_outbox.broker_order_id != mapping.broker_order_id
+            ):
+                raise ValueError("callback SUBMIT broker identity conflicts with durable ACK/reconcile evidence")
         elif reference_command.command_type is BrokerCommandTypeV2.CANCEL_ORDER:
             if (
                 reference_command.local_vt_orderid != mapping.local_vt_orderid
