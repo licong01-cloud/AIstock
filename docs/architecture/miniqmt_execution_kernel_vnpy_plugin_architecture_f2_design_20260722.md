@@ -6,15 +6,15 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B和K2-C均已`implemented_verified + merged`；K2-D 已达到 `implemented_verified`，`source_merge=pending_pr`。K2-D 通过唯一 durable outbox/reconcile authority、append-only reconciliation history、真实 callback lineage 和只读 diagnostics 闭合，不启动常驻 worker、不调用真实 Gateway/broker。K3/K4 `not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3/K4 `not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B与K2-C均为`implemented_verified + merged`，K2-D 为 `implemented_verified`、`source_merge=pending_pr`。K2-D direct outbox/diagnostics=`55 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；核心 line/branch 均满足 `>=80%/>=70%`。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B and K2-C are `implemented_verified + merged`; K2-D is `implemented_verified` with `source_merge=pending_pr`. K2-D implements the single durable outbox/reconcile authority, append-only reconciliation receipts, callback-watermark recovery, exact broker/mapping lineage, additive guarded migration, bounded diagnostics/metrics/alerts and operator runbook. K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -768,7 +768,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - current three manifest 化；
 - `LockedSurfaceV2` exact signature/object/enum receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1 overall 当前为 `implemented_verified + merged`；K2 detailed design `implementation_in_progress`，K2-A/K2-A-M1/K2-B/K2-C均为`implemented_verified + merged`。K2-C final source `c87748cd...`已通过 PR #2794 / merge `801dc3c9...`闭合为`source_merge=merged_pr_2794`；K2-D与K3/K4 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
+- K1 overall 当前为 `implemented_verified + merged`；K2 detailed design 为 `implementation_verified`，K2-A/K2-A-M1/K2-B/K2-C/K2-D 均为 `implemented_verified + merged`。K2-D final source `82c69fbf...`已通过 PR #2804 / merge `fc4170fa...`闭合为`source_merge=merged_pr_2804`；K3/K4 `not_started`，`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -782,7 +782,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - ExchangeSessionClock使用B0 preload exact `CalendarSnapshotSet`派生的durable session authority、session epoch/event identities；
 - crash/DB-epoch process incarnation/lease/fence、nullable broker-called、OUTCOME_UNKNOWN reconcile、plugin failure/readback；
 - 四个切片为 K2-A schema/repository、K2-B ingress/delivery、K2-C clock/timer、K2-D outbox/reconcile/observability；
-- 当前 `implementation_verified`；K2-A/K2-A-M1/K2-B/K2-C均`implemented_verified + merged`，K2-C=`source_merge=merged_pr_2794`，K2-D=`implemented_verified`、`source_merge=pending_pr`，整体保持shadow-only。K2-D 使用唯一 repository/dispatcher/reconciler 路径闭合 pre-call watermark、CLAIMED/DISPATCHING/ACK/reject/unknown、最多10次 reconciliation、真实 callback event lineage、append-only history、schema fingerprint、只读 diagnostics/metrics/alerts 与 runbook；不重做 risk/OMS/admission，不伪造 event identity，不引入人工 acknowledge、审批或 fallback。产品route仍未切换。
+- 当前 `implementation_verified`；K2-A/K2-A-M1/K2-B/K2-C/K2-D均`implemented_verified + merged`，K2-D=`source_merge=merged_pr_2804`，K2 overall=`implemented_verified + merged`且整体保持shadow-only。K2-D 使用唯一 repository/dispatcher/reconciler 路径闭合 pre-call watermark、CLAIMED/DISPATCHING/ACK/reject/unknown、最多10次 reconciliation、真实 callback event lineage、append-only history、schema fingerprint、只读 diagnostics/metrics/alerts 与 runbook；不重做 risk/OMS/admission，不伪造 event identity，不引入人工 acknowledge、审批或 fallback。产品route仍未切换。
 
 ### K3：迁移现有三个算法
 
