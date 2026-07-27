@@ -315,7 +315,10 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         source_state = reader.validate_source()
         source_state["query_plan_contract"] = {
             "cursor_tuple_fraction": 1.0,
-            "stock_fact_batching": "calendar_month_v1",
+            "stock_fact_batching": "calendar_month_split_fact_stream_v1",
+            "price_mapping_stream": "server_side_cursor",
+            "fact_lookup": "date_bounded_exact_key_maps",
+            "causal_circ_mv": "python_state_from_authoritative_daily_basic_only",
             "direct_l1_l2_single_stream": True,
         }
         reader.load_classification_lookup()

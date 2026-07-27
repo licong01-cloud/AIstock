@@ -64,6 +64,606 @@ class PostgresStockFactReader:
         )
 
     @staticmethod
+    def _month_windows(start: date, end: date) -> Iterator[tuple[date, date]]:
+        window_start = start
+        while window_start <= end:
+            next_month = (window_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            yield window_start, min(next_month - timedelta(days=1), end)
+            window_start = next_month
+
+    def _load_trading_date_ordinals(self, eligible_start: date) -> dict[date, int]:
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cal_date::date
+                FROM market.trading_calendar
+                WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+                ORDER BY cal_date
+                """,
+                (eligible_start, self.spec.source_end),
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            raise StateModelSetError("stock-fact trading calendar is empty")
+        return {row[0]: ordinal for ordinal, row in enumerate(rows, start=1)}
+
+    @staticmethod
+    def _unique_fact_map(
+        rows: list[tuple[Any, ...]],
+        *,
+        source_name: str,
+    ) -> dict[tuple[date, str], tuple[Any, ...]]:
+        result: dict[tuple[date, str], tuple[Any, ...]] = {}
+        for row in rows:
+            key = (row[0], str(row[1]))
+            value = tuple(row[2:])
+            existing = result.get(key)
+            if existing is not None and existing != value:
+                raise StateModelSetError(f"hmm_risk_stock_fact_conflicting_duplicate: {source_name} {key[1]}/{key[0]}")
+            result[key] = value
+        return result
+
+    def _load_initial_circ_mv_state(
+        self,
+        *,
+        eligible_start_by_code: dict[str, date],
+        before_date: date,
+    ) -> dict[str, tuple[date, Any]]:
+        if not eligible_start_by_code:
+            return {}
+        request_rows = [
+            {"ts_code": code, "eligible_start": eligible_start.isoformat()}
+            for code, eligible_start in sorted(eligible_start_by_code.items())
+        ]
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                WITH requested AS (
+                  SELECT ts_code,eligible_start::date
+                  FROM jsonb_to_recordset(%s::jsonb) AS item(ts_code text,eligible_start text)
+                )
+                SELECT requested.ts_code,previous.trade_date,previous.circ_mv
+                FROM requested
+                LEFT JOIN LATERAL (
+                  SELECT db.trade_date,db.circ_mv
+                  FROM market.daily_basic db
+                  WHERE db.ts_code=requested.ts_code
+                    AND db.trade_date>=requested.eligible_start
+                    AND db.trade_date<%s
+                  ORDER BY db.trade_date DESC
+                  LIMIT 1
+                ) previous ON true
+                ORDER BY requested.ts_code
+                """,
+                (json.dumps(request_rows, separators=(",", ":")), before_date),
+            )
+            rows = cursor.fetchall()
+        return {str(code): (source_date, circ_mv) for code, source_date, circ_mv in rows if source_date is not None}
+
+    def _load_window_fact_maps(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        canonical_codes: set[str],
+        moneyflow_source_codes: set[str],
+    ) -> tuple[
+        dict[tuple[date, str], tuple[Any, ...]],
+        dict[tuple[date, str], tuple[Any, ...]],
+        dict[tuple[date, str], tuple[Any, ...]],
+    ]:
+        codes = sorted(canonical_codes)
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT trade_date,ts_code,total_mv,circ_mv
+                FROM market.daily_basic
+                WHERE trade_date BETWEEN %s AND %s AND ts_code=ANY(%s)
+                ORDER BY trade_date,ts_code
+                """,
+                (window_start, window_end, codes),
+            )
+            daily_basic_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT trade_date,ts_code,buy_sm_amount,sell_sm_amount,
+                       buy_elg_amount,sell_elg_amount,net_mf_amount
+                FROM market.moneyflow_ts
+                WHERE trade_date BETWEEN %s AND %s AND ts_code=ANY(%s)
+                ORDER BY trade_date,ts_code
+                """,
+                (window_start, window_end, sorted(moneyflow_source_codes)),
+            )
+            moneyflow_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT trade_date,ts_code,up_limit
+                FROM market.stk_limit
+                WHERE trade_date BETWEEN %s AND %s AND ts_code=ANY(%s)
+                ORDER BY trade_date,ts_code
+                """,
+                (window_start, window_end, codes),
+            )
+            limit_rows = cursor.fetchall()
+        return (
+            self._unique_fact_map(daily_basic_rows, source_name="daily_basic"),
+            self._unique_fact_map(moneyflow_rows, source_name="moneyflow_ts"),
+            self._unique_fact_map(limit_rows, source_name="stk_limit"),
+        )
+
+    def _load_daily_basic_map(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        canonical_codes: set[str],
+    ) -> dict[tuple[date, str], tuple[Any, ...]]:
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT trade_date,ts_code,total_mv,circ_mv
+                FROM market.daily_basic
+                WHERE trade_date BETWEEN %s AND %s AND ts_code=ANY(%s)
+                ORDER BY trade_date,ts_code
+                """,
+                (window_start, window_end, sorted(canonical_codes)),
+            )
+            rows = cursor.fetchall()
+        return self._unique_fact_map(rows, source_name="daily_basic")
+
+    def _load_missing_price_base_rows(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        fetch_size: int,
+        sector_level: str,
+    ) -> list[tuple[Any, ...]]:
+        cursor_prefix = "hmm_risk_missing_price_base" if sector_level == "L1" else "hmm_risk_missing_price_base_l2"
+        cursor = self._conn.cursor(name=f"{cursor_prefix}_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
+        cursor.itersize = fetch_size
+        order_by = (
+            "c.trade_date,c.l1_code,c.ts_code,c.l2_code"
+            if sector_level == "L1"
+            else "c.trade_date,c.l2_code,c.ts_code,c.l1_code"
+        )
+        cursor.execute(
+            f"""
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
+              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), calendar_base AS (
+              SELECT trade_date,previous_trade_date FROM calendar_history
+              WHERE trade_date BETWEEN %s AND %s
+            ), missing_keys AS MATERIALIZED (
+              SELECT calendar_base.trade_date,calendar_base.previous_trade_date,
+                     spans.ts_code,spans.eligible_start,spans.eligible_end
+              FROM calendar_base
+              JOIN market.stock_universe_pit_spans spans
+                ON spans.universe_key=%s AND spans.eligible_start<=calendar_base.trade_date
+               AND (spans.eligible_end IS NULL OR spans.eligible_end>=calendar_base.trade_date)
+              WHERE NOT EXISTS (
+                SELECT 1 FROM market.kline_daily_raw price
+                WHERE price.trade_date=calendar_base.trade_date AND price.ts_code=spans.ts_code
+              )
+                AND NOT EXISTS (
+                  SELECT 1 FROM market.suspend_d suspension
+                  WHERE suspension.trade_date=calendar_base.trade_date AND suspension.ts_code=spans.ts_code
+                )
+            ), mapping_source AS (
+              SELECT missing_keys.trade_date,missing_keys.previous_trade_date,
+                     missing_keys.ts_code,missing_keys.eligible_start,missing_keys.eligible_end,
+                     l1.index_code l1_code,l1.industry_name l1_name,
+                     l2.index_code l2_code,l2.industry_name l2_name
+              FROM missing_keys
+              JOIN market.sw_index_member member
+                ON member.ts_code=missing_keys.ts_code AND member.in_date<=missing_keys.trade_date
+               AND (member.out_date IS NULL OR member.out_date>=missing_keys.trade_date)
+              JOIN market.sw_index_classify l1
+                ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
+              JOIN market.sw_index_classify l2
+                ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+            ), canonical_identity AS (
+              SELECT trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+                     l1_code,l1_name,l2_code,l2_name
+              FROM mapping_source
+              GROUP BY trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+                       l1_code,l1_name,l2_code,l2_name
+            ), counted AS (
+              SELECT c.*,count(*) OVER (PARTITION BY trade_date,ts_code) canonical_identity_count
+              FROM canonical_identity c
+            )
+            SELECT c.trade_date,c.ts_code,c.l1_code,c.l1_name,c.l2_code,c.l2_name,
+                   c.canonical_identity_count,c.eligible_start,c.previous_trade_date
+            FROM counted c
+            ORDER BY {order_by}
+            """,
+            (
+                window_start - timedelta(days=60),
+                window_end,
+                window_start,
+                window_end,
+                self.spec.universe_key,
+            ),
+        )
+        try:
+            return list(cursor)
+        finally:
+            cursor.close()
+
+    def _iter_missing_price_rows_separated(
+        self,
+        *,
+        fetch_size: int,
+        sector_level: str,
+    ) -> Iterator[dict[str, Any]]:
+        trading_ordinals: dict[date, int] | None = None
+        calendar_start: date | None = None
+        for window_start, window_end in self._month_windows(self.spec.source_start, self.spec.source_end):
+            base_rows = self._load_missing_price_base_rows(
+                window_start=window_start,
+                window_end=window_end,
+                fetch_size=fetch_size,
+                sector_level=sector_level,
+            )
+            if not base_rows:
+                continue
+            eligible_start_by_code: dict[str, date] = {}
+            for row in base_rows:
+                code = str(row[1])
+                eligible_start = row[7]
+                previous = eligible_start_by_code.get(code)
+                if previous is None or eligible_start < previous:
+                    eligible_start_by_code[code] = eligible_start
+            minimum_eligible_start = min(eligible_start_by_code.values())
+            if trading_ordinals is None or calendar_start is None or minimum_eligible_start < calendar_start:
+                calendar_start = minimum_eligible_start
+                trading_ordinals = self._load_trading_date_ordinals(calendar_start)
+            circ_mv_state = self._load_initial_circ_mv_state(
+                eligible_start_by_code=eligible_start_by_code,
+                before_date=window_start,
+            )
+            daily_basic = self._load_daily_basic_map(
+                window_start=window_start,
+                window_end=window_end,
+                canonical_codes=set(eligible_start_by_code),
+            )
+            daily_events = sorted((key[0], key[1], value[1]) for key, value in daily_basic.items())
+            event_index = 0
+            assert trading_ordinals is not None
+            for row in base_rows:
+                trade_date_value = row[0]
+                while event_index < len(daily_events) and daily_events[event_index][0] < trade_date_value:
+                    event_date, event_code, event_circ_mv = daily_events[event_index]
+                    if event_date not in trading_ordinals:
+                        raise StateModelSetError(
+                            f"hmm_risk_stock_fact_calendar_mismatch: daily_basic {event_code}/{event_date}"
+                        )
+                    circ_mv_state[event_code] = (event_date, event_circ_mv)
+                    event_index += 1
+                if int(row[6]) != 1:
+                    raise StateModelSetError(
+                        f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
+                    )
+                code = str(row[1])
+                eligible_start = row[7]
+                previous_market_date = row[8]
+                circ_state = circ_mv_state.get(code)
+                circ_mv_source_date = None if circ_state is None else circ_state[0]
+                previous_circ_mv = None if circ_state is None else circ_state[1]
+                if (
+                    circ_mv_source_date is None
+                    or previous_market_date is None
+                    or circ_mv_source_date >= trade_date_value
+                    or circ_mv_source_date > previous_market_date
+                    or circ_mv_source_date < eligible_start
+                ):
+                    circ_mv_source_date = None
+                    previous_circ_mv = None
+                circ_mv_staleness = None
+                if circ_mv_source_date is not None:
+                    try:
+                        circ_mv_staleness = (
+                            trading_ordinals[previous_market_date] - trading_ordinals[circ_mv_source_date]
+                        )
+                    except KeyError as exc:
+                        raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
+                    if circ_mv_staleness < 0:
+                        raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
+                current_basic = daily_basic.get((trade_date_value, code))
+                moneyflow_resolution = self.security_identity_manifest.resolve(
+                    code, trade_date_value, "market.moneyflow_ts"
+                )
+                yield {
+                    "trade_date": trade_date_value,
+                    "symbol": code,
+                    "l1_code": row[2],
+                    "l1_name": row[3],
+                    "l2_code": row[4],
+                    "l2_name": row[5],
+                    "is_suspended": False,
+                    "open_yuan": None,
+                    "high_yuan": None,
+                    "low_yuan": None,
+                    "close_yuan": None,
+                    "volume_shares": None,
+                    "amount_cny": None,
+                    "prev_close_yuan": None,
+                    "prev_close_5_yuan": None,
+                    "prev_close_10_yuan": None,
+                    "total_mv_cny": _scaled(None if current_basic is None else current_basic[0], 0.0001),
+                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
+                    "circ_mv_source_date": circ_mv_source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_staleness,
+                    "buy_sm_amount_cny": None,
+                    "sell_sm_amount_cny": None,
+                    "buy_elg_amount_cny": None,
+                    "sell_elg_amount_cny": None,
+                    "net_mf_amount_cny": None,
+                    "moneyflow_fact_status": "not_evaluated_missing_price",
+                    "moneyflow_source_identity": moneyflow_resolution.evidence(),
+                    "moneyflow_provider_absence": None,
+                    "up_limit_yuan": None,
+                }
+
+    def _load_stock_base_rows(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        fetch_size: int,
+        sector_level: str,
+    ) -> list[tuple[Any, ...]]:
+        price_history_start = window_start - timedelta(days=60)
+        cursor_prefix = "hmm_risk_stock_fact_base" if sector_level == "L1" else "hmm_risk_stock_fact_base_l2"
+        cursor = self._conn.cursor(name=f"{cursor_prefix}_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
+        cursor.itersize = fetch_size
+        order_by = (
+            "c.trade_date,c.l1_code,c.ts_code,c.l2_code"
+            if sector_level == "L1"
+            else "c.trade_date,c.l2_code,c.ts_code,c.l1_code"
+        )
+        cursor.execute(
+            f"""
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
+              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), price_base AS (
+              SELECT DISTINCT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li
+              FROM market.kline_daily_raw
+              WHERE trade_date BETWEEN %s AND %s
+            ), price_history AS (
+              SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                     lag(trade_date,1) OVER w previous_price_date,
+                     lag(close_li,1) OVER w previous_close_li,
+                     lag(trade_date,5) OVER w previous_price_5_date,
+                     lag(close_li,5) OVER w previous_close_5_li,
+                     lag(trade_date,10) OVER w previous_price_10_date,
+                     lag(close_li,10) OVER w previous_close_10_li
+              FROM price_base
+              WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            ), mapping_source AS (
+              SELECT p.trade_date,s.ts_code,s.eligible_start,s.eligible_end,
+                     p.open_li,p.high_li,p.low_li,p.close_li,p.volume_hand,p.amount_li,
+                     p.previous_price_date,p.previous_close_li,p.previous_price_5_date,p.previous_close_5_li,
+                     p.previous_price_10_date,p.previous_close_10_li,
+                     l1.index_code l1_code,l1.industry_name l1_name,
+                     l2.index_code l2_code,l2.industry_name l2_name
+              FROM price_history p
+              JOIN market.stock_universe_pit_spans s
+                ON s.ts_code=p.ts_code AND s.universe_key=%s AND s.eligible_start<=p.trade_date
+               AND (s.eligible_end IS NULL OR s.eligible_end>=p.trade_date)
+              JOIN market.sw_index_member m
+                ON m.ts_code=s.ts_code AND m.in_date<=p.trade_date
+               AND (m.out_date IS NULL OR m.out_date>=p.trade_date)
+              JOIN market.sw_index_classify l1
+                ON l1.level='L1' AND m.l1_code IN (l1.index_code,l1.industry_code)
+              JOIN market.sw_index_classify l2
+                ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
+              WHERE p.trade_date BETWEEN %s AND %s
+            ), canonical_identity AS (
+              SELECT trade_date,ts_code,eligible_start,eligible_end,
+                     open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                     previous_price_date,previous_close_li,previous_price_5_date,previous_close_5_li,
+                     previous_price_10_date,previous_close_10_li,l1_code,l1_name,l2_code,l2_name
+              FROM mapping_source
+              GROUP BY trade_date,ts_code,eligible_start,eligible_end,
+                       open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                       previous_price_date,previous_close_li,previous_price_5_date,previous_close_5_li,
+                       previous_price_10_date,previous_close_10_li,l1_code,l1_name,l2_code,l2_name
+            ), counted AS (
+              SELECT c.*,count(*) OVER (PARTITION BY trade_date,ts_code) canonical_identity_count
+              FROM canonical_identity c
+            )
+            SELECT c.trade_date,c.ts_code,c.l1_code,c.l1_name,c.l2_code,c.l2_name,
+                   c.eligible_start,c.canonical_identity_count,
+                   c.open_li,c.high_li,c.low_li,c.close_li,c.volume_hand,c.amount_li,
+                   c.previous_price_date,c.previous_close_li,c.previous_price_5_date,c.previous_close_5_li,
+                   c.previous_price_10_date,c.previous_close_10_li,ch.previous_trade_date
+            FROM counted c
+            LEFT JOIN calendar_history ch ON ch.trade_date=c.trade_date
+            ORDER BY {order_by}
+            """,
+            (
+                price_history_start,
+                window_end,
+                price_history_start,
+                window_end,
+                self.spec.universe_key,
+                window_start,
+                window_end,
+            ),
+        )
+        try:
+            return list(cursor)
+        finally:
+            cursor.close()
+
+    def _iter_stock_fact_rows_separated(
+        self,
+        *,
+        fetch_size: int,
+        sector_level: str,
+    ) -> Iterator[dict[str, Any]]:
+        circ_mv_state: dict[str, tuple[date, Any]] = {}
+        trading_ordinals: dict[date, int] | None = None
+        calendar_start: date | None = None
+        for window_start, window_end in self._month_windows(self.spec.source_start, self.spec.source_end):
+            base_rows = self._load_stock_base_rows(
+                window_start=window_start,
+                window_end=window_end,
+                fetch_size=fetch_size,
+                sector_level=sector_level,
+            )
+            if not base_rows:
+                continue
+            canonical_codes = {str(row[1]) for row in base_rows}
+            eligible_start_by_code: dict[str, date] = {}
+            moneyflow_source_codes = set(canonical_codes)
+            for row in base_rows:
+                code = str(row[1])
+                eligible_start = row[6]
+                previous = eligible_start_by_code.get(code)
+                if previous is None or eligible_start < previous:
+                    eligible_start_by_code[code] = eligible_start
+                resolution = self.security_identity_manifest.resolve(code, row[0], "market.moneyflow_ts")
+                moneyflow_source_codes.add(resolution.source_ts_code)
+            prior_state = self._load_initial_circ_mv_state(
+                eligible_start_by_code=eligible_start_by_code,
+                before_date=window_start,
+            )
+            for code, candidate in prior_state.items():
+                existing = circ_mv_state.get(code)
+                if existing is None or candidate[0] > existing[0]:
+                    circ_mv_state[code] = candidate
+            minimum_eligible_start = min(eligible_start_by_code.values())
+            if trading_ordinals is None or calendar_start is None or minimum_eligible_start < calendar_start:
+                calendar_start = minimum_eligible_start
+                trading_ordinals = self._load_trading_date_ordinals(calendar_start)
+            daily_basic, moneyflow, limits = self._load_window_fact_maps(
+                window_start=window_start,
+                window_end=window_end,
+                canonical_codes=canonical_codes,
+                moneyflow_source_codes=moneyflow_source_codes,
+            )
+            daily_events = sorted((key[0], key[1], value[1]) for key, value in daily_basic.items())
+            event_index = 0
+            assert trading_ordinals is not None
+            for row in base_rows:
+                trade_date_value = row[0]
+                while event_index < len(daily_events) and daily_events[event_index][0] < trade_date_value:
+                    event_date, event_code, event_circ_mv = daily_events[event_index]
+                    if event_date not in trading_ordinals:
+                        raise StateModelSetError(
+                            f"hmm_risk_stock_fact_calendar_mismatch: daily_basic {event_code}/{event_date}"
+                        )
+                    circ_mv_state[event_code] = (event_date, event_circ_mv)
+                    event_index += 1
+                if int(row[7]) != 1:
+                    raise StateModelSetError(
+                        f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
+                    )
+                code = str(row[1])
+                eligible_start = row[6]
+                previous_close = row[15] if row[14] is not None and row[14] >= eligible_start else None
+                previous_close_5 = row[17] if row[16] is not None and row[16] >= eligible_start else None
+                previous_close_10 = row[19] if row[18] is not None and row[18] >= eligible_start else None
+                previous_market_date = row[20]
+                circ_state = circ_mv_state.get(code)
+                circ_mv_source_date = None if circ_state is None else circ_state[0]
+                previous_circ_mv = None if circ_state is None else circ_state[1]
+                if (
+                    circ_mv_source_date is None
+                    or previous_market_date is None
+                    or circ_mv_source_date >= trade_date_value
+                    or circ_mv_source_date > previous_market_date
+                    or circ_mv_source_date < eligible_start
+                ):
+                    circ_mv_source_date = None
+                    previous_circ_mv = None
+                circ_mv_staleness = None
+                if circ_mv_source_date is not None:
+                    try:
+                        circ_mv_staleness = (
+                            trading_ordinals[previous_market_date] - trading_ordinals[circ_mv_source_date]
+                        )
+                    except KeyError as exc:
+                        raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
+                    if circ_mv_staleness < 0:
+                        raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
+                current_basic = daily_basic.get((trade_date_value, code))
+                total_mv = None if current_basic is None else current_basic[0]
+                moneyflow_resolution = self.security_identity_manifest.resolve(
+                    code, trade_date_value, "market.moneyflow_ts"
+                )
+                moneyflow_row = moneyflow.get((trade_date_value, moneyflow_resolution.source_ts_code))
+                if moneyflow_resolution.source_ts_code != code and (trade_date_value, code) in moneyflow:
+                    raise StateModelSetError(
+                        "hmm_risk_stock_fact_source_identity_ambiguous: canonical and aliased moneyflow rows coexist"
+                    )
+                if moneyflow_row is None:
+                    provider_absence = self.provider_absence_manifest.resolve(
+                        canonical_ts_code=code,
+                        source_dataset="market.moneyflow_ts",
+                        source_ts_code=moneyflow_resolution.source_ts_code,
+                        trade_date=trade_date_value,
+                    )
+                    moneyflow_fact_status = "provider_absence"
+                    moneyflow_values = (None, None, None, None, None)
+                elif any(value is None or not math.isfinite(float(value)) for value in moneyflow_row):
+                    provider_absence = None
+                    moneyflow_fact_status = "required_fields_invalid"
+                    moneyflow_values = moneyflow_row
+                else:
+                    provider_absence = None
+                    moneyflow_fact_status = "available"
+                    moneyflow_values = moneyflow_row
+                limit_row = limits.get((trade_date_value, code))
+                yield {
+                    "trade_date": trade_date_value,
+                    "symbol": code,
+                    "l1_code": row[2],
+                    "l1_name": row[3],
+                    "l2_code": row[4],
+                    "l2_name": row[5],
+                    "is_suspended": False,
+                    "open_yuan": _scaled(row[8], 1000.0),
+                    "high_yuan": _scaled(row[9], 1000.0),
+                    "low_yuan": _scaled(row[10], 1000.0),
+                    "close_yuan": _scaled(row[11], 1000.0),
+                    "volume_shares": _scaled(row[12], 0.01),
+                    "amount_cny": _scaled(row[13], 1000.0),
+                    "prev_close_yuan": _scaled(previous_close, 1000.0),
+                    "prev_close_5_yuan": _scaled(previous_close_5, 1000.0),
+                    "prev_close_10_yuan": _scaled(previous_close_10, 1000.0),
+                    "total_mv_cny": _scaled(total_mv, 0.0001),
+                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
+                    "circ_mv_source_date": circ_mv_source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_staleness,
+                    "buy_sm_amount_cny": _scaled(moneyflow_values[0], 0.0001),
+                    "sell_sm_amount_cny": _scaled(moneyflow_values[1], 0.0001),
+                    "buy_elg_amount_cny": _scaled(moneyflow_values[2], 0.0001),
+                    "sell_elg_amount_cny": _scaled(moneyflow_values[3], 0.0001),
+                    "net_mf_amount_cny": _scaled(moneyflow_values[4], 0.0001),
+                    "moneyflow_fact_status": moneyflow_fact_status,
+                    "moneyflow_source_identity": moneyflow_resolution.evidence(),
+                    "moneyflow_provider_absence": None if provider_absence is None else provider_absence.evidence(),
+                    "up_limit_yuan": None if limit_row is None or limit_row[0] is None else float(limit_row[0]),
+                }
+            while event_index < len(daily_events):
+                event_date, event_code, event_circ_mv = daily_events[event_index]
+                if event_date not in trading_ordinals:
+                    raise StateModelSetError(
+                        f"hmm_risk_stock_fact_calendar_mismatch: daily_basic {event_code}/{event_date}"
+                    )
+                circ_mv_state[event_code] = (event_date, event_circ_mv)
+                event_index += 1
+
+    @staticmethod
     def _circ_mv_asof_fragments(*, previous_date: str, eligible_start: str, has_alias: bool) -> tuple[str, str, str]:
         if not has_alias:
             return (
@@ -316,6 +916,16 @@ class PostgresStockFactReader:
             raise StateModelSetError("stock fact read level must be L1 or L2")
         if (_window_start is None) != (_window_end is None):
             raise StateModelSetError("stock fact query window must provide both boundaries")
+        if (
+            _window_start is None
+            and _window_end is None
+            and not self.security_identity_manifest.alias_rows("market.daily_basic")
+        ):
+            yield from self._iter_stock_fact_rows_separated(
+                fetch_size=fetch_size,
+                sector_level=sector_level,
+            )
+            return
         if _window_start is None or _window_end is None:
             window_start = self.spec.source_start
             while window_start <= self.spec.source_end:
@@ -584,6 +1194,13 @@ class PostgresStockFactReader:
 
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("missing-price read level must be L1 or L2")
+
+        if not self.security_identity_manifest.alias_rows("market.daily_basic"):
+            yield from self._iter_missing_price_rows_separated(
+                fetch_size=fetch_size,
+                sector_level=sector_level,
+            )
+            return
 
         price_history_start = self.spec.source_start - timedelta(days=60)
         daily_basic_alias_rows = self.security_identity_manifest.alias_rows("market.daily_basic")

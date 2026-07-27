@@ -57,11 +57,70 @@ class _Cursor:
             return rows
         if "duplicates WHERE conflict_groups>0" in self.sql:
             return self.connection.duplicates
+        if "SELECT cal_date::date FROM market.trading_calendar" in self.sql:
+            start, end = self.params
+            rows = []
+            current = start
+            while current <= end:
+                if current.weekday() < 5:
+                    rows.append((current,))
+                current = date.fromordinal(current.toordinal() + 1)
+            return rows
+        if "FROM requested LEFT JOIN LATERAL" in self.sql:
+            before_date = self.params[1]
+            latest = {}
+            for row in self.connection.stock_rows:
+                source_date = row[22]
+                if source_date is not None and source_date < before_date:
+                    key = row[1]
+                    candidate = (key, source_date, row[23])
+                    if key not in latest or source_date > latest[key][1]:
+                        latest[key] = candidate
+            return [latest[key] for key in sorted(latest)]
+        if "SELECT trade_date,ts_code,total_mv,circ_mv FROM market.daily_basic" in self.sql:
+            start, end, codes = self.params
+            facts = {}
+            for row in self.connection.stock_rows:
+                if row[1] not in codes:
+                    continue
+                if start <= row[0] <= end:
+                    facts[(row[0], row[1])] = (row[0], row[1], row[20], row[23])
+                if row[22] is not None and start <= row[22] <= end:
+                    facts[(row[22], row[1])] = (row[22], row[1], None, row[23])
+            return [facts[key] for key in sorted(facts)]
+        if "FROM market.moneyflow_ts" in self.sql and "buy_sm_amount" in self.sql:
+            start, end, codes = self.params
+            rows = [
+                (row[0], row[25], *row[26:31])
+                for row in self.connection.stock_rows
+                if row[25] is not None and row[25] in codes and start <= row[0] <= end
+            ]
+            rows.extend(
+                (row[0], row[31], *row[26:31])
+                for row in self.connection.stock_rows
+                if row[31] is not None and row[31] in codes and start <= row[0] <= end
+            )
+            return rows
+        if "SELECT trade_date,ts_code,up_limit FROM market.stk_limit" in self.sql:
+            start, end, codes = self.params
+            return [
+                (row[0], row[1], row[32])
+                for row in self.connection.stock_rows
+                if row[1] in codes and start <= row[0] <= end
+            ]
         return []
 
     def __iter__(self):
         if self.name == "hmm_risk_mapping_source":
             return iter(self.connection.mapping_rows)
+        if self.name and self.name.startswith("hmm_risk_missing_price_base"):
+            window_start, window_end = self.params[2:4]
+            return iter(row for row in self.connection.missing_rows if window_start <= row[0] <= window_end)
+        if self.name and self.name.startswith("hmm_risk_stock_fact_base"):
+            window_start, window_end = self.params[-2:]
+            return iter(
+                (*row[:20], row[21]) for row in self.connection.stock_rows if window_start <= row[0] <= window_end
+            )
         if self.name and self.name.startswith("hmm_risk_stock_fact_source"):
             window_start, window_end = self.params[-2:]
             return iter(row for row in self.connection.stock_rows if window_start <= row[0] <= window_end)
@@ -76,6 +135,7 @@ class _Connection:
         self.executed = []
         self.duplicates = []
         self.mapping_rows = []
+        self.missing_rows = []
         self.stock_rows = []
 
     def cursor(self, name=None):
@@ -209,10 +269,15 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     assert stock["moneyflow_source_identity"]["source_ts_code"] == "000001.SZ"
     assert l2_stock == stock
     l2_queries = [
-        sql for name, sql, _ in connection.executed if name and name.startswith("hmm_risk_stock_fact_source_l2_")
+        sql for name, sql, _ in connection.executed if name and name.startswith("hmm_risk_stock_fact_base_l2_")
     ]
     assert l2_queries
     assert all("ORDER BY c.trade_date,c.l2_code,c.ts_code,c.l1_code" in sql for sql in l2_queries)
+    base_queries = [sql for name, sql, _ in connection.executed if name and "stock_fact_base" in name]
+    assert all("market.daily_basic" not in sql for sql in base_queries)
+    assert all("market.moneyflow_ts" not in sql for sql in base_queries)
+    missing_queries = [sql for name, sql, _ in connection.executed if name and "missing_price_base" in name]
+    assert missing_queries and all("missing_keys AS MATERIALIZED" in sql for sql in missing_queries)
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
     assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
 
@@ -379,6 +444,69 @@ def test_reader_marks_missing_provider_moneyflow_as_na_with_identity_evidence() 
     connection.stock_rows[0] = (date(2024, 1, 9), *connection.stock_rows[0][1:])
     with pytest.raises(StateModelSetError, match="provider_absence_unverified"):
         next(_reader(connection).iter_stock_fact_rows())
+
+
+def test_missing_price_reader_uses_split_causal_daily_basic_without_evaluating_moneyflow() -> None:
+    connection = _Connection()
+    connection.missing_rows = [
+        (
+            date(2024, 1, 2),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            1,
+            date(2020, 1, 1),
+            date(2024, 1, 1),
+        )
+    ]
+    connection.stock_rows = [
+        (
+            date(2024, 1, 2),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2020, 1, 1),
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            100.0,
+            date(2024, 1, 1),
+            date(2024, 1, 1),
+            80.0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    ]
+
+    row = next(_reader(connection).iter_missing_price_rows())
+
+    assert row["close_yuan"] is None
+    assert row["total_mv_cny"] == 1_000_000.0
+    assert row["prev_circ_mv_cny"] == 800_000.0
+    assert row["circ_mv_source_date"] == date(2024, 1, 1)
+    assert row["moneyflow_fact_status"] == "not_evaluated_missing_price"
+    assert row["moneyflow_provider_absence"] is None
 
 
 class _MappingReader:
