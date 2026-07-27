@@ -774,7 +774,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 278 passed, 5 skipped | verified | none |
+| F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 280 passed, 5 skipped | verified | none |
 | F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_route_isolation.py`; `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | verified | none |
 | F-742 | `service.py` response-bound dispatcher and durable failure receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
 | F-743 | strict create/command DTOs in `api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py` covers both Program source kinds | verified | none |
