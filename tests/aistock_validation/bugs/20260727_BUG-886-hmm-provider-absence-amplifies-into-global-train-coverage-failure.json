@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-886",
-  "closed_at": null,
+  "closed_at": "2026-07-27T12:42:00Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -199,8 +199,8 @@
   },
   "first_seen_at": "2026-07-27T06:24:39.511709Z",
   "fix_branch": "bug/BUG-886-hmm-provider-absence-amplifies-into-global-train-20260727",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "73561f5314598cb26294ab4ba4d4ed00fef126d4",
+  "fixed_at": "2026-07-27T12:44:42.586795Z",
   "github_issue_number": 2799,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2799",
   "last_seen_at": "2026-07-27T11:41:57.7474340Z",
@@ -211,6 +211,7 @@
     "Do not activate the diagnostic contributor eligibility or feature-mask candidate as formal training policy.",
     "Do not execute database writes, dependency changes, deployment, or runtime service control."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2803",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -222,7 +223,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -231,6 +232,10 @@
     "fingerprint": "7bca63191fa7ed563d128613",
     "source_event_id": "FE-20260727-7bca63191fa7"
   },
+  "validation_evidence": [
+    "direct pytest: 15 passed",
+    "PR CI: hmm_risk_backend and required checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
