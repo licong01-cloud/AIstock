@@ -649,7 +649,12 @@ class ExchangeSessionClockV1:
                     committed = self.repository.read_event_transaction(event_id)
                 except KeyError:
                     if isinstance(exc, KernelRepositoryCommitUnknown):
-                        raise
+                        raise exc
+                    if str(exc) not in {
+                        "event sequence is not the exact runtime successor",
+                        "runtime event sequence CAS failed",
+                    }:
+                        raise exc
                     continue
                 persisted_event = committed["event"]
                 expected = builder(persisted_event.sequence)

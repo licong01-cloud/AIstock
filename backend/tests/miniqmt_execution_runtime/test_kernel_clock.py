@@ -377,10 +377,12 @@ class _ClockRepository:
         authority: ExchangeSessionAuthorityV1,
         claim_batches: list[tuple[tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1], ...]],
         fail_first_finalize: bool = False,
+        ingest_failure: BaseException | None = None,
     ) -> None:
         self.authority = authority
         self.claim_batches = claim_batches
         self.fail_first_finalize = fail_first_finalize
+        self.ingest_failure = ingest_failure
         self.last_sequence = 1
         self.events: dict[str, dict[str, object]] = {}
         self.ingested_types: list[EventTypeV2] = []
@@ -407,6 +409,8 @@ class _ClockRepository:
         self, *, event, catalog_runtime, correlated_algo_instance_ids, callback_mapping_update=None
     ):
         del catalog_runtime, correlated_algo_instance_ids, callback_mapping_update
+        if self.ingest_failure is not None:
+            raise self.ingest_failure
         assert event.sequence == self.last_sequence + 1
         receipt = RuntimeEventIngressReceiptV1.create(
             runtime_id=event.runtime_id,
@@ -544,3 +548,26 @@ def test_clock_wake_rejects_unbounded_page_inputs_before_repository_access() -> 
     with pytest.raises(ValueError, match="max_timer_pages"):
         clock.wake(**common, max_timer_pages=0)
     assert repository.claim_calls == []
+
+
+def test_clock_preserves_non_sequence_repository_conflict_without_retry_reclassification() -> None:
+    from backend.services.miniqmt_execution_runtime.kernel_repository import KernelRepositoryConflict
+
+    repository = _ClockRepository(
+        authority=_authority(),
+        claim_batches=[],
+        ingest_failure=KernelRepositoryConflict("routing authority conflict"),
+    )
+    clock = ExchangeSessionClockV1(
+        repository=repository,
+        catalog_runtime=object(),  # type: ignore[arg-type]
+        lease_owner="clock_worker:clock_incarnation",
+    )
+    with pytest.raises(KernelRepositoryConflict, match="routing authority conflict"):
+        clock.wake(
+            runtime_id="runtime_k2c",
+            exchange_trade_date=date(2026, 7, 27),
+            observed_at_utc="2026-07-27T01:30:00Z",
+            monotonic_ns=1,
+            lease_expires_at_utc="2026-07-27T01:31:00Z",
+        )
