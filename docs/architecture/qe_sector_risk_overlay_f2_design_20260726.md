@@ -272,6 +272,8 @@ BUG-884 小文本字节保真补证（2026-07-27）：BUG-881/883 合入并重�
 
 BUG-887 CAS 符号链接校验补证（2026-07-27）：BUG-884 合入并重启后的第二次 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00` 再次准确规划两个 child，且 `small_text` 文件 `conf.yaml` 已按 manifest 的 157647 字节进入远端 workspace，证明 CRLF 字节保真修复生效。两个 child 随后均在首个 CAS-backed 文件 `aistock_models/__init__.py` 的 size 校验终止：manifest 期望 578，`stat -c %s` 返回 103。只读远端核验确认 103 是符号链接文本自身长度；`readlink` 指向 SHA 命名的正确 CAS 对象，`stat -Lc %s` 返回目标文件 578 字节，且 `sha256sum` 通过链接得到 manifest SHA。运行时校验必须使用解引用语义读取目标大小，同时继续对目标内容执行 SHA256；不得移除 size/SHA 校验、把 CAS 文件复制回 workspace，或以失败后降级路径继续回测。该 run 仅作为基础架构失败证据，不作 Alpha 判断；修复合入并重启后仍只重试同一原始 2-child canary。
 
+BUG-888 Recorder 固化配置身份补证（2026-07-28）：BUG-887 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T115722735654Z_6584f87f` 已使 baseline 与 equal 两个 child 完成全部 `483/483` 回测日和 `PortAnaRecord`，随后在 Recorder 固化阶段因完整 Qlib 配置同时包含顶层 `port_analysis_config` YAML anchor 定义及 `task.record[].kwargs.config` 执行引用，被旧递归扫描误判为两个可执行 overlay strategy。固化器改为优先解析 Qlib 实际执行的 `task.record` 子树；只有该权威执行路径不存在时才兼容扫描旧式直接策略配置。存在两个真实可执行 portfolio record 时仍显式失败，不按相同 class/kwargs 静默去重。定向回归覆盖真实 anchor/record 双路径和双 record 冲突；修复不改变回测指标、策略参数、风险动作或非 QE 模块。
+
 ## 12. DESIGN-COMPLIANCE-001
 
 - [x] 设计覆盖运行制品、策略、配置、组合回测、评价和隔离，不交付缺臂实现。
