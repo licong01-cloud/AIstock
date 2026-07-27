@@ -266,6 +266,8 @@ manifest 与本地字节不一致、CAS binding 缺失或路径不安全均显�
 identity；真实 Python 源文件变化仍会改变身份。该修复只作用于 QE multi-alpha
 远端运行资产，不改变 overlay 计算、策略参数、研究方向或其他模块运行时。
 
+BUG-884 小文本字节保真补证（2026-07-27）：BUG-881/883 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T054318127030Z_55fbc49e` 已准确规划 `baseline:lgbm_g14_fp_h60` 与 `scheme:equal` 两个 child，证明 retry 字段守恒生效；嵌套模块、因子文件和 `qe_sector_risk_overlay.parquet` 也已通过 CAS 绑定、远端 size/SHA 校验，证明运行资产枚举与 CAS 路径生效。但 `small_text` 打包使用 `Path.read_text()`，其 universal-newline 行为把 Windows workspace 中的 CRLF 原始字节转换成 LF，再交给 `qe_file_sync`；manifest 仍冻结转换前的原始 SHA256/size，导致两个 child 均在 qrun 前的严格字节校验处终止。该 run 保留为基础架构失败证据，不作 Alpha 判断。修复必须以 `read_bytes().decode("utf-8")` 保留 JSON 文本通道中的 CRLF 字符，使远端重新编码后的字节与 manifest 完全相同；不关闭校验、不跳过文件、不改变 CAS 分层。所有远端 missing/size/SHA256 不一致必须输出 `QE_RUNTIME_FILE_VERIFY_FAILED` 及 path、expected、observed 后显式终止。合入和用户重启后只重试同一原始 2-child canary，成功后再提交正式 R13A。
+
 ## 12. DESIGN-COMPLIANCE-001
 
 - [x] 设计覆盖运行制品、策略、配置、组合回测、评价和隔离，不交付缺臂实现。
