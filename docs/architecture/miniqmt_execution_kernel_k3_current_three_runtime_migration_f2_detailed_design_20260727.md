@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K3 Current-Three Runtime Migration F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready_for_review`；`source_merge=pending_pr`。
+> Feature tier：`F2`。文档状态：`design_ready_for_review`；PR #2816；`source_merge=pending_user_review`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -759,7 +759,7 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 本设计阶段：
 
 ```text
-source_merge=pending_pr
+source_merge=pending_user_review_pr_2816
 close_sync=not_applicable_feature_design
 production_ddl_gate=noop
 production_dml_gate=noop
