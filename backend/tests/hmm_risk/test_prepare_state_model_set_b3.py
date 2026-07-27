@@ -290,6 +290,86 @@ def test_c009_preflight_rejects_l1_l2_source_evidence_drift(monkeypatch) -> None
         subject.prepare_c009_stock_fact_preflight(_request(), db_prefix="TDX_DB_")
 
 
+def test_c010_diagnostic_compares_baseline_and_masks_without_model_actions(monkeypatch) -> None:
+    inputs = _preflight_inputs()
+    inputs["c010_diagnostic"] = {
+        "eligibility": {
+            "schema_version": "hmm_risk_c010_train_observation_eligibility_v1",
+            "excluded_moneyflow_symbols": ["689009.SH"],
+            "pit_universe_changed": False,
+            "selection_universe_changed": False,
+            "runtime_prediction_eligibility_changed": False,
+            "diagnostic_only": True,
+        },
+        "aggregate_evidence": {
+            "impacted_l1_codes": ["801880.SI"],
+            "impacted_l2_codes": ["801881.SI"],
+            "formal_policy_activated": False,
+        },
+        "l1_panel": object(),
+        "l2_panel": object(),
+        "l1_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
+        "l2_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
+    }
+    observed = {}
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "f" * 40)
+
+    def load_inputs(request, *, db_prefix, c010_diagnostic=False):
+        observed["source"] = dict(request["source"])
+        observed["db_prefix"] = db_prefix
+        observed["diagnostic"] = c010_diagnostic
+        return inputs
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", load_inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda values, request: _coverage_preflight(valid=False),
+    )
+
+    def audit(panel, **kwargs):
+        return {
+            "schema_version": "hmm_risk_c010_feature_mask_candidate_set_v1",
+            "family": kwargs["family"],
+            "direct_sector_level": kwargs["direct_sector_level"],
+            "feature_mask_candidate_valid": True,
+            "fit_performed": False,
+            "selection_performed": False,
+            "formal_policy_activated": False,
+        }
+
+    monkeypatch.setattr(subject, "audit_feature_mask_candidates", audit)
+
+    report = subject.prepare_c010_observation_eligibility_diagnostic(_request(), db_prefix="TDX_DB_")
+
+    assert report["schema_version"] == subject.C010_OBSERVATION_ELIGIBILITY_SCHEMA
+    assert report["status"] == "diagnostic_complete"
+    assert report["feature_mask_candidate_valid"] is True
+    assert report["baseline_train_coverage"]["train_coverage_valid"] is False
+    assert report["observation_eligibility"]["excluded_moneyflow_symbols"] == ["689009.SH"]
+    assert observed == {
+        "source": {**_request()["source"], "source_start": "2022-01-01", "source_end": "2024-06-30"},
+        "db_prefix": "TDX_DB_",
+        "diagnostic": True,
+    }
+    for field in (
+        "pit_universe_changed",
+        "selection_universe_changed",
+        "runtime_prediction_eligibility_changed",
+        "formal_policy_activated",
+        "fit_performed",
+        "selection_performed",
+        "d6_performed",
+        "validation_accessed",
+        "future_utility_accessed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    ):
+        assert report[field] is False
+
+
 def test_request_template_loader_accepts_unfrozen_template_but_formal_loader_rejects_it(tmp_path) -> None:
     request = _request()
     for field in ("dataset_manifest_hash", "mapping_manifest_hash", "l2_stock_fact_manifest_hash"):

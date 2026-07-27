@@ -29,10 +29,17 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260727-7bca63191fa7",
       "timestamp": "2026-07-27T06:24:39.511706Z"
+    },
+    {
+      "action": "approve_c010_diagnostic_implementation",
+      "actor": "user",
+      "note": "Approved train-only feature-domain contributor eligibility and 601-day read-only diagnostic. PIT selection and runtime prediction eligibility remain unchanged; no HMM fit, selection, D6, model/READY, database write, runtime action, or formal policy activation is authorized.",
+      "timestamp": "2026-07-27T06:50:48.7909354Z"
     }
   ],
   "evidence_uris": [
-    "PR #2796 C-009 report: alias=591 provider_absence=502 stale_circ_mv=348 failure=hmm_risk_model_train_observation_coverage_insufficient"
+    "PR #2796 C-009 report: alias=591 provider_absence=502 stale_circ_mv=348 failure=hmm_risk_model_train_observation_coverage_insufficient",
+    "C-010-DIAG-01 approved diagnostic contract: train-only 0.90 contributor availability, price/moneyflow domain separation, 0.90 cross-section diagnostic, deterministic feature-mask candidates, no formal policy activation"
   ],
   "expected": "Audited provider absence must remain explicit but must not invalidate unrelated price features or every sector cross-section. Stocks remain in PIT selection/trading; only train-frozen feature-domain contribution may be excluded. Any isolated sector candidate must persist an explicit feature mask rather than use neutral, proxy, L1 fallback, or silent fill.",
   "file_scope_contract": {
@@ -164,15 +171,18 @@
     ]
   },
   "first_seen_at": "2026-07-27T06:24:39.511709Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-886-hmm-provider-absence-amplifies-into-global-train-20260727",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2799,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2799",
-  "last_seen_at": "2026-07-27T06:24:39.511709Z",
+  "last_seen_at": "2026-07-27T06:50:48.7909354Z",
   "module": "hmm.risk",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not remove affected securities from the PIT selection universe or runtime prediction eligibility.",
+    "Do not run HMM fits, D5 selection, D6 validation, or write model/READY artifacts in C-010-DIAG-01.",
+    "Do not activate the diagnostic contributor eligibility or feature-mask candidate as formal training policy.",
+    "Do not execute database writes, dependency changes, deployment, or runtime service control."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",

@@ -54,6 +54,11 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     build_l1_feature_panel,
     build_l1_training_series,
 )
+from backend.services.hmm_risk.observation_eligibility import (  # noqa: E402
+    audit_feature_mask_candidates,
+    build_train_only_observation_eligibility,
+    load_feature_domain_direct_aggregates,
+)
 from backend.services.hmm_risk.security_identity import (  # noqa: E402
     load_security_source_identity_manifest,
 )
@@ -69,6 +74,7 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
 C009_STOCK_FACT_PREFLIGHT_SCHEMA = "hmm_risk_c009_stock_fact_preflight_v1"
+C010_OBSERVATION_ELIGIBILITY_SCHEMA = "hmm_risk_c010_observation_eligibility_diagnostic_v1"
 B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
 B3_APPROVED_FROZEN_IDENTITIES = {
     "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
@@ -292,7 +298,45 @@ def _family_spec(
     )
 
 
-def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+def _c010_expected_opportunity_counts(
+    conn: Any,
+    source_spec: StockFactSourceSpec,
+    symbols: list[str],
+) -> dict[str, int]:
+    if not symbols:
+        return {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT price.ts_code,count(DISTINCT price.trade_date)
+            FROM market.kline_daily_raw price
+            JOIN market.stock_universe_pit_spans spans
+              ON spans.ts_code=price.ts_code AND spans.universe_key=%s
+             AND spans.eligible_start<=price.trade_date
+             AND (spans.eligible_end IS NULL OR spans.eligible_end>=price.trade_date)
+            JOIN market.sw_index_member member
+              ON member.ts_code=price.ts_code AND member.in_date<=price.trade_date
+             AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
+            WHERE price.trade_date BETWEEN %s AND %s AND price.ts_code=ANY(%s)
+            GROUP BY price.ts_code
+            ORDER BY price.ts_code
+            """,
+            (source_spec.universe_key, source_spec.source_start, source_spec.source_end, symbols),
+        )
+        rows = cursor.fetchall()
+    result = {str(symbol): int(count) for symbol, count in rows}
+    missing = sorted(set(symbols) - set(result))
+    if missing:
+        raise StateModelSetError(f"C-010 provider-absence symbols lack expected opportunity evidence: {missing}")
+    return result
+
+
+def _load_l1_source_inputs(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    c010_diagnostic: bool = False,
+) -> dict[str, Any]:
     source = request["source"]
     security_identity_manifest = _load_security_identity_manifest(source)
     provider_absence_manifest = _load_provider_absence_manifest(source)
@@ -333,6 +377,34 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
             source_spec.source_start,
             source_spec.source_end,
         )
+        c010_payload = None
+        if c010_diagnostic:
+            symbols = sorted(
+                {
+                    row.canonical_ts_code
+                    for row in provider_absence_manifest.rows
+                    if source_spec.source_start <= row.trade_date <= source_spec.source_end
+                }
+            )
+            expected_counts = _c010_expected_opportunity_counts(conn, source_spec, symbols)
+            eligibility = build_train_only_observation_eligibility(
+                provider_absence_manifest.rows,
+                expected_opportunity_count_by_symbol=expected_counts,
+                train_start=source_spec.source_start,
+                train_end=source_spec.source_end,
+                minimum_availability_ratio=MIN_COVERAGE,
+            )
+            diagnostic_l1, diagnostic_l2, aggregate_evidence = load_feature_domain_direct_aggregates(
+                reader,
+                eligibility,
+                min_coverage=MIN_COVERAGE,
+            )
+            c010_payload = {
+                "eligibility": eligibility,
+                "aggregate_evidence": aggregate_evidence,
+                "l1_aggregates": diagnostic_l1,
+                "l2_aggregates": diagnostic_l2,
+            }
     finally:
         conn.rollback()
         conn.close()
@@ -348,6 +420,32 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         expected_sector_count=131,
         direct_sector_level="L2",
     )
+    c010_diagnostic_payload = None
+    if c010_payload is not None:
+        diagnostic_l1_panel, diagnostic_l1_definition = build_l1_feature_panel(
+            c010_payload["l1_aggregates"],
+            trading_dates=calendar,
+            csi300_returns=benchmark,
+            cross_section_min_coverage=MIN_COVERAGE,
+            use_moneyflow_amount_denominator=True,
+        )
+        diagnostic_l2_panel, diagnostic_l2_definition = build_l1_feature_panel(
+            c010_payload["l2_aggregates"],
+            trading_dates=calendar,
+            csi300_returns=benchmark,
+            expected_sector_count=131,
+            direct_sector_level="L2",
+            cross_section_min_coverage=MIN_COVERAGE,
+            use_moneyflow_amount_denominator=True,
+        )
+        c010_diagnostic_payload = {
+            "eligibility": c010_payload["eligibility"].evidence(),
+            "aggregate_evidence": c010_payload["aggregate_evidence"],
+            "l1_panel": diagnostic_l1_panel,
+            "l2_panel": diagnostic_l2_panel,
+            "l1_feature_definition": diagnostic_l1_definition,
+            "l2_feature_definition": diagnostic_l2_definition,
+        }
     dataset_manifest = {
         "schema_version": "hmm_risk_state_model_set_dataset_manifest_v1",
         "source_state": source_state,
@@ -369,6 +467,7 @@ def _load_l1_source_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[s
         "dataset_manifest": dataset_manifest,
         "security_identity_manifest": security_identity_manifest.evidence(),
         "provider_absence_manifest": provider_absence_manifest.evidence(),
+        "c010_diagnostic": c010_diagnostic_payload,
     }
 
 
@@ -567,6 +666,83 @@ def prepare_c009_stock_fact_preflight(request_template: dict[str, Any], *, db_pr
         "d6_performed": False,
         "formal_model_acceptance_thresholds_applied": False,
         "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def prepare_c010_observation_eligibility_diagnostic(
+    request_template: dict[str, Any],
+    *,
+    db_prefix: str,
+) -> dict[str, Any]:
+    """Audit feature-domain eligibility/masks without activating model policy."""
+
+    producer_commit = _formal_producer_commit()
+    train_request = _c009_train_source_request(request_template)
+    inputs = _load_l1_source_inputs(train_request, db_prefix=db_prefix, c010_diagnostic=True)
+    c010 = inputs.get("c010_diagnostic")
+    if not isinstance(c010, dict):
+        raise StateModelSetError("C-010 diagnostic payload is missing")
+    baseline_coverage = _b3_train_coverage_preflight(inputs, train_request)
+    aggregate_evidence = c010["aggregate_evidence"]
+    reports: dict[str, Any] = {}
+    for family in sorted(train_request["families"], key=lambda item: str(item.get("family") or "")):
+        family_name = str(family.get("family") or "")
+        features = tuple(str(value) for value in family.get("feature_names") or ())
+        train_start = _date(family.get("train_start"), "train_start")
+        train_end = _date(family.get("train_end"), "train_end")
+        for level, panel, expected_count, unavailable in (
+            ("L1", c010["l1_panel"], 31, aggregate_evidence["impacted_l1_codes"]),
+            ("L2", c010["l2_panel"], 131, aggregate_evidence["impacted_l2_codes"]),
+        ):
+            reports[f"{family_name}:{level}"] = audit_feature_mask_candidates(
+                panel,
+                family=family_name,
+                feature_names=features,
+                train_start=train_start,
+                train_end=train_end,
+                direct_sector_level=level,
+                expected_sector_count=expected_count,
+                moneyflow_unavailable_sector_codes=unavailable,
+            )
+    candidate_valid = len(reports) == 4 and all(report["feature_mask_candidate_valid"] for report in reports.values())
+    calendar = inputs["dataset_manifest"]["calendar_benchmark"]
+    if int(calendar.get("row_count") or 0) != 601:
+        raise StateModelSetError(
+            f"C-010 frozen train calendar must contain 601 trading dates, got {calendar.get('row_count')}"
+        )
+    body = {
+        "schema_version": C010_OBSERVATION_ELIGIBILITY_SCHEMA,
+        "status": "diagnostic_complete",
+        "producer_commit": producer_commit,
+        "source_start": train_request["source"]["source_start"],
+        "source_end": train_request["source"]["source_end"],
+        "trading_date_count": int(calendar["row_count"]),
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        "security_source_identity": inputs["security_identity_manifest"],
+        "provider_absence_authority": inputs["provider_absence_manifest"],
+        "baseline_train_coverage": baseline_coverage,
+        "observation_eligibility": c010["eligibility"],
+        "feature_domain_aggregate_evidence": aggregate_evidence,
+        "l1_feature_definition": c010["l1_feature_definition"],
+        "l2_feature_definition": c010["l2_feature_definition"],
+        "feature_mask_candidate_reports": reports,
+        "feature_mask_candidate_valid": candidate_valid,
+        "pit_universe_changed": False,
+        "selection_universe_changed": False,
+        "runtime_prediction_eligibility_changed": False,
+        "formal_policy_activated": False,
+        "fit_performed": False,
+        "selection_performed": False,
+        "d6_performed": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
         "model_write_performed": False,
         "ready_artifact_write_performed": False,
         "database_write_performed": False,
@@ -1361,6 +1537,10 @@ def parse_args() -> argparse.Namespace:
         help="Run the approved 601-day C-009 stock-fact source preflight without HMM fits or writes.",
     )
     diagnostic_group.add_argument(
+        "--c010-observation-eligibility-output",
+        help="Run the approved C-010 feature-domain eligibility diagnostic without activating model policy.",
+    )
+    diagnostic_group.add_argument(
         "--b3-preparation-output",
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
     )
@@ -1381,7 +1561,8 @@ def main() -> int:
         _read_env_file(Path(args.env_file).resolve())
         request_path = Path(args.request).resolve()
         c009_preflight_output = getattr(args, "c009_stock_fact_preflight_output", None)
-        if args.b3_preflight_output or c009_preflight_output:
+        c010_diagnostic_output = getattr(args, "c010_observation_eligibility_output", None)
+        if args.b3_preflight_output or c009_preflight_output or c010_diagnostic_output:
             if not args.b3_request_candidate_output:
                 if args.b3_preflight_output:
                     raise StateModelSetError("--b3-request-candidate-output is required with --b3-preflight-output")
@@ -1390,6 +1571,37 @@ def main() -> int:
             if args.b3_request_candidate_output:
                 raise StateModelSetError("--b3-request-candidate-output is only valid with --b3-preflight-output")
             request = _load_request(request_path)
+        if c010_diagnostic_output:
+            if args.b3_request_candidate_output:
+                raise StateModelSetError(
+                    "--b3-request-candidate-output is not valid with --c010-observation-eligibility-output"
+                )
+            report = prepare_c010_observation_eligibility_diagnostic(
+                request,
+                db_prefix=str(args.db_env_prefix),
+            )
+            report_path = Path(c010_diagnostic_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c010_observation_eligibility_cli_receipt_v1",
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "feature_mask_candidate_valid": report["feature_mask_candidate_valid"],
+                "excluded_moneyflow_symbols": report["observation_eligibility"]["excluded_moneyflow_symbols"],
+                "pit_universe_changed": False,
+                "selection_universe_changed": False,
+                "formal_policy_activated": False,
+                "fit_performed": False,
+                "selection_performed": False,
+                "d6_performed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
         if c009_preflight_output:
             if args.b3_request_candidate_output:
                 raise StateModelSetError(

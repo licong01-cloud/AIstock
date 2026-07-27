@@ -152,6 +152,49 @@ def test_stock_fact_aggregation_is_weighted_recomputed_and_records_missing_evide
     assert exc_info.value.weight_coverage == 0.0
 
 
+def test_feature_domain_aggregation_excludes_only_moneyflow_contribution() -> None:
+    available = _stock_row(0)
+    unavailable = _stock_row(1, complete=False)
+    unavailable["symbol"] = "689009.SH"
+    unavailable["buy_sm_amount_cny"] = None
+    unavailable["sell_sm_amount_cny"] = None
+    unavailable["buy_elg_amount_cny"] = None
+    unavailable["sell_elg_amount_cny"] = None
+
+    aggregate = subject.aggregate_l1_day(
+        [available, unavailable],
+        moneyflow_excluded_symbols=frozenset({"689009.SH"}),
+    )
+
+    assert aggregate.count_coverage == 1.0
+    assert aggregate.weight_coverage == 1.0
+    assert aggregate.l1_amount == pytest.approx(available["amount_cny"] + unavailable["amount_cny"])
+    assert aggregate.moneyflow_amount == pytest.approx(available["amount_cny"])
+    assert aggregate.net_mf_amount == pytest.approx(available["net_mf_amount_cny"])
+    assert aggregate.moneyflow_domain_status == "available"
+    assert aggregate.moneyflow_excluded_symbols == ("689009.SH",)
+
+
+def test_singleton_sector_keeps_price_domain_and_marks_moneyflow_structurally_unavailable() -> None:
+    unavailable = _stock_row(1, complete=False)
+    unavailable["symbol"] = "689009.SH"
+    unavailable["buy_sm_amount_cny"] = None
+    unavailable["sell_sm_amount_cny"] = None
+    unavailable["buy_elg_amount_cny"] = None
+    unavailable["sell_elg_amount_cny"] = None
+
+    aggregate = subject.aggregate_l1_day(
+        [unavailable],
+        moneyflow_excluded_symbols=frozenset({"689009.SH"}),
+    )
+
+    assert np.isfinite(aggregate.l1_return)
+    assert aggregate.net_mf_amount is None
+    assert aggregate.moneyflow_amount is None
+    assert aggregate.moneyflow_domain_status == "structurally_unavailable"
+    assert aggregate.count_coverage == 1.0
+
+
 def _aggregate(day: date, code_index: int, day_index: int) -> subject.L1DailyAggregate:
     phase = day_index / 30.0 + code_index / 20.0
     daily_return = 0.004 * np.sin(phase) + code_index * 1e-5
@@ -250,6 +293,19 @@ def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> No
     row = panel.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
     assert np.isnan(row["sf_vol_vs_market_20d"])
     assert np.isnan(row["sf_excess_breadth_5d"])
+
+    diagnostic, definition = subject.build_l1_feature_panel(
+        aggregates,
+        trading_dates=calendar,
+        csi300_returns=benchmark,
+        cross_section_min_coverage=0.90,
+        use_moneyflow_amount_denominator=True,
+    )
+    diagnostic_row = diagnostic.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
+    assert np.isfinite(diagnostic_row["sf_vol_vs_market_20d"])
+    assert np.isfinite(diagnostic_row["sf_excess_breadth_5d"])
+    assert definition["cross_section_contract"] == "coverage_aware_diagnostic"
+    assert definition["cross_section_min_coverage"] == 0.90
 
 
 def test_direct_l2_projection_uses_canonical_stock_fact_identity_without_mutating_l1() -> None:
