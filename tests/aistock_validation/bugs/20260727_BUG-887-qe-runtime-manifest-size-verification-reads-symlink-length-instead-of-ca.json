@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-887",
-  "closed_at": null,
+  "closed_at": "2026-07-27T11:12:58Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -43,8 +43,8 @@
   },
   "first_seen_at": "2026-07-27T09:57:53.958999Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "72f977b4f0a216c9de7cdeb3ba8460229930febe",
+  "fixed_at": "2026-07-27T11:21:00.641889Z",
   "github_issue_number": 2805,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2805",
   "last_seen_at": "2026-07-27T09:57:53.958999Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2806",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -72,6 +73,12 @@
     "fingerprint": "5d259b2a35bf4c9b5a6f1bf4",
     "source_event_id": "FE-20260727-5d259b2a35bf"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py backend/tests/multi_alpha/test_durable_execution_adapter.py -q -> 50 passed, 1 skipped",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md --tier F2 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
