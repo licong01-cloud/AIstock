@@ -1,11 +1,11 @@
 # Advisory Phase 1R 历史范围研究与新策略上线前验证 F2 详细设计
 
 > 日期：2026-07-19
-> 修订日期：2026-07-22
+> 修订日期：2026-07-27
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_through_r3_merged_r3_dev_production_15_day_accepted_r4_design_reviewed_ready`；R1 已由 PR `#2481` 合入，R2-A/R2-B 已完成中性计算、历史 candidate adapter、DEV migration 和单/原生多 Alpha candidate E2E。R3 已按 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 完整实现并由 PR `#2633` 合入（merge commit `9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe`），BUG-827 close-sync 已由 PR `#2658` 合入。R3 corrective migration 已在 DEV 和 production apply/verify；单 Alpha 与原生多 Alpha 父包已直接使用生产历史库完成 15 个交易日、30/30 package-day E2E，覆盖真实 replacement、恢复、exact retry 和跨模块隔离。R4 唯一实施级设计 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 已完成正式审核；R4 源码/DDL 与 R5 API/UI 仍未实现，运行时未激活，完整 Phase 1R 尚未完成
+> 当前状态：`r1_through_r4_merged_production_historical_e2e_accepted_r5_design_reviewed_ready`；R1-R3 已完成 contracts、候选计算、历史 PIT adapter、逐日列表执行和单/原生多 Alpha 15 日 E2E。R4 已按 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 完整实现并由 PR `#2792` 合入（merge commit `f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9`），BUG close-sync 已由 PR `#2793` 合入（merge commit `81de5f93b8e7326ad9cd13ed2cb520c66847d321`）；DEV/production schema、32,549 条 outcome、4 个 summary、2 个非空 SEALED snapshot、360 条 source correction 和 exact retry 已验证。当前唯一下一实施批次为 R5 API/UI/legacy cutover，详细设计 `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 已完成正式审核；R5 源码、真实 API/UI E2E 和 runtime activation 尚未完成，完整 Phase 1R 尚未完成
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -1341,4 +1341,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1-R3 已完成源码合入；R3 已完成 DEV PostgreSQL 合同、DEV 双日执行、生产历史库 15 日单/原生多 Alpha 完整执行、真实 replacement、WAITING/RETRYABLE 恢复、exact retry 和跨模块隔离。下一任务固定为按 `advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 实现 candidate/episode/list/range outcome、maturity refresh、append-only summary version、Phase 1 retrospective lineage/selector 和 SEALED snapshot bridge。任何实现 PR 在报告完成前必须同时执行本文验收索引和对应子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少 outcome 成熟、summary、bridge exact retry 或隔离证据时不得声明 R4 完成，缺少 R5 API/UI 证据时不得声明 Phase 1R 完成。
+R1-R4 已完成源码合入、DEV/production schema 与真实历史业务验收。下一任务固定为按 `advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 实现 typed API、稳定分页查询、显式命令分发、历史验证 UI 和 legacy replay 主流程 cutover。任何实现 PR 在报告完成前必须同时执行本文与 R5 子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实 API/UI、单/原生多 Alpha、错误状态、exact retry 或隔离证据时不得声明 Phase 1R 完成。

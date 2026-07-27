@@ -2,8 +2,8 @@
 
 > 更新日期：2026-07-27
 > 唯一实施权威：`docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md`
-> 当前状态：`source_dev_production_schema_and_historical_e2e_verified_pr_pending`
-> 本记录不代表 PR、merge、服务重启或 runtime activation 已完成；生产 DDL/DML 的实际状态在第 6 节独立记录。
+> 当前状态：`merged_pr_2792_close_synced_pr_2793_production_historical_e2e_accepted`
+> 本记录证明 R4 源码、DEV/production schema、历史业务 E2E、合入与 BUG close-sync 已分别闭合；服务重启和 runtime activation 仍未执行，生产 DDL/DML 的实际状态在第 6 节独立记录。
 
 ## 1. 工作区与边界
 
@@ -97,7 +97,7 @@ R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_del
 | F-738 | revision transitions；operation/capture exact retry | 360 条真实 SOURCE_CORRECTION；两个 bridge terminal receipt；Program 2 exact retry 零新增 | PASS_PRODUCTION_E2E | correction 与 exact retry 使用不同 identity；不互相冒充 |
 | F-739 | 本验收记录 | source/DEV DDL/production DDL/DML/runtime/merge 分层状态 | PASS_REPORT | 两个 orphan ACTIVE build 仅报告，不删除或伪造终态 |
 
-汇总：F-700 至 F-739 的源码、DEV schema、生产 schema 与真实历史业务证据均已闭合。当前仍需完成最新-main changed-file 质量检查、提交、PR 与用户确认后的合入；不得把生产 E2E 完成误报为源码已经合入或 runtime 已激活。
+汇总：F-700 至 F-739 的源码、DEV schema、生产 schema、真实历史业务证据、PR `#2792` 合入与 PR `#2793` close-sync 均已闭合。服务重启和 runtime activation 仍未执行，不因源码合入而推导为已激活。
 
 ## 4. 验证证据
 
@@ -202,13 +202,13 @@ Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_histori
 - lineage payload 新增 identity-aware PostgreSQL trigger，阻止 Phase 0A/range cross-tag payload。
 - industry-at-T 查询不再 `LIMIT 1`；冲突 membership typed fail closed，等价重复按显式排序确定性读取。
 - DEV preflight、apply/readback、exact reapply/readback 通过；release schema v4 managed/prerequisite 均 `COMPATIBLE` 且 differences 为 0。
-- 本节记录的源码 remediation 已纳入后续生产 E2E 并由 F-737/F-738 的独立事实验证；它本身不替代生产证据。当前仍未授权 merge、服务控制或 runtime activation。
+- 本节记录的源码 remediation 已纳入后续生产 E2E 并由 F-737/F-738 的独立事实验证；它本身不替代生产证据。源码随后由 PR `#2792` 合入；服务控制和 runtime activation 未执行。
 
 ## 6. 独立交付状态
 
 ```text
 design_document = merged_pr_2665_commit_49a37e8fae0e4cc493804d3abb5598d883dbc0d5
-source_code = consolidated_on_latest_origin_main_locally_validated
+source_code = merged_pr_2792_commit_f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9
 dev_ddl = applied_verified_exact_reapplied
 dev_dml = rollback_only_non_empty_bridge_verified_zero_residue; no_full_r4_business_e2e
 production_ddl = r4_applied_verified; bug879_blob_ref_scope_applied_verified
@@ -220,15 +220,15 @@ dependencies = noop_no_dependency_files_changed
 service_restart = not_requested_not_performed
 runtime_activation = not_requested_not_performed
 commit = local_delivery_commits_created
-pull_request = not_created
-merge = not_performed
-close_sync = not_applicable
+pull_request = merged_2792
+merge = performed_squash_f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9
+close_sync = merged_pr_2793_commit_81de5f93b8e7326ad9cd13ed2cb520c66847d321
 root_main_sync = latest_origin_main_clean
-worktree_cleanup = not_performed
+worktree_cleanup = completed_for_r4_delivery_and_close_sync_worktrees
 ```
 
 ## 7. 当前结论与下一授权点
 
 R4 源码、formal Phase 1 parity、DEV/生产 migration、release schema v4、单/原生多 Alpha 真实 15 日 Outcome/Summary/non-empty bridge、source correction 与 exact retry 已形成分层证据。没有发现受保护模块业务写入、synthetic Phase 0A、silent fallback 或额外 gate。
 
-当前剩余交付步骤为：完成最新-main changed-file compile/Ruff/diff/ownership 与 DESIGN-COMPLIANCE-001 复审；提交验收修订；建立 PR 并读取紧凑 CI 汇总。合入必须等待用户明确确认。服务重启与 runtime activation 不属于本阶段，也未执行。
+R4 已完成源码合入、生产历史业务闭环和 BUG close-sync，不再保留代码、DDL、DML 或 repair 待办。下一阶段是独立的 R5 API/UI/legacy cutover；R5 不重复执行 R4 outcome、summary 或 bridge。服务重启与 runtime activation 不属于 R4，也未执行。
