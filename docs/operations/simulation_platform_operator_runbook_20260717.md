@@ -115,6 +115,12 @@ K2-D final-review operator facts:
 - Restart recovery converts expired pre-call `CLAIMED` to the exact bounded retry and
   expired post-commit `DISPATCHING` to `OUTCOME_UNKNOWN` without calling broker. Safe
   retry requires zero matching durable callbacks inside the watermark interval.
+- `MINIQMT_COMMAND_OUTBOX_PLACE_ORDER_UNAVAILABLE` and
+  `MINIQMT_COMMAND_OUTBOX_CANCEL_ORDER_UNAVAILABLE` are explicit pre-call technical
+  failures with `broker_called=false`; they follow the durable 1/2/4/8-second bounded
+  retry and must not be relabelled as broker rejection or unknown outcome. A failed
+  optional diagnostic read is retained inside ACK evidence and does not invalidate a
+  real broker ACK.
 - An EOD terminal decision must reference the persisted exchange-clock EOD event and a
   fresh final reconcile receipt. A pre-EOD receipt recovered after a crash is attached
   first and cannot substitute for that final readback.
