@@ -43,7 +43,7 @@ _MIGRATION_SHA256 = {
         "3552277b61c4035924bb787396565101a1403774a0c2c72ba5d8356965d3ec50"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2c_timer_reclaim_20260727.rollback.sql": (
-        "6098d99bdccb5ae0744f3779cf534a10475a67da294ea3154eb7bbd054ed7f29"
+        "11ca28e7981a4898fdcecc14067852f4e1129bef0a1a8bb31298ac886312fd13"
     ),
 }
 
