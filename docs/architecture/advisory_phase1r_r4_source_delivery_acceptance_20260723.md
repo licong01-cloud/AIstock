@@ -1,23 +1,23 @@
 # Advisory Phase 1R R4 源码、DEV 与历史业务验收记录
 
-> 更新日期：2026-07-24  
-> 唯一实施权威：`docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md`  
-> 当前状态：`source_dev_schema_and_rollback_bridge_verified_historical_e2e_pending_authorization`  
-> 本记录不代表 commit、PR、merge、生产 DDL/DML、服务重启或 runtime activation 已完成。
+> 更新日期：2026-07-27
+> 唯一实施权威：`docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md`
+> 当前状态：`source_dev_production_schema_and_historical_e2e_verified_pr_pending`
+> 本记录不代表 PR、merge、服务重启或 runtime activation 已完成；生产 DDL/DML 的实际状态在第 6 节独立记录。
 
 ## 1. 工作区与边界
 
 ```text
-worktree = F:\Dev\AIstock_worktrees\advisory-phase1r-r4-outcome-bridge-20260723
-branch = feature/advisory-phase1r-r4-outcome-bridge-20260723
-head = 001ab1520eaf41850d390d0b10dcf472650e5f0a
-origin_main_relation = behind_19
+worktree = F:\Dev\AIstock_worktrees\advisory-phase1r-r4-finalize-20260727
+branch = feature/advisory-phase1r-r4-finalize-20260727
+head = local_delivery_commits_on_latest_origin_main
+origin_main_base = ebf0da40c49697320dd0dfae9c0e23cefcd58598
 lane = verify-aistock-feature
 feature_tier = F2
 task_tier = T3
 ```
 
-本轮保留现有未提交现场，不 rebase、merge、commit、discard 或 cleanup。R4 只实现 Outcome、Summary 与 Phase 1 retrospective bridge；不实现 R5 API/UI、模型训练或用户可见 capability，不读取 QE/backtest、Paper/模拟盘或人工交易结果，不修改 Selection、Paper、Simulation、QE、Qlib、QMT、订单、持仓、账户或交易业务逻辑。
+R4 最终交付已从原开发现场收敛到最新 `origin/main` 的独立 worktree；原现场未 reset、stash、清理或删除。转移范围排除了已由 BUG-879 合入的重复 blob-ref 迁移、过期 BUG 编号元数据、allocator 和共享 planning 临时文件。R4 只实现 Outcome、Summary 与 Phase 1 retrospective bridge；不实现 R5 API/UI、模型训练或用户可见 capability，不读取 QE/backtest、Paper/模拟盘或人工交易结果，不修改 Selection、Paper、Simulation、QE、Qlib、QMT、订单、持仓、账户或交易业务逻辑。
 
 R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_delivery_acceptance_20260722.md`：权威 15 日 batch 为 `ahrb_dccde5770463663ecbde96fbe304cd26`，范围 `2026-07-01..2026-07-21`，单 Alpha 与原生多 Alpha 两个 Program 均为 15/15 成功。R4 没有重跑或改写 R3。
 
@@ -59,14 +59,14 @@ R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_del
 | F-700 | `models.py`; `composition.py`; `dataset_bridge.py` | changed-file/protected-module audit | PASS_SOURCE | R5、训练、API/UI 与 capability 均未进入范围 |
 | F-701 | R3 acceptance ledger；父设计与蓝图 | R3 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 既有记录 | PASS_PRECONDITION | R4 未重跑 R3 |
 | F-702 | `advisory_phase1/outcome_engine.py`; `outcome_projection.py` | `test_formal_outcome_engine_delegates_with_field_and_hash_parity`；formal Phase 1 direct matrix | PASS_SOURCE | none |
-| F-703 | `artifact_store.py`; `repository.py`; R4 migration | outcome artifact/repository/full-readback contracts | PASS_SOURCE_DEV_SCHEMA | 真实 15 日 append 尚未执行 |
+| F-703 | `artifact_store.py`; `repository.py`; R4 migration | outcome artifact/repository/full-readback contracts；生产 32,549 outcome 读回 | PASS_PRODUCTION_E2E | none |
 | F-704 | `outcome_projection.py`; `outcome_evaluator.py` | recommendation/executable separation 与 work-item identity tests | PASS_SOURCE | none |
 | F-705 | `outcome_planner.py`; `models.py`; R4 migration | planner 四 subject、cursor、episode 0 sentinel；migration test | PASS_SOURCE_DEV_SCHEMA | none |
 | F-706 | `outcome_evaluator.py`; `outcome_policy_provider.py` | exact policy artifact 与 component drift tests | PASS_SOURCE | 无 synthetic admission |
 | F-707 | `outcome_evaluator.py`; `outcome_source.py`; `composition.py` | projection/evaluator calendar contract tests | PASS_SOURCE | none |
 | F-708 | `models.py`; `outcome_projection.py`; `outcome_service.py` | maturity、open/closed episode、source-not-arrived tests | PASS_SOURCE | known unavailable 不写 0 |
 | F-709 | `outcome_service.py` | `test_source_not_arrived_waits_without_writing_failed_outcome` | PASS_SOURCE | none |
-| F-710 | `models.py`; `repository.py`; R4 migration | revision reason/transition/migration contracts | PASS_SOURCE_DEV_SCHEMA | 历史 source correction E2E 未执行，见 F-738 |
+| F-710 | `models.py`; `repository.py`; R4 migration | revision reason/transition/migration contracts；360 条 source-correction chain closure | PASS_PRODUCTION_E2E | predecessor/evidence/hash 缺失为 0 |
 | F-711 | `models.py`; `outcome_projection.py`; `repository.py` | work-item identity、unique input 与 exact retry tests | PASS_SOURCE_DEV_SCHEMA | none |
 | F-712 | `artifact_store.py`; `repository.py`; `outcome_evaluator.py` | outcome set loader/full readback/upstream closure tests | PASS_SOURCE | none |
 | F-713 | `repository.py`; `outcome_evaluator.py`; `outcome_projection.py` | T mark、episode owner、open censor/closed rejection tests | PASS_SOURCE | none |
@@ -76,7 +76,7 @@ R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_del
 | F-717 | `summary_service.py`; `outcome_source.py` | exact-positive denominator 与 missing-recall-visible tests | PASS_SOURCE | denominator unavailable 为 typed unavailable |
 | F-718 | `summary_service.py`; `models.py`; `repository.py`; R4 migration | summary coordinator append/exact retry 与 outcome-set loader tests | PASS_SOURCE_DEV_SCHEMA | none |
 | F-719 | `outcome_service.py`; `dataset_bridge.py`; `repository.py`; R4 migration | refresh/bridge durable operation、capacity retry、expired takeover tests | PASS_SOURCE_DEV_SCHEMA | none |
-| F-720 | `outcome_service.py`; `composition.py` | bounded top-level slice 与独立 range-run composition contracts | PASS_SOURCE | 单/多 Program 真实 15 日 R4 E2E 并未执行 |
+| F-720 | `outcome_service.py`; `composition.py` | bounded top-level slice；单/原生多 Alpha 独立 production receipt | PASS_PRODUCTION_E2E | 一个 Program 的历史失败 operation 未回滚另一 Program |
 | F-721 | `outcome_source.py`; `composition.py` | read-only source provider/source binding contracts；DEV 连接仅由 `.env` 解析 | PASS_SOURCE | 未记录 credential 值 |
 | F-722 | composition/import/scope audit | forbidden-source search 与 changed-file audit | PASS_SOURCE | 未读取 QE/backtest/Paper/模拟盘/人工交易结果 |
 | F-723 | `retrospective_contracts.py`; capture/label/dataset/snapshot modules；R4 migration | tagged-union repository、manifest 与 migration tests | PASS_SOURCE_DEV_SCHEMA | 未迁移 legacy replay |
@@ -85,19 +85,19 @@ R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_del
 | F-726 | `dataset_bridge.py`; `observation_capture.py` | canonical-signal non-empty bridge 与 lineage preservation tests | PASS_SOURCE | economic sample 去重但保留全部 range lineage |
 | F-727 | `retrospective_projection.py`; `observation_capture.py`; `dataset_bridge.py` | non-empty projection 与 observation PostgreSQL adapter contracts | PASS_SOURCE | 不调用 Selection/Inference |
 | F-728 | `dataset_bridge.py`; `dataset_bridge_postgres.py` | 仅 candidate/fixed/executable 投影以及 persisted label readback tests | PASS_SOURCE | label 只消费 outcome calculation evidence |
-| F-729 | `dataset_build.py`; `dataset_build_postgres.py`; `snapshot_writer.py`; `dataset_bridge_postgres.py` | retrospective build readback、selector-hash manifest、rollback-only non-empty SEALED snapshot | PASS_SOURCE_DEV_SCHEMA | 未执行真实 15 日 non-empty snapshot |
+| F-729 | `dataset_build.py`; `dataset_build_postgres.py`; `snapshot_writer.py`; `dataset_bridge_postgres.py` | retrospective build readback、selector-hash manifest；两个 production non-empty SEALED snapshot | PASS_PRODUCTION_E2E | 单 Alpha 8,400 行；多 Alpha 10,426 行；均为 24 文件 |
 | F-730 | `dataset_bridge.py`; retrospective snapshot manifest | capability isolation人工复审 | PASS_SOURCE | 未发布任何用户可见 READY capability |
 | F-731 | `dataset_bridge.py`; `dataset_bridge_postgres.py`; `repository.py` | valid-empty、terminal exact retry、retryable failure、expired lease、capture recovery、rollback-only full bridge | PASS_SOURCE_DEV_SCHEMA | none |
-| F-732 | R4 migration；release schema v4 | 最新 migration 两轮 DEV apply/readback；managed/prerequisite verifier 零差异 | PASS_SOURCE_DEV_SCHEMA | 生产 migration 未授权、未执行 |
-| F-733 | Phase 1R/Phase 1 retrospective/CAS changed files | ownership 与 protected-module zero-hit audit | PASS_SOURCE | 未执行生产 15 日 protected-count audit |
+| F-732 | R4 migration；release schema v4；BUG-879 snapshot-scoped blob-ref migration | DEV-first apply/readback；生产 apply/readback；unique scope catalog readback | PASS_PRODUCTION_SCHEMA | R4 与 BUG-879 DDL 均已独立授权执行，无 DML 回填 |
+| F-733 | Phase 1R/Phase 1 retrospective/CAS changed files | ownership、protected-module zero-hit audit；production exact-retry DML counts | PASS_PRODUCTION_E2E | exact retry 仅保持 Phase 1R 事实，未触碰 Selection/Paper/Simulation/QE/QMT |
 | F-734 | `composition.py`; bridge/outcome services | dependency/import/manual call-site audit | PASS_SOURCE | 无 package validator/health/asset/model 二次 gate |
 | F-735 | planner/service/bridge positive path | no-extra-gate tests 与人工复审 | PASS_SOURCE | 无 latest-day、min-candidate、all-horizon-mature 或 copy-prod-to-DEV gate |
 | F-736 | typed errors/reason codes in outcome/summary/bridge services | source-not-arrived、capacity、lineage conflict 与 rollback tests | PASS_SOURCE | none |
-| F-737 | production composition 与 exact-ref loader 已接线 | 生产只读 readiness 确认 R3 batch 与两个 15/15 Program 完整 | PENDING_AUTHORIZATION | 生产缺少最新 R4 Recall 字段和 artifact-column functions；未获生产 DDL/DML 授权，outcome/summary/non-empty bridge E2E 未执行 |
-| F-738 | revision transitions；operation/capture exact retry | unit/contract exact retry 与 source-correction identity tests | PARTIAL | exact retry 已验证；真实历史 source correction E2E 未执行，二者不得互相冒充 |
-| F-739 | 本验收记录 | 分层 delivery state | PASS_REPORT | 报告本身不提升 F-737/F-738 状态 |
+| F-737 | production composition 与 exact-ref loader | batch `ahrb_dccde...`；单/原生多 Alpha 15 日 Outcome/Summary/bridge receipts | PASS_PRODUCTION_E2E | 32,549 outcomes、4 summaries、2 SEALED snapshots |
+| F-738 | revision transitions；operation/capture exact retry | 360 条真实 SOURCE_CORRECTION；两个 bridge terminal receipt；Program 2 exact retry 零新增 | PASS_PRODUCTION_E2E | correction 与 exact retry 使用不同 identity；不互相冒充 |
+| F-739 | 本验收记录 | source/DEV DDL/production DDL/DML/runtime/merge 分层状态 | PASS_REPORT | 两个 orphan ACTIVE build 仅报告，不删除或伪造终态 |
 
-汇总：当前 source 独立复审、frozen contract 与最新 DEV schema 验证已通过；`F-737=PENDING_AUTHORIZATION`、`F-738=PARTIAL`。因此 R4 仍不能报告为完整历史业务验收通过，也不能在未获用户确认时提交或合入。
+汇总：F-700 至 F-739 的源码、DEV schema、生产 schema 与真实历史业务证据均已闭合。当前仍需完成最新-main changed-file 质量检查、提交、PR 与用户确认后的合入；不得把生产 E2E 完成误报为源码已经合入或 runtime 已激活。
 
 ## 4. 验证证据
 
@@ -105,7 +105,7 @@ R3 权威前置事实仍来自 `docs/architecture/advisory_phase1r_r3_source_del
 
 ```text
 nox -s advisory_historical_range_backend
-result: 172 passed, 3 skipped
+result: 248 passed, 4 skipped
 
 Phase 1 formal parity/direct dependency matrix
 result: 219 passed
@@ -128,7 +128,7 @@ strict L0: PASS, 52 delivery files, 0 blocking findings
 strict ownership: PASS, 52 mapped, 0 unmapped, 0 ambiguous
 ```
 
-3 个 skip 是未注入显式 PostgreSQL/真实历史 batch root 的外部集成入口，不是捕获异常后转成成功。PostgreSQL adapter 的直接合同、frozen registry verifier 与最新 migration 的 DEV reapply/readback 均已显式执行；它们仍不等于 F-737 的真实 15 日业务 E2E。
+4 个 skip 是未注入显式 PostgreSQL/真实历史 batch root 的外部集成入口，不是捕获异常后转成成功。PostgreSQL adapter 的直接合同、frozen registry verifier、DEV migration 与生产历史 E2E 已分别执行，状态不互相冒充。
 
 ### 4.2 DEV schema
 
@@ -166,12 +166,17 @@ sealed_snapshot = true
 
 Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_historical_range_backend`，两者均已执行。旧 ownership 规则把 `dataset_build.py` 与 `dataset_build_postgres.py` 泛化映射到 `local_data/data_sync_autonomy_backend`，但该 plan 实际只编译和测试 Tushare/TDX ingestion，与 R4 dataset contract 无共享行为；因此未运行该无关 suite，而是运行 219 项 Phase 1 capture/label/dataset/snapshot/release-schema 精确直接依赖矩阵。
 
-### 4.5 生产只读 readiness（2026-07-25）
+### 4.5 生产 schema 与历史业务 E2E（2026-07-25 至 2026-07-27）
 
-- 连接只由 `.env` 的 `TDX_DB_*` 解析；目标 identity 为 production `aistock`、PostgreSQL 16.10，environment contract hash 为 `1db7f2f57f2b0c130e660d56835e963b919e9735fbe60fdd6ff7198bbb6ca767`。
-- 权威 R3 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 仍为 `COMPLETED`，`2026-07-01..2026-07-21` 共 15 个交易日；单 Alpha 和原生多 Alpha两个 range run 均为 `15/15 COMPLETE`。
-- 生产 schema 尚无 `recall_denominator_set_hash`、`recall_denominator_evidence_json`，也尚无两个 outcome/summary artifact-column verification functions。真实 R4 E2E 必须先执行独立授权的生产 DDL，再执行独立授权的 R4 DML。
-- 本次只读检查首次使用旧字段名查询时收到 `UndefinedColumn`，事务完整回滚；随后改为读取实际 JSON row contract。未执行生产 DDL/DML、服务控制或 runtime activation。
+- 连接只由 `.env` 的 `TDX_DB_*` 解析；未在代码、日志或文档保存 credential。R4 migration 已先在 DEV 验证，再经用户独立授权在生产 apply/readback。
+- BUG-879 的 `app.advisory_dataset_snapshot_blob_ref` 约束已先在 DEV 验证，再在生产由全局 `UNIQUE(ref_content_hash)` 修正为 `UNIQUE(snapshot_id, ref_content_hash)`；既有 24 行无需 DML，生产执行前后行数与 digest 不变。
+- 权威 R3 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 保持 `COMPLETED`，`2026-07-01..2026-07-21` 共 15 个交易日；R4 形成 32,549 outcome、4 summary、706 capture batch、4 dataset build 和 2 SEALED snapshot。
+- 单 Alpha bridge operation `ahrop_11e4a3e56af450168cbc97165fcaf092` 返回 build `advbuild_a07924081cd116b6a582ba6d`、snapshot `advsnap_a2bf53b7a35235223c5eea09`，24 文件、8,400 行、1,626,297 bytes。
+- 原生多 Alpha bridge 在旧 FAILED operation 保持审计不可逆的前提下，以正式恢复 operation `ahrop_ae97e11c04d04a01d7561e1331b1a75e` 复用 build `advbuild_d862eaf715fbce7a3683082e`，生成 snapshot `advsnap_38cfea3c32e0408c3d3cc292`，24 文件、10,426 行、2,015,249 bytes。
+- 多 Alpha bridge exact retry 前后：operations `59 -> 59`、capture batches `706 -> 706`、dataset builds `4 -> 4`、snapshots `2 -> 2`，receipt hash 保持 `eb9138f6039fbd8452a79aaa26c403ed7c8cfe4328a5e78431e9bc58e4aece27`。
+- 真实历史链存在 360 条 `SOURCE_CORRECTION`，覆盖 210 个 LIST_VERSION/RANGE logical outcomes；全部具备 predecessor、revision evidence 与 evidence hash，缺失闭合项为 0。旧失败 operation 作为 append-only 审计事实保留，不改写为成功。
+- 两个历史 orphan ACTIVE build `advbuild_65193effe6c366a267d62c32`、`advbuild_2c3e17609f45d6bb8627a3c6` 无下游 SEALED 事实，本轮仅报告，不删除、不直接改状态。
+- 未启停服务、未执行 runtime activation，也未写 Selection、Paper、Simulation、QE、QMT、订单、持仓或账户业务表。
 
 ## 5. DESIGN-COMPLIANCE-001
 
@@ -195,36 +200,33 @@ Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_histori
 - lineage payload 新增 identity-aware PostgreSQL trigger，阻止 Phase 0A/range cross-tag payload。
 - industry-at-T 查询不再 `LIMIT 1`；冲突 membership typed fail closed，等价重复按显式排序确定性读取。
 - DEV preflight、apply/readback、exact reapply/readback 通过；release schema v4 managed/prerequisite 均 `COMPATIBLE` 且 differences 为 0。
-- 本节是 remediation checkpoint，不提升 F-737/F-738，也不授权 commit、PR、生产 DDL/DML、runtime activation 或 merge。
+- 本节记录的源码 remediation 已纳入后续生产 E2E 并由 F-737/F-738 的独立事实验证；它本身不替代生产证据。当前仍未授权 merge、服务控制或 runtime activation。
 
 ## 6. 独立交付状态
 
 ```text
 design_document = merged_pr_2665_commit_49a37e8fae0e4cc493804d3abb5598d883dbc0d5
-source_code = implemented_uncommitted_locally_validated
+source_code = consolidated_on_latest_origin_main_locally_validated
 dev_ddl = applied_verified_exact_reapplied
 dev_dml = rollback_only_non_empty_bridge_verified_zero_residue; no_full_r4_business_e2e
-production_ddl = not_authorized_not_applied
-production_dml = not_authorized_not_applied
-historical_single_alpha_15_day_r4_e2e = not_executed_authorization_required
-historical_native_multi_alpha_15_day_r4_e2e = not_executed_authorization_required
-historical_source_correction_e2e = not_executed
+production_ddl = r4_applied_verified; bug879_blob_ref_scope_applied_verified
+production_dml = outcome_summary_non_empty_bridge_and_exact_retry_executed_verified
+historical_single_alpha_15_day_r4_e2e = passed_sealed
+historical_native_multi_alpha_15_day_r4_e2e = passed_sealed_after_formal_recovery
+historical_source_correction_e2e = passed_360_rows_zero_incomplete
 dependencies = noop_no_dependency_files_changed
 service_restart = not_requested_not_performed
 runtime_activation = not_requested_not_performed
-commit = not_created
+commit = local_delivery_commits_created
 pull_request = not_created
 merge = not_performed
 close_sync = not_applicable
-root_main_sync = not_performed
+root_main_sync = latest_origin_main_clean
 worktree_cleanup = not_performed
 ```
 
 ## 7. 当前结论与下一授权点
 
-R4 源码、formal Phase 1 parity、DEV migration、release schema v4 和直接合同验证已形成完整证据；没有发现受保护模块业务写入、synthetic Phase 0A、silent fallback 或额外 gate。仍缺少两项不能由源码单测或 DEV schema 冒充的业务证据：
+R4 源码、formal Phase 1 parity、DEV/生产 migration、release schema v4、单/原生多 Alpha 真实 15 日 Outcome/Summary/non-empty bridge、source correction 与 exact retry 已形成分层证据。没有发现受保护模块业务写入、synthetic Phase 0A、silent fallback 或额外 gate。
 
-1. 使用持有 R3 权威 15 日事实的历史数据库，追加 R4 outcome、summary 与 non-empty retrospective snapshot，覆盖单 Alpha 和原生多 Alpha；
-2. 在同一真实历史链上分别执行 terminal exact retry 与 source correction E2E，并证明两者身份和 revision 语义不同。
-
-这些步骤会先对持有 R3 事实的生产数据库执行最新 R4 DDL，再执行 R4 DML；当前没有针对生产 DDL/DML 的明确授权，因此停在 `awaiting_production_ddl_dml_authorization`。提交、建 PR 和合入仍需用户另行确认；不得控制服务或执行 runtime activation。
+当前剩余交付步骤为：完成最新-main changed-file compile/Ruff/diff/ownership 与 DESIGN-COMPLIANCE-001 复审；提交验收修订；建立 PR 并读取紧凑 CI 汇总。合入必须等待用户明确确认。服务重启与 runtime activation 不属于本阶段，也未执行。
