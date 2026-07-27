@@ -121,11 +121,11 @@ python scripts/aistock_feature_workflow.py validate \
   --tier F2
 result: PASS, 40/40 design items, 0 warnings
 
-changed Python compile: PASS, 49 files
+changed Python compile: PASS, 60 files
 changed-file Ruff: PASS
 git diff --check: PASS
-strict L0: PASS, 52 delivery files, 0 blocking findings
-strict ownership: PASS, 52 mapped, 0 unmapped, 0 ambiguous
+strict L0: PASS, 64 delivery files, 13 findings, 0 blocking findings
+strict ownership: PASS, 64 mapped, 0 unmapped, 0 ambiguous
 ```
 
 4 个 skip 是未注入显式 PostgreSQL/真实历史 batch root 的外部集成入口，不是捕获异常后转成成功。PostgreSQL adapter 的直接合同、frozen registry verifier、DEV migration 与生产历史 E2E 已分别执行，状态不互相冒充。
@@ -162,7 +162,7 @@ sealed_snapshot = true
 
 ### 4.4 Scope 与 ownership
 
-最终 ownership scan 覆盖 55 个 changed/untracked 文件：52 个交付文件 mapped、0 ambiguous；根目录 `task_plan.md`、`findings.md`、`progress.md` 三个作为 planning 过程记录单独保留。对 52 个交付文件启用 `--fail-on-unmapped --fail-on-ambiguous` 后通过。Selection、Paper、Simulation、QE、Qlib、QMT 与前端均无 changed-file hit。
+最终 latest-main ownership scan 覆盖 64 个交付文件：64 mapped、0 unmapped、0 ambiguous；已启用 `--fail-on-unmapped --fail-on-ambiguous`。冻结策略资产 `policy_registry/r4/v1.json` 已显式强制纳入 Git，根目录 `task_plan.md`、`findings.md`、`progress.md` 与过期 BUG metadata 未进入交付。Selection、Paper、Simulation、QE、Qlib、QMT 与前端均无 changed-file hit。
 
 Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_historical_range_backend`，两者均已执行。旧 ownership 规则把 `dataset_build.py` 与 `dataset_build_postgres.py` 泛化映射到 `local_data/data_sync_autonomy_backend`，但该 plan 实际只编译和测试 Tushare/TDX ingestion，与 R4 dataset contract 无共享行为；因此未运行该无关 suite，而是运行 219 项 Phase 1 capture/label/dataset/snapshot/release-schema 精确直接依赖矩阵。
 
@@ -189,6 +189,8 @@ Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_histori
 | 禁止 synthetic Phase 0A | PASS_SOURCE_DEV_SCHEMA | range path 使用 `HISTORICAL_RANGE` tagged union；formal/range cross-pair、mixed selector/base snapshot 显式失败 |
 | formal Phase 1 parity | PASS_SOURCE | formal OutcomeEngine、capture/build/snapshot schema/canonical bytes 与 selector path 的直接矩阵通过 |
 | protected-module isolation | PASS_SOURCE | 受保护模块无 changed-file hit；composition 不导入其运行时验证/推理入口 |
+
+最终人工复审额外确认：32 个变更 service Python 文件没有 Selection、Paper、Simulation、QE、Qlib 或 QMT import；SQL 写目标只属于 Phase 1R/Phase 1 retrospective contract；宽异常处理没有静默 `pass`，均记录有效上下文并形成 typed failure 或显式失败 outcome。未发现 package 二次验证、RBAC/审批、latest-day、最小候选数、all-horizon 或 fallback。
 
 上一轮人工复审结论已由 2026-07-24 formal source audit 取代。本轮审核发现并修复了 lineage identity、observation version、dataset selector、lineage payload 跨表 union 与 industry-at-T overlap 五类问题；完整独立复审和 routed matrix 未结束前，不声明无 blocking finding。
 
