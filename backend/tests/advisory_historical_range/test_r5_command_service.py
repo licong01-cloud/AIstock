@@ -25,12 +25,13 @@ class _Query:
 
 
 class _Repository:
-    def __init__(self) -> None:
+    def __init__(self, *, exact_retry: bool = False) -> None:
         self.requests = []
+        self.exact_retry = exact_retry
 
     def get_or_create_operation(self, request):
         self.requests.append(request)
-        return ({"operation_id": request.operation_id}, False)
+        return ({"operation_id": request.operation_id}, self.exact_retry)
 
 
 class _Background:
@@ -71,3 +72,38 @@ def test_resume_persists_exact_operation_before_background_dispatch() -> None:
     assert response["data"]["operation_id"] == persisted.operation_id
     assert response["data"]["links"]["operation"].endswith(persisted.operation_id)
     assert len(background.tasks) == 1
+
+
+def test_resume_returns_repository_exact_retry_without_duplicate_dispatch_identity() -> None:
+    repository = _Repository(exact_retry=True)
+    service = HistoricalRangeApplicationService(runtime_factory=lambda: _runtime(repository))
+    response = service.resume_batch(
+        "ahrb_1",
+        HistoricalRangeCommandRequest(operation_idempotency_key="resume-key", expected_row_version=7),
+        background_tasks=_Background(),
+    )
+    assert response["data"]["exact_retry"] is True
+    assert len(repository.requests) == 1
+
+
+def test_planning_resume_enforces_expected_row_version_before_dispatch() -> None:
+    repository = _Repository()
+    runtime = _runtime(repository)
+    runtime.query.get_batch = lambda batch_id: {  # type: ignore[method-assign]
+        "batch_id": batch_id,
+        "row_version": 8,
+        "request_payload_sha256": None,
+        "catalog_operation_id": "ahrop_catalog",
+    }
+    service = HistoricalRangeApplicationService(runtime_factory=lambda: runtime)
+    try:
+        service.resume_batch(
+            "ahrb_1",
+            HistoricalRangeCommandRequest(operation_idempotency_key="resume-key", expected_row_version=7),
+            background_tasks=_Background(),
+        )
+    except Exception as exc:
+        assert getattr(exc, "reason_code", None) == "ADVISORY_HR_OPERATION_BATCH_VERSION_CONFLICT"
+        assert getattr(exc, "http_status", None) == 409
+    else:
+        raise AssertionError("stale PLANNING resume must fail")

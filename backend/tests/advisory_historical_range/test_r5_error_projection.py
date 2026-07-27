@@ -30,3 +30,16 @@ def test_cursor_error_projects_as_422() -> None:
         _raise_historical_range_http(HistoricalRangeQueryError("ADVISORY_HR_CURSOR_INVALID", "bad cursor"))
     assert raised.value.status_code == 422
     assert raised.value.detail["reason_code"] == "ADVISORY_HR_CURSOR_INVALID"
+
+
+def test_unexpected_500_does_not_leak_internal_error_text(caplog) -> None:
+    with pytest.raises(HTTPException) as raised:
+        _raise_historical_range_http(
+            RuntimeError(r"password=secret SQL failed at F:\private\artifact-root")
+        )
+    assert raised.value.status_code == 500
+    assert raised.value.detail["message"] == "Unexpected historical-range service error"
+    assert raised.value.detail["context"] == {}
+    assert "secret" not in str(raised.value.detail)
+    correlation_id = raised.value.detail["correlation_id"]
+    assert sum(correlation_id in record.message for record in caplog.records) == 1

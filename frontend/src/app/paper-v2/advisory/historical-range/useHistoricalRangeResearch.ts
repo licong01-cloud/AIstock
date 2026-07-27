@@ -37,7 +37,9 @@ export function useHistoricalRangeResearch() {
   const [batchPage, setBatchPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [selectedBatch, setSelectedBatch] = useState<HistoricalRangeRecord | null>(null);
   const [runs, setRuns] = useState<HistoricalRangeRecord[]>([]);
+  const [runPage, setRunPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [operations, setOperations] = useState<HistoricalRangeRecord[]>([]);
+  const [operationPage, setOperationPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [selectedRun, setSelectedRun] = useState<HistoricalRangeRecord | null>(null);
   const [days, setDays] = useState<HistoricalRangeRecord[]>([]);
   const [dayPage, setDayPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
@@ -50,6 +52,7 @@ export function useHistoricalRangeResearch() {
   const [outcomes, setOutcomes] = useState<HistoricalRangeRecord[]>([]);
   const [outcomePage, setOutcomePage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [summaries, setSummaries] = useState<HistoricalRangeRecord[]>([]);
+  const [summaryPage, setSummaryPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [activeOperation, setActiveOperation] = useState<HistoricalRangeRecord | null>(null);
   const [selectedHorizons, setSelectedHorizons] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,17 +71,19 @@ export function useHistoricalRangeResearch() {
   const refreshSelectedBatch = useCallback(async (batchId: string, signal?: AbortSignal) => {
     const [batch, nextRuns, nextOperations] = await Promise.all([
       historicalRangeApi.batch(batchId, signal),
-      historicalRangeApi.runs(batchId, signal),
-      historicalRangeApi.operations(batchId, signal),
+      historicalRangeApi.runs(batchId, null, signal),
+      historicalRangeApi.operations(batchId, null, signal),
     ]);
     setSelectedBatch(batch);
-    setRuns(nextRuns);
-    setOperations(nextOperations);
+    setRuns(nextRuns.rows);
+    setRunPage(nextRuns.page);
+    setOperations(nextOperations.rows);
+    setOperationPage(nextOperations.page);
     setActiveOperation((current) => {
       if (!current) return current;
-      return nextOperations.find((item) => item.operation_id === current.operation_id) || current;
+      return nextOperations.rows.find((item) => item.operation_id === current.operation_id) || current;
     });
-    return nextRuns;
+    return nextRuns.rows;
   }, []);
 
   const selectBatch = useCallback(async (batchId: string) => {
@@ -111,7 +116,8 @@ export function useHistoricalRangeResearch() {
       setListItemPage(EMPTY_PAGE);
       setOutcomes(nextOutcomes.rows);
       setOutcomePage(nextOutcomes.page);
-      setSummaries(nextSummaries);
+      setSummaries(nextSummaries.rows);
+      setSummaryPage(nextSummaries.page);
     } catch (cause) {
       setError(asApiError(cause));
     }
@@ -165,7 +171,10 @@ export function useHistoricalRangeResearch() {
   }, []);
 
   useEffect(() => {
-    const hasActive = batches.some((item) => !STABLE_BATCH.has(String(item.status)));
+    const hasActive = batches.some((item) =>
+      !STABLE_BATCH.has(String(item.status))
+      || (!!item.current_operation_status && !STABLE_OPERATION.has(String(item.current_operation_status)))
+    );
     if (!hasActive) return;
     let controller = new AbortController();
     const handleVisibility = () => {
@@ -342,6 +351,33 @@ export function useHistoricalRangeResearch() {
     }
   }, [dayPage, selectedRunId]);
 
+  const loadMoreRuns = useCallback(async () => {
+    if (!selectedBatchId || !runPage.next_cursor) return;
+    try {
+      const result = await historicalRangeApi.runs(selectedBatchId, runPage.next_cursor);
+      setRuns((current) => [...current, ...result.rows]);
+      setRunPage(result.page);
+    } catch (cause) { setError(asApiError(cause)); }
+  }, [runPage, selectedBatchId]);
+
+  const loadMoreOperations = useCallback(async () => {
+    if (!selectedBatchId || !operationPage.next_cursor) return;
+    try {
+      const result = await historicalRangeApi.operations(selectedBatchId, operationPage.next_cursor);
+      setOperations((current) => [...current, ...result.rows]);
+      setOperationPage(result.page);
+    } catch (cause) { setError(asApiError(cause)); }
+  }, [operationPage, selectedBatchId]);
+
+  const loadMoreSummaries = useCallback(async () => {
+    if (!selectedRunId || !summaryPage.next_cursor) return;
+    try {
+      const result = await historicalRangeApi.summaries(selectedRunId, summaryPage.next_cursor);
+      setSummaries((current) => [...current, ...result.rows]);
+      setSummaryPage(result.page);
+    } catch (cause) { setError(asApiError(cause)); }
+  }, [selectedRunId, summaryPage]);
+
   const loadMoreOutcomes = useCallback(async () => {
     if (!selectedRunId || !outcomePage.next_cursor) return;
     try {
@@ -376,11 +412,12 @@ export function useHistoricalRangeResearch() {
   }, [listItemPage, selectedDay, selectedRunId]);
 
   return {
-    options, batches, batchPage, selectedBatch, runs, operations, selectedRun, days, dayPage,
+    options, batches, batchPage, selectedBatch, runs, runPage, operations, operationPage, selectedRun, days, dayPage,
     selectedDay, candidates, candidatePage, listVersion, listItems, listItemPage,
-    outcomes, outcomePage, summaries, activeOperation, selectedHorizons, setSelectedHorizons,
+    outcomes, outcomePage, summaries, summaryPage, activeOperation, selectedHorizons, setSelectedHorizons,
     loading, mutating, error,
     create, mutate, selectBatch, selectRun, selectDay, selectOperation,
-    loadMoreBatches, loadMoreDays, loadMoreCandidates, loadMoreListItems, loadMoreOutcomes,
+    loadMoreBatches, loadMoreRuns, loadMoreOperations, loadMoreDays, loadMoreCandidates,
+    loadMoreListItems, loadMoreOutcomes, loadMoreSummaries,
   };
 }

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg2
+import psycopg2.extras
 
 from backend.services.strategy_package.historical_selection_providers import (
     build_historical_range_read_only_providers,
@@ -507,6 +508,7 @@ def build_historical_range_r5_application_service(
     *,
     query_runtime_factory: RuntimeFactory,
     mutation_runtime_factory: RuntimeFactory,
+    failure_runtime_factory: RuntimeFactory | None = None,
 ) -> HistoricalRangeApplicationService:
     """Compose R5 without request-scoped connections or implicit dependencies."""
 
@@ -515,6 +517,7 @@ def build_historical_range_r5_application_service(
     return HistoricalRangeApplicationService(
         query_runtime_factory=query_runtime_factory,
         mutation_runtime_factory=mutation_runtime_factory,
+        failure_runtime_factory=failure_runtime_factory,
     )
 
 
@@ -691,6 +694,7 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
 
     def query_runtime() -> HistoricalRangeRuntime:
         query = PostgresHistoricalRangeQueryRepository(conn_factory=conn_factory)
+        artifact_root = str(os.getenv("AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT") or "").strip()
         return HistoricalRangeRuntime(
             query=query,
             repository=None,  # type: ignore[arg-type]
@@ -701,6 +705,7 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
             outcome_requests=None,  # type: ignore[arg-type]
             bridge_requests=None,  # type: ignore[arg-type]
             options_projector=lambda: _project_historical_range_options(conn_factory),
+            artifact_store=(HistoricalRangeArtifactStore(root=Path(artifact_root)) if artifact_root else None),
         )
 
     def mutation_runtime() -> HistoricalRangeRuntime:
@@ -742,9 +747,38 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
                 context={"error_type": type(exc).__name__},
             ) from exc
 
+    def failure_runtime() -> HistoricalRangeRuntime:
+        artifact_root = str(os.getenv("AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT") or "").strip()
+        if not artifact_root:
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_CONFIGURATION_UNAVAILABLE",
+                "historical-range failure runtime requires the explicit artifact root",
+                http_status=503,
+                retryable=True,
+            )
+        artifact_store = HistoricalRangeArtifactStore(root=Path(artifact_root))
+        query = PostgresHistoricalRangeQueryRepository(conn_factory=conn_factory)
+        repository = PostgresHistoricalRangeRepository(
+            conn_factory=conn_factory,
+            artifact_store=artifact_store,
+        )
+        return HistoricalRangeRuntime(
+            query=query,
+            repository=repository,
+            planning=None,  # type: ignore[arg-type]
+            execution=None,  # type: ignore[arg-type]
+            outcome=None,  # type: ignore[arg-type]
+            bridge=None,  # type: ignore[arg-type]
+            outcome_requests=None,  # type: ignore[arg-type]
+            bridge_requests=None,  # type: ignore[arg-type]
+            options_projector=lambda: {},
+            artifact_store=artifact_store,
+        )
+
     return build_historical_range_r5_application_service(
         query_runtime_factory=query_runtime,
         mutation_runtime_factory=mutation_runtime,
+        failure_runtime_factory=failure_runtime,
     )
 
 
@@ -786,7 +820,6 @@ def explicit_historical_range_connection_factory() -> Callable[[], Any]:
 
 def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[str, Any]:
     program_repository = AdvisoryProgramPGRepository(conn_factory=conn_factory)
-    package_repository = StrategyPackageRepository(conn_factory=historical_read_only_connection_factory(conn_factory))
     programs = []
     for program in program_repository.list_programs(include_archived=False):
         active = program_repository.get_active_binding_version(program.program_id)
@@ -810,9 +843,24 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
         PackageStatus.PAPER_PASSED.value,
     }
     packages = []
-    for record in package_repository.list_summaries(limit=500):
-        if str(record["package_status"]) not in admitted_statuses:
-            continue
+    with historical_read_only_connection_factory(conn_factory)() as conn:
+        conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, alpha_mode, alpha_count,
+                           manifest_sha256, package_version, package_status
+                    FROM strategy_pkg.package
+                    WHERE package_status = ANY(%s)
+                    ORDER BY package_name, package_id
+                    """,
+                    (sorted(admitted_statuses),),
+                )
+                package_rows = [dict(row) for row in cur.fetchall()]
+        finally:
+            conn.rollback()
+    for record in package_rows:
         packages.append(
             {
                 "package_id": str(record["package_id"]),

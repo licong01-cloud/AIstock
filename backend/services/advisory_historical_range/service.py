@@ -26,6 +26,7 @@ from .models import (
     ExistingProgramSpecV1,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeDatasetBridgeRequestV1,
+    HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
     HistoricalRangeOperationRequestV1,
     HistoricalRangeOperationStatus,
@@ -98,10 +99,16 @@ RuntimeFactory = Callable[[], HistoricalRangeRuntime]
 class ResponseBoundHistoricalRangeDispatcher:
     """Register only immutable identities; reconstruct all resources in the worker."""
 
-    def __init__(self, *, runtime_factory: RuntimeFactory) -> None:
+    def __init__(
+        self,
+        *,
+        runtime_factory: RuntimeFactory,
+        failure_runtime_factory: RuntimeFactory | None = None,
+    ) -> None:
         if runtime_factory is None:
             raise ValueError("historical-range dispatcher requires runtime_factory")
         self._runtime_factory = runtime_factory
+        self._failure_runtime_factory = failure_runtime_factory or runtime_factory
 
     def schedule(
         self,
@@ -117,12 +124,16 @@ class ResponseBoundHistoricalRangeDispatcher:
         started = datetime.now(UTC)
         operation_id = str(payload.get("operation_id") or "")
         batch_id = str(payload.get("batch_id") or "")
+        stage = "RUNTIME_RECONSTRUCTION"
         try:
             runtime = self._runtime_factory()
             worker_id = f"r5-{command.lower()}-{uuid4().hex[:16]}"
+            stage = "REQUEST_RECONSTRUCTION"
             if command == "CATALOG_EXECUTE":
+                stage = "CLAIM_AND_EXECUTION"
                 self._run_catalog(runtime=runtime, payload=payload, worker_id=worker_id)
             elif command == "EXECUTION_RESUME":
+                stage = "CLAIM_AND_EXECUTION"
                 runtime.execution.resume_until_blocked(
                     batch_id=batch_id,
                     worker_id=worker_id,
@@ -130,6 +141,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     expected_batch_row_version=int(payload["expected_row_version"]),
                 )
             elif command == "CANCEL":
+                stage = "CLAIM_AND_EXECUTION"
                 runtime.execution.cancel_batch(
                     batch_id=batch_id,
                     worker_id=worker_id,
@@ -141,6 +153,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     batch_id,
                     HistoricalRangeRefreshOutcomesRequest.model_validate(payload["command_payload"]),
                 )
+                stage = "CLAIM_AND_EXECUTION"
                 self._run_outcome_plan(
                     runtime=runtime,
                     plan=plan,
@@ -153,6 +166,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     batch_id,
                     HistoricalRangeBuildBridgeRequest.model_validate(payload["command_payload"]),
                 )
+                stage = "CLAIM_AND_EXECUTION"
                 runtime.bridge.build_until_stable_boundary(
                     request=request,
                     resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
@@ -167,14 +181,64 @@ class ResponseBoundHistoricalRangeDispatcher:
                 batch_id,
                 int((datetime.now(UTC) - started).total_seconds() * 1000),
             )
-        except Exception:
+        except Exception as exc:
+            self._record_unclaimed_failure(
+                command=command,
+                payload=payload,
+                stage=stage,
+                error=exc,
+            )
             LOGGER.exception(
-                "historical-range command failed command=%s operation_id=%s batch_id=%s",
+                "historical-range command failed command=%s operation_id=%s batch_id=%s stage=%s",
                 command,
                 operation_id,
                 batch_id,
+                stage,
             )
             raise
+
+    def _record_unclaimed_failure(
+        self,
+        *,
+        command: str,
+        payload: Mapping[str, Any],
+        stage: str,
+        error: Exception,
+    ) -> None:
+        operation_id = str(payload.get("operation_id") or "")
+        if not operation_id:
+            return
+        try:
+            runtime = self._failure_runtime_factory()
+            operation = runtime.query.get_operation_internal(operation_id)
+            if operation.get("status") != HistoricalRangeOperationStatus.QUEUED.value:
+                return
+            receipt = {
+                "schema_version": "advisory_historical_range_background_failure_receipt_v1",
+                "reason_code": str(
+                    getattr(error, "reason_code", "ADVISORY_HR_BACKGROUND_DISPATCH_FAILED")
+                ),
+                "stage": stage,
+                "command": command,
+                "error_type": type(error).__name__,
+                "retryable": True,
+            }
+            runtime.repository.transition_operation(
+                operation_id=operation_id,
+                expected_row_version=int(operation["row_version"]),
+                target_status=HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+                attempt_no=int(operation.get("attempt_no") or 0),
+                error_json=receipt,
+            )
+        except Exception:
+            # A database outage cannot be converted into another write. Any
+            # already-claimed operation retains its lease/fencing identity and
+            # becomes query-visible as lease_expired after expiry.
+            LOGGER.exception(
+                "historical-range durable failure recording unavailable operation_id=%s stage=%s",
+                operation_id,
+                stage,
+            )
 
     def _run_outcome_plan(
         self,
@@ -526,6 +590,7 @@ class HistoricalRangeApplicationService:
         runtime_factory: RuntimeFactory | None = None,
         query_runtime_factory: RuntimeFactory | None = None,
         mutation_runtime_factory: RuntimeFactory | None = None,
+        failure_runtime_factory: RuntimeFactory | None = None,
     ) -> None:
         query_factory = query_runtime_factory or runtime_factory
         mutation_factory = mutation_runtime_factory or runtime_factory
@@ -533,7 +598,10 @@ class HistoricalRangeApplicationService:
             raise ValueError("historical-range application service requires query and mutation runtime factories")
         self._query_runtime_factory = query_factory
         self._mutation_runtime_factory = mutation_factory
-        self._dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=mutation_factory)
+        self._dispatcher = ResponseBoundHistoricalRangeDispatcher(
+            runtime_factory=mutation_factory,
+            failure_runtime_factory=failure_runtime_factory or mutation_factory,
+        )
 
     def list_batch_options(self) -> dict[str, Any]:
         return self._query_runtime_factory().options_projector()
@@ -551,7 +619,29 @@ class HistoricalRangeApplicationService:
         return self._query_runtime_factory().query.list_operations(batch_id=batch_id, **kwargs)
 
     def get_operation(self, operation_id: str) -> dict[str, Any]:
-        return self._query_runtime_factory().query.get_operation(operation_id)
+        runtime = self._query_runtime_factory()
+        operation = runtime.query.get_operation(operation_id)
+        if (
+            operation.get("operation_type") == HistoricalRangeOperationType.BUILD_DATASET_BRIDGE.value
+            and operation.get("result_ref") is not None
+        ):
+            if runtime.artifact_store is None:
+                raise HistoricalRangeServiceError(
+                    "ADVISORY_HR_CONFIGURATION_UNAVAILABLE",
+                    "typed Dataset bridge receipt requires the explicit historical artifact root",
+                    http_status=503,
+                    retryable=True,
+                )
+            ref = HistoricalRangeArtifactRefV1.model_validate(operation["result_ref"])
+            envelope = runtime.artifact_store.load(ref)
+            receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(envelope.payload)
+            operation["bridge_receipt"] = receipt.model_dump(mode="json")
+            operation["snapshot"] = (
+                {"snapshot_id": receipt.sealed_snapshot_id, "status": "SEALED"}
+                if receipt.sealed_snapshot_id is not None
+                else None
+            )
+        return operation
 
     def get_run(self, range_run_id: str) -> dict[str, Any]:
         return self._query_runtime_factory().query.get_run(range_run_id)
@@ -624,6 +714,18 @@ class HistoricalRangeApplicationService:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
         if batch.get("request_payload_sha256") is None:
+            if int(batch["row_version"]) != request.expected_row_version:
+                raise HistoricalRangeServiceError(
+                    "ADVISORY_HR_OPERATION_BATCH_VERSION_CONFLICT",
+                    "resume operation expected batch row version differs from current state",
+                    http_status=409,
+                    retryable=True,
+                    context={
+                        "batch_id": batch_id,
+                        "expected": request.expected_row_version,
+                        "actual": int(batch["row_version"]),
+                    },
+                )
             operation_id = str(batch.get("catalog_operation_id") or "")
             if not operation_id:
                 raise HistoricalRangeServiceError(
@@ -646,7 +748,7 @@ class HistoricalRangeApplicationService:
                 exact_retry=True,
                 dispatch_state="SCHEDULED" if scheduled else "NOT_SCHEDULED",
             )
-        operation = _persist_execution_operation(
+        operation, exact_retry = _persist_execution_operation(
             runtime=runtime,
             batch_id=batch_id,
             request=request,
@@ -664,7 +766,7 @@ class HistoricalRangeApplicationService:
                     "expected_row_version": request.expected_row_version,
                 },
             )
-        return _mutation_response(batch=batch, operation=operation, exact_retry=False, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
+        return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
 
     def cancel_batch(
         self,
@@ -675,7 +777,7 @@ class HistoricalRangeApplicationService:
     ) -> dict[str, Any]:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
-        operation = _persist_execution_operation(
+        operation, exact_retry = _persist_execution_operation(
             runtime=runtime,
             batch_id=batch_id,
             request=request,
@@ -693,7 +795,7 @@ class HistoricalRangeApplicationService:
                     "expected_row_version": request.expected_row_version,
                 },
             )
-        return _mutation_response(batch=batch, operation=operation, exact_retry=False, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
+        return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
 
     def refresh_outcomes(
         self,
@@ -705,7 +807,7 @@ class HistoricalRangeApplicationService:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
         command_plan = runtime.outcome_requests.build(batch_id, request)
-        operation = _persist_domain_operation(
+        operation, exact_retry = _persist_domain_operation(
             runtime=runtime,
             batch_id=batch_id,
             operation_type=HistoricalRangeOperationType.REFRESH_OUTCOMES,
@@ -724,7 +826,7 @@ class HistoricalRangeApplicationService:
                     "command_payload": request.model_dump(mode="json"),
                 },
             )
-        return _mutation_response(batch=batch, operation=operation, exact_retry=False, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
+        return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
 
     def build_dataset_bridge(
         self,
@@ -736,7 +838,7 @@ class HistoricalRangeApplicationService:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
         domain_request = runtime.bridge_requests.build(batch_id, request)
-        operation = _persist_domain_operation(
+        operation, exact_retry = _persist_domain_operation(
             runtime=runtime,
             batch_id=batch_id,
             operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
@@ -755,7 +857,7 @@ class HistoricalRangeApplicationService:
                     "command_payload": request.model_dump(mode="json"),
                 },
             )
-        return _mutation_response(batch=batch, operation=operation, exact_retry=False, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
+        return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
 
 
 def _domain_program_spec(value: Any) -> ExistingProgramSpecV1 | ResearchProgramSpecV1:
@@ -768,7 +870,7 @@ def _domain_program_spec(value: Any) -> ExistingProgramSpecV1 | ResearchProgramS
 def _persist_execution_operation(
     *, runtime: HistoricalRangeRuntime, batch_id: str, request: HistoricalRangeCommandRequest,
     operation_type: HistoricalRangeOperationType,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     schema = "resume" if operation_type is HistoricalRangeOperationType.RESUME else "cancel"
     payload: dict[str, Any] = {
         "schema_version": f"advisory_historical_range_{schema}_operation_input_v1",
@@ -800,13 +902,13 @@ def _persist_domain_operation(
     *, runtime: HistoricalRangeRuntime, batch_id: str, operation_type: HistoricalRangeOperationType,
     operation_idempotency_key: str, request_hash: str, expected_row_version: int,
     executor_identity: bool = False,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     identity_key = "operation_idempotency_key" if executor_identity else "idempotency_key"
     operation_id = derive_prefixed_id(
         "ahrop",
         {"batch_id": batch_id, "operation_type": operation_type.value, identity_key: operation_idempotency_key},
     )
-    operation, _ = runtime.repository.get_or_create_operation(
+    operation, exact_retry = runtime.repository.get_or_create_operation(
         HistoricalRangeOperationRequestV1(
             operation_id=operation_id,
             batch_id=batch_id,
@@ -816,7 +918,7 @@ def _persist_domain_operation(
             expected_row_version=expected_row_version,
         )
     )
-    return runtime.query.get_operation(str(operation["operation_id"]))
+    return runtime.query.get_operation(str(operation["operation_id"])), exact_retry
 
 
 def _operation_dispatchable(operation: Mapping[str, Any]) -> bool:

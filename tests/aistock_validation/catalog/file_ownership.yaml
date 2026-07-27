@@ -37,6 +37,7 @@ rules:
   - rule_id: advisory_historical_range_foundation
     priority: 121
     include:
+      - backend/routers/advisory.py
       - backend/services/advisory_historical_range/**
       - backend/tests/advisory_historical_range/**
       - backend/db/migrations/add_advisory_historical_range_phase1r_20260719.sql

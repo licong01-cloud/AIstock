@@ -4427,7 +4427,9 @@ OUTCOME_TRANSITIONS: dict[HistoricalRangeOutcomeStatus, frozenset[HistoricalRang
 }
 
 OPERATION_TRANSITIONS: dict[HistoricalRangeOperationStatus, frozenset[HistoricalRangeOperationStatus]] = {
-    HistoricalRangeOperationStatus.QUEUED: frozenset({HistoricalRangeOperationStatus.RUNNING}),
+    HistoricalRangeOperationStatus.QUEUED: frozenset(
+        {HistoricalRangeOperationStatus.RUNNING, HistoricalRangeOperationStatus.RETRYABLE_FAILED}
+    ),
     HistoricalRangeOperationStatus.RUNNING: frozenset(
         {
             HistoricalRangeOperationStatus.COMPLETED,

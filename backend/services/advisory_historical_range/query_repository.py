@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
 import psycopg2.extras
 
 from .api_models import json_ready
 from .canonical import canonical_json_sha256
+from .models import (
+    HistoricalRangeBatchStatus,
+    HistoricalRangeDayStatus,
+    HistoricalRangeOperationStatus,
+    HistoricalRangeOperationType,
+    HistoricalRangeOutcomeProjection,
+    HistoricalRangeOutcomeStatus,
+    HistoricalRangeOutcomeSubjectType,
+)
 
 
 class HistoricalRangeQueryError(ValueError):
@@ -44,7 +55,7 @@ class HistoricalRangeCursorCodec:
         cursor: str | None,
         *,
         filter_payload: Mapping[str, Any],
-        key_size: int,
+        key_schema: Sequence[tuple[type, bool]],
     ) -> tuple[Any, ...] | None:
         if cursor is None:
             return None
@@ -61,12 +72,13 @@ class HistoricalRangeCursorCodec:
             if payload.get("filter_hash") != expected_hash:
                 raise ValueError("cursor filters differ from this request")
             order_key = payload.get("order_key")
-            if not isinstance(order_key, list) or len(order_key) != key_size:
+            if not isinstance(order_key, list) or len(order_key) != len(key_schema):
                 raise ValueError("cursor order key is invalid")
-            if any(isinstance(item, (dict, list)) for item in order_key):
-                raise ValueError("cursor order key contains a composite value")
-            return tuple(order_key)
-        except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return tuple(
+                _cursor_value(item, expected_type, nullable)
+                for item, (expected_type, nullable) in zip(order_key, key_schema, strict=True)
+            )
+        except (ValueError, TypeError, OverflowError, binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise HistoricalRangeQueryError(
                 "ADVISORY_HR_CURSOR_INVALID",
                 "historical-range cursor is invalid for this request",
@@ -96,7 +108,11 @@ class PostgresHistoricalRangeQueryRepository:
             "program_id": program_id,
             "created_before": created_before.isoformat() if created_before else None,
         }
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=2)
+        statuses = _enum_values(statuses, HistoricalRangeBatchStatus, "batch status")
+        filters["statuses"] = sorted(set(statuses))
+        key = HistoricalRangeCursorCodec.decode(
+            cursor, filter_payload=filters, key_schema=((datetime, False), (str, False))
+        )
         where = ["TRUE"]
         params: list[Any] = []
         if statuses:
@@ -174,7 +190,9 @@ class PostgresHistoricalRangeQueryRepository:
 
     def list_runs(self, *, batch_id: str, cursor: str | None = None, limit: int = 50) -> dict[str, Any]:
         filters = {"batch_id": batch_id}
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=2)
+        key = HistoricalRangeCursorCodec.decode(
+            cursor, filter_payload=filters, key_schema=((str, False), (str, False))
+        )
         where = ["run.batch_id = %s"]
         params: list[Any] = [batch_id]
         if key:
@@ -241,7 +259,13 @@ class PostgresHistoricalRangeQueryRepository:
             "operation_types": sorted(set(operation_types)),
             "statuses": sorted(set(statuses)),
         }
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=2)
+        operation_types = _enum_values(operation_types, HistoricalRangeOperationType, "operation type")
+        statuses = _enum_values(statuses, HistoricalRangeOperationStatus, "operation status")
+        filters["operation_types"] = sorted(set(operation_types))
+        filters["statuses"] = sorted(set(statuses))
+        key = HistoricalRangeCursorCodec.decode(
+            cursor, filter_payload=filters, key_schema=((datetime, False), (str, False))
+        )
         where = ["operation.batch_id = %s"]
         params: list[Any] = [batch_id]
         if operation_types:
@@ -301,7 +325,11 @@ class PostgresHistoricalRangeQueryRepository:
         limit: int = 50,
     ) -> dict[str, Any]:
         filters = {"range_run_id": range_run_id, "statuses": sorted(set(statuses))}
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=2)
+        statuses = _enum_values(statuses, HistoricalRangeDayStatus, "day status")
+        filters["statuses"] = sorted(set(statuses))
+        key = HistoricalRangeCursorCodec.decode(
+            cursor, filter_payload=filters, key_schema=((int, False), (str, False))
+        )
         where = ["day_run.range_run_id = %s"]
         params: list[Any] = [range_run_id]
         if statuses:
@@ -354,7 +382,9 @@ class PostgresHistoricalRangeQueryRepository:
             f"{range_run_id}:{trade_date.isoformat()}",
         )
         filters = {"day_run_id": day["day_run_id"]}
-        key = HistoricalRangeCursorCodec.decode(candidate_cursor, filter_payload=filters, key_size=2)
+        key = HistoricalRangeCursorCodec.decode(
+            candidate_cursor, filter_payload=filters, key_schema=((int, True), (str, False))
+        )
         where = ["candidate.day_run_id = %s"]
         params: list[Any] = [day["day_run_id"]]
         if key:
@@ -402,7 +432,9 @@ class PostgresHistoricalRangeQueryRepository:
             f"{range_run_id}:{trade_date.isoformat()}",
         )
         filters = {"list_version_id": list_version["list_version_id"]}
-        key = HistoricalRangeCursorCodec.decode(item_cursor, filter_payload=filters, key_size=2)
+        key = HistoricalRangeCursorCodec.decode(
+            item_cursor, filter_payload=filters, key_schema=((int, True), (str, False))
+        )
         where = ["list_item.list_version_id = %s"]
         params: list[Any] = [list_version["list_version_id"]]
         if key:
@@ -443,7 +475,15 @@ class PostgresHistoricalRangeQueryRepository:
             "maturity_status": maturity_status,
             "horizon": horizon,
         }
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=5)
+        subject_type = _enum_value(subject_type, HistoricalRangeOutcomeSubjectType, "outcome subject type")
+        projection = _enum_value(projection, HistoricalRangeOutcomeProjection, "outcome projection")
+        maturity_status = _enum_value(maturity_status, HistoricalRangeOutcomeStatus, "outcome maturity status")
+        filters.update({"subject_type": subject_type, "projection": projection, "maturity_status": maturity_status})
+        key = HistoricalRangeCursorCodec.decode(
+            cursor,
+            filter_payload=filters,
+            key_schema=((str, False), (str, False), (str, False), (int, False), (int, False)),
+        )
         where = ["scope.range_run_id = %s"]
         params: list[Any] = [range_run_id]
         for column, value in (
@@ -500,7 +540,9 @@ class PostgresHistoricalRangeQueryRepository:
         self, *, range_run_id: str, cursor: str | None = None, limit: int = 50
     ) -> dict[str, Any]:
         filters = {"range_run_id": range_run_id}
-        key = HistoricalRangeCursorCodec.decode(cursor, filter_payload=filters, key_size=2)
+        key = HistoricalRangeCursorCodec.decode(
+            cursor, filter_payload=filters, key_schema=((int, False), (str, False))
+        )
         where = ["summary.range_run_id = %s"]
         params: list[Any] = [range_run_id]
         if key:
@@ -550,6 +592,46 @@ def _limit(limit: int) -> int:
             context={"limit": limit},
         )
     return limit
+
+
+def _cursor_value(value: Any, expected_type: type, nullable: bool) -> Any:
+    if value is None:
+        if nullable:
+            return None
+        raise ValueError("cursor order key contains an unexpected null")
+    if expected_type is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("cursor order key integer is invalid")
+        return value
+    if expected_type is str:
+        if not isinstance(value, str) or not value:
+            raise ValueError("cursor order key text is invalid")
+        return value
+    if expected_type is datetime:
+        if not isinstance(value, str):
+            raise ValueError("cursor order key timestamp is invalid")
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("cursor order key timestamp requires a timezone")
+        return parsed
+    raise ValueError("cursor order key schema is unsupported")
+
+
+def _enum_values(values: Sequence[str], enum_type: type[Enum], field: str) -> tuple[str, ...]:
+    return tuple(_enum_value(value, enum_type, field) for value in values)  # type: ignore[misc]
+
+
+def _enum_value(value: str | None, enum_type: type[Enum], field: str) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(enum_type(value).value)
+    except (TypeError, ValueError) as exc:
+        raise HistoricalRangeQueryError(
+            "ADVISORY_HR_FILTER_INVALID",
+            f"{field} filter is invalid",
+            context={"field": field, "value": value},
+        ) from exc
 
 
 def _page(

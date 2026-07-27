@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import logging
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -49,6 +50,7 @@ from backend.services.advisory_historical_range.service import (
 )
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
+LOGGER = logging.getLogger(__name__)
 
 
 class AdvisoryProgramCreateRequest(BaseModel):
@@ -215,12 +217,20 @@ def _raise_historical_range_http(exc: Exception) -> None:
     elif isinstance(exc, ValueError):
         status_code = 422
         reason_code = "ADVISORY_HR_REQUEST_INVALID"
+    unexpected = status_code == 500
+    if unexpected:
+        LOGGER.exception(
+            "unexpected historical-range HTTP failure correlation_id=%s error_type=%s",
+            correlation_id,
+            type(exc).__name__,
+            exc_info=exc,
+        )
     detail = {
         "error_code": "ADVISORY_HISTORICAL_RANGE_ERROR",
         "reason_code": reason_code,
-        "message": str(exc),
+        "message": "Unexpected historical-range service error" if unexpected else str(exc),
         "retryable": retryable,
-        "context": context,
+        "context": {} if unexpected else context,
         "correlation_id": correlation_id,
     }
     raise HTTPException(status_code=status_code, detail=detail) from exc

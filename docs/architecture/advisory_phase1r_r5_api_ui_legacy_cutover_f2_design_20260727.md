@@ -774,30 +774,30 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-740 | §1-6、§14 | planned: `backend/tests/advisory_historical_range/test_r5_service_boundaries.py` | design_ready | none |
-| F-741 | §4.3、§7、§11 | planned: `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | design_ready | none |
-| F-742 | §6.2-6.3、§7.3 | planned: `backend/tests/advisory_historical_range/test_r5_command_service.py` and `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | design_ready | none |
-| F-743 | §4.2、§10.2 | planned: `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | design_ready | none |
-| F-744 | §7.2 | planned: `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | design_ready | none |
-| F-745 | §7.4、§12 | planned: `backend/tests/advisory_historical_range/test_r5_package_projection.py` | design_ready | none |
-| F-746 | §7.1、§7.5-7.6 | planned: `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | design_ready | none |
-| F-747 | §8、§13 | planned: `backend/tests/advisory_historical_range/test_r5_query_repository.py` | design_ready | none |
-| F-748 | §6、§7.5、§9 | planned: `backend/tests/advisory_historical_range/test_r5_command_service.py` | design_ready | none |
-| F-749 | §9、§10.5 | planned: `backend/tests/advisory_historical_range/test_r5_error_projection.py` and `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-750 | §10 | planned: `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-751 | §3、§10.4、§12 | planned: `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-752 | §10.4 | planned: `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-753 | §11、§17.2 | planned: `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-754 | §4.3、§11、§12.3 | planned: `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | design_ready | none |
-| F-755 | §5.1、§12 | planned: `backend/tests/advisory_historical_range/test_r5_protected_module_isolation.py` | design_ready | none |
-| F-756 | §5.1、§9、§12.1 | planned: `backend/tests/advisory_historical_range/test_r5_composition.py` and `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | design_ready | none |
-| F-757 | §3、§6.2、§16.2 | planned: `backend/tests/advisory_historical_range/test_r5_service_boundaries.py` | design_ready | none |
-| F-758 | §6、§8、§13 | planned: `backend/tests/advisory_historical_range/test_r5_query_repository.py` | design_ready | none |
-| F-759 | §10.5、§16.3 | planned: `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-760 | §16.4 | planned: `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` and `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | design_ready | none |
-| F-761 | §21 | artifact: `scripts/aistock_feature_workflow.py`; validation command recorded in §21 | design_ready | none |
-| F-762 | §17.1 | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | design_ready | none |
-| F-763 | §1-3、§19 | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` | design_ready | none |
+| F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 278 passed, 5 skipped | verified | none |
+| F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_route_isolation.py`; `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | verified | none |
+| F-742 | `service.py` response-bound dispatcher and durable failure receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
+| F-743 | strict create/command DTOs in `api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py` covers both Program source kinds | verified | none |
+| F-744 | mutation routes and `service.py` exact-retry/CAS paths | `backend/tests/advisory_historical_range/test_r5_command_service.py` exact retry and stale PLANNING CAS | verified | none |
+| F-745 | `_project_historical_range_options` complete read-only projection | `backend/tests/advisory_historical_range/test_r5_package_projection.py` covers 501 admitted packages | verified | none |
+| F-746 | typed mutation envelopes and operation links | `backend/tests/advisory_historical_range/test_r5_api_contracts.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
+| F-747 | `query_repository.py` keyset/enum/cursor contracts | `backend/tests/advisory_historical_range/test_r5_query_repository.py` invalid enum/type/nullability behavior | verified | none |
+| F-748 | repository idempotent-hit propagation and PLANNING row-version CAS | `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
+| F-749 | safe correlation-id HTTP projection; layered frontend client errors | `backend/tests/advisory_historical_range/test_r5_error_projection.py`; `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
+| F-750 | historical-range hook/view and strict typed API client | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` = 7 passed | verified | none |
+| F-751 | multi-Program create UI and segmented historical evidence view | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
+| F-752 | independent batch/operation polling and cursor loaders | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` terminal-batch and multi-page behavior | verified | none |
+| F-753 | legacy main-flow cutover in `page.tsx`; compatibility API retained | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` no-replay-request guard | verified | none |
+| F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | verified | none |
+| F-755 | protected import and service-boundary isolation | `backend/tests/advisory_historical_range/test_r5_protected_module_isolation.py` | verified | none |
+| F-756 | explicit runtime composition and reconstructable background identities | `backend/tests/advisory_historical_range/test_r5_composition.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | verified | none |
+| F-757 | no DDL; existing R1-R4 repository/domain contracts | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `git diff --check` | verified | none |
+| F-758 | READ ONLY REPEATABLE READ queries and resource-specific keysets | `backend/tests/advisory_historical_range/test_r5_query_repository.py` | verified | none |
+| F-759 | responsive evidence UI and typed Dataset bridge receipt readback | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` covers SEALED/VALID_EMPTY and 375/768/1440 widths | verified | none |
+| F-760 | guarded PostgreSQL/UI E2E entrypoints only | `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` skipped; explicit configuration probe found all seven required roots absent | blocked user approved | user approved: keep incomplete because single-Alpha/native-multi create/resume/query/outcome/summary/bridge mutation E2E and UI readback could not run without guessing roots |
+| F-761 | `scripts/aistock_feature_workflow.py` and this reconciled matrix | validation-receipt: `aistock_feature_workflow F2` final local gate | verified | none |
+| F-762 | this design and PR acceptance evidence | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | verified | none |
+| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`; F-740-F-762 audit | blocked user approved | user approved: Phase 1R completion must not be claimed while F-760 remains incomplete |
 
 ## 21. DESIGN-COMPLIANCE-001 设计复核
 

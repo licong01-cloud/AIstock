@@ -144,3 +144,65 @@ test("current view no longer exposes a legacy replay creation card", async ({ pa
   await expect(page.getByRole("button", { name: "执行回放" })).toHaveCount(0);
   expect(requests.some((item) => item.includes("/replay"))).toBeFalsy();
 });
+
+test("missing page in a successful response is a visible contract error", async ({ page }) => {
+  await mockPage(page);
+  await page.route("**/api/v1/advisory/historical-range-batches", (route) =>
+    json(route, { ok: true, data: { batches: [] } }),
+  );
+  await page.goto("/paper-v2/advisory?view=historical-range");
+  await expect(page.getByTestId("historical-range-view")).toContainText("分页合同无效");
+});
+
+test("runs operations and summaries load every cursor page", async ({ page }) => {
+  await mockPage(page);
+  await page.route(`**/api/v1/advisory/historical-range-batches/${BATCH_ID}/runs**`, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return json(route, cursor
+      ? { ok: true, data: { runs: [{ range_run_id: "run_page_2", research_program_id: "program_page_2", status: "COMPLETED" }] }, page: { limit: 50, next_cursor: null, has_more: false } }
+      : { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, status: "PARTIAL" }] }, page: { limit: 50, next_cursor: "runs-next", has_more: true } });
+  });
+  await page.route(`**/api/v1/advisory/historical-range-batches/${BATCH_ID}/operations**`, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return json(route, cursor
+      ? { ok: true, data: { operations: [{ operation_id: "operation_page_2", operation_type: "BUILD_DATASET_BRIDGE", status: "FAILED" }] }, page: { limit: 50, next_cursor: null, has_more: false } }
+      : { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED" }] }, page: { limit: 50, next_cursor: "operations-next", has_more: true } });
+  });
+  await page.route(`**/api/v1/advisory/historical-range-runs/${RUN_ID}/summaries**`, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return json(route, cursor
+      ? { ok: true, data: { summaries: [{ summary_id: "sum_2", summary_version: 2, covered_outcome_set_hash: "2".repeat(64), summary_json: {} }] }, page: { limit: 50, next_cursor: null, has_more: false } }
+      : { ok: true, data: { summaries: [{ summary_id: "sum_1", summary_version: 1, covered_outcome_set_hash: "1".repeat(64), summary_json: {} }] }, page: { limit: 50, next_cursor: "summaries-next", has_more: true } });
+  });
+  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.getByRole("button", { name: "查看任务" }).click();
+  await page.getByRole("button", { name: "加载更多 Program" }).click();
+  await expect(page.getByText("program_page_2")).toBeVisible();
+  await page.getByRole("button", { name: "加载更多 Operations" }).click();
+  await expect(page.getByText("BUILD_DATASET_BRIDGE")).toBeVisible();
+  await page.getByRole("button", { name: "查看 Program run" }).first().click();
+  await page.getByRole("button", { name: "加载更多 Summary" }).click();
+  await expect(page.getByText("Summary v2")).toBeVisible();
+});
+
+test("typed Dataset bridge SEALED and VALID_EMPTY receipts are rendered", async ({ page }) => {
+  await mockPage(page);
+  let receiptRead = 0;
+  await page.route(`**/api/v1/advisory/historical-range-operations/${OPERATION_ID}`, (route) => {
+    receiptRead += 1;
+    return json(route, receiptRead === 1 ? {
+      ok: true,
+      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", result_status: "SEALED", snapshot: { snapshot_id: "snapshot_r5_001", status: "SEALED" }, bridge_receipt: { result_status: "SEALED", sealed_snapshot_id: "snapshot_r5_001" } } },
+    } : {
+      ok: true,
+      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", result_status: "VALID_EMPTY", snapshot: null, bridge_receipt: { result_status: "VALID_EMPTY", reason_codes: ["ADVISORY_HR_DATASET_BRIDGE_VALID_EMPTY"] } } },
+    });
+  });
+  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.getByRole("button", { name: "查看任务" }).click();
+  await page.getByRole("button", { name: /REFRESH_OUTCOMES/ }).click();
+  await expect(page.getByTestId("historical-range-detail")).toContainText("snapshot_r5_001");
+  await expect(page.getByTestId("historical-range-detail")).toContainText("SEALED");
+  await page.getByRole("button", { name: /REFRESH_OUTCOMES/ }).click();
+  await expect(page.getByTestId("historical-range-detail")).toContainText("VALID_EMPTY");
+});
