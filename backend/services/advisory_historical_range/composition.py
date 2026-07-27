@@ -34,7 +34,10 @@ from .decision_mark_provider import (
     PostgresHistoricalRangeDecisionMarkReader,
 )
 from .executor import HistoricalRangeBatchExecutionService, HistoricalRangeDayExecutor
-from .repository import PostgresHistoricalRangeRepository
+from .repository import (
+    PostgresHistoricalRangePreclaimFailureRepository,
+    PostgresHistoricalRangeRepository,
+)
 from .outcome_evaluator import (
     FrozenHistoricalRangeOutcomeInputFactory,
     HistoricalRangeAggregateOutcomeEvaluator,
@@ -508,7 +511,7 @@ def build_historical_range_r5_application_service(
     *,
     query_runtime_factory: RuntimeFactory,
     mutation_runtime_factory: RuntimeFactory,
-    failure_runtime_factory: RuntimeFactory | None = None,
+    failure_recorder_factory: Callable[[], Any] | None = None,
 ) -> HistoricalRangeApplicationService:
     """Compose R5 without request-scoped connections or implicit dependencies."""
 
@@ -517,7 +520,7 @@ def build_historical_range_r5_application_service(
     return HistoricalRangeApplicationService(
         query_runtime_factory=query_runtime_factory,
         mutation_runtime_factory=mutation_runtime_factory,
-        failure_runtime_factory=failure_runtime_factory,
+        failure_recorder_factory=failure_recorder_factory,
     )
 
 
@@ -747,38 +750,12 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
                 context={"error_type": type(exc).__name__},
             ) from exc
 
-    def failure_runtime() -> HistoricalRangeRuntime:
-        artifact_root = str(os.getenv("AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT") or "").strip()
-        if not artifact_root:
-            raise HistoricalRangeServiceError(
-                "ADVISORY_HR_CONFIGURATION_UNAVAILABLE",
-                "historical-range failure runtime requires the explicit artifact root",
-                http_status=503,
-                retryable=True,
-            )
-        artifact_store = HistoricalRangeArtifactStore(root=Path(artifact_root))
-        query = PostgresHistoricalRangeQueryRepository(conn_factory=conn_factory)
-        repository = PostgresHistoricalRangeRepository(
-            conn_factory=conn_factory,
-            artifact_store=artifact_store,
-        )
-        return HistoricalRangeRuntime(
-            query=query,
-            repository=repository,
-            planning=None,  # type: ignore[arg-type]
-            execution=None,  # type: ignore[arg-type]
-            outcome=None,  # type: ignore[arg-type]
-            bridge=None,  # type: ignore[arg-type]
-            outcome_requests=None,  # type: ignore[arg-type]
-            bridge_requests=None,  # type: ignore[arg-type]
-            options_projector=lambda: {},
-            artifact_store=artifact_store,
-        )
-
     return build_historical_range_r5_application_service(
         query_runtime_factory=query_runtime,
         mutation_runtime_factory=mutation_runtime,
-        failure_runtime_factory=failure_runtime,
+        failure_recorder_factory=lambda: PostgresHistoricalRangePreclaimFailureRepository(
+            conn_factory=conn_factory
+        ),
     )
 
 
@@ -849,7 +826,10 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT package_id, package_name, alpha_mode, alpha_count,
+                    SELECT package_id, package_name, alpha_mode,
+                           jsonb_array_length(
+                               COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)
+                           ) AS alpha_count,
                            manifest_sha256, package_version, package_status
                     FROM strategy_pkg.package
                     WHERE package_status = ANY(%s)

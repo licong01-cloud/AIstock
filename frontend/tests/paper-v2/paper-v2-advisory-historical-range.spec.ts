@@ -60,17 +60,17 @@ async function mockPage(page: Page, state: MockState = {}) {
       outcome_catalog: { catalog_version: "v1", catalog_content_hash: "c".repeat(64), default_horizons: [1, 3, 5, 10, 20], long_trend_horizons: [20, 40, 60, 120, 180], allowed_maturity_statuses: ["COMPLETE", "CENSORED", "TERMINAL"] },
     }});
     if (path.endsWith("/historical-range-batches") && request.method() === "GET") return json(route, { ok: true, data: { batches: [{ batch_id: BATCH_ID, start_trade_date: "2026-07-01", end_trade_date: "2026-07-21", program_count: 2, status: batchStatus, successful_day_count: 28, planned_day_count: 30, recoverable_program_count: recoverableProgramCount, row_version: 12, created_at: "2026-07-22T08:00:00Z" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
-    if (path.endsWith("/historical-range-batches") && request.method() === "POST") return json(route, { ok: true, data: { batch: { batch_id: "ahrb_new", status: "PLANNING", row_version: 1 }, operation: { operation_id: "ahrop_catalog", operation_type: "BUILD_SOURCE_CATALOG", status: "QUEUED" }, operation_id: "ahrop_catalog", exact_retry: false, dispatch_state: "SCHEDULED", links: { operation: "/api/v1/advisory/historical-range-operations/ahrop_catalog" } } }, 202);
+    if (path.endsWith("/historical-range-batches") && request.method() === "POST") return json(route, { ok: true, data: { batch: { batch_id: "ahrb_new", status: "PLANNING", row_version: 1 }, operation: { operation_id: "ahrop_catalog", operation_type: "BUILD_SOURCE_CATALOG", status: "QUEUED", row_version: 1 }, operation_id: "ahrop_catalog", exact_retry: false, dispatch_state: "SCHEDULED", links: { operation: "/api/v1/advisory/historical-range-operations/ahrop_catalog" } } }, 202);
     if (path.endsWith(`/historical-range-batches/${BATCH_ID}`)) return json(route, { ok: true, data: { batch: { batch_id: BATCH_ID, status: batchStatus, row_version: 12, successful_day_count: 28, terminal_failed_day_count: 1, recoverable_program_count: recoverableProgramCount, planning_recoverable: false, catalog_phase: "VERIFY" } } });
-    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/runs`)) return json(route, { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, package_id: "pkg_native_parent", package_version: "v7", alpha_mode: "multi_alpha", status: runStatus, completed_day_count: 14, total_day_count: 15 }] }, page: { limit: 50, next_cursor: null, has_more: false } });
-    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/operations`)) return json(route, { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
-    if (path.endsWith(`/historical-range-operations/${OPERATION_ID}`)) return json(route, { ok: true, data: { operation: { operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" } } });
+    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/runs`)) return json(route, { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, package_id: "pkg_native_parent", package_version: "v7", alpha_mode: "multi_alpha", status: runStatus, completed_day_count: 14, total_day_count: 15, row_version: 7 }] }, page: { limit: 50, next_cursor: null, has_more: false } });
+    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/operations`)) return json(route, { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", row_version: 4, error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
+    if (path.endsWith(`/historical-range-operations/${OPERATION_ID}`)) return json(route, { ok: true, data: { operation: { operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", row_version: 4, error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" } } });
     if (path.endsWith(`/historical-range-runs/${RUN_ID}/days`)) return json(route, { ok: true, data: { days: [
       { day_run_id: "day_1", ordinal: 1, decision_trade_date: "2026-07-01", status: "VALID_NO_CANDIDATE", candidate_count: 0, enter_count: 0, hold_count: 0, exit_count: 0, watch_count: 0 },
       { day_run_id: "day_2", ordinal: 2, decision_trade_date: "2026-07-02", status: "COMPLETE", candidate_count: 20, enter_count: 5, hold_count: 0, exit_count: 0, watch_count: 15 },
     ] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith(`/historical-range-runs/${RUN_ID}/days/2026-07-02`)) return json(route, { ok: true, data: { day: { day_run_id: "day_2", ordinal: 2, decision_trade_date: "2026-07-02", status: "COMPLETE" }, candidates: [{ candidate_id: "candidate_1", symbol: "600000.SH", selection_raw_rank: 2, selection_effective_rank: 1, membership_status: "INCLUDED", selection_score: "0.82" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
-    if (path.endsWith(`/historical-range-runs/${RUN_ID}/lists/2026-07-02`)) return json(route, { ok: true, data: { list: { list_version_id: "list_2", active_count: 5 }, items: [{ list_version_id: "list_2", symbol: "600000.SH", action: "ENTER", rank: 1, previous_rank: null, reason_codes: ["TOP_RANKED"], episode_id: "episode_1", recommendation_state: "ACTIVE", intended_execution_basis: "NEXT_OPEN" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
+    if (path.endsWith(`/historical-range-runs/${RUN_ID}/lists/2026-07-02`)) return json(route, { ok: true, data: { list: { list_version_id: "list_2", range_run_id: RUN_ID, active_count: 5 }, items: [{ list_version_id: "list_2", symbol: "600000.SH", action: "ENTER", rank: 1, previous_rank: null, reason_codes: ["TOP_RANKED"], episode_id: "episode_1", recommendation_state: "ACTIVE", intended_execution_basis: "NEXT_OPEN" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith(`/historical-range-runs/${RUN_ID}/outcomes`)) return json(route, { ok: true, data: { outcomes: [{ outcome_version_id: "out_1", subject_type: "EPISODE", subject_id: "episode_1", projection: "EXECUTABLE", horizon_trade_days: 5, maturity_status: "COMPLETE", label_as_of_trade_date: "2026-07-24", cost_policy_hash: "e".repeat(64), benchmark_hash: "f".repeat(64), outcome_version: 1, outcome_json: { calculation_results: [{ projection: "RETURN_GROSS", projection_value_decimal: "0.0312" }, { projection: "EXECUTABLE_MFE", projection_value_decimal: "0.0471" }, { projection: "EXECUTABLE_MAE", projection_value_decimal: "-0.0124" }] } }] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith(`/historical-range-runs/${RUN_ID}/summaries`)) return json(route, { ok: true, data: { summaries: [{ summary_id: "sum_1", summary_version: 1, covered_outcome_set_hash: "d".repeat(64), summary_json: { metrics: [{ metric_name: "mean_return", value: "0.0211" }], unavailable_metrics: [{ metric_name: "recall_at_5", status: "DENOMINATOR_UNAVAILABLE" }] } }] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith("/programs")) return json(route, { ok: true, programs: [] });
@@ -154,19 +154,32 @@ test("missing page in a successful response is a visible contract error", async 
   await expect(page.getByTestId("historical-range-view")).toContainText("分页合同无效");
 });
 
+test("missing business identity in a successful response is a visible contract error", async ({ page }) => {
+  await mockPage(page);
+  await page.route("**/api/v1/advisory/historical-range-batches", (route) =>
+    json(route, {
+      ok: true,
+      data: { batches: [{ status: "COMPLETED", row_version: 1 }] },
+      page: { limit: 50, next_cursor: null, has_more: false },
+    }),
+  );
+  await page.goto("/paper-v2/advisory?view=historical-range");
+  await expect(page.getByTestId("historical-range-view")).toContainText("数据合同无效：batches[0].batch_id");
+});
+
 test("runs operations and summaries load every cursor page", async ({ page }) => {
   await mockPage(page);
   await page.route(`**/api/v1/advisory/historical-range-batches/${BATCH_ID}/runs**`, (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     return json(route, cursor
-      ? { ok: true, data: { runs: [{ range_run_id: "run_page_2", research_program_id: "program_page_2", status: "COMPLETED" }] }, page: { limit: 50, next_cursor: null, has_more: false } }
-      : { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, status: "PARTIAL" }] }, page: { limit: 50, next_cursor: "runs-next", has_more: true } });
+      ? { ok: true, data: { runs: [{ range_run_id: "run_page_2", research_program_id: "program_page_2", status: "COMPLETED", row_version: 2 }] }, page: { limit: 50, next_cursor: null, has_more: false } }
+      : { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, status: "PARTIAL", row_version: 1 }] }, page: { limit: 50, next_cursor: "runs-next", has_more: true } });
   });
   await page.route(`**/api/v1/advisory/historical-range-batches/${BATCH_ID}/operations**`, (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     return json(route, cursor
-      ? { ok: true, data: { operations: [{ operation_id: "operation_page_2", operation_type: "BUILD_DATASET_BRIDGE", status: "FAILED" }] }, page: { limit: 50, next_cursor: null, has_more: false } }
-      : { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED" }] }, page: { limit: 50, next_cursor: "operations-next", has_more: true } });
+      ? { ok: true, data: { operations: [{ operation_id: "operation_page_2", operation_type: "BUILD_DATASET_BRIDGE", status: "FAILED", row_version: 2 }] }, page: { limit: 50, next_cursor: null, has_more: false } }
+      : { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", row_version: 1 }] }, page: { limit: 50, next_cursor: "operations-next", has_more: true } });
   });
   await page.route(`**/api/v1/advisory/historical-range-runs/${RUN_ID}/summaries**`, (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
@@ -192,10 +205,10 @@ test("typed Dataset bridge SEALED and VALID_EMPTY receipts are rendered", async 
     receiptRead += 1;
     return json(route, receiptRead === 1 ? {
       ok: true,
-      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", result_status: "SEALED", snapshot: { snapshot_id: "snapshot_r5_001", status: "SEALED" }, bridge_receipt: { result_status: "SEALED", sealed_snapshot_id: "snapshot_r5_001" } } },
+      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", row_version: 5, result_status: "SEALED", snapshot: { snapshot_id: "snapshot_r5_001", status: "SEALED" }, bridge_receipt: { result_status: "SEALED", sealed_snapshot_id: "snapshot_r5_001" } } },
     } : {
       ok: true,
-      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", result_status: "VALID_EMPTY", snapshot: null, bridge_receipt: { result_status: "VALID_EMPTY", reason_codes: ["ADVISORY_HR_DATASET_BRIDGE_VALID_EMPTY"] } } },
+      data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", row_version: 6, result_status: "VALID_EMPTY", snapshot: null, bridge_receipt: { result_status: "VALID_EMPTY", reason_codes: ["ADVISORY_HR_DATASET_BRIDGE_VALID_EMPTY"] } } },
     });
   });
   await page.goto("/paper-v2/advisory?view=historical-range");

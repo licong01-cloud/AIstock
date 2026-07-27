@@ -27,6 +27,8 @@ class _Cursor:
 
     def execute(self, statement, params):
         assert "LIMIT" not in statement.upper()
+        assert "manifest_json -> 'alpha_components'" in statement
+        assert "AS alpha_count" in statement
         assert len(params[0]) == 4
 
     def fetchall(self):

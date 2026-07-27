@@ -25,6 +25,7 @@ from .models import (
     HistoricalRangeArtifactKind,
     ExistingProgramSpecV1,
     HistoricalRangeArtifactRefV1,
+    HistoricalRangeBackgroundDispatchFailureV1,
     HistoricalRangeDatasetBridgeRequestV1,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
@@ -48,6 +49,12 @@ LOGGER = logging.getLogger(__name__)
 
 class BackgroundTaskRegistrar(Protocol):
     def add_task(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None: ...
+
+
+class HistoricalRangePreclaimFailureRecorder(Protocol):
+    def record_retryable_failure(
+        self, failure: HistoricalRangeBackgroundDispatchFailureV1
+    ) -> Mapping[str, Any]: ...
 
 
 class HistoricalRangeServiceError(RuntimeError):
@@ -94,6 +101,29 @@ class HistoricalRangeRuntime:
 
 
 RuntimeFactory = Callable[[], HistoricalRangeRuntime]
+FailureRecorderFactory = Callable[[], HistoricalRangePreclaimFailureRecorder]
+
+
+class _RuntimePreclaimFailureRecorder:
+    """Compatibility adapter for explicitly composed runtimes used outside HTTP composition."""
+
+    def __init__(self, runtime_factory: RuntimeFactory) -> None:
+        self._runtime_factory = runtime_factory
+
+    def record_retryable_failure(
+        self, failure: HistoricalRangeBackgroundDispatchFailureV1
+    ) -> Mapping[str, Any]:
+        runtime = self._runtime_factory()
+        operation = runtime.query.get_operation_internal(failure.operation_id)
+        if operation.get("status") != HistoricalRangeOperationStatus.QUEUED.value:
+            return operation
+        return runtime.repository.transition_operation(
+            operation_id=failure.operation_id,
+            expected_row_version=int(operation["row_version"]),
+            target_status=HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+            attempt_no=int(operation.get("attempt_no") or 0),
+            error_json=failure.model_dump(mode="json"),
+        )
 
 
 class ResponseBoundHistoricalRangeDispatcher:
@@ -103,12 +133,14 @@ class ResponseBoundHistoricalRangeDispatcher:
         self,
         *,
         runtime_factory: RuntimeFactory,
-        failure_runtime_factory: RuntimeFactory | None = None,
+        failure_recorder_factory: FailureRecorderFactory | None = None,
     ) -> None:
         if runtime_factory is None:
             raise ValueError("historical-range dispatcher requires runtime_factory")
         self._runtime_factory = runtime_factory
-        self._failure_runtime_factory = failure_runtime_factory or runtime_factory
+        self._failure_recorder_factory = failure_recorder_factory or (
+            lambda: _RuntimePreclaimFailureRecorder(runtime_factory)
+        )
 
     def schedule(
         self,
@@ -118,6 +150,11 @@ class ResponseBoundHistoricalRangeDispatcher:
         payload: Mapping[str, Any],
     ) -> None:
         frozen = _immutable_payload(payload)
+        if not command.strip():
+            raise ValueError("historical-range background command is required")
+        for identity in ("batch_id", "operation_id"):
+            if not str(frozen.get(identity) or "").strip():
+                raise ValueError(f"historical-range background {identity} is required")
         background_tasks.add_task(self._run, command, frozen)
 
     def _run(self, command: str, payload: Mapping[str, Any]) -> None:
@@ -209,31 +246,23 @@ class ResponseBoundHistoricalRangeDispatcher:
         if not operation_id:
             return
         try:
-            runtime = self._failure_runtime_factory()
-            operation = runtime.query.get_operation_internal(operation_id)
-            if operation.get("status") != HistoricalRangeOperationStatus.QUEUED.value:
-                return
-            receipt = {
-                "schema_version": "advisory_historical_range_background_failure_receipt_v1",
-                "reason_code": str(
-                    getattr(error, "reason_code", "ADVISORY_HR_BACKGROUND_DISPATCH_FAILED")
-                ),
-                "stage": stage,
-                "command": command,
-                "error_type": type(error).__name__,
-                "retryable": True,
-            }
-            runtime.repository.transition_operation(
+            failure = HistoricalRangeBackgroundDispatchFailureV1(
                 operation_id=operation_id,
-                expected_row_version=int(operation["row_version"]),
-                target_status=HistoricalRangeOperationStatus.RETRYABLE_FAILED,
-                attempt_no=int(operation.get("attempt_no") or 0),
-                error_json=receipt,
+                batch_id=str(payload.get("batch_id") or ""),
+                command=command,
+                stage=stage,
+                reason_code=str(
+                    getattr(error, "reason_code", None)
+                    or "ADVISORY_HR_BACKGROUND_DISPATCH_FAILED"
+                ),
+                error_type=type(error).__name__,
+                retryable=True,
+                recorded_at=datetime.now(UTC),
             )
+            self._failure_recorder_factory().record_retryable_failure(failure)
         except Exception:
-            # A database outage cannot be converted into another write. Any
-            # already-claimed operation retains its lease/fencing identity and
-            # becomes query-visible as lease_expired after expiry.
+            # A database outage cannot be converted into another database write.
+            # The operation remains exact-retryable under its existing identity.
             LOGGER.exception(
                 "historical-range durable failure recording unavailable operation_id=%s stage=%s",
                 operation_id,
@@ -590,7 +619,7 @@ class HistoricalRangeApplicationService:
         runtime_factory: RuntimeFactory | None = None,
         query_runtime_factory: RuntimeFactory | None = None,
         mutation_runtime_factory: RuntimeFactory | None = None,
-        failure_runtime_factory: RuntimeFactory | None = None,
+        failure_recorder_factory: FailureRecorderFactory | None = None,
     ) -> None:
         query_factory = query_runtime_factory or runtime_factory
         mutation_factory = mutation_runtime_factory or runtime_factory
@@ -598,9 +627,12 @@ class HistoricalRangeApplicationService:
             raise ValueError("historical-range application service requires query and mutation runtime factories")
         self._query_runtime_factory = query_factory
         self._mutation_runtime_factory = mutation_factory
+        failure_recorder_factory = failure_recorder_factory or (
+            lambda: _RuntimePreclaimFailureRecorder(mutation_factory)
+        )
         self._dispatcher = ResponseBoundHistoricalRangeDispatcher(
             runtime_factory=mutation_factory,
-            failure_runtime_factory=failure_runtime_factory or mutation_factory,
+            failure_recorder_factory=failure_recorder_factory,
         )
 
     def list_batch_options(self) -> dict[str, Any]:

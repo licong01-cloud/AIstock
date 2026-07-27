@@ -5,7 +5,7 @@
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 上游交付：R1 contracts/schema/repository、R2 candidate adapter、R3 ordered day executor、R4 outcome/summary/retrospective SEALED bridge
-> 当前状态：`reviewed_design_ready_second_formal_audit_passed`
+> 当前状态：`implementation_verified_except_external_f760_e2e`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. 背景与当前事实
@@ -163,7 +163,7 @@ R5 使用 FastAPI `BackgroundTasks` 作为显式命令的 response-bound dispatc
 5. 进程退出时未完成工作保留 durable operation/day attempt；用户点击 resume 或 exact retry 恢复；
 6. background callable 的顶层异常必须 `LOGGER.exception` 并由 domain service 写入可恢复/失败 receipt；不得只记录字符串后吞掉异常。
 
-显式 DB/root/registry composition 必须在持久化新 command 前完成；配置缺失时返回结构化 `503` 且零业务写入。operation 已持久化后的异常必须优先写 terminal/retryable attempt receipt；若数据库连接中断导致失败 receipt 暂时不可提交，operation 保持带 lease 的 RUNNING，租约到期后查询投影明确显示 `lease_expired=true` 并允许正式恢复，不能由 Router 或 UI 改写成成功。
+显式 DB/root/registry composition 必须在持久化新 command 前完成；配置缺失时返回结构化 `503` 且零业务写入。operation 已持久化但尚未 domain claim 时，runtime/request/claim 异常写入 typed operation-level pre-claim failure record，并以 additive `QUEUED -> RETRYABLE_FAILED` 状态表达；该记录不是 attempt，不得伪造 worker、lease、fencing、attempt row 或 artifact receipt。domain claim 后的异常继续使用 R1-R4 正式 attempt/operation receipt。pre-claim 阶段若数据库连接本身不可用，则没有任何数据库写入可以成立，operation 保持原 `QUEUED` identity，服务端按 operation/batch/stage 记录异常，数据库恢复后由 exact retry 重新 dispatch；已 claim 的 RUNNING operation 保持 lease/fencing，租约到期后查询投影显示 `lease_expired=true` 并允许正式恢复。Router 或 UI 均不得改写成成功。
 
 Background task 只捕获 immutable `batch_id/operation_id/request_hash` 和可重新构造的 composition config，不捕获或复用 request-scoped DB connection、cursor、transaction、FastAPI request、response 或前端 session 对象。每个 background stage 使用 connection factory 打开自己的短事务并在 `finally` 释放资源。
 
@@ -727,7 +727,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | 风险 | 后果 | 设计缓解 |
 |---|---|---|
 | HTTP 已返回但 background task 未 claim 就退出 | PLANNING batch 悬空 | exact create retry 和 planning resume 重新 dispatch 既有 catalog operation；artifact/lease/fencing 收敛 |
-| BackgroundTasks 内长任务异常被框架吞掉 | UI 永久轮询且无原因 | 顶层 wrapper 记录 traceback，domain attempt/operation 写 retryable/failed receipt，query 返回 reason/context |
+| BackgroundTasks 内长任务异常被框架吞掉 | UI 永久轮询且无原因 | 顶层 wrapper 记录 traceback；pre-claim 使用 DB-only typed failure record，claimed work 使用 domain attempt/operation receipt，query 返回 reason/context |
 | Router 直接组合 R1-R4 参数 | 派生 identity 漂移或暴露 root/hash 给客户端 | `HistoricalRangeApplicationService` 和 versioned composition 唯一派生；Router 只做 HTTP mapping |
 | 新 query repository 读取 current/legacy 表补字段 | 历史研究被未来状态污染 | query source allowlist、SQL contract tests 和 cross-write/read scan |
 | cursor 排序不唯一 | 翻页重复或漏行 | 每类资源固定稳定复合 key，cursor 带 filter hash，append-only rows 使用 keyset |
@@ -776,7 +776,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 |---|---|---|---|---|
 | F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 280 passed, 5 skipped | verified | none |
 | F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_route_isolation.py`; `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | verified | none |
-| F-742 | `service.py` response-bound dispatcher and durable failure receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
+| F-742 | `service.py` response-bound dispatcher、DB-only typed pre-claim failure record 和 claimed-work receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
 | F-743 | strict create/command DTOs in `api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py` covers both Program source kinds | verified | none |
 | F-744 | mutation routes and `service.py` exact-retry/CAS paths | `backend/tests/advisory_historical_range/test_r5_command_service.py` exact retry and stale PLANNING CAS | verified | none |
 | F-745 | `_project_historical_range_options` complete read-only projection | `backend/tests/advisory_historical_range/test_r5_package_projection.py` covers 501 admitted packages | verified | none |
@@ -784,36 +784,36 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-747 | `query_repository.py` keyset/enum/cursor contracts | `backend/tests/advisory_historical_range/test_r5_query_repository.py` invalid enum/type/nullability behavior | verified | none |
 | F-748 | repository idempotent-hit propagation and PLANNING row-version CAS | `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
 | F-749 | safe correlation-id HTTP projection; layered frontend client errors | `backend/tests/advisory_historical_range/test_r5_error_projection.py`; `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
-| F-750 | historical-range hook/view and strict typed API client | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` = 7 passed | verified | none |
+| F-750 | historical-range hook/view and strict typed API client | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` = 8 passed | verified | none |
 | F-751 | multi-Program create UI and segmented historical evidence view | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
 | F-752 | independent batch/operation polling and cursor loaders | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` terminal-batch and multi-page behavior | verified | none |
 | F-753 | legacy main-flow cutover in `page.tsx`; compatibility API retained | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` no-replay-request guard | verified | none |
 | F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | verified | none |
 | F-755 | protected import and service-boundary isolation | `backend/tests/advisory_historical_range/test_r5_protected_module_isolation.py` | verified | none |
 | F-756 | explicit runtime composition and reconstructable background identities | `backend/tests/advisory_historical_range/test_r5_composition.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | verified | none |
-| F-757 | no DDL; existing R1-R4 repository/domain contracts | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `git diff --check` | verified | none |
+| F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |
 | F-758 | READ ONLY REPEATABLE READ queries and resource-specific keysets | `backend/tests/advisory_historical_range/test_r5_query_repository.py` | verified | none |
 | F-759 | responsive evidence UI and typed Dataset bridge receipt readback | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` covers SEALED/VALID_EMPTY and 375/768/1440 widths | verified | none |
-| F-760 | guarded PostgreSQL/UI E2E entrypoints only | `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` skipped; explicit configuration probe found all seven required roots absent | blocked user approved | user approved: keep incomplete because single-Alpha/native-multi create/resume/query/outcome/summary/bridge mutation E2E and UI readback could not run without guessing roots |
+| F-760 | guarded PostgreSQL/UI E2E entrypoints only | `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` skipped; explicit configuration probe found all seven required roots absent | blocked_external_configuration | incomplete: single-Alpha/native-multi create/resume/query/outcome/summary/bridge mutation E2E and UI readback cannot run without explicit roots; no acceptance exception has been granted |
 | F-761 | `scripts/aistock_feature_workflow.py` and this reconciled matrix | validation-receipt: `aistock_feature_workflow F2` final local gate | verified | none |
 | F-762 | this design and PR acceptance evidence | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | verified | none |
-| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`; F-740-F-762 audit | blocked user approved | user approved: Phase 1R completion must not be claimed while F-760 remains incomplete |
+| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`; F-740-F-762 audit | incomplete_dependency | Phase 1R completion must not be claimed while F-760 remains incomplete; no acceptance exception has been granted |
 
 ## 21. DESIGN-COMPLIANCE-001 设计复核
 
-### 20.1 禁止简化交付
+### 21.1 禁止简化交付
 
 PASS_DESIGN。设计覆盖完整 typed API、command facade、query projection、前端创建/任务/详情/结果、legacy cutover 和真实 E2E。明确禁止静态 tab、mock-only、同步单日循环、临时脚本或 backend-only 冒充 R5 完成。
 
-### 20.2 禁止静默错误
+### 21.2 禁止静默错误
 
 PASS_DESIGN。HTTP、domain reason、retryable、context、correlation id、background traceback、UI error state 和 invalid cursor/row version 均有明确合同；WAITING/PARTIAL 不冒充 COMPLETED，空表不冒充加载成功。
 
-### 20.3 禁止业务逻辑偏移
+### 21.3 禁止业务逻辑偏移
 
 PASS_DESIGN。R5 复用 R1-R4 services 和 facts，不复制算法；Existing/research-only、多 Program、一 Program 一 package、空 seed、PIT、outcome maturity、retrospective-only 和 no-fallback 与父蓝图一致。
 
-### 20.4 禁止私增门禁审批
+### 21.4 禁止私增门禁审批
 
 PASS_DESIGN。没有角色、审批、双人复核、package 二次验证、最新交易日、candidate count、Program 数、日期跨度、全部 horizon、canary 或 ModelOps 门禁。资源分块、keyset、lease 和 background task 只控制工程执行，不改变合法请求的业务接受语义。
 
@@ -857,6 +857,6 @@ PASS_DESIGN。没有角色、审批、双人复核、package 二次验证、最�
 
 ## 23. 当前结论
 
-R5 详细设计已把父蓝图中的 API、UI、历史验证和 legacy cutover 方向落实为可编码合同，并保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离。设计阶段不执行代码、DDL/DML、服务重启或 runtime activation。
+R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail 和静态合同验证。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL/DML、服务重启、runtime activation、角色、审批或额外业务门禁。
 
-下一步是在正式设计审核通过后，按 R5-A 至 R5-D 顺序实现，并在请求合入前逐项回填 F-740 至 F-763 的代码、测试和真实 E2E 证据。缺少任一业务闭环时不得声明 R5 或 Phase 1R 完成。
+F-760 所要求的单 Alpha 与原生多 Alpha 真实 mutation E2E 和 UI readback 仍因七个显式 roots 未配置而未执行，F-763 因此保持未完成。当前不得声明 R5、Phase 1R 或合入验收完成，也不得以 mock、只读 smoke 或文字状态替代该证据；后续必须提供明确 roots 并完成真实 E2E，或由用户明确批准对应验收例外。
