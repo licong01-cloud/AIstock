@@ -1,0 +1,220 @@
+{
+  "actual": "Build aborts at admission: 300/300 (Program 1) and 373/373 (Program 2) mapping identities disjoint between build request and frozen label captures.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py",
+    "tests/aistock_validation/bugs/20260726_BUG-873-advisory-phase1r-r4-build-time-selection-mapping-identity-diverges-from.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-873",
+  "closed_at": "2026-07-27T02:33:07Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-26T14:27:27.712105Z",
+  "description": "Build aborts at admission: 300/300 (Program 1) and 373/373 (Program 2) mapping identities disjoint between build request and frozen label captures.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-04961428d8fa",
+      "timestamp": "2026-07-26T14:27:27.712101Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Build-time selected observation mappings reproduce the frozen capture-time identities per signal and merge deterministically; exact retry is stable.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py"
+    ],
+    "changed_files": [
+      "backend/services/advisory_historical_range/dataset_bridge_postgres.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+        "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+        "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+      "backend/tests/advisory_historical_range/test_r4_bridge_selection_replay.py"
+    ]
+  },
+  "first_seen_at": "2026-07-26T14:27:27.712105Z",
+  "fix_branch": null,
+  "fix_commit": "f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9",
+  "fixed_at": "2026-07-27T02:53:23.084125Z",
+  "github_issue_number": 2763,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2763",
+  "last_seen_at": "2026-07-26T14:27:27.712105Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2792",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "advisory phase1r r4 build-time selection mapping identity diverges from capture-time group-scoped selector context",
+  "trigger_condition": {
+    "fingerprint": "04961428d8fa5f8a572ebf64",
+    "source_event_id": "FE-20260726-04961428d8fa"
+  },
+  "validation_evidence": [
+    "PR #2792 required CI checks -> passed",
+    "advisory_historical_range_backend -> 248 passed, 4 explicit skips",
+    "Phase 1 direct dependency matrix -> 219 passed",
+    "production R4 single/native-multi bridge and exact retry -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
