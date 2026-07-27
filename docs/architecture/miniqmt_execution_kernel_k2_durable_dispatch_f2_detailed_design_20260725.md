@@ -215,6 +215,22 @@ event ingress 只允许首次写入上述 initial `PENDING` delivery；`CLAIMED/
 
 ### 4.5 `BrokerCommandOutboxV1`
 
+K2-D final-review closure: `BrokerCommandOutboxV1` additionally carries nullable
+`callback_watermark_before_call`. It is `null` for initial `PENDING` and each new
+`CLAIMED` epoch, is filled from `execution_runtime.last_event_sequence` and committed in
+the same CAS that publishes `DISPATCHING`, and remains immutable through
+`OUTCOME_UNKNOWN/RECONCILING/ACKED/ACKED_REJECTED`. A safe retry claim clears the old
+watermark before a new pre-call boundary. Gateway-local/process-memory watermarks are
+transport observations only and cannot authorize retry or recovery.
+
+An expired `CLAIMED` lease is recovered as an explicit pre-call failure with
+`broker_called=false` and the remaining 1/2/4/8-second retry cadence. An expired
+`DISPATCHING` lease is recovered as `OUTCOME_UNKNOWN` from the committed command,
+mapping, fence, dispatch attempt and pre-call watermark; recovery never calls Gateway.
+Exact non-acceptance additionally requires a repository query proving zero
+`ORDER/TRADE/RECONCILE` events whose `correlation.reference_command_id` matches the
+command in the durable `(watermark_before, watermark_after]` sequence interval.
+
 字段固定为：
 
 ```text
@@ -222,7 +238,7 @@ schema_version=miniqmt_broker_command_outbox_v1, command_id, transition_id, ordi
 runtime_id, algo_instance_id, parent_intent_id, mapping_id
 command_type, local_vt_orderid, payload_json, payload_sha256
 status, attempt_count, lease_owner, lease_epoch, lease_fence_token, lease_expires_at
-dispatch_attempt_id, deterministic_client_order_ref, next_attempt_at_utc
+dispatch_attempt_id, callback_watermark_before_call, deterministic_client_order_ref, next_attempt_at_utc
 broker_called: false|true|null
 broker_order_id, ack_receipt_json, ack_receipt_sha256
 non_acceptance_receipt, unknown_outcome_receipt, reconcile_receipt
@@ -250,9 +266,9 @@ transition writer 只允许首次创建 initial `PENDING` outbox；`ACKED/ACKED_
 
 `BrokerCommandAckReceiptV1` exact fields：`schema_version=miniqmt_broker_command_ack_receipt_v1,command_id,mapping_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,source(SYNCHRONOUS_RETURN|CALLBACK|RECONCILIATION),accepted,broker_called=true,broker_order_id|null,reason_code,ack_payload_sha256,observed_at_utc,receipt_sha256`。accepted=true必须有non-empty broker order id；accepted=false不得携带accepted broker id。receipt hash使用§4.0 domain，raw ACK仅以bounded canonical payload/hash保存，不把空payload当成功。
 
-`BrokerUnknownOutcomeReceiptV1` exact fields：`schema_version=miniqmt_broker_unknown_outcome_receipt_v1,command_id,dispatch_attempt_id,mapping_id,lease_fence_token,uncertain_stage(GATEWAY_CALL|GATEWAY_RETURN|ACK_PERSIST|CALLBACK_CORRELATION),callback_watermark,reason_code,broker_called=null,observed_at_utc,receipt_sha256`；receipt hash使用§4.0 domain。该receipt只授权OUTCOME_UNKNOWN/reconcile，永不授权重复SUBMIT。
+`BrokerUnknownOutcomeReceiptV1` exact fields：`schema_version=miniqmt_broker_unknown_outcome_receipt_v1,command_id,dispatch_attempt_id,mapping_id,lease_fence_token,uncertain_stage(GATEWAY_CALL|GATEWAY_RETURN|ACK_PERSIST|CALLBACK_CORRELATION),callback_watermark,reason_code,broker_called=null,observed_at_utc,receipt_sha256`；receipt hash使用§4.0 domain。outbox writer/readback必须同时验证其`mapping_id/dispatch_attempt_id/callback_watermark`分别与当前durable outbox的唯一mapping、dispatch attempt和单次赋值pre-call watermark完全一致；该receipt只授权OUTCOME_UNKNOWN/reconcile，永不授权重复SUBMIT。
 
-`BrokerNonAcceptanceReceiptV1` exact fields：`schema_version=miniqmt_broker_non_acceptance_receipt_v1,command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`；receipt hash 使用 §4.0 domain。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
+`BrokerNonAcceptanceReceiptV1` exact fields：`schema_version=miniqmt_broker_non_acceptance_receipt_v1,command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`；receipt hash 使用 §4.0 domain。writer/readback必须验证client ref、before watermark以及after/query/order/trade snapshot hashes分别与outbox和同一latest reconciliation receipt完全闭合。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
 
 `BrokerOutcomeReconciliationReceiptV1` exact fields：`schema_version=miniqmt_broker_outcome_reconciliation_receipt_v1,command_id,reconcile_attempt,query_criteria_sha256,callback_watermark,ordered_matched_order_ids,ordered_matched_trade_ids,order_snapshot_sha256,trade_snapshot_sha256,outcome(NOT_FOUND|UNIQUE_ACCEPTED|UNIQUE_REJECTED|CONFLICT),broker_called,broker_order_id|null,reason_code,observed_at_utc,receipt_sha256`；receipt hash 使用 §4.0 domain。matched IDs 按 broker authoritative identity 排序且分别唯一。`NOT_FOUND`不得自动转`broker_called=false`；`CONFLICT`必须terminal且保留全部matched identities。
 
@@ -304,6 +320,12 @@ K2 不自行读取“今天是否交易”的松散布尔值，也不在K2-A复�
 `session_epoch = "mqsessionepoch_" + hash_hex_v1("miniqmt_session_epoch_v1", {runtime_id,exchange_trade_date,exchange_session_authority_sha256})`；`session_event_id = "mqsessionevt_" + hash_hex_v1("miniqmt_session_event_identity_v1", {runtime_id,session_epoch,session_phase,phase_boundary_at_utc})`。EOD source identity 使用同 `session_epoch`；TIMER occurrence继续使用K1 schedule/due identity并在 occurrence row引用 authority hash。exchange-active seconds只在 authority中 `CONTINUOUS_AM/CONTINUOUS_PM` segments内累计，午休/auction/closed为零；所有 phase boundary由 segments转换为UTC后得到，不由 tick数量、process wake time或本机日期猜测。
 
 ### 4.10 Transaction commit identity
+
+K2-D reconciliation history follows the same authority. The shared pure projection is
+`{receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,outcome,observed_at_utc}`;
+writer and independent readback compare every scalar with the strict
+`BrokerOutcomeReconciliationReceiptV1`. The database owner is the composite
+`(command_id,runtime_id)` foreign key to the outbox, not two unrelated foreign keys.
 
 PostgreSQL writer 在事务内使用 repo-owned `transaction_commit_identity = "mqtx_" + hash_hex_v1("miniqmt_kernel_transaction_v1", {operation,owner identities,input hashes,ordered output identities})`。它不是 PostgreSQL xid 的替代，也不假装证明物理 commit；事务context正常退出且物理commit返回后，writer必须通过独立连接按exact identity重读strict carrier及关键scalar columns。commit-return unknown时不得返回成功或重做broker side effect；consumer用该 identity及全部业务 identity调用只读readback seam，只有完整 closure一致才确认，否则保持未确认并重试readback。
 
@@ -391,6 +413,15 @@ reconciler按 command id、client ref、order remark、callback watermark和brok
 
 ### 7.2 Bounded retry
 
+K2-D pre-call retry delays are exactly `1,2,4,8` seconds after attempts 1–4; attempt 5
+is terminal and no sixth broker call exists. Reconciliation remains bounded to ten
+durable attempts. Exhaustion or an exact persisted `EOD` event from
+`EXCHANGE_SESSION_CLOCK` triggers one fresh final Gateway/OMS snapshot readback and then
+terminalization. If crash recovery first finds an append-only pre-EOD receipt not yet
+attached to the outbox latest view, it attaches that receipt without re-querying, then
+the next EOD invocation writes a new final attempt; a stale pre-EOD receipt is never
+misreported as the EOD readback.
+
 delivery/repository pre-effect retry最多 5 次；outbox pre-DISPATCHING retry最多 5 次。延迟只由 durable attempt count确定，无随机 jitter、wall clock identity或进程内计数。attempt耗尽写 terminal receipt。
 
 `attempt_count` 表示已开始的总attempt，首次claim从0原子增至1；最大5次实际attempt。attempt 1–4失败后的next delay分别为 `1,2,4,8` 秒；attempt 5失败直接耗尽并写terminal receipt，不再设置next attempt。不存在第6次调用或未被计数的initial attempt。
@@ -462,6 +493,13 @@ K2不伪造历史 ALGO_START、delivery、transition或outbox。现存 rows只�
 稳定reason families固定为：`MINIQMT_KERNEL_SCHEMA_*`、`MINIQMT_RUNTIME_EVENT_*`、`MINIQMT_RUNTIME_EVENT_ROUTING_*`、`MINIQMT_ALGO_INITIALIZATION_*`、`MINIQMT_ALGO_DELIVERY_*`、`MINIQMT_ALGO_TRANSITION_*`、`MINIQMT_ALGO_FAILURE_*`、`MINIQMT_TIMER_*`、`MINIQMT_COMMAND_OUTBOX_*`、`MINIQMT_COMMAND_OUTCOME_*`、`MINIQMT_KERNEL_FENCE_*`、`MINIQMT_KERNEL_READBACK_*`。每个error必须包含适用的runtime/algo/event/delivery/transition/command identity、stage、retryable、terminal、broker_called和bounded JSON-safe context；renderer失败保留primary type/message并增加renderer error，不二次抛异常。
 
 ### 10.2 Read-only diagnostics
+
+K2-D command-chain pagination uses the exact keyset cursor
+`(updated_at_utc,command_id)` with ordering `updated_at_utc DESC, command_id ASC` and
+returns `next_cursor` only when another row exists. Malformed cursors fail loudly.
+Diagnostics also expose `expired_dispatching_lease_count`; repository/readback failure
+is projected as `READBACK_FAILED` plus a critical low-cardinality alert rather than a
+false-green response.
 
 现有 `/api/v1/simulation-runtime/platform-diagnostics` 增加：catalog/gateway authority hash；event sequence/routing/delivery set；per-algo predecessor gap；state/transition/failure/skip；timer due/emitted；outbox status/attempt/nullable broker_called/reconcile；command-child-broker mapping。查询要求 runtime id + trade date，默认100、最大500，cursor为 `(sequence,identity)`；不启动 feed/worker，不重放、不repair DB。
 
@@ -625,11 +663,11 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | `F-063` | §4.1、§4.6、§5、§6.1–6.2、§12 K2-B；`kernel_ingress.py`、`kernel_creation.py`、`kernel_repository_event_delivery.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py`、`test_kernel_creation.py`、`test_kernel_repository_postgres.py`闭合code-owned fan-out、ALGO_START authority、sequence与single transaction；focused/DEV/single-process=`50/14/794 passed`；PR #2773 / merge `db81b27e...` | implemented_verified | none |
 | `F-064` | §4.2–4.4、§6.3、§7、§12 K2-B；`kernel_delivery.py`、`kernel_materializer.py`、`kernel_repository_k2b.py`与唯一`KernelRepositoryBase._connection` | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py`、`test_kernel_repository_k2b_validation.py`、`test_kernel_repository_postgres.py`闭合projection lineage、failure mapping/outbox、retry/reclaim/readback；核心line/branch=`85.99%/70.38%`；MiniQMT L2=`772 passed,23 skipped` | implemented_verified | none |
 | `F-065` | §4.2–§4.4、§6.3、§7.2、§12 K2-B；strict failure/skip/parent closure与bounded retry transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py`与`test_kernel_repository_postgres.py`覆盖attempts 1–5/no sixth call、pre-broker terminalization、accepted child CANCEL、outcome unknown、last-good state与queued successor SKIPPED；classifier仅MiniQMT且`unmapped_code_files=[]` | implemented_verified | none |
-| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3、§12；`kernel_outbox.py`与唯一`kernel_repository_transition_outbox.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py`=`22 passed`覆盖three-phase、pre-call、ACK/reject、snapshot/unknown/non-acceptance、cadence、CAS-restart、production adapter、缺失broker query fail-loud与仅数值broker identity的CANCEL reconcile；`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py` DEV验证retry reclaim清除旧fact、sync ACK后真实RECONCILE event lineage、completion attempt和append-only receipt readback；outbox line/branch=`90.83%/75.41%` | implemented_verified | none |
+| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3、§12；`kernel_outbox.py`与唯一repository event/outbox authorities | `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py`=`33 passed`覆盖three-phase、1/2/4/8 pre-call cadence、expired CLAIMED/DISPATCHING recovery、ACK/reject/unknown、callback-watermark单次赋值/post-call不可变与receipt identity closure、zero-matching-callback non-acceptance、CAS restart、EOD fresh final readback及same-ID contradictory broker facts；`test_kernel_repository_postgres.py` DEV验证callback watermark、composite owner、scalar drift和append-only receipt；outbox line/branch=`91.09%/76.43%` | implemented_verified | none |
 | `F-067` | §4.8–§4.9、§8、§12 K2-C；`kernel_clock.py`与唯一`kernel_repository_timer_session.py`实现strict session projection、session/TIMER/EOD ingress、atomic claim/finalize/reclaim及additive migration | `backend/tests/miniqmt_execution_runtime/test_kernel_clock.py` direct=`16 passed`、clock line/branch=`90.10%/80.85%`；`test_plugin_import_boundaries.py`/`test_kernel_repository_structure.py` direct合计=`122 passed`；`test_kernel_migration_postgres.py` DEV=`13 passed`且`test_kernel_repository_postgres.py` atomic claim/reclaim/finalize/guarded rollback通过；`python -m nox -s miniqmt_execution_runtime_l2`=`789 passed,25 skipped`；L0/registry/classifier及required CI run `30235878200`通过；final source `c87748cd...`、PR #2794 / merge `801dc3c9...` | implemented_verified + merged | none |
-| `F-068` | §9；base/K2-C/K2-D migration triplets + canonical-LF checksum/fingerprint/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py` DEV完整矩阵=`15 passed`，验证preflight、first/second apply、8-column/7-constraint readback、catalog drift与zero-fact guarded rollback；forward SHA=`bb88b205...`，新catalog SHA=`8f1534aa...`；production DDL未执行 | implemented_verified | none |
-| `F-069` | §10；repository diagnostics、platform projection与operator runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`与`backend/tests/simulation_runtime/test_ops_api.py`验证NOT_APPLIED/NOT_ACTIVATED、lag/status/reason metrics、lineage/predecessor alerts、low-card labels、auto-clear、read-only/no-ack；coverage diagnostics=`89.38%/81.48%`、repository diagnostics=`97.22%/96.15%`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | implemented_verified | none |
-| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py -q`=`42 passed`；含DEV repository的coverage矩阵=`43 passed`；changed-files classifier=`targeted_ci_required`且只选择`miniqmt_execution_runtime_l2`=`832 passed,26 skipped`与`simulation_core_l2`=`438 passed`，`unmapped_code_files=[]`；`python -m nox -s l0`与`validation_module_registry_l0`通过；production/runtime gates均noop，PR/merge/CI状态在进度账本独立记录 | implemented_verified | none |
+| `F-068` | §9；base/K2-C/K2-D migration triplets + canonical-LF checksum/fingerprint/readback | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py -q`=`15 passed`，验证preflight、first/second apply、8-column reconciliation table、outbox callback-watermark column/CHECK、command/runtime composite owner、每列COMMENT、base+K2-D code-owned function body/catalog drift（含outbox复合UNIQUE backing index）与zero-fact guarded rollback；forward SHA=`23a7d6e1...`，K2-D catalog SHA=`f9034e9e...`；production DDL未执行 | implemented_verified | none |
+| `F-069` | §10；repository diagnostics、platform projection与operator runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`与`backend/tests/simulation_runtime/test_ops_api.py`验证NOT_APPLIED/NOT_ACTIVATED/READBACK_FAILED、stable cursor、delivery 5/30秒与timer 2/10秒阈值、predecessor/expired lease/unknown critical、low-card labels、auto-clear、read-only/no-ack；diagnostics line/branch=`87.41%/80.88%`，repository diagnostics combined coverage=`93%`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | implemented_verified | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py backend/tests/simulation_runtime/test_ops_api.py -q`=`109 passed`；DEV migration=`15 passed`且DEV repository public transaction matrix通过；changed-files classifier=`targeted_ci_required`并由`python -m nox -s miniqmt_execution_runtime_l2`=`849 passed,27 skipped`与`python -m nox -s simulation_core_l2`=`438 passed`闭合，`unmapped_code_files=[]`；`python -m nox -s l0`、`python -m nox -s validation_module_registry_l0`及三份F2 validator通过；production/runtime gates均noop，PR/merge/CI状态独立记录 | implemented_verified | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 

@@ -7,6 +7,8 @@ from typing import Any
 
 import psycopg2.extras
 
+from .plugin_canonical import canonical_utc_datetime_v1
+
 
 class KernelRepositoryDiagnosticsMixin:
     def read_kernel_diagnostics(
@@ -15,6 +17,7 @@ class KernelRepositoryDiagnosticsMixin:
         runtime_id: str,
         trade_date: date,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if type(runtime_id) is not str or not runtime_id.strip() or runtime_id != runtime_id.strip():
             raise ValueError("runtime_id must be a non-empty trim-stable strict string")
@@ -22,6 +25,7 @@ class KernelRepositoryDiagnosticsMixin:
             raise TypeError("trade_date must be an exact date")
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("kernel diagnostics limit must be a strict integer in [1, 500]")
+        cursor_values = _decode_kernel_cursor(cursor)
         required_tables = (
             "execution_runtime_event",
             "execution_algo_event_delivery",
@@ -60,12 +64,14 @@ class KernelRepositoryDiagnosticsMixin:
                         "diagnostic_reason_family_counts": {},
                         "predecessor_gap_count": 0,
                         "mapping_lineage_pending_count": 0,
+                        "expired_dispatching_lease_count": 0,
                         "oldest_delivery_lag_seconds": 0,
                         "oldest_due_timer_lag_seconds": 0,
                         "runtime_status": "UNKNOWN",
                         "recent_command_chains": [],
                         "limit": limit,
                         "truncated": False,
+                        "next_cursor": None,
                         "read_only": True,
                     }
                 cur.execute(
@@ -184,6 +190,17 @@ class KernelRepositoryDiagnosticsMixin:
                 mapping_lineage_pending_count = int(cur.fetchone()["count"])
                 cur.execute(
                     """
+                    SELECT COUNT(*)::bigint AS count
+                    FROM qmt_strategy.execution_algo_command_outbox AS target
+                    JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=target.runtime_id
+                    WHERE target.runtime_id=%s AND runtime.trade_date=%s
+                      AND target.status='DISPATCHING' AND target.lease_expires_at<CURRENT_TIMESTAMP
+                    """,
+                    (runtime_id, trade_date),
+                )
+                expired_dispatching_lease_count = int(cur.fetchone()["count"])
+                cur.execute(
+                    """
                     SELECT COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP-MIN(target.updated_at_utc))),0)::bigint AS lag
                     FROM qmt_strategy.execution_algo_event_delivery AS target
                     JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=target.runtime_id
@@ -205,19 +222,29 @@ class KernelRepositoryDiagnosticsMixin:
                     (runtime_id, trade_date),
                 )
                 oldest_due_timer_lag_seconds = max(0, int(cur.fetchone()["lag"]))
+                cursor_predicate = ""
+                params: list[Any] = [runtime_id, trade_date]
+                if cursor_values is not None:
+                    cursor_predicate = (
+                        "AND (target.updated_at_utc<%s OR (target.updated_at_utc=%s AND target.command_id>%s))"
+                    )
+                    params.extend((cursor_values[0], cursor_values[0], cursor_values[1]))
+                params.append(limit + 1)
                 cur.execute(
-                    """
-                    SELECT command_id
+                    f"""
+                    SELECT command_id,updated_at_utc
                     FROM qmt_strategy.execution_algo_command_outbox AS target
                     JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=target.runtime_id
                     WHERE target.runtime_id=%s AND runtime.trade_date=%s
+                    {cursor_predicate}
                     ORDER BY target.updated_at_utc DESC,target.command_id
                     LIMIT %s
                     """,
-                    (runtime_id, trade_date, limit + 1),
+                    tuple(params),
                 )
-                command_ids = tuple(str(row["command_id"]) for row in cur.fetchall())
-        returned_ids = command_ids[:limit]
+                command_rows = tuple(cur.fetchall())
+        returned_rows = command_rows[:limit]
+        returned_ids = tuple(str(row["command_id"]) for row in returned_rows)
         chains = []
         for command_id in returned_ids:
             chain = self.read_command_identity_chain(command_id)
@@ -243,12 +270,18 @@ class KernelRepositoryDiagnosticsMixin:
             "diagnostic_reason_family_counts": dict(sorted(diagnostic_reason_family_counts.items())),
             "predecessor_gap_count": predecessor_gap_count,
             "mapping_lineage_pending_count": mapping_lineage_pending_count,
+            "expired_dispatching_lease_count": expired_dispatching_lease_count,
             "oldest_delivery_lag_seconds": oldest_delivery_lag_seconds,
             "oldest_due_timer_lag_seconds": oldest_due_timer_lag_seconds,
             "runtime_status": runtime_status,
             "recent_command_chains": chains,
             "limit": limit,
-            "truncated": len(command_ids) > limit,
+            "truncated": len(command_rows) > limit,
+            "next_cursor": (
+                _encode_kernel_cursor(returned_rows[-1]["updated_at_utc"], str(returned_rows[-1]["command_id"]))
+                if len(command_rows) > limit and returned_rows
+                else None
+            ),
             "read_only": True,
         }
 
@@ -296,3 +329,22 @@ def _reason_family(reason_code: str) -> str:
         if family in normalized:
             return family
     return "OTHER"
+
+
+def _encode_kernel_cursor(updated_at_utc: Any, command_id: str) -> str:
+    timestamp = canonical_utc_datetime_v1(updated_at_utc, field_name="updated_at_utc")
+    if type(command_id) is not str or not command_id.strip() or command_id != command_id.strip():
+        raise ValueError("diagnostics cursor command identity is invalid")
+    return f"{timestamp}|{command_id}"
+
+
+def _decode_kernel_cursor(cursor: str | None) -> tuple[str, str] | None:
+    if cursor is None:
+        return None
+    if type(cursor) is not str or cursor != cursor.strip() or cursor.count("|") != 1:
+        raise ValueError("kernel diagnostics cursor is invalid")
+    timestamp, command_id = cursor.split("|", 1)
+    timestamp = canonical_utc_datetime_v1(timestamp, field_name="cursor.updated_at_utc")
+    if not command_id or command_id != command_id.strip():
+        raise ValueError("kernel diagnostics cursor command identity is invalid")
+    return timestamp, command_id

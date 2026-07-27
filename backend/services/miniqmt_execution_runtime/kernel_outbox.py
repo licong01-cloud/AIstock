@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import json
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from backend.services.trading_core.models import OrderSide
 
@@ -34,14 +34,17 @@ from .plugin_contracts import (
     BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
     ExecutionCommandChildMappingV1,
+    EventSourceV2,
+    EventTypeV2,
     GatewayCapabilityCatalogV1,
     KernelErrorEvidenceV1,
+    RuntimeEventEnvelopeV2,
     canonical_utc_datetime_v1,
     kernel_lease_fence_token_v1,
 )
 
 
-_PRE_CALL_DELAYS_SECONDS = (0, 1, 2, 5, 10)
+_PRE_CALL_DELAYS_SECONDS = (0, 1, 2, 4, 8)
 _RECONCILE_DELAYS_SECONDS = (0, 1, 2, 5, 10, 20, 30, 30, 30, 30)
 _REJECTED_ORDER_STATUSES = frozenset({"REJECTED", "FAILED", "INVALID", "CANCEL_REJECTED"})
 
@@ -69,13 +72,10 @@ class KernelGatewayPreCallError(KernelOutboxDispatchError):
 
 @dataclass(frozen=True)
 class GatewayReconciliationSnapshotV1:
-    callback_watermark: str
     orders: tuple[dict[str, Any], ...]
     trades: tuple[dict[str, Any], ...]
 
     def __post_init__(self) -> None:
-        if type(self.callback_watermark) is not str or not self.callback_watermark.strip():
-            raise ValueError("callback_watermark must be a non-empty strict identity")
         if any(type(item) is not dict for item in (*self.orders, *self.trades)):
             raise TypeError("broker reconciliation snapshots must contain exact dict rows")
         object.__setattr__(
@@ -107,6 +107,19 @@ class KernelOutboxRepositoryV1(Protocol):
         self, receipt: BrokerOutcomeReconciliationReceiptV1
     ) -> BrokerOutcomeReconciliationReceiptV1: ...
 
+    def read_callback_watermark(self, *, runtime_id: str) -> str: ...
+
+    def count_matching_callback_events(
+        self,
+        *,
+        command_id: str,
+        runtime_id: str,
+        callback_watermark_before: str,
+        callback_watermark_after: str,
+    ) -> int: ...
+
+    def read_runtime_event(self, event_id: str) -> RuntimeEventEnvelopeV2: ...
+
 
 class KernelGatewayAdapterV1(Protocol):
     def validate_pre_call(
@@ -121,28 +134,22 @@ class KernelGatewayAdapterV1(Protocol):
         self, *, command: BrokerCommandV2, mapping: ExecutionCommandChildMappingV1
     ) -> MiniQMTGatewayOrderAck | MiniQMTGatewayCancelAck: ...
 
-    def callback_watermark(self, *, runtime_id: str) -> str: ...
-
     def reconciliation_snapshot(self, *, runtime_id: str) -> GatewayReconciliationSnapshotV1: ...
 
 
 class MiniQMTKernelGatewayAdapterV1:
     """Production-capable adapter around the existing MiniQMTGateway protocol.
 
-    The callback watermark provider is mandatory because an empty or invented
-    watermark cannot prove non-acceptance or close an unknown outcome.
+    Durable callback watermark authority belongs to the repository event sequence,
+    never to this transport adapter.
     """
 
     def __init__(
         self,
         *,
         gateway: MiniQMTGateway,
-        callback_watermark_provider: Callable[[str], str],
     ) -> None:
-        if not callable(callback_watermark_provider):
-            raise TypeError("callback_watermark_provider must be callable")
         self._gateway = gateway
-        self._callback_watermark_provider = callback_watermark_provider
 
     def validate_pre_call(
         self,
@@ -157,7 +164,7 @@ class MiniQMTKernelGatewayAdapterV1:
         )
         if not callable(getattr(self._gateway, method_name, None)):
             raise KernelGatewayPreCallError(
-                "MINIQMT_KERNEL_GATEWAY_METHOD_UNAVAILABLE",
+                "MINIQMT_COMMAND_OUTBOX_GATEWAY_METHOD_UNAVAILABLE",
                 "configured MiniQMT gateway does not expose the required broker method",
                 context={"command_id": command.command_id, "command_type": command.command_type.value},
             )
@@ -175,7 +182,7 @@ class MiniQMTKernelGatewayAdapterV1:
         raw = _strict_snapshot_row(ack.raw, kind="gateway_ack")
         if raw.get("broker_called") is True and type(raw.get("exception_type")) is str:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_GATEWAY_CALL_OUTCOME_UNKNOWN",
+                "MINIQMT_COMMAND_OUTCOME_GATEWAY_CALL_UNKNOWN",
                 "gateway raised after entering the broker call boundary",
                 context={
                     "command_id": command.command_id,
@@ -203,28 +210,16 @@ class MiniQMTKernelGatewayAdapterV1:
             raw=raw,
         )
 
-    def callback_watermark(self, *, runtime_id: str) -> str:
-        watermark = self._callback_watermark_provider(runtime_id)
-        if type(watermark) is not str or not watermark.strip():
-            raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_CALLBACK_WATERMARK_INVALID",
-                "callback watermark provider returned an invalid identity",
-                context={"runtime_id": runtime_id},
-            )
-        return watermark.strip()
-
     def reconciliation_snapshot(self, *, runtime_id: str) -> GatewayReconciliationSnapshotV1:
-        watermark = self.callback_watermark(runtime_id=runtime_id)
         orders = self._gateway.sync_orders(runtime_id=runtime_id)
         trades = self._gateway.sync_trades(runtime_id=runtime_id)
         if type(orders) is not list or type(trades) is not list:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_RECONCILE_SNAPSHOT_INVALID",
+                "MINIQMT_COMMAND_OUTCOME_SNAPSHOT_INVALID",
                 "gateway reconciliation methods must return lists",
                 context={"runtime_id": runtime_id},
             )
         return GatewayReconciliationSnapshotV1(
-            callback_watermark=watermark,
             orders=tuple(_strict_snapshot_row(item, kind="order") for item in orders),
             trades=tuple(_strict_snapshot_row(item, kind="trade") for item in trades),
         )
@@ -269,13 +264,13 @@ class KernelOutboxDispatcherV1:
             BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
         }:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_OUTBOX_NOT_DISPATCHABLE",
+                "MINIQMT_COMMAND_OUTBOX_NOT_DISPATCHABLE",
                 "outbox command is not eligible for a broker call",
                 context={"command_id": command_id, "status": outbox.status.value},
             )
         if outbox.next_attempt_at_utc is not None and outbox.next_attempt_at_utc > now:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_OUTBOX_RETRY_NOT_DUE",
+                "MINIQMT_COMMAND_OUTBOX_RETRY_NOT_DUE",
                 "durable retry time has not arrived",
                 context={"command_id": command_id, "next_attempt_at_utc": outbox.next_attempt_at_utc},
             )
@@ -325,14 +320,14 @@ class KernelOutboxDispatcherV1:
                 error=exc,
             )
         try:
-            callback_watermark_before_call = self.gateway.callback_watermark(runtime_id=command.runtime_id)
+            callback_watermark_before_call = self.repository.read_callback_watermark(runtime_id=command.runtime_id)
             callback_watermark_before_call = _identity(
                 callback_watermark_before_call,
                 "callback_watermark_before_call",
             )
         except Exception as exc:
             error = KernelGatewayPreCallError(
-                "MINIQMT_KERNEL_CALLBACK_WATERMARK_UNAVAILABLE",
+                "MINIQMT_COMMAND_OUTBOX_CALLBACK_WATERMARK_UNAVAILABLE",
                 "callback watermark was unavailable before the broker-call boundary",
                 context={
                     "command_id": command.command_id,
@@ -369,6 +364,7 @@ class KernelOutboxDispatcherV1:
             status=BrokerCommandOutboxStatusV1.DISPATCHING,
             observed_at_utc=now,
             dispatch_attempt_id=attempt.dispatch_attempt_id,
+            callback_watermark_before_call=callback_watermark_before_call,
         )
         self.repository.compare_and_swap_mapping_outbox(
             mapping=dispatch_mapping,
@@ -493,13 +489,13 @@ class KernelOutboxDispatcherV1:
     ) -> BrokerCommandOutboxV1:
         if not isinstance(ack, (MiniQMTGatewayOrderAck, MiniQMTGatewayCancelAck)):
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_GATEWAY_ACK_INVALID",
+                "MINIQMT_COMMAND_OUTCOME_GATEWAY_ACK_INVALID",
                 "gateway returned an unsupported ACK carrier",
                 context={"command_id": command.command_id, "ack_type": type(ack).__name__},
             )
         if type(ack.accepted) is not bool or type(ack.message) is not str or type(ack.raw) is not dict:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_GATEWAY_ACK_SCHEMA_INVALID",
+                "MINIQMT_COMMAND_OUTCOME_GATEWAY_ACK_SCHEMA_INVALID",
                 "gateway ACK fields must use exact bool, string and dict carriers",
                 context={
                     "command_id": command.command_id,
@@ -510,14 +506,14 @@ class KernelOutboxDispatcherV1:
             )
         if ack.raw.get("broker_called") is not True:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_GATEWAY_ACK_BROKER_FACT_MISSING",
+                "MINIQMT_COMMAND_OUTCOME_GATEWAY_ACK_BROKER_FACT_MISSING",
                 "gateway ACK must explicitly prove broker_called=true",
                 context={"command_id": command.command_id},
             )
         broker_order_id = _optional_identity(ack.broker_order_id, "broker_order_id")
         if ack.accepted != (broker_order_id is not None):
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_GATEWAY_ACK_IDENTITY_CONFLICT",
+                "MINIQMT_COMMAND_OUTCOME_GATEWAY_ACK_IDENTITY_CONFLICT",
                 "gateway ACK acceptance conflicts with broker order identity",
                 context={"command_id": command.command_id},
             )
@@ -616,7 +612,7 @@ class KernelOutboxDispatcherV1:
             lease_fence_token=dispatching.lease_fence_token,
             uncertain_stage=BrokerUncertainStageV1.GATEWAY_RETURN,
             callback_watermark=callback_watermark,
-            reason_code="MINIQMT_COMMAND_GATEWAY_OUTCOME_UNKNOWN",
+            reason_code="MINIQMT_COMMAND_OUTCOME_GATEWAY_UNKNOWN",
             observed_at_utc=now,
         )
         unknown_mapping = (
@@ -645,7 +641,7 @@ class KernelOutboxDispatcherV1:
                 pre_call_complete=True,
                 broker_called=None,
                 outcome=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN.value,
-                error_reason_code="MINIQMT_COMMAND_GATEWAY_OUTCOME_UNKNOWN",
+                error_reason_code="MINIQMT_COMMAND_OUTCOME_GATEWAY_UNKNOWN",
                 error_context_sha256=hash_hex_v1(
                     "miniqmt_gateway_exception_context_v1",
                     {
@@ -669,6 +665,131 @@ class KernelOutboxDispatcherV1:
         return unknown
 
 
+class KernelOutboxRecoveryV1:
+    """Recover expired durable leases without guessing whether broker was called."""
+
+    def __init__(self, *, repository: KernelOutboxRepositoryV1) -> None:
+        self.repository = repository
+
+    def recover_stale_one(self, *, command_id: str, observed_at_utc: Any) -> BrokerCommandOutboxV1:
+        now = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        mapping, outbox = _strict_chain(self.repository.read_command_identity_chain(command_id), command_id=command_id)
+        if outbox.status not in {
+            BrokerCommandOutboxStatusV1.CLAIMED,
+            BrokerCommandOutboxStatusV1.DISPATCHING,
+        }:
+            raise KernelOutboxDispatchError(
+                "MINIQMT_COMMAND_OUTBOX_STALE_STATE_INVALID",
+                "only an expired claimed or dispatching lease can be recovered",
+                context={"command_id": command_id, "status": outbox.status.value},
+            )
+        if outbox.lease_expires_at is None or outbox.lease_expires_at > now:
+            raise KernelOutboxDispatchError(
+                "MINIQMT_COMMAND_OUTBOX_LEASE_NOT_EXPIRED",
+                "outbox lease is not yet stale",
+                context={"command_id": command_id, "lease_expires_at": outbox.lease_expires_at},
+            )
+        command = _command(outbox)
+        if outbox.status is BrokerCommandOutboxStatusV1.CLAIMED:
+            terminal = outbox.attempt_count >= len(_PRE_CALL_DELAYS_SECONDS)
+            status = (
+                BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+                if terminal
+                else BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
+            )
+            error = KernelErrorEvidenceV1.create(
+                stage="OUTBOX_STALE_CLAIM_RECOVERY",
+                stable_reason_code="MINIQMT_COMMAND_OUTBOX_STALE_CLAIM_RECOVERED",
+                exception=KernelOutboxDispatchError(
+                    "MINIQMT_COMMAND_OUTBOX_STALE_CLAIM_RECOVERED",
+                    "expired pre-call claim recovered without a broker call",
+                    context={"command_id": command_id},
+                ),
+                message="expired pre-call claim recovered without a broker call",
+                retryable=not terminal,
+                terminal=terminal,
+                broker_called=False,
+                primary_context={"command_id": command_id, "attempt_count": outbox.attempt_count},
+                secondary_errors=[],
+            )
+            successor = _outbox_successor(
+                outbox,
+                command=command,
+                status=status,
+                observed_at_utc=now,
+                clear_lease=True,
+                broker_called=False,
+                last_error_json=error.model_dump(mode="json"),
+                next_attempt_at_utc=(
+                    None if terminal else _plus_seconds(now, _PRE_CALL_DELAYS_SECONDS[outbox.attempt_count])
+                ),
+                closed_at_utc=now if terminal else None,
+            )
+            self._cas(mapping=mapping, outbox=outbox, successor_mapping=mapping, successor_outbox=successor)
+            return successor
+        watermark = outbox.callback_watermark_before_call
+        if watermark is None or outbox.dispatch_attempt_id is None or outbox.lease_fence_token is None:
+            raise KernelOutboxDispatchError(
+                "MINIQMT_COMMAND_OUTBOX_RECOVERY_AUTHORITY_MISSING",
+                "stale dispatch cannot be recovered without durable pre-call identity",
+                context={"command_id": command_id},
+            )
+        receipt = BrokerUnknownOutcomeReceiptV1.create(
+            command_id=command.command_id,
+            dispatch_attempt_id=outbox.dispatch_attempt_id,
+            mapping_id=mapping.mapping_id,
+            lease_fence_token=outbox.lease_fence_token,
+            uncertain_stage=BrokerUncertainStageV1.GATEWAY_CALL,
+            callback_watermark=watermark,
+            reason_code="MINIQMT_COMMAND_OUTCOME_STALE_DISPATCH_UNKNOWN",
+            observed_at_utc=now,
+        )
+        successor_mapping = (
+            _mapping_successor(
+                mapping,
+                command=command,
+                status=CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
+                observed_at_utc=now,
+            )
+            if command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+            else mapping
+        )
+        successor = _outbox_successor(
+            outbox,
+            command=command,
+            status=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            observed_at_utc=now,
+            clear_lease=True,
+            broker_called=None,
+            unknown_outcome_receipt=receipt,
+        )
+        self._cas(
+            mapping=mapping,
+            outbox=outbox,
+            successor_mapping=successor_mapping,
+            successor_outbox=successor,
+        )
+        return successor
+
+    def _cas(
+        self,
+        *,
+        mapping: ExecutionCommandChildMappingV1,
+        outbox: BrokerCommandOutboxV1,
+        successor_mapping: ExecutionCommandChildMappingV1,
+        successor_outbox: BrokerCommandOutboxV1,
+    ) -> None:
+        self.repository.compare_and_swap_mapping_outbox(
+            mapping=successor_mapping,
+            outbox=successor_outbox,
+            expected_mapping_version=mapping.mapping_version,
+            expected_outbox_row_version=outbox.row_version,
+            expected_lease_owner=outbox.lease_owner,
+            expected_lease_epoch=outbox.lease_epoch,
+            expected_lease_fence_token=outbox.lease_fence_token,
+        )
+
+
 class KernelOutboxReconcilerV1:
     """Exact snapshot reconciler that never re-submits an unresolved command."""
 
@@ -685,18 +806,37 @@ class KernelOutboxReconcilerV1:
             gateway_catalog.model_dump(mode="python"), strict=True
         )
 
-    def reconcile_one(self, *, command_id: str, observed_at_utc: Any) -> BrokerCommandOutboxV1:
+    def reconcile_one(
+        self,
+        *,
+        command_id: str,
+        observed_at_utc: Any,
+        eod_event_id: str | None = None,
+    ) -> BrokerCommandOutboxV1:
         now = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
         mapping, outbox = _strict_chain(self.repository.read_command_identity_chain(command_id), command_id=command_id)
         if outbox.status not in {BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN, BrokerCommandOutboxStatusV1.RECONCILING}:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_OUTBOX_NOT_RECONCILABLE",
+                "MINIQMT_COMMAND_OUTCOME_NOT_RECONCILABLE",
                 "outbox command is not in an unknown outcome state",
                 context={"command_id": command_id, "status": outbox.status.value},
             )
-        if outbox.next_attempt_at_utc is not None and outbox.next_attempt_at_utc > now:
+        eod_event = None
+        if eod_event_id is not None:
+            eod_event = self.repository.read_runtime_event(_identity(eod_event_id, "eod_event_id"))
+            if (
+                eod_event.runtime_id != outbox.runtime_id
+                or eod_event.event_type is not EventTypeV2.EOD
+                or eod_event.source is not EventSourceV2.EXCHANGE_SESSION_CLOCK
+            ):
+                raise KernelOutboxDispatchError(
+                    "MINIQMT_COMMAND_OUTCOME_EOD_AUTHORITY_INVALID",
+                    "EOD reconciliation requires an exact persisted exchange-session EOD event",
+                    context={"command_id": command_id, "event_id": eod_event.event_id},
+                )
+        if eod_event is None and outbox.next_attempt_at_utc is not None and outbox.next_attempt_at_utc > now:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_RECONCILE_NOT_DUE",
+                "MINIQMT_COMMAND_OUTCOME_RECONCILE_NOT_DUE",
                 "durable reconciliation cadence has not reached its next observation time",
                 context={"command_id": command_id, "next_attempt_at_utc": outbox.next_attempt_at_utc},
             )
@@ -705,6 +845,7 @@ class KernelOutboxReconcilerV1:
         receipt = self.repository.read_reconciliation_receipt(command.command_id, attempt_number)
         if receipt is None:
             snapshot = self.gateway.reconciliation_snapshot(runtime_id=command.runtime_id)
+            callback_watermark = self.repository.read_callback_watermark(runtime_id=command.runtime_id)
             order_matches, trade_matches = _snapshot_matches(snapshot=snapshot, outbox=outbox, mapping=mapping)
             outcome, broker_called, broker_order_id = _reconcile_outcome(
                 order_matches=order_matches, trade_matches=trade_matches
@@ -719,9 +860,11 @@ class KernelOutboxReconcilerV1:
                         "client_ref": outbox.deterministic_client_order_ref,
                         "local_vt_orderid": mapping.local_vt_orderid,
                         "broker_order_id": mapping.broker_order_id,
+                        "callback_watermark_before": outbox.callback_watermark_before_call,
+                        "callback_watermark_after": callback_watermark,
                     },
                 ),
-                callback_watermark=snapshot.callback_watermark,
+                callback_watermark=callback_watermark,
                 ordered_matched_order_ids=tuple(sorted(_snapshot_ids(order_matches, "order"))),
                 ordered_matched_trade_ids=tuple(sorted(_snapshot_ids(trade_matches, "trade"))),
                 order_snapshot_sha256=hash_hex_v1("miniqmt_reconcile_order_snapshot_v1", list(snapshot.orders)),
@@ -729,10 +872,11 @@ class KernelOutboxReconcilerV1:
                 outcome=outcome,
                 broker_called=broker_called,
                 broker_order_id=broker_order_id,
-                reason_code=f"MINIQMT_RECONCILE_{outcome.value}",
+                reason_code=f"MINIQMT_COMMAND_OUTCOME_{outcome.value}",
                 observed_at_utc=now,
             )
             self.repository.append_reconciliation_receipt(receipt)
+        eod_requires_fresh_attempt = eod_event is not None and receipt.observed_at_utc < eod_event.event_time_utc
         outcome = receipt.outcome
         broker_called = receipt.broker_called
         broker_order_id = receipt.broker_order_id
@@ -772,10 +916,19 @@ class KernelOutboxReconcilerV1:
                     )
                 )
             )
-            if outcome is BrokerReconciliationOutcomeV1.NOT_FOUND and not can_prove_retry:
+            if eod_requires_fresh_attempt:
+                return first_reconciling
+            if outcome is BrokerReconciliationOutcomeV1.NOT_FOUND and not can_prove_retry and eod_event is None:
                 return first_reconciling
         if outcome is BrokerReconciliationOutcomeV1.NOT_FOUND:
-            return self._close_not_found(mapping=mapping, outbox=outbox, command=command, receipt=receipt, now=now)
+            return self._close_not_found(
+                mapping=mapping,
+                outbox=outbox,
+                command=command,
+                receipt=receipt,
+                now=now,
+                force_terminal=eod_event is not None and not eod_requires_fresh_attempt,
+            )
         if outcome is BrokerReconciliationOutcomeV1.CONFLICT:
             return self._close_terminal_conflict(
                 mapping=mapping, outbox=outbox, command=command, receipt=receipt, now=now
@@ -822,13 +975,28 @@ class KernelOutboxReconcilerV1:
         command: BrokerCommandV2,
         receipt: BrokerOutcomeReconciliationReceiptV1,
         now: str,
+        force_terminal: bool = False,
     ) -> BrokerCommandOutboxV1:
         unknown = outbox.unknown_outcome_receipt
         can_retry = (
             command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
             and self.gateway_catalog.idempotent_submit_by_client_ref
         ) or (command.command_type is BrokerCommandTypeV2.CANCEL_ORDER and self.gateway_catalog.exact_order_id_cancel)
+        matching_callback_count = 0
         if can_retry and unknown is not None and unknown.callback_watermark != receipt.callback_watermark:
+            matching_callback_count = self.repository.count_matching_callback_events(
+                command_id=command.command_id,
+                runtime_id=command.runtime_id,
+                callback_watermark_before=unknown.callback_watermark,
+                callback_watermark_after=receipt.callback_watermark,
+            )
+        if (
+            not force_terminal
+            and can_retry
+            and unknown is not None
+            and unknown.callback_watermark != receipt.callback_watermark
+            and matching_callback_count == 0
+        ):
             non_acceptance = BrokerNonAcceptanceReceiptV1.create(
                 command_id=command.command_id,
                 deterministic_client_order_ref=outbox.deterministic_client_order_ref,
@@ -840,13 +1008,13 @@ class KernelOutboxReconcilerV1:
                 order_snapshot_sha256=receipt.order_snapshot_sha256,
                 trade_snapshot_sha256=receipt.trade_snapshot_sha256,
                 observed_at_utc=now,
-                reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
+                reason_code="MINIQMT_COMMAND_OUTCOME_EXACT_NON_ACCEPTANCE_PROVEN",
             )
             error = KernelErrorEvidenceV1.create(
                 stage="OUTBOX_RECONCILE",
-                stable_reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
+                stable_reason_code="MINIQMT_COMMAND_OUTCOME_EXACT_NON_ACCEPTANCE_PROVEN",
                 exception=KernelOutboxDispatchError(
-                    "MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
+                    "MINIQMT_COMMAND_OUTCOME_EXACT_NON_ACCEPTANCE_PROVEN",
                     "gateway snapshots proved the command was not accepted",
                     context={"command_id": command.command_id},
                 ),
@@ -871,7 +1039,7 @@ class KernelOutboxReconcilerV1:
             )
             self._cas(mapping=mapping, successor_mapping=mapping, outbox=outbox, successor_outbox=retry)
             return retry
-        if receipt.reconcile_attempt < len(_RECONCILE_DELAYS_SECONDS):
+        if not force_terminal and receipt.reconcile_attempt < len(_RECONCILE_DELAYS_SECONDS):
             reconciling = _outbox_successor(
                 outbox,
                 command=command,
@@ -956,19 +1124,19 @@ def _validate_gateway_authority(
 ) -> None:
     if gateway_catalog.quote_source != "B0_QUOTE_V2" or gateway_catalog.gateway_backend != "minqmt_sim":
         raise KernelGatewayPreCallError(
-            "MINIQMT_KERNEL_GATEWAY_AUTHORITY_INVALID",
+            "MINIQMT_COMMAND_OUTBOX_GATEWAY_AUTHORITY_INVALID",
             "K2 dispatcher requires the approved B0 MiniQMT gateway authority",
             context={"command_id": command.command_id, "route_id": gateway_catalog.route_id},
         )
     if command.order_type not in gateway_catalog.order_types:
         raise KernelGatewayPreCallError(
-            "MINIQMT_KERNEL_ORDER_TYPE_UNSUPPORTED",
+            "MINIQMT_COMMAND_OUTBOX_ORDER_TYPE_UNSUPPORTED",
             "command order type is absent from the strict gateway catalog",
             context={"command_id": command.command_id, "order_type": command.order_type.value},
         )
     if command.command_type is BrokerCommandTypeV2.CANCEL_ORDER and not gateway_catalog.exact_order_id_cancel:
         raise KernelGatewayPreCallError(
-            "MINIQMT_KERNEL_EXACT_CANCEL_UNSUPPORTED",
+            "MINIQMT_COMMAND_OUTBOX_EXACT_CANCEL_UNSUPPORTED",
             "CANCEL_ORDER requires exact-order-id cancel capability",
             context={"command_id": command.command_id},
         )
@@ -982,7 +1150,7 @@ def _validate_gateway_authority(
         or command.quantity != mapping.requested_quantity
     ):
         raise KernelGatewayPreCallError(
-            "MINIQMT_KERNEL_COMMAND_MAPPING_CONFLICT",
+            "MINIQMT_COMMAND_OUTBOX_MAPPING_CONFLICT",
             "command and durable child mapping identities do not close",
             context={"command_id": command.command_id, "mapping_id": mapping.mapping_id},
         )
@@ -993,7 +1161,7 @@ def _validate_gateway_authority(
             CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
         }:
             raise KernelGatewayPreCallError(
-                "MINIQMT_KERNEL_SUBMIT_MAPPING_STATE_INVALID",
+                "MINIQMT_COMMAND_OUTBOX_SUBMIT_MAPPING_STATE_INVALID",
                 "SUBMIT command does not own an eligible durable mapping",
                 context={"command_id": command.command_id, "mapping_status": mapping.mapping_status.value},
             )
@@ -1002,7 +1170,7 @@ def _validate_gateway_authority(
         or command.owned_broker_order_id != mapping.broker_order_id
     ):
         raise KernelGatewayPreCallError(
-            "MINIQMT_KERNEL_CANCEL_OWNERSHIP_INVALID",
+            "MINIQMT_COMMAND_OUTBOX_CANCEL_OWNERSHIP_INVALID",
             "CANCEL command does not close to an accepted durable broker identity",
             context={"command_id": command.command_id, "mapping_id": mapping.mapping_id},
         )
@@ -1036,7 +1204,7 @@ def _strict_chain(
 ) -> tuple[ExecutionCommandChildMappingV1, BrokerCommandOutboxV1]:
     if type(chain) is not dict or set(chain) != {"mapping", "outbox"}:
         raise KernelOutboxDispatchError(
-            "MINIQMT_KERNEL_COMMAND_CHAIN_INVALID",
+            "MINIQMT_COMMAND_OUTBOX_CHAIN_INVALID",
             "repository command chain must contain exactly mapping and outbox",
             context={"command_id": command_id},
         )
@@ -1044,13 +1212,13 @@ def _strict_chain(
     outbox = chain["outbox"]
     if not isinstance(mapping, ExecutionCommandChildMappingV1) or not isinstance(outbox, BrokerCommandOutboxV1):
         raise KernelOutboxDispatchError(
-            "MINIQMT_KERNEL_COMMAND_CHAIN_INVALID",
+            "MINIQMT_COMMAND_OUTBOX_CHAIN_INVALID",
             "repository command chain contains non-strict carriers",
             context={"command_id": command_id},
         )
     if outbox.command_id != command_id or mapping.mapping_id != outbox.mapping_id:
         raise KernelOutboxDispatchError(
-            "MINIQMT_KERNEL_COMMAND_CHAIN_IDENTITY_DRIFT",
+            "MINIQMT_COMMAND_OUTBOX_CHAIN_IDENTITY_DRIFT",
             "repository command chain identities do not close",
             context={"command_id": command_id},
         )
@@ -1183,6 +1351,10 @@ def _reconcile_outcome(
         return BrokerReconciliationOutcomeV1.CONFLICT, None, None
     broker_order_id = next(iter(combined))
     statuses = {str(row.get("status") or row.get("order_status") or "").strip().upper() for row in order_matches}
+    rejected = statuses & _REJECTED_ORDER_STATUSES
+    accepted = statuses - _REJECTED_ORDER_STATUSES - {""}
+    if rejected and (accepted or trade_matches):
+        return BrokerReconciliationOutcomeV1.CONFLICT, None, None
     if statuses and statuses.issubset(_REJECTED_ORDER_STATUSES) and not trade_matches:
         return BrokerReconciliationOutcomeV1.UNIQUE_REJECTED, True, None
     return BrokerReconciliationOutcomeV1.UNIQUE_ACCEPTED, True, broker_order_id
@@ -1198,7 +1370,7 @@ def _snapshot_ids(rows: Sequence[dict[str, Any]], kind: str) -> tuple[str, ...]:
         identity = _row_identity(row, *key_sets[kind])
         if identity is None:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_RECONCILE_IDENTITY_MISSING",
+                "MINIQMT_COMMAND_OUTCOME_IDENTITY_MISSING",
                 f"matched {kind} snapshot row lacks authoritative identity",
                 context={"row_sha256": hash_hex_v1("miniqmt_reconcile_row_v1", row)},
             )
@@ -1215,7 +1387,7 @@ def _row_identity(row: dict[str, Any], *keys: str) -> str | None:
     }
     if len(values) > 1:
         raise KernelOutboxDispatchError(
-            "MINIQMT_KERNEL_RECONCILE_ALIAS_CONFLICT",
+            "MINIQMT_COMMAND_OUTCOME_ALIAS_CONFLICT",
             "one broker snapshot row carries conflicting identity aliases",
             context={"keys": list(keys), "values": sorted(values)},
         )
@@ -1225,7 +1397,7 @@ def _row_identity(row: dict[str, Any], *keys: str) -> str | None:
 def _strict_snapshot_row(value: Any, *, kind: str) -> dict[str, Any]:
     if type(value) is not dict or any(type(key) is not str for key in value):
         raise KernelOutboxDispatchError(
-            "MINIQMT_KERNEL_RECONCILE_SNAPSHOT_INVALID",
+            "MINIQMT_COMMAND_OUTCOME_SNAPSHOT_INVALID",
             f"{kind} snapshot row must be a strict string-keyed dict",
             context={"row_type": type(value).__name__},
         )
@@ -1256,7 +1428,7 @@ def _canonical_snapshot_value(value: Any, *, field_path: str) -> Any:
             key: _canonical_snapshot_value(member, field_path=f"{field_path}.{key}") for key, member in value.items()
         }
     raise KernelOutboxDispatchError(
-        "MINIQMT_KERNEL_RECONCILE_SNAPSHOT_VALUE_INVALID",
+        "MINIQMT_COMMAND_OUTCOME_SNAPSHOT_VALUE_INVALID",
         "broker snapshot contains a non-canonical value",
         context={"field_path": field_path, "value_type": type(value).__name__},
     )
@@ -1268,7 +1440,7 @@ def _snapshot_identity(value: Any, *, field_name: str) -> str | None:
     if type(value) is int:
         if value < 0:
             raise KernelOutboxDispatchError(
-                "MINIQMT_KERNEL_RECONCILE_IDENTITY_INVALID",
+                "MINIQMT_COMMAND_OUTCOME_IDENTITY_INVALID",
                 "numeric broker identity cannot be negative",
                 context={"field": field_name, "value": value},
             )
@@ -1276,7 +1448,7 @@ def _snapshot_identity(value: Any, *, field_name: str) -> str | None:
     if type(value) is str and value.strip() and value == value.strip():
         return value
     raise KernelOutboxDispatchError(
-        "MINIQMT_KERNEL_RECONCILE_IDENTITY_INVALID",
+        "MINIQMT_COMMAND_OUTCOME_IDENTITY_INVALID",
         "broker identity must be a trim-stable string or non-negative integer",
         context={"field": field_name, "value_type": type(value).__name__},
     )

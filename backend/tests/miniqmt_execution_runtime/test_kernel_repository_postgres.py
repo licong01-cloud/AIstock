@@ -815,6 +815,7 @@ def test_repository_public_writers_reject_noninitial_first_facts_before_database
         lease_fence_token=None,
         lease_expires_at=None,
         dispatch_attempt_id="dispatch_forged_initial_k2",
+        callback_watermark_before_call="runtime_k2:0",
         next_attempt_at_utc=None,
         broker_called=True,
         broker_order_id="broker_forged_initial_k2",
@@ -872,6 +873,31 @@ def test_repository_preflight_rejects_forged_constant_catalog_function_on_dev_po
             repository.preflight_schema()
     finally:
         raw.autocommit = True
+        with raw.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+def test_repository_preflight_rejects_forged_k2d_catalog_function_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint()
+                RETURNS TEXT LANGUAGE SQL STABLE
+                AS $forged$ SELECT '65d2124222b09286e86888713e95db02ea3d531701f8e5d20f6cef344e44f0bd'::TEXT $forged$
+                """
+            )
+        with pytest.raises(KernelRepositorySchemaError, match="K2-D catalog function drift"):
+            PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema)).preflight_schema()
+    finally:
         with raw.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         raw.close()
@@ -1394,6 +1420,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatch_attempt.dispatch_attempt_id,
+            callback_watermark_before_call="runtime_k2:1",
             next_attempt_at_utc="2026-07-25T01:31:01Z",
             broker_called=False,
             broker_order_id=None,
@@ -1478,6 +1505,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=claimed_outbox.lease_fence_token,
             lease_expires_at=claimed_outbox.lease_expires_at,
             dispatch_attempt_id=dispatch_attempt.dispatch_attempt_id,
+            callback_watermark_before_call="runtime_k2:1",
             next_attempt_at_utc=None,
             broker_called=None,
             broker_order_id=None,
@@ -1586,6 +1614,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatching_outbox.dispatch_attempt_id,
+            callback_watermark_before_call=dispatching_outbox.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=True,
             broker_order_id="broker_repo_k2",
@@ -2260,6 +2289,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=claimed_cancel.lease_fence_token,
             lease_expires_at=claimed_cancel.lease_expires_at,
             dispatch_attempt_id=cancel_attempt.dispatch_attempt_id,
+            callback_watermark_before_call="runtime_k2:1",
             next_attempt_at_utc=None,
             broker_called=None,
             broker_order_id=None,
@@ -2307,6 +2337,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            callback_watermark_before_call=dispatching_cancel.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=True,
             broker_order_id=accepted_mapping.broker_order_id,
@@ -2540,6 +2571,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            callback_watermark_before_call=dispatching_cancel.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=True,
             broker_order_id=None,
@@ -2592,6 +2624,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatching_cancel.dispatch_attempt_id,
+            callback_watermark_before_call=dispatching_cancel.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=None,
             broker_order_id=None,
@@ -2632,6 +2665,37 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         )
         assert repository.append_reconciliation_receipt(not_found) == not_found
         assert repository.read_reconciliation_receipt(cancel_command.command_id, 1) == not_found
+        with raw.cursor() as cur:
+            cur.execute(
+                f"UPDATE {schema}.execution_broker_reconciliation_attempt SET outcome='CONFLICT' "
+                "WHERE receipt_sha256=%s",
+                (not_found.receipt_sha256,),
+            )
+        with pytest.raises(KernelRepositoryConflict, match="reconciliation_receipt scalar column"):
+            repository.read_reconciliation_receipt(cancel_command.command_id, 1)
+        with raw.cursor() as cur:
+            cur.execute(
+                f"UPDATE {schema}.execution_broker_reconciliation_attempt SET outcome='NOT_FOUND' "
+                "WHERE receipt_sha256=%s",
+                (not_found.receipt_sha256,),
+            )
+            with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_broker_reconciliation_attempt(
+                        receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,
+                        outcome,observed_at_utc,receipt_json
+                    ) VALUES (%s,%s,%s,2,%s,'NOT_FOUND',%s,%s)
+                    """,
+                    (
+                        "7" * 64,
+                        cancel_command.command_id,
+                        "runtime_repo_k2",
+                        "runtime_k2:2",
+                        not_found.observed_at_utc,
+                        json.dumps(not_found.model_dump(mode="json")),
+                    ),
+                )
         reconciling_cancel = BrokerCommandOutboxV1.create(
             command=cancel_command,
             mapping_id=mapping.mapping_id,
@@ -2642,6 +2706,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=unknown_cancel.dispatch_attempt_id,
+            callback_watermark_before_call=unknown_cancel.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=None,
             broker_order_id=None,
@@ -2718,6 +2783,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=reconciling_cancel.dispatch_attempt_id,
+            callback_watermark_before_call=reconciling_cancel.callback_watermark_before_call,
             next_attempt_at_utc=None,
             broker_called=True,
             broker_order_id=accepted_mapping.broker_order_id,

@@ -23,6 +23,7 @@ _EXPORT_MODULES = {
     "KernelGatewayPreCallError": ".kernel_outbox",
     "KernelOutboxDispatchError": ".kernel_outbox",
     "KernelOutboxDispatcherV1": ".kernel_outbox",
+    "KernelOutboxRecoveryV1": ".kernel_outbox",
     "KernelOutboxReconcilerV1": ".kernel_outbox",
     "MiniQMTKernelGatewayAdapterV1": ".kernel_outbox",
     "KernelDiagnosticsReadServiceV1": ".kernel_diagnostics",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -17,8 +18,10 @@ from backend.services.miniqmt_execution_runtime.kernel_outbox import (
     KernelGatewayPreCallError,
     KernelOutboxDispatchError,
     KernelOutboxDispatcherV1,
+    KernelOutboxRecoveryV1,
     KernelOutboxReconcilerV1,
     MiniQMTKernelGatewayAdapterV1,
+    _outbox_successor,
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -27,13 +30,19 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerCommandTypeV2,
     BrokerCommandV2,
     BrokerDispatchAttemptV1,
+    BrokerUncertainStageV1,
+    BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
     ExecutionCommandChildMappingV1,
     GatewayCapabilityCatalogV1,
+    EventSourceV2,
+    EventTypeV2,
     MarketDataCapabilityV1,
     OrderTypeV1,
+    RuntimeEventEnvelopeV2,
     SessionPhaseV1,
     SideV1,
+    kernel_lease_fence_token_v1,
 )
 
 
@@ -180,6 +189,24 @@ class _Repository:
         self.attempts: list[BrokerDispatchAttemptV1] = []
         self.reconciliation_receipts: dict[int, Any] = {}
         self.fail_next_cas = False
+        self.raise_after_dispatching_commit = False
+        self.callback_watermark_reads = 0
+        self.matching_callback_count = 0
+        self.runtime_events: dict[str, Any] = {}
+
+    def read_callback_watermark(self, *, runtime_id: str) -> str:
+        assert runtime_id == self.outbox.runtime_id
+        self.callback_watermark_reads += 1
+        return f"watermark_k2d_{self.callback_watermark_reads}"
+
+    def count_matching_callback_events(self, **values: Any) -> int:
+        assert values["command_id"] == self.outbox.command_id
+        assert values["runtime_id"] == self.outbox.runtime_id
+        assert values["callback_watermark_before"] != values["callback_watermark_after"]
+        return self.matching_callback_count
+
+    def read_runtime_event(self, event_id: str):  # type: ignore[no-untyped-def]
+        return self.runtime_events[event_id]
 
     def read_command_identity_chain(self, command_id: str) -> dict[str, Any]:
         assert command_id == self.outbox.command_id
@@ -232,6 +259,9 @@ class _Repository:
         outbox.validate_successor_v1(self.outbox)
         self.mapping = mapping
         self.outbox = outbox
+        if self.raise_after_dispatching_commit and outbox.status is BrokerCommandOutboxStatusV1.DISPATCHING:
+            self.raise_after_dispatching_commit = False
+            raise RuntimeError("simulated process death after dispatching commit")
         return {"mapping": mapping, "outbox": outbox}
 
     def append_dispatch_attempt(self, attempt: BrokerDispatchAttemptV1) -> BrokerDispatchAttemptV1:
@@ -267,9 +297,7 @@ class _Gateway:
         self.error = error
         self.calls = 0
         self.pre_call_error: KernelGatewayPreCallError | None = None
-        self.snapshots: list[GatewayReconciliationSnapshotV1] = [
-            GatewayReconciliationSnapshotV1(callback_watermark="watermark_k2d_1", orders=(), trades=())
-        ]
+        self.snapshots: list[GatewayReconciliationSnapshotV1] = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
         self.snapshot_error: BaseException | None = None
         self.snapshot_calls = 0
 
@@ -285,10 +313,6 @@ class _Gateway:
             raise self.error
         assert self.ack is not None
         return self.ack
-
-    def callback_watermark(self, *, runtime_id: str) -> str:
-        assert runtime_id == "runtime_k2d"
-        return self.snapshots[0].callback_watermark
 
     def reconciliation_snapshot(self, *, runtime_id: str) -> GatewayReconciliationSnapshotV1:
         assert runtime_id == "runtime_k2d"
@@ -399,8 +423,8 @@ def test_pre_call_failure_is_bounded_retryable_without_broker_call() -> None:
 def test_callback_watermark_failure_is_pre_call_and_never_calls_broker() -> None:
     repository = _Repository()
     gateway = _Gateway(ack=MiniQMTGatewayOrderAck(True, "broker_unused", "unused", {"broker_called": True}))
-    gateway.snapshots = [GatewayReconciliationSnapshotV1(callback_watermark="valid_watermark", orders=(), trades=())]
-    gateway.callback_watermark = lambda **values: " "  # type: ignore[method-assign]
+    gateway.snapshots = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
+    repository.read_callback_watermark = lambda **values: " "  # type: ignore[method-assign]
     result = _dispatcher(repository, gateway).dispatch_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T01:30:01Z",
@@ -441,7 +465,6 @@ def test_unknown_unique_snapshot_reconciles_without_new_gateway_dispatch() -> No
     )
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=(
                 {
                     "broker_order_id": "broker_k2d_recovered",
@@ -476,7 +499,6 @@ def test_reconcile_receipt_survives_cas_failure_and_retry_does_not_reread_gatewa
     )
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=(
                 {
                     "broker_order_id": "broker_k2d_recovered_once",
@@ -559,7 +581,7 @@ def test_exact_non_acceptance_allows_same_command_retry_only_when_catalog_says_i
         observed_at_utc="2026-07-27T01:30:01Z",
         lease_expires_at_utc="2026-07-27T01:31:01Z",
     )
-    gateway.snapshots = [GatewayReconciliationSnapshotV1(callback_watermark="watermark_k2d_2", orders=(), trades=())]
+    gateway.snapshots = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
     result = KernelOutboxReconcilerV1(
         repository=repository,
         gateway=gateway,
@@ -613,10 +635,7 @@ def test_non_boolean_ack_acceptance_is_unknown_not_coerced_to_success() -> None:
 def test_production_gateway_adapter_preserves_exact_child_and_order_remark() -> None:
     mapping, _ = _initial_chain()
     gateway = FakeMiniQMTGateway()
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=gateway,
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=gateway)
     command = _command()
     adapter.validate_pre_call(command=command, mapping=mapping, gateway_catalog=_catalog())
     ack = adapter.dispatch(command=command, mapping=mapping)
@@ -634,16 +653,12 @@ def test_production_gateway_adapter_preserves_exact_child_and_order_remark() -> 
     assert child.metadata["order_remark"] == mapping.order_remark
     assert child.metadata["deterministic_client_order_ref"] == mapping.deterministic_client_order_ref
     snapshot = adapter.reconciliation_snapshot(runtime_id=command.runtime_id)
-    assert snapshot.callback_watermark == f"watermark_{command.runtime_id}"
     assert snapshot.orders[0]["broker_order_id"] == ack.broker_order_id
     assert snapshot.orders[0]["price"] == "10.25"
 
 
 def test_production_gateway_adapter_fails_loud_when_reconciliation_queries_are_missing() -> None:
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=QmtClientMiniQMTGateway(qmt_client=object()),
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=QmtClientMiniQMTGateway(qmt_client=object()))
     with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_SYNC_ORDERS_UNAVAILABLE"):
         adapter.reconciliation_snapshot(runtime_id="runtime_k2d")
 
@@ -653,10 +668,7 @@ def test_production_gateway_adapter_fails_loud_when_reconciliation_queries_are_m
             assert cancelable_only is False
             return []
 
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=QmtClientMiniQMTGateway(qmt_client=OrdersOnlyClient()),
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=QmtClientMiniQMTGateway(qmt_client=OrdersOnlyClient()))
     with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_SYNC_TRADES_UNAVAILABLE"):
         adapter.reconciliation_snapshot(runtime_id="runtime_k2d")
 
@@ -673,10 +685,7 @@ def test_production_gateway_adapter_cancel_rejection_does_not_forge_accepted_ide
 
     mapping = _accepted_mapping()
     command = _cancel_command(mapping)
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=RejectCancelGateway(),
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=RejectCancelGateway())
     adapter.validate_pre_call(command=command, mapping=mapping, gateway_catalog=_catalog())
     ack = adapter.dispatch(command=command, mapping=mapping)
     assert isinstance(ack, MiniQMTGatewayCancelAck)
@@ -687,10 +696,7 @@ def test_production_gateway_adapter_cancel_rejection_does_not_forge_accepted_ide
 
 def test_production_gateway_adapter_rejects_cancel_ownership_drift_before_call() -> None:
     mapping = _accepted_mapping()
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=FakeMiniQMTGateway(),
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=FakeMiniQMTGateway())
     with pytest.raises(KernelGatewayPreCallError, match="accepted durable broker identity"):
         adapter.validate_pre_call(
             command=_cancel_command(mapping, owned_broker_order_id="broker_not_owned"),
@@ -701,10 +707,7 @@ def test_production_gateway_adapter_rejects_cancel_ownership_drift_before_call()
 
 def test_gateway_authority_and_exact_cancel_fail_before_broker_call() -> None:
     mapping, _ = _initial_chain()
-    adapter = MiniQMTKernelGatewayAdapterV1(
-        gateway=FakeMiniQMTGateway(),
-        callback_watermark_provider=lambda runtime_id: f"watermark_{runtime_id}",
-    )
+    adapter = MiniQMTKernelGatewayAdapterV1(gateway=FakeMiniQMTGateway())
     with pytest.raises(KernelGatewayPreCallError, match="approved B0"):
         adapter.validate_pre_call(command=_command(), mapping=mapping, gateway_catalog=_catalog(quote_source="OTHER"))
     accepted = _accepted_mapping()
@@ -727,7 +730,6 @@ def test_reconciliation_rejects_conflicting_aliases_without_mutating_durable_sta
     before = (repository.mapping, repository.outbox)
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=(
                 {
                     "broker_order_id": "broker_a",
@@ -757,7 +759,6 @@ def test_reconciliation_normalizes_numeric_identity_and_nested_transport_values(
     )
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=(
                 {
                     "broker_order_id": 123456,
@@ -826,7 +827,6 @@ def test_cancel_reconciliation_matches_numeric_broker_identity_without_secondary
     )
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=({"broker_order_id": 123456, "status": "SUBMITTED"},),
             trades=(),
         )
@@ -850,7 +850,6 @@ def test_reconciliation_rejects_negative_numeric_broker_identity() -> None:
     )
     gateway.snapshots = [
         GatewayReconciliationSnapshotV1(
-            callback_watermark="watermark_k2d_2",
             orders=(
                 {
                     "broker_order_id": -1,
@@ -866,6 +865,321 @@ def test_reconciliation_rejects_negative_numeric_broker_identity() -> None:
             gateway=gateway,
             gateway_catalog=_catalog(),
         ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+
+
+def test_pre_call_retry_uses_exact_one_two_four_eight_second_cadence() -> None:
+    repository = _Repository()
+    gateway = _Gateway()
+    gateway.pre_call_error = KernelGatewayPreCallError(
+        "MINIQMT_COMMAND_OUTBOX_PRE_CALL_FAILED",
+        "pre-call unavailable",
+        context={"route_id": "gateway_route_k2d"},
+    )
+    observed = (
+        "2026-07-27T01:30:01Z",
+        "2026-07-27T01:30:02Z",
+        "2026-07-27T01:30:04Z",
+        "2026-07-27T01:30:08Z",
+        "2026-07-27T01:30:16Z",
+    )
+    expected_next = (
+        "2026-07-27T01:30:02.000000Z",
+        "2026-07-27T01:30:04.000000Z",
+        "2026-07-27T01:30:08.000000Z",
+        "2026-07-27T01:30:16.000000Z",
+    )
+    for index, now in enumerate(observed):
+        result = _dispatcher(repository, gateway).dispatch_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc=now,
+            lease_expires_at_utc="2026-07-27T01:31:30Z",
+        )
+        if index < 4:
+            assert result.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
+            assert result.next_attempt_at_utc == expected_next[index]
+        else:
+            assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+            assert result.next_attempt_at_utc is None
+    assert gateway.calls == 0
+
+
+def test_restart_recovers_expired_dispatching_as_unknown_without_broker_replay() -> None:
+    repository = _Repository()
+    repository.raise_after_dispatching_commit = True
+    gateway = _Gateway(ack=MiniQMTGatewayOrderAck(True, "broker_never_called", "unused", {"broker_called": True}))
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        _dispatcher(repository, gateway).dispatch_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:01Z",
+            lease_expires_at_utc="2026-07-27T01:30:02Z",
+        )
+    assert repository.outbox.status is BrokerCommandOutboxStatusV1.DISPATCHING
+    assert repository.outbox.callback_watermark_before_call == "watermark_k2d_1"
+    recovered = KernelOutboxRecoveryV1(repository=repository).recover_stale_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:03Z",
+    )
+    assert recovered.status is BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN
+    assert recovered.unknown_outcome_receipt is not None
+    assert recovered.unknown_outcome_receipt.callback_watermark == "watermark_k2d_1"
+    assert gateway.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("receipt_update", "message"),
+    (
+        ({"mapping_id": "mapping_forged_k2d"}, "unknown-outcome receipt conflicts"),
+        ({"dispatch_attempt_id": "attempt_forged_k2d"}, "unknown-outcome receipt conflicts"),
+        ({"callback_watermark": "watermark_k2d_forged"}, "unknown-outcome receipt conflicts"),
+    ),
+)
+def test_unknown_outcome_receipt_must_close_over_exact_dispatch_authority(
+    receipt_update: dict[str, str], message: str
+) -> None:
+    repository = _Repository()
+    repository.raise_after_dispatching_commit = True
+    gateway = _Gateway(ack=MiniQMTGatewayOrderAck(True, "broker_unused", "unused", {"broker_called": True}))
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        _dispatcher(repository, gateway).dispatch_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:01Z",
+            lease_expires_at_utc="2026-07-27T01:30:02Z",
+        )
+    dispatching = repository.outbox
+    values = {
+        "command_id": dispatching.command_id,
+        "dispatch_attempt_id": dispatching.dispatch_attempt_id,
+        "mapping_id": dispatching.mapping_id,
+        "lease_fence_token": dispatching.lease_fence_token,
+        "uncertain_stage": BrokerUncertainStageV1.GATEWAY_CALL,
+        "callback_watermark": dispatching.callback_watermark_before_call,
+        "reason_code": "MINIQMT_COMMAND_OUTCOME_TEST_UNKNOWN",
+        "observed_at_utc": "2026-07-27T01:30:03Z",
+    }
+    values.update(receipt_update)
+    forged_receipt = BrokerUnknownOutcomeReceiptV1.create(**values)
+    with pytest.raises(ValueError, match=message):
+        _outbox_successor(
+            dispatching,
+            command=_read_command(dispatching),
+            status=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            observed_at_utc="2026-07-27T01:30:03Z",
+            clear_lease=True,
+            broker_called=None,
+            unknown_outcome_receipt=forged_receipt,
+        )
+
+
+def test_callback_watermark_is_immutable_after_dispatching_commit() -> None:
+    repository = _Repository()
+    repository.raise_after_dispatching_commit = True
+    gateway = _Gateway(ack=MiniQMTGatewayOrderAck(True, "broker_unused", "unused", {"broker_called": True}))
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        _dispatcher(repository, gateway).dispatch_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:01Z",
+            lease_expires_at_utc="2026-07-27T01:30:02Z",
+        )
+    dispatching = repository.outbox
+    forged_watermark = "watermark_k2d_forged"
+    forged_receipt = BrokerUnknownOutcomeReceiptV1.create(
+        command_id=dispatching.command_id,
+        dispatch_attempt_id=dispatching.dispatch_attempt_id,
+        mapping_id=dispatching.mapping_id,
+        lease_fence_token=dispatching.lease_fence_token,
+        uncertain_stage=BrokerUncertainStageV1.GATEWAY_CALL,
+        callback_watermark=forged_watermark,
+        reason_code="MINIQMT_COMMAND_OUTCOME_TEST_UNKNOWN",
+        observed_at_utc="2026-07-27T01:30:03Z",
+    )
+    with pytest.raises(ValueError, match="durable callback watermark cannot change"):
+        _outbox_successor(
+            dispatching,
+            command=_read_command(dispatching),
+            status=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            observed_at_utc="2026-07-27T01:30:03Z",
+            clear_lease=True,
+            callback_watermark_before_call=forged_watermark,
+            broker_called=None,
+            unknown_outcome_receipt=forged_receipt,
+        )
+
+
+def test_restart_recovers_expired_claim_as_pre_call_retry_without_broker_fact() -> None:
+    repository = _Repository()
+    owner = "worker_k2d:incarnation_k2d"
+    fence = kernel_lease_fence_token_v1(
+        owner_type="OUTBOX_COMMAND",
+        owner_id=repository.outbox.command_id,
+        lease_epoch=1,
+        lease_owner=owner,
+    )
+    repository.claim_outbox_command(
+        command_id=repository.outbox.command_id,
+        lease_owner=owner,
+        lease_epoch=1,
+        lease_fence_token=fence,
+        lease_expires_at="2026-07-27T01:30:02Z",
+        updated_at_utc="2026-07-27T01:30:01Z",
+        expected_row_version=1,
+    )
+    recovered = KernelOutboxRecoveryV1(repository=repository).recover_stale_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:03Z",
+    )
+    assert recovered.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
+    assert recovered.broker_called is False
+    assert recovered.next_attempt_at_utc == "2026-07-27T01:30:04.000000Z"
+
+
+def test_matching_callback_in_watermark_interval_forbids_nonacceptance_retry() -> None:
+    repository = _Repository()
+    gateway = _Gateway(error=TimeoutError("return lost"))
+    _dispatcher(repository, gateway, catalog=_catalog(idempotent_submit=True)).dispatch_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:01Z",
+        lease_expires_at_utc="2026-07-27T01:31:01Z",
+    )
+    repository.matching_callback_count = 1
+    gateway.snapshots = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
+    result = KernelOutboxReconcilerV1(
+        repository=repository,
+        gateway=gateway,
+        gateway_catalog=_catalog(idempotent_submit=True),
+    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+    assert result.status is BrokerCommandOutboxStatusV1.RECONCILING
+    assert result.non_acceptance_receipt is None
+
+
+def test_eod_event_forces_final_snapshot_readback_and_terminalizes_not_found() -> None:
+    repository = _Repository()
+    gateway = _Gateway(error=TimeoutError("return lost"))
+    _dispatcher(repository, gateway).dispatch_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:01Z",
+        lease_expires_at_utc="2026-07-27T01:31:01Z",
+    )
+    eod = RuntimeEventEnvelopeV2.create(
+        runtime_id="runtime_k2d",
+        sequence=99,
+        event_type=EventTypeV2.EOD,
+        event_time_utc=datetime(2026, 7, 27, 7, 0, tzinfo=UTC),
+        monotonic_ns=None,
+        source=EventSourceV2.EXCHANGE_SESSION_CLOCK,
+        symbol=None,
+        payload_schema_version="miniqmt_eod_event_v1",
+        payload={
+            "runtime_id": "runtime_k2d",
+            "trade_date": "2026-07-27",
+            "session_epoch": "session_k2d",
+            "session_phase": "CLOSED",
+            "phase_boundary_at_utc": "2026-07-27T07:00:00.000000Z",
+            "terminal_outcome": "EXPIRED_WITH_RESIDUAL",
+            "exchange_session_authority_sha256": "a" * 64,
+        },
+        source_identity={"runtime_id": "runtime_k2d", "trade_date": "2026-07-27", "session_epoch": "session_k2d"},
+        correlation={},
+    )
+    repository.runtime_events[eod.event_id] = eod
+    result = KernelOutboxReconcilerV1(
+        repository=repository,
+        gateway=gateway,
+        gateway_catalog=_catalog(),
+    ).reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T07:00:01Z",
+        eod_event_id=eod.event_id,
+    )
+    assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+    assert gateway.snapshot_calls == 1
+
+
+def test_eod_replays_pre_eod_receipt_then_performs_a_fresh_final_readback() -> None:
+    repository = _Repository()
+    gateway = _Gateway(error=TimeoutError("return lost"))
+    _dispatcher(repository, gateway).dispatch_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:01Z",
+        lease_expires_at_utc="2026-07-27T01:31:01Z",
+    )
+    repository.fail_next_cas = True
+    with pytest.raises(RuntimeError, match="injected reconciliation CAS failure"):
+        KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog()).reconcile_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:02Z",
+        )
+    eod = RuntimeEventEnvelopeV2.create(
+        runtime_id="runtime_k2d",
+        sequence=99,
+        event_type=EventTypeV2.EOD,
+        event_time_utc="2026-07-27T07:00:00Z",
+        monotonic_ns=None,
+        source=EventSourceV2.EXCHANGE_SESSION_CLOCK,
+        symbol=None,
+        payload_schema_version="miniqmt_eod_event_v1",
+        payload={
+            "runtime_id": "runtime_k2d",
+            "trade_date": "2026-07-27",
+            "session_epoch": "session_k2d",
+            "session_phase": "CLOSED",
+            "phase_boundary_at_utc": "2026-07-27T07:00:00.000000Z",
+            "terminal_outcome": "EXPIRED_WITH_RESIDUAL",
+            "exchange_session_authority_sha256": "a" * 64,
+        },
+        source_identity={"runtime_id": "runtime_k2d", "trade_date": "2026-07-27", "session_epoch": "session_k2d"},
+        correlation={},
+    )
+    repository.runtime_events[eod.event_id] = eod
+    reconciler = KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog())
+    replayed = reconciler.reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T07:00:01Z",
+        eod_event_id=eod.event_id,
+    )
+    assert replayed.status is BrokerCommandOutboxStatusV1.RECONCILING
+    assert gateway.snapshot_calls == 1
+    terminal = reconciler.reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T07:00:02Z",
+        eod_event_id=eod.event_id,
+    )
+    assert terminal.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+    assert gateway.snapshot_calls == 2
+
+
+def test_conflicting_rejected_and_accepted_rows_for_same_order_are_not_collapsed() -> None:
+    repository = _Repository()
+    gateway = _Gateway(error=TimeoutError("return lost"))
+    _dispatcher(repository, gateway).dispatch_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:01Z",
+        lease_expires_at_utc="2026-07-27T01:31:01Z",
+    )
+    gateway.snapshots = [
+        GatewayReconciliationSnapshotV1(
+            orders=(
+                {
+                    "broker_order_id": "broker_same",
+                    "order_remark": repository.mapping.order_remark,
+                    "status": "REJECTED",
+                },
+                {
+                    "broker_order_id": "broker_same",
+                    "order_remark": repository.mapping.order_remark,
+                    "status": "SUBMITTED",
+                },
+            ),
+            trades=(),
+        )
+    ]
+    result = KernelOutboxReconcilerV1(
+        repository=repository,
+        gateway=gateway,
+        gateway_catalog=_catalog(),
+    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+    assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
+    assert result.reconcile_receipt is not None
+    assert result.reconcile_receipt.outcome.value == "CONFLICT"
 
 
 def _read_command(outbox: BrokerCommandOutboxV1) -> BrokerCommandV2:

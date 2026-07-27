@@ -22,8 +22,10 @@ class KernelDiagnosticsReadServiceV1:
     def __init__(self, repository: PostgresMiniQMTKernelRepository | None = None) -> None:
         self.repository = repository if repository is not None else PostgresMiniQMTKernelRepository()
 
-    def read(self, *, runtime_id: str, trade_date: date, limit: int = 100) -> dict[str, Any]:
-        return self.repository.read_kernel_diagnostics(runtime_id=runtime_id, trade_date=trade_date, limit=limit)
+    def read(self, *, runtime_id: str, trade_date: date, limit: int = 100, cursor: str | None = None) -> dict[str, Any]:
+        return self.repository.read_kernel_diagnostics(
+            runtime_id=runtime_id, trade_date=trade_date, limit=limit, cursor=cursor
+        )
 
 
 def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosticsProjectionV1:
@@ -40,6 +42,39 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
     limit = _positive_bounded_int(exact.get("limit"), "limit", maximum=500)
     if len(_chains(exact)) > limit:
         raise ValueError("recent_command_chains exceeds the declared limit")
+    if schema_status == "READBACK_FAILED":
+        reason_code = _text(exact.get("reason_code"), "reason_code")
+        failure_type = _text(exact.get("failure_type"), "failure_type")
+        return KernelDiagnosticsProjectionV1(
+            layer={
+                "schema_version": "simulation_platform_health_layer_v1",
+                "layer": "miniqmt_kernel",
+                "status": "BLOCKED",
+                "reason_code": reason_code,
+                "source": "miniqmt_kernel_read_only_diagnostics",
+                "identity": {"runtime_id": runtime_id, "trade_date": trade_date},
+                "facts": {"schema_status": schema_status, "failure_type": failure_type},
+                "execution_gate": False,
+            },
+            metrics=(
+                {
+                    "name": "simulation_miniqmt_kernel_schema_ready",
+                    "kind": "gauge",
+                    "value": 0,
+                    "labels": {"backend": "MINIQMT_SIM", "status": "BLOCKED", "source": "kernel_diagnostics"},
+                },
+            ),
+            alerts=(
+                {
+                    "alert_type": "MINIQMT_KERNEL_READBACK",
+                    "status": "CRITICAL",
+                    "reason_code": reason_code,
+                    "source": "miniqmt_kernel_read_only_diagnostics",
+                    "identity": {"runtime_id": runtime_id, "trade_date": trade_date},
+                    "context": {"schema_status": schema_status, "failure_type": failure_type},
+                },
+            ),
+        )
     if schema_status == "NOT_APPLIED":
         missing = exact.get("missing_tables")
         if not isinstance(missing, list) or not missing or any(type(item) is not str or not item for item in missing):
@@ -110,6 +145,10 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
         exact.get("mapping_lineage_pending_count"),
         "mapping_lineage_pending_count",
     )
+    expired_dispatching_lease_count = _nonnegative_int(
+        exact.get("expired_dispatching_lease_count"),
+        "expired_dispatching_lease_count",
+    )
     oldest_delivery_lag_seconds = _nonnegative_int(
         exact.get("oldest_delivery_lag_seconds"),
         "oldest_delivery_lag_seconds",
@@ -119,7 +158,11 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
         "oldest_due_timer_lag_seconds",
     )
     blocked_count = (
-        delivery_counts.get("FAILED_TERMINAL", 0) + outbox_counts.get("FAILED_TERMINAL", 0) + predecessor_gap_count
+        delivery_counts.get("FAILED_TERMINAL", 0)
+        + outbox_counts.get("FAILED_TERMINAL", 0)
+        + predecessor_gap_count
+        + expired_dispatching_lease_count
+        + outbox_counts.get("OUTCOME_UNKNOWN", 0)
     )
     degraded_count = (
         delivery_counts.get("FAILED_RETRYABLE", 0)
@@ -128,9 +171,18 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
         + outbox_counts.get("RECONCILING", 0)
         + mapping_lineage_pending_count
     )
-    if blocked_count:
+    if predecessor_gap_count:
         status = "BLOCKED"
-        reason_code = "MINIQMT_KERNEL_TERMINAL_OR_PREDECESSOR_FAILURE"
+        reason_code = "MINIQMT_KERNEL_PREDECESSOR_GAP"
+    elif expired_dispatching_lease_count:
+        status = "BLOCKED"
+        reason_code = "MINIQMT_COMMAND_OUTBOX_LEASE_EXPIRED"
+    elif outbox_counts.get("OUTCOME_UNKNOWN", 0):
+        status = "BLOCKED"
+        reason_code = "MINIQMT_COMMAND_OUTCOME_UNKNOWN"
+    elif blocked_count:
+        status = "BLOCKED"
+        reason_code = "MINIQMT_KERNEL_TERMINAL_FAILURE"
     elif degraded_count:
         status = "DEGRADED"
         reason_code = "MINIQMT_KERNEL_RETRY_OR_RECONCILE_PENDING"
@@ -148,11 +200,13 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
         "diagnostic_reason_family_counts": reason_counts,
         "predecessor_gap_count": predecessor_gap_count,
         "mapping_lineage_pending_count": mapping_lineage_pending_count,
+        "expired_dispatching_lease_count": expired_dispatching_lease_count,
         "oldest_delivery_lag_seconds": oldest_delivery_lag_seconds,
         "oldest_due_timer_lag_seconds": oldest_due_timer_lag_seconds,
         "runtime_status": runtime_status,
         "returned_command_chain_count": len(_chains(exact)),
         "truncated": _strict_bool(exact.get("truncated"), "truncated"),
+        "next_cursor": _optional_text(exact.get("next_cursor"), "next_cursor"),
     }
     metrics: list[dict[str, Any]] = [
         {
@@ -302,6 +356,22 @@ def project_kernel_diagnostics_v1(payload: Mapping[str, Any]) -> KernelDiagnosti
                 },
             }
         )
+    lag_alerts = (
+        (oldest_delivery_lag_seconds, 30, 5, "MINIQMT_COMMAND_OUTBOX_DELIVERY_LAG", "delivery"),
+        (oldest_due_timer_lag_seconds, 10, 2, "MINIQMT_KERNEL_TIMER_DUE_LAG", "timer"),
+    )
+    for lag, critical_threshold, warning_threshold, alert_reason, kind in lag_alerts:
+        if lag > warning_threshold:
+            alerts.append(
+                {
+                    "alert_type": "MINIQMT_KERNEL_CADENCE",
+                    "status": "CRITICAL" if lag > critical_threshold else "WARNING",
+                    "reason_code": alert_reason,
+                    "source": "miniqmt_kernel_read_only_diagnostics",
+                    "identity": {"runtime_id": runtime_id, "trade_date": trade_date},
+                    "context": {"kind": kind, "lag_seconds": lag, "auto_clear": True},
+                }
+            )
     return KernelDiagnosticsProjectionV1(
         layer={
             "schema_version": "simulation_platform_health_layer_v1",
@@ -351,6 +421,12 @@ def _strict_bool(value: Any, field: str) -> bool:
     if type(value) is not bool:
         raise ValueError(f"{field} must be an exact boolean")
     return value
+
+
+def _optional_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    return _text(value, field)
 
 
 def _positive_bounded_int(value: Any, field: str, *, maximum: int) -> int:

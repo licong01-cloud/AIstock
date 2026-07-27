@@ -1288,18 +1288,23 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
         "diagnostic_reason_family_counts": {"OUTCOME_UNKNOWN": 1},
         "predecessor_gap_count": 0,
         "mapping_lineage_pending_count": 0,
+        "expired_dispatching_lease_count": 0,
         "oldest_delivery_lag_seconds": 0,
         "oldest_due_timer_lag_seconds": 0,
         "runtime_status": "ACTIVE",
         "recent_command_chains": [],
         "limit": 100,
         "truncated": False,
+        "next_cursor": None,
         "read_only": True,
     }
     calls: list[dict[str, Any]] = []
+    read_failure = False
 
     def reader(**values: Any) -> dict[str, Any]:
         calls.append(dict(values))
+        if read_failure:
+            raise RuntimeError("injected kernel scalar readback drift")
         return dict(durable_payload)
 
     service = SimulationRuntimeOpsService(
@@ -1324,8 +1329,8 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
         runtime_repository=runtime_repository,
         generated_at=datetime(2026, 7, 27, 1, 30, 10, tzinfo=UTC),
     )
-    assert calls == [{"runtime_id": "runtime_k2d_diagnostics", "trade_date": TRADE_DATE, "limit": 100}]
-    assert degraded["layers"]["miniqmt_kernel"]["status"] == "DEGRADED"
+    assert calls == [{"runtime_id": "runtime_k2d_diagnostics", "trade_date": TRADE_DATE, "limit": 100, "cursor": None}]
+    assert degraded["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
     assert any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in degraded["alerts"]["items"])
     assert degraded["side_effect_contract"]["read_only"] is True
     assert degraded["alerts"]["acknowledge_required"] is False
@@ -1344,6 +1349,19 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
     )
     assert recovered["layers"]["miniqmt_kernel"]["status"] == "HEALTHY"
     assert not any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in recovered["alerts"]["items"])
+
+    read_failure = True
+    failed = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 30, tzinfo=UTC),
+    )
+    assert failed["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert any(
+        item["reason_code"] == "MINIQMT_KERNEL_READBACK_FAILED" and item["status"] == "CRITICAL"
+        for item in failed["alerts"]["items"]
+    )
 
 
 def test_platform_diagnostics_surfaces_zero_run_scheduler_blocker_and_auto_clears() -> None:

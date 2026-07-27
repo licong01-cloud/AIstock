@@ -16,7 +16,7 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "00b0ec1b271c92f9f97098d97829babad4ad031ea8357bab63ecfb8012ba71d7"
+_PUBLIC_SIGNATURE_SHA256 = "93f6d49a0e05ad42708a434f499e11882b511e1514d3994ddafe189ba5787b6c"
 _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
     "backend.services.miniqmt_execution_runtime.kernel_repository_projection",
@@ -47,13 +47,13 @@ _MIGRATION_SHA256 = {
         "11ca28e7981a4898fdcecc14067852f4e1129bef0a1a8bb31298ac886312fd13"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.preflight.sql": (
-        "61dc5ddbf13fb24b5d562410be1e58dfd99e3e93070d9a64a0c17a678ad8c0b2"
+        "f5348aeb8ebd160ccbd11ffc321f5962ddaf71075f98a8a90a3df06aa24d812f"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.sql": (
-        "bb88b20556bd6e8fe847ad451abcf1496f9e1869ed94183756f3fda8e3015b98"
+        "23a7d6e19341cf69564719bc60a7c36d5b4daf94dca6cc963b03368e6f7a81c8"
     ),
     "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.rollback.sql": (
-        "ded28156e2424ffa22b5210f89658ffe90bb4b8120f0772e755ffc6ce1176a20"
+        "b532078e3fcd9efbd39444f9bfe7f8bbd85337a1f2c4ced1f10e05ada41ad65e"
     ),
 }
 

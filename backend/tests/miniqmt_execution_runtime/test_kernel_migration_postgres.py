@@ -92,6 +92,14 @@ def test_k2d_reconcile_history_migration_is_additive_idempotent_and_guarded() ->
     assert "execution_broker_reconciliation_attempt" in forward
     assert "uq_miniqmt_k2d_reconcile_command_attempt" in forward
     assert "reconcile_attempt BETWEEN 1 AND 10" in forward
+    assert "fk_miniqmt_k2d_reconcile_command_runtime" in forward
+    assert "FOREIGN KEY (command_id,runtime_id)" in forward
+    assert "callback_watermark_before_call" in forward
+    assert "miniqmt_k2d_catalog_fingerprint()" in forward
+    assert "format_type(attribute.atttypid,attribute.atttypmod)" in forward
+    assert "pg_get_indexdef" in forward
+    assert "index_class.relname='uq_miniqmt_k2d_outbox_command_runtime'" in forward
+    assert forward.count("COMMENT ON COLUMN qmt_strategy.execution_broker_reconciliation_attempt.") == 8
     assert "post-commit readback drift" in forward
     assert "durable_fact_count" in rollback
     assert "destructive rollback refused" in rollback
@@ -127,8 +135,8 @@ def test_k2c_timer_reclaim_migration_preflight_forward_second_apply_and_rollback
             definition = str(cur.fetchone()[0])
             assert "lease_epoch = 1" in definition and "row_version = 1" in definition
     finally:
-        conn.rollback()
         with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
 
@@ -159,6 +167,7 @@ def test_k2d_reconcile_history_preflight_forward_second_apply_and_rollback_on_de
             assert cur.fetchone()[0] is None
     finally:
         with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
 

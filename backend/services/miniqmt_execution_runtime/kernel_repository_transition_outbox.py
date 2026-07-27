@@ -22,6 +22,7 @@ from .kernel_repository_projection import (
     _dispatch_attempt_scalar_projection,
     _mapping_scalar_projection,
     _outbox_scalar_projection,
+    _reconciliation_receipt_scalar_projection,
     _transition_retry_matches,
     _transition_scalar_projection,
 )
@@ -63,6 +64,7 @@ class KernelRepositoryTransitionOutboxMixin:
                            mapping_id,command_type,local_vt_orderid,payload_json,payload_sha256,status,
                            attempt_count,lease_owner,lease_worker_id,lease_process_incarnation_id,
                            lease_epoch,lease_fence_token,lease_expires_at,dispatch_attempt_id,
+                           callback_watermark_before_call,
                            deterministic_client_order_ref,next_attempt_at_utc,broker_called,broker_order_id,
                            ack_receipt_json,ack_receipt_sha256,non_acceptance_receipt_json,
                            unknown_outcome_receipt_json,reconcile_receipt_json,last_error_json,row_version,
@@ -95,7 +97,9 @@ class KernelRepositoryTransitionOutboxMixin:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT receipt_json FROM qmt_strategy.execution_broker_reconciliation_attempt
+                    SELECT receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,
+                           outcome,observed_at_utc,receipt_json
+                    FROM qmt_strategy.execution_broker_reconciliation_attempt
                     WHERE command_id=%s AND reconcile_attempt=%s
                     """,
                     (command_id, reconcile_attempt),
@@ -103,7 +107,13 @@ class KernelRepositoryTransitionOutboxMixin:
                 row = cur.fetchone()
         if row is None:
             return None
-        return _model_from_json(BrokerOutcomeReconciliationReceiptV1, _row_json(row, "receipt_json"))
+        receipt = _model_from_json(BrokerOutcomeReconciliationReceiptV1, _row_json(row, "receipt_json"))
+        _assert_scalar_columns(
+            row,
+            _reconciliation_receipt_scalar_projection(receipt, runtime_id=str(row["runtime_id"])),
+            carrier_name="reconciliation_receipt",
+        )
+        return receipt
 
     def append_reconciliation_receipt(
         self,
@@ -151,6 +161,9 @@ class KernelRepositoryTransitionOutboxMixin:
                     else:
                         raise KernelRepositoryConflict("reconciliation attempt is not the exact durable successor")
                 if not idempotent_existing:
+                    receipt_projection = _reconciliation_receipt_scalar_projection(
+                        receipt, runtime_id=str(row["runtime_id"])
+                    )
                     cur.execute(
                         """
                         INSERT INTO qmt_strategy.execution_broker_reconciliation_attempt(
@@ -160,13 +173,13 @@ class KernelRepositoryTransitionOutboxMixin:
                         ON CONFLICT (receipt_sha256) DO NOTHING
                         """,
                         (
-                            receipt.receipt_sha256,
-                            receipt.command_id,
-                            row["runtime_id"],
-                            receipt.reconcile_attempt,
-                            receipt.callback_watermark,
-                            receipt.outcome.value,
-                            receipt.observed_at_utc,
+                            receipt_projection["receipt_sha256"],
+                            receipt_projection["command_id"],
+                            receipt_projection["runtime_id"],
+                            receipt_projection["reconcile_attempt"],
+                            receipt_projection["callback_watermark"],
+                            receipt_projection["outcome"],
+                            receipt_projection["observed_at_utc"],
                             _json(receipt.model_dump(mode="json")),
                         ),
                     )
@@ -696,12 +709,13 @@ class KernelRepositoryTransitionOutboxMixin:
                         command_id,transition_id,ordinal,runtime_id,algo_instance_id,parent_intent_id,
                         mapping_id,command_type,local_vt_orderid,payload_json,payload_sha256,
                         status,attempt_count,lease_owner,lease_epoch,lease_fence_token,
-                        lease_expires_at,dispatch_attempt_id,deterministic_client_order_ref,next_attempt_at_utc,
+                        lease_expires_at,dispatch_attempt_id,callback_watermark_before_call,
+                        deterministic_client_order_ref,next_attempt_at_utc,
                         broker_called,broker_order_id,ack_receipt_json,ack_receipt_sha256,
                         non_acceptance_receipt_json,unknown_outcome_receipt_json,reconcile_receipt_json,
                         last_error_json,row_version,created_at_utc,
                         updated_at_utc,closed_at_utc,carrier_json,outbox_row_sha256
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (command_id) DO NOTHING
                     """,
                 self._outbox_sql_values(outbox),
@@ -935,7 +949,8 @@ class KernelRepositoryTransitionOutboxMixin:
                     UPDATE qmt_strategy.execution_algo_command_outbox
                     SET status=%s,attempt_count=%s,lease_owner=%s,lease_worker_id=%s,
                         lease_process_incarnation_id=%s,lease_epoch=%s,lease_fence_token=%s,
-                        lease_expires_at=%s,dispatch_attempt_id=%s,next_attempt_at_utc=%s,
+                        lease_expires_at=%s,dispatch_attempt_id=%s,callback_watermark_before_call=%s,
+                        next_attempt_at_utc=%s,
                         broker_called=%s,broker_order_id=%s,ack_receipt_json=%s,ack_receipt_sha256=%s,
                         non_acceptance_receipt_json=%s,unknown_outcome_receipt_json=%s,
                         reconcile_receipt_json=%s,last_error_json=%s,row_version=%s,
@@ -955,6 +970,7 @@ class KernelRepositoryTransitionOutboxMixin:
                         outbox_projection["lease_fence_token"],
                         outbox_projection["lease_expires_at"],
                         outbox_projection["dispatch_attempt_id"],
+                        outbox_projection["callback_watermark_before_call"],
                         outbox_projection["next_attempt_at_utc"],
                         outbox_projection["broker_called"],
                         outbox_projection["broker_order_id"],
@@ -1288,6 +1304,7 @@ class KernelRepositoryTransitionOutboxMixin:
                     updated_at_utc=canonical_utc_datetime_v1(updated_at_utc, field_name="updated_at_utc"),
                     next_attempt_at_utc=None,
                     dispatch_attempt_id=None,
+                    callback_watermark_before_call=None,
                     broker_called=None,
                     broker_order_id=None,
                     ack_receipt_json=None,
@@ -1307,7 +1324,8 @@ class KernelRepositoryTransitionOutboxMixin:
                     SET status='CLAIMED', attempt_count=%s, lease_owner=%s,
                         lease_worker_id=%s, lease_process_incarnation_id=%s, lease_epoch=%s,
                         lease_fence_token=%s, lease_expires_at=%s, next_attempt_at_utc=NULL,
-                        dispatch_attempt_id=NULL,broker_called=NULL,broker_order_id=NULL,
+                        dispatch_attempt_id=NULL,callback_watermark_before_call=NULL,
+                        broker_called=NULL,broker_order_id=NULL,
                         ack_receipt_json=NULL,ack_receipt_sha256=NULL,
                         non_acceptance_receipt_json=NULL,unknown_outcome_receipt_json=NULL,
                         reconcile_receipt_json=NULL,last_error_json=NULL,
@@ -1602,6 +1620,7 @@ class KernelRepositoryTransitionOutboxMixin:
             projection["lease_fence_token"],
             projection["lease_expires_at"],
             projection["dispatch_attempt_id"],
+            projection["callback_watermark_before_call"],
             projection["deterministic_client_order_ref"],
             projection["next_attempt_at_utc"],
             projection["broker_called"],

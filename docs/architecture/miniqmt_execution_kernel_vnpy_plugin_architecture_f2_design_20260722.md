@@ -8,7 +8,7 @@
 >
 > K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B和K2-C均已`implemented_verified + merged`；K2-D 已达到 `implemented_verified`，`source_merge=pending_pr`。K2-D 通过唯一 durable outbox/reconcile authority、append-only reconciliation history、真实 callback lineage 和只读 diagnostics 闭合，不启动常驻 worker、不调用真实 Gateway/broker。K3/K4 `not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B与K2-C均为`implemented_verified + merged`，K2-D 为 `implemented_verified`、`source_merge=pending_pr`。K2-D direct outbox/diagnostics=`42 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；正式审核补修 broker query 缺失静默空快照和仅数值broker identity的CANCEL reconcile；核心 line/branch 均满足 `>=80%/>=70%`。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B与K2-C均为`implemented_verified + merged`，K2-D 为 `implemented_verified`、`source_merge=pending_pr`。K2-D direct outbox/diagnostics=`55 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；核心 line/branch 均满足 `>=80%/>=70%`。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
 > 日期：2026-07-22。
 
@@ -815,6 +815,22 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - source/DDL/config/restart/runtime evidence 分开记录。
 
 总工程量：核心隔离约 36–52 人日；包含 exact façade、Iceberg/Stop、正式审计补齐的并发/失败语义与完整生产级验收约 52–75 人日。不得把估算转换为减少验收范围的理由。
+
+### K2-D final-review contract closure
+
+The K2-D shadow path now persists a repository-owned pre-call callback watermark in the
+outbox before Gateway entry; it is single-assignment at `CLAIMED -> DISPATCHING`, immutable
+through the complete post-call chain, and cross-validated against unknown/non-acceptance
+receipts. Expired `CLAIMED` and `DISPATCHING` leases have explicit
+recovery semantics, exact non-acceptance requires zero matching durable callback events
+inside the watermark interval, retry cadence is exactly 1/2/4/8 seconds, and a persisted
+exchange-clock EOD event forces a fresh final broker/OMS readback. Reconciliation history
+uses a composite `(command_id,runtime_id)` database owner and complete scalar/carrier
+readback. Diagnostics implement stable keyset pagination, the documented lag thresholds,
+immediate critical facts for predecessor gaps/expired dispatch leases/unknown outcomes,
+critical DB readback failure, and automatic clearing without acknowledgement. These are
+technical execution contracts, not approval or runtime admission gates; K2-D remains
+shadow-only and K3/K4/product activation remain unchanged.
 
 ## 13. Verification Plan / 验证方案
 

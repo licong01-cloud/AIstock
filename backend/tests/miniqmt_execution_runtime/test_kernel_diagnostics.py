@@ -7,6 +7,8 @@ import pytest
 from backend.services.miniqmt_execution_runtime.kernel_diagnostics import project_kernel_diagnostics_v1
 from backend.services.miniqmt_execution_runtime.kernel_repository_diagnostics import (
     KernelRepositoryDiagnosticsMixin,
+    _decode_kernel_cursor,
+    _encode_kernel_cursor,
     _reason_family,
 )
 
@@ -27,12 +29,14 @@ def _payload(**updates):
         "diagnostic_reason_family_counts": {},
         "predecessor_gap_count": 0,
         "mapping_lineage_pending_count": 0,
+        "expired_dispatching_lease_count": 0,
         "oldest_delivery_lag_seconds": 0,
         "oldest_due_timer_lag_seconds": 0,
         "runtime_status": "ACTIVE",
         "recent_command_chains": [],
         "limit": 100,
         "truncated": False,
+        "next_cursor": None,
         "read_only": True,
     }
     payload.update(updates)
@@ -64,8 +68,8 @@ def test_kernel_unknown_outcome_emits_low_cardinality_auto_clear_alert() -> None
             diagnostic_reason_family_counts={"OUTCOME_UNKNOWN": 2},
         )
     )
-    assert degraded.layer["status"] == "DEGRADED"
-    assert degraded.alerts[0]["reason_code"] == "MINIQMT_KERNEL_RETRY_OR_RECONCILE_PENDING"
+    assert degraded.layer["status"] == "BLOCKED"
+    assert degraded.alerts[0]["reason_code"] == "MINIQMT_COMMAND_OUTCOME_UNKNOWN"
     assert degraded.alerts[0]["identity"] == {"runtime_id": "runtime_k2d", "trade_date": "2026-07-27"}
     forbidden = {"runtime_id", "algo_instance_id", "command_id", "symbol", "order_id"}
     assert all(not (set(metric["labels"]) & forbidden) for metric in degraded.metrics)
@@ -95,6 +99,40 @@ def test_kernel_terminal_and_predecessor_facts_are_blocking_but_not_execution_ga
     assert projection.layer["execution_gate"] is False
     assert projection.alerts[0]["status"] == "CRITICAL"
     assert projection.alerts[0].get("acknowledge_required") is None
+
+    expired = project_kernel_diagnostics_v1(_payload(expired_dispatching_lease_count=1))
+    assert expired.layer["status"] == "BLOCKED"
+    assert expired.alerts[0]["reason_code"] == "MINIQMT_COMMAND_OUTBOX_LEASE_EXPIRED"
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected_status", "reason_code"),
+    [
+        ({"oldest_delivery_lag_seconds": 6}, "WARNING", "MINIQMT_COMMAND_OUTBOX_DELIVERY_LAG"),
+        ({"oldest_delivery_lag_seconds": 31}, "CRITICAL", "MINIQMT_COMMAND_OUTBOX_DELIVERY_LAG"),
+        ({"oldest_due_timer_lag_seconds": 3}, "WARNING", "MINIQMT_KERNEL_TIMER_DUE_LAG"),
+        ({"oldest_due_timer_lag_seconds": 11}, "CRITICAL", "MINIQMT_KERNEL_TIMER_DUE_LAG"),
+    ],
+)
+def test_kernel_cadence_thresholds_emit_auto_clear_alerts(updates, expected_status, reason_code) -> None:
+    projection = project_kernel_diagnostics_v1(_payload(**updates))
+    alert = next(item for item in projection.alerts if item["reason_code"] == reason_code)
+    assert alert["status"] == expected_status
+    assert alert["context"]["auto_clear"] is True
+    assert project_kernel_diagnostics_v1(_payload()).alerts == ()
+
+
+def test_kernel_readback_failure_is_critical_and_never_false_green() -> None:
+    projection = project_kernel_diagnostics_v1(
+        _payload(
+            schema_status="READBACK_FAILED",
+            reason_code="MINIQMT_KERNEL_READBACK_SCALAR_DRIFT",
+            failure_type="KernelRepositoryConflict",
+        )
+    )
+    assert projection.layer["status"] == "BLOCKED"
+    assert projection.alerts[0]["status"] == "CRITICAL"
+    assert projection.alerts[0]["reason_code"] == "MINIQMT_KERNEL_READBACK_SCALAR_DRIFT"
 
 
 @pytest.mark.parametrize(
@@ -142,6 +180,13 @@ def test_repository_diagnostics_rejects_invalid_query_before_database_access() -
             trade_date=date(2026, 7, 27),
             limit=501,
         )
+
+
+def test_kernel_diagnostics_cursor_is_strict_stable_and_round_trips() -> None:
+    cursor = _encode_kernel_cursor("2026-07-27T01:30:00Z", "mqcommand_cursor")
+    assert _decode_kernel_cursor(cursor) == ("2026-07-27T01:30:00.000000Z", "mqcommand_cursor")
+    with pytest.raises(ValueError, match="cursor"):
+        _decode_kernel_cursor("2026-07-27T01:30:00Z|command|extra")
 
 
 def test_repository_diagnostic_aggregate_rejects_non_authoritative_sql_fragments() -> None:

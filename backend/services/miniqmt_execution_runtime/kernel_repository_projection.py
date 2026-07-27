@@ -16,6 +16,7 @@ from .plugin_contracts import (
     AlgoTransitionReceiptV1,
     BrokerCommandOutboxV1,
     BrokerDispatchAttemptV1,
+    BrokerOutcomeReconciliationReceiptV1,
     ExchangeSessionAuthorityV1,
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoTimerOccurrenceV1,
@@ -95,6 +96,7 @@ def _outbox_scalar_projection(outbox: BrokerCommandOutboxV1) -> dict[str, Any]:
         "lease_fence_token": outbox.lease_fence_token,
         "lease_expires_at": outbox.lease_expires_at,
         "dispatch_attempt_id": outbox.dispatch_attempt_id,
+        "callback_watermark_before_call": outbox.callback_watermark_before_call,
         "deterministic_client_order_ref": outbox.deterministic_client_order_ref,
         "next_attempt_at_utc": outbox.next_attempt_at_utc,
         "broker_called": outbox.broker_called,
@@ -288,6 +290,24 @@ def _dispatch_attempt_scalar_projection(attempt: BrokerDispatchAttemptV1) -> dic
         "error_context_sha256": attempt.error_context_sha256,
         "authority_receipt_sha256": attempt.authority_receipt_sha256,
         "attempt_receipt_sha256": attempt.attempt_receipt_sha256,
+    }
+
+
+def _reconciliation_receipt_scalar_projection(
+    receipt: BrokerOutcomeReconciliationReceiptV1,
+    *,
+    runtime_id: str,
+) -> dict[str, Any]:
+    """One writer/readback scalar authority for immutable reconciliation history."""
+
+    return {
+        "receipt_sha256": receipt.receipt_sha256,
+        "command_id": receipt.command_id,
+        "runtime_id": runtime_id,
+        "reconcile_attempt": receipt.reconcile_attempt,
+        "callback_watermark": receipt.callback_watermark,
+        "outcome": receipt.outcome.value,
+        "observed_at_utc": receipt.observed_at_utc,
     }
 
 

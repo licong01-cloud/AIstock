@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import psycopg2
 import psycopg2.extras
 
 from .kernel_repository_common import KernelRepositorySchemaError
 
 
-_K2_SCHEMA_CATALOG_SHA256 = "8f1534aae7b0362de2061fafec2f16e056f52fd66251c0d67698ef33a2915d9d"
+_K2_SCHEMA_CATALOG_SHA256 = "2ae93a1e637f4232ea01fc80f7f7a4680679956cc428b12c56adb01f16efea6a"
+_K2D_SCHEMA_CATALOG_SHA256 = "f9034e9e9680a12e335c5bdc0ac06e10dda73d34c8a65128df08c26b0f93725d"
+_K2D_CATALOG_FUNCTION_BODY_SHA256 = "69bf9ce6268522052ca6ce97d9769f7377b69e130f25cb143159f7fe1109d708"
 
 _K2_CATALOG_QUERY = """
 WITH target_tables(relname) AS (
@@ -229,6 +233,41 @@ class KernelRepositorySchemaMixin:
                         raise KernelRepositorySchemaError("K2 catalog function drift")
                     cur.execute(f"SELECT * FROM ({_K2_CATALOG_QUERY}) AS catalog(catalog_sha256)")
                     catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
+                    cur.execute(
+                        """
+                        SELECT namespace.nspname AS schema_name,language.lanname AS language_name,
+                               function_record.provolatile AS volatility,
+                               pg_get_function_arguments(function_record.oid) AS arguments,
+                               pg_get_function_result(function_record.oid) AS result_type,
+                               function_record.prosrc AS function_body
+                        FROM pg_proc AS function_record
+                        JOIN pg_namespace AS namespace ON namespace.oid=function_record.pronamespace
+                        JOIN pg_language AS language ON language.oid=function_record.prolang
+                        WHERE function_record.oid=to_regprocedure(
+                            'qmt_strategy.miniqmt_k2d_catalog_fingerprint()'
+                        )
+                        """
+                    )
+                    k2d_function_row = cur.fetchone()
+                    if k2d_function_row is None:
+                        raise KernelRepositorySchemaError("K2-D schema fingerprint authority is unavailable")
+                    normalized_k2d_body = (
+                        str(k2d_function_row["function_body"])
+                        .replace(str(k2d_function_row["schema_name"]), "qmt_strategy")
+                        .strip()
+                        .rstrip(";")
+                    )
+                    if (
+                        k2d_function_row["language_name"] != "sql"
+                        or k2d_function_row["volatility"] != "s"
+                        or k2d_function_row["arguments"] != ""
+                        or k2d_function_row["result_type"] != "text"
+                        or hashlib.sha256(normalized_k2d_body.encode("utf-8")).hexdigest()
+                        != _K2D_CATALOG_FUNCTION_BODY_SHA256
+                    ):
+                        raise KernelRepositorySchemaError("K2-D catalog function drift")
+                    cur.execute("SELECT qmt_strategy.miniqmt_k2d_catalog_fingerprint() AS catalog_sha256")
+                    k2d_catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
                 except KernelRepositorySchemaError:
                     raise
                 except psycopg2.Error as exc:
@@ -237,5 +276,10 @@ class KernelRepositorySchemaMixin:
             raise KernelRepositorySchemaError(
                 f"K2 schema catalog drift: expected {_K2_SCHEMA_CATALOG_SHA256}, got {catalog_sha256}"
             )
+        if k2d_catalog_sha256 != _K2D_SCHEMA_CATALOG_SHA256:
+            raise KernelRepositorySchemaError(
+                f"K2-D schema catalog drift: expected {_K2D_SCHEMA_CATALOG_SHA256}, got {k2d_catalog_sha256}"
+            )
         result["schema_catalog_fingerprint"] = True
+        result["k2d_schema_catalog_fingerprint"] = True
         return result

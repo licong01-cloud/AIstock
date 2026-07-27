@@ -4299,6 +4299,7 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
     lease_fence_token: IdentityV1 | None
     lease_expires_at: UtcDateTimeV1 | None
     dispatch_attempt_id: IdentityV1 | None
+    callback_watermark_before_call: IdentityV1 | None = None
     deterministic_client_order_ref: IdentityV1
     next_attempt_at_utc: UtcDateTimeV1 | None
     broker_called: StrictBool | None
@@ -4335,6 +4336,7 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
             "payload_json": command.model_dump(mode="json"),
             "payload_sha256": command.payload_sha256,
             "deterministic_client_order_ref": client_ref,
+            "callback_watermark_before_call": values.get("callback_watermark_before_call"),
             **values,
             "status": normalized_status.value,
         }
@@ -4414,6 +4416,19 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         }
         if self.status not in allowed[previous.status]:
             raise ValueError("illegal outbox status transition")
+        sets_call_boundary = (
+            previous.status is BrokerCommandOutboxStatusV1.CLAIMED
+            and self.status is BrokerCommandOutboxStatusV1.DISPATCHING
+        )
+        starts_new_attempt = self.status is BrokerCommandOutboxStatusV1.CLAIMED
+        if sets_call_boundary:
+            if previous.callback_watermark_before_call is not None or self.callback_watermark_before_call is None:
+                raise ValueError("CLAIMED to DISPATCHING must set callback watermark exactly once")
+        elif starts_new_attempt:
+            if self.callback_watermark_before_call is not None:
+                raise ValueError("new outbox attempt must clear the prior callback watermark")
+        elif self.callback_watermark_before_call != previous.callback_watermark_before_call:
+            raise ValueError("durable callback watermark cannot change after the broker-call boundary")
         if self.status is BrokerCommandOutboxStatusV1.CLAIMED:
             if self.lease_epoch != previous.lease_epoch + 1:
                 raise ValueError("outbox lease_epoch must advance from its durable predecessor")
@@ -4433,6 +4448,7 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
                 self.lease_fence_token,
                 self.lease_expires_at,
                 self.dispatch_attempt_id,
+                self.callback_watermark_before_call,
                 self.next_attempt_at_utc,
                 self.broker_called,
                 self.broker_order_id,
@@ -4475,6 +4491,24 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
             raise ValueError("outbox lease owner, fence and expiry must be present together")
         if self.lease_owner is not None and self.lease_epoch <= 0:
             raise ValueError("leased outbox row requires positive lease epoch")
+        post_call_boundary = {
+            BrokerCommandOutboxStatusV1.DISPATCHING,
+            BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            BrokerCommandOutboxStatusV1.RECONCILING,
+            BrokerCommandOutboxStatusV1.ACKED,
+            BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+        }
+        if self.status in post_call_boundary and self.callback_watermark_before_call is None:
+            raise ValueError("post-call outbox state requires durable callback watermark authority")
+        if (
+            self.status
+            in {
+                BrokerCommandOutboxStatusV1.PENDING,
+                BrokerCommandOutboxStatusV1.CLAIMED,
+            }
+            and self.callback_watermark_before_call is not None
+        ):
+            raise ValueError("pre-call/retry outbox state cannot retain callback watermark authority")
         _validate_kernel_lease_fence_v1(
             owner_type="OUTBOX_COMMAND",
             owner_id=self.command_id,
@@ -4489,6 +4523,11 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
                 raise ValueError("ack_receipt_sha256 conflicts with strict ACK receipt")
             if self.ack_receipt_json.command_id != self.command_id:
                 raise ValueError("ACK receipt command identity conflicts with outbox")
+            if (
+                self.ack_receipt_json.mapping_id != self.mapping_id
+                or self.ack_receipt_json.deterministic_client_order_ref != self.deterministic_client_order_ref
+            ):
+                raise ValueError("ACK receipt mapping/client identity conflicts with outbox")
         elif self.ack_receipt_sha256 is not None:
             raise ValueError("ack_receipt_sha256 requires strict ACK receipt")
         authority_receipts = (
@@ -4499,6 +4538,31 @@ class BrokerCommandOutboxV1(FrozenStrictModel):
         )
         if any(receipt is not None and receipt.command_id != self.command_id for receipt in authority_receipts):
             raise ValueError("broker authority receipt command identity conflicts with outbox")
+        if self.unknown_outcome_receipt is not None and (
+            self.unknown_outcome_receipt.mapping_id != self.mapping_id
+            or self.unknown_outcome_receipt.dispatch_attempt_id != self.dispatch_attempt_id
+            or self.unknown_outcome_receipt.callback_watermark != self.callback_watermark_before_call
+        ):
+            raise ValueError("unknown-outcome receipt conflicts with exact outbox dispatch authority")
+        if self.reconcile_receipt is not None and self.reconcile_receipt.reconcile_attempt > 10:
+            raise ValueError("outbox reconciliation attempt exceeds the bounded durable history")
+        if self.non_acceptance_receipt is not None:
+            if (
+                self.non_acceptance_receipt.deterministic_client_order_ref != self.deterministic_client_order_ref
+                or self.non_acceptance_receipt.callback_watermark_before != self.callback_watermark_before_call
+                or self.reconcile_receipt is None
+                or self.non_acceptance_receipt.callback_watermark_after != self.reconcile_receipt.callback_watermark
+                or self.non_acceptance_receipt.query_criteria_sha256 != self.reconcile_receipt.query_criteria_sha256
+                or self.non_acceptance_receipt.order_snapshot_sha256 != self.reconcile_receipt.order_snapshot_sha256
+                or self.non_acceptance_receipt.trade_snapshot_sha256 != self.reconcile_receipt.trade_snapshot_sha256
+            ):
+                raise ValueError("non-acceptance receipt conflicts with exact reconciliation authority")
+        if self.ack_receipt_json is not None and self.ack_receipt_json.source is BrokerAckSourceV1.RECONCILIATION:
+            if (
+                self.reconcile_receipt is None
+                or self.ack_receipt_json.ack_payload_sha256 != self.reconcile_receipt.receipt_sha256
+            ):
+                raise ValueError("reconciliation ACK must close over the exact reconciliation receipt")
         if self.status in {BrokerCommandOutboxStatusV1.PENDING, BrokerCommandOutboxStatusV1.CLAIMED}:
             if self.broker_called is not None or any(receipt is not None for receipt in authority_receipts):
                 raise ValueError("pre-dispatch outbox cannot claim broker outcome")

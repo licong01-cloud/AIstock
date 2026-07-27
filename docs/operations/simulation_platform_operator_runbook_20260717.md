@@ -103,6 +103,25 @@ K2 durable kernel 只在提供 exact `runtime_id + trade_date` 时加入 `layers
 outbox command/status、timer、diagnostic reason family、predecessor gap 及 bounded recent command→mapping chain。该查询不启动
 dispatcher/reconciler，不 claim lease，不调用 Gateway/broker，不写数据库。
 
+K2-D final-review operator facts:
+
+- Continue a truncated command-chain read with the returned `next_cursor` as
+  `kernel_cursor`; never synthesize or edit the cursor.
+- `OUTCOME_UNKNOWN`, any predecessor gap, or any expired `DISPATCHING` lease is an
+  immediate critical fact. Delivery lag is warning above 5 seconds and critical above
+  30 seconds; timer due lag is warning above 2 seconds and critical above 10 seconds.
+- `READBACK_FAILED` is critical and carries the failure type. It is not permission to
+  edit a row, replay a command, restart a service, or acknowledge an alert.
+- Restart recovery converts expired pre-call `CLAIMED` to the exact bounded retry and
+  expired post-commit `DISPATCHING` to `OUTCOME_UNKNOWN` without calling broker. Safe
+  retry requires zero matching durable callbacks inside the watermark interval.
+- An EOD terminal decision must reference the persisted exchange-clock EOD event and a
+  fresh final reconcile receipt. A pre-EOD receipt recovered after a crash is attached
+  first and cannot substitute for that final readback.
+
+All alerts clear from the next clean readback; no manual acknowledge, approval or extra
+runtime gate exists.
+
 ### 3.5 Durable facts
 
 LocalSIM 核对：
