@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -123,6 +123,9 @@ def test_stock_fact_aggregation_is_weighted_recomputed_and_records_missing_evide
 
     result = subject.aggregate_l1_day(rows)
 
+    assert not hasattr(result, "moneyflow_amount")
+    assert not hasattr(result, "moneyflow_domain_status")
+
     assert result.count_coverage == pytest.approx(0.9)
     assert result.weight_coverage == pytest.approx(0.9)
     assert result.l1_return == pytest.approx(0.01)
@@ -150,6 +153,88 @@ def test_stock_fact_aggregation_is_weighted_recomputed_and_records_missing_evide
         subject.aggregate_l1_day(rows)
     assert exc_info.value.l1_code == "L1-00"
     assert exc_info.value.weight_coverage == 0.0
+
+
+def test_feature_domain_aggregation_excludes_only_moneyflow_contribution() -> None:
+    available = _stock_row(0)
+    unavailable = _stock_row(1, complete=False)
+    unavailable["symbol"] = "689009.SH"
+    unavailable["buy_sm_amount_cny"] = None
+    unavailable["sell_sm_amount_cny"] = None
+    unavailable["buy_elg_amount_cny"] = None
+    unavailable["sell_elg_amount_cny"] = None
+
+    aggregate = subject.aggregate_l1_day(
+        [available, unavailable],
+        moneyflow_excluded_symbols=frozenset({"689009.SH"}),
+    )
+
+    assert aggregate.count_coverage == 1.0
+    assert aggregate.weight_coverage == 1.0
+    assert aggregate.l1_amount == pytest.approx(available["amount_cny"] + unavailable["amount_cny"])
+    assert aggregate.moneyflow_amount == pytest.approx(available["amount_cny"])
+    assert aggregate.net_mf_amount == pytest.approx(available["net_mf_amount_cny"])
+    assert aggregate.moneyflow_domain_status == "available"
+    assert aggregate.moneyflow_excluded_symbols == ("689009.SH",)
+
+
+def test_singleton_sector_keeps_price_domain_and_marks_moneyflow_structurally_unavailable() -> None:
+    unavailable = _stock_row(1, complete=False)
+    unavailable["symbol"] = "689009.SH"
+    unavailable["buy_sm_amount_cny"] = None
+    unavailable["sell_sm_amount_cny"] = None
+    unavailable["buy_elg_amount_cny"] = None
+    unavailable["sell_elg_amount_cny"] = None
+
+    aggregate = subject.aggregate_l1_day(
+        [unavailable],
+        moneyflow_excluded_symbols=frozenset({"689009.SH"}),
+    )
+
+    assert np.isfinite(aggregate.l1_return)
+    assert aggregate.net_mf_amount is None
+    assert aggregate.moneyflow_amount is None
+    assert aggregate.moneyflow_domain_status == "structurally_unavailable"
+    assert aggregate.count_coverage == 1.0
+
+
+def test_diagnostic_moneyflow_features_use_only_contributor_amount() -> None:
+    calendar = [date(2024, 1, 2) + timedelta(days=index) for index in range(5)]
+    aggregates = []
+    for trade_date in calendar:
+        for code_index in range(31):
+            available = _stock_row(0)
+            excluded = _stock_row(1, complete=False)
+            for row in (available, excluded):
+                row["trade_date"] = trade_date
+                row["l1_code"] = f"L1-{code_index:02d}"
+                row["l1_name"] = f"L1 Sector {code_index}"
+            available["amount_cny"] = 100.0
+            available["buy_sm_amount_cny"] = 100.0
+            available["sell_sm_amount_cny"] = 0.0
+            excluded["symbol"] = "689009.SH"
+            excluded["amount_cny"] = 900.0
+            aggregates.append(
+                subject.aggregate_l1_day(
+                    [available, excluded],
+                    moneyflow_excluded_symbols=frozenset({"689009.SH"}),
+                )
+            )
+
+    panel, definition = subject.build_l1_feature_panel(
+        aggregates,
+        trading_dates=calendar,
+        csi300_returns={value: 0.0 for value in calendar},
+        cross_section_min_coverage=0.90,
+        use_moneyflow_amount_denominator=True,
+    )
+
+    row = panel.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
+    assert row["moneyflow_amount"] == 100.0
+    assert row["l1_amount"] == 1000.0
+    assert row["small_net_ratio"] == 1.0
+    assert row["sf_small_net_ratio_5d"] == 1.0
+    assert set(definition["moneyflow_denominator_by_feature"].values()) == {"moneyflow_contributor_amount"}
 
 
 def _aggregate(day: date, code_index: int, day_index: int) -> subject.L1DailyAggregate:
@@ -207,6 +292,9 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
     assert all(np.isfinite(float(tail[name])) for name in ALL_CORE_FEATURES)
     assert definition["all_core_features"] == list(ALL_CORE_FEATURES)
     assert definition["cross_section_required_l1_count"] == 31
+    assert "diagnostic_only" not in definition
+    assert "cross_section_contract" not in definition
+    assert "moneyflow_denominator_by_feature" not in definition
 
     constituent = {
         f"L1-{index:02d}": {
@@ -250,6 +338,19 @@ def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> No
     row = panel.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
     assert np.isnan(row["sf_vol_vs_market_20d"])
     assert np.isnan(row["sf_excess_breadth_5d"])
+
+    diagnostic, definition = subject.build_l1_feature_panel(
+        aggregates,
+        trading_dates=calendar,
+        csi300_returns=benchmark,
+        cross_section_min_coverage=0.90,
+    )
+    diagnostic_row = diagnostic.loc[(pd.Timestamp(calendar[-1]), "L1-00")]
+    assert np.isfinite(diagnostic_row["sf_vol_vs_market_20d"])
+    assert np.isfinite(diagnostic_row["sf_excess_breadth_5d"])
+    assert definition["cross_section_contract"] == "coverage_aware_diagnostic"
+    assert definition["cross_section_min_coverage"] == 0.90
+    assert set(definition["moneyflow_denominator_by_feature"].values()) == {"l1_amount"}
 
 
 def test_direct_l2_projection_uses_canonical_stock_fact_identity_without_mutating_l1() -> None:

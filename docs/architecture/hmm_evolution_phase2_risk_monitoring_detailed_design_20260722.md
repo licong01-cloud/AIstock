@@ -812,6 +812,63 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
 4. 因此 C-009-A/B/C 的 source implementation 已闭合，C-009-D 的 601 日执行已闭合但验收结果为 blocked；F-011 保持
    blocked。下一步必须先形成独立 train-coverage 根因/合同决策，不得在本 BUG 内自行迁移业务逻辑，也不得恢复 5184 fits。
 
+##### C-010-DIAG-01. train-only feature-domain contributor eligibility 与 mask 候选诊断
+
+1. **批准边界**：用户于 2026-07-27 批准先实现并执行 601 日只读诊断。该诊断只回答“provider-absence 是否应停止贡献特定
+   train feature domain”以及“受影响 direct sector 是否存在可审计 feature mask 候选”；不批准正式训练政策、HMM fit、D5、
+   D6、model/READY、数据库写入、依赖变更或 runtime action。
+2. **证券与场景边界**：证券继续保留在 PIT 股票池、选股、回测/实盘候选和后续 runtime prediction eligibility 中；不得把
+   `689009.SH` 或任何其他证券从业务 universe 删除。eligibility 仅依据冻结 train `2022-01-01..2024-06-30` 的 audited
+   provider-absence 与同窗口 expected observation opportunity 冻结，并继续复用已批准 `0.90` availability，而非新增门禁。
+3. **feature-domain 分离**：价格、成交额、停牌、涨跌停、收益、breadth 与 PIT sector identity 继续使用完整可用证券事实；仅
+   moneyflow contributor domain 可排除 train availability 低于 `0.90` 的证券。不得填 0、前值、行业代理、neutral、L1 fallback
+   或把 NA 送入 GaussianHMM；排除项、机会数、absence 数、availability、source/hash 必须进入 receipt。
+4. **横截面诊断**：正式 exact-complete cross-section 入口保持不变。只读诊断可复用既有 `0.90` coverage 计算可区分
+   “一个已审计 provider absence 放大全市场缺失”与真实 price-domain coverage failure；不得把诊断结果静默激活为正式
+   cross-section policy。
+5. **mask 候选**：每个 `family × direct L1/L2 sector` 先审计完整 feature set。只有与 excluded contributor 精确关联且完整
+   feature set 不足 `120` 行、同时所有 mandatory non-moneyflow features 至少 `120` 行时，才可形成删除精确 moneyflow feature
+   group 的 deterministic candidate。candidate 必须保存有序 mask、excluded feature、row count、status 与 canonical hash；
+   不允许因 candidate 存在推导 family eligibility、selection、semantic mapping 或 READY。
+6. **停止条件**：diagnostic 报告无论 candidate 是否完整都只写 evidence 并正常结束；任一 denominator、identity、sector set、
+   price-domain coverage 或 mask 证据不完整时 fail closed。只有 601 日结果、正式设计复审和后续用户明确批准后，才可另行设计
+   formal policy 与恢复 5184 fits；本次不得选择 seed 或访问 validation/future utility。
+7. **首次 601 日执行证据（已被正式审核否定）**：clean producer `385e8309109dddab8e629768c8dc30934a179cd3` 完成
+   `hmm_risk_c010_observation_eligibility_diagnostic_v1`。报告 canonical SHA-256 为
+   `ded02740714ba55de6aeabf4b71d5f98282dfb4f6fb0dc11fc80e026ccad251f`，内部 body receipt SHA-256 为
+   `959ddd0603549c869ed683b7419fbcf3494580f221a9a02cae0d91ab0d3efb70`。train-only eligibility 仅排除
+   `689009.SH` 的 moneyflow contribution，精确影响 L1 `801880.SI` 与 L2 `801881.SI`；PIT/selection/runtime prediction
+   eligibility 均未改变。该 report 后续被代码审核发现的 schema/denominator/opportunity-receipt 缺陷否定，不得继续作为可批准
+   formal policy 的 evidence；其 hash 仅保留为 historical failed-review identity。
+8. **首次候选结果（须重跑确认）**：四个 `family × level` 均形成完整 diagnostic candidate，且不需要删除任何 family feature：autocycle L1/L2
+   最低完整 train row 分别为 `152/236`，legacy L1/L2 为 `313/422`，全部高于既有 `120`。诊断仍显式保留
+   `999` 个 L1 与 `1351` 个 L2 price-domain invalid sector/date evidence；它们没有被填值或吞掉，而是由 diagnostic-only
+   `0.90` cross-section evidence 与后续 rolling 共同决定最终行数。
+9. **状态边界**：baseline formal coverage 仍为 invalid；`fit/selection/D6/model/READY/database/runtime` 全部为 `false`，且
+   `formal_policy_activated=false`。首次结果不能证明 formal policy，也不能在修复后免除 601 日重跑。
+10. **正式审核修复合同**：诊断 aggregate 必须使用独立 `FeatureDomainDailyAggregate`，不得向正式 `L1DailyAggregate.__dict__`、
+    aggregate manifest/hash 或默认 feature definition 注入字段；只有 diagnostic 入口可声明 coverage-aware contract。诊断内
+    `net_mf_ratio/elg_net_mf_ratio/sf_mf_net_ratio_std_5d_neg/sf_small_net_ratio_5d` 必须统一使用
+    `moneyflow_contributor_amount`，而正式 C-007-A `/l1_amount` 公式保持不变。expected opportunity 必须保存逐 symbol 精确日期集合 hash，
+    provider-absence 日期必须是其子集；eligibility 只能有一个 canonical receipt authority。上述修复通过直接边界测试后，必须以新
+    clean producer 重跑 601 日诊断并生成新 hash，旧 `ded02740…251f` 不得复用。
+11. **审核修复后 601 日证据**：clean producer `6f447908959161c8c4e87289476a99505d8ff537` 完成重跑，新报告
+    `bug886_c010_observation_eligibility_reviewfix.json` canonical SHA-256 为
+    `ac218d78935d2adbf3940c0b97cce2d9db4a3e382e00f6beb86e245c7006b3ae`，内部 body receipt 为
+    `27f96a86034b1398490079a7813db17ce7ef376f3a1d38fe7e09b06e71c9ec5b`，eligibility receipt 为
+    `9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f`。5 个 absence symbol 均保存 exact opportunity
+    date-set hash；仅 `689009.SH` availability=`0.1730449251` 被排除 moneyflow contribution。四项 candidate 再次完整且无需删
+    feature，最低 train rows 仍为 autocycle L1/L2=`152/236`、legacy L1/L2=`313/422`。baseline formal coverage 仍 invalid；
+    `fit/selection/D6/model/READY/database/runtime/formal_policy` 全部未执行。首次向旧路径写入因 collision fail-closed，旧报告未覆盖；
+    随后使用独立路径完成，不删除任何历史 artifact。
+12. **rebase 后权威证据**：PR #2796 source branch rebase 到最新 main 后，BUG-886 同步 rebase；代码内容不变但 commit identity 被
+    改写，因此 `ac218d78…6b3ae` 仅保留为 pre-rebase verified evidence，不作为当前 source ancestry 的最终 receipt。新 clean producer
+    `60d9ce16a5abe2ce92c3c1f664165c13ba414211` 以独立路径完成第三次 601 日只读诊断，报告 canonical SHA-256 为
+    `2b1f4accfb4e8a3d85ed4ca8ce2f9bf0547552c48938eb85a6166c8a3f007260`，内部 body receipt 为
+    `ac17beb27ee9688c3b8808b12e0ceae26fe4789020408091d3576c13f6fa12ae`，eligibility receipt 保持
+    `9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f`。5/5 opportunity hashes、排除 symbol、四项
+    candidate 与最低行数均和审核修复后报告一致；所有 fit/write/action flags 继续为 `false`。
+
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 
 1. **失败事实**：clean producer `1ad5ff6209d723c41537d51b1d2d750a95a2e371` 的 identity preflight 通过后，
@@ -1724,6 +1781,8 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-009-B | 新旧证券代码如何在不改写 raw source 的前提下连接同一稳定证券身份 | `IMPLEMENTED_VERIFIED_READONLY` | immutable source-specific resolver 解析 591 个 moneyflow key；canonical/source/authority/hash evidence 完整，raw source 未改写 |
 | C-009-C | Tushare authority 不存在的 stock/date moneyflow 如何使用 NA | `IMPLEMENTED_VERIFIED_READONLY` | provider-audit manifest 精确绑定 502 个 NA key；继续执行 0.90 count/weight coverage，未填 0/前值/代理，因 coverage 不足正确 blocked |
 | C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
+| BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_REVIEW_FIX_VALIDATED_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING` | 正式/诊断 schema、统一 diagnostic denominator、exact opportunity date-set/hash 与单一 receipt 已修复；rebase 后权威 601 日 report `2b1f4acc…7260` 回读通过，PIT/selection/runtime prediction universe 不变，正式 policy 与训练保持 blocked |
+| C-010-DIAG-01 | 是否先执行 601 日 feature-domain eligibility/mask 只读诊断 | `VERIFIED_AFTER_REVIEW_FIX_NO_FIT_NO_SELECTION_NO_ARTIFACT` | 当前 source ancestry 的 clean producer report canonical `2b1f4acc…7260`；5 个 exact opportunity hashes 完整，仅排除 `689009.SH` moneyflow contribution，四项 candidate valid 且无需删 feature；旧 `ded02740…251f` 仅为 failed-review identity，`ac218d78…6b3ae` 为 pre-rebase verified evidence |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
@@ -1749,12 +1808,13 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`BLOCKED_C009_SOURCE_IMPLEMENTATION_AND_PREFLIGHT`；既有 B3/L2 retrain 源码与直接边界测试保留，但 BUG-877 已证明
+- F-011 parent：`BLOCKED_C010_FORMAL_POLICY_DECISION`；既有 B3/L2 retrain 源码与直接边界测试保留，但 BUG-877 已证明
   exact-calendar circ-mv 和 source-code exact join 无法形成完整 formal input；C-009-A/B/C/D 已获用户批准，仍须完成源码审核、601 日只读 preflight 与独立 source merge，之后才可申请恢复完整 fit、真实
-  selection、D6 或两-family READY；Slice 1-3 仍未开始。
-- F-011-A 数据/PIT/observation：`APPROVED_BY_USER_C009_SOURCE_IMPLEMENTATION_IN_PROGRESS`；C-007-A 单位、PIT sector mapping、7/20 维公式、
+  selection、D6 或两-family READY；C-010-DIAG-01 已形成完整候选 evidence，但正式 policy 尚未批准；Slice 1-3 仍未开始。
+- F-011-A 数据/PIT/observation：`C010_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING`；C-007-A 单位、PIT sector mapping、7/20 维公式、
   0.90 count/weight coverage 与 hard semantic authority 均保留，但 suspension circ-mv、source-specific security identity 和
-  provider-absence NA evidence 必须按 C-009 精确修订、验证并通过 601 日只读 preflight 后才能恢复 implementation-ready。
+  provider-absence NA evidence 必须按 C-009 精确修订；C-010 必须证明 contributor eligibility、price/moneyflow domain 分离与
+  deterministic mask 候选不会删除证券、吞错或激活未经批准的正式政策。601 日 evidence 已闭合该诊断边界，正式训练合同仍待用户决策。
 - F-011-B fit/convergence/covariance/occupancy：`SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING`；正式 train-only grid、D3-03-A、D4-01-A、D4-02-A、D4-03-B、双 fresh-process hash 与 direct L2 131 构造已实现；旧 fixed-seed READY 入口已禁用。未运行完整正式 grid，故 historical DIAG 仍不构成正式 D4 acceptance。
 - F-011-C semantic evidence/selection：`SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING`；D5-01-B level-global selection 与 selection 后 D6-01-B hard mapping 已实现，validation/future utility 在 train-only child 中不构造，D6 failure 不触发 reselection；本 PR 未执行真实 selection/D6。
 - F-011-D 两-family READY：`BLOCKED_CONTROLLED_EXECUTION`；当前 READY artifact 数为0；源码只允许四个 family/level 全部 accepted 时写 READY，且旧 fixed-seed writer 已禁用。受控重训、family eligibility、selection、D6 和 READY 均未实际执行。
@@ -1766,8 +1826,8 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; `nox -s hmm_risk_backend` | APPROVED_BY_USER_BLOCKED_C009_TRAIN_COVERAGE | C-009 source implementation 与 601 日只读 preflight 已闭合，但既有 0.90 coverage、autocycle rolling/cross-section 和 L2 `801881.SI` 使四个 family/level coverage 未完整；不得执行 fit/selection/D6/READY |
-| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,stock_fact_repository,stock_fact_observation}.py`; C-007-A formulas；BUG-877/C-009 approved contracts | `backend/tests/hmm_risk/test_security_identity.py`; `backend/tests/hmm_risk/test_provider_absence.py`; `backend/tests/hmm_risk/test_stock_fact_repository.py`; `backend/tests/hmm_risk/test_stock_fact_observation.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; 601-day preflight receipt | APPROVED_BY_USER_SOURCE_IMPLEMENTATION_IN_PROGRESS | 466 suspension circ-mv、591 source-code identity 与 502 provider-absence NA 已获精确合同批准；须完成正式验证和只读preflight；保留既有0.90 coverage，不允许DML、填零或NaN进入HMM |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_observation_eligibility.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; C-010 601-day report | APPROVED_BY_USER_BLOCKED_C010_FORMAL_POLICY_DECISION | C-010-DIAG-01 四项 candidate valid 且无需删 feature，但 baseline formal coverage 仍 invalid；正式 contributor/cross-section policy 未批准，不得执行 fit/selection/D6/READY |
+| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A formulas；BUG-877/C-009/C-010 contracts | `backend/tests/hmm_risk/test_security_identity.py`; `backend/tests/hmm_risk/test_provider_absence.py`; `backend/tests/hmm_risk/test_observation_eligibility.py`; `backend/tests/hmm_risk/test_stock_fact_repository.py`; `backend/tests/hmm_risk/test_stock_fact_observation.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; C-010 canonical `2b1f4acc…7260` | APPROVED_BY_USER_C010_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING | rebase 后当前 source ancestry 的只读诊断证明仅 `689009.SH` moneyflow contribution 需 train-only 排除；正式 aggregate/feature identity 不漂移，PIT/selection/runtime prediction universe不变，四项 candidate valid；formal policy 未获批准，不允许DML、填零、NaN进入HMM或激活正式 policy |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,state_model_set,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | 旧L2仍不可接受；正式新L2 identity只有执行完整受控重训后才形成，historical DIAG不反写正式 acceptance |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | hard authority与单一validation保持；真实selection/D6尚未执行，B2不采用 |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_CONTROLLED_EXECUTION | READY artifact数为0；新受控L2未训练且没有真实selection/D6/artifact write，两个family完整性未成立 |

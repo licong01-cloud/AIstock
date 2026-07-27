@@ -1267,6 +1267,103 @@ def test_platform_diagnostics_is_read_only_layered_and_low_cardinality(
     assert repo.get_simulation_daily_run(run_id).model_dump(mode="json") == before
 
 
+def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    scheduler = _PlatformDiagnosticsBackgroundScheduler(
+        last_run_at=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+        market_phase="OPEN_AM",
+    )
+    durable_payload = {
+        "schema_version": "miniqmt_kernel_diagnostics_v1",
+        "schema_status": "READY",
+        "runtime_id": "runtime_k2d_diagnostics",
+        "trade_date": TRADE_DATE.isoformat(),
+        "missing_tables": [],
+        "event_type_counts": {"TIMER": 2},
+        "delivery_status_counts": {"APPLIED": 2},
+        "outbox_status_counts": {"OUTCOME_UNKNOWN": 1},
+        "outbox_command_type_counts": {"SUBMIT_LIMIT": 1},
+        "timer_status_counts": {"EMITTED": 2},
+        "timer_occurrence_status_counts": {"EVENT_COMMITTED": 2},
+        "diagnostic_reason_family_counts": {"OUTCOME_UNKNOWN": 1},
+        "predecessor_gap_count": 0,
+        "mapping_lineage_pending_count": 0,
+        "expired_dispatching_lease_count": 0,
+        "oldest_delivery_lag_seconds": 0,
+        "oldest_due_timer_lag_seconds": 0,
+        "runtime_status": "ACTIVE",
+        "recent_command_chains": [],
+        "limit": 100,
+        "truncated": False,
+        "next_cursor": None,
+        "read_only": True,
+    }
+    calls: list[dict[str, Any]] = []
+    read_failure = False
+
+    def reader(**values: Any) -> dict[str, Any]:
+        calls.append(dict(values))
+        if read_failure:
+            raise RuntimeError("injected kernel scalar readback drift")
+        return dict(durable_payload)
+
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=scheduler,  # type: ignore[arg-type]
+        kernel_diagnostics_reader=reader,
+    )
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id="runtime_k2d_diagnostics",
+                account_group_id="account_k2d_diagnostics",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="d" * 64,
+            ).model_dump()
+        )
+    )
+    degraded = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 10, tzinfo=UTC),
+    )
+    assert calls == [{"runtime_id": "runtime_k2d_diagnostics", "trade_date": TRADE_DATE, "limit": 100, "cursor": None}]
+    assert degraded["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in degraded["alerts"]["items"])
+    assert degraded["side_effect_contract"]["read_only"] is True
+    assert degraded["alerts"]["acknowledge_required"] is False
+    assert all(
+        not ({"runtime_id", "algo_instance_id", "command_id", "symbol"} & set(item["labels"]))
+        for item in degraded["metrics"]["series"]
+    )
+
+    durable_payload["outbox_status_counts"] = {"ACKED": 1}
+    durable_payload["diagnostic_reason_family_counts"] = {}
+    recovered = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 20, tzinfo=UTC),
+    )
+    assert recovered["layers"]["miniqmt_kernel"]["status"] == "HEALTHY"
+    assert not any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in recovered["alerts"]["items"])
+
+    read_failure = True
+    failed = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 30, tzinfo=UTC),
+    )
+    assert failed["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert any(
+        item["reason_code"] == "MINIQMT_KERNEL_READBACK_FAILED" and item["status"] == "CRITICAL"
+        for item in failed["alerts"]["items"]
+    )
+
+
 def test_platform_diagnostics_surfaces_zero_run_scheduler_blocker_and_auto_clears() -> None:
     repo = InMemorySimulationRuntimeRepository()
     scheduler = _PlatformDiagnosticsBackgroundScheduler(
@@ -1806,10 +1903,7 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
     )
     lunch = lunch_service.platform_diagnostics(run_id=run_id, generated_at=lunch_at)
     assert lunch["layers"]["business"][0]["facts"]["max_bar_lag_seconds"] == 9000.0
-    assert not any(
-        alert["alert_type"] == "LOCAL_SIM_CAUSAL_BAR_NOT_PROGRESSING"
-        for alert in lunch["alerts"]["items"]
-    )
+    assert not any(alert["alert_type"] == "LOCAL_SIM_CAUSAL_BAR_NOT_PROGRESSING" for alert in lunch["alerts"]["items"])
 
     future_state_payload = state.model_dump(mode="python")
     future_state_payload.update(
@@ -2038,10 +2132,7 @@ def test_platform_diagnostics_distinguishes_active_and_stale_localsim_valuation_
     assert active_durability["reason_code"] == "LOCAL_SIM_VALUATION_PENDING"
     assert active_durability["facts"]["valuation_pending"] is True
     assert active_durability["facts"]["missing_mark_symbols"] == ["000003.SZ"]
-    assert not any(
-        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
-        for alert in active["alerts"]["items"]
-    )
+    assert not any(alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE" for alert in active["alerts"]["items"])
 
     stale = service.platform_diagnostics(
         run_id=run_id,

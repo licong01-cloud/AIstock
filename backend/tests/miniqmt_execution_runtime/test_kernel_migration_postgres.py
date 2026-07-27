@@ -19,6 +19,9 @@ ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2_20260725.rollback.sql"
 K2C_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.preflight.sql"
 K2C_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.sql"
 K2C_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.rollback.sql"
+K2D_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.preflight.sql"
+K2D_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.sql"
+K2D_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.rollback.sql"
 
 
 def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> None:
@@ -78,6 +81,30 @@ def test_k2c_timer_reclaim_migration_is_additive_idempotent_and_guarded() -> Non
     assert "destructive rollback refused" in rollback
 
 
+def test_k2d_reconcile_history_migration_is_additive_idempotent_and_guarded() -> None:
+    preflight = K2D_PREFLIGHT.read_text(encoding="utf-8")
+    forward = K2D_FORWARD.read_text(encoding="utf-8")
+    rollback = K2D_ROLLBACK.read_text(encoding="utf-8")
+    canonical_forward = forward.replace("\r\n", "\n").replace("\r", "\n")
+    expected_forward_sha256 = hashlib.sha256(canonical_forward.encode("utf-8")).hexdigest()
+    assert "SET TRANSACTION READ ONLY" in preflight
+    assert f"'{expected_forward_sha256}'::TEXT AS expected_migration_sha256" in preflight
+    assert "execution_broker_reconciliation_attempt" in forward
+    assert "uq_miniqmt_k2d_reconcile_command_attempt" in forward
+    assert "reconcile_attempt BETWEEN 1 AND 10" in forward
+    assert "fk_miniqmt_k2d_reconcile_command_runtime" in forward
+    assert "FOREIGN KEY (command_id,runtime_id)" in forward
+    assert "callback_watermark_before_call" in forward
+    assert "miniqmt_k2d_catalog_fingerprint()" in forward
+    assert "format_type(attribute.atttypid,attribute.atttypmod)" in forward
+    assert "pg_get_indexdef" in forward
+    assert "index_class.relname='uq_miniqmt_k2d_outbox_command_runtime'" in forward
+    assert forward.count("COMMENT ON COLUMN qmt_strategy.execution_broker_reconciliation_attempt.") == 8
+    assert "post-commit readback drift" in forward
+    assert "durable_fact_count" in rollback
+    assert "destructive rollback refused" in rollback
+
+
 def test_k2c_timer_reclaim_migration_preflight_forward_second_apply_and_rollback_on_dev() -> None:
     if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
         pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
@@ -108,8 +135,39 @@ def test_k2c_timer_reclaim_migration_preflight_forward_second_apply_and_rollback
             definition = str(cur.fetchone()[0])
             assert "lease_epoch = 1" in definition and "row_version = 1" in definition
     finally:
-        conn.rollback()
         with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_k2d_reconcile_history_preflight_forward_second_apply_and_rollback_on_dev() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _apply_base_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(K2C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(K2D_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            k2d_forward = K2D_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            cur.execute(k2d_forward)
+            cur.execute(k2d_forward)
+            cur.execute(
+                "SELECT count(*) FROM information_schema.columns WHERE table_schema=%s "
+                "AND table_name='execution_broker_reconciliation_attempt'",
+                (schema,),
+            )
+            assert int(cur.fetchone()[0]) == 8
+            cur.execute(K2D_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute("SELECT to_regclass(%s)", (f"{schema}.execution_broker_reconciliation_attempt",))
+            assert cur.fetchone()[0] is None
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
 
@@ -325,13 +383,24 @@ def _apply_forward(cur: object, forward: str) -> None:
     row = cur.fetchone()  # type: ignore[attr-defined]
     if row is None or "row_version = lease_epoch" not in str(row[0]):
         _apply_base_forward(cur, forward)
-    k2c_forward = K2C_FORWARD.read_text(encoding="utf-8")
-    cur.execute(k2c_forward.replace("qmt_strategy", target_schema))  # type: ignore[attr-defined]
+    cur.execute(  # type: ignore[attr-defined]
+        "SELECT to_regclass(%s)",
+        (f"{target_schema}.execution_broker_reconciliation_attempt",),
+    )
+    k2d_already_applied = cur.fetchone()[0] is not None  # type: ignore[attr-defined]
+    if not k2d_already_applied:
+        k2c_forward = K2C_FORWARD.read_text(encoding="utf-8")
+        cur.execute(k2c_forward.replace("qmt_strategy", target_schema))  # type: ignore[attr-defined]
+    k2d_forward = K2D_FORWARD.read_text(encoding="utf-8")
+    cur.execute(k2d_forward.replace("qmt_strategy", target_schema))  # type: ignore[attr-defined]
 
 
 def _apply_rollback(cur: object, rollback: str) -> None:
     match = re.search(r"FROM ([A-Za-z0-9_]+)\.execution_runtime_event", rollback)
     target_schema = "qmt_strategy" if match is None else match.group(1)
+    cur.execute(  # type: ignore[attr-defined]
+        K2D_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", target_schema)
+    )
     cur.execute(  # type: ignore[attr-defined]
         K2C_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", target_schema)
     )
@@ -548,7 +617,7 @@ def test_k2_preflight_and_forward_reject_exact_catalog_drift_on_dev_postgres(dri
             with pytest.raises(psycopg2.Error, match="exact schema catalog drift"):
                 cur.execute(preflight)
             cur.execute("ROLLBACK")
-            with pytest.raises(psycopg2.Error, match="schema catalog drift"):
+            with pytest.raises(psycopg2.Error, match="catalog drift"):
                 _apply_forward(cur, forward)
             cur.execute("ROLLBACK")
     finally:
