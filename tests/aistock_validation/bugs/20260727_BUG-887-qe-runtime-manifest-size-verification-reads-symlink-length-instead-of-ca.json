@@ -1,0 +1,170 @@
+{
+  "actual": "R13A exact-2 canary macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00 deterministically fails both remote children before backtest. run.log reports QE_RUNTIME_FILE_VERIFY_FAILED path=aistock_models/__init__.py kind=size expected=578 observed=103. Read-only remote proof: readlink points to the expected SHA-addressed CAS object; stat -c reports symlink length 103, stat -Lc reports target length 578, and sha256sum through the symlink equals 642c62b4... The manifest verifier must validate the dereferenced target while retaining strict missing/size/SHA failure semantics.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
+    "tests/aistock_validation/bugs/20260727_BUG-887-qe-runtime-manifest-size-verification-reads-symlink-length-instead-of-ca.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-887",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-27T09:57:53.958999Z",
+  "description": "R13A exact-2 canary macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00 deterministically fails both remote children before backtest. run.log reports QE_RUNTIME_FILE_VERIFY_FAILED path=aistock_models/__init__.py kind=size expected=578 observed=103. Read-only remote proof: readlink points to the expected SHA-addressed CAS object; stat -c reports symlink length 103, stat -Lc reports target length 578, and sha256sum through the symlink equals 642c62b4... The manifest verifier must validate the dereferenced target while retaining strict missing/size/SHA failure semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260727-5d259b2a35bf",
+      "timestamp": "2026-07-27T09:57:53.958995Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Runtime manifest size verification must dereference CAS-backed workspace symlinks, while missing files, target-size mismatches, and target-SHA mismatches continue to fail explicitly.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-07-27T09:57:53.958999Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2805,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2805",
+  "last_seen_at": "2026-07-27T09:57:53.958999Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "On rdagent-node1 compare stat -c %s, stat -Lc %s, and sha256sum for the R13A canary workspace path aistock_models/__init__.py; the current verifier reports symlink length 103 instead of target length 578.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE runtime manifest size verification reads symlink length instead of CAS target size",
+  "trigger_condition": {
+    "fingerprint": "5d259b2a35bf4c9b5a6f1bf4",
+    "source_event_id": "FE-20260727-5d259b2a35bf"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

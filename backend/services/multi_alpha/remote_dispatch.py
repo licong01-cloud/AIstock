@@ -1295,7 +1295,7 @@ def _remote_runtime_file_verify_commands(manifest: Mapping[str, Any]) -> str:
                 + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=missing\\n' "
                 + quoted_name
                 + " >&2; exit 91; fi; ",
-                "runtime_observed_size=$(stat -c %s -- "
+                "runtime_observed_size=$(stat -Lc %s -- "
                 + quoted_name
                 + "); if [ \"$runtime_observed_size\" -ne "
                 + str(size)
