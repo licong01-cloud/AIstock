@@ -6,15 +6,17 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3/K4 `not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3下位详细设计为`design_ready_for_review`、`source_merge=pending_pr`，K3/K4 implementation均`not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+>
+> K3 下位详细设计：[`miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`](miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md) 当前为 `design_ready_for_review`；固定 current-three pure plugin、3.0.0 identity/binding、Sniper/BestLimit/TWAP exact transition、legacy inventory、immutable parity receipt、K3/K4/K6边界和两个shadow-only实现切片。K3 design source等待PR，产品runtime未切换。
 >
 > 日期：2026-07-22。
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3/K4 remain `not_started`, product runtime is not switched, and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3 detailed design is `design_ready_for_review` with `source_merge=pending_pr` while K3/K4 implementation remains `not_started`; product runtime is not switched and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -786,11 +788,16 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 
 ### K3：迁移现有三个算法
 
-- Sniper/BestLimit/TWAP Lite 全部走 plugin SPI；
-- TWAP 真实 timer、午休/EOD/restart；
-- 删除 kernel/client/B0 的具体 algo 分支；
-- 行为 parity、source attribution、no-broker-duplicate；
-- 预计 2 PR，7–11 人日。
+- 唯一下位合同为 [`miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`](miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md)；
+- Sniper/BestLimit/TWAP Lite 全部实现真实、side-effect-free `ExecutionAlgoPluginV2`；
+- plugin version 3.0.0使用三个state_v3表达pre-ACK `COMMAND_PENDING`，与K2 RESERVED mapping/PENDING outbox同事务闭合；broker ID只来自ACK/callback/reconcile，下一event不得重复submit；
+- TWAP 使用 K2 真实 exchange-active timer，闭合午休/EOD/restart；
+- K2 kernel/client/B0 新路径禁止任何具体 algo 分支；现有 legacy product helper 的最终退役属于 K6，K3不制造临时双 broker route；
+- immutable ALGO_LOCAL before/after parity、source attribution、legacy policy/state和dependent-BUY coordinator zero-write inventory、no-broker-duplicate；
+- legacy dependent-BUY 卖出回款协调器是跨parent execution coordination，不属于三个算法；K2现有OMS `PASS|REJECT`、transition、mapping/outbox和repository没有durable deferred-command owner，K3禁止把该语义塞入plugin state或普通diagnostic；
+- K3-A pure plugin/binding 与 K3-B parity/inventory/shadow orchestration 两个PR均保持shadow-only；
+- 当前详细设计=`design_ready_for_review`、`source_merge=pending_pr`，K3 implementation=`not_started`；
+- 预计 2 PR，10–15 人日；增加的工作来自不可省略的pre-ACK v3 state/mapping closure与dependent-BUY zero-write inventory，不得以沿用不相容v2或删除资金因果语义缩短。
 
 ### K4：vn.py compatibility façade
 
@@ -808,13 +815,15 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 
 ### K6：旧 helper 退役、生产迁移与真实 SIM
 
+- 先以独立F2详细设计和代码实现durable dependent-BUY coordinator：qmt_strategy ledger cash authority、SELL TRADE/ORDER terminal/ACCOUNT/EOD lineage、defer/release/block/residual、single-writer/CAS/fence、restart/no-double-release和release后正常K2 outbox；不得下沉进算法plugin；
 - 退役同步 timer for-loop/legacy adapter 产品调用；
 - static unique-route scan；
 - 用户授权后 DEV/production DDL readback；
 - 用户重启后正常交易日 single/multi、上午/午休/下午/EOD observation；
 - source/DDL/config/restart/runtime evidence 分开记录。
+- dependent-BUY coordinator设计/实现预计1–2 PR、6–10人日；route retirement/生产迁移和正常交易日观察另计，不能把观察时间折算成代码完成。
 
-总工程量：核心隔离约 36–52 人日；包含 exact façade、Iceberg/Stop、正式审计补齐的并发/失败语义与完整生产级验收约 52–75 人日。不得把估算转换为减少验收范围的理由。
+总工程量：核心隔离约 45–66 人日；包含 exact façade、Iceberg/Stop、正式审计补齐的并发/失败语义与完整生产级验收约 61–90 人日。不得把估算转换为减少验收范围的理由。
 
 ### K2-D final-review contract closure
 
@@ -991,6 +1000,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-068` | DEV-first migration、幂等preflight/forward/readback、legacy inventory与rollback不伪造事实 |
 | `F-069` | K2 diagnostics/metrics/alerts/retention/runbook有界、低基数、只读且无人工acknowledge |
 | `F-070` | K2 direct/crash/concurrency/migration测试、coverage、changed-file routing和生产状态分离完整 |
+| `F-071` | K3 current legacy side-effect chain、dependent-BUY coordinator carrier缺口、K2/K3/K4/K6边界、信号/执行隔离和唯一route事实完整 |
+| `F-072` | current-three plugin identity/version/source/manifest/factory/catalog、v3 state和public transition identity writer-readback可直接实施，零partial catalog |
+| `F-073` | Sniper BUY/SELL/active-cancel/depth/fill/EOD exact行为与state lineage完整 |
+| `F-074` | BestLimit quote/replace/deterministic draw ordinal/restart exact且无global random |
+| `F-075` | TWAP exchange-active TIMER、午休、PM、duration、slice、missing view、EOD/restart语义完整 |
+| `F-076` | pre-ACK COMMAND_PENDING、ORDER/TRADE因果、active-order/mapping/outbox、traded quantity/terminal/unknown-cancel transaction与identity closure完整 |
+| `F-077` | legacy policy/state/dependent-BUY read-only inventory和ALGO_LOCAL immutable parity receipt schema/hash/truncation/readback完整 |
+| `F-078` | K2 public seam shadow orchestration无algo branch、无direct broker、无第二runtime/route/fallback，且不把cross-parent coordination塞入plugin |
+| `F-079` | typed failure、diagnostics/metrics/retention、concurrency/retry/rollback和无人工门禁完整 |
+| `F-080` | K3 direct/parity/restart/integration测试、coverage、changed-file routing、K6 coordinator cutover prerequisite和生产状态分离可执行 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1002,7 +1021,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-046` | §5.6、§7；target B0 capability projector | target `backend/tests/miniqmt_execution_runtime/test_market_data_capabilities.py` static unsupported/current wait/invalid observation/EOD residual matrix | design_ready | none |
 | `F-047` | §5.7-§6.3、§10；target repository/outbox/dispatcher | target `backend/tests/miniqmt_execution_runtime/test_command_outbox_repository.py` stale DISPATCHING/null truth/callback-before-ACK/no-resubmit；`backend/tests/miniqmt_execution_runtime/test_algo_delivery_repository.py` | design_ready | none |
 | `F-048` | §8；target `backend/execution_algos/vnpy_compat/` | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compat_facade.py` pinned method signature/return/error/DTO characterization for all registered plugins | design_ready | none |
-| `F-049` | §7.2、§12 K3；current-three plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_parity.py`；existing `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_sniper.py` | design_ready | none |
+| `F-049` | §7.2、§12 K3；K3 detailed design §1–§15 current-three plugins/ALGO_LOCAL parity/policy-state-dependent-BUY inventory | artifact: `docs/architecture/miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`；target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`；existing `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_sniper.py` | design_ready | none |
 | `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
@@ -1024,6 +1043,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-068` | K2 detailed design §9 migration | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证K2-D DEV clean first/second apply、独立catalog readback、CHECK/UNIQUE/composite FK/index fingerprint与有durable rows时guarded rollback | implemented_verified | none |
 | `F-069` | K2 detailed design §10 diagnostics/retention/runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`覆盖NOT_APPLIED/NOT_ACTIVATED/NOT_FOUND、reason family、lag、lineage pending/closed、低cardinality metrics与auto-clear alerts；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | implemented_verified | none |
 | `F-070` | K2 detailed design §11–§13 validation/rollout | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py -q`=`42 passed`；changed-files classifier只选择`miniqmt_execution_runtime_l2`=`832 passed,26 skipped`与`simulation_core_l2`=`438 passed`；DEV repository/migration走真实PostgreSQL disposable schema；核心line/branch均满足`>=80%/>=70%`；classifier=`unmapped_code_files=[]`；production/runtime gates=`noop` | implemented_verified | none |
+| `F-071` | K3 detailed design §1–§3.4 current facts/boundaries/dependent-BUY carrier gap | artifact: `docs/architecture/miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`；target route/import/ledger-cross-parent static tests | design_ready | none |
+| `F-072` | K3 detailed design §3–§5.1.1 plugin identity/source/factory/catalog、v3 state与public transition ID | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py` | design_ready | none |
+| `F-073` | K3 detailed design §5–§6 Sniper exact behavior | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` Sniper parity/negative/restart vectors | design_ready | none |
+| `F-074` | K3 detailed design §5、§7 BestLimit deterministic behavior | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` deterministic ordinal/retry/restart/price-change vectors | design_ready | none |
+| `F-075` | K3 detailed design §5、§8 TWAP timer/session/restart | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` AM/lunch/PM/duration/EOD/restart vectors | design_ready | none |
+| `F-076` | K3 detailed design §5.1.1、§5.3–§5.4、§11 pre-ACK/callback/terminal closure | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py` COMMAND_PENDING、callback-before-ACK、ORDER-ahead-of-TRADE、fill closure、EOD cancel/unknown/no-duplicate tests | design_ready | none |
+| `F-077` | K3 detailed design §9–§10 policy/state/dependent-BUY inventory与ALGO_LOCAL parity contracts | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_legacy_inventory.py` | design_ready | none |
+| `F-078` | K3 detailed design §3–§3.4、§13 K2 public shadow seams | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` no-branch/no-broker/no-ledger/no-cross-parent tests | design_ready | none |
+| `F-079` | K3 detailed design §11–§12、§15 failure/diagnostics/rollback | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` malformed input、plugin-local isolation、DB failure、source rollback tests | design_ready | none |
+| `F-080` | K3 detailed design §14–§16 validation/routing/gates/K6 prerequisite | target `python -m nox -s miniqmt_execution_runtime_l2`、`python -m nox -s paper_v2_backend`及真实依赖plans；line>=80/branch>=70、`unmapped_code_files=[]` | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
@@ -1034,7 +1063,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | no business semantic drift | pass | per-algo predecessor CAS 和 event owner routing 固定 callback order/slot isolation；K1 固定 current-three exact state 与 TWAP exchange-active seconds/午休/EOD/restart，legacy alias drift 不自动重解释；signal/target/plan、方向数量、B0 authority、A 股规则、OMS/Gateway 和唯一 broker route 保持 owner 不变 |
 | no unauthorized gates | pass | route-independent plugin catalog 与 per-plugin/per-route capability receipt 分离；单 route/plugin unsupported 不阻止其它 plugin；当前暂缺/非法 observation 按既有自动语义处理并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
 | no parallel product route | pass | 在现有 `MiniQMTExecutionRuntime` 内原地抽取 kernel/SPI，完整 vn.py runtime、legacy compiler/raw route 均不恢复 |
-| production state separation | pass | K2-A source 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，K2-A-M1 source已通过PR #2753 / merge `024bcf70537c2f1b267417c72f8539937dd21a3f`闭合为`source_merge=merged_pr_2753`；M1不改schema/migration/dependency/config/binding/broker/runtime，DDL/DML/restart/runtime activation全部为`noop` |
+| production state separation | pass | K2 overall 已通过 K2-D PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 闭合为`implemented_verified + merged`；K3详细设计=`design_ready_for_review`、`source_merge=pending_pr`，K3/K4 implementation均`not_started`；DDL/DML/config/binding/broker/restart/runtime activation全部为`noop` |
 
 ## 20. Definition of Done / 完成定义
 
