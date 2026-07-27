@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -46,6 +47,26 @@ from backend.execution_algos.adaptive_is.reasons import (
     QuoteFailureSeverity,
     quote_contract_error,
 )
+
+
+def test_quote_contract_error_preserves_typed_failure_through_contextlib_traceback_handling() -> None:
+    @contextmanager
+    def propagate():  # type: ignore[no-untyped-def]
+        yield
+
+    error = quote_contract_error(
+        QuoteContractReasonCode.CONSUMER_FAILURE,
+        "primary quote failure",
+        context={"generation": 2},
+    )
+    with pytest.raises(QuoteContractError) as caught:
+        with propagate():
+            raise error
+    assert caught.value is error
+    assert caught.value.reason_code is QuoteContractReasonCode.CONSUMER_FAILURE
+    assert caught.value.context == {"generation": 2}
+    with pytest.raises(AttributeError):
+        caught.value.reason_code = QuoteContractReasonCode.PAYLOAD_INVALID  # type: ignore[misc]
 
 
 def _valid_quote(**overrides: object) -> FiveLevelQuote:
@@ -271,7 +292,9 @@ def test_calendar_requires_all_markets_and_aware_clock_fields() -> None:
 
     assert len(calendar_set.snapshot_by_market) == 3
     with pytest.raises(QuoteContractError) as exc_info:
-        CalendarSnapshotSet(snapshot_set_id="missing-bj", snapshot_by_market={MarketCode.SH: snapshot_by_market[MarketCode.SH]})
+        CalendarSnapshotSet(
+            snapshot_set_id="missing-bj", snapshot_by_market={MarketCode.SH: snapshot_by_market[MarketCode.SH]}
+        )
     assert exc_info.value.reason_code == QuoteContractReasonCode.CLOCK_CALENDAR_INVALID
 
 
@@ -300,7 +323,12 @@ def test_eligibility_never_reports_ready_with_a_failure_reason() -> None:
 
 def test_all_reason_codes_have_one_registered_stage() -> None:
     assert set(QUOTE_FAILURE_REGISTRY) == set(QuoteContractReasonCode)
-    assert {definition.stage.value for definition in QUOTE_FAILURE_REGISTRY.values()} >= {"NORMALIZE", "UNIT", "TRADABILITY", "ELIGIBILITY"}
+    assert {definition.stage.value for definition in QUOTE_FAILURE_REGISTRY.values()} >= {
+        "NORMALIZE",
+        "UNIT",
+        "TRADABILITY",
+        "ELIGIBILITY",
+    }
 
 
 def test_reason_registry_is_immutable_and_carries_complete_loud_metadata() -> None:

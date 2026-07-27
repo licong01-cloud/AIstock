@@ -28,28 +28,23 @@ class MiniQMTGatewayCancelAck:
 
 
 class MiniQMTGateway(Protocol):
-    def connect(self, *, runtime_id: str) -> None:
-        ...
+    def connect(self, *, runtime_id: str) -> None: ...
 
-    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
-        ...
+    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]: ...
 
-    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
-        ...
+    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]: ...
 
-    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
-        ...
+    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]: ...
 
-    def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
-        ...
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None: ...
 
-    def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
-        ...
+    def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck: ...
+
+    def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck: ...
 
 
 class MiniQMTGatewayEventSink(Protocol):
-    def on_tick(self, *, symbol: str, price: float, payload: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
-        ...
+    def on_tick(self, *, symbol: str, price: float, payload: dict[str, Any] | None = None) -> MiniQMTExecutionEvent: ...
 
     def record_order_event(
         self,
@@ -57,8 +52,7 @@ class MiniQMTGatewayEventSink(Protocol):
         broker_order_id: str,
         status: str,
         payload: dict[str, Any] | None = None,
-    ) -> MiniQMTExecutionEvent:
-        ...
+    ) -> MiniQMTExecutionEvent: ...
 
     def record_trade_event(
         self,
@@ -67,39 +61,30 @@ class MiniQMTGatewayEventSink(Protocol):
         quantity: int,
         price: float,
         payload: dict[str, Any] | None = None,
-    ) -> MiniQMTExecutionEvent:
-        ...
+    ) -> MiniQMTExecutionEvent: ...
 
-    def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent:
-        ...
+    def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent: ...
 
     def record_disconnect_event(
         self,
         *,
         reason: str,
         payload: dict[str, Any] | None = None,
-    ) -> MiniQMTExecutionEvent:
-        ...
+    ) -> MiniQMTExecutionEvent: ...
 
 
 class MiniQMTGatewayEventSource(Protocol):
-    def bind_event_sink(self, sink: MiniQMTGatewayEventSink) -> None:
-        ...
+    def bind_event_sink(self, sink: MiniQMTGatewayEventSink) -> None: ...
 
-    def on_order(self, raw_order: dict[str, Any]) -> MiniQMTExecutionEvent:
-        ...
+    def on_order(self, raw_order: dict[str, Any]) -> MiniQMTExecutionEvent: ...
 
-    def on_trade(self, raw_trade: dict[str, Any]) -> MiniQMTExecutionEvent:
-        ...
+    def on_trade(self, raw_trade: dict[str, Any]) -> MiniQMTExecutionEvent: ...
 
-    def on_tick(self, raw_tick: dict[str, Any]) -> MiniQMTExecutionEvent:
-        ...
+    def on_tick(self, raw_tick: dict[str, Any]) -> MiniQMTExecutionEvent: ...
 
-    def on_account(self, raw_account: dict[str, Any]) -> MiniQMTExecutionEvent:
-        ...
+    def on_account(self, raw_account: dict[str, Any]) -> MiniQMTExecutionEvent: ...
 
-    def on_disconnect(self, raw_event: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
-        ...
+    def on_disconnect(self, raw_event: dict[str, Any] | None = None) -> MiniQMTExecutionEvent: ...
 
 
 class MiniQMTGatewayEventSourceError(RuntimeError):
@@ -143,6 +128,12 @@ class FakeMiniQMTGateway:
     def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
         return [dict(item, runtime_id=runtime_id) for item in self._positions]
 
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None:
+        if operation not in {"SUBMIT_LIMIT", "CANCEL_ORDER"}:
+            raise ValueError("unsupported child-order broker operation")
+        if operation == "CANCEL_ORDER" and not order.broker_order_id:
+            raise ValueError("CANCEL_ORDER requires the exact broker order identity")
+
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
         self.submitted_orders.append(order)
         if not self._accept_orders:
@@ -182,7 +173,7 @@ class FakeMiniQMTGateway:
             accepted=True,
             broker_order_id=order.broker_order_id,
             message="fake broker accepted cancel request",
-            raw={"gateway": "fake_miniqmt", "cancel_reason": reason},
+            raw={"gateway": "fake_miniqmt", "cancel_reason": reason, "broker_called": True},
         )
 
 
@@ -212,23 +203,56 @@ class QmtClientMiniQMTGateway:
         # Do not auto-restart or reconnect services from operator commands.
         self.connected_runtime_ids.append(runtime_id)
 
-    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        getter = getattr(self.qmt_client, "get_orders", None)
-        if not callable(getter):
-            return []
-        return [dict(item) for item in (getter(cancelable_only=False) or [])]
+    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_orders",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_ORDERS_UNAVAILABLE",
+            kwargs={"cancelable_only": False},
+            runtime_id=runtime_id,
+        )
 
-    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        getter = getattr(self.qmt_client, "get_trades", None)
-        if not callable(getter):
-            return []
-        return [dict(item) for item in (getter() or [])]
+    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_trades",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_TRADES_UNAVAILABLE",
+            runtime_id=runtime_id,
+        )
 
-    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
-        getter = getattr(self.qmt_client, "get_positions", None)
-        if not callable(getter):
-            return []
-        return [dict(item) for item in (getter() or [])]
+    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_positions",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_POSITIONS_UNAVAILABLE",
+            runtime_id=runtime_id,
+        )
+
+    def validate_child_order_pre_call(self, order: MiniQMTChildOrder, *, operation: str) -> None:
+        if operation == "SUBMIT_LIMIT":
+            method_name = "place_order"
+            reason_code = "MINIQMT_COMMAND_OUTBOX_PLACE_ORDER_UNAVAILABLE"
+        elif operation == "CANCEL_ORDER":
+            if not (order.broker_order_id or _metadata_broker_order_id(order)):
+                raise MiniQMTGatewayEventSourceError(
+                    "CANCEL_ORDER has no exact broker order identity",
+                    reason_code="MINIQMT_COMMAND_OUTBOX_CANCEL_IDENTITY_MISSING",
+                    context={"operation": operation},
+                )
+            method_name = "cancel_order"
+            reason_code = "MINIQMT_COMMAND_OUTBOX_CANCEL_ORDER_UNAVAILABLE"
+        else:
+            raise MiniQMTGatewayEventSourceError(
+                "child-order broker operation is unsupported",
+                reason_code="MINIQMT_COMMAND_OUTBOX_OPERATION_UNSUPPORTED",
+                context={"operation": operation},
+            )
+        if not callable(getattr(self.qmt_client, method_name, None)):
+            raise MiniQMTGatewayEventSourceError(
+                "qmt client does not expose the required broker method",
+                reason_code=reason_code,
+                context={"operation": operation, "method_name": method_name},
+            )
 
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
         self.submitted_orders.append(order)
@@ -246,7 +270,9 @@ class QmtClientMiniQMTGateway:
             )
         order_type = 23 if order.side == OrderSide.BUY else 24
         strategy_name = _metadata_text(order, "strategy_name") or self.strategy_name or order.strategy_slot_id
-        order_remark = _metadata_text(order, "order_remark") or f"{self.order_remark_prefix}-{order.child_order_id[-12:]}"
+        order_remark = (
+            _metadata_text(order, "order_remark") or f"{self.order_remark_prefix}-{order.child_order_id[-12:]}"
+        )
         try:
             broker_order_id, message = submitter(
                 stock_code=order.symbol,
@@ -268,7 +294,7 @@ class QmtClientMiniQMTGateway:
                     "broker_called": True,
                 },
             )
-        diagnostic = _maybe_call(self.qmt_client, "get_last_order_diagnostic") or {}
+        diagnostic = _diagnostic_call(self.qmt_client, "get_last_order_diagnostic")
         try:
             parsed_order_id = int(broker_order_id)
         except (TypeError, ValueError):
@@ -296,7 +322,7 @@ class QmtClientMiniQMTGateway:
                 accepted=False,
                 broker_order_id=None,
                 message="child order has no broker_order_id",
-                raw={"gateway": "qmt_client_miniqmt", "reason": reason},
+                raw={"gateway": "qmt_client_miniqmt", "reason": reason, "broker_called": False},
             )
         canceler = getattr(self.qmt_client, "cancel_order", None)
         if not callable(canceler):
@@ -304,7 +330,11 @@ class QmtClientMiniQMTGateway:
                 accepted=False,
                 broker_order_id=str(order_id),
                 message="qmt client does not expose cancel_order",
-                raw={"gateway": "qmt_client_miniqmt", "error_code": "QMT_CANCEL_ORDER_UNAVAILABLE"},
+                raw={
+                    "gateway": "qmt_client_miniqmt",
+                    "error_code": "QMT_CANCEL_ORDER_UNAVAILABLE",
+                    "broker_called": False,
+                },
             )
         try:
             accepted, message = canceler(str(order_id))
@@ -313,14 +343,24 @@ class QmtClientMiniQMTGateway:
                 accepted=False,
                 broker_order_id=str(order_id),
                 message=f"{type(exc).__name__}: {exc}",
-                raw={"gateway": "qmt_client_miniqmt", "exception_type": type(exc).__name__, "reason": reason},
+                raw={
+                    "gateway": "qmt_client_miniqmt",
+                    "exception_type": type(exc).__name__,
+                    "reason": reason,
+                    "broker_called": True,
+                },
             )
-        diagnostic = _maybe_call(self.qmt_client, "get_last_cancel_diagnostic") or {}
+        diagnostic = _diagnostic_call(self.qmt_client, "get_last_cancel_diagnostic")
         return MiniQMTGatewayCancelAck(
             accepted=bool(accepted),
             broker_order_id=str(order_id),
             message=str(message or ""),
-            raw={"gateway": "qmt_client_miniqmt", "diagnostic": diagnostic, "reason": reason},
+            raw={
+                "gateway": "qmt_client_miniqmt",
+                "diagnostic": diagnostic,
+                "reason": reason,
+                "broker_called": True,
+            },
         )
 
 
@@ -340,14 +380,24 @@ def _metadata_broker_order_id(order: MiniQMTChildOrder) -> str | None:
     return None
 
 
-def _maybe_call(obj: Any, method_name: str) -> Any:
+def _diagnostic_call(obj: Any, method_name: str) -> Any:
     method = getattr(obj, method_name, None)
     if not callable(method):
-        return None
+        return {"status": "UNAVAILABLE", "method_name": method_name}
     try:
-        return method()
-    except Exception:  # noqa: BLE001
-        return None
+        value = method()
+    except Exception as exc:  # noqa: BLE001 - observation failure remains explicit in broker ACK evidence.
+        try:
+            message = str(exc)[:512]
+        except Exception as render_error:  # noqa: BLE001
+            message = f"<{type(exc).__name__}; renderer={type(render_error).__name__}>"
+        return {
+            "status": "FAILED",
+            "method_name": method_name,
+            "exception_type": type(exc).__name__,
+            "message": message,
+        }
+    return value if value is not None else {"status": "EMPTY", "method_name": method_name}
 
 
 class QmtClientMiniQMTEventLoopGateway(QmtClientMiniQMTGateway):

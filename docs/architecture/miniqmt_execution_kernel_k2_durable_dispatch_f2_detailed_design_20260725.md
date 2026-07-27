@@ -1,10 +1,10 @@
 # MiniQMT 统一执行内核 K2 Durable Dispatch F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`；K2-B=`implemented_verified + merged`、`source_merge=merged_pr_2773`；K2-C=`implemented_verified + merged`、final source `c87748cd`、PR #2794 / merge `801dc3c9`、`source_merge=merged_pr_2794`；K2-D `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_verified`；实现状态：`K2-A implemented_verified + merged`，K2-A-M1 repository maintainability=`implemented_verified + merged`、`source_merge=merged_pr_2753`；K2-B=`implemented_verified + merged`、`source_merge=merged_pr_2773`；K2-C=`implemented_verified + merged`、final source `c87748cd`、PR #2794 / merge `801dc3c9`、`source_merge=merged_pr_2794`；K2-D=`implemented_verified`、`source_merge=pending_pr`，产品 runtime 仍未切换。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
-> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B final source HEAD `84ce557ccb533452b8dcb08e0747398b94cd88c6` 已通过 PR #2773 / merge `db81b27e84c9c82bed26e8d8e66b44d80b44def4` 合入，required CI run `30225853616` 全绿，当前为 `implemented_verified + merged`、`source_merge=merged_pr_2773`。K2-C final source HEAD `c87748cd32f47a21e824fe8fba5d342e0a0a2304` 已闭合 strict session projection、durable timer claim/finalize/reclaim、午休/EOD/catch-up/restart 与 additive migration，并通过 PR #2794 / merge `801dc3c99259a32cf7bb9cfdcabac0fa6053c4f4` 合入；required CI run `30235878200` 全绿，当前 `implemented_verified + merged`、`source_merge=merged_pr_2794`。K2-D与K3/K4 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1-A/B/C `implemented_verified + merged`。K2-A PR #2729 七项首轮审核补修之后，第二轮独立复审新增的 initial-state、CANCEL synchronous ACK 后 callback closure、完整 scalar/carrier projection、非自证 catalog fingerprint 四项阻断已由 source、direct/DEV、coverage、classifier/F2、DESIGN-COMPLIANCE-001 与 final required CI run `30172230466`闭合；最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入，当前为 `implemented_verified + merged`，`source_merge=merged_pr_2729`。K2-B final source HEAD `84ce557ccb533452b8dcb08e0747398b94cd88c6` 已通过 PR #2773 / merge `db81b27e84c9c82bed26e8d8e66b44d80b44def4` 合入，required CI run `30225853616` 全绿，当前为 `implemented_verified + merged`、`source_merge=merged_pr_2773`。K2-C final source HEAD `c87748cd32f47a21e824fe8fba5d342e0a0a2304` 已闭合 strict session projection、durable timer claim/finalize/reclaim、午休/EOD/catch-up/restart 与 additive migration，并通过 PR #2794 / merge `801dc3c99259a32cf7bb9cfdcabac0fa6053c4f4` 合入；required CI run `30235878200` 全绿，当前 `implemented_verified + merged`、`source_merge=merged_pr_2794`。K2-D现已完成shadow-only three-phase dispatcher、调用前callback watermark、同步ACK与真实event lineage分离、append-only reconcile history、unknown/non-acceptance bounded reconcile、只读diagnostics/metrics/alerts/runbook及additive guarded migration；`source_merge=pending_pr`。K3/K4 `not_started`，产品 runtime 未切换。
 >
 > 本轮 K2-B 只实现 shadow-only ingress/creation/delivery/materialization/repository transaction，不启动常驻worker、不调用 Gateway/broker、不修改 binding/config、不启停或重启服务。只在现有 DEV 数据库的 disposable schema 验证 repository transaction；未执行生产 DDL/DML。`production_ddl_gate=noop`，前后端 dependency gates=`noop`，runtime activation=`noop`。
 
@@ -13,7 +13,7 @@
 - K2-A merged source：最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入；`plugin_contracts.py` 中K2-A要求的§4 strict durable carriers；`kernel_repository.py` PostgreSQL writer/readback、row lock/CAS、DB-sequenced worker incarnation、event/delivery、transition/mapping/child/outbox、timer/session authority与有界恢复查询；三份 additive/preflight/guarded-rollback migration。
 - 第二轮 RED：public carrier/repository/migration seam 证明首次 PENDING/RESERVED row 可携带伪造历史、CANCEL synchronous accepted 后 terminal outbox 无 successor 导致 later callback 不能原子闭合 mapping/algo、carrier JSON 与重复 scalar 只做部分比对、目标数据库可把 fingerprint helper 替换为预期常量并自证 READY。
 - 第二轮 GREEN：contracts=`33 passed`；DEV repository=`12 passed`；DEV migration=`11 passed`；import-boundary=`66 passed`；repository+contracts coverage run=`45 passed`，`kernel_repository.py` line=`87.21%`、branch=`72.04%`；MiniQMT L2=`719 passed,21 skipped`，Paper impact plan=`1050 passed,2 skipped,2 xfailed`；L0/registry、classifier、三份F2 validator=`10/10,28/28,70/70`、DESIGN-COMPLIANCE-001与final required CI run `30172230466`全绿。catalog projection SHA-256=`6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762`，helper body SHA-256=`8d9c8b09b5c27a0b0caeeaea3663556b9876b0eea179057d691bbf2fce29c107`，canonical-LF forward SHA-256=`24b4e1894f93f1383d7690ff145c55e100a26cecfc9e60a9070b71a57524d083`。
-- 当前状态为 K2-A、K2-A-M1、K2-B、K2-C 均 `implemented_verified + merged`，K2-C=`source_merge=merged_pr_2794`、`close_sync=not_applicable_feature`。K2-C classifier仅选择`miniqmt_execution_runtime_l2`且`unmapped_code_files=[]`；K2 overall仍需K2-D，不能由已合入前四个切片推断完成。
+- 当前状态为 K2-A、K2-A-M1、K2-B、K2-C 均 `implemented_verified + merged`；K2-D=`implemented_verified`、`source_merge=pending_pr`。K2-D changed-files classifier只选择`miniqmt_execution_runtime_l2/simulation_core_l2`且`unmapped_code_files=[]`；K2 overall source implementation已闭合但尚未合入，不能推断K3/K4或产品runtime完成。
 
 ## 0. Implementation Decision / 实施决策
 
@@ -215,6 +215,34 @@ event ingress 只允许首次写入上述 initial `PENDING` delivery；`CLAIMED/
 
 ### 4.5 `BrokerCommandOutboxV1`
 
+K2-D final-review closure: `BrokerCommandOutboxV1` additionally carries nullable
+`callback_watermark_before_call`. It is `null` for initial `PENDING` and each new
+`CLAIMED` epoch, is filled from `execution_runtime.last_event_sequence` and committed in
+the same CAS that publishes `DISPATCHING`, and remains immutable through
+`OUTCOME_UNKNOWN/RECONCILING/ACKED/ACKED_REJECTED`. A safe retry claim clears the old
+watermark before a new pre-call boundary. Gateway-local/process-memory watermarks are
+transport observations only and cannot authorize retry or recovery.
+
+An expired `CLAIMED` lease is recovered as an explicit pre-call failure with
+`broker_called=false` and the remaining 1/2/4/8-second retry cadence. An expired
+`DISPATCHING` lease is recovered as `OUTCOME_UNKNOWN` from the committed command,
+mapping, fence, dispatch attempt and pre-call watermark; recovery never calls Gateway.
+The concrete Gateway must also expose and pass `validate_child_order_pre_call` before
+the `DISPATCHING` CAS. Missing underlying `place_order`/`cancel_order` is therefore an
+explicit bounded pre-call failure, not a fabricated broker rejection or
+`OUTCOME_UNKNOWN`; failures of optional post-call diagnostic readers remain explicit in
+ACK evidence without changing the real broker ACK.
+Last-lease fencing and same-session successor preparation form one bounded handoff:
+generation preparation waits up to two seconds for the already-fenced writer to observe
+its stop event, then still rejects if that writer remains alive. This removes the
+load-dependent false consumer failure without permitting parallel writers. Typed
+`QuoteContractError` business fields and recursive context remain read-only, while the
+exception itself preserves Python's required mutable traceback runtime so `contextlib`
+cannot replace the primary reason with `FrozenInstanceError`.
+Exact non-acceptance additionally requires a repository query proving zero
+`ORDER/TRADE/RECONCILE` events whose `correlation.reference_command_id` matches the
+command in the durable `(watermark_before, watermark_after]` sequence interval.
+
 字段固定为：
 
 ```text
@@ -222,7 +250,7 @@ schema_version=miniqmt_broker_command_outbox_v1, command_id, transition_id, ordi
 runtime_id, algo_instance_id, parent_intent_id, mapping_id
 command_type, local_vt_orderid, payload_json, payload_sha256
 status, attempt_count, lease_owner, lease_epoch, lease_fence_token, lease_expires_at
-dispatch_attempt_id, deterministic_client_order_ref, next_attempt_at_utc
+dispatch_attempt_id, callback_watermark_before_call, deterministic_client_order_ref, next_attempt_at_utc
 broker_called: false|true|null
 broker_order_id, ack_receipt_json, ack_receipt_sha256
 non_acceptance_receipt, unknown_outcome_receipt, reconcile_receipt
@@ -250,9 +278,9 @@ transition writer 只允许首次创建 initial `PENDING` outbox；`ACKED/ACKED_
 
 `BrokerCommandAckReceiptV1` exact fields：`schema_version=miniqmt_broker_command_ack_receipt_v1,command_id,mapping_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,source(SYNCHRONOUS_RETURN|CALLBACK|RECONCILIATION),accepted,broker_called=true,broker_order_id|null,reason_code,ack_payload_sha256,observed_at_utc,receipt_sha256`。accepted=true必须有non-empty broker order id；accepted=false不得携带accepted broker id。receipt hash使用§4.0 domain，raw ACK仅以bounded canonical payload/hash保存，不把空payload当成功。
 
-`BrokerUnknownOutcomeReceiptV1` exact fields：`schema_version=miniqmt_broker_unknown_outcome_receipt_v1,command_id,dispatch_attempt_id,mapping_id,lease_fence_token,uncertain_stage(GATEWAY_CALL|GATEWAY_RETURN|ACK_PERSIST|CALLBACK_CORRELATION),callback_watermark,reason_code,broker_called=null,observed_at_utc,receipt_sha256`；receipt hash使用§4.0 domain。该receipt只授权OUTCOME_UNKNOWN/reconcile，永不授权重复SUBMIT。
+`BrokerUnknownOutcomeReceiptV1` exact fields：`schema_version=miniqmt_broker_unknown_outcome_receipt_v1,command_id,dispatch_attempt_id,mapping_id,lease_fence_token,uncertain_stage(GATEWAY_CALL|GATEWAY_RETURN|ACK_PERSIST|CALLBACK_CORRELATION),callback_watermark,reason_code,broker_called=null,observed_at_utc,receipt_sha256`；receipt hash使用§4.0 domain。outbox writer/readback必须同时验证其`mapping_id/dispatch_attempt_id/callback_watermark`分别与当前durable outbox的唯一mapping、dispatch attempt和单次赋值pre-call watermark完全一致；该receipt只授权OUTCOME_UNKNOWN/reconcile，永不授权重复SUBMIT。
 
-`BrokerNonAcceptanceReceiptV1` exact fields：`schema_version=miniqmt_broker_non_acceptance_receipt_v1,command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`；receipt hash 使用 §4.0 domain。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
+`BrokerNonAcceptanceReceiptV1` exact fields：`schema_version=miniqmt_broker_non_acceptance_receipt_v1,command_id,deterministic_client_order_ref,gateway_route_id,gateway_catalog_sha256,query_criteria_sha256,callback_watermark_before,callback_watermark_after,order_snapshot_sha256,trade_snapshot_sha256,observed_at_utc,reason_code,receipt_sha256`；receipt hash 使用 §4.0 domain。writer/readback必须验证client ref、before watermark以及after/query/order/trade snapshot hashes分别与outbox和同一latest reconciliation receipt完全闭合。只有Gateway capability authority声明并验证相应idempotency，且两个watermark之间无匹配callback、snapshot exact查询证明未受理时，receipt才有效；空snapshot本身不是证明。
 
 `BrokerOutcomeReconciliationReceiptV1` exact fields：`schema_version=miniqmt_broker_outcome_reconciliation_receipt_v1,command_id,reconcile_attempt,query_criteria_sha256,callback_watermark,ordered_matched_order_ids,ordered_matched_trade_ids,order_snapshot_sha256,trade_snapshot_sha256,outcome(NOT_FOUND|UNIQUE_ACCEPTED|UNIQUE_REJECTED|CONFLICT),broker_called,broker_order_id|null,reason_code,observed_at_utc,receipt_sha256`；receipt hash 使用 §4.0 domain。matched IDs 按 broker authoritative identity 排序且分别唯一。`NOT_FOUND`不得自动转`broker_called=false`；`CONFLICT`必须terminal且保留全部matched identities。
 
@@ -304,6 +332,12 @@ K2 不自行读取“今天是否交易”的松散布尔值，也不在K2-A复�
 `session_epoch = "mqsessionepoch_" + hash_hex_v1("miniqmt_session_epoch_v1", {runtime_id,exchange_trade_date,exchange_session_authority_sha256})`；`session_event_id = "mqsessionevt_" + hash_hex_v1("miniqmt_session_event_identity_v1", {runtime_id,session_epoch,session_phase,phase_boundary_at_utc})`。EOD source identity 使用同 `session_epoch`；TIMER occurrence继续使用K1 schedule/due identity并在 occurrence row引用 authority hash。exchange-active seconds只在 authority中 `CONTINUOUS_AM/CONTINUOUS_PM` segments内累计，午休/auction/closed为零；所有 phase boundary由 segments转换为UTC后得到，不由 tick数量、process wake time或本机日期猜测。
 
 ### 4.10 Transaction commit identity
+
+K2-D reconciliation history follows the same authority. The shared pure projection is
+`{receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,outcome,observed_at_utc}`;
+writer and independent readback compare every scalar with the strict
+`BrokerOutcomeReconciliationReceiptV1`. The database owner is the composite
+`(command_id,runtime_id)` foreign key to the outbox, not two unrelated foreign keys.
 
 PostgreSQL writer 在事务内使用 repo-owned `transaction_commit_identity = "mqtx_" + hash_hex_v1("miniqmt_kernel_transaction_v1", {operation,owner identities,input hashes,ordered output identities})`。它不是 PostgreSQL xid 的替代，也不假装证明物理 commit；事务context正常退出且物理commit返回后，writer必须通过独立连接按exact identity重读strict carrier及关键scalar columns。commit-return unknown时不得返回成功或重做broker side effect；consumer用该 identity及全部业务 identity调用只读readback seam，只有完整 closure一致才确认，否则保持未确认并重试readback。
 
@@ -391,6 +425,15 @@ reconciler按 command id、client ref、order remark、callback watermark和brok
 
 ### 7.2 Bounded retry
 
+K2-D pre-call retry delays are exactly `1,2,4,8` seconds after attempts 1–4; attempt 5
+is terminal and no sixth broker call exists. Reconciliation remains bounded to ten
+durable attempts. Exhaustion or an exact persisted `EOD` event from
+`EXCHANGE_SESSION_CLOCK` triggers one fresh final Gateway/OMS snapshot readback and then
+terminalization. If crash recovery first finds an append-only pre-EOD receipt not yet
+attached to the outbox latest view, it attaches that receipt without re-querying, then
+the next EOD invocation writes a new final attempt; a stale pre-EOD receipt is never
+misreported as the EOD readback.
+
 delivery/repository pre-effect retry最多 5 次；outbox pre-DISPATCHING retry最多 5 次。延迟只由 durable attempt count确定，无随机 jitter、wall clock identity或进程内计数。attempt耗尽写 terminal receipt。
 
 `attempt_count` 表示已开始的总attempt，首次claim从0原子增至1；最大5次实际attempt。attempt 1–4失败后的next delay分别为 `1,2,4,8` 秒；attempt 5失败直接耗尽并写terminal receipt，不再设置next attempt。不存在第6次调用或未被计数的initial attempt。
@@ -462,6 +505,13 @@ K2不伪造历史 ALGO_START、delivery、transition或outbox。现存 rows只�
 稳定reason families固定为：`MINIQMT_KERNEL_SCHEMA_*`、`MINIQMT_RUNTIME_EVENT_*`、`MINIQMT_RUNTIME_EVENT_ROUTING_*`、`MINIQMT_ALGO_INITIALIZATION_*`、`MINIQMT_ALGO_DELIVERY_*`、`MINIQMT_ALGO_TRANSITION_*`、`MINIQMT_ALGO_FAILURE_*`、`MINIQMT_TIMER_*`、`MINIQMT_COMMAND_OUTBOX_*`、`MINIQMT_COMMAND_OUTCOME_*`、`MINIQMT_KERNEL_FENCE_*`、`MINIQMT_KERNEL_READBACK_*`。每个error必须包含适用的runtime/algo/event/delivery/transition/command identity、stage、retryable、terminal、broker_called和bounded JSON-safe context；renderer失败保留primary type/message并增加renderer error，不二次抛异常。
 
 ### 10.2 Read-only diagnostics
+
+K2-D command-chain pagination uses the exact keyset cursor
+`(updated_at_utc,command_id)` with ordering `updated_at_utc DESC, command_id ASC` and
+returns `next_cursor` only when another row exists. Malformed cursors fail loudly.
+Diagnostics also expose `expired_dispatching_lease_count`; repository/readback failure
+is projected as `READBACK_FAILED` plus a critical low-cardinality alert rather than a
+false-green response.
 
 现有 `/api/v1/simulation-runtime/platform-diagnostics` 增加：catalog/gateway authority hash；event sequence/routing/delivery set；per-algo predecessor gap；state/transition/failure/skip；timer due/emitted；outbox status/attempt/nullable broker_called/reconcile；command-child-broker mapping。查询要求 runtime id + trade date，默认100、最大500，cursor为 `(sequence,identity)`；不启动 feed/worker，不重放、不repair DB。
 
@@ -561,6 +611,8 @@ session events、durable schedule/occurrence、午休/catch-up/EOD/restart；不
 
 dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS/Gateway reconcile、metrics/alerts/platform diagnostics/runbook。生产adapter存在但不由产品runtime实例化。
 
+当前实现由`kernel_outbox.py`、唯一public repository façade下的transition/outbox与diagnostics mixin、`kernel_diagnostics.py`及现有platform diagnostics承担。broker call前先提交DISPATCHING并冻结callback watermark；同步accepted ACK只关闭outbox，不伪造ORDER/RECONCILE event或mapping lineage，后续broker identity只由K2-B atomic callback/reconcile ingress附加。异常后即使OMS snapshot不可用也能持久化OUTCOME_UNKNOWN；10次cadence严格按durable next-at执行，当前MiniQMT无idempotent-submit capability时绝不重提。每次snapshot写入新增append-only`execution_broker_reconciliation_attempt`，CAS失败/restart复用同receipt而不重新查询broker。diagnostics区分schema未部署、runtime未激活与真实healthy，提供delivery/timer lag、predecessor、outbox、mapping-lineage和低基数reason family；alerts自动清除且无人工acknowledge/审批。全部能力保持shadow-only，未实例化worker或调用真实broker。
+
 四个slice均独立PR、独立DESIGN-COMPLIANCE和changed-file routing；不得把K2-A schema或in-memory worker称为K2 complete。
 
 ## 13. Risks, Rollout and Production Gates / 风险、发布与生产门禁状态
@@ -623,11 +675,11 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 | `F-063` | §4.1、§4.6、§5、§6.1–6.2、§12 K2-B；`kernel_ingress.py`、`kernel_creation.py`、`kernel_repository_event_delivery.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py`、`test_kernel_creation.py`、`test_kernel_repository_postgres.py`闭合code-owned fan-out、ALGO_START authority、sequence与single transaction；focused/DEV/single-process=`50/14/794 passed`；PR #2773 / merge `db81b27e...` | implemented_verified | none |
 | `F-064` | §4.2–4.4、§6.3、§7、§12 K2-B；`kernel_delivery.py`、`kernel_materializer.py`、`kernel_repository_k2b.py`与唯一`KernelRepositoryBase._connection` | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py`、`test_kernel_repository_k2b_validation.py`、`test_kernel_repository_postgres.py`闭合projection lineage、failure mapping/outbox、retry/reclaim/readback；核心line/branch=`85.99%/70.38%`；MiniQMT L2=`772 passed,23 skipped` | implemented_verified | none |
 | `F-065` | §4.2–§4.4、§6.3、§7.2、§12 K2-B；strict failure/skip/parent closure与bounded retry transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py`与`test_kernel_repository_postgres.py`覆盖attempts 1–5/no sixth call、pre-broker terminalization、accepted child CANCEL、outcome unknown、last-good state与queued successor SKIPPED；classifier仅MiniQMT且`unmapped_code_files=[]` | implemented_verified | none |
-| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3、§12 K2-A-M1；`kernel_repository_transition_outbox.py`唯一持有mapping/outbox/callback transaction | `backend/tests/miniqmt_execution_runtime/test_kernel_contracts.py`与`test_kernel_repository_postgres.py`验证accepted mapping+CANCEL claim/DISPATCHING、wrong owned broker id、ACK/reject/unknown/reconcile/terminal matrix、terminal outbox immutable、FAILED+CLEAN原子闭包与整事务rollback；K2-D再实现dispatcher/reconciler | design_ready | none |
+| `F-066` | §4.5–§4.7、§6.4–6.5、§7.1–§7.3、§12；`kernel_outbox.py`与唯一repository event/outbox authorities | `backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py`=`35 passed`覆盖three-phase、底层mutation method pre-call proof、diagnostic failure显式证据、1/2/4/8 cadence、expired CLAIMED/DISPATCHING recovery、ACK/reject/unknown、callback-watermark单次赋值/post-call不可变与receipt identity closure、zero-matching-callback non-acceptance、CAS restart、EOD fresh final readback及same-ID contradictory broker facts；`test_quote_ingress.py::test_supervisor_reacquires_after_last_release_without_reusing_fenced_generation`与`test_quote_contract.py::test_quote_contract_error_preserves_typed_failure_through_contextlib_traceback_handling`验证fenced-writer有界handoff和primary typed failure不被traceback handling覆盖；`test_kernel_repository_postgres.py` DEV验证callback watermark、composite owner、scalar drift和append-only receipt；outbox line/branch=`91.09%/76.43%` | implemented_verified | none |
 | `F-067` | §4.8–§4.9、§8、§12 K2-C；`kernel_clock.py`与唯一`kernel_repository_timer_session.py`实现strict session projection、session/TIMER/EOD ingress、atomic claim/finalize/reclaim及additive migration | `backend/tests/miniqmt_execution_runtime/test_kernel_clock.py` direct=`16 passed`、clock line/branch=`90.10%/80.85%`；`test_plugin_import_boundaries.py`/`test_kernel_repository_structure.py` direct合计=`122 passed`；`test_kernel_migration_postgres.py` DEV=`13 passed`且`test_kernel_repository_postgres.py` atomic claim/reclaim/finalize/guarded rollback通过；`python -m nox -s miniqmt_execution_runtime_l2`=`789 passed,25 skipped`；L0/registry/classifier及required CI run `30235878200`通过；final source `c87748cd...`、PR #2794 / merge `801dc3c9...` | implemented_verified + merged | none |
-| `F-068` | §9；三份 migration + checksum/fingerprint/readback | `backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py`验证DEV preflight、clean first/second apply、guarded rollback、CHECK/FK/partial predicate/type/null/default六类drift；production DDL未执行 | design_ready | none |
-| `F-069` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m nox -s miniqmt_execution_runtime_l2`、`backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py`与`test_kernel_migration_postgres.py`：K2-B final source=`84ce557c...`、PR #2773 / merge=`db81b27e...`、CI run=`30225853616`；K2-C final source=`c87748cd...`、PR #2794 / merge=`801dc3c9...`、CI run=`30235878200`，direct/import/structure/DEV/L2与line/branch=`122/13/789 passed`、`90.10%/80.85%`；K2-D仍待自身证据 | design_ready | none |
+| `F-068` | §9；base/K2-C/K2-D migration triplets + canonical-LF checksum/fingerprint/readback | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py -q`=`15 passed`，验证preflight、first/second apply、8-column reconciliation table、outbox callback-watermark column/CHECK、command/runtime composite owner、每列COMMENT、base+K2-D code-owned function body/catalog drift（含outbox复合UNIQUE backing index）与zero-fact guarded rollback；forward SHA=`23a7d6e1...`，K2-D catalog SHA=`f9034e9e...`；production DDL未执行 | implemented_verified | none |
+| `F-069` | §10；repository diagnostics、platform projection与operator runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`与`backend/tests/simulation_runtime/test_ops_api.py`验证NOT_APPLIED/NOT_ACTIVATED/READBACK_FAILED、stable cursor、delivery 5/30秒与timer 2/10秒阈值、predecessor/expired lease/unknown critical、low-card labels、auto-clear、read-only/no-ack；diagnostics line/branch=`87.41%/80.88%`，repository diagnostics combined coverage=`93%`；artifact `docs/operations/simulation_platform_operator_runbook_20260717.md` | implemented_verified | none |
+| `F-070` | §11–§13；ownership/classifier/coverage/state separation | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py backend/tests/simulation_runtime/test_ops_api.py -q`=`111 passed`；DEV migration=`15 passed`且DEV repository public transaction matrix通过；changed-files classifier=`targeted_ci_required`并由`python -m nox -s miniqmt_execution_runtime_l2`=`852 passed,27 skipped`、共享Adaptive IS error-contract依赖`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`及`python -m nox -s simulation_core_l2`=`438 passed`闭合，`unmapped_code_files=[]`；`python -m nox -s l0`、`python -m nox -s validation_module_registry_l0`及三份F2 validator通过；production/runtime gates均noop，PR/merge/CI状态独立记录 | implemented_verified | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 
@@ -643,4 +695,4 @@ dispatcher three-phase、attempt history、callback race、OUTCOME_UNKNOWN、OMS
 
 ## 17. Definition of Done / K2 完成定义
 
-K2-A 当前为`implemented_verified + merged`：最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入。K2-A-M1内部职责拆分同样为`implemented_verified + merged`、`source_merge=merged_pr_2753`：最终 source HEAD `df10123bf39cd7f03ead2dce62ba6a2fae268e92`及required CI run `30193156930`已通过PR #2753 / merge `024bcf70537c2f1b267417c72f8539937dd21a3f`闭合，public façade/API/identity/transaction/schema/migration与业务语义保持不变，不改变K2-A既有merge identity。只有 F-061..F-070 全部拥有最终source/test/DEV migration/CI receipt，四个slice全部合入，且K2 production modules可由K3直接消费时，K2 overall source implementation才能标记 `implemented_verified + merged`。即使如此，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据仍是独立状态，不能由K2完成推断。
+K2-A 当前为`implemented_verified + merged`：最终 source HEAD `fc261aaf47a6fade01b1037efd5c8cb8ccda5235` 已通过 PR #2729 / merge `0b46f7819f4147c97a36908e25ca948ce5450661` 合入。K2-A-M1内部职责拆分同样为`implemented_verified + merged`、`source_merge=merged_pr_2753`：最终 source HEAD `df10123bf39cd7f03ead2dce62ba6a2fae268e92`及required CI run `30193156930`已通过PR #2753 / merge `024bcf70537c2f1b267417c72f8539937dd21a3f`闭合。K2-B/C均已合入；K2-D source implementation已由F-066/F-068/F-069/F-070本地证据闭合但`source_merge=pending_pr`，因此K2 overall只能标记`implemented_verified_source_pending_merge`。K2-D合入并完成state-sync后才可标记`implemented_verified + merged`。无论source状态如何，K3/K4、产品runtime切换、production DDL、用户重启和正常交易日运行证据均为独立状态。

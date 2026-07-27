@@ -46,8 +46,72 @@ from .plugin_contracts import (
 )
 
 
+def _callback_watermark_sequence(value: str, *, runtime_id: str) -> int:
+    prefix = f"{runtime_id}:"
+    if type(value) is not str or not value.startswith(prefix):
+        raise KernelRepositoryConflict("callback watermark does not belong to the requested runtime")
+    suffix = value[len(prefix) :]
+    if not suffix.isascii() or not suffix.isdigit():
+        raise KernelRepositoryConflict("callback watermark sequence is invalid")
+    sequence = int(suffix)
+    if sequence < 0 or str(sequence) != suffix:
+        raise KernelRepositoryConflict("callback watermark sequence is not canonical")
+    return sequence
+
+
 class KernelRepositoryEventDeliveryMixin:
     """Own event ingress, delivery readback, claim, and atomicity operations."""
+
+    def read_runtime_event(self, event_id: str) -> RuntimeEventEnvelopeV2:
+        return self.read_event_transaction(event_id)["event"]
+
+    def read_callback_watermark(self, *, runtime_id: str) -> str:
+        if type(runtime_id) is not str or not runtime_id.strip() or runtime_id != runtime_id.strip():
+            raise ValueError("runtime_id must be a non-empty trim-stable strict string")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT last_event_sequence FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        sequence = row["last_event_sequence"]
+        if type(sequence) is not int or sequence < 0:
+            raise KernelRepositoryConflict("runtime callback watermark scalar is invalid")
+        return f"{runtime_id}:{sequence}"
+
+    def count_matching_callback_events(
+        self,
+        *,
+        command_id: str,
+        runtime_id: str,
+        callback_watermark_before: str,
+        callback_watermark_after: str,
+    ) -> int:
+        before = _callback_watermark_sequence(callback_watermark_before, runtime_id=runtime_id)
+        after = _callback_watermark_sequence(callback_watermark_after, runtime_id=runtime_id)
+        if after <= before:
+            raise KernelRepositoryConflict("callback watermark interval must advance monotonically")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)::bigint AS count
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id=%s AND event_contract_version='KERNEL_V2'
+                      AND sequence>%s AND sequence<=%s
+                      AND event_type IN ('ORDER','TRADE','RECONCILE')
+                      AND correlation_json->>'reference_command_id'=%s
+                    """,
+                    (runtime_id, before, after, command_id),
+                )
+                row = cur.fetchone()
+        count = row["count"] if row is not None else None
+        if type(count) is not int or count < 0:
+            raise KernelRepositoryConflict("matching callback count readback is invalid")
+        return count
 
     def read_delivery(self, delivery_id: str) -> AlgoDeliveryPersistenceV1:
         with self._connection(transaction=False) as conn:
@@ -178,6 +242,11 @@ class KernelRepositoryEventDeliveryMixin:
         if reference_command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
             if reference_command.command_id != mapping.command_id:
                 raise ValueError("callback SUBMIT reference does not own the durable mapping")
+            if (
+                unchanged_outbox.broker_order_id is not None
+                and unchanged_outbox.broker_order_id != mapping.broker_order_id
+            ):
+                raise ValueError("callback SUBMIT broker identity conflicts with durable ACK/reconcile evidence")
         elif reference_command.command_type is BrokerCommandTypeV2.CANCEL_ORDER:
             if (
                 reference_command.local_vt_orderid != mapping.local_vt_orderid
