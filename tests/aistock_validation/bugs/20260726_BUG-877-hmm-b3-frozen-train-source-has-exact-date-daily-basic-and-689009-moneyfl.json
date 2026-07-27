@@ -22,7 +22,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-877",
-  "closed_at": null,
+  "closed_at": "2026-07-27T12:03:23.764139Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -143,8 +143,8 @@
   },
   "first_seen_at": "2026-07-26T17:21:23.347912Z",
   "fix_branch": "bug/BUG-877-hmm-b3-frozen-train-source-has-exact-date-daily-20260726",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fa69225c394691c0bf404ad7881b7ebcf354b509",
+  "fixed_at": "2026-07-27T12:03:23.764152Z",
   "github_issue_number": 2772,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2772",
   "last_seen_at": "2026-07-27T05:34:56.6918588Z",
@@ -153,6 +153,7 @@
     "Do not restart production runtime services without explicit approval.",
     "Do not execute production DML, a local-data confirmed repair, HMM training, selection, model/READY writes, or PIT identity changes in this source PR."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2796",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_dml_gate": "noop_no_authoritative_candidate",
@@ -166,7 +167,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -175,6 +176,11 @@
     "fingerprint": "4763032b2877d08be02457bf",
     "source_event_id": "FE-20260726-4763032b2877"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_risk/test_security_identity.py backend/tests/hmm_risk/test_provider_absence.py backend/tests/hmm_risk/test_stock_fact_repository.py backend/tests/hmm_risk/test_stock_fact_observation.py backend/tests/hmm_risk/test_stock_fact_gap_repair.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider -> passed (56 tests)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests; 14/14 mapped)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
