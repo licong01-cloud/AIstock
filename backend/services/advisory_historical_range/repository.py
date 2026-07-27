@@ -34,6 +34,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactRefV1,
     HistoricalRangeArtifactEnvelopeV1,
     HistoricalRangeBatchStatus,
+    HistoricalRangeBridgeResultStatus,
     HistoricalRangeCandidateFactV1,
     HistoricalRangeCandidateArtifactPayloadV2,
     HistoricalRangeContractError,
@@ -60,7 +61,9 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeOperationRequestV1,
     HistoricalRangeOperationStatus,
     HistoricalRangeOperationType,
+    HistoricalRangeOutcomeArtifactV2,
     HistoricalRangeOutcomeFactV1,
+    HistoricalRangeOutcomeRefreshReceiptV1,
     HistoricalRangeProgramStatus,
     HistoricalRangePlanningArtifactBindingsV1,
     HistoricalRangeResolvedRequestArtifactPayloadV1,
@@ -71,6 +74,8 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeCatalogPhase,
     HistoricalRangeSourceRevisionCatalogV1,
     HistoricalRangeSummaryFactV1,
+    HistoricalRangeSummaryArtifactV2,
+    HistoricalRangeDatasetBridgeReceiptV1,
     ResolvedHistoricalRangeRequestV1,
     build_candidate_input_hash,
     build_day_input_hash,
@@ -202,6 +207,7 @@ class PostgresHistoricalRangeRepository:
             raise ValueError("artifact_store is required")
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
+        self._validated_upstream_closures: set[tuple[str, str, str | None, str | None, str | None]] = set()
 
     def create_planning_batch(
         self,
@@ -380,7 +386,9 @@ class PostgresHistoricalRangeRepository:
                 else None
             )
             if len(chain) > len(plan.requirements) * 2 + 2:
-                raise self._repository_error("catalog checkpoint chain is longer than its plan", operation_id=operation_id)
+                raise self._repository_error(
+                    "catalog checkpoint chain is longer than its plan", operation_id=operation_id
+                )
         chain.reverse()
         discovered: dict[str, Any] = {}
         current_phase_members: dict[str, Any] = {}
@@ -429,9 +437,10 @@ class PostgresHistoricalRangeRepository:
                     key_value=batch_id,
                 )
                 self._assert_planning_batch_matches(existing=batch, plan=plan, artifacts=None)
-                if str(batch["status"]) == HistoricalRangeBatchStatus.DEDUPLICATED.value or batch.get(
-                    "sealed_at"
-                ) is not None:
+                if (
+                    str(batch["status"]) == HistoricalRangeBatchStatus.DEDUPLICATED.value
+                    or batch.get("sealed_at") is not None
+                ):
                     return self._exact_sealed_batch_result(
                         cur=cur,
                         batch=batch,
@@ -722,8 +731,7 @@ class PostgresHistoricalRangeRepository:
                     (operation_id,),
                 )
                 return tuple(
-                    HistoricalRangeArtifactRefV1.model_validate(row["attempt_receipt_ref"])
-                    for row in cur.fetchall()
+                    HistoricalRangeArtifactRefV1.model_validate(row["attempt_receipt_ref"]) for row in cur.fetchall()
                 )
 
     def claim_execution_operation(
@@ -874,8 +882,7 @@ class PostgresHistoricalRangeRepository:
             batch.row_version != receipt.ending_batch_row_version
             or batch.status is not receipt.result_status
             or actual_program_results != receipt_program_results
-            or self.load_cancelled_day_results(batch_id=claimed_operation.batch_id)
-            != receipt.cancelled_day_results
+            or self.load_cancelled_day_results(batch_id=claimed_operation.batch_id) != receipt.cancelled_day_results
         ):
             raise HistoricalRangeContractError(
                 REASON_REPOSITORY_CONFLICT,
@@ -888,13 +895,11 @@ class PostgresHistoricalRangeRepository:
             resolved_request_hash=claimed_operation.resolved_request_hash,
             expected_payload=receipt.model_dump(mode="json"),
         )
-        upstream = tuple(
-            item.final_receipt_ref
-            for item in receipt.program_results
-            if item.final_receipt_ref is not None
-        ) + tuple(
-            item.attempt_receipt_ref for item in receipt.cancelled_day_results
-        ) + receipt.prior_nonterminal_attempt_receipt_refs
+        upstream = (
+            tuple(item.final_receipt_ref for item in receipt.program_results if item.final_receipt_ref is not None)
+            + tuple(item.attempt_receipt_ref for item in receipt.cancelled_day_results)
+            + receipt.prior_nonterminal_attempt_receipt_refs
+        )
         expected_upstream = tuple(
             sorted(upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
         )
@@ -1023,10 +1028,7 @@ class PostgresHistoricalRangeRepository:
             != canonicalize(attempt.result_cursor_json or attempt.input_cursor_json or {})
             or payload.reason_codes != attempt.reason_codes
             or canonicalize(payload.sanitized_error) != canonicalize(attempt.error_json)
-            or (
-                payload.lease_expired_at is not None
-                and payload.lease_expired_at != operation["lease_expires_at"]
-            )
+            or (payload.lease_expired_at is not None and payload.lease_expired_at != operation["lease_expires_at"])
             or attempt.result_hash != attempt.attempt_receipt_ref.semantic_content_hash
         ):
             raise ValueError("execution operation attempt receipt differs from durable ownership")
@@ -1173,9 +1175,8 @@ class PostgresHistoricalRangeRepository:
         }:
             raise ValueError("planning operation attempt must use a planning artifact receipt")
         envelope = self._artifact_store.load_planning(ref)
-        if (
-            envelope.batch_id != str(batch["batch_id"])
-            or envelope.planning_identity_hash != str(batch["planning_identity_hash"])
+        if envelope.batch_id != str(batch["batch_id"]) or envelope.planning_identity_hash != str(
+            batch["planning_identity_hash"]
         ):
             raise ValueError("planning operation attempt receipt belongs to another batch")
         if ref.artifact_kind is HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN:
@@ -1530,8 +1531,7 @@ class PostgresHistoricalRangeRepository:
         if (
             attempt is None
             or str(attempt["status"]) != expected_attempt_status
-            or canonicalize(attempt.get("attempt_receipt_ref"))
-            != canonicalize(checkpoint_ref.model_dump(mode="json"))
+            or canonicalize(attempt.get("attempt_receipt_ref")) != canonicalize(checkpoint_ref.model_dump(mode="json"))
             or tuple(attempt.get("reason_codes_json") or ()) != reason_codes
             or canonicalize(attempt.get("error_json")) != canonicalize(error_json)
             or canonicalize(attempt.get("result_cursor_json"))
@@ -1867,7 +1867,11 @@ class PostgresHistoricalRangeRepository:
         if row is None:
             raise self._repository_error("execution batch does not exist", batch_id=batch_id)
         payload = dict(row)
-        if payload["request_payload_sha256"] is None or payload["request_artifact_ref"] is None or payload["date_plan_ref"] is None:
+        if (
+            payload["request_payload_sha256"] is None
+            or payload["request_artifact_ref"] is None
+            or payload["date_plan_ref"] is None
+        ):
             raise HistoricalRangeContractError(
                 REASON_REPOSITORY_CONFLICT,
                 "execution requires a sealed historical-range batch",
@@ -2022,7 +2026,11 @@ class PostgresHistoricalRangeRepository:
                     return None
                 day_data = dict(day_row)
                 day_status = HistoricalRangeDayStatus(str(day_data["status"]))
-                if day_status in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED, HistoricalRangeDayStatus.RUNNING}:
+                if day_status in {
+                    HistoricalRangeDayStatus.FAILED,
+                    HistoricalRangeDayStatus.CANCELLED,
+                    HistoricalRangeDayStatus.RUNNING,
+                }:
                     return None
                 if day_status not in {
                     HistoricalRangeDayStatus.PENDING,
@@ -2474,7 +2482,10 @@ class PostgresHistoricalRangeRepository:
             (receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ()
         )
         if tuple(receipt_envelope.upstream_refs) != tuple(
-            sorted(expected_upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
+            sorted(
+                expected_upstream,
+                key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path),
+            )
         ):
             raise HistoricalRangeContractError(
                 REASON_REPOSITORY_CONFLICT,
@@ -2514,9 +2525,7 @@ class PostgresHistoricalRangeRepository:
                 context={"day_run_id": day_run_id},
             )
         expected_mark_upstream = (mark_set.upstream_request_ref,) + (
-            (mark_set.predecessor_day_receipt_ref,)
-            if mark_set.predecessor_day_receipt_ref is not None
-            else ()
+            (mark_set.predecessor_day_receipt_ref,) if mark_set.predecessor_day_receipt_ref is not None else ()
         )
         if tuple(mark_envelope.upstream_refs) != tuple(
             sorted(
@@ -2633,9 +2642,7 @@ class PostgresHistoricalRangeRepository:
                 worker_id=(str(row["worker_id"]) if row.get("worker_id") is not None else None),
                 lease_token=(str(row["lease_token"]) if row.get("lease_token") is not None else None),
                 fencing_token=(
-                    int(row["current_fencing_token"])
-                    if row.get("current_fencing_token") is not None
-                    else None
+                    int(row["current_fencing_token"]) if row.get("current_fencing_token") is not None else None
                 ),
                 resolved_request_hash=str(row["request_payload_sha256"]),
                 request_ref=HistoricalRangeArtifactRefV1.model_validate(row["request_artifact_ref"]),
@@ -2706,9 +2713,7 @@ class PostgresHistoricalRangeRepository:
                     row_version=int(row["row_version"]),
                     attempt_no=int(row["attempt_no"]),
                     fencing_token=int(row["current_fencing_token"]),
-                    attempt_receipt_ref=HistoricalRangeArtifactRefV1.model_validate(
-                        row["attempt_receipt_ref"]
-                    ),
+                    attempt_receipt_ref=HistoricalRangeArtifactRefV1.model_validate(row["attempt_receipt_ref"]),
                 )
             )
         return tuple(results)
@@ -2767,7 +2772,9 @@ class PostgresHistoricalRangeRepository:
                         range_run_id=str(day["range_run_id"]),
                         resolved_request_hash=str(batch["request_payload_sha256"]),
                     )
-                    expected_attempt = int(day["attempt_no"]) if day["status"] == "RUNNING" else int(day["attempt_no"]) + 1
+                    expected_attempt = (
+                        int(day["attempt_no"]) if day["status"] == "RUNNING" else int(day["attempt_no"]) + 1
+                    )
                     expected_fencing = (
                         int(day["current_fencing_token"])
                         if day["status"] == "RUNNING"
@@ -2985,10 +2992,7 @@ class PostgresHistoricalRangeRepository:
             if attempt_row is not None and attempt_row["attempt_receipt_ref"] is not None:
                 blocking_ref = HistoricalRangeArtifactRefV1.model_validate(attempt_row["attempt_receipt_ref"])
         executed_count = len(successful) + (
-            1
-            if blocking_status
-            in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED}
-            else 0
+            1 if blocking_status in {HistoricalRangeDayStatus.FAILED, HistoricalRangeDayStatus.CANCELLED} else 0
         )
         total_day_count = int(run_data["trade_date_count"])
         return HistoricalRangeRunFinalizationFacts(
@@ -3003,9 +3007,7 @@ class PostgresHistoricalRangeRepository:
             blocking_attempt_receipt_ref=blocking_ref,
             unexecuted_day_count=max(total_day_count - executed_count, 0),
             cancelled_from_ordinal=(
-                int(run_data["cancelled_from_ordinal"])
-                if run_data["cancelled_from_ordinal"] is not None
-                else None
+                int(run_data["cancelled_from_ordinal"]) if run_data["cancelled_from_ordinal"] is not None else None
             ),
         )
 
@@ -3353,7 +3355,10 @@ class PostgresHistoricalRangeRepository:
             (receipt.blocking_attempt_receipt_ref,) if receipt.blocking_attempt_receipt_ref is not None else ()
         )
         expected_upstream = tuple(
-            sorted(expected_upstream, key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path))
+            sorted(
+                expected_upstream,
+                key=lambda ref: (ref.artifact_kind.value, ref.semantic_content_hash, ref.relative_path),
+            )
         )
         if tuple(envelope.upstream_refs) != expected_upstream:
             raise HistoricalRangeContractError(
@@ -3537,6 +3542,7 @@ class PostgresHistoricalRangeRepository:
         lease_expires_at: datetime | None = None,
         fencing_token: int | None = None,
         stable_keyset_cursor_json: dict[str, Any] | None = None,
+        replace_stable_keyset_cursor: bool = False,
         result_row_version: int | None = None,
         result_status: str | None = None,
         result_ref: HistoricalRangeArtifactRefV1 | None = None,
@@ -3547,25 +3553,29 @@ class PostgresHistoricalRangeRepository:
         expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
     ) -> dict[str, Any]:
         resolved_request_hash = self._get_operation_artifact_identity(operation_id)
+        operation_type = self._get_operation_type(operation_id)
         for evidence in (attempt, expired_attempt):
             if evidence is not None:
                 self._validate_operation_attempt_artifacts(
                     attempt=evidence,
                     resolved_request_hash=resolved_request_hash,
+                    operation_type=operation_type,
                 )
         terminal = target_status in {
             HistoricalRangeOperationStatus.COMPLETED,
             HistoricalRangeOperationStatus.FAILED,
         }
-        if terminal:
+        publishes_receipt = terminal or target_status is HistoricalRangeOperationStatus.WAITING_INPUT
+        if publishes_receipt:
             if result_ref is None:
-                raise ValueError("terminal operation requires result_ref")
+                raise ValueError("receipt-bearing operation status requires result_ref")
             self._validate_operation_result_artifact(
                 ref=result_ref,
                 resolved_request_hash=resolved_request_hash,
+                operation_type=operation_type,
             )
         elif result_ref is not None:
-            raise ValueError("non-terminal operation cannot publish result_ref")
+            raise ValueError("operation status cannot publish result_ref")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 current = self._lock_row(
@@ -3610,13 +3620,16 @@ class PostgresHistoricalRangeRepository:
                             attempt=attempt,
                         )
                         self._insert_operation_attempt(cur=cur, attempt=attempt)
-                        if terminal and (
-                            result_ref is None
-                            or attempt.result_hash != result_ref.semantic_content_hash
-                            or attempt.error_json is not None
+                        if publishes_receipt and (
+                            result_ref is None or attempt.result_hash != result_ref.semantic_content_hash
                         ):
-                            raise ValueError("terminal operation result differs from the final attempt receipt")
-                        if not terminal and canonicalize(error_json) != canonicalize(attempt.error_json):
+                            raise ValueError("operation result differs from the final attempt receipt")
+                        if target_status is HistoricalRangeOperationStatus.FAILED:
+                            if canonicalize(error_json) != canonicalize(attempt.error_json):
+                                raise ValueError("failed operation error differs from final attempt receipt")
+                        elif publishes_receipt and attempt.error_json is not None:
+                            raise ValueError("successful or waiting operation receipt cannot carry terminal error")
+                        if not publishes_receipt and canonicalize(error_json) != canonicalize(attempt.error_json):
                             raise ValueError("operation error differs from the final attempt receipt")
                     elif attempt is not None or expired_attempt is not None:
                         raise ValueError("operation transition does not accept attempt evidence")
@@ -3627,6 +3640,7 @@ class PostgresHistoricalRangeRepository:
                     or (now if target_status is HistoricalRangeOperationStatus.RUNNING or terminal else None)
                 )
                 finished = finished_at or now if terminal else None
+                reset_result = target_status is HistoricalRangeOperationStatus.RUNNING
                 cur.execute(
                     """
                     UPDATE app.advisory_historical_range_operation
@@ -3637,11 +3651,14 @@ class PostgresHistoricalRangeRepository:
                         lease_token = %s,
                         lease_expires_at = %s,
                         fencing_token = COALESCE(%s, fencing_token),
-                        stable_keyset_cursor_json = COALESCE(%s, stable_keyset_cursor_json),
-                        result_row_version = COALESCE(result_row_version, %s),
-                        result_status = COALESCE(result_status, %s),
-                        result_ref = COALESCE(result_ref, %s),
-                        result_hash = COALESCE(result_hash, %s),
+                        stable_keyset_cursor_json = CASE
+                            WHEN %s THEN %s
+                            ELSE COALESCE(%s, stable_keyset_cursor_json)
+                        END,
+                        result_row_version = CASE WHEN %s THEN NULL ELSE COALESCE(result_row_version, %s) END,
+                        result_status = CASE WHEN %s THEN NULL ELSE COALESCE(result_status, %s) END,
+                        result_ref = CASE WHEN %s THEN NULL ELSE COALESCE(result_ref, %s) END,
+                        result_hash = CASE WHEN %s THEN NULL ELSE COALESCE(result_hash, %s) END,
                         error_json = %s,
                         started_at = COALESCE(started_at, %s),
                         finished_at = %s
@@ -3655,12 +3672,20 @@ class PostgresHistoricalRangeRepository:
                         lease_token,
                         lease_expires_at,
                         fencing_token,
+                        replace_stable_keyset_cursor,
                         psycopg2.extras.Json(stable_keyset_cursor_json)
                         if stable_keyset_cursor_json is not None
                         else None,
+                        psycopg2.extras.Json(stable_keyset_cursor_json)
+                        if stable_keyset_cursor_json is not None
+                        else None,
+                        reset_result,
                         result_row_version,
+                        reset_result,
                         result_status,
+                        reset_result,
                         psycopg2.extras.Json(result_ref.model_dump(mode="json")) if result_ref is not None else None,
+                        reset_result,
                         result_ref.semantic_content_hash if result_ref is not None else None,
                         psycopg2.extras.Json(error_json) if error_json is not None else None,
                         started,
@@ -3814,10 +3839,7 @@ class PostgresHistoricalRangeRepository:
                 and member.package_id in {None, frozen_program.package_id}
                 and member.component_id in {None, *component_ids}
             )
-        expected_refs = {
-            (str(item.revision_id), str(item.revision_hash))
-            for item in expected_members
-        }
+        expected_refs = {(str(item.revision_id), str(item.revision_hash)) for item in expected_members}
         candidate_refs = {(item.revision_id, item.revision_hash) for item in candidate_payload.source_revision_refs}
         if not expected_refs or candidate_refs != expected_refs:
             raise ValueError("candidate artifact source refs do not equal the sealed Program/day catalog members")
@@ -3843,8 +3865,7 @@ class PostgresHistoricalRangeRepository:
             )
             mark_payload = HistoricalRangeDecisionMarkSetV1.model_validate(mark_envelope.payload)
             expected_mark_refs = {
-                (item.revision_id, item.revision_hash)
-                for item in source_role_selection.decision_mark_members
+                (item.revision_id, item.revision_hash) for item in source_role_selection.decision_mark_members
             }
             actual_mark_refs = {(item.revision_id, item.revision_hash) for item in mark_payload.source_revision_refs}
             if (
@@ -4126,12 +4147,17 @@ class PostgresHistoricalRangeRepository:
                     idempotent=False,
                 )
 
-    def append_outcome(self, fact: HistoricalRangeOutcomeFactV1) -> bool:
+    def _validate_outcome_artifact(self, fact: HistoricalRangeOutcomeFactV1) -> None:
+        outcome_artifact = HistoricalRangeOutcomeArtifactV2.model_validate(fact.outcome_json)
         range_run_id, resolved_request_hash, subject_day_run_id = self._get_outcome_subject_identity(
             subject_type=fact.subject_type.value,
             subject_id=fact.subject_id,
+            subject_ref=outcome_artifact.subject_ref,
         )
-        required_upstream: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+        required_upstream: tuple[HistoricalRangeArtifactRefV1, ...] = (
+            outcome_artifact.subject_ref,
+            *((fact.revision_evidence_ref,) if fact.revision_evidence_ref is not None else ()),
+        )
         if fact.calculation_evidence_ref is not None:
             self._load_artifact(
                 fact.calculation_evidence_ref,
@@ -4141,24 +4167,53 @@ class PostgresHistoricalRangeRepository:
                 day_run_id=subject_day_run_id,
                 allow_ancestor_identity=True,
             )
-            required_upstream = (fact.calculation_evidence_ref,)
-        self._load_artifact(
+            required_upstream = (*required_upstream, fact.calculation_evidence_ref)
+        outcome_envelope = self._load_artifact(
             fact.outcome_artifact_ref,
             expected_kind=HistoricalRangeArtifactKind.OUTCOME,
             resolved_request_hash=resolved_request_hash,
             range_run_id=range_run_id,
             expected_payload=fact.outcome_json,
             required_upstream_refs=required_upstream,
+            exact_upstream_refs=outcome_artifact.direct_upstream_refs,
         )
+        if outcome_envelope.producer_contract_version != fact.outcome_contract_version:
+            raise ValueError("outcome artifact contract version differs from durable fact")
+
+    def append_outcome(self, fact: HistoricalRangeOutcomeFactV1) -> bool:
+        return self.append_outcomes((fact,))[0]
+
+    def append_outcomes(self, facts: Sequence[HistoricalRangeOutcomeFactV1]) -> tuple[bool, ...]:
+        """Validate one stable slice, then append it in one DB transaction."""
+
+        ordered = tuple(facts)
+        if not ordered:
+            return ()
+        identities = tuple((item.outcome_logical_id, item.outcome_input_hash) for item in ordered)
+        if len(identities) != len(set(identities)):
+            raise ValueError("outcome append slice contains duplicate exact identities")
+        for fact in ordered:
+            self._validate_outcome_artifact(fact)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
+                return tuple(self._append_outcome_with_cursor(cur=cur, fact=fact) for fact in ordered)
+
+    def _append_outcome_with_cursor(
+        self,
+        *,
+        cur: Any,
+        fact: HistoricalRangeOutcomeFactV1,
+    ) -> bool:
+        cur.execute(
+            """
                     INSERT INTO app.advisory_historical_range_outcome (
                         outcome_version_id, outcome_logical_id, outcome_version,
-                        subject_type, subject_id, projection, horizon_trade_days,
-                        label_policy_hash, source_revision_set_hash,
+                        subject_type, subject_id, projection, evaluation_window_type,
+                        horizon_trade_days, historical_range_policy_bundle_hash,
+                        outcome_input_hash, revision_reason, producer_code_hash,
+                        outcome_contract_version, label_policy_hash, source_revision_set_hash,
                         predecessor_outcome_version_id, predecessor_outcome_hash,
+                        revision_evidence_ref, revision_evidence_hash,
                         maturity_status, label_as_of_trade_date,
                         next_refresh_trade_date, entry_execution_evidence_json,
                         exit_execution_evidence_json, benchmark_hash,
@@ -4168,82 +4223,106 @@ class PostgresHistoricalRangeRepository:
                         outcome_json, outcome_content_hash
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT DO NOTHING
                     """,
-                    (
-                        fact.outcome_version_id,
-                        fact.outcome_logical_id,
-                        fact.outcome_version,
-                        fact.subject_type.value,
-                        fact.subject_id,
-                        fact.projection.value,
-                        fact.horizon_trade_days,
-                        fact.label_policy_hash,
-                        fact.source_revision_set_hash,
-                        fact.predecessor_outcome_version_id,
-                        fact.predecessor_outcome_hash,
-                        fact.maturity_status.value,
-                        fact.label_as_of_trade_date,
-                        fact.next_refresh_trade_date,
-                        psycopg2.extras.Json(fact.entry_execution_evidence_json)
-                        if fact.entry_execution_evidence_json is not None
-                        else None,
-                        psycopg2.extras.Json(fact.exit_execution_evidence_json)
-                        if fact.exit_execution_evidence_json is not None
-                        else None,
-                        fact.benchmark_hash,
-                        fact.cost_policy_hash,
-                        fact.corporate_action_hash,
-                        psycopg2.extras.Json(fact.calculation_evidence_ref.model_dump(mode="json"))
-                        if fact.calculation_evidence_ref is not None
-                        else None,
-                        fact.calculation_evidence_ref.semantic_content_hash
-                        if fact.calculation_evidence_ref is not None
-                        else None,
-                        psycopg2.extras.Json(fact.outcome_artifact_ref.model_dump(mode="json")),
-                        fact.outcome_artifact_ref.semantic_content_hash,
-                        psycopg2.extras.Json(fact.outcome_json),
-                        fact.outcome_content_hash,
-                    ),
-                )
-                inserted = cur.rowcount == 1
-                cur.execute(
-                    """
-                    SELECT outcome_version_id, outcome_content_hash, source_revision_set_hash,
+            (
+                fact.outcome_version_id,
+                fact.outcome_logical_id,
+                fact.outcome_version,
+                fact.subject_type.value,
+                fact.subject_id,
+                fact.projection.value,
+                fact.evaluation_window_type.value,
+                fact.horizon_trade_days,
+                fact.historical_range_policy_bundle_hash,
+                fact.outcome_input_hash,
+                fact.revision_reason.value,
+                fact.producer_code_hash,
+                fact.outcome_contract_version,
+                fact.historical_range_policy_bundle_hash,
+                fact.source_revision_set_hash,
+                fact.predecessor_outcome_version_id,
+                fact.predecessor_outcome_hash,
+                psycopg2.extras.Json(fact.revision_evidence_ref.model_dump(mode="json"))
+                if fact.revision_evidence_ref is not None
+                else None,
+                fact.revision_evidence_hash,
+                fact.maturity_status.value,
+                fact.label_as_of_trade_date,
+                fact.next_refresh_trade_date,
+                psycopg2.extras.Json(fact.entry_execution_evidence_json)
+                if fact.entry_execution_evidence_json is not None
+                else None,
+                psycopg2.extras.Json(fact.exit_execution_evidence_json)
+                if fact.exit_execution_evidence_json is not None
+                else None,
+                fact.benchmark_hash,
+                fact.cost_policy_hash,
+                fact.corporate_action_hash,
+                psycopg2.extras.Json(fact.calculation_evidence_ref.model_dump(mode="json"))
+                if fact.calculation_evidence_ref is not None
+                else None,
+                fact.calculation_evidence_ref.semantic_content_hash
+                if fact.calculation_evidence_ref is not None
+                else None,
+                psycopg2.extras.Json(fact.outcome_artifact_ref.model_dump(mode="json")),
+                fact.outcome_artifact_ref.semantic_content_hash,
+                psycopg2.extras.Json(fact.outcome_json),
+                fact.outcome_content_hash,
+            ),
+        )
+        inserted = cur.rowcount == 1
+        cur.execute(
+            """
+                    SELECT outcome_version_id, outcome_version, outcome_content_hash,
+                           outcome_input_hash, source_revision_set_hash,
                            outcome_artifact_ref, outcome_artifact_hash
                     FROM app.advisory_historical_range_outcome
                     WHERE outcome_logical_id = %s
-                      AND outcome_version = %s
+                      AND outcome_input_hash = %s
                     """,
-                    (fact.outcome_logical_id, fact.outcome_version),
-                )
-                row = cur.fetchone()
-                if (
-                    row is None
-                    or row["outcome_version_id"] != fact.outcome_version_id
-                    or row["outcome_content_hash"] != fact.outcome_content_hash
-                    or row["source_revision_set_hash"] != fact.source_revision_set_hash
-                    or canonicalize(row["outcome_artifact_ref"])
-                    != canonicalize(fact.outcome_artifact_ref.model_dump(mode="json"))
-                    or row["outcome_artifact_hash"] != fact.outcome_artifact_ref.semantic_content_hash
-                ):
-                    raise self._repository_error(
-                        "outcome exact retry payload conflict",
-                        outcome_logical_id=fact.outcome_logical_id,
-                        outcome_version=fact.outcome_version,
-                    )
-                return not inserted
+            (fact.outcome_logical_id, fact.outcome_input_hash),
+        )
+        row = cur.fetchone()
+        if (
+            row is None
+            or row["outcome_version_id"] != fact.outcome_version_id
+            or int(row["outcome_version"]) != fact.outcome_version
+            or row["outcome_content_hash"] != fact.outcome_content_hash
+            or row["outcome_input_hash"] != fact.outcome_input_hash
+            or row["source_revision_set_hash"] != fact.source_revision_set_hash
+            or canonicalize(row["outcome_artifact_ref"])
+            != canonicalize(fact.outcome_artifact_ref.model_dump(mode="json"))
+            or row["outcome_artifact_hash"] != fact.outcome_artifact_ref.semantic_content_hash
+        ):
+            raise self._repository_error(
+                "outcome exact retry payload conflict",
+                outcome_logical_id=fact.outcome_logical_id,
+                outcome_version=fact.outcome_version,
+            )
+        return not inserted
 
     def append_summary(self, fact: HistoricalRangeSummaryFactV1) -> bool:
         range_run_id, resolved_request_hash = self._get_run_artifact_identity(fact.range_run_id)
+        summary_artifact = HistoricalRangeSummaryArtifactV2.model_validate(fact.summary_json)
+        expected_summary_upstream = tuple(
+            (*summary_artifact.covered_outcome_refs,)
+            + (
+                (summary_artifact.predecessor_summary_ref,)
+                if summary_artifact.predecessor_summary_ref is not None
+                else ()
+            )
+        )
         self._load_artifact(
             fact.summary_artifact_ref,
             expected_kind=HistoricalRangeArtifactKind.SUMMARY,
             resolved_request_hash=resolved_request_hash,
             range_run_id=range_run_id,
             expected_payload=fact.summary_json,
+            exact_upstream_refs=expected_summary_upstream,
         )
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -4251,10 +4330,14 @@ class PostgresHistoricalRangeRepository:
                     """
                     INSERT INTO app.advisory_historical_range_summary (
                         summary_id, range_run_id, summary_version,
-                        covered_outcome_set_hash, predecessor_summary_id,
+                        covered_outcome_set_hash, summary_policy_hash,
+                        summary_input_hash, recall_denominator_set_hash,
+                        recall_denominator_evidence_json, producer_code_hash,
+                        maturity_coverage_json, maturity_coverage_hash,
+                        predecessor_summary_id,
                         predecessor_summary_hash, summary_artifact_ref,
                         summary_artifact_hash, summary_json, summary_content_hash
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     """,
                     (
@@ -4262,6 +4345,13 @@ class PostgresHistoricalRangeRepository:
                         fact.range_run_id,
                         fact.summary_version,
                         fact.covered_outcome_set_hash,
+                        fact.summary_policy_hash,
+                        fact.summary_input_hash,
+                        fact.recall_denominator_set_hash,
+                        psycopg2.extras.Json(fact.recall_denominator_evidence_json),
+                        fact.producer_code_hash,
+                        psycopg2.extras.Json(fact.maturity_coverage_json),
+                        fact.maturity_coverage_hash,
                         fact.predecessor_summary_id,
                         fact.predecessor_summary_hash,
                         psycopg2.extras.Json(fact.summary_artifact_ref.model_dump(mode="json")),
@@ -4273,17 +4363,20 @@ class PostgresHistoricalRangeRepository:
                 inserted = cur.rowcount == 1
                 cur.execute(
                     """
-                    SELECT summary_id, summary_content_hash, summary_artifact_ref, summary_artifact_hash
+                    SELECT summary_id, summary_version, summary_content_hash,
+                           summary_input_hash, summary_artifact_ref, summary_artifact_hash
                     FROM app.advisory_historical_range_summary
-                    WHERE range_run_id = %s AND summary_version = %s
+                    WHERE range_run_id = %s AND summary_input_hash = %s
                     """,
-                    (fact.range_run_id, fact.summary_version),
+                    (fact.range_run_id, fact.summary_input_hash),
                 )
                 row = cur.fetchone()
                 if (
                     row is None
                     or row["summary_id"] != fact.summary_id
+                    or int(row["summary_version"]) != fact.summary_version
                     or row["summary_content_hash"] != fact.summary_content_hash
+                    or row["summary_input_hash"] != fact.summary_input_hash
                     or canonicalize(row["summary_artifact_ref"])
                     != canonicalize(fact.summary_artifact_ref.model_dump(mode="json"))
                     or row["summary_artifact_hash"] != fact.summary_artifact_ref.semantic_content_hash
@@ -4294,6 +4387,587 @@ class PostgresHistoricalRangeRepository:
                         summary_version=fact.summary_version,
                     )
                 return not inserted
+
+    def load_latest_outcome(self, *, outcome_logical_id: str) -> HistoricalRangeOutcomeFactV1 | None:
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_historical_range_outcome
+                    WHERE outcome_logical_id = %s
+                    ORDER BY outcome_version DESC
+                    LIMIT 1
+                    """,
+                    (outcome_logical_id,),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+        return self._outcome_fact_from_row(row) if row is not None else None
+
+    def find_outcome_by_input(
+        self,
+        *,
+        outcome_logical_id: str,
+        outcome_input_hash: str,
+    ) -> HistoricalRangeOutcomeFactV1 | None:
+        require_sha256(outcome_input_hash, field_name="outcome_input_hash")
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_historical_range_outcome
+                    WHERE outcome_logical_id = %s AND outcome_input_hash = %s
+                    """,
+                    (outcome_logical_id, outcome_input_hash),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+        return self._outcome_fact_from_row(row) if row is not None else None
+
+    def list_bridge_successful_days(self, *, day_receipt_hashes: Sequence[str]) -> tuple[dict[str, Any], ...]:
+        """Load exact successful-day refs and their candidate membership closure."""
+
+        hashes = tuple(sorted({require_sha256(value, field_name="day_receipt_hash") for value in day_receipt_hashes}))
+        if not hashes:
+            return ()
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT day.range_run_id,
+                           day.day_run_id,
+                           day.status AS terminal_status,
+                           day.day_receipt_ref,
+                           day.day_receipt_hash,
+                           day.candidate_artifact_ref,
+                           day.candidate_artifact_hash,
+                           COALESCE(
+                               array_agg(candidate.candidate_id ORDER BY candidate.candidate_id)
+                                   FILTER (WHERE candidate.membership_status = 'INCLUDED'),
+                               ARRAY[]::text[]
+                           ) AS included_candidate_ids
+                    FROM app.advisory_historical_range_day_run AS day
+                    LEFT JOIN app.advisory_historical_range_candidate AS candidate
+                      ON candidate.day_run_id = day.day_run_id
+                    WHERE day.day_receipt_hash = ANY(%s)
+                      AND day.status IN ('COMPLETE', 'VALID_NO_CANDIDATE')
+                    GROUP BY day.range_run_id,
+                             day.day_run_id,
+                             day.status,
+                             day.day_receipt_ref,
+                             day.day_receipt_hash,
+                             day.candidate_artifact_ref,
+                             day.candidate_artifact_hash
+                    ORDER BY day.day_receipt_hash
+                    """,
+                    (list(hashes),),
+                )
+                rows = tuple(dict(row) for row in cur.fetchall())
+            conn.rollback()
+        observed = tuple(str(row["day_receipt_hash"]) for row in rows)
+        if observed != hashes:
+            raise self._repository_error(
+                "bridge successful-day set is incomplete or ambiguous",
+                expected_count=len(hashes),
+                observed_count=len(observed),
+            )
+        return rows
+
+    def list_bridge_candidate_outcomes(
+        self, *, outcome_artifact_hashes: Sequence[str]
+    ) -> tuple[tuple[str, HistoricalRangeOutcomeFactV1], ...]:
+        """Load the exact requested candidate outcomes with their R3 range id."""
+
+        hashes = tuple(
+            sorted({require_sha256(value, field_name="outcome_artifact_hash") for value in outcome_artifact_hashes})
+        )
+        if not hashes:
+            return ()
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT outcome.*, day.range_run_id AS bridge_range_run_id
+                    FROM app.advisory_historical_range_outcome AS outcome
+                    JOIN app.advisory_historical_range_candidate AS candidate
+                      ON candidate.candidate_id = outcome.subject_id
+                    JOIN app.advisory_historical_range_day_run AS day
+                      ON day.day_run_id = candidate.day_run_id
+                    WHERE outcome.outcome_artifact_hash = ANY(%s)
+                      AND outcome.subject_type = 'CANDIDATE'
+                    ORDER BY outcome.outcome_artifact_hash
+                    """,
+                    (list(hashes),),
+                )
+                rows = tuple(dict(row) for row in cur.fetchall())
+            conn.rollback()
+        observed = tuple(str(row["outcome_artifact_hash"]) for row in rows)
+        if observed != hashes:
+            raise self._repository_error(
+                "bridge outcome artifact set is incomplete or ambiguous",
+                expected_count=len(hashes),
+                observed_count=len(observed),
+            )
+        return tuple(
+            (
+                str(row["bridge_range_run_id"]),
+                self._outcome_fact_from_row(row),
+            )
+            for row in rows
+        )
+
+    def list_due_outcomes(
+        self,
+        *,
+        range_run_ids: Sequence[str],
+        label_as_of_trade_date: date,
+        after_key: tuple[str, str, int] | None,
+        limit: int,
+    ) -> tuple[HistoricalRangeOutcomeFactV1, ...]:
+        if not range_run_ids or limit < 1:
+            raise ValueError("due outcome selection requires range runs and a positive limit")
+        cursor = after_key or ("", "", -1)
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH scoped AS (
+                        SELECT outcome.*,
+                               CASE outcome.subject_type
+                                   WHEN 'CANDIDATE' THEN (
+                                       SELECT day.range_run_id
+                                       FROM app.advisory_historical_range_candidate candidate
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = candidate.day_run_id
+                                       WHERE candidate.candidate_id = outcome.subject_id
+                                         AND candidate.artifact_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'EPISODE' THEN (
+                                       SELECT episode.range_run_id
+                                       FROM app.advisory_historical_range_episode_snapshot episode
+                                       JOIN app.advisory_historical_range_list_version list
+                                         ON list.list_version_id = episode.list_version_id
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = list.day_run_id
+                                       WHERE episode.episode_id = outcome.subject_id
+                                         AND day.day_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'LIST_VERSION' THEN (
+                                       SELECT list.range_run_id
+                                       FROM app.advisory_historical_range_list_version list
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = list.day_run_id
+                                       WHERE list.list_version_id = outcome.subject_id
+                                         AND day.day_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'RANGE' THEN (
+                                       SELECT run.range_run_id
+                                       FROM app.advisory_historical_range_run run
+                                       WHERE run.range_run_id = outcome.subject_id
+                                         AND run.final_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                               END AS resolved_range_run_id
+                        FROM app.advisory_historical_range_outcome outcome
+                    ), ranked AS (
+                        SELECT scoped.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY scoped.outcome_logical_id
+                                   ORDER BY scoped.outcome_version DESC
+                               ) AS version_rank
+                        FROM scoped
+                    )
+                    SELECT ranked.*
+                    FROM ranked
+                    WHERE ranked.version_rank = 1
+                      AND ranked.resolved_range_run_id = ANY(%s)
+                      AND ranked.maturity_status IN ('NOT_DUE', 'MATURING')
+                      AND ranked.next_refresh_trade_date <= %s
+                      AND (
+                          ranked.resolved_range_run_id,
+                          ranked.outcome_logical_id,
+                          ranked.outcome_version
+                      ) > (%s, %s, %s)
+                    ORDER BY ranked.resolved_range_run_id,
+                             ranked.outcome_logical_id,
+                             ranked.outcome_version
+                    LIMIT %s
+                    """,
+                    (list(range_run_ids), label_as_of_trade_date, *cursor, limit),
+                )
+                rows = tuple(cur.fetchall())
+            conn.rollback()
+        return tuple(self._outcome_fact_from_row(row) for row in rows)
+
+    def list_outcomes_for_summary(
+        self,
+        *,
+        range_run_id: str,
+        label_as_of_trade_date: date,
+    ) -> tuple[HistoricalRangeOutcomeFactV1, ...]:
+        """Read the deterministic latest outcome version for each logical identity."""
+
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH scoped AS (
+                        SELECT outcome.*,
+                               CASE outcome.subject_type
+                                   WHEN 'CANDIDATE' THEN (
+                                       SELECT day.range_run_id
+                                       FROM app.advisory_historical_range_candidate candidate
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = candidate.day_run_id
+                                       WHERE candidate.candidate_id = outcome.subject_id
+                                         AND candidate.artifact_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'EPISODE' THEN (
+                                       SELECT episode.range_run_id
+                                       FROM app.advisory_historical_range_episode_snapshot episode
+                                       JOIN app.advisory_historical_range_list_version list
+                                         ON list.list_version_id = episode.list_version_id
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = list.day_run_id
+                                       WHERE episode.episode_id = outcome.subject_id
+                                         AND day.day_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'LIST_VERSION' THEN (
+                                       SELECT list.range_run_id
+                                       FROM app.advisory_historical_range_list_version list
+                                       JOIN app.advisory_historical_range_day_run day
+                                         ON day.day_run_id = list.day_run_id
+                                       WHERE list.list_version_id = outcome.subject_id
+                                         AND day.day_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                                   WHEN 'RANGE' THEN (
+                                       SELECT run.range_run_id
+                                       FROM app.advisory_historical_range_run run
+                                       WHERE run.range_run_id = outcome.subject_id
+                                         AND run.final_receipt_ref = outcome.outcome_json->'subject_ref'
+                                   )
+                               END AS resolved_range_run_id
+                        FROM app.advisory_historical_range_outcome outcome
+                    )
+                    , ranked AS (
+                        SELECT scoped.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY scoped.outcome_logical_id
+                                   ORDER BY scoped.outcome_version DESC
+                               ) AS version_rank
+                        FROM scoped
+                        WHERE scoped.resolved_range_run_id = %s
+                          AND (
+                              scoped.label_as_of_trade_date IS NULL
+                              OR scoped.label_as_of_trade_date <= %s
+                          )
+                    )
+                    SELECT *
+                    FROM ranked
+                    WHERE ranked.version_rank = 1
+                    ORDER BY outcome_logical_id, outcome_version
+                    """,
+                    (range_run_id, label_as_of_trade_date),
+                )
+                rows = tuple(cur.fetchall())
+            conn.rollback()
+        return tuple(self._outcome_fact_from_row(row) for row in rows)
+
+    def list_child_outcomes_for_aggregate(self, *, work_item: Any) -> tuple[HistoricalRangeOutcomeFactV1, ...]:
+        return self.list_child_outcomes_for_identity(
+            range_run_id=work_item.range_run_id,
+            subject_type=work_item.subject_type,
+            subject_id=work_item.subject_id,
+            projection=work_item.projection,
+            evaluation_window_type=work_item.evaluation_window_type,
+            horizon_trade_days=work_item.horizon_trade_days,
+            policy_bundle_hash=work_item.policy_bundle_hash,
+            label_as_of_trade_date=work_item.label_as_of_trade_date,
+        )
+
+    def list_child_outcomes_for_identity(
+        self,
+        *,
+        range_run_id: str,
+        subject_type: Any,
+        subject_id: str,
+        projection: Any,
+        evaluation_window_type: Any,
+        horizon_trade_days: int,
+        policy_bundle_hash: str,
+        label_as_of_trade_date: date,
+    ) -> tuple[HistoricalRangeOutcomeFactV1, ...]:
+        if subject_type.value == "LIST_VERSION":
+            subject_sql = """
+                SELECT candidate.candidate_id AS subject_id
+                FROM app.advisory_historical_range_list_version list
+                JOIN app.advisory_historical_range_list_item item
+                  ON item.list_version_id = list.list_version_id
+                 AND item.action IN ('ENTER', 'HOLD')
+                JOIN app.advisory_historical_range_candidate candidate
+                  ON candidate.day_run_id = list.day_run_id
+                 AND candidate.symbol = item.symbol
+                WHERE list.list_version_id = %s
+            """
+            child_type = "CANDIDATE"
+            subject_param = subject_id
+        elif subject_type.value == "RANGE":
+            subject_sql = """
+                SELECT list.list_version_id AS subject_id
+                FROM app.advisory_historical_range_list_version list
+                WHERE list.range_run_id = %s
+            """
+            child_type = "LIST_VERSION"
+            subject_param = range_run_id
+        else:
+            raise ValueError("aggregate child selection requires LIST_VERSION or RANGE subject")
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH child_subjects AS ({subject_sql}),
+                    ranked AS (
+                        SELECT outcome.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY outcome.outcome_logical_id
+                                   ORDER BY outcome.outcome_version DESC
+                               ) AS version_rank
+                        FROM app.advisory_historical_range_outcome outcome
+                        JOIN child_subjects child ON child.subject_id = outcome.subject_id
+                        WHERE outcome.subject_type = %s
+                          AND outcome.projection = %s
+                          AND outcome.evaluation_window_type = %s
+                          AND outcome.horizon_trade_days = %s
+                          AND outcome.historical_range_policy_bundle_hash = %s
+                          AND outcome.label_as_of_trade_date <= %s
+                    )
+                    SELECT * FROM ranked
+                    WHERE version_rank = 1
+                    ORDER BY outcome_logical_id
+                    """,
+                    (
+                        subject_param,
+                        child_type,
+                        projection.value,
+                        evaluation_window_type.value,
+                        horizon_trade_days,
+                        policy_bundle_hash,
+                        label_as_of_trade_date,
+                    ),
+                )
+                rows = tuple(cur.fetchall())
+            conn.rollback()
+        return tuple(self._outcome_fact_from_row(row) for row in rows)
+
+    def list_subject_seeds(
+        self,
+        *,
+        request: Any,
+        after_key: tuple[str, str, str] | None,
+        limit: int,
+    ) -> tuple[Any, ...]:
+        """Return immutable candidate/episode/list/range identities for R4 planning."""
+
+        if limit < 1:
+            raise ValueError("subject seed selection requires a positive limit")
+        from backend.services.advisory_historical_range.outcome_planner import (
+            HistoricalRangeOutcomeSubjectSeedV1,
+        )
+
+        cursor = after_key or ("", "", "")
+        subject_types = tuple(item.value for item in request.requested_subject_types)
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH seeds AS (
+                        SELECT day.range_run_id,
+                               'CANDIDATE'::TEXT AS subject_type,
+                               candidate.candidate_id AS subject_id,
+                               candidate.artifact_ref AS subject_ref,
+                               candidate.symbol,
+                               day.decision_trade_date,
+                               day.day_receipt_ref AS day_ref,
+                               candidate.artifact_ref AS source_ref,
+                               NULL::DATE AS intended_entry_trade_date,
+                               NULL::DATE AS earliest_sell_trade_date,
+                               NULL::DATE AS exit_trade_date,
+                               FALSE AS episode_closed
+                          FROM app.advisory_historical_range_candidate candidate
+                          JOIN app.advisory_historical_range_day_run day
+                            ON day.day_run_id = candidate.day_run_id
+                         WHERE candidate.membership_status = 'INCLUDED'
+                        UNION ALL
+                        SELECT episode.range_run_id,
+                               'EPISODE'::TEXT,
+                               episode.episode_id,
+                               day.day_receipt_ref,
+                               episode.symbol,
+                               episode.enter_decision_trade_date,
+                               day.day_receipt_ref,
+                               enter_day.day_receipt_ref,
+                               NULL::DATE,
+                               NULL::DATE,
+                               COALESCE(episode.exit_decision_trade_date, episode.decision_trade_date),
+                               (episode.recommendation_state = 'EXITED')
+                          FROM (
+                               SELECT DISTINCT ON (range_run_id, episode_id) *
+                               FROM app.advisory_historical_range_episode_snapshot
+                               ORDER BY range_run_id, episode_id, decision_trade_date DESC
+                          ) episode
+                          JOIN app.advisory_historical_range_day_run day
+                            ON day.day_run_id = (
+                                SELECT list.day_run_id
+                                  FROM app.advisory_historical_range_list_version list
+                                 WHERE list.list_version_id = episode.list_version_id
+                            )
+                          JOIN app.advisory_historical_range_day_run enter_day
+                            ON enter_day.range_run_id = episode.range_run_id
+                           AND enter_day.decision_trade_date = episode.enter_decision_trade_date
+                        UNION ALL
+                        SELECT list.range_run_id,
+                               'LIST_VERSION'::TEXT,
+                               list.list_version_id,
+                               day.day_receipt_ref,
+                               NULL::TEXT,
+                               day.decision_trade_date,
+                               day.day_receipt_ref,
+                               day.day_receipt_ref,
+                               NULL::DATE,
+                               NULL::DATE,
+                               NULL::DATE,
+                               FALSE
+                          FROM app.advisory_historical_range_list_version list
+                          JOIN app.advisory_historical_range_day_run day
+                            ON day.day_run_id = list.day_run_id
+                        UNION ALL
+                        SELECT run.range_run_id,
+                               'RANGE'::TEXT,
+                               run.range_run_id,
+                               run.final_receipt_ref,
+                               NULL::TEXT,
+                               (SELECT MIN(day.decision_trade_date)
+                                  FROM app.advisory_historical_range_day_run day
+                                 WHERE day.range_run_id = run.range_run_id),
+                               run.final_receipt_ref,
+                               run.final_receipt_ref,
+                               NULL::DATE,
+                               NULL::DATE,
+                               NULL::DATE,
+                               FALSE
+                          FROM app.advisory_historical_range_run run
+                         WHERE run.final_receipt_ref IS NOT NULL
+                    )
+                    SELECT range_run_id, subject_type, subject_id, subject_ref, symbol,
+                           decision_trade_date, intended_entry_trade_date,
+                           earliest_sell_trade_date, exit_trade_date, episode_closed,
+                           jsonb_build_array(source_ref, day_ref) AS source_refs
+                      FROM seeds
+                     WHERE range_run_id = ANY(%s)
+                       AND subject_type = ANY(%s)
+                       AND (range_run_id, subject_type, subject_id) >= (%s, %s, %s)
+                     ORDER BY range_run_id, subject_type, subject_id
+                     LIMIT %s
+                    """,
+                    (
+                        list(request.range_run_ids) if request.range_run_ids else self._all_requested_range_runs(conn),
+                        list(subject_types),
+                        *cursor,
+                        limit,
+                    ),
+                )
+                rows = tuple(dict(row) for row in cur.fetchall())
+            conn.rollback()
+        seeds: list[Any] = []
+        for row in rows:
+            source_refs = tuple(
+                HistoricalRangeArtifactRefV1.model_validate(item)
+                for item in (row["source_refs"] or [])
+                if item is not None
+            )
+            source_refs = tuple(
+                item
+                for index, item in enumerate(source_refs)
+                if item.semantic_content_hash not in {other.semantic_content_hash for other in source_refs[:index]}
+            )
+            if row["subject_ref"] is None:
+                raise self._repository_error(
+                    "R4 subject is missing an exact artifact reference",
+                    subject_type=row["subject_type"],
+                    subject_id=row["subject_id"],
+                )
+            seeds.append(
+                HistoricalRangeOutcomeSubjectSeedV1(
+                    range_run_id=str(row["range_run_id"]),
+                    subject_type=str(row["subject_type"]),
+                    subject_id=str(row["subject_id"]),
+                    subject_ref=HistoricalRangeArtifactRefV1.model_validate(row["subject_ref"]),
+                    symbol=(str(row["symbol"]).upper() if row["symbol"] else None),
+                    decision_trade_date=row["decision_trade_date"],
+                    label_as_of_trade_date=request.label_as_of_trade_date,
+                    source_revision_refs=source_refs,
+                    intended_entry_trade_date=row["intended_entry_trade_date"],
+                    earliest_sell_trade_date=row["earliest_sell_trade_date"],
+                    exit_trade_date=row["exit_trade_date"],
+                    episode_closed=bool(row["episode_closed"]),
+                )
+            )
+        return tuple(seeds)
+
+    @staticmethod
+    def _all_requested_range_runs(conn: Any) -> list[str]:
+        with conn.cursor() as cur:
+            cur.execute("SELECT range_run_id FROM app.advisory_historical_range_run ORDER BY range_run_id")
+            return [str(row[0]) for row in cur.fetchall()]
+
+    def load_latest_summary(self, *, range_run_id: str) -> HistoricalRangeSummaryFactV1 | None:
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_historical_range_summary
+                    WHERE range_run_id = %s
+                    ORDER BY summary_version DESC
+                    LIMIT 1
+                    """,
+                    (range_run_id,),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+        return self._summary_fact_from_row(row) if row is not None else None
+
+    def find_summary_by_input(
+        self,
+        *,
+        range_run_id: str,
+        summary_input_hash: str,
+    ) -> HistoricalRangeSummaryFactV1 | None:
+        require_sha256(summary_input_hash, field_name="summary_input_hash")
+        with self._conn_factory() as conn:
+            conn.set_session(readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_historical_range_summary
+                    WHERE range_run_id = %s AND summary_input_hash = %s
+                    """,
+                    (range_run_id, summary_input_hash),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+        return self._summary_fact_from_row(row) if row is not None else None
+
+    def load_run_resolved_request_hash(self, *, range_run_id: str) -> str:
+        _resolved_run_id, request_hash = self._get_run_artifact_identity(range_run_id)
+        return request_hash
 
     def _get_day_artifact_identity(self, day_run_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
@@ -4358,7 +5032,25 @@ class PostgresHistoricalRangeRepository:
             raise self._repository_error("operation does not exist", operation_id=operation_id)
         return str(row["request_payload_sha256"])
 
-    def _get_outcome_subject_identity(self, *, subject_type: str, subject_id: str) -> tuple[str, str, str | None]:
+    def _get_operation_type(self, operation_id: str) -> HistoricalRangeOperationType:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT operation_type FROM app.advisory_historical_range_operation WHERE operation_id = %s",
+                    (operation_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise self._repository_error("operation does not exist", operation_id=operation_id)
+        return HistoricalRangeOperationType(str(row["operation_type"]))
+
+    def _get_outcome_subject_identity(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        subject_ref: HistoricalRangeArtifactRefV1,
+    ) -> tuple[str, str, str | None]:
         relation = {
             "CANDIDATE": (
                 "app.advisory_historical_range_candidate AS subject "
@@ -4366,14 +5058,16 @@ class PostgresHistoricalRangeRepository:
                 "subject.candidate_id",
                 "day.range_run_id",
                 "day.day_run_id",
+                "subject.artifact_ref",
             ),
             "EPISODE": (
                 "app.advisory_historical_range_episode_snapshot AS subject "
                 "JOIN app.advisory_historical_range_list_version AS list ON list.list_version_id = subject.list_version_id "
                 "JOIN app.advisory_historical_range_day_run AS day ON day.day_run_id = list.day_run_id",
-                "subject.episode_snapshot_id",
+                "subject.episode_id",
                 "day.range_run_id",
                 "day.day_run_id",
+                "day.day_receipt_ref",
             ),
             "LIST_VERSION": (
                 "app.advisory_historical_range_list_version AS subject "
@@ -4381,17 +5075,19 @@ class PostgresHistoricalRangeRepository:
                 "subject.list_version_id",
                 "day.range_run_id",
                 "day.day_run_id",
+                "day.day_receipt_ref",
             ),
             "RANGE": (
                 "app.advisory_historical_range_run AS subject",
                 "subject.range_run_id",
                 "subject.range_run_id",
                 "NULL::TEXT",
+                "subject.final_receipt_ref",
             ),
         }.get(subject_type)
         if relation is None:
             raise ValueError("unsupported outcome subject_type")
-        from_sql, key_sql, range_sql, day_sql = relation
+        from_sql, key_sql, range_sql, day_sql, ref_sql = relation
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -4404,16 +5100,21 @@ class PostgresHistoricalRangeRepository:
                     JOIN app.advisory_historical_range_batch AS batch
                       ON batch.batch_id = run.batch_id
                     WHERE {key_sql} = %s
+                      AND {ref_sql} = %s
                     """,
-                    (subject_id,),
+                    (
+                        subject_id,
+                        psycopg2.extras.Json(subject_ref.model_dump(mode="json")),
+                    ),
                 )
-                row = cur.fetchone()
-        if row is None:
+                rows = tuple(cur.fetchall())
+        if len(rows) != 1:
             raise self._repository_error(
-                "outcome subject does not exist",
+                "outcome subject exact ref is unavailable or ambiguous",
                 subject_type=subject_type,
                 subject_id=subject_id,
             )
+        row = rows[0]
         return (
             str(row["range_run_id"]),
             str(row["request_payload_sha256"]),
@@ -4471,10 +5172,11 @@ class PostgresHistoricalRangeRepository:
                     or canonicalize(receipt.sanitized_error) != canonicalize(attempt.error_json)
                 ):
                     raise ValueError("typed day failure receipt differs from its attempt row")
-                expected_upstream = (request_ref,) + (
-                    (attempt.candidate_artifact_ref,) if attempt.candidate_artifact_ref is not None else ()
-                ) + ((receipt.decision_mark_set_ref,) if receipt.decision_mark_set_ref is not None else ()) + (
-                    (receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ()
+                expected_upstream = (
+                    (request_ref,)
+                    + ((attempt.candidate_artifact_ref,) if attempt.candidate_artifact_ref is not None else ())
+                    + ((receipt.decision_mark_set_ref,) if receipt.decision_mark_set_ref is not None else ())
+                    + ((receipt.previous_day_receipt_ref,) if receipt.previous_day_receipt_ref is not None else ())
                 )
                 self._require_exact_upstream_refs(envelope=envelope, expected_refs=expected_upstream)
             elif envelope.payload_schema_version == DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
@@ -4505,20 +5207,118 @@ class PostgresHistoricalRangeRepository:
         *,
         attempt: HistoricalRangeOperationAttemptV1,
         resolved_request_hash: str,
+        operation_type: HistoricalRangeOperationType | None = None,
     ) -> None:
         if attempt.attempt_receipt_ref is not None:
-            self._load_artifact(
+            operation_type = operation_type or self._get_operation_type(attempt.operation_id)
+            expected_kind = self._operation_receipt_kind(operation_type)
+            if attempt.attempt_receipt_ref.artifact_kind is not expected_kind:
+                raise ValueError("operation attempt receipt kind differs from operation type")
+            envelope = self._load_artifact(
                 attempt.attempt_receipt_ref,
-                expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+                expected_kind=expected_kind,
                 resolved_request_hash=resolved_request_hash,
             )
+            if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+                receipt = HistoricalRangeOutcomeRefreshReceiptV1.model_validate(envelope.payload)
+                if (
+                    receipt.operation_id != attempt.operation_id
+                    or receipt.request_hash != attempt.input_hash
+                    or receipt.status != attempt.status
+                    or canonicalize(receipt.stable_keyset_cursor) != canonicalize(attempt.result_cursor_json)
+                    or receipt.reason_codes != attempt.reason_codes
+                    or attempt.result_hash != attempt.attempt_receipt_ref.semantic_content_hash
+                ):
+                    raise ValueError("outcome refresh receipt differs from its durable attempt")
+                self._require_exact_upstream_refs(
+                    envelope=envelope,
+                    expected_refs=tuple((*receipt.outcome_refs, *receipt.summary_refs)),
+                )
+                for outcome_ref in receipt.outcome_refs:
+                    outcome_envelope = self._artifact_store.load(outcome_ref)
+                    outcome = HistoricalRangeOutcomeArtifactV2.model_validate(outcome_envelope.payload)
+                    self._require_exact_upstream_refs(
+                        envelope=outcome_envelope,
+                        expected_refs=outcome.direct_upstream_refs,
+                    )
+                for summary_ref in receipt.summary_refs:
+                    summary_envelope = self._artifact_store.load(summary_ref)
+                    summary = HistoricalRangeSummaryArtifactV2.model_validate(summary_envelope.payload)
+                    self._require_exact_upstream_refs(
+                        envelope=summary_envelope,
+                        expected_refs=(
+                            *summary.covered_outcome_refs,
+                            *(
+                                (summary.predecessor_summary_ref,)
+                                if summary.predecessor_summary_ref is not None
+                                else ()
+                            ),
+                        ),
+                    )
+            elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+                receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(envelope.payload)
+                expected_status = {
+                    HistoricalRangeBridgeResultStatus.SEALED: (HistoricalRangeOperationStatus.COMPLETED.value),
+                    HistoricalRangeBridgeResultStatus.VALID_EMPTY: (HistoricalRangeOperationStatus.COMPLETED.value),
+                    HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED: (
+                        HistoricalRangeOperationStatus.RETRYABLE_FAILED.value
+                    ),
+                    HistoricalRangeBridgeResultStatus.FAILED: (HistoricalRangeOperationStatus.FAILED.value),
+                }[receipt.result_status]
+                if (
+                    receipt.operation_id != attempt.operation_id
+                    or receipt.request_hash != attempt.input_hash
+                    or expected_status != attempt.status
+                    or receipt.reason_codes != attempt.reason_codes
+                    or attempt.result_hash != attempt.attempt_receipt_ref.semantic_content_hash
+                ):
+                    raise ValueError("dataset bridge receipt differs from its durable attempt")
+                self._require_exact_upstream_refs(
+                    envelope=envelope,
+                    expected_refs=(receipt.bridge_artifact_ref,),
+                )
+                from backend.services.advisory_historical_range.dataset_bridge import (
+                    HistoricalRangeDatasetBridgeArtifactV1,
+                )
+
+                bridge_envelope = self._artifact_store.load(receipt.bridge_artifact_ref)
+                bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(bridge_envelope.payload)
+                expected_bridge_upstream = tuple(
+                    (
+                        *bridge.request.successful_day_refs,
+                        *bridge.request.candidate_refs,
+                        *bridge.request.outcome_refs,
+                        *bridge.request.summary_refs,
+                        *bridge.request.policy_bundle_refs,
+                    )
+                )
+                if (
+                    bridge.operation_id != receipt.operation_id
+                    or bridge.request_hash != receipt.request_hash
+                    or bridge.result_status is not receipt.result_status
+                    or len(bridge.observations) != receipt.observation_count
+                    or len(bridge.labels) != receipt.label_count
+                    or len(bridge.observations) != receipt.canonical_signal_count
+                    or sum(len(item.lineage_variants) for item in bridge.observations) != receipt.range_lineage_count
+                    or bridge.selector_policy_hash != receipt.retrospective_selector_policy_hash
+                    or bridge.build_id != receipt.dataset_build_id
+                    or bridge.sealed_snapshot_id != receipt.sealed_snapshot_id
+                ):
+                    raise ValueError("dataset bridge artifact differs from its typed receipt")
+                self._require_exact_upstream_refs(
+                    envelope=bridge_envelope,
+                    expected_refs=expected_bridge_upstream,
+                )
 
     def _validate_operation_result_artifact(
         self,
         *,
         ref: HistoricalRangeArtifactRefV1,
         resolved_request_hash: str,
+        operation_type: HistoricalRangeOperationType,
     ) -> None:
+        if ref.artifact_kind is not self._operation_receipt_kind(operation_type):
+            raise ValueError("operation result receipt kind differs from operation type")
         envelope = self._artifact_store.load(ref)
         if envelope.resolved_request_hash != resolved_request_hash or envelope.day_run_id is not None:
             raise ValueError("operation result artifact differs from the batch operation identity")
@@ -4529,6 +5329,20 @@ class PostgresHistoricalRangeRepository:
             day_run_id=None,
             visited={ref.semantic_content_hash},
         )
+
+    @staticmethod
+    def _operation_receipt_kind(operation_type: HistoricalRangeOperationType) -> HistoricalRangeArtifactKind:
+        if operation_type in {HistoricalRangeOperationType.RESUME, HistoricalRangeOperationType.CANCEL}:
+            return HistoricalRangeArtifactKind.RANGE_RECEIPT
+        if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+            return HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT
+        if operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+            return HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT
+        if operation_type is HistoricalRangeOperationType.CREATE:
+            return HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN
+        if operation_type is HistoricalRangeOperationType.BUILD_SOURCE_CATALOG:
+            return HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT
+        raise ValueError(f"unsupported operation type {operation_type.value}")
 
     def _insert_day_attempt(self, *, cur: Any, attempt: HistoricalRangeDayAttemptV1) -> bool:
         cur.execute(
@@ -4683,10 +5497,7 @@ class PostgresHistoricalRangeRepository:
             or attempt.status != target_status.value
             or (
                 str(current["status"]) == HistoricalRangeDayStatus.RUNNING.value
-                and (
-                    attempt.worker_id != current.get("worker_id")
-                    or attempt.lease_token != current.get("lease_token")
-                )
+                and (attempt.worker_id != current.get("worker_id") or attempt.lease_token != current.get("lease_token"))
             )
         ):
             raise ValueError("day transition requires the exact final attempt receipt")
@@ -5417,7 +6228,9 @@ class PostgresHistoricalRangeRepository:
                     ),
                 )
             )
-            actual_upstream = tuple(sorted((kind.value, semantic_hash, path) for kind, semantic_hash, path in upstream_by_identity))
+            actual_upstream = tuple(
+                sorted((kind.value, semantic_hash, path) for kind, semantic_hash, path in upstream_by_identity)
+            )
             if actual_upstream != expected_upstream:
                 raise ValueError("artifact upstream closure does not equal the required exact ref set")
         if validate_recursive_upstream:
@@ -5452,6 +6265,15 @@ class PostgresHistoricalRangeRepository:
         allow_direct_predecessor_day_run_id: str | None = None,
     ) -> None:
         for upstream_ref in envelope.upstream_refs:
+            closure_key = (
+                upstream_ref.semantic_content_hash,
+                resolved_request_hash,
+                range_run_id,
+                day_run_id,
+                allow_direct_predecessor_day_run_id,
+            )
+            if closure_key in self._validated_upstream_closures:
+                continue
             if upstream_ref.semantic_content_hash in visited:
                 continue
             visited.add(upstream_ref.semantic_content_hash)
@@ -5467,7 +6289,10 @@ class PostgresHistoricalRangeRepository:
                 raise ValueError("upstream artifact belongs to a different day run")
             next_day_run_id = day_run_id
             next_predecessor_day_run_id: str | None = None
-            if upstream_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT and upstream.day_run_id is not None:
+            if (
+                upstream_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT
+                and upstream.day_run_id is not None
+            ):
                 range_receipt_to_day = day_run_id is None
                 cross_day = day_run_id is not None and upstream.day_run_id != day_run_id
                 if cross_day and upstream.payload_schema_version != DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
@@ -5493,6 +6318,7 @@ class PostgresHistoricalRangeRepository:
                 visited=visited,
                 allow_direct_predecessor_day_run_id=next_predecessor_day_run_id,
             )
+            self._validated_upstream_closures.add(closure_key)
 
     @staticmethod
     def _require_exact_upstream_refs(
@@ -5501,7 +6327,10 @@ class PostgresHistoricalRangeRepository:
         expected_refs: Sequence[HistoricalRangeArtifactRefV1],
     ) -> None:
         actual = tuple(
-            sorted((item.artifact_kind.value, item.semantic_content_hash, item.relative_path) for item in envelope.upstream_refs)
+            sorted(
+                (item.artifact_kind.value, item.semantic_content_hash, item.relative_path)
+                for item in envelope.upstream_refs
+            )
         )
         expected = tuple(
             sorted((item.artifact_kind.value, item.semantic_content_hash, item.relative_path) for item in expected_refs)
@@ -5735,7 +6564,6 @@ class PostgresHistoricalRangeRepository:
             )
         return row
 
-
     @staticmethod
     def _candidate_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeCandidateFactV1:
         return HistoricalRangeCandidateFactV1(
@@ -5852,6 +6680,70 @@ class PostgresHistoricalRangeRepository:
         )
 
     @staticmethod
+    def _outcome_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeOutcomeFactV1:
+        return HistoricalRangeOutcomeFactV1(
+            outcome_version_id=str(row["outcome_version_id"]),
+            outcome_logical_id=str(row["outcome_logical_id"]),
+            outcome_version=int(row["outcome_version"]),
+            subject_type=str(row["subject_type"]),
+            subject_id=str(row["subject_id"]),
+            projection=str(row["projection"]),
+            evaluation_window_type=str(row["evaluation_window_type"]),
+            horizon_trade_days=int(row["horizon_trade_days"]),
+            historical_range_policy_bundle_hash=str(row["historical_range_policy_bundle_hash"]),
+            outcome_input_hash=str(row["outcome_input_hash"]),
+            revision_reason=str(row["revision_reason"]),
+            producer_code_hash=str(row["producer_code_hash"]),
+            outcome_contract_version=str(row["outcome_contract_version"]),
+            source_revision_set_hash=str(row["source_revision_set_hash"]),
+            predecessor_outcome_version_id=row.get("predecessor_outcome_version_id"),
+            predecessor_outcome_hash=row.get("predecessor_outcome_hash"),
+            revision_evidence_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(row["revision_evidence_ref"])
+                if row.get("revision_evidence_ref") is not None
+                else None
+            ),
+            revision_evidence_hash=row.get("revision_evidence_hash"),
+            maturity_status=str(row["maturity_status"]),
+            label_as_of_trade_date=row.get("label_as_of_trade_date"),
+            next_refresh_trade_date=row.get("next_refresh_trade_date"),
+            entry_execution_evidence_json=row.get("entry_execution_evidence_json"),
+            exit_execution_evidence_json=row.get("exit_execution_evidence_json"),
+            benchmark_hash=row.get("benchmark_hash"),
+            cost_policy_hash=row.get("cost_policy_hash"),
+            corporate_action_hash=row.get("corporate_action_hash"),
+            calculation_evidence_ref=(
+                HistoricalRangeArtifactRefV1.model_validate(row["calculation_evidence_ref"])
+                if row.get("calculation_evidence_ref") is not None
+                else None
+            ),
+            outcome_artifact_ref=HistoricalRangeArtifactRefV1.model_validate(row["outcome_artifact_ref"]),
+            outcome_json=dict(row["outcome_json"]),
+            outcome_content_hash=str(row["outcome_content_hash"]),
+        )
+
+    @staticmethod
+    def _summary_fact_from_row(row: Mapping[str, Any]) -> HistoricalRangeSummaryFactV1:
+        return HistoricalRangeSummaryFactV1(
+            summary_id=str(row["summary_id"]),
+            range_run_id=str(row["range_run_id"]),
+            summary_version=int(row["summary_version"]),
+            covered_outcome_set_hash=str(row["covered_outcome_set_hash"]),
+            summary_policy_hash=str(row["summary_policy_hash"]),
+            summary_input_hash=str(row["summary_input_hash"]),
+            recall_denominator_set_hash=str(row["recall_denominator_set_hash"]),
+            recall_denominator_evidence_json=dict(row["recall_denominator_evidence_json"]),
+            producer_code_hash=str(row["producer_code_hash"]),
+            maturity_coverage_json=dict(row["maturity_coverage_json"]),
+            maturity_coverage_hash=str(row["maturity_coverage_hash"]),
+            predecessor_summary_id=row.get("predecessor_summary_id"),
+            predecessor_summary_hash=row.get("predecessor_summary_hash"),
+            summary_artifact_ref=HistoricalRangeArtifactRefV1.model_validate(row["summary_artifact_ref"]),
+            summary_json=dict(row["summary_json"]),
+            summary_content_hash=str(row["summary_content_hash"]),
+        )
+
+    @staticmethod
     def _execution_operation_from_row(row: Mapping[str, Any]) -> HistoricalRangeExecutionOperationV1:
         return HistoricalRangeExecutionOperationV1(
             operation_id=str(row["operation_id"]),
@@ -5870,9 +6762,7 @@ class PostgresHistoricalRangeRepository:
             lease_expired=bool(row.get("lease_expired", False)),
             fencing_token=(int(row["fencing_token"]) if row["fencing_token"] is not None else None),
             stable_keyset_cursor_json=(
-                dict(row["stable_keyset_cursor_json"])
-                if row["stable_keyset_cursor_json"] is not None
-                else None
+                dict(row["stable_keyset_cursor_json"]) if row["stable_keyset_cursor_json"] is not None else None
             ),
             result_row_version=(int(row["result_row_version"]) if row["result_row_version"] else None),
             result_status=(str(row["result_status"]) if row["result_status"] is not None else None),

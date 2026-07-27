@@ -43,6 +43,8 @@ _NAMESPACE_BY_KIND: dict[HistoricalRangeArtifactKind, str] = {
     HistoricalRangeArtifactKind.DECISION_MARK_SET: "decision-mark-sets",
     HistoricalRangeArtifactKind.DAY_RECEIPT: "day-receipts",
     HistoricalRangeArtifactKind.RANGE_RECEIPT: "range-receipts",
+    HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT: "outcome-refresh-receipts",
+    HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT: "dataset-bridge-receipts",
     HistoricalRangeArtifactKind.OUTCOME: "outcomes",
     HistoricalRangeArtifactKind.SUMMARY: "summaries",
     HistoricalRangeArtifactKind.DATASET_BRIDGE: "dataset-bridges",

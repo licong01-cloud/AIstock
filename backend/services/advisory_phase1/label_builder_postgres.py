@@ -21,6 +21,7 @@ from backend.services.advisory_phase1.calculation_evidence import CalculationEvi
 from backend.services.advisory_phase1.label_builder import (
     LabelAppendRequest,
     LabelBuilderError,
+    LabelPolicyLineageType,
     OutcomeLabelAuthorityHeader,
     OutcomeLabelPayload,
     OutcomeLabelVersion,
@@ -45,6 +46,9 @@ from backend.services.advisory_phase1.outcome_engine import (
     OutcomeEventStatus,
     OutcomeOwner,
     OwnerType,
+)
+from backend.services.advisory_phase1.retrospective_contracts import (
+    HistoricalRangeArtifactReference,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,7 +143,11 @@ class PostgresOutcomeLabelRepository:
                 if existing is not None:
                     self._assert_exact_retry(existing=existing, request=request)
                     return existing
-                self._require_creator_batch_active(cur, capture_batch_id=created_by_capture_batch_id)
+                self._require_creator_batch_active(
+                    cur,
+                    capture_batch_id=created_by_capture_batch_id,
+                    policy_lineage_type=request.policy_lineage_type,
+                )
                 predecessor = self._select_terminal_locked(cur, request.label_key_hash)
                 self._validate_predecessor(request=request, predecessor=predecessor)
                 self._insert_or_compare_blob(cur, request=request)
@@ -230,7 +238,13 @@ class PostgresOutcomeLabelRepository:
              AND p.decision_as_of_trade_date = h.decision_as_of_trade_date
         """
 
-    def _require_creator_batch_active(self, cur: Any, *, capture_batch_id: str) -> None:
+    def _require_creator_batch_active(
+        self,
+        cur: Any,
+        *,
+        capture_batch_id: str,
+        policy_lineage_type: LabelPolicyLineageType,
+    ) -> None:
         cur.execute(
             """
             SELECT capture_status, capture_request_schema_version, capture_purpose,
@@ -245,7 +259,13 @@ class PostgresOutcomeLabelRepository:
         if (
             row is None
             or row["capture_status"] != "RUNNING"
-            or row["capture_request_schema_version"] != "advisory_phase1_capture_batch_v2"
+            or row["capture_request_schema_version"]
+            != (
+                "advisory_phase1_retrospective_label_capture_batch_v1"
+                if policy_lineage_type
+                is LabelPolicyLineageType.HISTORICAL_RANGE_OUTCOME_POLICY
+                else "advisory_phase1_capture_batch_v2"
+            )
             or row["capture_purpose"] != "LABEL_CAPTURE_V1"
             or row["lease_expires_at"] is None
             or row["lease_expires_at"] <= row["database_now"]
@@ -308,39 +328,118 @@ class PostgresOutcomeLabelRepository:
     def _insert_header(self, cur: Any, version: OutcomeLabelVersion) -> None:
         owner = version.owner
         result = version.outcome_result
-        cur.execute(
-            """
-            INSERT INTO app.advisory_outcome_label (
-                label_version_id, label_content_hash, label_key_hash, label_revision_no,
-                supersedes_label_version_id, supersedes_label_version_hash, label_append_request_hash,
-                label_policy_bundle_id, label_policy_bundle_hash, label_policy_hash,
-                label_source_revision_set_id, label_source_revision_set_hash,
-                owner_type, owner_key, canonical_signal_id, observation_version_id,
-                candidate_stage_evidence_id, symbol, universe_layer, decision_as_of_trade_date, evidence_scope,
-                horizon_trading_days, projection, projection_schema_version,
-                intended_entry_trade_date, earliest_sell_eligible_trade_date, exit_trade_date,
-                maturity_status, outcome_event_status, entry_status, projection_payload_hash,
-                calculation_evidence_sha256, calculation_evidence_size_bytes,
-                calculation_evidence_store_backend_hash, created_by_capture_batch_id, computed_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s
+        columns = [
+            "label_version_id",
+            "label_content_hash",
+            "label_key_hash",
+            "label_revision_no",
+            "supersedes_label_version_id",
+            "supersedes_label_version_hash",
+            "label_append_request_hash",
+        ]
+        values: list[Any] = [
+            version.label_version_id,
+            version.label_content_hash,
+            version.label_key_hash,
+            version.label_revision_no,
+            version.supersedes_label_version_id,
+            version.supersedes_label_version_hash,
+            version.label_append_request_hash,
+        ]
+        if version.policy_lineage_type is LabelPolicyLineageType.PHASE1_LABEL_POLICY:
+            columns.extend(("label_policy_bundle_id", "label_policy_bundle_hash"))
+            values.extend(
+                (version.label_policy_bundle_id, version.label_policy_bundle_hash)
             )
-            """,
+        else:
+            columns.extend(
+                (
+                    "policy_lineage_type",
+                    "historical_range_policy_bundle_ref",
+                    "historical_range_policy_bundle_hash",
+                    "policy_component_set_hash",
+                )
+            )
+            values.extend(
+                (
+                    version.policy_lineage_type.value,
+                    psycopg2.extras.Json(
+                        version.historical_range_policy_bundle_ref.model_dump(
+                            mode="json"
+                        )
+                    )
+                    if version.historical_range_policy_bundle_ref is not None
+                    else None,
+                    version.historical_range_policy_bundle_hash,
+                    version.policy_component_set_hash,
+                )
+            )
+        columns.extend(
             (
-                version.label_version_id, version.label_content_hash, version.label_key_hash, version.label_revision_no,
-                version.supersedes_label_version_id, version.supersedes_label_version_hash, version.label_append_request_hash,
-                version.label_policy_bundle_id, version.label_policy_bundle_hash, version.label_policy_hash,
-                version.label_source_revision_set_id, version.label_source_revision_set_hash,
-                owner.owner_type.value, owner.owner_key, owner.canonical_signal_id, owner.observation_version_id,
-                owner.candidate_stage_evidence_id, owner.symbol, owner.universe_layer, owner.decision_as_of_trade_date, owner.evidence_scope,
-                version.horizon_trading_days, version.projection.value, version.projection_schema_version,
-                result.intended_entry_trade_date, result.earliest_sell_eligible_trade_date, result.exit_trade_date,
-                result.maturity_status.value, result.outcome_event_status.value, result.entry_status.value,
-                result.projection_payload_hash, version.calculation_evidence_sha256, version.calculation_evidence_size_bytes,
-                version.calculation_evidence_store_backend_hash, version.created_by_capture_batch_id, version.computed_at,
-            ),
+                "label_policy_hash",
+                "label_source_revision_set_id",
+                "label_source_revision_set_hash",
+                "owner_type",
+                "owner_key",
+                "canonical_signal_id",
+                "observation_version_id",
+                "candidate_stage_evidence_id",
+                "symbol",
+                "universe_layer",
+                "decision_as_of_trade_date",
+                "evidence_scope",
+                "horizon_trading_days",
+                "projection",
+                "projection_schema_version",
+                "intended_entry_trade_date",
+                "earliest_sell_eligible_trade_date",
+                "exit_trade_date",
+                "maturity_status",
+                "outcome_event_status",
+                "entry_status",
+                "projection_payload_hash",
+                "calculation_evidence_sha256",
+                "calculation_evidence_size_bytes",
+                "calculation_evidence_store_backend_hash",
+                "created_by_capture_batch_id",
+                "computed_at",
+            )
+        )
+        values.extend(
+            (
+                version.label_policy_hash,
+                version.label_source_revision_set_id,
+                version.label_source_revision_set_hash,
+                owner.owner_type.value,
+                owner.owner_key,
+                owner.canonical_signal_id,
+                owner.observation_version_id,
+                owner.candidate_stage_evidence_id,
+                owner.symbol,
+                owner.universe_layer,
+                owner.decision_as_of_trade_date,
+                owner.evidence_scope,
+                version.horizon_trading_days,
+                version.projection.value,
+                version.projection_schema_version,
+                result.intended_entry_trade_date,
+                result.earliest_sell_eligible_trade_date,
+                result.exit_trade_date,
+                result.maturity_status.value,
+                result.outcome_event_status.value,
+                result.entry_status.value,
+                result.projection_payload_hash,
+                version.calculation_evidence_sha256,
+                version.calculation_evidence_size_bytes,
+                version.calculation_evidence_store_backend_hash,
+                version.created_by_capture_batch_id,
+                version.computed_at,
+            )
+        )
+        cur.execute(
+            f"INSERT INTO app.advisory_outcome_label ({', '.join(columns)}) "
+            f"VALUES ({', '.join(['%s'] * len(columns))})",
+            tuple(values),
         )
 
     def _insert_payload(self, cur: Any, version: OutcomeLabelVersion) -> None:
@@ -480,12 +579,45 @@ class PostgresOutcomeLabelRepository:
             projection_payload_hash=str(row["projection_payload_hash"]),
             calculation_evidence=evidence,
         )
+        policy_lineage_type = LabelPolicyLineageType(
+            str(
+                row.get("policy_lineage_type")
+                or LabelPolicyLineageType.PHASE1_LABEL_POLICY.value
+            )
+        )
+        range_policy_ref_raw = row.get("historical_range_policy_bundle_ref")
+        range_policy_ref = (
+            HistoricalRangeArtifactReference.model_validate(range_policy_ref_raw)
+            if range_policy_ref_raw is not None
+            else None
+        )
         version = OutcomeLabelVersion(
             label_key_hash=str(row["label_key_hash"]), label_revision_no=int(row["label_revision_no"]),
             supersedes_label_version_id=(str(row["supersedes_label_version_id"]) if row["supersedes_label_version_id"] else None),
             supersedes_label_version_hash=(str(row["supersedes_label_version_hash"]) if row["supersedes_label_version_hash"] else None),
             label_append_request_hash=str(row["label_append_request_hash"]),
-            label_policy_bundle_id=str(row["label_policy_bundle_id"]), label_policy_bundle_hash=str(row["label_policy_bundle_hash"]),
+            policy_lineage_type=policy_lineage_type,
+            label_policy_bundle_id=(
+                str(row["label_policy_bundle_id"])
+                if row.get("label_policy_bundle_id") is not None
+                else None
+            ),
+            label_policy_bundle_hash=(
+                str(row["label_policy_bundle_hash"])
+                if row.get("label_policy_bundle_hash") is not None
+                else None
+            ),
+            historical_range_policy_bundle_ref=range_policy_ref,
+            historical_range_policy_bundle_hash=(
+                str(row["historical_range_policy_bundle_hash"])
+                if row.get("historical_range_policy_bundle_hash") is not None
+                else None
+            ),
+            policy_component_set_hash=(
+                str(row["policy_component_set_hash"])
+                if row.get("policy_component_set_hash") is not None
+                else None
+            ),
             label_policy_hash=str(row["label_policy_hash"]), label_source_revision_set_id=str(row["label_source_revision_set_id"]),
             label_source_revision_set_hash=str(row["label_source_revision_set_hash"]), owner=owner,
             horizon_trading_days=int(row["horizon_trading_days"]), projection=Projection(str(row["projection"])),
@@ -511,8 +643,12 @@ class PostgresOutcomeLabelRepository:
             expected_predecessor_version_id=existing.supersedes_label_version_id,
             expected_predecessor_version_hash=existing.supersedes_label_version_hash,
             expected_predecessor_revision_no=(existing.label_revision_no - 1 if existing.label_revision_no > 1 else None),
+            policy_lineage_type=existing.policy_lineage_type,
             label_policy_bundle_id=existing.label_policy_bundle_id,
             label_policy_bundle_hash=existing.label_policy_bundle_hash,
+            historical_range_policy_bundle_ref=existing.historical_range_policy_bundle_ref,
+            historical_range_policy_bundle_hash=existing.historical_range_policy_bundle_hash,
+            policy_component_set_hash=existing.policy_component_set_hash,
             label_policy_hash=existing.label_policy_hash,
             label_source_revision_set_id=existing.label_source_revision_set_id,
             label_source_revision_set_hash=existing.label_source_revision_set_hash,

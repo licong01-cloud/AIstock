@@ -19,7 +19,15 @@ from backend.services.advisory_phase0a.policy import canonical_json_sha256, cano
 from backend.services.advisory_phase1.label_capture import (
     LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
     LABEL_CAPTURE_PURPOSE,
+    RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
     LabelCaptureBatchRequestV2,
+    RetrospectiveLabelCaptureBatchRequestV1,
+)
+from backend.services.advisory_phase1.retrospective_contracts import (
+    HistoricalRangeCaptureScope,
+    HistoricalRangeLineageProjection,
+    RETROSPECTIVE_EVIDENCE_SCOPE,
+    RETROSPECTIVE_EXECUTION_ORIGIN,
 )
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import (
@@ -34,6 +42,9 @@ from backend.services.advisory_phase1.trace_outbox import (
 
 
 CAPTURE_BATCH_SCHEMA_VERSION = "advisory_phase1_capture_batch_v1"
+RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION = (
+    "advisory_phase1_retrospective_capture_batch_v1"
+)
 OBSERVATION_CAPTURE_PURPOSE = "OBSERVATION_CAPTURE_V1"
 REASON_CAPTURE_BATCH_CONFLICT = "ADVISORY_PHASE1_CAPTURE_BATCH_CONFLICT"
 REASON_CAPTURE_BATCH_STATE_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_STATE_INVALID"
@@ -298,7 +309,234 @@ class CaptureBatchRequest(BaseModel):
         return self
 
 
-CaptureBatchRequestLike = CaptureBatchRequest | LabelCaptureBatchRequestV2
+class RetrospectiveObservationCapturePlan(BaseModel):
+    """Range-native observation input without a synthetic Selection/Phase 0A id."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    canonical_signal_id: str = Field(min_length=1, max_length=160)
+    symbol: str = Field(min_length=1, max_length=32)
+    decision_as_of_trade_date: date
+    selection_as_of_trade_date: date
+    target_trade_date: date
+    decision_cutoff_ts: datetime
+    alpha_mode: str = Field(pattern="^(single_alpha|multi_alpha)$")
+    selection_runtime_semantics_hash: str = Field(min_length=64, max_length=64)
+    package_effective_config_hash: str = Field(min_length=64, max_length=64)
+    calendar_version: str = Field(min_length=1, max_length=160)
+    calendar_hash: str = Field(min_length=64, max_length=64)
+    stable_signal_semantics_hash: str = Field(min_length=64, max_length=64)
+    canonical_signal_scope_hash: str = Field(min_length=64, max_length=64)
+    lineage: HistoricalRangeLineageProjection
+    range_scope: HistoricalRangeCaptureScope
+    signal_source_revision_set_id: str = Field(min_length=1, max_length=160)
+    signal_source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    range_signal_context_hash: str = Field(min_length=64, max_length=64)
+    evidence_bundle_hash: str = Field(min_length=64, max_length=64)
+    stage_payload_hash: str = Field(min_length=64, max_length=64)
+    runtime_profile_version_id: str = Field(min_length=1, max_length=160)
+    runtime_profile_version_hash: str = Field(min_length=64, max_length=64)
+    hmm_snapshot_id: str | None = Field(default=None, max_length=160)
+    hmm_snapshot_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    hmm_snapshot_status: str = Field(min_length=1, max_length=80)
+    risk_policy_hash: str = Field(min_length=64, max_length=64)
+    universe_policy_hash: str = Field(min_length=64, max_length=64)
+    symbol_normalization_policy_hash: str = Field(min_length=64, max_length=64)
+    evidence_available_at: datetime
+    selector_policy_hash: str = Field(min_length=64, max_length=64)
+    plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("symbol")
+    @classmethod
+    def _symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator(
+        "selection_runtime_semantics_hash",
+        "package_effective_config_hash",
+        "calendar_hash",
+        "stable_signal_semantics_hash",
+        "canonical_signal_scope_hash",
+        "signal_source_revision_set_hash",
+        "range_signal_context_hash",
+        "evidence_bundle_hash",
+        "stage_payload_hash",
+        "runtime_profile_version_hash",
+        "hmm_snapshot_hash",
+        "risk_policy_hash",
+        "universe_policy_hash",
+        "symbol_normalization_policy_hash",
+        "selector_policy_hash",
+        "plan_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return (
+            _require_sha256(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
+
+    @field_validator("decision_cutoff_ts", "evidence_available_at")
+    @classmethod
+    def _timestamps(cls, value: datetime, info: Any) -> datetime:
+        return _require_aware(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveObservationCapturePlan":
+        if (
+            self.selection_as_of_trade_date != self.decision_as_of_trade_date
+            or self.target_trade_date <= self.decision_as_of_trade_date
+            or self.canonical_signal_id
+            != f"acs_{self.canonical_signal_scope_hash[:20]}"
+        ):
+            raise ValueError("retrospective observation dates or signal id are invalid")
+        scope = self.range_scope
+        lineage = self.lineage
+        if (
+            lineage.historical_range_request_ref
+            != scope.historical_range_request_ref
+            or lineage.historical_range_frozen_program_ref
+            != scope.historical_range_frozen_program_ref
+            or lineage.range_run_id != scope.range_run_id
+            or lineage.package_id == ""
+            or lineage.signal_source_revision_set_hash
+            != self.signal_source_revision_set_hash
+            or scope.signal_source_revision_set_id
+            != self.signal_source_revision_set_id
+            or scope.signal_source_revision_set_hash
+            != self.signal_source_revision_set_hash
+            or self.selector_policy_hash != scope.selector_policy_hash
+        ):
+            raise ValueError("retrospective observation lineage differs from capture scope")
+        if self.hmm_snapshot_status == "NOT_APPLICABLE":
+            if self.hmm_snapshot_id is not None or self.hmm_snapshot_hash is not None:
+                raise ValueError("NOT_APPLICABLE HMM cannot carry a snapshot")
+        elif not self.hmm_snapshot_id or not self.hmm_snapshot_hash:
+            raise ValueError("applicable HMM requires exact snapshot identity")
+        digest = canonical_json_sha256(
+            self.model_dump(mode="json", exclude={"plan_hash"})
+        )
+        if self.plan_hash is not None and self.plan_hash != digest:
+            raise ValueError("retrospective observation plan hash differs")
+        object.__setattr__(self, "plan_hash", digest)
+        return self
+
+
+class RetrospectiveObservationCaptureBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = "advisory_phase1_retrospective_capture_binding_v1"
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    capture_fencing_token: int = Field(ge=1)
+    range_scope: HistoricalRangeCaptureScope
+    binding_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("binding_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        return (
+            _require_sha256(value, field_name="binding_hash")
+            if value is not None
+            else None
+        )
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveObservationCaptureBinding":
+        digest = canonical_json_sha256(
+            self.model_dump(mode="json", exclude={"binding_hash"})
+        )
+        if self.binding_hash is not None and self.binding_hash != digest:
+            raise ValueError("retrospective capture binding hash differs")
+        object.__setattr__(self, "binding_hash", digest)
+        return self
+
+
+class RetrospectiveObservationCaptureBatchRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION
+    capture_purpose: str = OBSERVATION_CAPTURE_PURPOSE
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    binding: RetrospectiveObservationCaptureBinding
+    plans: tuple[RetrospectiveObservationCapturePlan, ...] = Field(min_length=1)
+    data_source: str = "DB_HISTORICAL"
+    execution_origin: str = RETROSPECTIVE_EXECUTION_ORIGIN
+    research_scope: str = RETROSPECTIVE_EVIDENCE_SCOPE
+    evidence_scope: str = RETROSPECTIVE_EVIDENCE_SCOPE
+    execution_prohibited: bool = True
+    capture_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("capture_request_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        return (
+            _require_sha256(value, field_name="capture_request_hash")
+            if value is not None
+            else None
+        )
+
+    def canonical_payload(self) -> dict[str, Any]:
+        binding = self.binding.model_dump(
+            mode="json",
+            exclude={"capture_batch_id", "capture_fencing_token", "binding_hash"},
+        )
+        return canonicalize(
+            {
+                "schema_version": self.schema_version,
+                "capture_purpose": self.capture_purpose,
+                "binding": binding,
+                "plans": [item.model_dump(mode="json") for item in self.plans],
+                "data_source": self.data_source,
+                "execution_origin": self.execution_origin,
+                "research_scope": self.research_scope,
+                "evidence_scope": self.evidence_scope,
+                "execution_prohibited": self.execution_prohibited,
+            }
+        )
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveObservationCaptureBatchRequestV1":
+        if (
+            self.schema_version != RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION
+            or self.capture_purpose != OBSERVATION_CAPTURE_PURPOSE
+            or self.data_source != "DB_HISTORICAL"
+            or self.execution_origin != RETROSPECTIVE_EXECUTION_ORIGIN
+            or self.research_scope != RETROSPECTIVE_EVIDENCE_SCOPE
+            or self.evidence_scope != RETROSPECTIVE_EVIDENCE_SCOPE
+            or self.execution_prohibited is not True
+            or self.binding.capture_batch_id != self.capture_batch_id
+            or self.binding.capture_fencing_token != 1
+        ):
+            raise ValueError("retrospective observation capture boundary is invalid")
+        ordered = tuple(
+            sorted(
+                self.plans,
+                key=lambda item: (
+                    item.decision_as_of_trade_date,
+                    item.canonical_signal_id,
+                ),
+            )
+        )
+        if ordered != self.plans or len(
+            {(item.decision_as_of_trade_date, item.canonical_signal_id) for item in ordered}
+        ) != len(ordered):
+            raise ValueError("retrospective observation plans must be sorted and unique")
+        if any(item.range_scope != self.binding.range_scope for item in ordered):
+            raise ValueError("retrospective observation plan uses another range scope")
+        digest = canonical_json_sha256(self.canonical_payload())
+        if self.capture_request_hash is not None and self.capture_request_hash != digest:
+            raise ValueError("retrospective capture request hash differs")
+        object.__setattr__(self, "capture_request_hash", digest)
+        return self
+
+
+CaptureBatchRequestLike = (
+    CaptureBatchRequest
+    | LabelCaptureBatchRequestV2
+    | RetrospectiveObservationCaptureBatchRequestV1
+    | RetrospectiveLabelCaptureBatchRequestV1
+)
 
 
 def capture_request_schema(request: CaptureBatchRequestLike) -> str:
@@ -308,6 +546,10 @@ def capture_request_schema(request: CaptureBatchRequestLike) -> str:
         return CAPTURE_BATCH_SCHEMA_VERSION
     if isinstance(request, LabelCaptureBatchRequestV2):
         return LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+    if isinstance(request, RetrospectiveObservationCaptureBatchRequestV1):
+        return RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION
+    if isinstance(request, RetrospectiveLabelCaptureBatchRequestV1):
+        return RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION
     raise TypeError(f"unsupported capture request type: {type(request)!r}")
 
 
@@ -316,6 +558,14 @@ def capture_request_purpose(request: CaptureBatchRequestLike) -> str:
         return OBSERVATION_CAPTURE_PURPOSE
     if isinstance(request, LabelCaptureBatchRequestV2):
         return LABEL_CAPTURE_PURPOSE
+    if isinstance(
+        request,
+        (
+            RetrospectiveObservationCaptureBatchRequestV1,
+            RetrospectiveLabelCaptureBatchRequestV1,
+        ),
+    ):
+        return request.capture_purpose
     raise TypeError(f"unsupported capture request type: {type(request)!r}")
 
 
@@ -331,26 +581,46 @@ def _capture_binding_payload(request: CaptureBatchRequestLike) -> dict[str, Any]
     return request.binding.model_dump(mode="json")
 
 
-def _capture_control_binding_event_hash(request: CaptureBatchRequestLike) -> str:
+def _capture_control_binding_event_hash(
+    request: CaptureBatchRequestLike,
+) -> str | None:
     """Persist historical control provenance without reading current control state."""
 
     if isinstance(request, CaptureBatchRequest):
         return request.binding.control_binding_event_hash
     if isinstance(request, LabelCaptureBatchRequestV2):
         return request.binding.source_control_binding_event_hash
+    if isinstance(
+        request,
+        (
+            RetrospectiveObservationCaptureBatchRequestV1,
+            RetrospectiveLabelCaptureBatchRequestV1,
+        ),
+    ):
+        return None
     raise TypeError(f"unsupported capture request type: {type(request)!r}")
 
 
-def _capture_handoff_readiness_hash(request: CaptureBatchRequestLike) -> str:
-    return request.binding.handoff_readiness_hash
+def _capture_handoff_readiness_hash(request: CaptureBatchRequestLike) -> str | None:
+    return getattr(request.binding, "handoff_readiness_hash", None)
 
 
-def _capture_admission_scope_id(request: CaptureBatchRequestLike) -> str:
-    return request.binding.admission_scope_id
+def _capture_admission_scope_id(request: CaptureBatchRequestLike) -> str | None:
+    return getattr(request.binding, "admission_scope_id", None)
 
 
-def _capture_admission_scope_hash(request: CaptureBatchRequestLike) -> str:
-    return request.binding.admission_scope_hash
+def _capture_admission_scope_hash(request: CaptureBatchRequestLike) -> str | None:
+    return getattr(request.binding, "admission_scope_hash", None)
+
+
+def _capture_range_scope(
+    request: CaptureBatchRequestLike,
+) -> HistoricalRangeCaptureScope | None:
+    if isinstance(request, RetrospectiveObservationCaptureBatchRequestV1):
+        return request.binding.range_scope
+    if isinstance(request, RetrospectiveLabelCaptureBatchRequestV1):
+        return request.binding.range_scope
+    return None
 
 
 def parse_capture_batch_request_payload(
@@ -378,6 +648,14 @@ def parse_capture_batch_request_payload(
                 "v2 label capture request requires LABEL_CAPTURE_V1 purpose"
             )
         return LabelCaptureBatchRequestV2.model_validate(payload)
+    if schema_version == RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION:
+        if purpose != OBSERVATION_CAPTURE_PURPOSE:
+            raise ValueError("retrospective observation capture purpose is invalid")
+        return RetrospectiveObservationCaptureBatchRequestV1.model_validate(payload)
+    if schema_version == RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION:
+        if purpose != LABEL_CAPTURE_PURPOSE:
+            raise ValueError("retrospective label capture purpose is invalid")
+        return RetrospectiveLabelCaptureBatchRequestV1.model_validate(payload)
     raise ValueError("unsupported capture request schema or purpose")
 
 
@@ -827,6 +1105,23 @@ class InMemoryCaptureBatchRepository:
     def get(self, capture_batch_id: str) -> CaptureBatch:
         return self._get(capture_batch_id)
 
+    def list_by_capture_request_hash(
+        self, capture_request_hash: str
+    ) -> tuple[CaptureBatch, ...]:
+        """Read the complete same-content recovery chain ordered by attempt."""
+
+        _require_sha256(capture_request_hash, field_name="capture_request_hash")
+        batch_ids = self._by_request_hash.get(capture_request_hash, [])
+        return tuple(
+            sorted(
+                (self._batches[batch_id] for batch_id in batch_ids),
+                key=lambda item: (
+                    item.capture_attempt_no,
+                    item.request.capture_batch_id,
+                ),
+            )
+        )
+
     def memberships_for(self, capture_batch_id: str) -> tuple[CaptureMembership, ...]:
         self._get(capture_batch_id)
         return tuple(
@@ -1004,36 +1299,15 @@ class PostgresCaptureBatchRepository:
                         "capture retry requires explicit recovery from its predecessor",
                     )
                 try:
-                    cur.execute(
-                        """
-                        INSERT INTO app.advisory_capture_batch (
-                            capture_batch_id, capture_request_hash, request_payload_jsonb, binding_jsonb,
-                            control_binding_event_hash, handoff_readiness_hash, admission_scope_id,
-                            admission_scope_hash, capture_request_schema_version, capture_purpose,
-                            capture_status, row_version, fencing_token, capture_attempt_no
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, 1)
-                        RETURNING *
-                        """,
-                        (
-                            request.capture_batch_id,
-                            capture_request_hash(request),
-                            psycopg2.extras.Json(
-                                canonicalize(request.canonical_payload())
-                            ),
-                            psycopg2.extras.Json(
-                                canonicalize(_capture_binding_payload(request))
-                            ),
-                            _capture_control_binding_event_hash(request),
-                            _capture_handoff_readiness_hash(request),
-                            _capture_admission_scope_id(request),
-                            _capture_admission_scope_hash(request),
-                            capture_request_schema(request),
-                            capture_request_purpose(request),
-                        ),
+                    row = self._insert_capture_batch_row(
+                        cur, request=request, capture_attempt_no=1
                     )
-                    row = dict(cur.fetchone())
                     if isinstance(request, CaptureBatchRequest):
                         self._insert_plans(cur, request)
+                    elif isinstance(
+                        request, RetrospectiveObservationCaptureBatchRequestV1
+                    ):
+                        self._insert_retrospective_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
                     raise SourceLedgerError(
                         REASON_CAPTURE_BATCH_CONFLICT,
@@ -1238,39 +1512,18 @@ class PostgresCaptureBatchRepository:
                     )
                 next_attempt = int(predecessor["capture_attempt_no"]) + 1
                 try:
-                    cur.execute(
-                        """
-                        INSERT INTO app.advisory_capture_batch (
-                            capture_batch_id, capture_request_hash, request_payload_jsonb, binding_jsonb,
-                            control_binding_event_hash, handoff_readiness_hash, admission_scope_id,
-                            admission_scope_hash, capture_request_schema_version, capture_purpose,
-                            capture_status, row_version, fencing_token, capture_attempt_no,
-                            predecessor_capture_batch_id
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, %s, %s)
-                        RETURNING *
-                        """,
-                        (
-                            request.capture_batch_id,
-                            capture_request_hash(request),
-                            psycopg2.extras.Json(
-                                canonicalize(request.canonical_payload())
-                            ),
-                            psycopg2.extras.Json(
-                                canonicalize(_capture_binding_payload(request))
-                            ),
-                            _capture_control_binding_event_hash(request),
-                            _capture_handoff_readiness_hash(request),
-                            _capture_admission_scope_id(request),
-                            _capture_admission_scope_hash(request),
-                            capture_request_schema(request),
-                            capture_request_purpose(request),
-                            next_attempt,
-                            predecessor_capture_batch_id,
-                        ),
+                    row = self._insert_capture_batch_row(
+                        cur,
+                        request=request,
+                        capture_attempt_no=next_attempt,
+                        predecessor_capture_batch_id=predecessor_capture_batch_id,
                     )
-                    row = dict(cur.fetchone())
                     if isinstance(request, CaptureBatchRequest):
                         self._insert_plans(cur, request)
+                    elif isinstance(
+                        request, RetrospectiveObservationCaptureBatchRequestV1
+                    ):
+                        self._insert_retrospective_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
                     raise SourceLedgerError(
                         REASON_CAPTURE_BATCH_CONFLICT,
@@ -1283,6 +1536,27 @@ class PostgresCaptureBatchRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 row = self._select_batch_locked(cur, capture_batch_id)
                 return self._load_locked(cur, row)
+
+    def list_by_capture_request_hash(
+        self, capture_request_hash: str
+    ) -> tuple[CaptureBatch, ...]:
+        """Read the complete same-content recovery chain ordered by attempt."""
+
+        _require_sha256(capture_request_hash, field_name="capture_request_hash")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT {_CAPTURE_BATCH_COLUMNS}
+                    FROM app.advisory_capture_batch
+                    WHERE capture_request_hash = %s
+                    ORDER BY capture_attempt_no, capture_batch_id
+                    """,
+                    (capture_request_hash,),
+                )
+                return tuple(
+                    self._load_readonly(cur, dict(row)) for row in cur.fetchall()
+                )
 
     @classmethod
     def read_request_chain_exact_readonly(
@@ -1548,6 +1822,85 @@ class PostgresCaptureBatchRepository:
         return self._load_locked(cur, dict(cur.fetchone()))
 
     @staticmethod
+    def _insert_capture_batch_row(
+        cur: Any,
+        *,
+        request: CaptureBatchRequestLike,
+        capture_attempt_no: int,
+        predecessor_capture_batch_id: str | None = None,
+    ) -> dict[str, Any]:
+        range_scope = _capture_range_scope(request)
+        common = (
+            request.capture_batch_id,
+            capture_request_hash(request),
+            psycopg2.extras.Json(canonicalize(request.canonical_payload())),
+            psycopg2.extras.Json(canonicalize(_capture_binding_payload(request))),
+            _capture_control_binding_event_hash(request),
+            _capture_handoff_readiness_hash(request),
+            _capture_admission_scope_id(request),
+            _capture_admission_scope_hash(request),
+            capture_request_schema(request),
+            capture_request_purpose(request),
+        )
+        if range_scope is None:
+            cur.execute(
+                """
+                INSERT INTO app.advisory_capture_batch (
+                    capture_batch_id, capture_request_hash, request_payload_jsonb,
+                    binding_jsonb, control_binding_event_hash,
+                    handoff_readiness_hash, admission_scope_id, admission_scope_hash,
+                    capture_request_schema_version, capture_purpose, capture_status,
+                    row_version, fencing_token, capture_attempt_no,
+                    predecessor_capture_batch_id
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    'PLANNED', 1, 1, %s, %s
+                ) RETURNING *
+                """,
+                (*common, capture_attempt_no, predecessor_capture_batch_id),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO app.advisory_capture_batch (
+                    capture_batch_id, capture_request_hash, request_payload_jsonb,
+                    binding_jsonb, control_binding_event_hash,
+                    handoff_readiness_hash, admission_scope_id, admission_scope_hash,
+                    capture_request_schema_version, capture_purpose,
+                    lineage_identity_type, range_lineage_scope_id,
+                    range_lineage_scope_hash, execution_origin, research_scope,
+                    evidence_scope, selector_policy_hash,
+                    historical_range_policy_bundle_ref,
+                    historical_range_policy_bundle_hash, capture_status,
+                    row_version, fencing_token, capture_attempt_no,
+                    predecessor_capture_batch_id
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    'HISTORICAL_RANGE', %s, %s, %s, %s, %s, %s, %s, %s,
+                    'PLANNED', 1, 1, %s, %s
+                ) RETURNING *
+                """,
+                (
+                    *common,
+                    range_scope.range_lineage_scope_id,
+                    range_scope.range_lineage_scope_hash,
+                    request.execution_origin,
+                    request.research_scope,
+                    request.evidence_scope,
+                    range_scope.selector_policy_hash,
+                    psycopg2.extras.Json(
+                        range_scope.historical_range_policy_bundle_ref.model_dump(
+                            mode="json"
+                        )
+                    ),
+                    range_scope.historical_range_policy_bundle_hash,
+                    capture_attempt_no,
+                    predecessor_capture_batch_id,
+                ),
+            )
+        return dict(cur.fetchone())
+
+    @staticmethod
     def _insert_plans(cur: Any, request: CaptureBatchRequest) -> None:
         for plan in request.plans:
             cur.execute(
@@ -1580,6 +1933,71 @@ class PostgresCaptureBatchRepository:
                     plan.program_id,
                     plan.binding_version_id,
                     plan.source_run_id,
+                ),
+            )
+
+    @staticmethod
+    def _insert_retrospective_plans(
+        cur: Any, request: RetrospectiveObservationCaptureBatchRequestV1
+    ) -> None:
+        for plan in request.plans:
+            cur.execute(
+                """
+                INSERT INTO app.advisory_capture_plan (
+                    capture_batch_id, plan_hash, plan_payload_jsonb, package_id,
+                    manifest_sha256, decision_as_of_trade_date,
+                    stable_signal_semantics_hash, canonical_signal_scope_hash,
+                    signal_source_revision_set_id, signal_source_revision_set_hash,
+                    lineage_identity_type, range_lineage_scope_id,
+                    range_lineage_scope_hash, historical_range_request_ref,
+                    historical_range_request_hash,
+                    historical_range_frozen_program_ref,
+                    historical_range_frozen_program_hash, range_run_id,
+                    range_day_run_id, candidate_artifact_ref,
+                    candidate_artifact_hash, range_lineage_identity_hash,
+                    range_signal_context_hash, selector_policy_hash
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    request.capture_batch_id,
+                    plan.plan_hash,
+                    psycopg2.extras.Json(
+                        canonicalize(plan.model_dump(mode="json"))
+                    ),
+                    plan.lineage.package_id,
+                    plan.lineage.manifest_sha256,
+                    plan.decision_as_of_trade_date,
+                    plan.stable_signal_semantics_hash,
+                    plan.canonical_signal_scope_hash,
+                    plan.signal_source_revision_set_id,
+                    plan.signal_source_revision_set_hash,
+                    "HISTORICAL_RANGE",
+                    plan.range_scope.range_lineage_scope_id,
+                    plan.range_scope.range_lineage_scope_hash,
+                    psycopg2.extras.Json(
+                        plan.lineage.historical_range_request_ref.model_dump(
+                            mode="json"
+                        )
+                    ),
+                    plan.lineage.historical_range_request_ref.semantic_content_hash,
+                    psycopg2.extras.Json(
+                        plan.lineage.historical_range_frozen_program_ref.model_dump(
+                            mode="json"
+                        )
+                    ),
+                    plan.lineage.historical_range_frozen_program_ref.semantic_content_hash,
+                    plan.lineage.range_run_id,
+                    plan.lineage.range_day_run_id,
+                    psycopg2.extras.Json(
+                        plan.lineage.candidate_artifact_ref.model_dump(mode="json")
+                    ),
+                    plan.lineage.candidate_artifact_ref.semantic_content_hash,
+                    plan.lineage.range_lineage_identity_hash,
+                    plan.range_signal_context_hash,
+                    plan.selector_policy_hash,
                 ),
             )
 
@@ -1700,6 +2118,64 @@ class PostgresCaptureBatchRepository:
             payload["capture_batch_id"] = str(row["capture_batch_id"])
             payload["capture_request_hash"] = str(row["capture_request_hash"])
             request = LabelCaptureBatchRequestV2.model_validate(payload)
+        elif (
+            schema_version == RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION
+            and purpose == OBSERVATION_CAPTURE_PURPOSE
+        ):
+            lock_clause = " FOR KEY SHARE" if lock_children else ""
+            cur.execute(
+                f"""
+                SELECT plan_payload_jsonb FROM app.advisory_capture_plan
+                WHERE capture_batch_id = %s ORDER BY plan_hash{lock_clause}
+                """,
+                (row["capture_batch_id"],),
+            )
+            plans = tuple(
+                sorted(
+                    (
+                        RetrospectiveObservationCapturePlan.model_validate(
+                            canonicalize(dict(item["plan_payload_jsonb"]))
+                        )
+                        for item in cur.fetchall()
+                    ),
+                    key=lambda item: (
+                        item.decision_as_of_trade_date,
+                        item.canonical_signal_id,
+                    ),
+                )
+            )
+            if not plans:
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "retrospective observation capture is missing plans",
+                )
+            request = RetrospectiveObservationCaptureBatchRequestV1(
+                capture_batch_id=str(row["capture_batch_id"]),
+                binding=RetrospectiveObservationCaptureBinding.model_validate(
+                    binding_payload
+                ),
+                plans=plans,
+                capture_request_hash=str(row["capture_request_hash"]),
+            )
+        elif (
+            schema_version == RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+            and purpose == LABEL_CAPTURE_PURPOSE
+        ):
+            lock_clause = " FOR KEY SHARE" if lock_children else ""
+            cur.execute(
+                "SELECT 1 FROM app.advisory_capture_plan "
+                f"WHERE capture_batch_id = %s{lock_clause}",
+                (row["capture_batch_id"],),
+            )
+            if cur.fetchone() is not None:
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "retrospective label capture cannot contain observation plans",
+                )
+            payload["binding"] = binding_payload
+            payload["capture_batch_id"] = str(row["capture_batch_id"])
+            payload["capture_request_hash"] = str(row["capture_request_hash"])
+            request = RetrospectiveLabelCaptureBatchRequestV1.model_validate(payload)
         else:
             raise SourceLedgerError(
                 REASON_CAPTURE_BATCH_CONFLICT,

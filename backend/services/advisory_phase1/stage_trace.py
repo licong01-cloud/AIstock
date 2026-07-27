@@ -162,8 +162,11 @@ class TraceCaptureContext(BaseModel):
     def _historical_boundary(self) -> "TraceCaptureContext":
         if self.data_source != "DB_HISTORICAL":
             raise ValueError("Phase 1 trace capture requires DB_HISTORICAL data")
-        if self.execution_origin != "ADVISORY_RUN" or self.research_scope != "HISTORICAL_RESEARCH_ONLY":
-            raise ValueError("Phase 1 trace capture is restricted to historical ADVISORY_RUN research")
+        if (self.execution_origin, self.research_scope) not in {
+            ("ADVISORY_RUN", "HISTORICAL_RESEARCH_ONLY"),
+            ("HISTORICAL_RANGE_RESEARCH", "RETROSPECTIVE_RESEARCH_ONLY"),
+        }:
+            raise ValueError("Phase 1 trace capture origin/research scope pair is invalid")
         if self.execution_prohibited is not True:
             raise ValueError("Phase 1 trace capture requires execution_prohibited=true")
         return self

@@ -243,6 +243,39 @@ def test_advisory_snapshot_blob_ref_migrations_select_historical_range_plan(tmp_
     assert payload["unmapped_code_files"] == []
 
 
+def test_advisory_r4_shared_phase1_contracts_select_historical_range_plan(
+    tmp_path: Path,
+) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/db/migrations/add_advisory_historical_range_r4_outcome_bridge_20260723.sql",
+            "backend/services/advisory_phase1/capture_foundation.py",
+            "backend/services/advisory_phase1/dataset_build.py",
+            "backend/services/advisory_phase1/label_builder_postgres.py",
+            "backend/services/advisory_phase1/observation_capture_postgres.py",
+            "backend/services/advisory_phase1/outcome_engine.py",
+            "backend/services/advisory_phase1/release_schema_contract.py",
+            "backend/services/advisory_phase1/retrospective_selector.py",
+            "backend/services/advisory_phase1/snapshot_writer.py",
+            "backend/tests/advisory_phase1/test_phase1c3_batch_d_writer.py",
+            "backend/tests/advisory_phase1/test_r4_dataset_build_postgres.py",
+            "backend/tests/advisory_phase1/test_release_schema.py",
+            "backend/tests/advisory_phase1/test_retrospective_selector.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_plan_keys"] == ["l0", "advisory_historical_range_backend"]
+    assert payload["backend_sessions"] == ["advisory_historical_range_backend"]
+    assert payload["catalog_impacted_modules"] == [
+        "advisory.historical_range",
+        "tests.backend",
+    ]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

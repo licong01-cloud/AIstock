@@ -35,17 +35,20 @@ from backend.services.advisory_phase1.dataset_build import (
     DatasetSnapshotFile,
     DatasetSnapshotLabel,
     DatasetSnapshotObservation,
+    RetrospectiveDatasetBuildRequest,
     SealedDatasetSnapshot,
+    SnapshotUniversePolicySetError,
+    build_snapshot_universe_policy_set_hash,
     verify_attempt_file_set,
 )
 from backend.services.advisory_phase1.dataset_store import LocalContentAddressedStore, StoredCasObject
-from backend.services.advisory_phase1.observation_selector import OBSERVATION_SELECTOR_POLICY_HASH
 
 
 BATCH_D_WRITER_VERSION = "ADVISORY_PHASE1C3_PYARROW21_PARQUET_V1"
 BATCH_D_BUILDER_VERSION = "ADVISORY_PHASE1C3_BUILDER_V1"
 BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT = "PHASE1C3_BATCH_D_FULL_PARQUET_V1"
 SNAPSHOT_SCHEMA_VERSION = "advisory_phase1c3_dataset_snapshot_v1"
+RETROSPECTIVE_SNAPSHOT_SCHEMA_VERSION = "advisory_phase1r_r4_retrospective_dataset_snapshot_v1"
 SCHEMA_DESCRIPTOR_ROLE = "SCHEMA_DESCRIPTOR"
 
 REASON_ARROW_SCHEMA_CONFLICT = "ADVISORY_PHASE1C3_ARROW_SCHEMA_CONFLICT"
@@ -156,7 +159,7 @@ class DiskBackedRows:
         self._file.seek(0)
         while True:
             try:
-                yield pickle.load(self._file)
+                yield pickle.Unpickler(self._file).load()
             except EOFError:
                 return
 
@@ -359,6 +362,18 @@ class FullParquetVerificationReceipt(BaseModel):
     files: tuple[VerifiedDatasetFile, ...] = Field(min_length=1)
     selected_observations: tuple[DatasetSnapshotObservation, ...]
     selected_labels: tuple[DatasetSnapshotLabel, ...]
+    lineage_identity_type: str = "PHASE0A"
+    execution_origin: str = "ADVISORY_RUN"
+    research_scope: str = "HISTORICAL_RESEARCH_ONLY"
+    evidence_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    range_lineage_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selector_policy_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_range_day_outcome_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_lineage_type: str = "PHASE1_LABEL_POLICY"
+    historical_range_policy_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_component_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    source_revision_closure_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    maturity_coverage_hash: str | None = Field(default=None, min_length=64, max_length=64)
     verified_content_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
     relational_closure_summary: dict[str, Any]
     relational_closure_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -367,7 +382,9 @@ class FullParquetVerificationReceipt(BaseModel):
     @field_validator(
         "file_set_hash", "capture_set_hash", "source_revision_set_hash",
         "selected_observation_mapping_set_hash", "selected_label_mapping_set_hash", "capability_manifest_hash",
-        "verified_content_set_hash", "relational_closure_hash", "receipt_hash",
+        "verified_content_set_hash", "relational_closure_hash", "receipt_hash", "range_lineage_scope_set_hash",
+        "selector_policy_hash", "selected_range_day_outcome_set_hash", "historical_range_policy_bundle_hash",
+        "policy_component_set_hash", "source_revision_closure_hash", "maturity_coverage_hash",
     )
     @classmethod
     def _hashes(cls, value: str | None, info: Any) -> str | None:
@@ -388,7 +405,56 @@ class FullParquetVerificationReceipt(BaseModel):
         if self.relational_closure_hash is not None and self.relational_closure_hash != closure_hash:
             raise ValueError("full verification closure hash is invalid")
         object.__setattr__(self, "relational_closure_hash", closure_hash)
+        if self.lineage_identity_type == "PHASE0A":
+            if (
+                self.execution_origin != "ADVISORY_RUN"
+                or self.research_scope != "HISTORICAL_RESEARCH_ONLY"
+                or self.policy_lineage_type != "PHASE1_LABEL_POLICY"
+                or any(
+                    value is not None
+                    for value in (
+                        self.range_lineage_scope_set_hash,
+                        self.selector_policy_hash,
+                        self.selected_range_day_outcome_set_hash,
+                        self.historical_range_policy_bundle_hash,
+                        self.policy_component_set_hash,
+                        self.source_revision_closure_hash,
+                        self.maturity_coverage_hash,
+                    )
+                )
+            ):
+                raise ValueError("formal verification receipt carries retrospective identity")
+        elif self.lineage_identity_type == "HISTORICAL_RANGE":
+            if (
+                self.execution_origin != "HISTORICAL_RANGE_RESEARCH"
+                or self.research_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.evidence_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.policy_lineage_type != "HISTORICAL_RANGE_OUTCOME_POLICY"
+                or any(
+                    value is None
+                    for value in (
+                        self.range_lineage_scope_set_hash,
+                        self.selector_policy_hash,
+                        self.selected_range_day_outcome_set_hash,
+                        self.historical_range_policy_bundle_hash,
+                        self.policy_component_set_hash,
+                        self.source_revision_closure_hash,
+                        self.maturity_coverage_hash,
+                    )
+                )
+            ):
+                raise ValueError("retrospective verification receipt identity is incomplete")
+        else:
+            raise ValueError("verification receipt lineage identity type is invalid")
         payload = self.model_dump(mode="python", exclude={"receipt_hash"})
+        if self.lineage_identity_type == "PHASE0A":
+            for field_name in (
+                "lineage_identity_type", "execution_origin", "research_scope", "evidence_scope",
+                "range_lineage_scope_set_hash", "selector_policy_hash", "selected_range_day_outcome_set_hash",
+                "policy_lineage_type", "historical_range_policy_bundle_hash", "policy_component_set_hash",
+                "source_revision_closure_hash", "maturity_coverage_hash",
+            ):
+                payload.pop(field_name, None)
         digest = canonical_json_sha256(payload)
         if self.receipt_hash is not None and self.receipt_hash != digest:
             raise ValueError("full verification receipt hash is invalid")
@@ -451,8 +517,22 @@ class DatasetManifestCore(BaseModel):
     selected_labels: tuple[DatasetSnapshotLabel, ...]
     snapshot_source_revision_set_hash: str = Field(min_length=64, max_length=64)
     capture_set_hash: str = Field(min_length=64, max_length=64)
-    handoff_readiness_hash: str = Field(min_length=64, max_length=64)
-    admission_scope_set_hash: str = Field(min_length=64, max_length=64)
+    lineage_identity_type: str = "PHASE0A"
+    execution_origin: str = "ADVISORY_RUN"
+    research_scope: str = "HISTORICAL_RESEARCH_ONLY"
+    evidence_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    handoff_readiness_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    admission_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    range_lineage_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selector_policy_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_range_day_outcome_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_lineage_type: str = "PHASE1_LABEL_POLICY"
+    historical_range_policy_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_component_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_observation_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_label_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    source_revision_closure_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    maturity_coverage_hash: str | None = Field(default=None, min_length=64, max_length=64)
     query_registry_hash: str = Field(min_length=64, max_length=64)
     capability_manifest: DatasetCapabilityManifest
     schema_fingerprint: str = Field(min_length=64, max_length=64)
@@ -466,6 +546,9 @@ class DatasetManifestCore(BaseModel):
 
     @field_validator(
         "snapshot_source_revision_set_hash", "capture_set_hash", "handoff_readiness_hash", "admission_scope_set_hash",
+        "range_lineage_scope_set_hash", "selector_policy_hash", "selected_range_day_outcome_set_hash",
+        "historical_range_policy_bundle_hash", "policy_component_set_hash", "selected_observation_mapping_set_hash",
+        "selected_label_mapping_set_hash", "source_revision_closure_hash", "maturity_coverage_hash",
         "query_registry_hash", "schema_fingerprint", "partition_policy_hash", "policy_compatibility_hash", "manifest_core_sha256",
     )
     @classmethod
@@ -479,6 +562,57 @@ class DatasetManifestCore(BaseModel):
             raise ValueError("manifest files are not unique")
         observations = tuple(sorted(self.selected_observations, key=lambda item: item.canonical_signal_id))
         labels = tuple(sorted(self.selected_labels, key=lambda item: item.label_key_hash))
+        if self.lineage_identity_type == "PHASE0A":
+            if (
+                self.execution_origin != "ADVISORY_RUN"
+                or self.research_scope != "HISTORICAL_RESEARCH_ONLY"
+                or self.handoff_readiness_hash is None
+                or self.admission_scope_set_hash is None
+                or self.policy_lineage_type != "PHASE1_LABEL_POLICY"
+                or any(
+                    value is not None
+                    for value in (
+                        self.range_lineage_scope_set_hash,
+                        self.selector_policy_hash,
+                        self.selected_range_day_outcome_set_hash,
+                        self.historical_range_policy_bundle_hash,
+                        self.policy_component_set_hash,
+                        self.selected_observation_mapping_set_hash,
+                        self.selected_label_mapping_set_hash,
+                        self.source_revision_closure_hash,
+                        self.maturity_coverage_hash,
+                    )
+                )
+            ):
+                raise ValueError("formal manifest lineage identity is invalid")
+        elif self.lineage_identity_type == "HISTORICAL_RANGE":
+            if (
+                self.execution_origin != "HISTORICAL_RANGE_RESEARCH"
+                or self.research_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.evidence_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.handoff_readiness_hash is not None
+                or self.admission_scope_set_hash is not None
+                or self.policy_lineage_type != "HISTORICAL_RANGE_OUTCOME_POLICY"
+                or any(
+                    value is None
+                    for value in (
+                        self.range_lineage_scope_set_hash,
+                        self.selector_policy_hash,
+                        self.selected_range_day_outcome_set_hash,
+                        self.historical_range_policy_bundle_hash,
+                        self.policy_component_set_hash,
+                        self.selected_observation_mapping_set_hash,
+                        self.selected_label_mapping_set_hash,
+                        self.source_revision_closure_hash,
+                        self.maturity_coverage_hash,
+                    )
+                )
+                or {item.selector_policy_hash for item in observations} != {self.selector_policy_hash}
+                or {item.selector_policy_hash for item in labels} != {self.selector_policy_hash}
+            ):
+                raise ValueError("retrospective manifest lineage identity is invalid")
+        else:
+            raise ValueError("manifest lineage identity type is invalid")
         payload = {
             "files": [item.model_dump(mode="json") for item in files],
             "observations": [item.model_dump(mode="json") for item in observations],
@@ -497,6 +631,27 @@ class DatasetManifestCore(BaseModel):
             "partition_policy_hash": self.partition_policy_hash,
             "policy_compatibility_hash": self.policy_compatibility_hash,
         }
+        if self.lineage_identity_type == "HISTORICAL_RANGE":
+            payload.update(
+                {
+                    "lineage_identity_type": self.lineage_identity_type,
+                    "execution_origin": self.execution_origin,
+                    "research_scope": self.research_scope,
+                    "evidence_scope": self.evidence_scope,
+                    "range_lineage_scope_set_hash": self.range_lineage_scope_set_hash,
+                    "selector_policy_hash": self.selector_policy_hash,
+                    "selected_range_day_outcome_set_hash": self.selected_range_day_outcome_set_hash,
+                    "policy_lineage_type": self.policy_lineage_type,
+                    "historical_range_policy_bundle_hash": self.historical_range_policy_bundle_hash,
+                    "policy_component_set_hash": self.policy_component_set_hash,
+                    "selected_observation_mapping_set_hash": self.selected_observation_mapping_set_hash,
+                    "selected_label_mapping_set_hash": self.selected_label_mapping_set_hash,
+                    "observation_count": len(observations),
+                    "label_count": len(labels),
+                    "source_revision_closure_hash": self.source_revision_closure_hash,
+                    "maturity_coverage_hash": self.maturity_coverage_hash,
+                }
+            )
         digest = canonical_json_sha256(payload)
         if self.manifest_core_sha256 is not None and self.manifest_core_sha256 != digest:
             raise ValueError("manifest core hash is invalid")
@@ -518,7 +673,19 @@ class DatasetManifest(BaseModel):
         return _sha256(value, field_name=info.field_name) if value is not None else None
 
     def canonical_bytes(self) -> bytes:
-        return _canonical_json_bytes(self.model_dump(mode="python", exclude={"manifest_sha256"}))
+        payload = self.model_dump(mode="python", exclude={"manifest_sha256"})
+        if self.core.lineage_identity_type == "PHASE0A":
+            core = dict(payload["core"])
+            for field_name in (
+                "lineage_identity_type", "execution_origin", "research_scope", "evidence_scope",
+                "range_lineage_scope_set_hash", "selector_policy_hash", "selected_range_day_outcome_set_hash",
+                "policy_lineage_type", "historical_range_policy_bundle_hash", "policy_component_set_hash",
+                "selected_observation_mapping_set_hash", "selected_label_mapping_set_hash",
+                "source_revision_closure_hash", "maturity_coverage_hash",
+            ):
+                core.pop(field_name, None)
+            payload["core"] = core
+        return _canonical_json_bytes(payload)
 
     @model_validator(mode="after")
     def _identity(self) -> "DatasetManifest":
@@ -839,13 +1006,149 @@ SNAPSHOT_ARROW_SCHEMAS_V1["outcome_source_evidence"] = (
 )
 
 
-def _capture_source_revision_identity(request: Any) -> tuple[str, str]:
-    from backend.services.advisory_phase1.capture_foundation import CaptureBatchRequest
-    from backend.services.advisory_phase1.label_capture import LabelCaptureBatchRequestV2
+def retrospective_snapshot_schemas() -> dict[str, tuple[SnapshotSchemaField, ...]]:
+    """Return the range-native role schema without changing formal schema bytes."""
 
-    if isinstance(request, LabelCaptureBatchRequestV2):
+    formal = SNAPSHOT_ARROW_SCHEMAS_V1
+    nullable_observation_fields = {
+        "phase0a_signal_context_hash", "selection_evidence_id", "selection_evidence_hash",
+        "selection_run_id", "selection_run_content_hash", "selection_score_artifact_id",
+        "selection_score_artifact_hash",
+    }
+    observation_versions = tuple(
+        field.model_copy(update={"nullable": True})
+        if field.name in nullable_observation_fields
+        else field
+        for field in formal["observation_versions"]
+    ) + (
+        SnapshotSchemaField(name="lineage_identity_type", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_signal_context_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_run_id", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_day_run_id", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="candidate_artifact_ref", arrow_type="canonical_json", nullable=False),
+        SnapshotSchemaField(name="candidate_artifact_hash", arrow_type="utf8", nullable=False),
+    )
+    nullable_lineage_fields = {
+        "phase0a_audit_id", "phase0a_audit_manifest_hash", "handoff_readiness_hash",
+        "admission_scope_id", "admission_scope_hash", "phase0a_signal_context_hash",
+        "program_id", "binding_version_id", "review_run_id", "list_version_id",
+    }
+    lineage = tuple(
+        field.model_copy(update={"nullable": True})
+        if field.name in nullable_lineage_fields
+        else field
+        for field in formal["lineage"]
+    ) + (
+        SnapshotSchemaField(name="historical_range_request_ref", arrow_type="canonical_json", nullable=False),
+        SnapshotSchemaField(name="historical_range_request_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="historical_range_frozen_program_ref", arrow_type="canonical_json", nullable=False),
+        SnapshotSchemaField(name="historical_range_frozen_program_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_run_id", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_day_run_id", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="candidate_artifact_ref", arrow_type="canonical_json", nullable=False),
+        SnapshotSchemaField(name="candidate_artifact_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_lineage_identity_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="range_signal_context_hash", arrow_type="utf8", nullable=False),
+    )
+    selected_observations = formal["selected_observations"] + (
+        SnapshotSchemaField(name="selection_policy_hash", arrow_type="utf8", nullable=False),
+    )
+    outcome_nullable = {"label_policy_bundle_id", "label_policy_bundle_hash"}
+    outcome_labels = tuple(
+        field.model_copy(update={"nullable": True})
+        if field.name in outcome_nullable
+        else field
+        for field in formal["outcome_labels"]
+    ) + (
+        SnapshotSchemaField(name="policy_lineage_type", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="historical_range_policy_bundle_ref", arrow_type="canonical_json", nullable=False),
+        SnapshotSchemaField(name="historical_range_policy_bundle_hash", arrow_type="utf8", nullable=False),
+        SnapshotSchemaField(name="policy_component_set_hash", arrow_type="utf8", nullable=False),
+    )
+    gaps = tuple(
+        field.model_copy(update={"nullable": True})
+        if field.name in {"audit_target_id", "program_id", "package_id"}
+        else field
+        for field in formal["gaps"]
+    )
+    return {
+        **formal,
+        "observation_versions": observation_versions,
+        "selected_observations": selected_observations,
+        "lineage": lineage,
+        "outcome_labels": outcome_labels,
+        "universe_outcomes": outcome_labels,
+        "gaps": gaps,
+    }
+
+
+SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1 = retrospective_snapshot_schemas()
+
+
+def _schemas_for_lineage(lineage_identity_type: str) -> dict[str, tuple[SnapshotSchemaField, ...]]:
+    if lineage_identity_type == "HISTORICAL_RANGE":
+        return SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1
+    if lineage_identity_type == "PHASE0A":
+        return SNAPSHOT_ARROW_SCHEMAS_V1
+    raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "unknown snapshot lineage identity type")
+
+
+def _retrospective_universe_policy_set_hash(
+    *,
+    selected_version_ids: set[str],
+    observation_rows: list[Mapping[str, Any]],
+    observation_dates: Mapping[str, date],
+) -> str:
+    """BUG-869: recompute the frozen day-bound universe policy binding set.
+
+    The snapshot-level ``universe_policy_hash`` is never trusted from the
+    build request alone; it is recomputed from the selected frozen
+    observation rows.  Missing selected versions fail explicitly, and
+    same-day conflicting bindings fail closed, so a matching composite hash
+    proves the streamed rows carry exactly the request's day bindings.
+    """
+    streamed_version_ids = {item["observation_version_id"] for item in observation_rows}
+    if set(selected_version_ids) - streamed_version_ids:
+        raise SnapshotWriterError(
+            REASON_SOURCE_SNAPSHOT_CONFLICT,
+            "frozen selected observation versions are missing",
+        )
+    try:
+        return build_snapshot_universe_policy_set_hash(
+            (
+                observation_dates[item["observation_version_id"]],
+                str(item["universe_policy_hash"]),
+            )
+            for item in observation_rows
+            if item["observation_version_id"] in selected_version_ids
+        )
+    except SnapshotUniversePolicySetError as error:
+        raise SnapshotWriterError(
+            REASON_SOURCE_SNAPSHOT_CONFLICT,
+            "snapshot observations carry conflicting same-day universe "
+            f"policies: {error}",
+        ) from error
+
+
+def _capture_source_revision_identity(request: Any) -> tuple[str, str]:
+    from backend.services.advisory_phase1.capture_foundation import (
+        CaptureBatchRequest,
+        RetrospectiveObservationCaptureBatchRequestV1,
+    )
+    from backend.services.advisory_phase1.label_capture import (
+        LabelCaptureBatchRequestV2,
+        RetrospectiveLabelCaptureBatchRequestV1,
+    )
+
+    if isinstance(
+        request,
+        (LabelCaptureBatchRequestV2, RetrospectiveLabelCaptureBatchRequestV1),
+    ):
         return request.label_source_revision_set_id, request.label_source_revision_set_hash
-    if isinstance(request, CaptureBatchRequest):
+    if isinstance(
+        request,
+        (CaptureBatchRequest, RetrospectiveObservationCaptureBatchRequestV1),
+    ):
         identities = {
             (plan.signal_source_revision_set_id, plan.signal_source_revision_set_hash)
             for plan in request.plans
@@ -862,15 +1165,58 @@ def _load_persisted_capture_request_read_only(cur: Any, row: Mapping[str, Any]) 
     from backend.services.advisory_phase1.capture_foundation import (
         CaptureBatchRequest,
         CapturePlan,
+        RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION,
+        RetrospectiveObservationCaptureBatchRequestV1,
+        RetrospectiveObservationCaptureBinding,
+        RetrospectiveObservationCapturePlan,
         capture_request_hash,
     )
-    from backend.services.advisory_phase1.label_capture import LabelCaptureBatchRequestV2
+    from backend.services.advisory_phase1.label_capture import (
+        RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
+        LabelCaptureBatchRequestV2,
+        RetrospectiveLabelCaptureBatchRequestV1,
+    )
     from backend.services.advisory_phase1.stage_trace import TraceCaptureBinding
 
     purpose = str(row["capture_purpose"])
     payload = canonicalize(dict(row["request_payload_jsonb"]))
     binding = canonicalize(dict(row["binding_jsonb"]))
-    if purpose == "OBSERVATION_CAPTURE_V1":
+    schema_version = str(row["capture_request_schema_version"])
+    if (
+        purpose == "OBSERVATION_CAPTURE_V1"
+        and schema_version == RETROSPECTIVE_CAPTURE_BATCH_SCHEMA_VERSION
+    ):
+        cur.execute(
+            "SELECT plan_payload_jsonb FROM app.advisory_capture_plan "
+            "WHERE capture_batch_id = %s ORDER BY plan_hash",
+            (row["capture_batch_id"],),
+        )
+        plans = tuple(
+            sorted(
+                (
+                    RetrospectiveObservationCapturePlan.model_validate(
+                        canonicalize(dict(item["plan_payload_jsonb"]))
+                    )
+                    for item in cur.fetchall()
+                ),
+                key=lambda item: (
+                    item.decision_as_of_trade_date,
+                    item.canonical_signal_id,
+                ),
+            )
+        )
+        if not plans:
+            raise SnapshotWriterError(
+                REASON_SOURCE_SNAPSHOT_CONFLICT,
+                "retrospective observation capture has no persisted plans",
+            )
+        request = RetrospectiveObservationCaptureBatchRequestV1(
+            capture_batch_id=str(row["capture_batch_id"]),
+            binding=RetrospectiveObservationCaptureBinding.model_validate(binding),
+            plans=plans,
+            capture_request_hash=str(row["capture_request_hash"]),
+        )
+    elif purpose == "OBSERVATION_CAPTURE_V1":
         cur.execute(
             "SELECT plan_payload_jsonb FROM app.advisory_capture_plan "
             "WHERE capture_batch_id = %s ORDER BY plan_hash",
@@ -888,6 +1234,14 @@ def _load_persisted_capture_request_read_only(cur: Any, row: Mapping[str, Any]) 
             plans=plans,
             capture_request_hash=str(row["capture_request_hash"]),
         )
+    elif (
+        purpose == "LABEL_CAPTURE_V1"
+        and schema_version == RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+    ):
+        payload["binding"] = binding
+        payload["capture_batch_id"] = str(row["capture_batch_id"])
+        payload["capture_request_hash"] = str(row["capture_request_hash"])
+        request = RetrospectiveLabelCaptureBatchRequestV1.model_validate(payload)
     elif purpose == "LABEL_CAPTURE_V1":
         payload["binding"] = binding
         payload["capture_batch_id"] = str(row["capture_batch_id"])
@@ -903,12 +1257,30 @@ def _load_persisted_capture_request_read_only(cur: Any, row: Mapping[str, Any]) 
 class PostgresSnapshotSourceReader:
     """Read one frozen Batch D logical row set from a single database snapshot."""
 
-    def __init__(self, *, conn_factory: Any, evidence_reader: Any) -> None:
+    def __init__(
+        self,
+        *,
+        conn_factory: Any,
+        evidence_reader: Any,
+        lineage_identity_type: str = "PHASE0A",
+    ) -> None:
         self._conn_factory = conn_factory
         self._evidence_reader = evidence_reader
+        self._lineage_identity_type = lineage_identity_type
+        self._schemas = _schemas_for_lineage(lineage_identity_type)
 
     def read(self, build: DatasetBuild) -> dict[str, DiskBackedRows]:
-        rows = {role: DiskBackedRows() for role in SNAPSHOT_ARROW_SCHEMAS_V1}
+        expected_lineage_type = (
+            "HISTORICAL_RANGE"
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+            else "PHASE0A"
+        )
+        if self._lineage_identity_type != expected_lineage_type:
+            raise SnapshotWriterError(
+                REASON_ARROW_SCHEMA_CONFLICT,
+                "snapshot source lineage type differs from build request",
+            )
+        rows = {role: DiskBackedRows() for role in self._schemas}
         with self._conn_factory() as conn:
             conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
             with conn.cursor() as control:
@@ -941,9 +1313,15 @@ class PostgresSnapshotSourceReader:
                     self._logical("selected_observations", item) for item in selected_observations
                 )
 
+                observation_columns = (
+                    ", lineage_identity_type, range_signal_context_hash, range_run_id, "
+                    "range_day_run_id, candidate_artifact_ref, candidate_artifact_hash"
+                    if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+                    else ""
+                )
                 observation_rows = self._query(
                     conn,
-                    """
+                    f"""
                     SELECT observation_version_id, canonical_signal_id, observation_schema_version,
                            observation_revision_no, supersedes_observation_version_id, signal_source_revision_set_id,
                            signal_source_revision_set_hash, phase0a_signal_context_hash, evidence_bundle_hash,
@@ -952,7 +1330,7 @@ class PostgresSnapshotSourceReader:
                            runtime_profile_version_id, runtime_profile_version_hash, hmm_snapshot_id, hmm_snapshot_hash,
                            hmm_snapshot_status, risk_policy_hash, universe_policy_hash, symbol_normalization_policy_hash,
                            valid_no_candidate, observation_status, evidence_available_at, observation_content_hash,
-                           reason_codes, created_by_capture_batch_id
+                           reason_codes, created_by_capture_batch_id{observation_columns}
                       FROM app.advisory_signal_observation_version
                      WHERE canonical_signal_id = ANY(%s)
                      ORDER BY canonical_signal_id, observation_revision_no, observation_version_id
@@ -967,6 +1345,27 @@ class PostgresSnapshotSourceReader:
                     self._logical("observation_versions", item, decision_date=observation_dates[item["observation_version_id"]])
                     for item in observation_rows
                 )
+                if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+                    # BUG-869: never trust the request-level universe policy
+                    # value - recompute the frozen day-bound binding set from
+                    # the selected observation rows and compare.  Missing
+                    # members, extra days, same-day conflicts, or row-level
+                    # tampering all fail closed.
+                    selected_version_ids = {
+                        str(item["terminal_observation_version_id"])
+                        for item in selected_observations
+                    }
+                    universe_policy_set_hash = _retrospective_universe_policy_set_hash(
+                        selected_version_ids=selected_version_ids,
+                        observation_rows=observation_rows,
+                        observation_dates=observation_dates,
+                    )
+                    if universe_policy_set_hash != build.request.universe_policy_hash:
+                        raise SnapshotWriterError(
+                            REASON_SOURCE_SNAPSHOT_CONFLICT,
+                            "snapshot universe policy binding set differs from "
+                            "build request",
+                        )
                 observation_ids = [item["observation_version_id"] for item in observation_rows]
                 lineage_rows = self._query(
                     conn,
@@ -1097,15 +1496,17 @@ class PostgresSnapshotSourceReader:
                 raise SnapshotWriterError(REASON_SOURCE_SNAPSHOT_CONFLICT, "frozen captures are missing")
             summary_captures: list[dict[str, Any]] = []
             compared_fields = (
-                "capture_request_hash",
-                "capture_receipt_hash",
-                "membership_hash",
-                "capture_purpose",
-                "handoff_readiness_hash",
-                "admission_scope_id",
-                "admission_scope_hash",
-                "source_revision_set_id",
-                "source_revision_set_hash",
+                (
+                    "capture_request_hash", "capture_receipt_hash", "membership_hash",
+                    "capture_purpose", "range_lineage_scope_id", "range_lineage_scope_hash",
+                    "source_revision_set_id", "source_revision_set_hash",
+                )
+                if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+                else (
+                    "capture_request_hash", "capture_receipt_hash", "membership_hash",
+                    "capture_purpose", "handoff_readiness_hash", "admission_scope_id",
+                    "admission_scope_hash", "source_revision_set_id", "source_revision_set_hash",
+                )
             )
             for row in capture_rows:
                 member = expected[row["capture_batch_id"]]
@@ -1117,12 +1518,33 @@ class PostgresSnapshotSourceReader:
                     row["capture_status"] != "COMPLETE"
                     or parsed.capture_request_hash != row["capture_request_hash"]
                     or any(row[field] != getattr(member, field) for field in compared_fields)
+                    or (
+                        isinstance(build.request, RetrospectiveDatasetBuildRequest)
+                        and (
+                            row.get("lineage_identity_type") != "HISTORICAL_RANGE"
+                            or row.get("execution_origin") != build.request.execution_origin
+                            or row.get("research_scope") != build.request.research_scope
+                            or row.get("evidence_scope") != build.request.evidence_scope
+                            or row.get("selector_policy_hash") != build.request.selector_policy_hash
+                        )
+                    )
                 ):
                     raise SnapshotWriterError(REASON_SOURCE_SNAPSHOT_CONFLICT, "frozen capture authority differs from build")
                 summary_captures.append(
                     {
                         "capture_batch_id": row["capture_batch_id"],
                         **{field: row[field] for field in compared_fields},
+                        **(
+                            {
+                                "lineage_identity_type": row["lineage_identity_type"],
+                                "execution_origin": row["execution_origin"],
+                                "research_scope": row["research_scope"],
+                                "evidence_scope": row["evidence_scope"],
+                                "selector_policy_hash": row["selector_policy_hash"],
+                            }
+                            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+                            else {}
+                        ),
                     }
                 )
             cur.execute(
@@ -1226,7 +1648,10 @@ class PostgresSnapshotSourceReader:
             raise SnapshotWriterError(REASON_SOURCE_SNAPSHOT_CONFLICT, "derived stream counts differ from frozen mappings")
 
     def _selected_observations(self, *, conn: Any, build: DatasetBuild) -> list[dict[str, Any]]:
-        from backend.services.advisory_phase1.label_capture import LabelCaptureBatchRequestV2
+        from backend.services.advisory_phase1.label_capture import (
+            LabelCaptureBatchRequestV2,
+            RetrospectiveLabelCaptureBatchRequestV1,
+        )
 
         label_capture_ids = [
             item.capture_batch_id for item in build.request.captures if item.capture_purpose == "LABEL_CAPTURE_V1"
@@ -1234,10 +1659,19 @@ class PostgresSnapshotSourceReader:
         persisted_requests = self._load_persisted_capture_requests(conn, label_capture_ids)
         result: dict[str, dict[str, Any]] = {}
         for persisted, request in persisted_requests:
-            if not isinstance(request, LabelCaptureBatchRequestV2) or request.capture_request_hash != persisted["capture_request_hash"]:
+            if not isinstance(
+                request,
+                (LabelCaptureBatchRequestV2, RetrospectiveLabelCaptureBatchRequestV1),
+            ) or request.capture_request_hash != persisted["capture_request_hash"]:
                 raise SnapshotWriterError(REASON_SOURCE_SNAPSHOT_CONFLICT, "label capture request payload is invalid")
             for reference in request.selected_observation_mappings:
                 payload = reference.model_dump(mode="python")
+                if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+                    if payload.get("selection_policy_hash") != build.request.selector_policy_hash:
+                        raise SnapshotWriterError(
+                            REASON_SOURCE_SNAPSHOT_CONFLICT,
+                            "retrospective selected observation mapping selector hash differs from build",
+                        )
                 existing = result.get(reference.selected_mapping_id)
                 if existing is not None and existing != payload:
                     raise SnapshotWriterError(REASON_SOURCE_SNAPSHOT_CONFLICT, "selected observation mapping conflicts across captures")
@@ -1286,7 +1720,8 @@ class PostgresSnapshotSourceReader:
             (label_capture_ids, build.request.date_start, build.request.date_end),
             name="batchd_outcomes",
         )
-        return DiskBackedRows({field: row[field] for field in _OUTCOME_LABEL_FIELDS} for row in rows)
+        outcome_fields = tuple(field.name for field in self._schemas["outcome_labels"])
+        return DiskBackedRows({field: row[field] for field in outcome_fields} for row in rows)
 
     def _outcome_evidence_row(self, outcome: Mapping[str, Any]) -> LogicalDatasetRow:
         try:
@@ -1317,6 +1752,7 @@ class PostgresSnapshotSourceReader:
         from backend.services.advisory_phase1.label_builder import (
             LabelSelectionPolicy,
             LabelSelectionRequest,
+            RetrospectiveExactLabelSelector,
             TerminalFirstLabelSelector,
         )
         from backend.services.advisory_phase1.label_builder_postgres import PostgresOutcomeLabelRepository
@@ -1331,6 +1767,41 @@ class PostgresSnapshotSourceReader:
         grouped = itertools.groupby(outcome_rows, key=lambda item: item["label_key_hash"])
         for _, group in grouped:
             versions = sorted((adapter._from_row(row) for row in group), key=lambda item: item.label_revision_no)
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+                selector = RetrospectiveExactLabelSelector()
+                for version in versions:
+                    request = LabelSelectionRequest(
+                        selection_policy=LabelSelectionPolicy.EXACT_REVISION_V1,
+                        label_key_hash=version.label_key_hash,
+                        requested_label_as_of_ts=build.request.label_as_of_ts,
+                        required_maturity_statuses=(
+                            version.outcome_result.maturity_status,
+                        ),
+                        required_outcome_event_statuses=(
+                            version.outcome_result.outcome_event_status,
+                        ),
+                        required_projection_schema_version=(
+                            version.projection_schema_version
+                        ),
+                        expected_observation_version_id=(
+                            version.owner.observation_version_id
+                        ),
+                        expected_candidate_stage_evidence_id=(
+                            version.owner.candidate_stage_evidence_id
+                        ),
+                        expected_label_source_revision_set_hash=(
+                            version.label_source_revision_set_hash
+                        ),
+                        explicit_label_version_id=version.label_version_id,
+                    )
+                    mapping = selector.select(
+                        request=request,
+                        label_versions=versions,
+                    )
+                    mapping_id = str(mapping.selected_label_mapping_id)
+                    if expected.get(mapping_id) == mapping.selected_label_mapping_hash:
+                        matched[mapping_id] = mapping.model_dump(mode="python")
+                continue
             terminal = tuple(item for item in versions if item.computed_at <= build.request.label_as_of_ts)
             if not terminal:
                 continue
@@ -1374,8 +1845,12 @@ class PostgresSnapshotSourceReader:
         decision_date: date | None = None,
         outcome: Mapping[str, Any] | None = None,
     ) -> LogicalDatasetRow:
-        values = {field.name: raw[field.name] for field in SNAPSHOT_ARROW_SCHEMAS_V1[logical_role]}
-        normalized = _coerce_values(logical_role=logical_role, values=values)
+        values = {field.name: raw[field.name] for field in self._schemas[logical_role]}
+        normalized = _coerce_values(
+            logical_role=logical_role,
+            values=values,
+            schemas=self._schemas,
+        )
         partition = _partition_key_for_values(
             logical_role=logical_role,
             values=normalized,
@@ -1409,15 +1884,14 @@ class PostgresSnapshotSourceReader:
             raise
         return result
 
-    @staticmethod
-    def _validate_authority_columns(cur: Any) -> None:
+    def _validate_authority_columns(self, cur: Any) -> None:
         table_fields = {
-            "advisory_signal_observation": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["canonical_signals"]},
-            "advisory_signal_observation_version": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["observation_versions"]},
-            "advisory_signal_observation_lineage": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["lineage"]},
-            "advisory_signal_stage_evidence": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["stage_summaries"]},
-            "advisory_signal_stage_candidate": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["stage_candidates"]},
-            "advisory_dataset_build_gap": {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["gaps"]} - {"source_kind"},
+            "advisory_signal_observation": {field.name for field in self._schemas["canonical_signals"]},
+            "advisory_signal_observation_version": {field.name for field in self._schemas["observation_versions"]},
+            "advisory_signal_observation_lineage": {field.name for field in self._schemas["lineage"]},
+            "advisory_signal_stage_evidence": {field.name for field in self._schemas["stage_summaries"]},
+            "advisory_signal_stage_candidate": {field.name for field in self._schemas["stage_candidates"]},
+            "advisory_dataset_build_gap": {field.name for field in self._schemas["gaps"]} - {"source_kind"},
         }
         tables = tuple(table_fields)
         cur.execute(
@@ -1429,7 +1903,28 @@ class PostgresSnapshotSourceReader:
         for table_name, column_name in cur.fetchall():
             actual[str(table_name)].add(str(column_name))
         for table, expected in table_fields.items():
-            if actual[table] - {"created_at"} != expected:
+            observed = actual[table] - {"created_at"}
+            allowed_extra = {
+                "advisory_signal_observation": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["canonical_signals"]
+                },
+                "advisory_signal_observation_version": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["observation_versions"]
+                },
+                "advisory_signal_observation_lineage": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["lineage"]
+                },
+                "advisory_signal_stage_evidence": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["stage_summaries"]
+                },
+                "advisory_signal_stage_candidate": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["stage_candidates"]
+                },
+                "advisory_dataset_build_gap": {
+                    field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["gaps"]
+                } - {"source_kind"},
+            }[table]
+            if not expected.issubset(observed) or not observed.issubset(allowed_extra):
                 raise SnapshotWriterError(
                     REASON_ARROW_SCHEMA_CONFLICT,
                     f"authority columns differ from frozen Arrow schema: {table}",
@@ -1438,12 +1933,12 @@ class PostgresSnapshotSourceReader:
             (
                 "outcome_label",
                 ("advisory_outcome_label", "advisory_outcome_label_payload"),
-                set(_OUTCOME_LABEL_FIELDS),
+                {field.name for field in self._schemas["outcome_labels"]},
             ),
             (
                 "source_revision",
                 ("advisory_source_revision_set", "advisory_source_revision_member"),
-                {field.name for field in SNAPSHOT_ARROW_SCHEMAS_V1["source_revisions"]},
+                {field.name for field in self._schemas["source_revisions"]},
             ),
         ):
             cur.execute(
@@ -1452,7 +1947,12 @@ class PostgresSnapshotSourceReader:
                 (list(source_tables),),
             )
             union = {str(row[0]) for row in cur.fetchall()} - {"created_at"}
-            if union != expected:
+            allowed = (
+                {field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["outcome_labels"]}
+                if label == "outcome_label"
+                else {field.name for field in SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1["source_revisions"]}
+            )
+            if not expected.issubset(union) or not union.issubset(allowed):
                 raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, f"{label} authority columns differ from frozen schema")
 
     @staticmethod
@@ -1517,6 +2017,16 @@ class DatasetSnapshotMaterializer:
         store: LocalContentAddressedStore,
         base_files: Sequence[DatasetSnapshotFile] = (),
     ) -> tuple[tuple[WrittenDatasetFile, ...], MaterializationReceipt]:
+        expected_lineage_type = (
+            "HISTORICAL_RANGE"
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+            else "PHASE0A"
+        )
+        if self._writer.lineage_identity_type != expected_lineage_type:
+            raise SnapshotWriterError(
+                REASON_ARROW_SCHEMA_CONFLICT,
+                "snapshot materializer lineage type differs from build request",
+            )
         if build.request.builder_version != BATCH_D_BUILDER_VERSION or build.request.writer_version != BATCH_D_WRITER_VERSION:
             raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "build request writer/builder version differs from Batch D")
         if build.request.compression_config != {"codec": "zstd", "level": 3}:
@@ -1535,7 +2045,7 @@ class DatasetSnapshotMaterializer:
             store.ensure_capacity(logical_source_bytes=logical_source_bytes)
             files: list[WrittenDatasetFile] = []
             base_by_path = {file.logical_path: file for file in base_files}
-            for role in sorted(SNAPSHOT_ARROW_SCHEMAS_V1):
+            for role in sorted(self._writer.schemas):
                 descriptor_path = store.staging_path(
                     build_id=build.build_id,
                     attempt_id=attempt_id,
@@ -1605,7 +2115,10 @@ class DatasetSnapshotPipeline:
         self._materializer = materializer
         self._store = store
         self._writer = materializer._writer
-        self._verifier = FullParquetVerifier(writer_version=self._writer.writer_version)
+        self._verifier = FullParquetVerifier(
+            writer_version=self._writer.writer_version,
+            lineage_identity_type=self._writer.lineage_identity_type,
+        )
 
     def run(self, *, build_id: str, actor: str) -> DatasetBuild:
         while True:
@@ -1820,7 +2333,6 @@ class DatasetSnapshotPipeline:
                     label_maturity_event_summary=verification.relational_closure_summary,
                 )
                 self._repository.save_sealed_snapshot(snapshot, actor=actor)
-                self._repository.save_sealed_snapshot(snapshot, actor=actor)
                 self._cleanup_materialized_staging(build)
         except Exception as error:
             current = self._repository.get_build(build.build_id)
@@ -1888,20 +2400,52 @@ class DatasetSnapshotPipeline:
 class DeterministicParquetWriter:
     """Write exact Parquet bytes from typed, fully materialized logical rows."""
 
-    def __init__(self, *, writer_version: str = BATCH_D_WRITER_VERSION) -> None:
+    def __init__(
+        self,
+        *,
+        writer_version: str = BATCH_D_WRITER_VERSION,
+        lineage_identity_type: str = "PHASE0A",
+    ) -> None:
         if writer_version != BATCH_D_WRITER_VERSION:
             raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "unsupported Batch D writer version")
         self._writer_version = writer_version
+        self._lineage_identity_type = lineage_identity_type
+        self._schemas = _schemas_for_lineage(lineage_identity_type)
+        self._snapshot_schema_version = (
+            RETROSPECTIVE_SNAPSHOT_SCHEMA_VERSION
+            if lineage_identity_type == "HISTORICAL_RANGE"
+            else SNAPSHOT_SCHEMA_VERSION
+        )
 
     @property
     def writer_version(self) -> str:
         return self._writer_version
 
+    @property
+    def lineage_identity_type(self) -> str:
+        return self._lineage_identity_type
+
+    @property
+    def schemas(self) -> dict[str, tuple[SnapshotSchemaField, ...]]:
+        return self._schemas
+
     def schema_fingerprint(self, logical_role: str) -> str:
-        return canonical_json_sha256(_schema_descriptor_payload(logical_role))
+        return canonical_json_sha256(
+            _schema_descriptor_payload(
+                logical_role,
+                schemas=self._schemas,
+                snapshot_schema_version=self._snapshot_schema_version,
+            )
+        )
 
     def schema_descriptor_bytes(self, logical_role: str) -> bytes:
-        return _canonical_json_bytes(_schema_descriptor_payload(logical_role))
+        return _canonical_json_bytes(
+            _schema_descriptor_payload(
+                logical_role,
+                schemas=self._schemas,
+                snapshot_schema_version=self._snapshot_schema_version,
+            )
+        )
 
     def write_schema_descriptor(self, *, path: Path, logical_role: str) -> WrittenDatasetFile:
         payload = self.schema_descriptor_bytes(logical_role)
@@ -1914,7 +2458,13 @@ class DeterministicParquetWriter:
             ordinal=0,
             row_count=0,
             schema_fingerprint=self.schema_fingerprint(logical_role),
-            partition_content_hash=canonical_json_sha256(_schema_descriptor_payload(logical_role)),
+            partition_content_hash=canonical_json_sha256(
+                _schema_descriptor_payload(
+                    logical_role,
+                    schemas=self._schemas,
+                    snapshot_schema_version=self._snapshot_schema_version,
+                )
+            ),
             compression="none",
             writer_version=self._writer_version,
         )
@@ -1930,12 +2480,12 @@ class DeterministicParquetWriter:
         ordinal: int,
         rows: Iterable[LogicalDatasetRow],
     ) -> WrittenDatasetFile:
-        if logical_role not in SNAPSHOT_ARROW_SCHEMAS_V1:
+        if logical_role not in self._schemas:
             raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "unknown Parquet logical role")
         pa, pq = _pyarrow()
-        schema = _arrow_schema(logical_role)
+        schema = _arrow_schema(logical_role, schemas=self._schemas)
         metadata = {
-            b"aistock_snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION.encode("ascii"),
+            b"aistock_snapshot_schema_version": self._snapshot_schema_version.encode("ascii"),
             b"aistock_logical_role": logical_role.encode("ascii"),
             b"aistock_schema_fingerprint": self.schema_fingerprint(logical_role).encode("ascii"),
             b"aistock_writer_version": self._writer_version.encode("ascii"),
@@ -1964,7 +2514,11 @@ class DeterministicParquetWriter:
                                 REASON_ARROW_SCHEMA_CONFLICT,
                                 "mixed logical roles cannot share one Parquet file",
                             )
-                        values = _coerce_values(logical_role=logical_role, values=row.values)
+                        values = _coerce_values(
+                            logical_role=logical_role,
+                            values=row.values,
+                            schemas=self._schemas,
+                        )
                         key = _logical_sort_key(logical_role, values)
                         if row.sort_key and row.sort_key != key:
                             raise SnapshotWriterError(
@@ -2017,8 +2571,16 @@ class DeterministicParquetWriter:
 class FullParquetVerifier:
     """Verify every byte and every row in a frozen Batch D materialized file set."""
 
-    def __init__(self, *, writer_version: str = BATCH_D_WRITER_VERSION) -> None:
-        self._writer = DeterministicParquetWriter(writer_version=writer_version)
+    def __init__(
+        self,
+        *,
+        writer_version: str = BATCH_D_WRITER_VERSION,
+        lineage_identity_type: str = "PHASE0A",
+    ) -> None:
+        self._writer = DeterministicParquetWriter(
+            writer_version=writer_version,
+            lineage_identity_type=lineage_identity_type,
+        )
 
     def verify_files(
         self,
@@ -2027,21 +2589,43 @@ class FullParquetVerifier:
         files: Sequence[WrittenDatasetFile],
         capability_manifest: DatasetCapabilityManifest,
     ) -> FullParquetVerificationReceipt:
+        expected_lineage_type = (
+            "HISTORICAL_RANGE"
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+            else "PHASE0A"
+        )
+        if self._writer.lineage_identity_type != expected_lineage_type:
+            raise SnapshotWriterError(
+                REASON_ARROW_SCHEMA_CONFLICT,
+                "snapshot writer lineage type differs from build request",
+            )
         if build.materialized_file_set_hash is None:
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "build has no materialized file set")
         self._validate_complete_file_set(files)
         verified: list[VerifiedDatasetFile] = []
-        rows_by_role: dict[str, list[dict[str, Any]]] = {role: [] for role in SNAPSHOT_ARROW_SCHEMAS_V1}
+        rows_by_role: dict[str, list[dict[str, Any]]] = {
+            role: [] for role in self._writer.schemas
+        }
         for file in sorted(files, key=lambda item: item.logical_path):
             payload = _read_exact(path=_path_from_file_uri(file.uri), sha256=file.sha256, size_bytes=file.size_bytes)
             if file.logical_role == SCHEMA_DESCRIPTOR_ROLE:
-                role = _role_from_schema_path(file.logical_path)
+                role = _role_from_schema_path(
+                    file.logical_path,
+                    schemas=self._writer.schemas,
+                )
                 expected = self._writer.schema_descriptor_bytes(role)
                 if (
                     file.compression != "none"
                     or file.writer_version != self._writer.writer_version
                     or payload != expected
-                    or file.partition_content_hash != canonical_json_sha256(_schema_descriptor_payload(role))
+                    or file.partition_content_hash
+                    != canonical_json_sha256(
+                        _schema_descriptor_payload(
+                            role,
+                            schemas=self._writer.schemas,
+                            snapshot_schema_version=self._writer._snapshot_schema_version,
+                        )
+                    )
                 ):
                     raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "schema descriptor bytes are not canonical")
                 observed_rows = 0
@@ -2094,6 +2678,33 @@ class FullParquetVerifier:
             selected_observations=observations,
             selected_labels=labels,
             relational_closure_summary=relational_summary,
+            **(
+                {
+                    "lineage_identity_type": build.request.lineage_identity_type,
+                    "execution_origin": build.request.execution_origin,
+                    "research_scope": build.request.research_scope,
+                    "evidence_scope": build.request.evidence_scope,
+                    "range_lineage_scope_set_hash": build.request.range_lineage_scope_set_hash,
+                    "selector_policy_hash": build.request.selector_policy_hash,
+                    "selected_range_day_outcome_set_hash": build.request.selected_range_day_outcome_set_hash,
+                    "policy_lineage_type": "HISTORICAL_RANGE_OUTCOME_POLICY",
+                    "historical_range_policy_bundle_hash": build.request.label_policy_bundle_hash,
+                    "policy_component_set_hash": build.request.policy_component_set_hash,
+                    "source_revision_closure_hash": canonical_json_sha256(
+                        {
+                            "source_revision_set_id": build.request.snapshot_source_revision_set_id,
+                            "source_revision_set_hash": build.request.snapshot_source_revision_set_hash,
+                            "query_registry_hash": build.request.query_registry_hash,
+                            "source_revision_member_count": relational_summary["source_revision_member_count"],
+                        }
+                    ),
+                    "maturity_coverage_hash": canonical_json_sha256(
+                        relational_summary["maturity_coverage"]
+                    ),
+                }
+                if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+                else {}
+            ),
         )
 
     def _validate_complete_file_set(self, files: Sequence[WrittenDatasetFile]) -> None:
@@ -2101,17 +2712,17 @@ class FullParquetVerifier:
         if len(paths) != len(set(paths)):
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "materialized logical paths are not unique")
         descriptor_roles = {
-            _role_from_schema_path(item.logical_path)
+            _role_from_schema_path(item.logical_path, schemas=self._writer.schemas)
             for item in files
             if item.logical_role == SCHEMA_DESCRIPTOR_ROLE
         }
         data_roles = {item.logical_role for item in files if item.logical_role != SCHEMA_DESCRIPTOR_ROLE}
-        required = set(SNAPSHOT_ARROW_SCHEMAS_V1)
+        required = set(self._writer.schemas)
         if descriptor_roles != required or data_roles != required:
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "materialized file set does not cover every logical role")
 
     def _verify_parquet(self, *, file: WrittenDatasetFile) -> tuple[list[dict[str, Any]], str, str]:
-        if file.logical_role not in SNAPSHOT_ARROW_SCHEMAS_V1:
+        if file.logical_role not in self._writer.schemas:
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "unknown Parquet role")
         if file.compression != "zstd" or file.writer_version != self._writer.writer_version:
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "Parquet descriptor differs from writer v1")
@@ -2122,13 +2733,16 @@ class FullParquetVerifier:
             table = parquet.read()
         except Exception as error:
             raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, f"cannot read full Parquet file: {type(error).__name__}") from error
-        expected_schema = _arrow_schema(file.logical_role)
+        expected_schema = _arrow_schema(
+            file.logical_role,
+            schemas=self._writer.schemas,
+        )
         actual_schema = table.schema.remove_metadata()
         if actual_schema != expected_schema:
             raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "Parquet Arrow schema differs from frozen role schema")
         metadata = table.schema.metadata or {}
         required_metadata = {
-            b"aistock_snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION.encode("ascii"),
+            b"aistock_snapshot_schema_version": self._writer._snapshot_schema_version.encode("ascii"),
             b"aistock_logical_role": file.logical_role.encode("ascii"),
             b"aistock_schema_fingerprint": self._writer.schema_fingerprint(file.logical_role).encode("ascii"),
             b"aistock_writer_version": self._writer.writer_version.encode("ascii"),
@@ -2336,6 +2950,35 @@ def build_dataset_manifest(
     )
     if canonical_json_sha256([item.canonical_identity() for item in identities]) != verification.verified_content_set_hash:
         raise SnapshotWriterError(REASON_MANIFEST_CONFLICT, "manifest files differ from full verification")
+    range_fields: dict[str, object] = {}
+    if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+        expected_range_identity = {
+            "lineage_identity_type": build.request.lineage_identity_type,
+            "execution_origin": build.request.execution_origin,
+            "research_scope": build.request.research_scope,
+            "evidence_scope": build.request.evidence_scope,
+            "range_lineage_scope_set_hash": build.request.range_lineage_scope_set_hash,
+            "selector_policy_hash": build.request.selector_policy_hash,
+            "selected_range_day_outcome_set_hash": build.request.selected_range_day_outcome_set_hash,
+            "policy_lineage_type": "HISTORICAL_RANGE_OUTCOME_POLICY",
+            "historical_range_policy_bundle_hash": build.request.label_policy_bundle_hash,
+            "policy_component_set_hash": build.request.policy_component_set_hash,
+        }
+        receipt_range_identity = {
+            key: getattr(verification, key) for key in expected_range_identity
+        }
+        if receipt_range_identity != expected_range_identity:
+            raise SnapshotWriterError(
+                REASON_MANIFEST_CONFLICT,
+                "retrospective verification identity differs from frozen build request",
+            )
+        range_fields = {
+            **expected_range_identity,
+            "selected_observation_mapping_set_hash": verification.selected_observation_mapping_set_hash,
+            "selected_label_mapping_set_hash": verification.selected_label_mapping_set_hash,
+            "source_revision_closure_hash": verification.source_revision_closure_hash,
+            "maturity_coverage_hash": verification.maturity_coverage_hash,
+        }
     core = DatasetManifestCore(
         files=tuple(files),
         selected_observations=verification.selected_observations,
@@ -2343,7 +2986,7 @@ def build_dataset_manifest(
         snapshot_source_revision_set_hash=build.request.snapshot_source_revision_set_hash,
         capture_set_hash=str(build.request.capture_set_hash),
         handoff_readiness_hash=build.request.handoff_readiness_hash,
-        admission_scope_set_hash=str(build.request.admission_scope_set_hash),
+        admission_scope_set_hash=build.request.admission_scope_set_hash,
         query_registry_hash=build.request.query_registry_hash,
         capability_manifest=capability_manifest,
         schema_fingerprint=build.request.schema_fingerprint,
@@ -2353,6 +2996,7 @@ def build_dataset_manifest(
         partition_policy_hash=build.request.partition_policy_hash,
         policy_compatibility_hash=build.request.policy_compatibility_hash,
         base_snapshot=build.request.base_snapshot,
+        **range_fields,
     )
     return DatasetManifest(core=core, store_backend_hash=store_backend_hash)
 
@@ -2413,6 +3057,24 @@ def assemble_sealed_snapshot(
             "full_verification_receipt_hash": verification.receipt_hash,
         }
     )
+    range_fields: dict[str, object] = {}
+    if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+        range_fields = {
+            "lineage_identity_type": manifest.core.lineage_identity_type,
+            "execution_origin": manifest.core.execution_origin,
+            "research_scope": manifest.core.research_scope,
+            "evidence_scope": manifest.core.evidence_scope,
+            "range_lineage_scope_set_hash": manifest.core.range_lineage_scope_set_hash,
+            "selector_policy_hash": manifest.core.selector_policy_hash,
+            "selected_range_day_outcome_set_hash": manifest.core.selected_range_day_outcome_set_hash,
+            "policy_lineage_type": manifest.core.policy_lineage_type,
+            "historical_range_policy_bundle_hash": manifest.core.historical_range_policy_bundle_hash,
+            "policy_component_set_hash": manifest.core.policy_component_set_hash,
+            "selected_observation_mapping_set_hash": manifest.core.selected_observation_mapping_set_hash,
+            "selected_label_mapping_set_hash": manifest.core.selected_label_mapping_set_hash,
+            "source_revision_closure_hash": manifest.core.source_revision_closure_hash,
+            "maturity_coverage_hash": manifest.core.maturity_coverage_hash,
+        }
     return SealedDatasetSnapshot(
         build_id=build.build_id,
         seal_attempt_id=seal_attempt_id,
@@ -2427,7 +3089,7 @@ def assemble_sealed_snapshot(
         capture_set_hash=str(build.request.capture_set_hash),
         base_snapshot=build.request.base_snapshot,
         handoff_readiness_hash=build.request.handoff_readiness_hash,
-        admission_scope_set_hash=str(build.request.admission_scope_set_hash),
+        admission_scope_set_hash=build.request.admission_scope_set_hash,
         query_registry_hash=build.request.query_registry_hash,
         builder_version=build.request.builder_version,
         code_commit=build.request.code_commit,
@@ -2442,24 +3104,34 @@ def assemble_sealed_snapshot(
         labels=manifest.core.selected_labels,
         blob_refs=snapshot_blob_refs(manifest.core.files),
         label_maturity_event_summary=canonicalize(label_maturity_event_summary),
+        **range_fields,
     )
 
 
-def _schema_descriptor_payload(logical_role: str) -> dict[str, Any]:
-    fields = SNAPSHOT_ARROW_SCHEMAS_V1.get(logical_role)
+def _schema_descriptor_payload(
+    logical_role: str,
+    *,
+    schemas: Mapping[str, tuple[SnapshotSchemaField, ...]] = SNAPSHOT_ARROW_SCHEMAS_V1,
+    snapshot_schema_version: str = SNAPSHOT_SCHEMA_VERSION,
+) -> dict[str, Any]:
+    fields = schemas.get(logical_role)
     if fields is None:
         raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "unknown logical role schema")
     return {
-        "snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "snapshot_schema_version": snapshot_schema_version,
         "logical_role": logical_role,
         "writer_version": BATCH_D_WRITER_VERSION,
         "fields": [field.model_dump(mode="json") for field in fields],
     }
 
 
-def _arrow_schema(logical_role: str) -> Any:
+def _arrow_schema(
+    logical_role: str,
+    *,
+    schemas: Mapping[str, tuple[SnapshotSchemaField, ...]] = SNAPSHOT_ARROW_SCHEMAS_V1,
+) -> Any:
     pa, _ = _pyarrow()
-    fields = SNAPSHOT_ARROW_SCHEMAS_V1.get(logical_role)
+    fields = schemas.get(logical_role)
     if fields is None:
         raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, "unknown logical role schema")
     type_map = {
@@ -2476,8 +3148,13 @@ def _arrow_schema(logical_role: str) -> Any:
     return pa.schema([pa.field(field.name, type_map[field.arrow_type], nullable=field.nullable) for field in fields])
 
 
-def _coerce_values(*, logical_role: str, values: Mapping[str, Any]) -> dict[str, Any]:
-    schema = SNAPSHOT_ARROW_SCHEMAS_V1[logical_role]
+def _coerce_values(
+    *,
+    logical_role: str,
+    values: Mapping[str, Any],
+    schemas: Mapping[str, tuple[SnapshotSchemaField, ...]] = SNAPSHOT_ARROW_SCHEMAS_V1,
+) -> dict[str, Any]:
+    schema = schemas[logical_role]
     expected_names = {field.name for field in schema}
     actual_names = set(values)
     if actual_names != expected_names:
@@ -2585,13 +3262,17 @@ def _path_from_file_uri(uri: str) -> Path:
         raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "file descriptor URI cannot be resolved") from error
 
 
-def _role_from_schema_path(logical_path: str) -> str:
+def _role_from_schema_path(
+    logical_path: str,
+    *,
+    schemas: Mapping[str, tuple[SnapshotSchemaField, ...]] = SNAPSHOT_ARROW_SCHEMAS_V1,
+) -> str:
     prefix = "schemas/"
     suffix = ".schema.json"
     if not logical_path.startswith(prefix) or not logical_path.endswith(suffix):
         raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "schema descriptor logical path is invalid")
     role = logical_path[len(prefix):-len(suffix)]
-    if role not in SNAPSHOT_ARROW_SCHEMAS_V1:
+    if role not in schemas:
         raise SnapshotWriterError(REASON_PARQUET_FULL_VERIFY_FAILED, "schema descriptor role is invalid")
     return role
 
@@ -2787,13 +3468,25 @@ def _validate_relational_rows(
             raise SnapshotWriterError(REASON_RELATIONAL_CLOSURE_FAILED, "selected observation mapping is not closed")
         selected_observation_ids.add(version_id)
         lineage = lineages[0]
+        observation_selector_hash = (
+            build.request.selector_policy_hash
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+            else _formal_observation_selector_policy_hash()
+        )
+        if isinstance(build.request, RetrospectiveDatasetBuildRequest) and (
+            mapping.get("selection_policy_hash") != observation_selector_hash
+        ):
+            raise SnapshotWriterError(
+                REASON_RELATIONAL_CLOSURE_FAILED,
+                "retrospective observation mapping selector hash differs from build request",
+            )
         observations.append(
             DatasetSnapshotObservation(
                 canonical_signal_id=signal_id,
                 observation_version_id=version_id,
                 evidence_scope=lineage["evidence_scope"],
                 oos_interval_id=lineage["oos_interval_id"],
-                selector_policy_hash=OBSERVATION_SELECTOR_POLICY_HASH,
+                selector_policy_hash=observation_selector_hash,
             )
         )
     if len(observations) != len(signals):
@@ -2822,6 +3515,11 @@ def _validate_relational_rows(
             or outcome["candidate_stage_evidence_id"] not in stages
         ):
             raise SnapshotWriterError(REASON_RELATIONAL_CLOSURE_FAILED, "selected label mapping is not closed")
+        label_selector_hash = (
+            build.request.selector_policy_hash
+            if isinstance(build.request, RetrospectiveDatasetBuildRequest)
+            else mapping["selection_policy_hash"]
+        )
         labels.append(
             DatasetSnapshotLabel(
                 label_key_hash=outcome["label_key_hash"],
@@ -2830,7 +3528,7 @@ def _validate_relational_rows(
                 observation_version_id=outcome["observation_version_id"],
                 candidate_stage_evidence_id=outcome["candidate_stage_evidence_id"],
                 symbol=outcome["symbol"],
-                selector_policy_hash=mapping["selection_policy_hash"],
+                selector_policy_hash=label_selector_hash,
             )
         )
     evidence = rows_by_role["outcome_source_evidence"]
@@ -2893,7 +3591,36 @@ def _validate_relational_rows(
         "schema_descriptor_count": len(SNAPSHOT_ARROW_SCHEMAS_V1),
         "capability_manifest_hash": capability_manifest.manifest_hash,
     }
+    if isinstance(build.request, RetrospectiveDatasetBuildRequest):
+        maturity_counts: dict[tuple[str, int, str, str], int] = {}
+        for row in outcomes.values():
+            key = (
+                str(row["projection"]),
+                int(row["horizon_trading_days"]),
+                str(row["maturity_status"]),
+                str(row["outcome_event_status"]),
+            )
+            maturity_counts[key] = maturity_counts.get(key, 0) + 1
+        summary["maturity_coverage"] = [
+            {
+                "projection": key[0],
+                "horizon_trading_days": key[1],
+                "maturity_status": key[2],
+                "outcome_event_status": key[3],
+                "count": maturity_counts[key],
+            }
+            for key in sorted(maturity_counts)
+        ]
+        summary["source_revision_member_count"] = len(source_rows)
     return summary, tuple(observations), tuple(labels)
+
+
+def _formal_observation_selector_policy_hash() -> str:
+    from backend.services.advisory_phase1.observation_selector import (
+        OBSERVATION_SELECTOR_POLICY_HASH,
+    )
+
+    return OBSERVATION_SELECTOR_POLICY_HASH
 
 
 def _canonical_json_bytes(payload: Any) -> bytes:
@@ -2909,3 +3636,93 @@ def _pyarrow() -> tuple[Any, Any]:
     if pa.__version__ != "21.0.0":
         raise SnapshotWriterError(REASON_ARROW_SCHEMA_CONFLICT, f"Batch D requires pyarrow 21.0.0, found {pa.__version__}")
     return pa, pq
+
+
+def read_verified_snapshot_parquet_rows(
+    *,
+    file: DatasetSnapshotFile,
+    store: LocalContentAddressedStore,
+    lineage_identity_type: str,
+) -> tuple[dict[str, Any], ...]:
+    """Full-read one sealed CAS Parquet file under the frozen Batch-D contract."""
+
+    if file.logical_role == SCHEMA_DESCRIPTOR_ROLE:
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            "schema descriptors are not Parquet data roles",
+        )
+    writer = DeterministicParquetWriter(
+        lineage_identity_type=lineage_identity_type
+    )
+    if file.logical_role not in writer.schemas:
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            "snapshot file has an unknown logical role",
+        )
+    payload = store.read_blob_bytes(
+        uri=file.content_uri,
+        sha256=file.sha256,
+        size_bytes=file.size_bytes,
+    )
+    pa, pq = _pyarrow()
+    try:
+        table = pq.read_table(pa.BufferReader(payload))
+    except Exception as error:
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            f"cannot read sealed Parquet file: {type(error).__name__}",
+        ) from error
+    expected_schema = _arrow_schema(file.logical_role, schemas=writer.schemas)
+    if table.schema.remove_metadata() != expected_schema:
+        raise SnapshotWriterError(
+            REASON_ARROW_SCHEMA_CONFLICT,
+            "sealed Parquet Arrow schema differs from the frozen role schema",
+        )
+    expected_metadata = {
+        b"aistock_snapshot_schema_version": writer._snapshot_schema_version.encode(
+            "ascii"
+        ),
+        b"aistock_logical_role": file.logical_role.encode("ascii"),
+        b"aistock_schema_fingerprint": writer.schema_fingerprint(
+            file.logical_role
+        ).encode("ascii"),
+        b"aistock_writer_version": writer.writer_version.encode("ascii"),
+    }
+    if (table.schema.metadata or {}) != expected_metadata:
+        raise SnapshotWriterError(
+            REASON_ARROW_SCHEMA_CONFLICT,
+            "sealed Parquet metadata differs from the frozen writer contract",
+        )
+    rows = tuple(table.to_pylist())
+    if len(rows) != file.row_count:
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            "sealed Parquet row count differs from its DB descriptor",
+        )
+    keys = tuple(_logical_sort_key(file.logical_role, item) for item in rows)
+    if keys != tuple(sorted(keys)) or len(keys) != len(set(keys)):
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            "sealed Parquet rows violate frozen sort/unique order",
+        )
+    partition_key = _partition_key_from_logical_path(
+        file.logical_path,
+        logical_role=file.logical_role,
+    )
+    if (
+        canonical_json_sha256(dict(sorted(partition_key.items())))
+        != file.partition_key_hash
+        or _partition_content_hash(
+            logical_role=file.logical_role,
+            partition_key=partition_key,
+            values=rows,
+        )
+        != file.partition_content_hash
+        or writer.schema_fingerprint(file.logical_role)
+        != file.schema_fingerprint
+    ):
+        raise SnapshotWriterError(
+            REASON_PARQUET_FULL_VERIFY_FAILED,
+            "sealed Parquet descriptor content differs from full readback",
+        )
+    return rows

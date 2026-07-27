@@ -193,6 +193,33 @@ class LocalContentAddressedStore:
         self.verify_object(stored)
         return stored
 
+    def read_document_bytes(self, *, kind: str, sha256: str) -> bytes:
+        """Read one canonical manifest/receipt by exact content hash."""
+
+        if kind not in {"manifests", "promotion_receipts"} or not _is_sha256(
+            sha256
+        ):
+            raise LocalContentAddressedStoreError(
+                REASON_DATASET_STORE_INVALID,
+                "canonical dataset document descriptor is invalid",
+            )
+        path = (
+            self._root / kind / "sha256" / sha256[:2] / f"{sha256}.json"
+        ).resolve()
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise LocalContentAddressedStoreError(
+                REASON_DATASET_STORE_INVALID,
+                "canonical dataset document is missing",
+            ) from error
+        if hashlib.sha256(payload).hexdigest() != sha256:
+            raise LocalContentAddressedStoreError(
+                REASON_CAS_CONTENT_CONFLICT,
+                "canonical dataset document hash conflicts",
+            )
+        return payload
+
     def publish_staging_file(self, *, staging_uri: str, sha256: str, size_bytes: int) -> StoredCasObject:
         staging = self.path_from_uri(staging_uri, allowed_root=self._root / "staging")
         try:

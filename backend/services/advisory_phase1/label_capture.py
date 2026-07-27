@@ -22,12 +22,21 @@ from backend.services.advisory_phase1.observation_selector import (
     SelectedObservationMapping,
 )
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
+from backend.services.advisory_phase1.retrospective_contracts import (
+    HistoricalRangeArtifactReference,
+    HistoricalRangeCaptureScope,
+    RETROSPECTIVE_EVIDENCE_SCOPE,
+    RETROSPECTIVE_EXECUTION_ORIGIN,
+)
 from backend.services.advisory_phase1.source_revision import SourceRevisionSet, build_source_revision_set
 
 
 LABEL_CAPTURE_BINDING_SCHEMA_VERSION = "advisory_phase1_label_capture_binding_v1"
 LABEL_CAPTURE_BATCH_SCHEMA_VERSION = "advisory_phase1_capture_batch_v2"
 LABEL_CAPTURE_PURPOSE = "LABEL_CAPTURE_V1"
+RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION = (
+    "advisory_phase1_retrospective_label_capture_batch_v1"
+)
 
 REASON_LABEL_CAPTURE_BINDING_INVALID = "ADVISORY_PHASE1C3_LABEL_CAPTURE_BINDING_INVALID"
 REASON_LABEL_CAPTURE_SOURCE_BATCH_INVALID = "ADVISORY_PHASE1C3_LABEL_CAPTURE_SOURCE_BATCH_INVALID"
@@ -765,3 +774,240 @@ def build_label_capture_request(
         planned_label_count=planned_count,
         planned_label_hash=planned_hash,
     )
+
+
+class RetrospectiveSelectedObservationMappingReference(BaseModel):
+    """Exact retrospective mapping consumed by a range label capture."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    selected_mapping_id: str = Field(min_length=1, max_length=160)
+    selected_mapping_hash: str = Field(min_length=64, max_length=64)
+    canonical_signal_id: str = Field(min_length=1, max_length=160)
+    terminal_observation_version_id: str = Field(min_length=1, max_length=160)
+    terminal_observation_content_hash: str = Field(min_length=64, max_length=64)
+    terminal_revision_no: int = Field(default=1, ge=1, le=1)
+    candidate_stage_evidence_id: str = Field(min_length=1, max_length=160)
+    selected_lineage_refs: tuple[str, ...] = Field(min_length=1)
+    selection_policy_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator(
+        "selected_mapping_hash", "terminal_observation_content_hash", "selection_policy_hash"
+    )
+    @classmethod
+    def _hash(cls, value: str, info: Any) -> str:
+        return _require_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _lineage(self) -> "RetrospectiveSelectedObservationMappingReference":
+        refs = tuple(sorted(set(self.selected_lineage_refs)))
+        if refs != self.selected_lineage_refs:
+            raise ValueError("retrospective selected lineage refs must be sorted and unique")
+        if any(len(item) != 64 for item in refs):
+            raise ValueError("retrospective selected lineage refs must be sha256 identities")
+        return self
+
+    def canonical_identity(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+def _retrospective_mapping_set_hash(
+    values: Iterable[RetrospectiveSelectedObservationMappingReference],
+) -> tuple[int, str]:
+    ordered = [
+        item.canonical_identity()
+        for item in sorted(values, key=lambda item: item.canonical_signal_id)
+    ]
+    if len({item["canonical_signal_id"] for item in ordered}) != len(ordered):
+        raise ValueError("retrospective mappings contain duplicate canonical signals")
+    return len(ordered), canonical_json_sha256(ordered)
+
+
+class RetrospectiveLabelCaptureBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = "advisory_phase1_retrospective_label_capture_binding_v1"
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    current_fencing_token: int = Field(ge=1)
+    source_observation_capture_batch_id: str = Field(min_length=1, max_length=160)
+    source_capture_request_hash: str = Field(min_length=64, max_length=64)
+    source_capture_receipt_hash: str = Field(min_length=64, max_length=64)
+    source_capture_membership_count: int = Field(ge=0)
+    source_capture_membership_hash: str = Field(min_length=64, max_length=64)
+    source_capture_plan_set_count: int = Field(ge=1)
+    source_capture_plan_set_hash: str = Field(min_length=64, max_length=64)
+    range_scope: HistoricalRangeCaptureScope
+    selected_observation_mapping_set_count: int = Field(ge=1)
+    selected_observation_mapping_set_hash: str = Field(min_length=64, max_length=64)
+    policy_component_set_hash: str = Field(min_length=64, max_length=64)
+    label_source_revision_set_id: str = Field(min_length=1, max_length=160)
+    label_source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    label_as_of_ts: datetime
+    binding_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "source_capture_request_hash",
+        "source_capture_receipt_hash",
+        "source_capture_membership_hash",
+        "source_capture_plan_set_hash",
+        "selected_observation_mapping_set_hash",
+        "policy_component_set_hash",
+        "label_source_revision_set_hash",
+        "binding_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return (
+            _require_sha256(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
+
+    @field_validator("label_as_of_ts")
+    @classmethod
+    def _timestamp(cls, value: datetime) -> datetime:
+        return _require_aware(value, field_name="label_as_of_ts")
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveLabelCaptureBinding":
+        digest = canonical_json_sha256(
+            self.model_dump(mode="json", exclude={"binding_hash"})
+        )
+        if self.binding_hash is not None and self.binding_hash != digest:
+            raise ValueError("retrospective label binding hash differs")
+        object.__setattr__(self, "binding_hash", digest)
+        return self
+
+
+class RetrospectiveLabelCaptureBatchRequestV1(BaseModel):
+    """Range-native label capture with no Phase 0A admission envelope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+    capture_purpose: str = LABEL_CAPTURE_PURPOSE
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    binding: RetrospectiveLabelCaptureBinding
+    source_observation_capture_batch_id: str = Field(min_length=1, max_length=160)
+    source_capture_receipt_hash: str = Field(min_length=64, max_length=64)
+    source_capture_membership_hash: str = Field(min_length=64, max_length=64)
+    source_capture_plan_set_count: int = Field(ge=1)
+    source_capture_plan_set_hash: str = Field(min_length=64, max_length=64)
+    selected_observation_mappings: tuple[
+        RetrospectiveSelectedObservationMappingReference, ...
+    ] = Field(min_length=1)
+    label_policy_bundle_id: str = Field(min_length=1, max_length=160)
+    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    historical_range_policy_bundle_ref: HistoricalRangeArtifactReference
+    policy_component_set_hash: str = Field(min_length=64, max_length=64)
+    label_source_revision_set_id: str = Field(min_length=1, max_length=160)
+    label_source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    label_as_of_ts: datetime
+    planned_labels: tuple[PlannedLabelDescriptor, ...] = Field(min_length=1)
+    planned_label_count: int = Field(ge=1)
+    planned_label_hash: str = Field(min_length=64, max_length=64)
+    data_source: str = "DB_HISTORICAL"
+    execution_origin: str = RETROSPECTIVE_EXECUTION_ORIGIN
+    research_scope: str = RETROSPECTIVE_EVIDENCE_SCOPE
+    evidence_scope: str = RETROSPECTIVE_EVIDENCE_SCOPE
+    selector_policy_hash: str = Field(min_length=64, max_length=64)
+    execution_prohibited: bool = True
+    capture_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "source_capture_receipt_hash",
+        "source_capture_membership_hash",
+        "source_capture_plan_set_hash",
+        "label_policy_bundle_hash",
+        "policy_component_set_hash",
+        "label_source_revision_set_hash",
+        "planned_label_hash",
+        "selector_policy_hash",
+        "capture_request_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return (
+            _require_sha256(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
+
+    @field_validator("label_as_of_ts")
+    @classmethod
+    def _timestamp(cls, value: datetime) -> datetime:
+        return _require_aware(value, field_name="label_as_of_ts")
+
+    def canonical_payload(self) -> dict[str, Any]:
+        binding = self.binding.model_dump(
+            mode="json",
+            exclude={"capture_batch_id", "current_fencing_token", "binding_hash"},
+        )
+        payload = self.model_dump(
+            mode="json",
+            exclude={"capture_batch_id", "capture_request_hash", "binding"},
+        )
+        payload["binding"] = binding
+        return canonicalize(payload)
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveLabelCaptureBatchRequestV1":
+        if (
+            self.schema_version != RETROSPECTIVE_LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+            or self.capture_purpose != LABEL_CAPTURE_PURPOSE
+            or self.data_source != "DB_HISTORICAL"
+            or self.execution_origin != RETROSPECTIVE_EXECUTION_ORIGIN
+            or self.research_scope != RETROSPECTIVE_EVIDENCE_SCOPE
+            or self.evidence_scope != RETROSPECTIVE_EVIDENCE_SCOPE
+            or self.execution_prohibited is not True
+        ):
+            raise ValueError("retrospective label capture boundary is invalid")
+        binding = self.binding
+        scope = binding.range_scope
+        if (
+            binding.capture_batch_id != self.capture_batch_id
+            or binding.current_fencing_token != 1
+            or self.source_observation_capture_batch_id
+            != binding.source_observation_capture_batch_id
+            or self.source_capture_receipt_hash != binding.source_capture_receipt_hash
+            or self.source_capture_membership_hash
+            != binding.source_capture_membership_hash
+            or self.source_capture_plan_set_count
+            != binding.source_capture_plan_set_count
+            or self.source_capture_plan_set_hash != binding.source_capture_plan_set_hash
+            or self.label_policy_bundle_hash
+            != scope.historical_range_policy_bundle_hash
+            or self.historical_range_policy_bundle_ref
+            != scope.historical_range_policy_bundle_ref
+            or self.policy_component_set_hash != binding.policy_component_set_hash
+            or self.label_source_revision_set_id
+            != binding.label_source_revision_set_id
+            or self.label_source_revision_set_hash
+            != binding.label_source_revision_set_hash
+            or self.selector_policy_hash != scope.selector_policy_hash
+            or any(
+                item.selection_policy_hash != self.selector_policy_hash
+                for item in self.selected_observation_mappings
+            )
+        ):
+            raise ValueError("retrospective label capture differs from frozen binding")
+        mapping_count, mapping_hash = _retrospective_mapping_set_hash(
+            self.selected_observation_mappings
+        )
+        if (
+            mapping_count != binding.selected_observation_mapping_set_count
+            or mapping_hash != binding.selected_observation_mapping_set_hash
+        ):
+            raise ValueError("retrospective mapping set differs from binding")
+        planned_count, planned_hash = _planned_label_set_hash(self.planned_labels)
+        if (
+            planned_count != self.planned_label_count
+            or planned_hash != self.planned_label_hash
+            or any(item.horizon_trading_days < 1 for item in self.planned_labels)
+        ):
+            raise ValueError("retrospective planned label set is invalid")
+        digest = canonical_json_sha256(self.canonical_payload())
+        if self.capture_request_hash is not None and self.capture_request_hash != digest:
+            raise ValueError("retrospective label capture request hash differs")
+        object.__setattr__(self, "capture_request_hash", digest)
+        return self
