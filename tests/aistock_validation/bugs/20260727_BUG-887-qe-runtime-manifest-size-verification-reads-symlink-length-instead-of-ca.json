@@ -1,6 +1,9 @@
 {
   "actual": "R13A exact-2 canary macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00 deterministically fails both remote children before backtest. run.log reports QE_RUNTIME_FILE_VERIFY_FAILED path=aistock_models/__init__.py kind=size expected=578 observed=103. Read-only remote proof: readlink points to the expected SHA-addressed CAS object; stat -c reports symlink length 103, stat -Lc reports target length 578, and sha256sum through the symlink equals 642c62b4... The manifest verifier must validate the dereferenced target while retaining strict missing/size/SHA failure semantics.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
     "tests/aistock_validation/bugs/20260727_BUG-887-qe-runtime-manifest-size-verification-reads-symlink-length-instead-of-ca.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Runtime manifest size verification must dereference CAS-backed workspace symlinks, while missing files, target-size mismatches, and target-SHA mismatches continue to fail explicitly.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,9 +55,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "On rdagent-node1 compare stat -c %s, stat -Lc %s, and sha256sum for the R13A canary workspace path aistock_models/__init__.py; the current verifier reports symlink length 103 instead of target length 578.",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

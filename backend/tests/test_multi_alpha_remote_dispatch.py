@@ -16,6 +16,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     WorkspaceArtifactSyncClient,
     _build_remote_runtime_file_manifest,
     _remote_runtime_artifact_link_commands,
+    _remote_runtime_file_verify_commands,
     _remote_small_files,
     _sync_remote_runtime_artifacts,
     _remote_task_id,
@@ -538,6 +539,7 @@ def test_runtime_file_manifest_covers_nested_assets_and_excludes_python_cache(
     assert "kind=missing" in command
     assert "kind=size" in command
     assert "kind=sha256" in command
+    assert "stat -Lc %s --" in command
     syntax = subprocess.run(
         ["bash", "-n", "-c", command],
         check=False,
@@ -545,6 +547,52 @@ def test_runtime_file_manifest_covers_nested_assets_and_excludes_python_cache(
         text=True,
     )
     assert syntax.returncode == 0, syntax.stderr
+
+
+def test_runtime_file_verification_dereferences_cas_symlink_and_keeps_sha_fail_closed(
+    tmp_path: Path,
+) -> None:
+    source_workspace = tmp_path / "source"
+    source_package = source_workspace / "aistock_models"
+    source_package.mkdir(parents=True)
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (source_workspace / name).write_text("runtime\n", encoding="utf-8")
+    expected_content = b"from .efficient_gats import EfficientGATs\n"
+    source_file = source_package / "__init__.py"
+    source_file.write_bytes(expected_content)
+    manifest = _build_remote_runtime_file_manifest(workspace=source_workspace)
+
+    runtime_workspace = tmp_path / "runtime"
+    runtime_package = runtime_workspace / "aistock_models"
+    runtime_package.mkdir(parents=True)
+    cas_object = tmp_path / hashlib.sha256(expected_content).hexdigest()
+    cas_object.write_bytes(expected_content)
+    runtime_file = runtime_package / "__init__.py"
+    try:
+        runtime_file.symlink_to(cas_object)
+    except OSError as exc:
+        pytest.skip(f"filesystem cannot create the CAS symlink required by this contract test: {exc}")
+
+    command = _remote_runtime_file_verify_commands(manifest)
+    verified = subprocess.run(
+        ["bash", "-c", command],
+        cwd=runtime_workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert verified.returncode == 0, verified.stderr
+
+    cas_object.write_bytes(b"x" * len(expected_content))
+    rejected = subprocess.run(
+        ["bash", "-c", command],
+        cwd=runtime_workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 93
+    assert "QE_RUNTIME_FILE_VERIFY_FAILED path=aistock_models/__init__.py kind=sha256" in rejected.stderr
 
 
 def test_runtime_file_manifest_detects_workspace_mutation(tmp_path: Path) -> None:
