@@ -884,6 +884,10 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
         attempt_id=ATTEMPT_ID,
     )
     published = adapter.publish_artifacts(materialized)
+    nested_runtime = published.workspace / "aistock_models" / "model.py"
+    nested_runtime.parent.mkdir()
+    nested_runtime.write_text("VALUE = 1\n", encoding="utf-8")
+    (nested_runtime.parent / "__init__.py").write_bytes(b"")
     intent = adapter.prepare_submission_intent(
         run=repository.run,
         child=repository.child,
@@ -906,16 +910,24 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
     assert artifact_client.paths == [
         published.workspace / "combined_factors_df.parquet",
         published.prediction_path,
+        nested_runtime,
         published_overlay,
     ]
     payload = coordinator.calls[0]["payload"]
     bindings = payload.config["runtime_artifact_bindings"]
-    assert bindings[0]["remote_path"] == f"/remote/artifacts/{expected_sha}"
+    overlay_binding = next(item for item in bindings if item["name"] == runtime_overlay.name)
+    assert overlay_binding["remote_path"] == f"/remote/artifacts/{expected_sha}"
     assert f"{runtime_overlay.name}.b64" not in payload.experiment_files
     assert "sha256sum --" in payload.wsl_command
     assert f"/remote/artifacts/{expected_sha}" in payload.wsl_command
     claimed_manifest = repository.claim_calls[0]["artifact_manifest"]
     assert claimed_manifest["remote_runtime_artifact_bindings"] == bindings
+    runtime_manifest = claimed_manifest["remote_runtime_file_manifest"]
+    runtime_entries = {item["path"]: item for item in runtime_manifest["files"]}
+    assert runtime_entries[runtime_overlay.name]["sha256"] == expected_sha
+    assert runtime_entries[runtime_overlay.name]["transfer"] == "cas"
+    assert runtime_entries["aistock_models/model.py"]["transfer"] == "cas"
+    assert runtime_entries["aistock_models/__init__.py"]["transfer"] == "empty_file"
     assert claimed_manifest["manifest_hash"] == artifact_manifest_hash_for(
         {key: value for key, value in claimed_manifest.items() if key != "manifest_hash"}
     )
@@ -923,6 +935,7 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
     repository.attempt["artifact_manifest_json"] = claimed_manifest
     collected = asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
     assert collected.result_manifest["submission_artifact_manifest_hash"] == claimed_manifest["manifest_hash"]
+    assert collected.result_manifest["remote_runtime_file_manifest"] == runtime_manifest
     assert collected.result_manifest["remote_runtime_artifact_bindings"] == bindings
 
 

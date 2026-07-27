@@ -254,6 +254,18 @@ BUG-878 远端运行时制品传输补证（2026-07-27）：BUG-872 两-child wi
 
 BUG-881 retry 选择身份补证（2026-07-27）：BUG-878 合入并重启后，原 canary 的 exact-snapshot retry 正确记录源 run lineage，但 `DurableCombineSubmissionService._replace_run_async` 在强制异步时遗漏 `prediction_task_selection`，导致后继 run 从目标 2 个 child 膨胀为 baseline、equal scheme 和 4 个 LOO，共 6 个 child。该 retry run 已提交 durable cancel 并保留全部 append-only 证据，未用于 Alpha 判断，正式 R13A 仍未提交。修复不再手工逐字段重建 `CombineBacktestRequest`：通用 request replace 与 run-async override 均使用 dataclass `replace`，新增字段自动守恒；回归覆盖 exact snapshot 恢复、异步覆盖、持久化 `_combine_request_v1` 和 deterministic child planning，明确断言后继仅包含 `baseline:leg_a` 与 `scheme:equal` 两个 child。合入和用户重启后再次从原失败 canary 执行 exact-snapshot retry。
 
+BUG-883 运行资产协议加固（2026-07-27）：BUG-878 的真实 Parquet CAS
+路径保持不变，但不再依靠“顶层文件 + parquet 后缀”推断运行资产。每次远端
+提交先生成并持久化 `multi_alpha_remote_runtime_file_manifest_v1`，逐文件冻结
+安全相对路径、SHA256、size、text/binary 类型和 `small_text / small_binary /
+cas / empty_file` 传输语义。顶层契约内小文件继续使用 `qe_file_sync`；嵌套
+运行模块及超过 Base64 10MB 契约的任意非空运行资产使用内容寻址 CAS，qrun
+前逐项校验大小与 SHA256、建立必要父目录并链接；空文件按 manifest 显式创建。
+manifest 与本地字节不一致、CAS binding 缺失或路径不安全均显式失败，不静默
+遗漏。`__pycache__`、`.pyc`、`.pyo` 不进入传输清单或 runtime-template
+identity；真实 Python 源文件变化仍会改变身份。该修复只作用于 QE multi-alpha
+远端运行资产，不改变 overlay 计算、策略参数、研究方向或其他模块运行时。
+
 ## 12. DESIGN-COMPLIANCE-001
 
 - [x] 设计覆盖运行制品、策略、配置、组合回测、评价和隔离，不交付缺臂实现。
