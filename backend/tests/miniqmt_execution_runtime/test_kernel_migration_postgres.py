@@ -112,7 +112,10 @@ def _base_fixture_sql(schema: str) -> str:
     return f"""
     CREATE SCHEMA {schema};
     CREATE TABLE {schema}.execution_runtime (
-        runtime_id TEXT PRIMARY KEY, trade_date DATE NOT NULL
+        runtime_id TEXT PRIMARY KEY, trade_date DATE NOT NULL,
+        last_event_sequence INTEGER NOT NULL DEFAULT 0,
+        archived_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE {schema}.execution_runtime_event (
         event_id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL REFERENCES {schema}.execution_runtime(runtime_id),
