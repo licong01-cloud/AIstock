@@ -1,5 +1,5 @@
 {
-  "actual": "Production read-only exact-key preflight on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves 466 daily_basic and 1093 moneyflow_ts apparent candidates. All 466 daily-basic dates are exact stock suspension dates: suspend_d exists, kline is absent, and Tushare also publishes no daily_basic row, so these are not local or H5 data loss and cannot be repaired by DML. Moneyflow breaks down as 302132.SZ=591, 689009.SH=497, 603326.SH=2, and 603595.SH/603081.SH/002951.SZ=1 each. The 591 302132.SZ dates have exact complete 300114.SZ source rows and are a cross-source code-identity mismatch after the same listed entity changed code; the other 502 rows are absent from Tushare's trade-date authority. No candidate has a same-identity authoritative provider row. Canonical observed price required-field gaps, current eligible non-suspended missing-price rows, stk_limit/up_limit gaps, and conflicting duplicate groups are zero. The blocking defect is the approved exact-previous-market-day circ_mv contract on suspension days, not database/H5 incompleteness. No production DML, alias rewrite, HMM fit, selection, model/READY, or runtime action has been executed.",
+  "actual": "Production read-only exact-key preflight on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves 466 daily_basic and 1093 moneyflow_ts apparent candidates. All 466 daily-basic dates are exact stock suspension dates and no DML candidate exists. C-009 source implementation resolves 591 moneyflow rows through immutable 302132.SZ -> 300114.SZ dataset-specific identity, preserves 502 provider-audit-bound absences as explicit NA, and resolves 348 causal circ_mv rows with maximum 30 market-trading-day staleness. The complete 601-day source-only preflight finished with no fits, selection, D6, model/READY, database write or runtime action, but correctly blocked on the existing train observation coverage contract: legacy L1=31/31 valid, legacy L2=130/131 valid with 801881.SI at 96 rows, autocycle L1=0/31 valid and autocycle L2=0/131 valid. No coverage threshold, rolling window, cross-section completeness, universe, hard semantic authority or model logic was changed.",
   "allowed_write_scope": [
     "backend/services/hmm_risk/security_identity.py",
     "backend/services/hmm_risk/provider_absence.py",
@@ -60,6 +60,12 @@
       "actor": "user",
       "note": "Approved C-009-A/B/C/D and expanded BUG-877 for the source-specific security resolver, causal circ_mv as-of, provider-absence NA evidence, and a 601-trading-day read-only preflight. Production DML, 5184 fits, selection, D6, model/READY, runtime actions, and source merge remain outside this authorization.",
       "timestamp": "2026-07-27T02:42:07.1188081Z"
+    },
+    {
+      "action": "complete_c009_source_and_block_on_train_coverage",
+      "actor": "codex",
+      "note": "Implemented immutable security source identity, provider-absence NA evidence, causal circ_mv as-of, and bounded split-query execution. The 601-day read-only preflight completed with exact 591 alias, 502 provider absence and 348 stale circ_mv evidence, then failed closed because all four family/level train coverage receipts were not complete. No training, selection, D6, model/READY, DML or runtime action was executed.",
+      "timestamp": "2026-07-27T05:34:56.6918588Z"
     }
   ],
   "evidence_uris": [
@@ -80,7 +86,10 @@
     "Feature Workflow F2 validation: PASS, design_items=3, matrix_rows=8, warnings=0",
     "provider audit first run failed explicitly on HTTP proxy read timeout; bounded three-attempt typed retry was added and partial results were not accepted",
     "completed Tushare daily-basic audit: exact provider rows=0/466; missing=466; no partial result accepted",
-    "suspension lineage: 466/466 daily-basic candidate dates have suspend_d, 0/466 have kline, and 0/466 are unexplained"
+    "suspension lineage: 466/466 daily-basic candidate dates have suspend_d, 0/466 have kline, and 0/466 are unexplained",
+    "tmp/validation/hmm_risk/bug877_c009_stock_fact_preflight.json: 601 trading dates, canonical report sha256=b45d71d318e6793728dc8d570bd84be7d39f67e9d72937848b346fe4c37077d2, status=blocked, fit/selection/D6/model/READY/database/runtime=false",
+    "C-009 source statistics: alias=591 provider_absence=502 causal_circ_mv_stale=348 max_staleness_trading_days=30",
+    "C-009 train coverage: legacy L1=31/31, legacy L2=130/131 (801881.SI=96), autocycle L1=0/31, autocycle L2=0/131; failure=hmm_risk_model_train_observation_coverage_insufficient"
   ],
   "expected": "The HMM stock-fact contract must distinguish suspension-day absence, true provider absence, and cross-source security-code identity without fabricating database rows. Production DML is allowed only for an exact same-identity authoritative provider row; none currently exist. A suspension-aware causal circ_mv as-of contract may use only a source date before t, must persist source date/staleness, and must fail closed when no causal row exists, but this business-contract change requires explicit user approval before implementation or retraining.",
   "file_scope_contract": {
@@ -138,7 +147,7 @@
   "fixed_at": null,
   "github_issue_number": 2772,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2772",
-  "last_seen_at": "2026-07-26T17:21:23.347912Z",
+  "last_seen_at": "2026-07-27T05:34:56.6918588Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not restart production runtime services without explicit approval.",
@@ -151,7 +160,8 @@
   "reproduce_command": "Run the BUG-877 production read-only exact-key preflight for 2022-01-01..2024-06-30; expect daily_basic=466, moneyflow_ts=1093, candidate_key_sha256=a69df9ec676031541824c314f154403a41fe596c410c933ebfba55aef0f696f3, and no database writes.",
   "required_verification": [
     "l0",
-    "hmm_risk_backend"
+    "hmm_risk_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

@@ -792,6 +792,26 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
     回读与 frozen preflight 不写数据库。禁止以 Qlib 能保存 NA 证明 GaussianHMM 可接收 NaN，也禁止以单个代码正例、单一 family、
     单一 sector 或 plan-only artifact 代替完整实现验收。
 
+##### C-009 implementation/read-only preflight evidence（2026-07-27）
+
+1. `security_identity` resolver、provider-absence authority、causal `circ_mv` as-of、row/aggregate evidence 与 C-009 CLI
+   已在 BUG-877 独立分支实现。生产读采用 `calendar_month_split_fact_stream_v1`：价格/PIT 映射使用 server-side cursor，
+   `daily_basic/moneyflow_ts/stk_limit` 使用 date-bounded exact-key maps，causal `circ_mv` 只从 authoritative
+   `daily_basic` 状态推进；该拆分只改变查询执行计划，不改变 source identity、coverage、feature 或 semantic authority。
+2. 601 日只读 preflight 已完整执行，receipt 为
+   `tmp/validation/hmm_risk/bug877_c009_stock_fact_preflight.json`，canonical SHA-256=
+   `b45d71d318e6793728dc8d570bd84be7d39f67e9d72937848b346fe4c37077d2`，内部 receipt SHA-256=
+   `5b55fe57d14c8fe9c50ae4f468a09496c4255387b62ad8c0e37448ed635a1c58`。source statistics 精确为：
+   moneyflow alias=591、provider absence=502、causal stale circ-mv=348、最大 staleness=30 个市场交易日；
+   `fit/selection/D5/D6/model/READY/database/runtime` 均未执行。
+3. preflight 正确 fail closed 为 `blocked/hmm_risk_model_train_observation_coverage_insufficient`，不是 source 实现成功后伪造
+   READY：legacy L1=31/31 合格；legacy L2=130/131 合格，`801881.SI` 仅 96 行；autocycle L1=0/31、
+   autocycle L2=0/131 合格。直接原因是 provider-absence NA 继续服从已批准 0.90 count/weight coverage，invalid sector/date
+   又与 autocycle 的 120/250-day rolling 及 exact complete cross-section 合同组合；不得通过填 0、前值、行业代理、删除
+   `689009.SH`、放宽 coverage、降低 rolling min-periods 或允许 incomplete cross-section 来伪造 120 行。
+4. 因此 C-009-A/B/C 的 source implementation 已闭合，C-009-D 的 601 日执行已闭合但验收结果为 blocked；F-011 保持
+   blocked。下一步必须先形成独立 train-coverage 根因/合同决策，不得在本 BUG 内自行迁移业务逻辑，也不得恢复 5184 fits。
+
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 
 1. **失败事实**：clean producer `1ad5ff6209d723c41537d51b1d2d750a95a2e371` 的 identity preflight 通过后，
@@ -1699,11 +1719,11 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D4-L2-AUDIT-01 | 既有 L2 131/131 是否具备可按 D4-01-A/D4-02-A 回读的 immutable training/numeric receipt | `VERIFIED_FAIL_CLOSED_LIKELIHOOD_INSUFFICIENT_COVARIANCE_FAILED` | 13/13 candidate snapshot 收敛为 legacy 9 + autocycle 4 两份 exact SHA；两者均缺完整 D4-01 history，262/262 entry 均有 post-fit covariance 修正。likelihood 保持 insufficient、covariance 为 failed；禁止 grandfather、补 metadata、复制 L1 evidence 或 READY |
 | C-008-B3-D4-L2-RETRAIN-DESIGN-A | 是否在不覆盖历史 artifact 的前提下，以冻结输入和已批准 D3/D4 合同受控重训两 family 的 131/131 direct L2 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_EXECUTION_BLOCKED_BUG868` | 使用 `hmm_risk_c008_b3_l2_retrain_a_v1`、重新冻结的 dataset/mapping/direct-L2、seeds 42..49、两 fresh process；2096 L2 fits/process、4192 L2 fits total。源码、边界测试与 Conda 依赖已完成；实际 fit 在启动前被 BUG-868 阻断，selection、model/READY 和 runtime 均未执行 |
 | BUG-868-A | 正式 B3 是否保留 exact previous-trading-date 语义并重新冻结与当前 source 一致的 L1/L2 identities | `RESOLVED_USER_APPROVED_REFREEZE_PREFLIGHT_MERGED` | 保留 `previous_basic_date == previous_trade_date`；正式 identity 固定为 dataset `c07177…`、mapping `9cdddd…`、direct L2 `d4a5cc…`。source PR #2748 merge `44bc9e8a…`、close-sync PR #2752 merge `1ad5ff62…`；旧 `fca206…` 仅为历史诊断 identity |
-| BUG-877 | frozen train source 的 exact daily-basic 与 moneyflow symbol-key 缺口如何受控修复 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTATION_IN_PROGRESS` | 466/466 daily-basic 候选是停牌日且 Tushare 不发布 row；1093 moneyflow 中 591 为旧/新代码 identity、502 为 provider absence；没有可合法 DML 的同 identity provider row，production DML=noop；用户已批准 C-009-A/B/C/D 的 source 实现与 601 日只读预检 |
-| C-009-A | 停牌导致前一市场交易日无 daily-basic 时如何取得 causal circ_mv | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTATION_IN_PROGRESS` | 使用 `<t` 且 `<=prev_market_trade_date(t)` 的最新 authoritative circ_mv，并持久化 source date/staleness；无 causal row fail closed；不授权重训 |
-| C-009-B | 新旧证券代码如何在不改写 raw source 的前提下连接同一稳定证券身份 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTATION_IN_PROGRESS` | 使用 source-dataset-specific、effective-dated immutable identity manifest；零/多/重叠/冲突均 typed fail closed；禁止 hard-coded 单股 alias、名称猜测或 raw row 复制 |
-| C-009-C | Tushare authority 不存在的 stock/date moneyflow 如何使用 NA | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTATION_IN_PROGRESS` | 只有 provider-audit manifest 的 exact key 可在股票事实层保留 provider_absence NA；继续使用已批准 0.90 count/weight coverage，最终 HMM matrix 必须 finite；禁止 0/前值/均值/neutral/synthetic row，不新增 95% 或其他门禁 |
-| C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTATION_IN_PROGRESS` | identity 全量只读审计 -> resolver/as-of/NA evidence -> frozen 601-day preflight -> 独立 source review/merge -> 另行授权 5184 fits；本次不训练、不选择、不写 READY |
+| BUG-877 | frozen train source 的 exact daily-basic 与 moneyflow symbol-key 缺口如何受控修复 | `SOURCE_IMPLEMENTED_PREFLIGHT_BLOCKED_TRAIN_COVERAGE` | C-009 source 实现与 601 日只读 preflight 已完成；591 alias、502 provider absence、348 causal stale circ-mv 均有 hash evidence；preflight 因既有 train coverage 合同 blocked，禁止恢复训练 |
+| C-009-A | 停牌导致前一市场交易日无 daily-basic 时如何取得 causal circ_mv | `IMPLEMENTED_VERIFIED_READONLY` | 使用 `<t` 且 `<=prev_market_trade_date(t)` 的最新 authoritative circ_mv，并持久化 source date/staleness；无 causal row fail closed；601 日发现 348 个 stale key，最大 30 个市场交易日 |
+| C-009-B | 新旧证券代码如何在不改写 raw source 的前提下连接同一稳定证券身份 | `IMPLEMENTED_VERIFIED_READONLY` | immutable source-specific resolver 解析 591 个 moneyflow key；canonical/source/authority/hash evidence 完整，raw source 未改写 |
+| C-009-C | Tushare authority 不存在的 stock/date moneyflow 如何使用 NA | `IMPLEMENTED_VERIFIED_READONLY` | provider-audit manifest 精确绑定 502 个 NA key；继续执行 0.90 count/weight coverage，未填 0/前值/代理，因 coverage 不足正确 blocked |
+| C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
@@ -1746,7 +1766,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; `nox -s hmm_risk_backend` | APPROVED_BY_USER_SOURCE_IMPLEMENTATION_IN_PROGRESS | 用户已批准C-009-A/B/C/D；D3-D7与受控L2重训源码保留，但源码审核、601日只读preflight和独立source merge尚未闭合，完整正式fit/selection/D6/READY和Slice 1-3未执行 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; `nox -s hmm_risk_backend` | APPROVED_BY_USER_BLOCKED_C009_TRAIN_COVERAGE | C-009 source implementation 与 601 日只读 preflight 已闭合，但既有 0.90 coverage、autocycle rolling/cross-section 和 L2 `801881.SI` 使四个 family/level coverage 未完整；不得执行 fit/selection/D6/READY |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,stock_fact_repository,stock_fact_observation}.py`; C-007-A formulas；BUG-877/C-009 approved contracts | `backend/tests/hmm_risk/test_security_identity.py`; `backend/tests/hmm_risk/test_provider_absence.py`; `backend/tests/hmm_risk/test_stock_fact_repository.py`; `backend/tests/hmm_risk/test_stock_fact_observation.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; 601-day preflight receipt | APPROVED_BY_USER_SOURCE_IMPLEMENTATION_IN_PROGRESS | 466 suspension circ-mv、591 source-code identity 与 502 provider-absence NA 已获精确合同批准；须完成正式验证和只读preflight；保留既有0.90 coverage，不允许DML、填零或NaN进入HMM |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,state_model_set,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | 旧L2仍不可接受；正式新L2 identity只有执行完整受控重训后才形成，historical DIAG不反写正式 acceptance |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | hard authority与单一validation保持；真实selection/D6尚未执行，B2不采用 |
