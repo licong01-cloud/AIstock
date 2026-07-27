@@ -121,11 +121,11 @@ python scripts/aistock_feature_workflow.py validate \
   --tier F2
 result: PASS, 40/40 design items, 0 warnings
 
-changed Python compile: PASS, 60 files
+changed Python compile: PASS, 61 files
 changed-file Ruff: PASS
 git diff --check: PASS
-strict L0: PASS, 64 delivery files, 13 findings, 0 blocking findings
-strict ownership: PASS, 64 mapped, 0 unmapped, 0 ambiguous
+strict L0: PASS, 66 delivery files, 13 findings, 0 blocking findings
+strict ownership: PASS, 66 mapped, 0 unmapped, 0 ambiguous
 ```
 
 4 个 skip 是未注入显式 PostgreSQL/真实历史 batch root 的外部集成入口，不是捕获异常后转成成功。PostgreSQL adapter 的直接合同、frozen registry verifier、DEV migration 与生产历史 E2E 已分别执行，状态不互相冒充。
@@ -162,7 +162,7 @@ sealed_snapshot = true
 
 ### 4.4 Scope 与 ownership
 
-最终 latest-main ownership scan 覆盖 64 个交付文件：64 mapped、0 unmapped、0 ambiguous；已启用 `--fail-on-unmapped --fail-on-ambiguous`。冻结策略资产 `policy_registry/r4/v1.json` 已显式强制纳入 Git，根目录 `task_plan.md`、`findings.md`、`progress.md` 与过期 BUG metadata 未进入交付。Selection、Paper、Simulation、QE、Qlib、QMT 与前端均无 changed-file hit。
+最终 latest-main ownership scan 覆盖 66 个交付文件：66 mapped、0 unmapped、0 ambiguous；已启用 `--fail-on-unmapped --fail-on-ambiguous`。冻结策略资产 `policy_registry/r4/v1.json` 已显式强制纳入 Git；共享 Phase 1 R4 contract 已精确路由到 `advisory_historical_range_backend`，classifier 全套 49 项、module registry 8 项和 catalog integrity 6 项通过。根目录 `task_plan.md`、`findings.md`、`progress.md` 与过期 BUG metadata 未进入交付。Selection、Paper、Simulation、QE、Qlib、QMT 与前端均无 changed-file hit。
 
 Catalog routing 将 `advisory.historical_range` 映射到 `l0 + advisory_historical_range_backend`，两者均已执行。旧 ownership 规则把 `dataset_build.py` 与 `dataset_build_postgres.py` 泛化映射到 `local_data/data_sync_autonomy_backend`，但该 plan 实际只编译和测试 Tushare/TDX ingestion，与 R4 dataset contract 无共享行为；因此未运行该无关 suite，而是运行 219 项 Phase 1 capture/label/dataset/snapshot/release-schema 精确直接依赖矩阵。
 
