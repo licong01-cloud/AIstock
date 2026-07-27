@@ -1,0 +1,268 @@
+{
+  "actual": "In the R13A two-child canary, the equal child completed the remote Qlib backtest but durable reconciliation failed with qe_execution_reservation_owner_mismatch. The reservation remained owned by qe_submit_DESKTOP-* while the durable reconciler identified as macb-worker:*. record_authoritative_remote_status_for_source attempted an ordinary active-lease claim and could not finalize the authoritative remote terminal state. Fix must preserve fencing and prevent unrelated owners from stealing active work, while allowing the durable source owner to reconcile a proven terminal receipt for the exact reservation/source identity. Add concurrent/terminal and nonterminal anti-steal regressions; remain QE-only.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
+    "tests/aistock_validation/bugs/20260727_BUG-889-qe-multi-alpha-terminal-reconciliation-cannot-release-reservation-owned.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-889",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-27T16:17:26.347188Z",
+  "description": "In the R13A two-child canary, the equal child completed the remote Qlib backtest but durable reconciliation failed with qe_execution_reservation_owner_mismatch. The reservation remained owned by qe_submit_DESKTOP-* while the durable reconciler identified as macb-worker:*. record_authoritative_remote_status_for_source attempted an ordinary active-lease claim and could not finalize the authoritative remote terminal state. Fix must preserve fencing and prevent unrelated owners from stealing active work, while allowing the durable source owner to reconcile a proven terminal receipt for the exact reservation/source identity. Add concurrent/terminal and nonterminal anti-steal regressions; remain QE-only.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260727-8246497f0743",
+      "timestamp": "2026-07-27T16:17:26.347182Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "platform.db",
+        "qe.sector_risk_overlay",
+        "qe.long_trend_evaluation"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_active_execution_capacity.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md"
+    ]
+  },
+  "first_seen_at": "2026-07-27T16:17:26.347188Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2813,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2813",
+  "last_seen_at": "2026-07-27T16:17:26.347188Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE multi-alpha terminal reconciliation cannot release reservation owned by submission identity",
+  "trigger_condition": {
+    "fingerprint": "8246497f0743f59cf5e6e3ff",
+    "source_event_id": "FE-20260727-8246497f0743"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
