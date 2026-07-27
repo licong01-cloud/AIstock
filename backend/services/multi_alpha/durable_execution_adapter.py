@@ -48,6 +48,7 @@ from backend.services.multi_alpha.durable_repository import MultiAlphaDurableRep
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError
 from backend.services.multi_alpha.remote_dispatch import (
     WorkspaceArtifactSyncClient,
+    _build_remote_runtime_file_manifest,
     _remote_paths,
     _remote_small_files,
     _sync_remote_runtime_artifacts,
@@ -1274,22 +1275,29 @@ class QEWorkspacePredBacktestAdapter:
             artifact_manifest=l2_manifest,
             prediction_artifact_sha256=str(prediction_manifest["sha256"]),
         )
+        runtime_file_manifest = _build_remote_runtime_file_manifest(
+            workspace=artifacts.workspace,
+        )
         runtime_artifact_bindings = _sync_remote_runtime_artifacts(
             workspace=artifacts.workspace,
             node=node,
             node_id=intent.node_id,
             artifact_client=artifact_client,
             remote_paths=remote_paths,
+            runtime_file_manifest=runtime_file_manifest,
         )
         submission_artifact_manifest = dict(artifacts.artifact_manifest)
+        submission_artifact_manifest.pop("manifest_hash", None)
+        submission_artifact_manifest["remote_runtime_file_manifest"] = dict(
+            runtime_file_manifest
+        )
         if runtime_artifact_bindings:
-            submission_artifact_manifest.pop("manifest_hash", None)
             submission_artifact_manifest["remote_runtime_artifact_bindings"] = [
                 dict(item) for item in runtime_artifact_bindings
             ]
-            submission_artifact_manifest["manifest_hash"] = artifact_manifest_hash_for(
-                submission_artifact_manifest
-            )
+        submission_artifact_manifest["manifest_hash"] = artifact_manifest_hash_for(
+            submission_artifact_manifest
+        )
         remote_loop_index = _remote_loop_index_from_intent(intent.qe_loop_id)
         submission_backtest_config = {
             **dict(request.backtest_config),
@@ -1301,12 +1309,14 @@ class QEWorkspacePredBacktestAdapter:
             remote_paths=remote_paths,
             backtest_config=submission_backtest_config,
             runtime_artifact_bindings=runtime_artifact_bindings,
+            runtime_file_manifest=runtime_file_manifest,
         )
         experiment_files = _remote_small_files(
             workspace=artifacts.workspace,
             pred_pkl=artifacts.prediction_path,
             include_prediction=False,
             cas_bound_names={str(item["name"]) for item in runtime_artifact_bindings},
+            runtime_file_manifest=runtime_file_manifest,
         )
 
         def claim_source(cur: Any) -> Mapping[str, Any] | None:
@@ -1362,6 +1372,7 @@ class QEWorkspacePredBacktestAdapter:
                 "l2_artifact_manifest": dict(l2_manifest),
                 "prediction_artifact_manifest": dict(prediction_manifest),
                 "runtime_artifact_bindings": runtime_artifact_bindings,
+                "runtime_file_manifest": runtime_file_manifest,
                 "remote_paths": remote_paths,
             },
             experiment_files=experiment_files,
@@ -1620,6 +1631,16 @@ class QEWorkspacePredBacktestAdapter:
                     context={"attempt_id": intent.attempt_id},
                 )
             runtime_bindings = submitted_manifest.get("remote_runtime_artifact_bindings")
+            runtime_file_manifest = submitted_manifest.get("remote_runtime_file_manifest")
+            if runtime_file_manifest is not None:
+                if not isinstance(runtime_file_manifest, Mapping):
+                    raise DurableExecutionAdapterError(
+                        "persisted runtime file manifest is invalid",
+                        reason_code="multi_alpha_artifact_manifest_invalid",
+                        context={"attempt_id": intent.attempt_id},
+                    )
+                result_manifest["submission_artifact_manifest_hash"] = submitted_manifest_hash
+                result_manifest["remote_runtime_file_manifest"] = dict(runtime_file_manifest)
             if runtime_bindings is not None:
                 if not isinstance(runtime_bindings, list) or not all(
                     isinstance(item, Mapping) for item in runtime_bindings

@@ -4,7 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest
-from backend.services.multi_alpha.durable_identity import DurableExecutionIdentityResolver
+from backend.services.multi_alpha.durable_identity import (
+    DurableExecutionIdentityResolver,
+    _sha256_tree,
+)
 from backend.services.multi_alpha.durable_models import (
     DurableRunSpec,
     durable_run_request_payload,
@@ -191,6 +194,25 @@ def test_runtime_identity_does_not_dereference_node_bound_qe_data_links(
     assert resolution.complete is True
     assert resolution.identity is not None
     assert len(resolution.identity.payload["runtime"]["qlib_runtime_template_sha256"]) == 64
+
+
+def test_runtime_template_identity_excludes_python_cache_but_tracks_source(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    package = runtime / "aistock_models"
+    package.mkdir(parents=True)
+    source = package / "model.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    before = _sha256_tree(runtime)
+
+    cache = package / "__pycache__"
+    cache.mkdir()
+    (cache / "model.cpython-310.pyc").write_bytes(b"environment-specific-cache")
+    (package / "legacy.pyo").write_bytes(b"optimized-cache")
+
+    assert _sha256_tree(runtime) == before
+
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    assert _sha256_tree(runtime) != before
 
 
 def test_missing_dataset_manifest_is_visible_evidence_not_a_research_rejection(tmp_path: Path) -> None:
