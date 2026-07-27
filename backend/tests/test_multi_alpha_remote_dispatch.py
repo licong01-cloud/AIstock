@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -330,6 +331,23 @@ def test_remote_small_files_include_runtime_deps_and_exclude_outputs(tmp_path: P
     assert "qlib_results_enhanced.json" not in files
 
 
+def test_remote_small_text_preserves_exact_utf8_crlf_bytes(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    expected = b"first line\r\nsecond line\r\n"
+    for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / name).write_bytes(expected)
+
+    files = _remote_small_files(
+        workspace=workspace,
+        pred_pkl=workspace / "combined_prediction.pkl",
+        include_prediction=False,
+    )
+
+    assert set(files) == {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
+    assert all(content.encode("utf-8") == expected for content in files.values())
+
+
 def test_remote_small_file_scan_filters_factor_symlinks_before_windows_stat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -516,6 +534,17 @@ def test_runtime_file_manifest_covers_nested_assets_and_excludes_python_cache(
     assert "rglob" in command and "*.b64" in command
     assert entries["conf.yaml"]["sha256"] in command
     assert entries["aistock_models/model.py"]["sha256"] in command
+    assert "QE_RUNTIME_FILE_VERIFY_FAILED" in command
+    assert "kind=missing" in command
+    assert "kind=size" in command
+    assert "kind=sha256" in command
+    syntax = subprocess.run(
+        ["bash", "-n", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
 
 
 def test_runtime_file_manifest_detects_workspace_mutation(tmp_path: Path) -> None:

@@ -721,7 +721,8 @@ def _remote_small_files(
             files[f"{name}.b64"] = _b64_file(path)
         elif transfer == "small_text":
             try:
-                files[name] = path.read_text(encoding="utf-8")
+                raw = path.read_bytes()
+                files[name] = raw.decode("utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 raise MultiAlphaCombineBacktestError(
                     f"failed to package remote text workspace file: {type(exc).__name__}: {exc}",
@@ -1289,11 +1290,29 @@ def _remote_runtime_file_verify_commands(manifest: Mapping[str, Any]) -> str:
         quoted_name = _shell_quote(name)
         commands.extend(
             [
-                "test -f " + quoted_name + "; ",
-                "test \"$(stat -c %s -- " + quoted_name + ")\" -eq " + str(size) + "; ",
-                "test \"$(sha256sum -- " + quoted_name + " | awk '{print $1}')\" = "
+                "if [ ! -f "
+                + quoted_name
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=missing\\n' "
+                + quoted_name
+                + " >&2; exit 91; fi; ",
+                "runtime_observed_size=$(stat -c %s -- "
+                + quoted_name
+                + "); if [ \"$runtime_observed_size\" -ne "
+                + str(size)
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=size expected=%s observed=%s\\n' "
+                + quoted_name
+                + " "
+                + str(size)
+                + " \"$runtime_observed_size\" >&2; exit 92; fi; ",
+                "runtime_observed_sha256=$(sha256sum -- "
+                + quoted_name
+                + " | awk '{print $1}'); if [ \"$runtime_observed_sha256\" != "
                 + _shell_quote(sha256)
-                + "; ",
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=sha256 expected=%s observed=%s\\n' "
+                + quoted_name
+                + " "
+                + _shell_quote(sha256)
+                + " \"$runtime_observed_sha256\" >&2; exit 93; fi; ",
             ]
         )
     return "".join(commands)
