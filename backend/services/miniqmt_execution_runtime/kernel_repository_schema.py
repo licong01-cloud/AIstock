@@ -8,7 +8,7 @@ import psycopg2.extras
 from .kernel_repository_common import KernelRepositorySchemaError
 
 
-_K2_SCHEMA_CATALOG_SHA256 = "6e4fc4ae4c6e403d3316c124da6ae5933eb33184129569fd6bf1cf750e27f762"
+_K2_SCHEMA_CATALOG_SHA256 = "4c613f119a828c7ce3d1a9bac92113b803c93455802fb5b71b8a7ca2ac2743a5"
 
 _K2_CATALOG_QUERY = """
 WITH target_tables(relname) AS (

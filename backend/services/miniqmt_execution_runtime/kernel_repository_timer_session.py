@@ -8,6 +8,7 @@ from typing import Any, Sequence
 import psycopg2
 import psycopg2.extras
 
+from .plugin_canonical import canonical_utc_datetime_v1, thaw_json_v1
 from .kernel_repository_common import (
     KernelRepositoryConflict,
     _bounded_limit,
@@ -29,9 +30,13 @@ from .plugin_contracts import (
     DeliveryStatusV1,
     ExecutionAlgoTimerOccurrenceStatusV1,
     ExecutionAlgoTimerOccurrenceV1,
+    ExecutionAlgoTimerScheduleStatusV1,
     ExecutionAlgoTimerScheduleV1,
     ExchangeSessionAuthorityV1,
     KernelWorkerStartupReceiptV1,
+    TimerMutationTypeV1,
+    TimerMutationV1,
+    kernel_lease_fence_token_v1,
     transaction_commit_identity_v1,
 )
 
@@ -270,110 +275,110 @@ class KernelRepositoryTimerSessionMixin:
             self._verify_lease_owner(occurrence.lease_owner)
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_algo_timer_occurrence WHERE timer_occurrence_id=%s FOR UPDATE",
-                    (occurrence.timer_occurrence_id,),
-                )
-                row = cur.fetchone()
-                if row is not None:
-                    previous = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(row, "carrier_json"))
-                    if previous != occurrence:
-                        occurrence.validate_successor_v1(previous)
-                else:
-                    try:
-                        occurrence.validate_initial_v1()
-                    except ValueError as exc:
-                        raise KernelRepositoryConflict(
-                            "timer occurrence first write requires exact initial state"
-                        ) from exc
-                occurrence_projection = _timer_occurrence_scalar_projection(occurrence)
-                sql_values = (
-                    occurrence_projection["timer_occurrence_id"],
-                    occurrence_projection["schedule_id"],
-                    occurrence_projection["runtime_id"],
-                    occurrence_projection["algo_instance_id"],
-                    occurrence_projection["due_at_exchange_utc"],
-                    occurrence_projection["exchange_session_authority_sha256"],
-                    occurrence_projection["status"],
-                    occurrence_projection["emitted_event_id"],
-                    occurrence_projection["catch_up_receipt_sha256"],
-                    occurrence_projection["lease_owner"],
-                    occurrence_projection["lease_worker_id"],
-                    occurrence_projection["lease_process_incarnation_id"],
-                    occurrence_projection["lease_epoch"],
-                    occurrence_projection["lease_fence_token"],
-                    occurrence_projection["lease_expires_at_utc"],
-                    occurrence_projection["row_version"],
-                    occurrence_projection["created_at_utc"],
-                    occurrence_projection["closed_at_utc"],
-                    occurrence_projection["occurrence_receipt_sha256"],
-                    _json(occurrence.model_dump(mode="json")),
-                )
-                if row is None:
-                    cur.execute(
-                        """
-                    INSERT INTO qmt_strategy.execution_algo_timer_occurrence(
-                        timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,
-                        exchange_session_authority_sha256,status,emitted_event_id,catch_up_receipt_sha256,
-                        lease_owner,lease_worker_id,
-                        lease_process_incarnation_id,lease_epoch,lease_fence_token,lease_expires_at_utc,row_version,
-                        created_at_utc,closed_at_utc,occurrence_receipt_sha256,carrier_json
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT DO NOTHING
-                        """,
-                        sql_values,
-                    )
-                elif previous != occurrence:
-                    cur.execute(
-                        """
-                        UPDATE qmt_strategy.execution_algo_timer_occurrence
-                        SET status=%s,emitted_event_id=%s,catch_up_receipt_sha256=%s,
-                            lease_owner=%s,lease_worker_id=%s,
-                            lease_process_incarnation_id=%s,lease_epoch=%s,lease_fence_token=%s,
-                            lease_expires_at_utc=%s,row_version=%s,closed_at_utc=%s,
-                            occurrence_receipt_sha256=%s,carrier_json=%s
-                        WHERE timer_occurrence_id=%s AND row_version=%s
-                          AND lease_owner IS NOT DISTINCT FROM %s
-                          AND lease_epoch=%s
-                          AND lease_fence_token IS NOT DISTINCT FROM %s
-                        """,
-                        (
-                            occurrence_projection["status"],
-                            occurrence_projection["emitted_event_id"],
-                            occurrence_projection["catch_up_receipt_sha256"],
-                            occurrence_projection["lease_owner"],
-                            occurrence_projection["lease_worker_id"],
-                            occurrence_projection["lease_process_incarnation_id"],
-                            occurrence_projection["lease_epoch"],
-                            occurrence_projection["lease_fence_token"],
-                            occurrence_projection["lease_expires_at_utc"],
-                            occurrence_projection["row_version"],
-                            occurrence_projection["closed_at_utc"],
-                            occurrence_projection["occurrence_receipt_sha256"],
-                            _json(occurrence.model_dump(mode="json")),
-                            occurrence_projection["timer_occurrence_id"],
-                            previous.row_version,
-                            previous.lease_owner,
-                            previous.lease_epoch,
-                            previous.lease_fence_token,
-                        ),
-                    )
-                    if cur.rowcount != 1:
-                        raise KernelRepositoryConflict("timer occurrence CAS failed")
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_algo_timer_occurrence WHERE timer_occurrence_id=%s",
-                    (occurrence.timer_occurrence_id,),
-                )
-                persisted_row = cur.fetchone()
-                if persisted_row is None:
-                    raise KernelRepositoryConflict("timer occurrence write did not persist its identity")
-                persisted = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(persisted_row, "carrier_json"))
-                if persisted != occurrence:
-                    raise KernelRepositoryConflict("timer occurrence identity exists with different immutable payload")
+                self._write_timer_occurrence_with_cursor(cur, occurrence)
         readback = self.read_timer_occurrence(occurrence.timer_occurrence_id)
         if readback != occurrence:
             raise KernelRepositoryConflict("timer occurrence post-commit readback differs from writer payload")
         return readback
+
+    def _write_timer_occurrence_with_cursor(self, cur: Any, occurrence: ExecutionAlgoTimerOccurrenceV1) -> None:
+        cur.execute(
+            "SELECT carrier_json FROM qmt_strategy.execution_algo_timer_occurrence "
+            "WHERE timer_occurrence_id=%s FOR UPDATE",
+            (occurrence.timer_occurrence_id,),
+        )
+        row = cur.fetchone()
+        previous = None
+        if row is not None:
+            previous = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(row, "carrier_json"))
+            if previous != occurrence:
+                occurrence.validate_successor_v1(previous)
+        else:
+            try:
+                occurrence.validate_initial_v1()
+            except ValueError as exc:
+                raise KernelRepositoryConflict("timer occurrence first write requires exact initial state") from exc
+        projection = _timer_occurrence_scalar_projection(occurrence)
+        if row is None:
+            cur.execute(
+                """
+                INSERT INTO qmt_strategy.execution_algo_timer_occurrence(
+                    timer_occurrence_id,schedule_id,runtime_id,algo_instance_id,due_at_exchange_utc,
+                    exchange_session_authority_sha256,status,emitted_event_id,catch_up_receipt_sha256,
+                    lease_owner,lease_worker_id,lease_process_incarnation_id,lease_epoch,lease_fence_token,
+                    lease_expires_at_utc,row_version,created_at_utc,closed_at_utc,
+                    occurrence_receipt_sha256,carrier_json
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    projection["timer_occurrence_id"],
+                    projection["schedule_id"],
+                    projection["runtime_id"],
+                    projection["algo_instance_id"],
+                    projection["due_at_exchange_utc"],
+                    projection["exchange_session_authority_sha256"],
+                    projection["status"],
+                    projection["emitted_event_id"],
+                    projection["catch_up_receipt_sha256"],
+                    projection["lease_owner"],
+                    projection["lease_worker_id"],
+                    projection["lease_process_incarnation_id"],
+                    projection["lease_epoch"],
+                    projection["lease_fence_token"],
+                    projection["lease_expires_at_utc"],
+                    projection["row_version"],
+                    projection["created_at_utc"],
+                    projection["closed_at_utc"],
+                    projection["occurrence_receipt_sha256"],
+                    _json(occurrence.model_dump(mode="json")),
+                ),
+            )
+        elif previous != occurrence:
+            cur.execute(
+                """
+                UPDATE qmt_strategy.execution_algo_timer_occurrence
+                SET status=%s,emitted_event_id=%s,catch_up_receipt_sha256=%s,
+                    lease_owner=%s,lease_worker_id=%s,lease_process_incarnation_id=%s,
+                    lease_epoch=%s,lease_fence_token=%s,lease_expires_at_utc=%s,row_version=%s,
+                    closed_at_utc=%s,occurrence_receipt_sha256=%s,carrier_json=%s
+                WHERE timer_occurrence_id=%s AND row_version=%s
+                  AND lease_owner IS NOT DISTINCT FROM %s AND lease_epoch=%s
+                  AND lease_fence_token IS NOT DISTINCT FROM %s
+                """,
+                (
+                    projection["status"],
+                    projection["emitted_event_id"],
+                    projection["catch_up_receipt_sha256"],
+                    projection["lease_owner"],
+                    projection["lease_worker_id"],
+                    projection["lease_process_incarnation_id"],
+                    projection["lease_epoch"],
+                    projection["lease_fence_token"],
+                    projection["lease_expires_at_utc"],
+                    projection["row_version"],
+                    projection["closed_at_utc"],
+                    projection["occurrence_receipt_sha256"],
+                    _json(occurrence.model_dump(mode="json")),
+                    projection["timer_occurrence_id"],
+                    previous.row_version,
+                    previous.lease_owner,
+                    previous.lease_epoch,
+                    previous.lease_fence_token,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise KernelRepositoryConflict("timer occurrence CAS failed")
+        cur.execute(
+            "SELECT carrier_json FROM qmt_strategy.execution_algo_timer_occurrence WHERE timer_occurrence_id=%s",
+            (occurrence.timer_occurrence_id,),
+        )
+        persisted_row = cur.fetchone()
+        if persisted_row is None:
+            raise KernelRepositoryConflict("timer occurrence write did not persist its identity")
+        persisted = _model_from_json(ExecutionAlgoTimerOccurrenceV1, _row_json(persisted_row, "carrier_json"))
+        if persisted != occurrence:
+            raise KernelRepositoryConflict("timer occurrence identity exists with different immutable payload")
 
     def read_timer_schedule(self, schedule_id: str) -> ExecutionAlgoTimerScheduleV1:
         with self._connection(transaction=False) as conn:
@@ -509,6 +514,251 @@ class KernelRepositoryTimerSessionMixin:
         if row["exchange_trade_date"] != row["runtime_trade_date"]:
             raise KernelRepositoryConflict("exchange-session trade date drifts from runtime owner")
         return authority
+
+    def read_runtime_last_event_sequence(self, runtime_id: str) -> int:
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise ValueError("runtime_id must be a non-empty trim-stable strict string")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT last_event_sequence,archived_at FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        if row["archived_at"] is not None:
+            raise KernelRepositoryConflict("cannot allocate a clock event for an archived runtime")
+        sequence = row["last_event_sequence"]
+        if type(sequence) is not int or sequence < 0:
+            raise KernelRepositoryConflict("runtime last_event_sequence is not a non-negative strict integer")
+        return sequence
+
+    def claim_due_timer_schedules_atomic(
+        self,
+        *,
+        runtime_id: str,
+        exchange_trade_date: date,
+        exchange_session_authority_sha256: str,
+        due_cutoff_at_utc: Any,
+        observed_at_utc: Any,
+        lease_owner: str,
+        lease_expires_at_utc: Any,
+        eligible_algo_statuses: Sequence[str],
+        limit: int,
+    ) -> tuple[tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1], ...]:
+        """Atomically claim/reclaim bounded due schedule+occurrence pairs."""
+
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("timer claim limit must be a strict integer in [1, 200]")
+        if type(exchange_trade_date) is not date:
+            raise TypeError("exchange_trade_date must be an exact date")
+        observed = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        cutoff = canonical_utc_datetime_v1(due_cutoff_at_utc, field_name="due_cutoff_at_utc")
+        lease_expiry = canonical_utc_datetime_v1(lease_expires_at_utc, field_name="lease_expires_at_utc")
+        if cutoff > observed:
+            raise ValueError("timer due cutoff cannot be later than observed_at_utc")
+        if lease_expiry <= observed:
+            raise ValueError("timer claim lease expiry must be later than observed_at_utc")
+        exact_algo_statuses = tuple(eligible_algo_statuses)
+        if (
+            not exact_algo_statuses
+            or len(set(exact_algo_statuses)) != len(exact_algo_statuses)
+            or any(status not in {"ACTIVE", "PAUSED"} for status in exact_algo_statuses)
+        ):
+            raise ValueError("eligible_algo_statuses must be a non-empty unique ACTIVE/PAUSED subset")
+        worker_id, separator, process_incarnation_id = lease_owner.partition(":")
+        if not separator or not worker_id or not process_incarnation_id:
+            raise ValueError("lease_owner must be worker_id:process_incarnation_id")
+        claimed: list[tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1]] = []
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM qmt_strategy.execution_kernel_worker_incarnation
+                    WHERE worker_id=%s AND process_incarnation_id=%s
+                    """,
+                    (worker_id, process_incarnation_id),
+                )
+                if cur.fetchone() is None:
+                    raise KernelRepositoryConflict("timer claim references unknown worker incarnation")
+                cur.execute(
+                    """
+                    SELECT authority_json FROM qmt_strategy.execution_exchange_session_authority
+                    WHERE runtime_id=%s AND exchange_trade_date=%s FOR SHARE
+                    """,
+                    (runtime_id, exchange_trade_date),
+                )
+                authority_row = cur.fetchone()
+                if authority_row is None:
+                    raise KernelRepositoryConflict("timer claim has no durable exchange-session authority")
+                authority = _model_from_json(
+                    ExchangeSessionAuthorityV1,
+                    _row_json(authority_row, "authority_json"),
+                )
+                if authority.authority_sha256 != exchange_session_authority_sha256:
+                    raise KernelRepositoryConflict("timer claim exchange-session authority hash drift")
+                cur.execute(
+                    """
+                    SELECT schedule.carrier_json
+                    FROM qmt_strategy.execution_algo_timer_schedule AS schedule
+                    JOIN qmt_strategy.execution_algo_instance AS algo
+                      ON algo.runtime_id=schedule.runtime_id
+                     AND algo.algo_instance_id=schedule.algo_instance_id
+                    WHERE schedule.runtime_id=%s AND schedule.due_at_exchange_utc<=%s
+                      AND algo.status=ANY(%s::text[])
+                      AND (
+                        schedule.status='SCHEDULED'
+                        OR (schedule.status='EMITTING' AND schedule.lease_expires_at_utc<=%s)
+                      )
+                    ORDER BY schedule.due_at_exchange_utc,schedule.schedule_id
+                    LIMIT %s
+                    FOR UPDATE OF schedule SKIP LOCKED
+                    """,
+                    (runtime_id, cutoff, list(exact_algo_statuses), observed, limit),
+                )
+                schedules = tuple(
+                    _model_from_json(ExecutionAlgoTimerScheduleV1, _row_json(row, "carrier_json"))
+                    for row in cur.fetchall()
+                )
+                for previous_schedule in schedules:
+                    cur.execute(
+                        "SELECT carrier_json FROM qmt_strategy.execution_algo_timer_occurrence "
+                        "WHERE timer_occurrence_id=%s FOR UPDATE",
+                        (previous_schedule.timer_occurrence_id,),
+                    )
+                    occurrence_row = cur.fetchone()
+                    previous_occurrence = (
+                        None
+                        if occurrence_row is None
+                        else _model_from_json(
+                            ExecutionAlgoTimerOccurrenceV1,
+                            _row_json(occurrence_row, "carrier_json"),
+                        )
+                    )
+                    if previous_schedule.status is ExecutionAlgoTimerScheduleStatusV1.SCHEDULED:
+                        if previous_occurrence is not None:
+                            raise KernelRepositoryConflict(
+                                "SCHEDULED timer already has an occurrence and cannot be claimed"
+                            )
+                    elif (
+                        previous_occurrence is None
+                        or previous_occurrence.status is not ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED
+                        or previous_occurrence.lease_expires_at_utc is None
+                        or previous_occurrence.lease_expires_at_utc > observed
+                        or previous_occurrence.lease_epoch != previous_schedule.lease_epoch
+                        or previous_occurrence.lease_owner != previous_schedule.lease_owner
+                    ):
+                        raise KernelRepositoryConflict(
+                            "stale EMITTING timer does not have one matching expired CLAIMED occurrence"
+                        )
+                    lease_epoch = previous_schedule.lease_epoch + 1
+                    mutation = TimerMutationV1.create(
+                        mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
+                        algo_instance_id=previous_schedule.algo_instance_id,
+                        transition_id=f"mqtimerclaim_{lease_epoch}",
+                        ordinal=0,
+                        timer_name=previous_schedule.timer_name,
+                        schedule_epoch=previous_schedule.schedule_epoch,
+                        due_at_exchange_utc=previous_schedule.due_at_exchange_utc,
+                        catch_up_policy=previous_schedule.catch_up_policy,
+                        payload=thaw_json_v1(previous_schedule.payload),
+                    )
+                    schedule = ExecutionAlgoTimerScheduleV1.create(
+                        runtime_id=previous_schedule.runtime_id,
+                        mutation=mutation,
+                        status=ExecutionAlgoTimerScheduleStatusV1.EMITTING,
+                        emitted_event_id=None,
+                        lease_owner=lease_owner,
+                        lease_epoch=lease_epoch,
+                        lease_fence_token=kernel_lease_fence_token_v1(
+                            owner_type="TIMER_SCHEDULE",
+                            owner_id=previous_schedule.schedule_id,
+                            lease_epoch=lease_epoch,
+                            lease_owner=lease_owner,
+                        ),
+                        lease_expires_at_utc=lease_expiry,
+                        row_version=previous_schedule.row_version + 1,
+                        created_at_utc=previous_schedule.created_at_utc,
+                        updated_at_utc=observed,
+                        closed_at_utc=None,
+                    )
+                    occurrence = ExecutionAlgoTimerOccurrenceV1.create(
+                        schedule=schedule,
+                        exchange_session_authority_sha256=exchange_session_authority_sha256,
+                        status=ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
+                        emitted_event_id=None,
+                        catch_up_receipt_sha256=None,
+                        lease_owner=lease_owner,
+                        lease_epoch=lease_epoch,
+                        lease_fence_token=kernel_lease_fence_token_v1(
+                            owner_type="TIMER_OCCURRENCE",
+                            owner_id=schedule.timer_occurrence_id,
+                            lease_epoch=lease_epoch,
+                            lease_owner=lease_owner,
+                        ),
+                        lease_expires_at_utc=lease_expiry,
+                        row_version=1 if previous_occurrence is None else previous_occurrence.row_version + 1,
+                        created_at_utc=observed if previous_occurrence is None else previous_occurrence.created_at_utc,
+                        closed_at_utc=None,
+                    )
+                    schedule.validate_successor_v1(previous_schedule)
+                    if previous_occurrence is not None:
+                        occurrence.validate_successor_v1(previous_occurrence)
+                    self._write_timer_schedule_with_cursor(cur, schedule)
+                    self._write_timer_occurrence_with_cursor(cur, occurrence)
+                    claimed.append((schedule, occurrence))
+        readback: list[tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1]] = []
+        for schedule, occurrence in claimed:
+            persisted = (
+                self.read_timer_schedule(schedule.schedule_id),
+                self.read_timer_occurrence(occurrence.timer_occurrence_id),
+            )
+            if persisted != (schedule, occurrence):
+                raise KernelRepositoryConflict("timer claim post-commit readback differs from atomic writer payload")
+            readback.append(persisted)
+        return tuple(readback)
+
+    def finalize_timer_claim_atomic(
+        self,
+        *,
+        schedule: ExecutionAlgoTimerScheduleV1,
+        occurrence: ExecutionAlgoTimerOccurrenceV1,
+    ) -> tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1]:
+        if not isinstance(schedule, ExecutionAlgoTimerScheduleV1) or not isinstance(
+            occurrence, ExecutionAlgoTimerOccurrenceV1
+        ):
+            raise TypeError("timer finalization requires strict schedule and occurrence carriers")
+        allowed_pairs = {
+            (
+                ExecutionAlgoTimerScheduleStatusV1.EMITTED,
+                ExecutionAlgoTimerOccurrenceStatusV1.EVENT_COMMITTED,
+            ),
+            (ExecutionAlgoTimerScheduleStatusV1.EXPIRED, ExecutionAlgoTimerOccurrenceStatusV1.SKIPPED),
+            (ExecutionAlgoTimerScheduleStatusV1.EXPIRED, ExecutionAlgoTimerOccurrenceStatusV1.EXPIRED),
+        }
+        if (schedule.status, occurrence.status) not in allowed_pairs:
+            raise ValueError("timer finalization status pair is not registered")
+        if (
+            schedule.runtime_id != occurrence.runtime_id
+            or schedule.schedule_id != occurrence.schedule_id
+            or schedule.timer_occurrence_id != occurrence.timer_occurrence_id
+            or schedule.algo_instance_id != occurrence.algo_instance_id
+            or schedule.lease_epoch != occurrence.lease_epoch
+            or schedule.emitted_event_id != occurrence.emitted_event_id
+        ):
+            raise ValueError("timer finalization carriers do not form one exact occurrence closure")
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                self._write_timer_occurrence_with_cursor(cur, occurrence)
+                self._write_timer_schedule_with_cursor(cur, schedule)
+        readback = (
+            self.read_timer_schedule(schedule.schedule_id),
+            self.read_timer_occurrence(occurrence.timer_occurrence_id),
+        )
+        if readback != (schedule, occurrence):
+            raise KernelRepositoryConflict("timer finalization post-commit readback differs from atomic writer payload")
+        return readback
 
     def list_recovery_deliveries(
         self, *, runtime_id: str, trade_date: date, statuses: Sequence[str], limit: int

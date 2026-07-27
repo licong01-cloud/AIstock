@@ -16,6 +16,9 @@ MIGRATION_ROOT = REPO_ROOT / "backend" / "migrations"
 PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k2_20260725.preflight.sql"
 FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k2_20260725.sql"
 ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2_20260725.rollback.sql"
+K2C_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.preflight.sql"
+K2C_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.sql"
+K2C_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_20260727.rollback.sql"
 
 
 def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> None:
@@ -57,6 +60,58 @@ def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> No
     assert "FAILED_WITH_ACTIVE_CHILD" not in _algo_status_check(forward)
     assert "kernel_v2_fact_count" in rollback
     assert "destructive rollback refused" in rollback
+
+
+def test_k2c_timer_reclaim_migration_is_additive_idempotent_and_guarded() -> None:
+    preflight = K2C_PREFLIGHT.read_text(encoding="utf-8")
+    forward = K2C_FORWARD.read_text(encoding="utf-8")
+    rollback = K2C_ROLLBACK.read_text(encoding="utf-8")
+    canonical_forward = forward.replace("\r\n", "\n").replace("\r", "\n")
+    expected_forward_sha256 = hashlib.sha256(canonical_forward.encode("utf-8")).hexdigest()
+    assert "SET TRANSACTION READ ONLY" in preflight
+    assert "legacy_invalid_row_count" in preflight
+    assert f"'{expected_forward_sha256}'::TEXT AS expected_migration_sha256" in preflight
+    assert "row_version = lease_epoch" in forward
+    assert "VALIDATE CONSTRAINT ck_miniqmt_k2_timer_occurrence_initial" in forward
+    assert "K2-C post-commit readback drift" in forward
+    assert "reclaimed_claim_count" in rollback
+    assert "destructive rollback refused" in rollback
+
+
+def test_k2c_timer_reclaim_migration_preflight_forward_second_apply_and_rollback_on_dev() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            base_forward = FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            _apply_base_forward(cur, base_forward)
+            cur.execute(K2C_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            k2c_forward = K2C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            cur.execute(k2c_forward)
+            cur.execute(k2c_forward)
+            cur.execute(
+                "SELECT pg_get_constraintdef(oid,true) FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND conname='ck_miniqmt_k2_timer_occurrence_initial'",
+                (f"{schema}.execution_algo_timer_occurrence",),
+            )
+            assert "row_version = lease_epoch" in str(cur.fetchone()[0])
+            cur.execute(K2C_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                "SELECT pg_get_constraintdef(oid,true) FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND conname='ck_miniqmt_k2_timer_occurrence_initial'",
+                (f"{schema}.execution_algo_timer_occurrence",),
+            )
+            definition = str(cur.fetchone()[0])
+            assert "lease_epoch = 1" in definition and "row_version = 1" in definition
+    finally:
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
 
 
 def _algo_status_check(sql: str) -> str:
@@ -245,7 +300,7 @@ def _catalog_snapshot(cur: object, schema: str) -> tuple[tuple[object, ...], ...
     return tuple(tuple(row) for row in cur.fetchall())  # type: ignore[attr-defined]
 
 
-def _apply_forward(cur: object, forward: str) -> None:
+def _apply_base_forward(cur: object, forward: str) -> None:
     stage1, remainder = forward.split(
         "-- Stage 2: PostgreSQL requires CONCURRENTLY outside a transaction block.", maxsplit=1
     )
@@ -259,7 +314,27 @@ def _apply_forward(cur: object, forward: str) -> None:
     cur.execute(stage3)  # type: ignore[attr-defined]
 
 
+def _apply_forward(cur: object, forward: str) -> None:
+    match = re.search(r"ALTER TABLE ([A-Za-z0-9_]+)\.execution_runtime_event", forward)
+    target_schema = "qmt_strategy" if match is None else match.group(1)
+    cur.execute(  # type: ignore[attr-defined]
+        "SELECT pg_get_constraintdef(oid,true) FROM pg_constraint "
+        "WHERE conrelid=to_regclass(%s) AND conname='ck_miniqmt_k2_timer_occurrence_initial'",
+        (f"{target_schema}.execution_algo_timer_occurrence",),
+    )
+    row = cur.fetchone()  # type: ignore[attr-defined]
+    if row is None or "row_version = lease_epoch" not in str(row[0]):
+        _apply_base_forward(cur, forward)
+    k2c_forward = K2C_FORWARD.read_text(encoding="utf-8")
+    cur.execute(k2c_forward.replace("qmt_strategy", target_schema))  # type: ignore[attr-defined]
+
+
 def _apply_rollback(cur: object, rollback: str) -> None:
+    match = re.search(r"FROM ([A-Za-z0-9_]+)\.execution_runtime_event", rollback)
+    target_schema = "qmt_strategy" if match is None else match.group(1)
+    cur.execute(  # type: ignore[attr-defined]
+        K2C_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", target_schema)
+    )
     stage1, remainder = rollback.split("-- Stage 2: nontransactional concurrent index cleanup.", maxsplit=1)
     stage2, stage3 = remainder.split("-- Stage 3: independent rollback readback.", maxsplit=1)
     cur.execute(stage1)  # type: ignore[attr-defined]

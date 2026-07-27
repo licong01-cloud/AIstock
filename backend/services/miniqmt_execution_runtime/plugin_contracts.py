@@ -4662,6 +4662,7 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
                 ExecutionAlgoTimerScheduleStatusV1.EXPIRED,
             },
             ExecutionAlgoTimerScheduleStatusV1.EMITTING: {
+                ExecutionAlgoTimerScheduleStatusV1.EMITTING,
                 ExecutionAlgoTimerScheduleStatusV1.EMITTED,
                 ExecutionAlgoTimerScheduleStatusV1.EXPIRED,
             },
@@ -4674,6 +4675,10 @@ class ExecutionAlgoTimerScheduleV1(FrozenStrictModel):
         if self.status is ExecutionAlgoTimerScheduleStatusV1.EMITTING:
             if self.lease_epoch != previous.lease_epoch + 1:
                 raise ValueError("timer schedule lease_epoch must advance from its durable predecessor")
+            if previous.status is ExecutionAlgoTimerScheduleStatusV1.EMITTING and (
+                previous.lease_expires_at_utc is None or self.updated_at_utc < previous.lease_expires_at_utc
+            ):
+                raise ValueError("timer schedule reclaim requires its durable predecessor lease to expire")
         elif self.lease_epoch != previous.lease_epoch:
             raise ValueError("timer schedule completion must preserve the claimed lease epoch")
         return self
@@ -4820,12 +4825,22 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
         if previous.status is not ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
             raise ValueError("closed timer occurrence cannot transition")
         if self.status not in {
+            ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED,
             ExecutionAlgoTimerOccurrenceStatusV1.EVENT_COMMITTED,
             ExecutionAlgoTimerOccurrenceStatusV1.SKIPPED,
             ExecutionAlgoTimerOccurrenceStatusV1.EXPIRED,
         }:
             raise ValueError("illegal timer occurrence status transition")
-        if self.lease_epoch != previous.lease_epoch:
+        if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
+            if self.lease_epoch != previous.lease_epoch + 1:
+                raise ValueError("timer occurrence reclaim must advance the durable lease epoch exactly once")
+            if (
+                previous.lease_expires_at_utc is None
+                or self.lease_expires_at_utc is None
+                or self.lease_expires_at_utc <= previous.lease_expires_at_utc
+            ):
+                raise ValueError("timer occurrence reclaim requires a later bounded lease expiry")
+        elif self.lease_epoch != previous.lease_epoch:
             raise ValueError("timer occurrence completion must preserve the claimed lease epoch")
         return self
 
@@ -4850,7 +4865,7 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
         if any(value is None for value in lease_values) != all(value is None for value in lease_values):
             raise ValueError("timer occurrence lease fields must be present together")
         if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
-            if self.lease_owner is None or self.lease_epoch != 1 or self.closed_at_utc is not None:
+            if self.lease_owner is None or self.lease_epoch <= 0 or self.closed_at_utc is not None:
                 raise ValueError("CLAIMED occurrence requires active durable lease")
             if self.emitted_event_id is not None or self.catch_up_receipt_sha256 is not None:
                 raise ValueError("CLAIMED occurrence cannot carry terminal emission outcome")
@@ -4875,7 +4890,7 @@ class ExecutionAlgoTimerOccurrenceV1(FrozenStrictModel):
         )
         if self.occurrence_receipt_sha256 != expected_hash:
             raise ValueError("occurrence_receipt_sha256 does not match timer occurrence closure")
-        if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED:
+        if self.status is ExecutionAlgoTimerOccurrenceStatusV1.CLAIMED and self.row_version == 1:
             self.validate_initial_v1()
         return self
 
