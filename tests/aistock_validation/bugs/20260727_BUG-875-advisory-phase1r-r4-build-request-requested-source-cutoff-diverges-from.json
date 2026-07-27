@@ -1,0 +1,49 @@
+{
+  "actual": "Verify aborts: SnapshotWriterError ADVISORY_PHASE1C3_RELATIONAL_CLOSURE_FAILED 'source revision member count is not closed' (snapshot_writer.py:3584). Build advbuild_2c3e17609f45d6bb8627a3c6 declares requested_source_cutoff=2026-07-21 (max decision date, dataset_bridge_postgres.py 'requested_source_cutoff=date_end') while the union authority row srs_872daab9111bea66f4da carries requested_source_cutoff=2026-07-24 23:59:59 UTC (constituents' common header, label_as_of bound); the closure check requires the request cutoff date to equal the persisted authority cutoff date. All other closure clauses (registry, set identity, label_as_of_ts, research_only, member_count) now match.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_source_revision_union.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_registry_identity.py",
+    "tests/aistock_validation/bugs/20260727_BUG-875-advisory-phase1r-r4-build-request-requested-source-cutoff-diverges-from.json"
+  ],
+  "bug_id": "BUG-875",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "description": "Verify aborts: SnapshotWriterError ADVISORY_PHASE1C3_RELATIONAL_CLOSURE_FAILED 'source revision member count is not closed' (snapshot_writer.py:3584). Build advbuild_2c3e17609f45d6bb8627a3c6 declares requested_source_cutoff=2026-07-21 (max decision date, dataset_bridge_postgres.py 'requested_source_cutoff=date_end') while the union authority row srs_872daab9111bea66f4da carries requested_source_cutoff=2026-07-24 23:59:59 UTC (constituents' common header, label_as_of bound); the closure check requires the request cutoff date to equal the persisted authority cutoff date. All other closure clauses (registry, set identity, label_as_of_ts, research_only, member_count) now match.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260727-10af6ff95045",
+      "timestamp": "2026-07-26T16:29:50.178532Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The retrospective build request declares the same requested_source_cutoff as the frozen evidence-derived snapshot source revision union header (label_as_of bound), so the verify-time relational closure check passes and exact retry is stable.",
+  "github_issue_number": 2768,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2768",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "advisory phase1r r4 build request requested_source_cutoff diverges from evidence-derived union authority cutoff",
+  "trigger_condition": {
+    "fingerprint": "10af6ff950451ccc4a274e0f",
+    "source_event_id": "FE-20260727-10af6ff95045"
+  }
+}

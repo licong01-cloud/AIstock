@@ -1,0 +1,51 @@
+{
+  "actual": "Seal aborts at snapshot materialize: SnapshotWriterError ADVISORY_PHASE1C3_SOURCE_SNAPSHOT_CONFLICT 'snapshot source revision authority is missing'. Persisted union set srs_872daab9111bea66f4da carries query_registry_hash 9988148ceec4763cefbb43c0a0e7f5ebccb7d5cbe62f186377e3f7e4e1e274eb (content-derived from R4 outcome source member templates at capture/derivation time) while the build request declares 875443fab7c89aa28370a52e81764b2f26a7e8c464edf50c415fd6876a058448 (bridge-configured descriptor from the E2E harness); the writer authority check (snapshot_writer.py:1563) and relational closure check (snapshot_writer.py:3573) require equality and fail closed.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+    "backend/services/advisory_historical_range/composition.py",
+    "backend/tests/advisory_historical_range/test_r4_historical_e2e.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_source_revision_union.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_registry_identity.py",
+    "tests/aistock_validation/bugs/20260726_BUG-874-advisory-phase1r-r4-snapshot-source-revision-authority-registry-identity.json"
+  ],
+  "bug_id": "BUG-874",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "description": "Seal aborts at snapshot materialize: SnapshotWriterError ADVISORY_PHASE1C3_SOURCE_SNAPSHOT_CONFLICT 'snapshot source revision authority is missing'. Persisted union set srs_872daab9111bea66f4da carries query_registry_hash 9988148ceec4763cefbb43c0a0e7f5ebccb7d5cbe62f186377e3f7e4e1e274eb (content-derived from R4 outcome source member templates at capture/derivation time) while the build request declares 875443fab7c89aa28370a52e81764b2f26a7e8c464edf50c415fd6876a058448 (bridge-configured descriptor from the E2E harness); the writer authority check (snapshot_writer.py:1563) and relational closure check (snapshot_writer.py:3573) require equality and fail closed.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-f9c5c9b99ab0",
+      "timestamp": "2026-07-26T15:00:37.086272Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The retrospective build request declares the same query registry identity as the frozen evidence-derived snapshot source revision union set, so seal-time authority and relational closure checks pass and exact retry is stable.",
+  "github_issue_number": 2766,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2766",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "advisory phase1r r4 snapshot source revision authority registry identity diverges between evidence-derived union set and bridge-configured build request",
+  "trigger_condition": {
+    "fingerprint": "f9c5c9b99ab0feb7e7984a6b",
+    "source_event_id": "FE-20260726-f9c5c9b99ab0"
+  }
+}
