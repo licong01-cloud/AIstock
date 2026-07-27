@@ -291,6 +291,219 @@ export type WatchlistBulkAddResponse = {
   moved?: number;
 };
 
+export type HistoricalRangeRecord = Record<string, unknown>;
+export type HistoricalRangePage = { limit: number; next_cursor: string | null; has_more: boolean };
+export type HistoricalRangeEnvelope<T extends HistoricalRangeRecord> = {
+  ok: true;
+  data: T;
+  page?: HistoricalRangePage;
+};
+export type HistoricalRangeOptions = {
+  existing_programs: Array<{
+    program_id: string;
+    name: string;
+    version: number;
+    active_binding_version_id: string;
+    package_id: string | null;
+    target_count: number;
+    review_policy_summary: JsonObject;
+  }>;
+  admitted_packages: Array<{
+    package_id: string;
+    name: string;
+    alpha_mode: "single_alpha" | "multi_alpha";
+    component_count: number;
+    manifest_sha256: string;
+    package_version: string;
+  }>;
+  outcome_catalog: {
+    catalog_version: string;
+    catalog_content_hash: string;
+    default_horizons: number[];
+    long_trend_horizons: number[];
+    allowed_maturity_statuses: string[];
+  };
+};
+export type HistoricalRangeProgramSpec =
+  | { source_kind: "EXISTING_PROGRAM"; program_id: string; expected_program_version: number; expected_binding_version_id: string }
+  | {
+      source_kind: "RESEARCH_PROGRAM_SPEC";
+      program_name: string;
+      package_id: string;
+      target_count: number;
+      review_policy: JsonObject;
+      runtime_config: JsonObject;
+      entry_price_basis: string;
+      exit_price_basis: string;
+      style_profile_ref: string | null;
+      style_profile_hash: string | null;
+    };
+export type HistoricalRangeCreatePayload = { program_specs: HistoricalRangeProgramSpec[]; start_trade_date: string; end_trade_date: string };
+export type HistoricalRangeCommandPayload = { operation_idempotency_key: string; expected_row_version: number };
+export type HistoricalRangeMutationData = {
+  batch: HistoricalRangeRecord;
+  operation: HistoricalRangeRecord;
+  operation_id: string;
+  exact_retry: boolean;
+  dispatch_state: string;
+  links: Record<string, string>;
+};
+
+export class AdvisoryApiError extends Error {
+  readonly http_status: number | null;
+  readonly error_code: string;
+  readonly reason_code: string | null;
+  readonly retryable: boolean;
+  readonly context: JsonObject;
+  readonly correlation_id: string | null;
+
+  constructor(input: {
+    message: string;
+    http_status?: number | null;
+    error_code: string;
+    reason_code?: string | null;
+    retryable?: boolean;
+    context?: JsonObject;
+    correlation_id?: string | null;
+  }) {
+    super(input.message);
+    this.name = "AdvisoryApiError";
+    this.http_status = input.http_status ?? null;
+    this.error_code = input.error_code;
+    this.reason_code = input.reason_code ?? null;
+    this.retryable = input.retryable ?? false;
+    this.context = input.context ?? {};
+    this.correlation_id = input.correlation_id ?? null;
+  }
+}
+
+const HISTORICAL_RANGE_API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+
+async function historicalRangeFetch<T extends HistoricalRangeRecord>(path: string, init?: RequestInit): Promise<HistoricalRangeEnvelope<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`${HISTORICAL_RANGE_API_BASE}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    });
+  } catch (cause) {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_NETWORK_ERROR",
+      message: cause instanceof Error ? cause.message : "历史验证 API 网络连接失败",
+    });
+  }
+  const correlationHeader = response.headers.get("x-correlation-id");
+  const text = await response.text();
+  let payload: unknown;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_INVALID_RESPONSE",
+      message: `历史验证 API 返回了无法解析的响应（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail?: unknown }).detail
+      : null;
+    if (detail && typeof detail === "object") {
+      const typed = detail as JsonObject;
+      throw new AdvisoryApiError({
+        error_code: String(typed.error_code || "ADVISORY_HISTORICAL_RANGE_ERROR"),
+        reason_code: typed.reason_code ? String(typed.reason_code) : null,
+        message: String(typed.message || `HTTP ${response.status}`),
+        retryable: typed.retryable === true,
+        context: typed.context && typeof typed.context === "object" ? typed.context as JsonObject : {},
+        correlation_id: typed.correlation_id ? String(typed.correlation_id) : correlationHeader,
+        http_status: response.status,
+      });
+    }
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_INVALID_RESPONSE",
+      message: `历史验证 API 错误响应不符合结构化合同（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  if (!payload || typeof payload !== "object" || (payload as JsonObject).ok !== true || typeof (payload as JsonObject).data !== "object") {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_CONTRACT_ERROR",
+      message: `历史验证 API 成功响应不符合合同（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  return payload as HistoricalRangeEnvelope<T>;
+}
+
+function r5Body(payload: unknown, headers?: HeadersInit): RequestInit {
+  return { method: "POST", body: JSON.stringify(payload), headers };
+}
+
+export const historicalRangeApi = {
+  async options(signal?: AbortSignal): Promise<HistoricalRangeOptions> {
+    return (await historicalRangeFetch<{ existing_programs: HistoricalRangeOptions["existing_programs"]; admitted_packages: HistoricalRangeOptions["admitted_packages"]; outcome_catalog: HistoricalRangeOptions["outcome_catalog"] }>("/advisory/historical-range-options", { signal })).data;
+  },
+  async batches(cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ batches: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches${query}`, { signal });
+    return { rows: envelope.data.batches, page: envelope.page || { limit: 50, next_cursor: null, has_more: false } };
+  },
+  async create(payload: HistoricalRangeCreatePayload, idempotencyKey: string): Promise<HistoricalRangeMutationData> {
+    return (await historicalRangeFetch<{ batch: HistoricalRangeRecord; operation: HistoricalRangeRecord; operation_id: string; exact_retry: boolean; dispatch_state: string; links: Record<string, string> }>(
+      "/advisory/historical-range-batches",
+      r5Body(payload, { "Idempotency-Key": idempotencyKey }),
+    )).data;
+  },
+  async batch(batchId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord> {
+    return (await historicalRangeFetch<{ batch: HistoricalRangeRecord }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}`, { signal })).data.batch;
+  },
+  async runs(batchId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord[]> {
+    return (await historicalRangeFetch<{ runs: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/runs`, { signal })).data.runs;
+  },
+  async operations(batchId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord[]> {
+    return (await historicalRangeFetch<{ operations: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/operations`, { signal })).data.operations;
+  },
+  async operation(operationId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord> {
+    return (await historicalRangeFetch<{ operation: HistoricalRangeRecord }>(`/advisory/historical-range-operations/${encodeURIComponent(operationId)}`, { signal })).data.operation;
+  },
+  async days(rangeRunId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ days: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/days${query}`, { signal });
+    return { rows: envelope.data.days, page: envelope.page || { limit: 50, next_cursor: null, has_more: false } };
+  },
+  async day(rangeRunId: string, tradeDate: string, cursor?: string | null, signal?: AbortSignal): Promise<{ day: HistoricalRangeRecord; rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?candidate_cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ day: HistoricalRangeRecord; candidates: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/days/${encodeURIComponent(tradeDate)}${query}`, { signal });
+    return { day: envelope.data.day, rows: envelope.data.candidates, page: envelope.page || { limit: 50, next_cursor: null, has_more: false } };
+  },
+  async list(rangeRunId: string, tradeDate: string, cursor?: string | null, signal?: AbortSignal): Promise<{ list: HistoricalRangeRecord; rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?item_cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ list: HistoricalRangeRecord; items: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/lists/${encodeURIComponent(tradeDate)}${query}`, { signal });
+    return { list: envelope.data.list, rows: envelope.data.items, page: envelope.page || { limit: 50, next_cursor: null, has_more: false } };
+  },
+  async outcomes(rangeRunId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ outcomes: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/outcomes${query}`, { signal });
+    return { rows: envelope.data.outcomes, page: envelope.page || { limit: 50, next_cursor: null, has_more: false } };
+  },
+  async summaries(rangeRunId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord[]> {
+    return (await historicalRangeFetch<{ summaries: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/summaries`, { signal })).data.summaries;
+  },
+  async command(batchId: string, action: "resume" | "cancel", payload: HistoricalRangeCommandPayload): Promise<HistoricalRangeMutationData> {
+    return (await historicalRangeFetch<{ batch: HistoricalRangeRecord; operation: HistoricalRangeRecord; operation_id: string; exact_retry: boolean; dispatch_state: string; links: Record<string, string> }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/${action}`, r5Body(payload))).data;
+  },
+  async refreshOutcomes(batchId: string, payload: HistoricalRangeCommandPayload & { label_as_of_trade_date: string; range_run_ids: string[]; horizons: number[] }): Promise<HistoricalRangeMutationData> {
+    return (await historicalRangeFetch<{ batch: HistoricalRangeRecord; operation: HistoricalRangeRecord; operation_id: string; exact_retry: boolean; dispatch_state: string; links: Record<string, string> }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/refresh-outcomes`, r5Body(payload))).data;
+  },
+  async buildBridge(batchId: string, payload: HistoricalRangeCommandPayload & { range_run_ids: string[]; requested_horizons: number[]; requested_maturity_statuses: Array<"COMPLETE" | "CENSORED" | "TERMINAL"> }): Promise<HistoricalRangeMutationData> {
+    return (await historicalRangeFetch<{ batch: HistoricalRangeRecord; operation: HistoricalRangeRecord; operation_id: string; exact_retry: boolean; dispatch_state: string; links: Record<string, string> }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/build-dataset-bridge`, r5Body(payload))).data;
+  },
+};
+
 function body(payload: unknown, method = "POST"): RequestInit {
   return { method, body: globalThis.JSON["stringify"](payload) };
 }
