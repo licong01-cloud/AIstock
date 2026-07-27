@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-883",
-  "closed_at": null,
+  "closed_at": "2026-07-27T01:51:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -177,8 +177,8 @@
   },
   "first_seen_at": "2026-07-26T22:12:46.569346Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ebf0da40c49697320dd0dfae9c0e23cefcd58598",
+  "fixed_at": "2026-07-27T01:54:29.176085Z",
   "github_issue_number": 2785,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2785",
   "last_seen_at": "2026-07-26T22:12:46.569346Z",
@@ -186,6 +186,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2787",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -198,7 +199,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -207,6 +208,12 @@
     "fingerprint": "983a0d7ad1327529b3432c7a",
     "source_event_id": "FE-20260726-983a0d7ad132"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_submission.py backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_repository.py -q -> 112 passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/qe_sector_risk_overlay_f2_design_20260726.md --tier F2 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
