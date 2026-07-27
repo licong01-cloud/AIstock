@@ -837,6 +837,12 @@ durable broker-call boundary. Missing `place_order`/`cancel_order` is a typed pr
 failure with `broker_called=false`; optional diagnostic-reader failure is retained in ACK
 evidence and never converted to success, rejection, or an unknown broker outcome.
 
+The same-session last-release/successor-generation lifecycle performs a bounded join of
+the already-fenced writer before publication and still refuses any live stale writer.
+Structured quote failures retain read-only reason/stage/message/context but use the
+normal Python exception traceback lifecycle, so error reporting cannot mask the primary
+typed failure.
+
 ## 13. Verification Plan / 验证方案
 
 ### 13.1 Direct contract tests

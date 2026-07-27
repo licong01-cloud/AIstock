@@ -674,6 +674,24 @@ class QuoteIngressWorker:
         with self._lock:
             if self._status == "STOPPED" or generation <= self._fenced_generation:
                 return False
+            fenced_writer = (
+                self._writer_thread
+                if self._writer_thread is not None
+                and self._writer_thread.is_alive()
+                and self._writer_thread_epoch != self._writer_epoch
+                else None
+            )
+        if fenced_writer is not None:
+            # Last-lease release fences the old writer before a successor feed is
+            # prepared. Under scheduler/CI load the thread may need one final poll
+            # cycle to observe its stop event; wait boundedly instead of turning
+            # that harmless handoff into a false consumer failure. Publication
+            # still refuses while the old writer remains alive, so no parallel
+            # writer or fail-open path is introduced.
+            fenced_writer.join(timeout=2.0)
+        with self._lock:
+            if self._status == "STOPPED" or generation <= self._fenced_generation:
+                return False
             return not (
                 self._writer_thread is not None
                 and self._writer_thread.is_alive()
