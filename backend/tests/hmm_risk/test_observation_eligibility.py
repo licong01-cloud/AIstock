@@ -46,7 +46,10 @@ def test_train_only_eligibility_excludes_structural_absence_without_changing_sto
 
     result = build_train_only_observation_eligibility(
         absences,
-        expected_opportunity_count_by_symbol={"689009.SH": 10, "603595.SH": 100},
+        expected_opportunity_dates_by_symbol={
+            "689009.SH": tuple(start + timedelta(days=index) for index in range(10)),
+            "603595.SH": tuple(start + timedelta(days=index) for index in range(100)),
+        },
         train_start=start,
         train_end=date(2024, 6, 30),
     )
@@ -57,6 +60,9 @@ def test_train_only_eligibility_excludes_structural_absence_without_changing_sto
     assert evidence["selection_universe_changed"] is False
     assert evidence["runtime_prediction_eligibility_changed"] is False
     assert evidence["diagnostic_only"] is True
+    assert evidence["entries"][0]["expected_opportunity_contract"] == ("hmm_risk_c010_expected_opportunity_dates_v1")
+    assert len(evidence["entries"][0]["expected_opportunity_date_sha256"]) == 64
+    assert evidence["receipt_sha256"] == result.evidence()["receipt_sha256"]
 
 
 def test_train_only_eligibility_rejects_missing_or_inconsistent_denominator() -> None:
@@ -65,8 +71,20 @@ def test_train_only_eligibility_rejects_missing_or_inconsistent_denominator() ->
     with pytest.raises(StateModelSetError, match="expected opportunity count is invalid"):
         build_train_only_observation_eligibility(
             [row],
-            expected_opportunity_count_by_symbol={},
+            expected_opportunity_dates_by_symbol={},
             train_start=date(2022, 1, 1),
+            train_end=date(2024, 6, 30),
+        )
+
+
+def test_train_only_eligibility_rejects_absence_outside_exact_opportunity_dates() -> None:
+    start = date(2022, 1, 1)
+
+    with pytest.raises(StateModelSetError, match="provider absence is outside expected opportunities"):
+        build_train_only_observation_eligibility(
+            [_absence("689009.SH", start + timedelta(days=1))],
+            expected_opportunity_dates_by_symbol={"689009.SH": (start,)},
+            train_start=start,
             train_end=date(2024, 6, 30),
         )
 
@@ -158,7 +176,7 @@ def test_direct_feature_domain_loader_keeps_excluded_stock_in_price_and_sector_i
     start = date(2022, 1, 1)
     eligibility = build_train_only_observation_eligibility(
         [_absence("689009.SH", start + timedelta(days=index)) for index in range(9)],
-        expected_opportunity_count_by_symbol={"689009.SH": 10},
+        expected_opportunity_dates_by_symbol={"689009.SH": tuple(start + timedelta(days=index) for index in range(10))},
         train_start=start,
         train_end=date(2024, 6, 30),
     )

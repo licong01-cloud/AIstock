@@ -41,6 +41,12 @@
       "actor": "codex",
       "note": "601-day diagnostic completed from clean producer 385e8309. Only 689009.SH moneyflow contribution was excluded; all four family-level candidates were valid without feature removal. Baseline formal coverage remains invalid and formal policy remains inactive.",
       "timestamp": "2026-07-27T07:17:34.0216437Z"
+    },
+    {
+      "action": "formal_review_reject_and_fix_c010_diagnostic",
+      "actor": "codex",
+      "note": "Formal review rejected the first diagnostic receipt because diagnostic fields changed formal aggregate identity, sf_small_net_ratio used a conflicting denominator, opportunity evidence lacked exact date-set identity/subset validation, and receipt authority was duplicated. Source fixes and direct regression tests are complete; the 601-day diagnostic must be rerun from a new clean producer.",
+      "timestamp": "2026-07-27T09:48:16.1186098Z"
     }
   ],
   "evidence_uris": [
@@ -183,7 +189,7 @@
   "fixed_at": null,
   "github_issue_number": 2799,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2799",
-  "last_seen_at": "2026-07-27T07:17:34.0216437Z",
+  "last_seen_at": "2026-07-27T09:48:16.1186098Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not remove affected securities from the PIT selection universe or runtime prediction eligibility.",

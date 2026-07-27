@@ -25,6 +25,7 @@ from .stock_fact_observation import (
 
 ELIGIBILITY_SCHEMA = "hmm_risk_c010_train_observation_eligibility_v1"
 FEATURE_MASK_SCHEMA = "hmm_risk_c010_feature_mask_candidate_set_v1"
+EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v1"
 
 MONEYFLOW_FEATURES = frozenset(
     {
@@ -40,6 +41,7 @@ MONEYFLOW_FEATURES = frozenset(
 class ContributorEligibility:
     canonical_ts_code: str
     expected_opportunity_count: int
+    expected_opportunity_date_sha256: str
     provider_absence_count: int
     availability_ratio: float
     moneyflow_contributor_eligible: bool
@@ -49,6 +51,8 @@ class ContributorEligibility:
         return {
             "canonical_ts_code": self.canonical_ts_code,
             "expected_opportunity_count": self.expected_opportunity_count,
+            "expected_opportunity_contract": EXPECTED_OPPORTUNITY_CONTRACT,
+            "expected_opportunity_date_sha256": self.expected_opportunity_date_sha256,
             "provider_absence_count": self.provider_absence_count,
             "availability_ratio": self.availability_ratio,
             "moneyflow_contributor_eligible": self.moneyflow_contributor_eligible,
@@ -62,7 +66,6 @@ class ObservationEligibility:
     train_end: date
     minimum_availability_ratio: float
     entries: tuple[ContributorEligibility, ...]
-    receipt_sha256: str
 
     @property
     def excluded_moneyflow_symbols(self) -> frozenset[str]:
@@ -87,7 +90,7 @@ class ObservationEligibility:
 def build_train_only_observation_eligibility(
     provider_absence_rows: Iterable[ProviderAbsenceEvidence],
     *,
-    expected_opportunity_count_by_symbol: Mapping[str, int],
+    expected_opportunity_dates_by_symbol: Mapping[str, Sequence[date]],
     train_start: date,
     train_end: date,
     minimum_availability_ratio: float = MIN_COVERAGE,
@@ -112,7 +115,24 @@ def build_train_only_observation_eligibility(
     absence_counts = Counter(row.canonical_ts_code for row in filtered)
     entries: list[ContributorEligibility] = []
     for symbol in sorted(absence_counts):
-        expected = int(expected_opportunity_count_by_symbol.get(symbol, 0))
+        expected_dates = tuple(sorted(expected_opportunity_dates_by_symbol.get(symbol, ())))
+        if not expected_dates:
+            raise StateModelSetError(
+                f"C-010 expected opportunity count is invalid: {symbol} expected=0 missing={absence_counts[symbol]}"
+            )
+        if len(expected_dates) != len(set(expected_dates)):
+            raise StateModelSetError(f"C-010 expected opportunity dates are duplicated: {symbol}")
+        if any(not isinstance(value, date) or value < train_start or value > train_end for value in expected_dates):
+            raise StateModelSetError(f"C-010 expected opportunity dates are outside the train window: {symbol}")
+        expected_date_set = frozenset(expected_dates)
+        absence_dates = frozenset(row.trade_date for row in filtered if row.canonical_ts_code == symbol)
+        unexpected_absence_dates = sorted(absence_dates - expected_date_set)
+        if unexpected_absence_dates:
+            raise StateModelSetError(
+                f"C-010 provider absence is outside expected opportunities: {symbol} "
+                f"dates={[value.isoformat() for value in unexpected_absence_dates]}"
+            )
+        expected = len(expected_dates)
         missing = int(absence_counts[symbol])
         if expected <= 0 or missing > expected:
             raise StateModelSetError(
@@ -124,25 +144,20 @@ def build_train_only_observation_eligibility(
             ContributorEligibility(
                 canonical_ts_code=symbol,
                 expected_opportunity_count=expected,
+                expected_opportunity_date_sha256=canonical_sha256(
+                    [{"canonical_ts_code": symbol, "trade_date": value.isoformat()} for value in expected_dates]
+                ),
                 provider_absence_count=missing,
                 availability_ratio=float(availability),
                 moneyflow_contributor_eligible=availability >= minimum_availability_ratio,
                 provider_absence_key_sha256=canonical_sha256(symbol_keys),
             )
         )
-    body = {
-        "schema_version": ELIGIBILITY_SCHEMA,
-        "train_start": train_start.isoformat(),
-        "train_end": train_end.isoformat(),
-        "minimum_availability_ratio": minimum_availability_ratio,
-        "entries": [entry.evidence() for entry in entries],
-    }
     return ObservationEligibility(
         train_start=train_start,
         train_end=train_end,
         minimum_availability_ratio=minimum_availability_ratio,
         entries=tuple(entries),
-        receipt_sha256=canonical_sha256(body),
     )
 
 

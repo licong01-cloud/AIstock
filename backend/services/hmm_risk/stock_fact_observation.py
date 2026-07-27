@@ -211,11 +211,11 @@ class L1DailyAggregate:
     l1_total_mv: float
     l1_range_ratio: float
     l1_true_range_ratio: float
-    net_mf_amount: float | None
-    buy_sm_amount: float | None
-    sell_sm_amount: float | None
-    buy_elg_amount: float | None
-    sell_elg_amount: float | None
+    net_mf_amount: float
+    buy_sm_amount: float
+    sell_sm_amount: float
+    buy_elg_amount: float
+    sell_elg_amount: float
     limit_up_ratio: float
     breadth_1d: float
     breadth_5d: float
@@ -232,6 +232,17 @@ class L1DailyAggregate:
     count_coverage: float
     weight_coverage: float
     missing_evidence: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class FeatureDomainDailyAggregate(L1DailyAggregate):
+    """Diagnostic aggregate whose extra fields never enter formal source manifests."""
+
+    net_mf_amount: float | None
+    buy_sm_amount: float | None
+    sell_sm_amount: float | None
+    buy_elg_amount: float | None
+    sell_elg_amount: float | None
     moneyflow_amount: float | None = None
     moneyflow_count_coverage: float | None = None
     moneyflow_weight_coverage: float | None = None
@@ -298,7 +309,7 @@ def _aggregate_feature_domain_day(
     l1_name: str,
     min_coverage: float,
     moneyflow_excluded_symbols: frozenset[str],
-) -> L1DailyAggregate:
+) -> FeatureDomainDailyAggregate:
     expected = [row for row in rows if not bool(row.get("is_suspended"))]
     if not expected:
         raise StateModelSetError(f"{l1_code}/{trade_date} has no observed denominator")
@@ -443,7 +454,7 @@ def _aggregate_feature_domain_day(
         for row in expected
         if str(row.get("symbol") or "") in moneyflow_excluded_symbols
     ]
-    return L1DailyAggregate(
+    return FeatureDomainDailyAggregate(
         trade_date=trade_date,
         l1_code=l1_code,
         l1_name=l1_name,
@@ -778,7 +789,7 @@ def build_l1_feature_panel(
     turn20 = by_sector["sector_turnover"].rolling(20, min_periods=10).mean().droplevel(0)
     panel["sf_turnover_ma5_ma20_neg"] = -(turn5 / turn20.replace(0, np.nan) - 1.0)
     panel["sf_mf_net_ratio_std_5d_neg"] = -by_sector["net_mf_ratio"].rolling(5, min_periods=5).std(ddof=1).droplevel(0)
-    panel["small_net_ratio"] = (panel["buy_sm_amount"] - panel["sell_sm_amount"]) / panel["l1_amount"].replace(
+    panel["small_net_ratio"] = (panel["buy_sm_amount"] - panel["sell_sm_amount"]) / moneyflow_denominator.replace(
         0, np.nan
     )
     panel["sf_small_net_ratio_5d"] = by_sector["small_net_ratio"].rolling(5, min_periods=3).mean().droplevel(0)
@@ -825,11 +836,29 @@ def build_l1_feature_panel(
         "direct_sector_level": direct_sector_level,
         "cross_section_required_sector_count": expected_sector_count,
         "cross_section_required_l1_count": expected_sector_count if direct_sector_level == "L1" else None,
-        "cross_section_contract": cross_section_contract,
-        "cross_section_min_coverage": cross_section_min_coverage,
-        "moneyflow_denominator": "moneyflow_contributor_amount" if use_moneyflow_amount_denominator else "l1_amount",
         "rank_tie_method": "pandas_average_pct",
     }
+    if cross_section_min_coverage is not None or use_moneyflow_amount_denominator:
+        feature_definition.update(
+            {
+                "diagnostic_only": True,
+                "cross_section_contract": cross_section_contract,
+                "cross_section_min_coverage": cross_section_min_coverage,
+                "moneyflow_denominator_by_feature": {
+                    "net_mf_ratio": "moneyflow_contributor_amount",
+                    "elg_net_mf_ratio": "moneyflow_contributor_amount",
+                    "sf_mf_net_ratio_std_5d_neg": "moneyflow_contributor_amount",
+                    "sf_small_net_ratio_5d": "moneyflow_contributor_amount",
+                }
+                if use_moneyflow_amount_denominator
+                else {
+                    "net_mf_ratio": "l1_amount",
+                    "elg_net_mf_ratio": "l1_amount",
+                    "sf_mf_net_ratio_std_5d_neg": "l1_amount",
+                    "sf_small_net_ratio_5d": "l1_amount",
+                },
+            }
+        )
     return panel, feature_definition
 
 

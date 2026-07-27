@@ -298,17 +298,17 @@ def _family_spec(
     )
 
 
-def _c010_expected_opportunity_counts(
+def _c010_expected_opportunity_dates(
     conn: Any,
     source_spec: StockFactSourceSpec,
     symbols: list[str],
-) -> dict[str, int]:
+) -> dict[str, tuple[date, ...]]:
     if not symbols:
         return {}
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT price.ts_code,count(DISTINCT price.trade_date)
+            SELECT DISTINCT price.ts_code,price.trade_date
             FROM market.kline_daily_raw price
             JOIN market.stock_universe_pit_spans spans
               ON spans.ts_code=price.ts_code AND spans.universe_key=%s
@@ -318,13 +318,15 @@ def _c010_expected_opportunity_counts(
               ON member.ts_code=price.ts_code AND member.in_date<=price.trade_date
              AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
             WHERE price.trade_date BETWEEN %s AND %s AND price.ts_code=ANY(%s)
-            GROUP BY price.ts_code
-            ORDER BY price.ts_code
+            ORDER BY price.ts_code,price.trade_date
             """,
             (source_spec.universe_key, source_spec.source_start, source_spec.source_end, symbols),
         )
         rows = cursor.fetchall()
-    result = {str(symbol): int(count) for symbol, count in rows}
+    grouped: dict[str, list[date]] = {symbol: [] for symbol in symbols}
+    for symbol, trade_date in rows:
+        grouped.setdefault(str(symbol), []).append(trade_date)
+    result = {symbol: tuple(dates) for symbol, dates in grouped.items() if dates}
     missing = sorted(set(symbols) - set(result))
     if missing:
         raise StateModelSetError(f"C-010 provider-absence symbols lack expected opportunity evidence: {missing}")
@@ -386,10 +388,10 @@ def _load_l1_source_inputs(
                     if source_spec.source_start <= row.trade_date <= source_spec.source_end
                 }
             )
-            expected_counts = _c010_expected_opportunity_counts(conn, source_spec, symbols)
+            expected_dates = _c010_expected_opportunity_dates(conn, source_spec, symbols)
             eligibility = build_train_only_observation_eligibility(
                 provider_absence_manifest.rows,
-                expected_opportunity_count_by_symbol=expected_counts,
+                expected_opportunity_dates_by_symbol=expected_dates,
                 train_start=source_spec.source_start,
                 train_end=source_spec.source_end,
                 minimum_availability_ratio=MIN_COVERAGE,
