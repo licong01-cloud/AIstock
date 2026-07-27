@@ -11,7 +11,7 @@
 worktree = F:\Dev\AIstock_worktrees\advisory-phase1r-r4-finalize-20260727
 branch = feature/advisory-phase1r-r4-finalize-20260727
 head = local_delivery_commits_on_latest_origin_main
-origin_main_base = ebf0da40c49697320dd0dfae9c0e23cefcd58598
+origin_main_base = 91d248c2e374f4db5f853943426f57e14ce15df2
 lane = verify-aistock-feature
 feature_tier = F2
 task_tier = T3
