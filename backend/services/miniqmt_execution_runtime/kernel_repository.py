@@ -9,6 +9,7 @@ from .kernel_repository_common import (
     KernelRepositorySchemaError,
 )
 from .kernel_repository_event_delivery import KernelRepositoryEventDeliveryMixin
+from .kernel_repository_k2b import KernelRepositoryK2BMixin
 from .kernel_repository_schema import KernelRepositorySchemaMixin
 from .kernel_repository_timer_session import KernelRepositoryTimerSessionMixin
 from .kernel_repository_transition_outbox import KernelRepositoryTransitionOutboxMixin
@@ -23,6 +24,7 @@ KernelRepositoryCommitUnknown.__module__ = __name__
 class PostgresMiniQMTKernelRepository(
     KernelRepositorySchemaMixin,
     KernelRepositoryEventDeliveryMixin,
+    KernelRepositoryK2BMixin,
     KernelRepositoryTransitionOutboxMixin,
     KernelRepositoryTimerSessionMixin,
     KernelRepositoryBase,

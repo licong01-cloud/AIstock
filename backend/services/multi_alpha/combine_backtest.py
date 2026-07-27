@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -2504,25 +2504,7 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
 
 
 def _replace_request(request: CombineBacktestRequest, **updates: Any) -> CombineBacktestRequest:
-    data = {
-        "roster": request.roster,
-        "oos_start": request.oos_start,
-        "oos_end": request.oos_end,
-        "weighting_schemes": request.weighting_schemes,
-        "normalize_method": request.normalize_method,
-        "walk_forward": request.walk_forward,
-        "rank_fusion": request.rank_fusion,
-        "backtest_config": request.backtest_config,
-        "prediction_task_selection": request.prediction_task_selection,
-        "baseline_leg_id": request.baseline_leg_id,
-        "topk": request.topk,
-        "min_date_coverage": request.min_date_coverage,
-        "run_async": request.run_async,
-        "scheme_timeout_seconds": request.scheme_timeout_seconds,
-        "run_timeout_seconds": request.run_timeout_seconds,
-    }
-    data.update(updates)
-    return CombineBacktestRequest(**data)
+    return replace(request, **updates)
 
 
 def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
