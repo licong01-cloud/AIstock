@@ -224,9 +224,11 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = retry_canary_cancelled_bug881_selection_fix_in_review
+r13a_experiment = canary_backtest_complete_terminal_persistence_and_reconciliation_bug888_bug889_in_fix
 non_qe_impact = prohibited
 ```
+
+BUG-889 reservation 终态协调补证（2026-07-28）：本次两-child canary 的远端长任务期间，全局 capacity reconciler 合法接管并续租了 exact reservation；durable worker 在取得相同 task/loop 的权威终态后，旧逻辑仍要求以 worker owner 重新 claim 未过期 lease，导致 equal child 以 `qe_execution_reservation_owner_mismatch` 停在 reconcile。修复只对映射为 `released/failed/cancelled` 的终态、且调用方同时提供并匹配精确 `expected_reservation_id` 时，使用当前 reservation owner/fencing/row-version 做一次 CAS 终态转换；非终态、缺少精确 reservation 身份、reservation/source 冲突以及并发 owner/row 变化仍显式失败。该语义不抢占在途任务、不放宽节点并发、不伪造远端状态，也不改变 QE 之外的运行时。
 
 ## 11. Design Acceptance Matrix / 设计验收矩阵
 
