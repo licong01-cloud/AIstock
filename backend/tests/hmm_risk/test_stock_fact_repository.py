@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from backend.services.hmm_risk import stock_fact_repository as subject
-from backend.services.hmm_risk.state_model_set import StateModelSetError
+from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
+from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
+from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
 
 
 class _Cursor:
@@ -13,6 +17,7 @@ class _Cursor:
         self.connection = connection
         self.name = name
         self.sql = ""
+        self.params = None
         self.itersize = 0
 
     def __enter__(self):
@@ -23,6 +28,7 @@ class _Cursor:
 
     def execute(self, sql, params=None) -> None:
         self.sql = " ".join(str(sql).split())
+        self.params = params
         self.connection.executed.append((self.name, self.sql, params))
 
     def fetchone(self):
@@ -56,8 +62,9 @@ class _Cursor:
     def __iter__(self):
         if self.name == "hmm_risk_mapping_source":
             return iter(self.connection.mapping_rows)
-        if self.name in {"hmm_risk_stock_fact_source", "hmm_risk_stock_fact_source_l2"}:
-            return iter(self.connection.stock_rows)
+        if self.name and self.name.startswith("hmm_risk_stock_fact_source"):
+            window_start, window_end = self.params[-2:]
+            return iter(row for row in self.connection.stock_rows if window_start <= row[0] <= window_end)
         return iter(())
 
     def close(self) -> None:
@@ -84,9 +91,37 @@ def _spec() -> subject.StockFactSourceSpec:
     )
 
 
+def _identity_manifest():
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "backend"
+        / "services"
+        / "hmm_risk"
+        / "manifests"
+        / "security_source_identity_v1.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return load_security_source_identity_manifest(path, expected_sha256=canonical_sha256(payload))
+
+
+def _provider_absence_manifest():
+    path = Path(__file__).resolve().parents[2] / "services" / "hmm_risk" / "manifests" / "provider_absence_v1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return load_provider_absence_manifest(path, expected_sha256=canonical_sha256(payload))
+
+
+def _reader(connection: _Connection) -> subject.PostgresStockFactReader:
+    return subject.PostgresStockFactReader(
+        connection,
+        _spec(),
+        security_identity_manifest=_identity_manifest(),
+        provider_absence_manifest=_provider_absence_manifest(),
+    )
+
+
 def test_reader_allows_identical_duplicates_but_rejects_conflicting_duplicate_keys() -> None:
     connection = _Connection()
-    reader = subject.PostgresStockFactReader(connection, _spec())
+    reader = _reader(connection)
 
     state = reader.validate_source()
     lookup = reader.load_classification_lookup()
@@ -143,15 +178,18 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
             date(2024, 1, 1),
             date(2024, 1, 1),
             80.0,
+            0,
+            "000001.SZ",
             2.0,
             1.0,
             4.0,
             3.0,
             2.0,
+            "000001.SZ",
             11.0,
         )
     ]
-    reader = subject.PostgresStockFactReader(connection, _spec())
+    reader = _reader(connection)
 
     mapping = next(reader.iter_mapping_source_rows())
     stock = next(reader.iter_stock_fact_rows())
@@ -164,16 +202,22 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     assert stock["volume_shares"] == 10_000.0
     assert stock["amount_cny"] == 1_000.0
     assert stock["prev_circ_mv_cny"] == 800_000.0
+    assert stock["circ_mv_source_date"] == date(2024, 1, 1)
+    assert stock["circ_mv_staleness_trading_days"] == 0
     assert stock["net_mf_amount_cny"] == 20_000.0
+    assert stock["moneyflow_fact_status"] == "available"
+    assert stock["moneyflow_source_identity"]["source_ts_code"] == "000001.SZ"
     assert l2_stock == stock
-    l2_queries = [sql for name, sql, _ in connection.executed if name == "hmm_risk_stock_fact_source_l2"]
-    assert len(l2_queries) == 1
-    assert "ORDER BY c.trade_date,c.l2_code,c.ts_code,c.l1_code" in l2_queries[0]
+    l2_queries = [
+        sql for name, sql, _ in connection.executed if name and name.startswith("hmm_risk_stock_fact_source_l2_")
+    ]
+    assert l2_queries
+    assert all("ORDER BY c.trade_date,c.l2_code,c.ts_code,c.l1_code" in sql for sql in l2_queries)
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
     assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
 
 
-def test_reader_requires_circ_mv_from_exact_previous_trading_day() -> None:
+def test_reader_uses_latest_causal_circ_mv_before_previous_market_day() -> None:
     connection = _Connection()
     connection.stock_rows = [
         (
@@ -201,16 +245,140 @@ def test_reader_requires_circ_mv_from_exact_previous_trading_day() -> None:
             date(2024, 1, 1),
             date(2023, 12, 29),
             80.0,
+            1,
+            "000001.SZ",
             2.0,
             1.0,
             4.0,
             3.0,
             2.0,
+            "000001.SZ",
             11.0,
         )
     ]
-    row = next(subject.PostgresStockFactReader(connection, _spec()).iter_stock_fact_rows())
-    assert row["prev_circ_mv_cny"] is None
+    row = next(_reader(connection).iter_stock_fact_rows())
+    assert row["prev_circ_mv_cny"] == 800_000.0
+    assert row["circ_mv_source_date"] == date(2023, 12, 29)
+    assert row["circ_mv_staleness_trading_days"] == 1
+
+    non_causal = list(connection.stock_rows[0])
+    non_causal[22] = date(2024, 1, 2)
+    connection.stock_rows[0] = tuple(non_causal)
+    rejected = next(_reader(connection).iter_stock_fact_rows())
+    assert rejected["prev_circ_mv_cny"] is None
+    assert rejected["circ_mv_source_date"] is None
+    assert rejected["circ_mv_staleness_trading_days"] is None
+
+
+def test_reader_resolves_historical_moneyflow_source_without_rewriting_canonical_symbol() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2024, 6, 28),
+            "302132.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2020, 1, 1),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2024, 6, 27),
+            10_000,
+            date(2024, 6, 21),
+            9_000,
+            date(2024, 6, 14),
+            8_000,
+            100.0,
+            date(2024, 6, 27),
+            date(2024, 6, 27),
+            80.0,
+            0,
+            "300114.SZ",
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            None,
+            11.0,
+        )
+    ]
+
+    row = next(_reader(connection).iter_stock_fact_rows())
+
+    assert row["symbol"] == "302132.SZ"
+    assert row["moneyflow_source_identity"]["source_ts_code"] == "300114.SZ"
+    assert row["moneyflow_source_identity"]["resolution_kind"] == "explicit_effective_alias"
+    assert row["moneyflow_fact_status"] == "available"
+
+    conflicting = list(connection.stock_rows[0])
+    conflicting[31] = "302132.SZ"
+    connection.stock_rows[0] = tuple(conflicting)
+    with pytest.raises(StateModelSetError, match="canonical and aliased moneyflow rows coexist"):
+        next(_reader(connection).iter_stock_fact_rows())
+
+
+def test_reader_marks_missing_provider_moneyflow_as_na_with_identity_evidence() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2024, 1, 8),
+            "603595.SH",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2020, 1, 1),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2024, 1, 5),
+            10_000,
+            date(2023, 12, 29),
+            9_000,
+            date(2023, 12, 22),
+            8_000,
+            100.0,
+            date(2024, 1, 5),
+            date(2024, 1, 5),
+            80.0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            11.0,
+        )
+    ]
+
+    row = next(_reader(connection).iter_stock_fact_rows())
+
+    assert row["moneyflow_fact_status"] == "provider_absence"
+    assert row["net_mf_amount_cny"] is None
+    assert row["moneyflow_source_identity"]["source_ts_code"] == "603595.SH"
+    assert row["moneyflow_provider_absence"]["provider_audit_receipt_sha256"] == (
+        "a96c19313e110e7ea3ce67f33d0027eaef3ef494898f5d8db7362c9e88670fec"
+    )
+    assert row["moneyflow_provider_absence"]["row_hash"] == (
+        "7f7eb116ab9b800995eeea98c7c1d050bea6674702d7b6994906a2bcaee147b6"
+    )
+
+    connection.stock_rows[0] = (date(2024, 1, 9), *connection.stock_rows[0][1:])
+    with pytest.raises(StateModelSetError, match="provider_absence_unverified"):
+        next(_reader(connection).iter_stock_fact_rows())
 
 
 class _MappingReader:
@@ -246,6 +414,8 @@ def test_mapping_manifest_freezes_all_source_rows_and_31_131_constituents() -> N
 
 class _FactReader:
     spec = _spec()
+    security_identity_manifest = _identity_manifest()
+    provider_absence_manifest = _provider_absence_manifest()
 
     def iter_missing_price_rows(self):
         return iter(())
@@ -289,3 +459,32 @@ def test_daily_aggregate_loader_hashes_raw_rows_and_returns_all_l1() -> None:
     assert manifest["raw_row_count"] == 310
     assert manifest["aggregate_row_count"] == 31
     assert len(manifest["raw_jsonl_sha256"]) == 64
+
+
+def test_direct_loader_builds_l1_l2_from_one_database_stream() -> None:
+    class DirectReader(_FactReader):
+        def __init__(self) -> None:
+            self.stock_calls = 0
+            self.missing_calls = 0
+
+        def iter_missing_price_rows(self):
+            self.missing_calls += 1
+            return super().iter_missing_price_rows()
+
+        def iter_stock_fact_rows(self):
+            self.stock_calls += 1
+            return super().iter_stock_fact_rows()
+
+    reader = DirectReader()
+    l1, l1_manifest, l2, l2_manifest = subject.load_direct_daily_aggregates(reader)
+
+    assert reader.stock_calls == 1
+    assert reader.missing_calls == 1
+    assert len(l1) == 31
+    assert len(l2) == 31
+    assert l1_manifest["raw_row_count"] == 310
+    assert l2_manifest["raw_row_count"] == 310
+    assert (
+        l1_manifest["moneyflow_provider_absence_key_sha256"] == (l2_manifest["moneyflow_provider_absence_key_sha256"])
+    )
+    assert l2_manifest["direct_sector_level"] == "L2"

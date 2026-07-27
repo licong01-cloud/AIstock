@@ -5,12 +5,16 @@ from __future__ import annotations
 import hashlib
 import heapq
 import itertools
+import json
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
 from .state_model_set import StateModelSetError, canonical_json_bytes
+from .security_identity import SecuritySourceIdentityManifest
+from .provider_absence import ProviderAbsenceManifest
 from .stock_fact_observation import (
     MIN_COVERAGE,
     L1DailyAggregate,
@@ -37,10 +41,94 @@ class StockFactSourceSpec:
 class PostgresStockFactReader:
     """Stream explicit stock facts from an already read-only connection."""
 
-    def __init__(self, conn: Any, spec: StockFactSourceSpec) -> None:
+    def __init__(
+        self,
+        conn: Any,
+        spec: StockFactSourceSpec,
+        *,
+        security_identity_manifest: SecuritySourceIdentityManifest,
+        provider_absence_manifest: ProviderAbsenceManifest,
+    ) -> None:
         spec.validate()
         self._conn = conn
         self.spec = spec
+        self.security_identity_manifest = security_identity_manifest
+        self.provider_absence_manifest = provider_absence_manifest
+
+    def _identity_alias_json(self, source_dataset: str) -> str:
+        return json.dumps(
+            self.security_identity_manifest.alias_rows(source_dataset),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _circ_mv_asof_fragments(*, previous_date: str, eligible_start: str, has_alias: bool) -> tuple[str, str, str]:
+        if not has_alias:
+            return (
+                "",
+                "pb.trade_date,pb.circ_mv",
+                f"""
+                LEFT JOIN LATERAL (
+                  SELECT canonical_db.trade_date,canonical_db.circ_mv
+                  FROM market.daily_basic canonical_db
+                  WHERE canonical_db.ts_code=c.ts_code
+                    AND canonical_db.trade_date<={previous_date}
+                    AND canonical_db.trade_date>={eligible_start}
+                  ORDER BY canonical_db.trade_date DESC
+                  LIMIT 1
+                ) pb ON true
+                LEFT JOIN calendar_ordinal pb_cal ON pb_cal.trade_date=pb.trade_date
+                """,
+            )
+        return (
+            "",
+            "COALESCE(alias_pb.trade_date,canonical_pb.trade_date),COALESCE(alias_pb.circ_mv,canonical_pb.circ_mv)",
+            f"""
+            LEFT JOIN daily_basic_alias_identity alias_identity
+              ON alias_identity.canonical_ts_code=c.ts_code
+            LEFT JOIN LATERAL (
+              SELECT canonical_db.trade_date,canonical_db.circ_mv
+              FROM market.daily_basic canonical_db
+              WHERE alias_identity.canonical_ts_code IS NULL
+                AND canonical_db.ts_code=c.ts_code
+                AND canonical_db.trade_date<={previous_date}
+                AND canonical_db.trade_date>={eligible_start}
+              ORDER BY canonical_db.trade_date DESC
+              LIMIT 1
+            ) canonical_pb ON true
+            LEFT JOIN LATERAL (
+              SELECT identity_candidate.trade_date,identity_candidate.circ_mv
+              FROM (
+                SELECT canonical_db.trade_date,canonical_db.circ_mv
+                FROM market.daily_basic canonical_db
+                WHERE canonical_db.ts_code=c.ts_code
+                  AND canonical_db.trade_date<={previous_date}
+                  AND canonical_db.trade_date>={eligible_start}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM daily_basic_identity_alias identity_alias
+                    WHERE identity_alias.canonical_ts_code=c.ts_code
+                      AND canonical_db.trade_date BETWEEN identity_alias.effective_start AND identity_alias.effective_end
+                  )
+                UNION ALL
+                SELECT aliased_db.trade_date,aliased_db.circ_mv
+                FROM daily_basic_identity_alias identity_alias
+                JOIN market.daily_basic aliased_db
+                  ON aliased_db.ts_code=identity_alias.source_ts_code
+                 AND aliased_db.trade_date BETWEEN identity_alias.effective_start AND identity_alias.effective_end
+                WHERE identity_alias.canonical_ts_code=c.ts_code
+                  AND aliased_db.trade_date<={previous_date}
+                  AND aliased_db.trade_date>={eligible_start}
+              ) identity_candidate
+              WHERE alias_identity.canonical_ts_code IS NOT NULL
+              ORDER BY identity_candidate.trade_date DESC
+              LIMIT 1
+            ) alias_pb ON true
+            LEFT JOIN calendar_ordinal pb_cal
+              ON pb_cal.trade_date=COALESCE(alias_pb.trade_date,canonical_pb.trade_date)
+            """,
+        )
 
     def validate_source(self) -> dict[str, Any]:
         with self._conn.cursor() as cursor:
@@ -219,13 +307,46 @@ class PostgresStockFactReader:
     def iter_stock_fact_rows(
         self,
         *,
-        fetch_size: int = 10_000,
+        fetch_size: int = 100_000,
         sector_level: str = "L1",
+        _window_start: date | None = None,
+        _window_end: date | None = None,
     ) -> Iterator[dict[str, Any]]:
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("stock fact read level must be L1 or L2")
-        history_start = self.spec.source_start - timedelta(days=60)
-        cursor_name = "hmm_risk_stock_fact_source" if sector_level == "L1" else "hmm_risk_stock_fact_source_l2"
+        if (_window_start is None) != (_window_end is None):
+            raise StateModelSetError("stock fact query window must provide both boundaries")
+        if _window_start is None or _window_end is None:
+            window_start = self.spec.source_start
+            while window_start <= self.spec.source_end:
+                next_month = (window_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+                window_end = min(next_month - timedelta(days=1), self.spec.source_end)
+                yield from self.iter_stock_fact_rows(
+                    fetch_size=fetch_size,
+                    sector_level=sector_level,
+                    _window_start=window_start,
+                    _window_end=window_end,
+                )
+                window_start = next_month
+            return
+        if _window_start > _window_end:
+            raise StateModelSetError("stock fact query window is invalid")
+        price_history_start = _window_start - timedelta(days=60)
+        daily_basic_alias_rows = self.security_identity_manifest.alias_rows("market.daily_basic")
+        daily_basic_alias_json = json.dumps(
+            daily_basic_alias_rows,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        moneyflow_alias_json = self._identity_alias_json("market.moneyflow_ts")
+        circ_mv_history_cte, circ_mv_select_sql, circ_mv_join_sql = self._circ_mv_asof_fragments(
+            previous_date="ch.previous_trade_date",
+            eligible_start="c.eligible_start",
+            has_alias=bool(daily_basic_alias_rows),
+        )
+        cursor_prefix = "hmm_risk_stock_fact_source" if sector_level == "L1" else "hmm_risk_stock_fact_source_l2"
+        cursor_name = f"{cursor_prefix}_{_window_start:%Y%m%d}_{_window_end:%Y%m%d}"
         cursor = self._conn.cursor(name=cursor_name)
         cursor.itersize = fetch_size
         order_by = (
@@ -235,11 +356,19 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH calendar_history AS (
-              SELECT cal_date::date trade_date,
-                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
-              FROM market.trading_calendar
-              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            WITH source_bounds AS (
+              SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
+                     %s::date history_end
+              FROM market.stock_universe_pit_spans WHERE universe_key=%s
+            ), calendar_ordinal AS (
+              SELECT cal_date::date trade_date,row_number() OVER (ORDER BY cal_date) trade_ordinal
+              FROM market.trading_calendar,source_bounds
+              WHERE is_trading=true AND cal_date BETWEEN source_bounds.history_start AND source_bounds.history_end
+            ), calendar_history AS (
+              SELECT trade_date,trade_ordinal,
+                     lag(trade_date,1) OVER (ORDER BY trade_date) previous_trade_date,
+                     lag(trade_ordinal,1) OVER (ORDER BY trade_date) previous_trade_ordinal
+              FROM calendar_ordinal
             ), price_base AS (
               SELECT DISTINCT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li
               FROM market.kline_daily_raw
@@ -254,16 +383,24 @@ class PostgresStockFactReader:
                      lag(close_li,10) OVER w previous_close_10_li
               FROM price_base
               WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
-            ), basic_base AS (
-              SELECT DISTINCT trade_date,ts_code,total_mv,circ_mv
-              FROM market.daily_basic
-              WHERE trade_date BETWEEN %s AND %s
-            ), basic_history AS (
-              SELECT trade_date,ts_code,total_mv,
-                     lag(trade_date,1) OVER w previous_basic_date,
-                     lag(circ_mv,1) OVER w previous_circ_mv
-              FROM basic_base
-              WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            ), daily_basic_identity_alias AS (
+              SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date,
+                     security_identity_id,row_hash
+              FROM jsonb_to_recordset(%s::jsonb) AS item(
+                canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
+                security_identity_id text,row_hash text
+              )
+            ), daily_basic_alias_identity AS (
+              SELECT DISTINCT canonical_ts_code FROM daily_basic_identity_alias
+            )
+            {circ_mv_history_cte}
+            , moneyflow_identity_alias AS (
+              SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date,
+                     security_identity_id,row_hash
+              FROM jsonb_to_recordset(%s::jsonb) AS item(
+                canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
+                security_identity_id text,row_hash text
+              )
             ), moneyflow_base AS (
               SELECT DISTINCT trade_date,ts_code,buy_sm_amount,sell_sm_amount,
                               buy_elg_amount,sell_elg_amount,net_mf_amount
@@ -275,6 +412,9 @@ class PostgresStockFactReader:
               WHERE trade_date BETWEEN %s AND %s
             ), mapping_source AS (
               SELECT p.trade_date,s.ts_code,s.eligible_start,s.eligible_end,
+                     p.open_li,p.high_li,p.low_li,p.close_li,p.volume_hand,p.amount_li,
+                     p.previous_price_date,p.previous_close_li,p.previous_price_5_date,p.previous_close_5_li,
+                     p.previous_price_10_date,p.previous_close_10_li,
                      l1.index_code l1_code,l1.industry_name l1_name,
                      l2.index_code l2_code,l2.industry_name l2_name
               FROM price_history p
@@ -291,9 +431,15 @@ class PostgresStockFactReader:
               WHERE p.trade_date BETWEEN %s AND %s
             ), canonical_identity AS (
               SELECT trade_date,ts_code,eligible_start,eligible_end,
+                     open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                     previous_price_date,previous_close_li,previous_price_5_date,previous_close_5_li,
+                     previous_price_10_date,previous_close_10_li,
                      l1_code,l1_name,l2_code,l2_name
               FROM mapping_source
               GROUP BY trade_date,ts_code,eligible_start,eligible_end,
+                       open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                       previous_price_date,previous_close_li,previous_price_5_date,previous_close_5_li,
+                       previous_price_10_date,previous_close_10_li,
                        l1_code,l1_name,l2_code,l2_name
             ), counted AS (
               SELECT c.*,count(*) OVER (PARTITION BY trade_date,ts_code) canonical_identity_count
@@ -301,34 +447,48 @@ class PostgresStockFactReader:
             )
             SELECT c.trade_date,c.ts_code,c.l1_code,c.l1_name,c.l2_code,c.l2_name,
                    c.eligible_start,c.canonical_identity_count,
-                   p.open_li,p.high_li,p.low_li,p.close_li,p.volume_hand,p.amount_li,
-                   p.previous_price_date,p.previous_close_li,p.previous_price_5_date,p.previous_close_5_li,
-                   p.previous_price_10_date,p.previous_close_10_li,
-                   db.total_mv,ch.previous_trade_date,db.previous_basic_date,db.previous_circ_mv,
-                   mf.buy_sm_amount,mf.sell_sm_amount,mf.buy_elg_amount,mf.sell_elg_amount,mf.net_mf_amount,
-                   lim.up_limit
+                   c.open_li,c.high_li,c.low_li,c.close_li,c.volume_hand,c.amount_li,
+                   c.previous_price_date,c.previous_close_li,c.previous_price_5_date,c.previous_close_5_li,
+                   c.previous_price_10_date,c.previous_close_10_li,
+                    db.total_mv,ch.previous_trade_date,{circ_mv_select_sql},
+                    ch.previous_trade_ordinal-pb_cal.trade_ordinal circ_mv_staleness_trading_days,
+                    mf.ts_code,mf.buy_sm_amount,mf.sell_sm_amount,mf.buy_elg_amount,mf.sell_elg_amount,mf.net_mf_amount,
+                    canonical_mf.ts_code canonical_moneyflow_ts_code,lim.up_limit
             FROM counted c
             LEFT JOIN calendar_history ch ON ch.trade_date=c.trade_date
-            LEFT JOIN price_history p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
-            LEFT JOIN basic_history db ON db.trade_date=c.trade_date AND db.ts_code=c.ts_code
-            LEFT JOIN moneyflow_base mf ON mf.trade_date=c.trade_date AND mf.ts_code=c.ts_code
+            LEFT JOIN daily_basic_identity_alias current_db_alias
+              ON current_db_alias.canonical_ts_code=c.ts_code
+             AND c.trade_date BETWEEN current_db_alias.effective_start AND current_db_alias.effective_end
+            LEFT JOIN market.daily_basic db
+              ON db.trade_date=c.trade_date
+             AND db.ts_code=COALESCE(current_db_alias.source_ts_code,c.ts_code)
+            {circ_mv_join_sql}
+            LEFT JOIN moneyflow_identity_alias mf_alias
+              ON mf_alias.canonical_ts_code=c.ts_code
+             AND c.trade_date BETWEEN mf_alias.effective_start AND mf_alias.effective_end
+            LEFT JOIN moneyflow_base mf
+              ON mf.trade_date=c.trade_date AND mf.ts_code=COALESCE(mf_alias.source_ts_code,c.ts_code)
+            LEFT JOIN moneyflow_base canonical_mf
+              ON canonical_mf.trade_date=c.trade_date AND canonical_mf.ts_code=c.ts_code
             LEFT JOIN limit_base lim ON lim.trade_date=c.trade_date AND lim.ts_code=c.ts_code
             ORDER BY {order_by}
             """,
             (
-                history_start,
-                self.spec.source_end,
-                history_start,
-                self.spec.source_end,
-                history_start,
-                self.spec.source_end,
-                self.spec.source_start,
-                self.spec.source_end,
-                self.spec.source_start,
-                self.spec.source_end,
+                _window_start,
+                _window_start,
+                _window_end,
                 self.spec.universe_key,
-                self.spec.source_start,
-                self.spec.source_end,
+                price_history_start,
+                _window_end,
+                daily_basic_alias_json,
+                moneyflow_alias_json,
+                _window_start,
+                _window_end,
+                _window_start,
+                _window_end,
+                self.spec.universe_key,
+                _window_start,
+                _window_end,
             ),
         )
         try:
@@ -341,9 +501,43 @@ class PostgresStockFactReader:
                 previous_close = row[15] if row[14] is not None and row[14] >= eligible_start else None
                 previous_close_5 = row[17] if row[16] is not None and row[16] >= eligible_start else None
                 previous_close_10 = row[19] if row[18] is not None and row[18] >= eligible_start else None
+                circ_mv_source_date = row[22]
+                circ_mv_staleness = row[24]
                 previous_circ_mv = (
-                    row[23] if row[21] is not None and row[21] == row[22] and row[21] >= eligible_start else None
+                    row[23]
+                    if circ_mv_source_date is not None
+                    and circ_mv_source_date < row[0]
+                    and circ_mv_source_date >= eligible_start
+                    and circ_mv_staleness is not None
+                    and int(circ_mv_staleness) >= 0
+                    else None
                 )
+                moneyflow_resolution = self.security_identity_manifest.resolve(
+                    str(row[1]), row[0], "market.moneyflow_ts"
+                )
+                if row[25] is not None and str(row[25]) != moneyflow_resolution.source_ts_code:
+                    raise StateModelSetError(
+                        "hmm_risk_stock_fact_source_identity_ambiguous: resolved moneyflow source row is inconsistent"
+                    )
+                if moneyflow_resolution.source_ts_code != str(row[1]) and row[31] is not None:
+                    raise StateModelSetError(
+                        "hmm_risk_stock_fact_source_identity_ambiguous: canonical and aliased moneyflow rows coexist"
+                    )
+                moneyflow_values = row[26:31]
+                if row[25] is None:
+                    provider_absence = self.provider_absence_manifest.resolve(
+                        canonical_ts_code=str(row[1]),
+                        source_dataset="market.moneyflow_ts",
+                        source_ts_code=moneyflow_resolution.source_ts_code,
+                        trade_date=row[0],
+                    )
+                    moneyflow_fact_status = "provider_absence"
+                elif any(value is None or not math.isfinite(float(value)) for value in moneyflow_values):
+                    provider_absence = None
+                    moneyflow_fact_status = "required_fields_invalid"
+                else:
+                    provider_absence = None
+                    moneyflow_fact_status = "available"
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],
@@ -363,12 +557,19 @@ class PostgresStockFactReader:
                     "prev_close_10_yuan": _scaled(previous_close_10, 1000.0),
                     "total_mv_cny": _scaled(row[20], 0.0001),
                     "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
-                    "buy_sm_amount_cny": _scaled(row[24], 0.0001),
-                    "sell_sm_amount_cny": _scaled(row[25], 0.0001),
-                    "buy_elg_amount_cny": _scaled(row[26], 0.0001),
-                    "sell_elg_amount_cny": _scaled(row[27], 0.0001),
-                    "net_mf_amount_cny": _scaled(row[28], 0.0001),
-                    "up_limit_yuan": None if row[29] is None else float(row[29]),
+                    "circ_mv_source_date": circ_mv_source_date if previous_circ_mv is not None else None,
+                    "circ_mv_staleness_trading_days": (
+                        int(circ_mv_staleness) if previous_circ_mv is not None else None
+                    ),
+                    "buy_sm_amount_cny": _scaled(row[26], 0.0001),
+                    "sell_sm_amount_cny": _scaled(row[27], 0.0001),
+                    "buy_elg_amount_cny": _scaled(row[28], 0.0001),
+                    "sell_elg_amount_cny": _scaled(row[29], 0.0001),
+                    "net_mf_amount_cny": _scaled(row[30], 0.0001),
+                    "moneyflow_fact_status": moneyflow_fact_status,
+                    "moneyflow_source_identity": moneyflow_resolution.evidence(),
+                    "moneyflow_provider_absence": (None if provider_absence is None else provider_absence.evidence()),
+                    "up_limit_yuan": None if row[32] is None else float(row[32]),
                 }
         finally:
             cursor.close()
@@ -384,7 +585,19 @@ class PostgresStockFactReader:
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("missing-price read level must be L1 or L2")
 
-        history_start = self.spec.source_start - timedelta(days=60)
+        price_history_start = self.spec.source_start - timedelta(days=60)
+        daily_basic_alias_rows = self.security_identity_manifest.alias_rows("market.daily_basic")
+        daily_basic_alias_json = json.dumps(
+            daily_basic_alias_rows,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        circ_mv_history_cte, circ_mv_select_sql, circ_mv_join_sql = self._circ_mv_asof_fragments(
+            previous_date="c.previous_trade_date",
+            eligible_start="c.eligible_start",
+            has_alias=bool(daily_basic_alias_rows),
+        )
         cursor_name = "hmm_risk_missing_price_source" if sector_level == "L1" else "hmm_risk_missing_price_source_l2"
         cursor = self._conn.cursor(name=cursor_name)
         cursor.itersize = fetch_size
@@ -395,28 +608,38 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH calendar_history AS (
-              SELECT cal_date::date trade_date,
-                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
-              FROM market.trading_calendar
-              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            WITH source_bounds AS (
+              SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
+                     %s::date history_end
+              FROM market.stock_universe_pit_spans WHERE universe_key=%s
+            ), calendar_ordinal AS (
+              SELECT cal_date::date trade_date,row_number() OVER (ORDER BY cal_date) trade_ordinal
+              FROM market.trading_calendar,source_bounds
+              WHERE is_trading=true AND cal_date BETWEEN source_bounds.history_start AND source_bounds.history_end
+            ), calendar_history AS (
+              SELECT trade_date,trade_ordinal,
+                     lag(trade_date,1) OVER (ORDER BY trade_date) previous_trade_date,
+                     lag(trade_ordinal,1) OVER (ORDER BY trade_date) previous_trade_ordinal
+              FROM calendar_ordinal
             ), calendar_base AS (
-              SELECT trade_date,previous_trade_date FROM calendar_history
+              SELECT trade_date,previous_trade_date,previous_trade_ordinal FROM calendar_history
               WHERE trade_date BETWEEN %s AND %s
-            ), basic_base AS (
-              SELECT DISTINCT trade_date,ts_code,total_mv,circ_mv
-              FROM market.daily_basic WHERE trade_date BETWEEN %s AND %s
-            ), basic_history AS (
-              SELECT trade_date,ts_code,total_mv,
-                     lag(trade_date,1) OVER w previous_basic_date,
-                     lag(circ_mv,1) OVER w previous_circ_mv
-              FROM basic_base
-              WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
-            ), price_base AS (
+            ), daily_basic_identity_alias AS (
+              SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date
+              FROM jsonb_to_recordset(%s::jsonb) AS item(
+                canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
+                security_identity_id text,row_hash text
+              )
+            ), daily_basic_alias_identity AS (
+              SELECT DISTINCT canonical_ts_code FROM daily_basic_identity_alias
+            )
+            {circ_mv_history_cte}
+            , price_base AS (
               SELECT DISTINCT trade_date,ts_code FROM market.kline_daily_raw
               WHERE trade_date BETWEEN %s AND %s
             ), mapping_source AS (
-              SELECT c.trade_date,c.previous_trade_date,s.ts_code,s.eligible_start,s.eligible_end,
+              SELECT c.trade_date,c.previous_trade_date,c.previous_trade_ordinal,
+                     s.ts_code,s.eligible_start,s.eligible_end,
                      l1.index_code l1_code,l1.industry_name l1_name,
                      l2.index_code l2_code,l2.industry_name l2_name
               FROM calendar_base c
@@ -431,10 +654,10 @@ class PostgresStockFactReader:
               JOIN market.sw_index_classify l2
                 ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
             ), canonical_identity AS (
-              SELECT trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+              SELECT trade_date,previous_trade_date,previous_trade_ordinal,ts_code,eligible_start,eligible_end,
                      l1_code,l1_name,l2_code,l2_name
               FROM mapping_source
-              GROUP BY trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
+              GROUP BY trade_date,previous_trade_date,previous_trade_ordinal,ts_code,eligible_start,eligible_end,
                        l1_code,l1_name,l2_code,l2_name
             ), counted AS (
               SELECT c.*,count(*) OVER (PARTITION BY trade_date,ts_code) canonical_identity_count
@@ -442,10 +665,17 @@ class PostgresStockFactReader:
             )
             SELECT c.trade_date,c.ts_code,c.l1_code,c.l1_name,c.l2_code,c.l2_name,
                    c.canonical_identity_count,c.eligible_start,db.total_mv,c.previous_trade_date,
-                   db.previous_basic_date,db.previous_circ_mv
+                   {circ_mv_select_sql},
+                   c.previous_trade_ordinal-pb_cal.trade_ordinal
             FROM counted c
+            LEFT JOIN daily_basic_identity_alias current_db_alias
+              ON current_db_alias.canonical_ts_code=c.ts_code
+             AND c.trade_date BETWEEN current_db_alias.effective_start AND current_db_alias.effective_end
+            LEFT JOIN market.daily_basic db
+              ON db.trade_date=c.trade_date
+             AND db.ts_code=COALESCE(current_db_alias.source_ts_code,c.ts_code)
+            {circ_mv_join_sql}
             LEFT JOIN price_base p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
-            LEFT JOIN basic_history db ON db.trade_date=c.trade_date AND db.ts_code=c.ts_code
             WHERE p.ts_code IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM market.suspend_d sd
@@ -454,13 +684,14 @@ class PostgresStockFactReader:
             ORDER BY {order_by}
             """,
             (
-                history_start,
-                self.spec.source_end,
+                self.spec.source_start,
                 self.spec.source_start,
                 self.spec.source_end,
-                history_start,
+                self.spec.universe_key,
+                self.spec.source_start,
                 self.spec.source_end,
-                history_start,
+                daily_basic_alias_json,
+                price_history_start,
                 self.spec.source_end,
                 self.spec.universe_key,
             ),
@@ -471,7 +702,20 @@ class PostgresStockFactReader:
                     raise StateModelSetError(
                         f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
                     )
-                previous_circ_mv = row[11] if row[9] is not None and row[9] == row[10] and row[9] >= row[7] else None
+                circ_mv_source_date = row[10]
+                circ_mv_staleness = row[12]
+                previous_circ_mv = (
+                    row[11]
+                    if circ_mv_source_date is not None
+                    and circ_mv_source_date < row[0]
+                    and circ_mv_source_date >= row[7]
+                    and circ_mv_staleness is not None
+                    and int(circ_mv_staleness) >= 0
+                    else None
+                )
+                moneyflow_resolution = self.security_identity_manifest.resolve(
+                    str(row[1]), row[0], "market.moneyflow_ts"
+                )
                 yield {
                     "trade_date": row[0],
                     "symbol": row[1],
@@ -491,11 +735,18 @@ class PostgresStockFactReader:
                     "prev_close_10_yuan": None,
                     "total_mv_cny": _scaled(row[8], 0.0001),
                     "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
+                    "circ_mv_source_date": circ_mv_source_date if previous_circ_mv is not None else None,
+                    "circ_mv_staleness_trading_days": (
+                        int(circ_mv_staleness) if previous_circ_mv is not None else None
+                    ),
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,
                     "sell_elg_amount_cny": None,
                     "net_mf_amount_cny": None,
+                    "moneyflow_fact_status": "not_evaluated_missing_price",
+                    "moneyflow_source_identity": moneyflow_resolution.evidence(),
+                    "moneyflow_provider_absence": None,
                     "up_limit_yuan": None,
                 }
         finally:
@@ -563,6 +814,145 @@ def load_mapping_manifest(reader: PostgresStockFactReader) -> tuple[dict[str, An
     return manifest, constituents
 
 
+def _record_source_evidence(
+    row: dict[str, Any],
+    *,
+    provider_absence_keys: list[dict[str, str]],
+    alias_resolution_keys: list[dict[str, str]],
+    circ_mv_stale_keys: list[dict[str, Any]],
+) -> None:
+    trade_date_value = row.get("trade_date")
+    symbol = str(row.get("symbol") or "")
+    if row.get("moneyflow_fact_status") == "provider_absence" and isinstance(trade_date_value, date):
+        provider_absence = row.get("moneyflow_provider_absence")
+        if not isinstance(provider_absence, dict):
+            raise StateModelSetError("hmm_risk_stock_fact_provider_absence_unverified: row evidence is missing")
+        provider_absence_keys.append(
+            {
+                "trade_date": trade_date_value.isoformat(),
+                "canonical_ts_code": symbol,
+                "source_ts_code": str(provider_absence.get("source_ts_code") or ""),
+                "provider_audit_receipt_sha256": str(provider_absence.get("provider_audit_receipt_sha256") or ""),
+                "row_hash": str(provider_absence.get("row_hash") or ""),
+            }
+        )
+    identity = row.get("moneyflow_source_identity")
+    if (
+        isinstance(identity, dict)
+        and identity.get("resolution_kind") == "explicit_effective_alias"
+        and isinstance(trade_date_value, date)
+    ):
+        alias_resolution_keys.append(
+            {
+                "trade_date": trade_date_value.isoformat(),
+                "canonical_ts_code": symbol,
+                "source_ts_code": str(identity.get("source_ts_code") or ""),
+                "row_hash": str(identity.get("row_hash") or ""),
+            }
+        )
+    staleness = row.get("circ_mv_staleness_trading_days")
+    circ_mv_source_date = row.get("circ_mv_source_date")
+    if (
+        isinstance(staleness, int)
+        and staleness > 0
+        and isinstance(circ_mv_source_date, date)
+        and isinstance(trade_date_value, date)
+    ):
+        circ_mv_stale_keys.append(
+            {
+                "trade_date": trade_date_value.isoformat(),
+                "canonical_ts_code": symbol,
+                "circ_mv_source_date": circ_mv_source_date.isoformat(),
+                "staleness_trading_days": staleness,
+            }
+        )
+
+
+def _stock_fact_manifest(
+    reader: PostgresStockFactReader,
+    *,
+    sector_level: str,
+    min_coverage: float,
+    raw_count: int,
+    missing_row_count: int,
+    raw_jsonl_sha256: str,
+    aggregates: list[L1DailyAggregate],
+    invalid_sector_dates: list[dict[str, Any]],
+    provider_absence_keys: list[dict[str, str]],
+    alias_resolution_keys: list[dict[str, str]],
+    circ_mv_stale_keys: list[dict[str, Any]],
+) -> dict[str, Any]:
+    provider_absence_keys.sort(key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["source_ts_code"]))
+    alias_resolution_keys.sort(key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["source_ts_code"]))
+    circ_mv_stale_keys.sort(
+        key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["circ_mv_source_date"])
+    )
+    manifest = {
+        "schema_version": "hmm_risk_stock_fact_dataset_manifest_v1",
+        "source_window_start": reader.spec.source_start.isoformat(),
+        "source_window_end": reader.spec.source_end.isoformat(),
+        "raw_row_count": raw_count,
+        "missing_non_suspended_price_row_count": missing_row_count,
+        "security_source_identity": reader.security_identity_manifest.evidence(),
+        "provider_absence_authority": reader.provider_absence_manifest.evidence(),
+        "moneyflow_provider_absence_count": len(provider_absence_keys),
+        "moneyflow_provider_absence_key_sha256": hashlib.sha256(
+            canonical_json_bytes(provider_absence_keys)
+        ).hexdigest(),
+        "moneyflow_alias_resolution_count": len(alias_resolution_keys),
+        "moneyflow_alias_resolution_key_sha256": hashlib.sha256(
+            canonical_json_bytes(alias_resolution_keys)
+        ).hexdigest(),
+        "circ_mv_asof_stale_count": len(circ_mv_stale_keys),
+        "circ_mv_asof_max_staleness_trading_days": max(
+            (int(item["staleness_trading_days"]) for item in circ_mv_stale_keys),
+            default=0,
+        ),
+        "circ_mv_asof_stale_key_sha256": hashlib.sha256(canonical_json_bytes(circ_mv_stale_keys)).hexdigest(),
+        "raw_jsonl_sha256": raw_jsonl_sha256,
+        "aggregate_row_count": len(aggregates),
+        "invalid_l1_date_count": len(invalid_sector_dates),
+        "invalid_l1_dates": invalid_sector_dates,
+        "aggregate_sha256": hashlib.sha256(
+            canonical_json_bytes([{**item.__dict__, "trade_date": item.trade_date.isoformat()} for item in aggregates])
+        ).hexdigest(),
+        "min_count_coverage": min_coverage,
+        "min_weight_coverage": min_coverage,
+    }
+    if sector_level == "L2":
+        manifest["schema_version"] = "hmm_risk_direct_l2_stock_fact_dataset_manifest_v1"
+        manifest["direct_sector_level"] = "L2"
+        manifest["invalid_sector_date_count"] = manifest.pop("invalid_l1_date_count")
+        manifest["invalid_sector_dates"] = manifest.pop("invalid_l1_dates")
+    return manifest
+
+
+def _append_aggregate(
+    rows: list[dict[str, Any]],
+    *,
+    min_coverage: float,
+    sector_level: str,
+    aggregates: list[L1DailyAggregate],
+    invalid_sector_dates: list[dict[str, Any]],
+) -> None:
+    try:
+        aggregates.append(aggregate_l1_day(rows, min_coverage=min_coverage))
+    except ObservationCoverageError as exc:
+        identity = (
+            {"l1_code": exc.l1_code} if sector_level == "L1" else {"sector_level": "L2", "sector_code": exc.l1_code}
+        )
+        invalid_sector_dates.append(
+            {
+                "trade_date": exc.trade_date.isoformat(),
+                **identity,
+                "reason": "stock_coverage_insufficient",
+                "count_coverage": exc.count_coverage,
+                "weight_coverage": exc.weight_coverage,
+                "missing_evidence": list(exc.missing_evidence),
+            }
+        )
+
+
 def load_daily_aggregates(
     reader: PostgresStockFactReader,
     *,
@@ -575,6 +965,9 @@ def load_daily_aggregates(
     raw_count = 0
     aggregates: list[L1DailyAggregate] = []
     invalid_sector_dates: list[dict[str, Any]] = []
+    moneyflow_provider_absence_keys: list[dict[str, str]] = []
+    moneyflow_alias_resolution_keys: list[dict[str, str]] = []
+    circ_mv_stale_keys: list[dict[str, Any]] = []
 
     missing_rows = list(
         reader.iter_missing_price_rows()
@@ -593,6 +986,12 @@ def load_daily_aggregates(
     def rows_with_hash() -> Iterator[dict[str, Any]]:
         nonlocal raw_count
         for row in merged_rows:
+            _record_source_evidence(
+                row,
+                provider_absence_keys=moneyflow_provider_absence_keys,
+                alias_resolution_keys=moneyflow_alias_resolution_keys,
+                circ_mv_stale_keys=circ_mv_stale_keys,
+            )
             serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
             digest.update(canonical_json_bytes(serialized))
             digest.update(b"\n")
@@ -609,51 +1008,122 @@ def load_daily_aggregates(
         rows_with_hash(),
         key=lambda row: (row["trade_date"], row["l1_code"]),
     ):
-        try:
-            aggregates.append(aggregate_l1_day(list(group), min_coverage=min_coverage))
-        except ObservationCoverageError as exc:
-            identity = (
-                {"l1_code": exc.l1_code} if sector_level == "L1" else {"sector_level": "L2", "sector_code": exc.l1_code}
-            )
-            invalid_sector_dates.append(
-                {
-                    "trade_date": exc.trade_date.isoformat(),
-                    **identity,
-                    "reason": "stock_coverage_insufficient",
-                    "count_coverage": exc.count_coverage,
-                    "weight_coverage": exc.weight_coverage,
-                    "missing_evidence": list(exc.missing_evidence),
-                }
-            )
+        _append_aggregate(
+            list(group),
+            min_coverage=min_coverage,
+            sector_level=sector_level,
+            aggregates=aggregates,
+            invalid_sector_dates=invalid_sector_dates,
+        )
     if not aggregates:
         raise StateModelSetError("PostgreSQL stock-fact source produced no aggregates")
-    manifest = {
-        "schema_version": "hmm_risk_stock_fact_dataset_manifest_v1",
-        "source_window_start": reader.spec.source_start.isoformat(),
-        "source_window_end": reader.spec.source_end.isoformat(),
-        "raw_row_count": raw_count,
-        "missing_non_suspended_price_row_count": len(missing_rows),
-        "raw_jsonl_sha256": digest.hexdigest(),
-        "aggregate_row_count": len(aggregates),
-        "invalid_l1_date_count": len(invalid_sector_dates),
-        "invalid_l1_dates": invalid_sector_dates,
-        "aggregate_sha256": hashlib.sha256(
-            canonical_json_bytes(
-                [
-                    {
-                        **item.__dict__,
-                        "trade_date": item.trade_date.isoformat(),
-                    }
-                    for item in aggregates
-                ]
-            )
-        ).hexdigest(),
-        "min_count_coverage": min_coverage,
-        "min_weight_coverage": min_coverage,
-    }
-    if sector_level == "L2":
-        manifest["schema_version"] = "hmm_risk_direct_l2_stock_fact_dataset_manifest_v1"
-        manifest["direct_sector_level"] = "L2"
-        manifest["invalid_sector_date_count"] = manifest.pop("invalid_l1_date_count")
-        manifest["invalid_sector_dates"] = manifest.pop("invalid_l1_dates")
+    manifest = _stock_fact_manifest(
+        reader,
+        sector_level=sector_level,
+        min_coverage=min_coverage,
+        raw_count=raw_count,
+        missing_row_count=len(missing_rows),
+        raw_jsonl_sha256=digest.hexdigest(),
+        aggregates=aggregates,
+        invalid_sector_dates=invalid_sector_dates,
+        provider_absence_keys=moneyflow_provider_absence_keys,
+        alias_resolution_keys=moneyflow_alias_resolution_keys,
+        circ_mv_stale_keys=circ_mv_stale_keys,
+    )
     return aggregates, manifest
+
+
+def load_direct_daily_aggregates(
+    reader: PostgresStockFactReader,
+    *,
+    min_coverage: float = MIN_COVERAGE,
+) -> tuple[list[L1DailyAggregate], dict[str, Any], list[L1DailyAggregate], dict[str, Any]]:
+    """Build direct L1/L2 aggregates from one canonical stock-fact database stream."""
+
+    missing_rows = list(reader.iter_missing_price_rows())
+    merged_rows = heapq.merge(
+        reader.iter_stock_fact_rows(),
+        iter(missing_rows),
+        key=lambda row: (row["trade_date"], row["l1_code"], row["symbol"], row["l2_code"]),
+    )
+    l1_digest = hashlib.sha256()
+    l2_digest = hashlib.sha256()
+    raw_count = 0
+    l1_aggregates: list[L1DailyAggregate] = []
+    l2_aggregates: list[L1DailyAggregate] = []
+    l1_invalid: list[dict[str, Any]] = []
+    l2_invalid: list[dict[str, Any]] = []
+    provider_absence_keys: list[dict[str, str]] = []
+    alias_resolution_keys: list[dict[str, str]] = []
+    circ_mv_stale_keys: list[dict[str, Any]] = []
+
+    for _, day_group in itertools.groupby(merged_rows, key=lambda row: row["trade_date"]):
+        day_rows = list(day_group)
+        l1_rows = sorted(day_rows, key=lambda row: (row["l1_code"], row["symbol"], row["l2_code"]))
+        l2_rows = sorted(day_rows, key=lambda row: (row["l2_code"], row["symbol"], row["l1_code"]))
+        for row in l1_rows:
+            _record_source_evidence(
+                row,
+                provider_absence_keys=provider_absence_keys,
+                alias_resolution_keys=alias_resolution_keys,
+                circ_mv_stale_keys=circ_mv_stale_keys,
+            )
+            serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
+            l1_digest.update(canonical_json_bytes(serialized))
+            l1_digest.update(b"\n")
+            raw_count += 1
+        for row in l2_rows:
+            serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
+            l2_digest.update(canonical_json_bytes(serialized))
+            l2_digest.update(b"\n")
+        for _, group in itertools.groupby(l1_rows, key=lambda row: row["l1_code"]):
+            _append_aggregate(
+                list(group),
+                min_coverage=min_coverage,
+                sector_level="L1",
+                aggregates=l1_aggregates,
+                invalid_sector_dates=l1_invalid,
+            )
+        projected_l2_rows = []
+        for row in l2_rows:
+            projected = dict(row)
+            projected["l1_code"] = row["l2_code"]
+            projected["l1_name"] = row["l2_name"]
+            projected_l2_rows.append(projected)
+        for _, group in itertools.groupby(projected_l2_rows, key=lambda row: row["l1_code"]):
+            _append_aggregate(
+                list(group),
+                min_coverage=min_coverage,
+                sector_level="L2",
+                aggregates=l2_aggregates,
+                invalid_sector_dates=l2_invalid,
+            )
+    if not l1_aggregates or not l2_aggregates:
+        raise StateModelSetError("PostgreSQL stock-fact source produced no direct L1/L2 aggregates")
+    l1_manifest = _stock_fact_manifest(
+        reader,
+        sector_level="L1",
+        min_coverage=min_coverage,
+        raw_count=raw_count,
+        missing_row_count=len(missing_rows),
+        raw_jsonl_sha256=l1_digest.hexdigest(),
+        aggregates=l1_aggregates,
+        invalid_sector_dates=l1_invalid,
+        provider_absence_keys=list(provider_absence_keys),
+        alias_resolution_keys=list(alias_resolution_keys),
+        circ_mv_stale_keys=list(circ_mv_stale_keys),
+    )
+    l2_manifest = _stock_fact_manifest(
+        reader,
+        sector_level="L2",
+        min_coverage=min_coverage,
+        raw_count=raw_count,
+        missing_row_count=len(missing_rows),
+        raw_jsonl_sha256=l2_digest.hexdigest(),
+        aggregates=l2_aggregates,
+        invalid_sector_dates=l2_invalid,
+        provider_absence_keys=list(provider_absence_keys),
+        alias_resolution_keys=list(alias_resolution_keys),
+        circ_mv_stale_keys=list(circ_mv_stale_keys),
+    )
+    return l1_aggregates, l1_manifest, l2_aggregates, l2_manifest

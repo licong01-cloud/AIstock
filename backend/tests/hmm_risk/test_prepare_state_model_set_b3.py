@@ -20,6 +20,10 @@ def _request() -> dict:
             "universe_rule_version": "frozen-rule",
             "source_start": "2020-07-30",
             "source_end": "2025-04-30",
+            "security_identity_manifest_path": ("backend/services/hmm_risk/manifests/security_source_identity_v1.json"),
+            "security_identity_manifest_sha256": ("24e0070fd97e00e5021eafc295426144b5b2eb3f7d76d4828aab18fe6d21358f"),
+            "provider_absence_manifest_path": ("backend/services/hmm_risk/manifests/provider_absence_v1.json"),
+            "provider_absence_manifest_sha256": ("717b899cbc5cebfa41f9ffe9d4fe32055f033bc93d1712d5da6a983a6a93e886"),
         },
         "producer_commit": "c" * 40,
         "dataset_manifest_hash": subject.canonical_sha256(dataset),
@@ -30,11 +34,15 @@ def _request() -> dict:
                 "family": "legacy_covfix",
                 "feature_names": list(BASE_FEATURES),
                 "preprocess_family": "identity",
+                "train_start": "2022-01-01",
+                "train_end": "2024-06-30",
             },
             {
                 "family": "autocycle_all_core",
                 "feature_names": list(ALL_CORE_FEATURES),
                 "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+                "train_start": "2022-01-01",
+                "train_end": "2024-06-30",
             },
         ],
     }
@@ -49,17 +57,47 @@ def _preflight_inputs() -> dict:
                 "schema_version": "l1_facts_v1",
                 "aggregate_row_count": 33_221,
                 "invalid_l1_date_count": 2_491,
+                "moneyflow_provider_absence_count": 502,
+                "moneyflow_provider_absence_key_sha256": "1" * 64,
+                "moneyflow_alias_resolution_count": 591,
+                "moneyflow_alias_resolution_key_sha256": "2" * 64,
+                "circ_mv_asof_stale_count": 466,
+                "circ_mv_asof_max_staleness_trading_days": 9,
+                "circ_mv_asof_stale_key_sha256": "3" * 64,
             },
-            "calendar_benchmark": {"schema_version": "calendar_v1"},
+            "calendar_benchmark": {"schema_version": "calendar_v1", "row_count": 601},
+            "security_source_identity": {
+                "schema_version": "hmm_risk_security_source_identity_manifest_v1",
+                "manifest_sha256": "a" * 64,
+            },
+            "provider_absence_authority": {
+                "schema_version": "hmm_risk_provider_absence_manifest_v1",
+                "manifest_sha256": "b" * 64,
+            },
         },
         "mapping_manifest": {"schema_version": "mapping_v1"},
         "l2_stock_fact_manifest": {
             "schema_version": "l2_dataset_v1",
             "aggregate_row_count": 145_805,
             "invalid_sector_date_count": 4_067,
+            "moneyflow_provider_absence_count": 502,
+            "moneyflow_provider_absence_key_sha256": "1" * 64,
+            "moneyflow_alias_resolution_count": 591,
+            "moneyflow_alias_resolution_key_sha256": "2" * 64,
+            "circ_mv_asof_stale_count": 466,
+            "circ_mv_asof_max_staleness_trading_days": 9,
+            "circ_mv_asof_stale_key_sha256": "3" * 64,
         },
         "panel": [object()] * 35_712,
         "l2_panel": [object()] * 150_912,
+        "security_identity_manifest": {
+            "schema_version": "hmm_risk_security_source_identity_manifest_v1",
+            "manifest_sha256": "a" * 64,
+        },
+        "provider_absence_manifest": {
+            "schema_version": "hmm_risk_provider_absence_manifest_v1",
+            "manifest_sha256": "b" * 64,
+        },
     }
 
 
@@ -115,6 +153,13 @@ def test_formal_b3_rejects_well_formed_but_unapproved_frozen_identity() -> None:
 
     with pytest.raises(StateModelSetError, match="formal B3 frozen identity mismatch: dataset_manifest_hash"):
         subject._require_approved_b3_identities(identities)
+
+
+def test_source_loader_requires_explicit_identity_and_provider_absence_manifests() -> None:
+    with pytest.raises(StateModelSetError, match="security_identity_manifest_path"):
+        subject._load_security_identity_manifest({})
+    with pytest.raises(StateModelSetError, match="provider_absence_manifest_path"):
+        subject._load_provider_absence_manifest({})
 
 
 def test_preflight_rejects_live_manifest_drift_before_candidate_ready(monkeypatch) -> None:
@@ -190,6 +235,59 @@ def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(
     assert report["train_coverage_valid"] is False
     assert report["failure_reason_codes"] == ["hmm_risk_model_train_observation_coverage_insufficient"]
     assert report["fit_performed"] is False
+
+
+def test_c009_preflight_uses_immutable_train_window_and_never_runs_model_stages(monkeypatch) -> None:
+    request = _request()
+    inputs = _preflight_inputs()
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
+
+    def load_inputs(train_request, *, db_prefix):
+        observed["source"] = dict(train_request["source"])
+        observed["db_prefix"] = db_prefix
+        return inputs
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", load_inputs)
+    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
+
+    report = subject.prepare_c009_stock_fact_preflight(request, db_prefix="TDX_DB_")
+
+    assert report["schema_version"] == subject.C009_STOCK_FACT_PREFLIGHT_SCHEMA
+    assert report["status"] == "preflight_complete"
+    assert observed["source"]["source_start"] == "2022-01-01"
+    assert observed["source"]["source_end"] == "2024-06-30"
+    assert observed["db_prefix"] == "TDX_DB_"
+    assert report["trading_date_count"] == 601
+    assert report["source_statistics"]["moneyflow_provider_absence_count"] == 502
+    assert report["source_statistics"]["moneyflow_alias_resolution_count"] == 591
+    assert report["source_statistics"]["circ_mv_asof_stale_count"] == 466
+    assert report["provider_absence_authority"]["manifest_sha256"] == "b" * 64
+    assert report["approved_source_coverage_contract_applied"] is True
+    for field in (
+        "fit_performed",
+        "selection_performed",
+        "d5_performed",
+        "d6_performed",
+        "formal_model_acceptance_thresholds_applied",
+        "hard_semantic_authority_changed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    ):
+        assert report[field] is False
+
+
+def test_c009_preflight_rejects_l1_l2_source_evidence_drift(monkeypatch) -> None:
+    inputs = _preflight_inputs()
+    inputs["l2_stock_fact_manifest"]["moneyflow_provider_absence_count"] = 501
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
+
+    with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
+        subject.prepare_c009_stock_fact_preflight(_request(), db_prefix="TDX_DB_")
 
 
 def test_request_template_loader_accepts_unfrozen_template_but_formal_loader_rejects_it(tmp_path) -> None:

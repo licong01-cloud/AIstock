@@ -1,6 +1,22 @@
 {
-  "actual": "Read-only C-008-B3 train-window audit on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves two remaining source-data gaps after BUG-876 semantics are applied: 466 canonical eligible symbol-days lack daily_basic on the exact previous trading date required for causal circ_mv weight, and 689009.SH has 601 mapped eligible price days but only 104 moneyflow_ts rows, leaving 497 stock-days missing from 2022-01-04 through 2024-01-18. Current eligible non-suspended kline missing-price rows are 0; source conflicting duplicate groups are 0. The repair must use existing ingestion/backfill authority, validate in the existing DEV database first, provide read-only preflight/apply/readback/guarded rollback/idempotency evidence, preserve PIT/7D/20D/D4-D6 contracts, and must not execute production DML, training, seed selection, model/READY, or runtime restart without separate authorization.",
+  "actual": "Production read-only exact-key preflight on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves 466 daily_basic and 1093 moneyflow_ts apparent candidates. All 466 daily-basic dates are exact stock suspension dates: suspend_d exists, kline is absent, and Tushare also publishes no daily_basic row, so these are not local or H5 data loss and cannot be repaired by DML. Moneyflow breaks down as 302132.SZ=591, 689009.SH=497, 603326.SH=2, and 603595.SH/603081.SH/002951.SZ=1 each. The 591 302132.SZ dates have exact complete 300114.SZ source rows and are a cross-source code-identity mismatch after the same listed entity changed code; the other 502 rows are absent from Tushare's trade-date authority. No candidate has a same-identity authoritative provider row. Canonical observed price required-field gaps, current eligible non-suspended missing-price rows, stk_limit/up_limit gaps, and conflicting duplicate groups are zero. The blocking defect is the approved exact-previous-market-day circ_mv contract on suspension days, not database/H5 incompleteness. No production DML, alias rewrite, HMM fit, selection, model/READY, or runtime action has been executed.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/security_identity.py",
+    "backend/services/hmm_risk/provider_absence.py",
+    "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+    "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
+    "backend/services/hmm_risk/stock_fact_gap_repair.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+    "backend/tests/hmm_risk/test_security_identity.py",
+    "backend/tests/hmm_risk/test_provider_absence.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
     "tests/aistock_validation/bugs/20260726_BUG-877-hmm-b3-frozen-train-source-has-exact-date-daily-basic-and-689009-moneyfl.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,20 +29,81 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-26T17:21:23.347912Z",
-  "description": "Read-only C-008-B3 train-window audit on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves two remaining source-data gaps after BUG-876 semantics are applied: 466 canonical eligible symbol-days lack daily_basic on the exact previous trading date required for causal circ_mv weight, and 689009.SH has 601 mapped eligible price days but only 104 moneyflow_ts rows, leaving 497 stock-days missing from 2022-01-04 through 2024-01-18. Current eligible non-suspended kline missing-price rows are 0; source conflicting duplicate groups are 0. The repair must use existing ingestion/backfill authority, validate in the existing DEV database first, provide read-only preflight/apply/readback/guarded rollback/idempotency evidence, preserve PIT/7D/20D/D4-D6 contracts, and must not execute production DML, training, seed selection, model/READY, or runtime restart without separate authorization.",
+  "description": "The HMM B3 frozen stock-fact source has 466 exact daily_basic candidates and 1093 apparent moneyflow candidates. Read-only provider and lineage audit separates the moneyflow set into 591 historical rows present under predecessor code 300114.SZ for canonical code 302132.SZ, plus 502 rows absent from Tushare's own moneyflow authority. The guarded repair must enumerate every exact key, reject incomplete or mismatched provider identity, remain insert-only with canonical readback/idempotency/exact rollback, and keep alias semantics, production DML, training, selection, model/READY, database and runtime actions behind their existing separate authorization boundaries.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260726-4763032b2877",
       "timestamp": "2026-07-26T17:21:23.347905Z"
+    },
+    {
+      "action": "expand_exact_key_lineage_evidence",
+      "actor": "codex",
+      "note": "Production read-only preflight found 466 daily-basic and 1093 moneyflow candidates; 591 moneyflow dates are complete under predecessor code 300114.SZ, while the remaining 502 exact rows are absent from Tushare trade-date authority. No DML or alias rewrite was executed.",
+      "timestamp": "2026-07-26T19:07:44.5377569Z"
+    },
+    {
+      "action": "repair_framework_validated_provider_resolution_pending",
+      "actor": "codex",
+      "note": "Implemented hashed dataset-scoped plans, exact provider validation, insert-only apply, durable pre-commit receipt preparation, canonical readback/idempotency, guarded rollback, strict DEV/production identity, and bounded typed provider retry. Provider completeness remained pending at this step; no production DML was executed.",
+      "timestamp": "2026-07-26T20:07:37.4313284Z"
+    },
+    {
+      "action": "classify_suspension_contract_not_data_loss",
+      "actor": "codex",
+      "note": "Confirmed all 466 daily-basic keys are suspension dates with no provider row, all 1093 moneyflow keys lack a same-identity provider row, and production DML has no legal candidate. Proposed C-009-A causal as-of circ_mv contract remains unapproved and unimplemented.",
+      "timestamp": "2026-07-26T20:19:35.5598999Z"
+    },
+    {
+      "action": "approve_c009_source_contract_and_expand_scope",
+      "actor": "user",
+      "note": "Approved C-009-A/B/C/D and expanded BUG-877 for the source-specific security resolver, causal circ_mv as-of, provider-absence NA evidence, and a 601-trading-day read-only preflight. Production DML, 5184 fits, selection, D6, model/READY, runtime actions, and source merge remain outside this authorization.",
+      "timestamp": "2026-07-27T02:42:07.1188081Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "tmp/validation/hmm_risk/bug877_production_full_plan_v2.json: selected_datasets=[daily_basic,moneyflow_ts] daily_basic=466 moneyflow_ts=1093 candidate_key_sha256=a69df9ec676031541824c314f154403a41fe596c410c933ebfba55aef0f696f3 plan_sha256=9583b1a46a87b655c566662a77e9da8139c7507ee069367808da48e0dab0fe75 db_writes=false",
+    "tmp/validation/hmm_risk/bug877_production_daily_basic_plan_v2.json: selected_datasets=[daily_basic] daily_basic=466 moneyflow_ts=0 candidate_key_sha256=4c1a755a14e40bfd6d734381e5b7757e4bd7809100ffc605118932a5be0f0e29 plan_sha256=5b48d1fa46f3a5a5f01c7a0b3e1778b24471007d738575b2a29d349577d83709 db_writes=false",
+    "read-only DB lineage: canonical price rows=2627746 required price NULL rows=0; current missing-price rows=0; stk_limit/up_limit gaps=0; conflicting duplicate groups=0",
+    "read-only DB lineage: 302132.SZ target dates=591; 300114.SZ exact source rows=591; required NULL rows=0; source-row SHA-256=c43da698b9c53dc753dd81f7f05cb9b35cd183bae8564c5b7a527ec0b18c655d",
+    "Tushare trade-date moneyflow evidence: 689009.SH pre-2024-01-19 and the five one-off exact keys are absent; 302132.SZ history is returned under 300114.SZ before the 2025-02-17 code change",
+    "local-data MCP daily_basic date-level gap check=0 ranges; proves platform day coverage does not detect per-symbol holes",
+    "local-data MCP plan IDs ldmp_f0741df963256b8e495142eb and ldmp_eba647da9ec4a9202422867c are plan-only and were not applied",
+    "DEV preflight: failed closed because the DEV source does not cover every frozen trading date; db_writes=false",
+    "DEV transaction rollback smoke: synthetic exact row insert=1 readback=1 exact delete=1 post-delete=0 transaction_committed=false production_touched=false",
+    "direct repair contract tests: 17 passed",
+    "nox hmm_risk_backend: 92 passed; total branch coverage=73.92%",
+    "explicit changed-file nox l0: PASS, files=6, blocking=0",
+    "nox validation_module_registry_l0: 8 passed; catalog mapping 14/14",
+    "changed-file ownership: 6/6 mapped, unmapped=0, ambiguous=0",
+    "Feature Workflow F2 validation: PASS, design_items=3, matrix_rows=8, warnings=0",
+    "provider audit first run failed explicitly on HTTP proxy read timeout; bounded three-attempt typed retry was added and partial results were not accepted",
+    "completed Tushare daily-basic audit: exact provider rows=0/466; missing=466; no partial result accepted",
+    "suspension lineage: 466/466 daily-basic candidate dates have suspend_d, 0/466 have kline, and 0/466 are unexplained"
+  ],
+  "expected": "The HMM stock-fact contract must distinguish suspension-day absence, true provider absence, and cross-source security-code identity without fabricating database rows. Production DML is allowed only for an exact same-identity authoritative provider row; none currently exist. A suspension-aware causal circ_mv as-of contract may use only a source date before t, must persist source date/staleness, and must fail closed when no causal row exists, but this business-contract change requires explicit user approval before implementation or retraining.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+      "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+      "backend/services/hmm_risk/stock_fact_gap_repair.py",
+      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_gap_repair.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,10 +113,27 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+      "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/stock_fact_gap_repair.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ]
   },
   "first_seen_at": "2026-07-26T17:21:23.347912Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-877-hmm-b3-frozen-train-source-has-exact-date-daily-20260726",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2772,
@@ -47,12 +141,14 @@
   "last_seen_at": "2026-07-26T17:21:23.347912Z",
   "module": "hmm.risk",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not execute production DML, a local-data confirmed repair, HMM training, selection, model/READY writes, or PIT identity changes in this source PR."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
+  "production_dml_gate": "noop_no_authoritative_candidate",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run the BUG-877 production read-only exact-key preflight for 2022-01-01..2024-06-30; expect daily_basic=466, moneyflow_ts=1093, candidate_key_sha256=a69df9ec676031541824c314f154403a41fe596c410c933ebfba55aef0f696f3, and no database writes.",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
@@ -64,7 +160,7 @@
   "suspected_modules": [
     "hmm.risk"
   ],
-  "title": "HMM B3 frozen train source has exact-date daily-basic and 689009 moneyflow gaps",
+  "title": "HMM B3 exact previous-day circ_mv contract misclassifies suspension/provider identity absence as repairable data loss",
   "trigger_condition": {
     "fingerprint": "4763032b2877d08be02457bf",
     "source_event_id": "FE-20260726-4763032b2877"

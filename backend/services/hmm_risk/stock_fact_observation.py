@@ -254,6 +254,29 @@ def _row_complete(row: Mapping[str, Any]) -> tuple[bool, list[str]]:
     return not missing, missing
 
 
+def _missing_row_evidence(row: Mapping[str, Any], fields: Sequence[str]) -> dict[str, Any]:
+    evidence: dict[str, Any] = {"symbol": str(row.get("symbol") or ""), "fields": list(fields)}
+    moneyflow_fields = {
+        "buy_sm_amount_cny",
+        "sell_sm_amount_cny",
+        "buy_elg_amount_cny",
+        "sell_elg_amount_cny",
+        "net_mf_amount_cny",
+    }
+    if moneyflow_fields.intersection(fields):
+        evidence["moneyflow_fact_status"] = str(row.get("moneyflow_fact_status") or "required_fields_invalid")
+        identity = row.get("moneyflow_source_identity")
+        if isinstance(identity, Mapping):
+            evidence["moneyflow_source_identity"] = dict(identity)
+        provider_absence = row.get("moneyflow_provider_absence")
+        if isinstance(provider_absence, Mapping):
+            evidence["moneyflow_provider_absence"] = dict(provider_absence)
+    if "prev_circ_mv_cny" in fields:
+        evidence["circ_mv_source_date"] = row.get("circ_mv_source_date")
+        evidence["circ_mv_staleness_trading_days"] = row.get("circ_mv_staleness_trading_days")
+    return evidence
+
+
 def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float = MIN_COVERAGE) -> L1DailyAggregate:
     """Aggregate one sorted L1/date group with explicit count and cap-weight coverage."""
 
@@ -280,7 +303,7 @@ def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float =
         try:
             expected_weights.append(_finite_number(row.get("prev_circ_mv_cny"), "prev_circ_mv_cny", positive=True))
         except StateModelSetError:
-            missing_weight_evidence.append({"symbol": str(row.get("symbol") or ""), "fields": ["prev_circ_mv_cny"]})
+            missing_weight_evidence.append(_missing_row_evidence(row, ["prev_circ_mv_cny"]))
     if missing_weight_evidence:
         known_count_coverage = (len(expected) - len(missing_weight_evidence)) / len(expected)
         raise ObservationCoverageError(
@@ -300,7 +323,7 @@ def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float =
         if ok:
             complete.append(row)
         else:
-            missing_evidence.append({"symbol": row["symbol"], "fields": missing})
+            missing_evidence.append(_missing_row_evidence(row, missing))
     count_coverage = len(complete) / len(expected)
     complete_weight = sum(float(row["prev_circ_mv_cny"]) for row in complete)
     weight_coverage = complete_weight / expected_weight
