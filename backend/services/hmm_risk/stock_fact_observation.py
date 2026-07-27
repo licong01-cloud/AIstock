@@ -47,6 +47,14 @@ REQUIRED_STOCK_FIELDS = (
     "net_mf_amount_cny",
     "up_limit_yuan",
 )
+MONEYFLOW_STOCK_FIELDS = (
+    "buy_sm_amount_cny",
+    "sell_sm_amount_cny",
+    "buy_elg_amount_cny",
+    "sell_elg_amount_cny",
+    "net_mf_amount_cny",
+)
+PRICE_STOCK_FIELDS = tuple(field for field in REQUIRED_STOCK_FIELDS if field not in MONEYFLOW_STOCK_FIELDS)
 
 
 class ObservationCoverageError(StateModelSetError):
@@ -226,6 +234,22 @@ class L1DailyAggregate:
     missing_evidence: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class FeatureDomainDailyAggregate(L1DailyAggregate):
+    """Diagnostic aggregate whose extra fields never enter formal source manifests."""
+
+    net_mf_amount: float | None
+    buy_sm_amount: float | None
+    sell_sm_amount: float | None
+    buy_elg_amount: float | None
+    sell_elg_amount: float | None
+    moneyflow_amount: float | None = None
+    moneyflow_count_coverage: float | None = None
+    moneyflow_weight_coverage: float | None = None
+    moneyflow_domain_status: str = "same_as_price_domain"
+    moneyflow_excluded_symbols: tuple[str, ...] = ()
+
+
 def _row_complete(row: Mapping[str, Any]) -> tuple[bool, list[str]]:
     missing: list[str] = []
     for field in REQUIRED_STOCK_FIELDS:
@@ -277,7 +301,205 @@ def _missing_row_evidence(row: Mapping[str, Any], fields: Sequence[str]) -> dict
     return evidence
 
 
-def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float = MIN_COVERAGE) -> L1DailyAggregate:
+def _aggregate_feature_domain_day(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    trade_date: date,
+    l1_code: str,
+    l1_name: str,
+    min_coverage: float,
+    moneyflow_excluded_symbols: frozenset[str],
+) -> FeatureDomainDailyAggregate:
+    expected = [row for row in rows if not bool(row.get("is_suspended"))]
+    if not expected:
+        raise StateModelSetError(f"{l1_code}/{trade_date} has no observed denominator")
+    expected_weights: list[float] = []
+    missing_weight_evidence: list[dict[str, Any]] = []
+    for row in expected:
+        try:
+            expected_weights.append(_finite_number(row.get("prev_circ_mv_cny"), "prev_circ_mv_cny", positive=True))
+        except StateModelSetError:
+            missing_weight_evidence.append(_missing_row_evidence(row, ["prev_circ_mv_cny"]))
+    if missing_weight_evidence:
+        known_count_coverage = (len(expected) - len(missing_weight_evidence)) / len(expected)
+        raise ObservationCoverageError(
+            f"{l1_code}/{trade_date} previous float-market-value denominator is incomplete "
+            f"known_count={known_count_coverage:.6f}",
+            trade_date=trade_date,
+            l1_code=l1_code,
+            count_coverage=float(known_count_coverage),
+            weight_coverage=0.0,
+            missing_evidence=missing_weight_evidence,
+        )
+    expected_weight = float(sum(expected_weights))
+    price_complete: list[Mapping[str, Any]] = []
+    price_missing: list[dict[str, Any]] = []
+    for row in expected:
+        missing = []
+        for field in PRICE_STOCK_FIELDS:
+            try:
+                _finite_number(
+                    row.get(field),
+                    field,
+                    positive=field
+                    in {
+                        "open_yuan",
+                        "high_yuan",
+                        "low_yuan",
+                        "close_yuan",
+                        "prev_close_yuan",
+                        "prev_close_5_yuan",
+                        "prev_close_10_yuan",
+                        "total_mv_cny",
+                        "prev_circ_mv_cny",
+                        "up_limit_yuan",
+                    },
+                    non_negative=field in {"volume_shares", "amount_cny"},
+                )
+            except StateModelSetError:
+                missing.append(field)
+        if missing:
+            price_missing.append(_missing_row_evidence(row, missing))
+        else:
+            price_complete.append(row)
+    price_count_coverage = len(price_complete) / len(expected)
+    price_complete_weight = sum(float(row["prev_circ_mv_cny"]) for row in price_complete)
+    price_weight_coverage = price_complete_weight / expected_weight
+    if price_count_coverage < min_coverage or price_weight_coverage < min_coverage:
+        raise ObservationCoverageError(
+            f"{l1_code}/{trade_date} price-domain stock coverage is insufficient "
+            f"count={price_count_coverage:.6f} weight={price_weight_coverage:.6f}",
+            trade_date=trade_date,
+            l1_code=l1_code,
+            count_coverage=float(price_count_coverage),
+            weight_coverage=float(price_weight_coverage),
+            missing_evidence=price_missing,
+        )
+
+    moneyflow_expected = [row for row in expected if str(row.get("symbol") or "") not in moneyflow_excluded_symbols]
+    moneyflow_complete: list[Mapping[str, Any]] = []
+    moneyflow_missing: list[dict[str, Any]] = []
+    for row in moneyflow_expected:
+        missing = []
+        for field in (*MONEYFLOW_STOCK_FIELDS, "amount_cny", "prev_circ_mv_cny"):
+            try:
+                _finite_number(
+                    row.get(field),
+                    field,
+                    positive=field == "prev_circ_mv_cny",
+                    non_negative=field == "amount_cny",
+                )
+            except StateModelSetError:
+                missing.append(field)
+        if missing:
+            moneyflow_missing.append(_missing_row_evidence(row, missing))
+        else:
+            moneyflow_complete.append(row)
+    if not moneyflow_expected:
+        moneyflow_count_coverage = 0.0
+        moneyflow_weight_coverage = 0.0
+        moneyflow_status = "structurally_unavailable"
+    else:
+        moneyflow_expected_weight = sum(float(row["prev_circ_mv_cny"]) for row in moneyflow_expected)
+        moneyflow_complete_weight = sum(float(row["prev_circ_mv_cny"]) for row in moneyflow_complete)
+        moneyflow_count_coverage = len(moneyflow_complete) / len(moneyflow_expected)
+        moneyflow_weight_coverage = moneyflow_complete_weight / moneyflow_expected_weight
+        moneyflow_status = (
+            "available"
+            if moneyflow_count_coverage >= min_coverage and moneyflow_weight_coverage >= min_coverage
+            else "coverage_insufficient"
+        )
+
+    weights = np.asarray([float(row["prev_circ_mv_cny"]) for row in price_complete], dtype=np.float64)
+    weights /= weights.sum()
+    close = np.asarray([float(row["close_yuan"]) for row in price_complete])
+    previous = np.asarray([float(row["prev_close_yuan"]) for row in price_complete])
+    previous_5 = np.asarray([float(row["prev_close_5_yuan"]) for row in price_complete])
+    previous_10 = np.asarray([float(row["prev_close_10_yuan"]) for row in price_complete])
+    high = np.asarray([float(row["high_yuan"]) for row in price_complete])
+    low = np.asarray([float(row["low_yuan"]) for row in price_complete])
+    returns_1 = close / previous - 1.0
+    returns_5 = close / previous_5 - 1.0
+    returns_10 = close / previous_10 - 1.0
+    range_ratio = (high - low) / close
+    true_range = np.maximum.reduce((high - low, np.abs(high - previous), np.abs(low - previous))) / previous
+    limit_up = np.asarray(
+        [float(row["close_yuan"]) >= float(row["up_limit_yuan"]) - 1e-4 for row in price_complete],
+        dtype=np.float64,
+    )
+    price_values = {
+        field: np.asarray([float(row[field]) for row in price_complete], dtype=np.float64)
+        for field in ("volume_shares", "amount_cny", "total_mv_cny")
+    }
+    result_values = np.concatenate(
+        [returns_1, returns_5, returns_10, range_ratio, true_range, limit_up, *price_values.values()]
+    )
+    if not np.isfinite(result_values).all():
+        raise StateModelSetError(f"{l1_code}/{trade_date} feature-domain aggregation produced non-finite price values")
+    moneyflow_values: dict[str, float] | None = None
+    moneyflow_amount: float | None = None
+    if moneyflow_status == "available":
+        moneyflow_values = {
+            field: float(sum(float(row[field]) for row in moneyflow_complete)) for field in MONEYFLOW_STOCK_FIELDS
+        }
+        moneyflow_amount = float(sum(float(row["amount_cny"]) for row in moneyflow_complete))
+        if not all(math.isfinite(value) for value in (*moneyflow_values.values(), moneyflow_amount)):
+            raise StateModelSetError(f"{l1_code}/{trade_date} feature-domain moneyflow aggregate is non-finite")
+    excluded_evidence = [
+        {
+            "symbol": str(row.get("symbol") or ""),
+            "fields": list(MONEYFLOW_STOCK_FIELDS),
+            "moneyflow_eligibility_status": "train_frozen_excluded",
+        }
+        for row in expected
+        if str(row.get("symbol") or "") in moneyflow_excluded_symbols
+    ]
+    return FeatureDomainDailyAggregate(
+        trade_date=trade_date,
+        l1_code=l1_code,
+        l1_name=l1_name,
+        l2_codes=tuple(sorted({str(row["l2_code"]) for row in price_complete})),
+        l1_return=float(np.dot(weights, returns_1)),
+        l1_volume=float(price_values["volume_shares"].sum()),
+        l1_amount=float(price_values["amount_cny"].sum()),
+        l1_total_mv=float(price_values["total_mv_cny"].sum()),
+        l1_range_ratio=float(np.dot(weights, range_ratio)),
+        l1_true_range_ratio=float(np.dot(weights, true_range)),
+        net_mf_amount=None if moneyflow_values is None else moneyflow_values["net_mf_amount_cny"],
+        buy_sm_amount=None if moneyflow_values is None else moneyflow_values["buy_sm_amount_cny"],
+        sell_sm_amount=None if moneyflow_values is None else moneyflow_values["sell_sm_amount_cny"],
+        buy_elg_amount=None if moneyflow_values is None else moneyflow_values["buy_elg_amount_cny"],
+        sell_elg_amount=None if moneyflow_values is None else moneyflow_values["sell_elg_amount_cny"],
+        limit_up_ratio=float(limit_up.mean()),
+        breadth_1d=float((returns_1 > 0).mean()),
+        breadth_5d=float((returns_5 > 0).mean()),
+        breadth_10d=float((returns_10 > 0).mean()),
+        dispersion_1d=float(np.std(returns_1, ddof=1)) if len(returns_1) > 1 else 0.0,
+        dispersion_5d=float(np.std(returns_5, ddof=1)) if len(returns_5) > 1 else 0.0,
+        dispersion_10d=float(np.std(returns_10, ddof=1)) if len(returns_10) > 1 else 0.0,
+        median_stock_return_1d=float(np.median(returns_1)),
+        median_stock_return_5d=float(np.median(returns_5)),
+        median_stock_return_10d=float(np.median(returns_10)),
+        mean_stock_return_1d=float(np.mean(returns_1)),
+        mean_stock_return_5d=float(np.mean(returns_5)),
+        mean_stock_return_10d=float(np.mean(returns_10)),
+        count_coverage=float(price_count_coverage),
+        weight_coverage=float(price_weight_coverage),
+        missing_evidence=tuple([*price_missing, *moneyflow_missing, *excluded_evidence]),
+        moneyflow_amount=moneyflow_amount,
+        moneyflow_count_coverage=float(moneyflow_count_coverage),
+        moneyflow_weight_coverage=float(moneyflow_weight_coverage),
+        moneyflow_domain_status=moneyflow_status,
+        moneyflow_excluded_symbols=tuple(sorted({item["symbol"] for item in excluded_evidence})),
+    )
+
+
+def aggregate_l1_day(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    min_coverage: float = MIN_COVERAGE,
+    moneyflow_excluded_symbols: frozenset[str] | None = None,
+) -> L1DailyAggregate:
     """Aggregate one sorted L1/date group with explicit count and cap-weight coverage."""
 
     if not rows:
@@ -293,6 +515,15 @@ def aggregate_l1_day(rows: Sequence[Mapping[str, Any]], *, min_coverage: float =
     symbols = [str(row.get("symbol") or "") for row in rows]
     if any(not symbol for symbol in symbols) or len(symbols) != len(set(symbols)):
         raise StateModelSetError(f"{l1_code}/{trade_date} contains empty or duplicate canonical symbols")
+    if moneyflow_excluded_symbols is not None:
+        return _aggregate_feature_domain_day(
+            rows,
+            trade_date=trade_date,
+            l1_code=l1_code,
+            l1_name=l1_name,
+            min_coverage=min_coverage,
+            moneyflow_excluded_symbols=moneyflow_excluded_symbols,
+        )
 
     expected = [row for row in rows if not bool(row.get("is_suspended"))]
     if not expected:
@@ -513,6 +744,8 @@ def build_l1_feature_panel(
     csi300_returns: Mapping[date, float],
     expected_sector_count: int = 31,
     direct_sector_level: str = "L1",
+    cross_section_min_coverage: float | None = None,
+    use_moneyflow_amount_denominator: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute the approved 7/20 features from L1 raw aggregates."""
 
@@ -544,8 +777,9 @@ def build_l1_feature_panel(
     panel["excess_return_Nd"] = by_sector["daily_excess"].rolling(3, min_periods=3).mean().droplevel(0)
     panel["volume_ratio"] = panel["l1_volume"] / market_volume.replace(0, np.nan)
     panel["volatility_Nd"] = by_sector["l1_return"].rolling(3, min_periods=3).std(ddof=0).droplevel(0)
-    panel["net_mf_ratio"] = panel["net_mf_amount"] / panel["l1_amount"].replace(0, np.nan)
-    panel["elg_net_mf_ratio"] = (panel["buy_elg_amount"] - panel["sell_elg_amount"]) / panel["l1_amount"].replace(
+    moneyflow_denominator = panel["moneyflow_amount"] if use_moneyflow_amount_denominator else panel["l1_amount"]
+    panel["net_mf_ratio"] = panel["net_mf_amount"] / moneyflow_denominator.replace(0, np.nan)
+    panel["elg_net_mf_ratio"] = (panel["buy_elg_amount"] - panel["sell_elg_amount"]) / moneyflow_denominator.replace(
         0, np.nan
     )
     panel["sector_turnover"] = panel["l1_amount"] / panel["l1_total_mv"].replace(0, np.nan) * 100.0
@@ -555,7 +789,7 @@ def build_l1_feature_panel(
     turn20 = by_sector["sector_turnover"].rolling(20, min_periods=10).mean().droplevel(0)
     panel["sf_turnover_ma5_ma20_neg"] = -(turn5 / turn20.replace(0, np.nan) - 1.0)
     panel["sf_mf_net_ratio_std_5d_neg"] = -by_sector["net_mf_ratio"].rolling(5, min_periods=5).std(ddof=1).droplevel(0)
-    panel["small_net_ratio"] = (panel["buy_sm_amount"] - panel["sell_sm_amount"]) / panel["l1_amount"].replace(
+    panel["small_net_ratio"] = (panel["buy_sm_amount"] - panel["sell_sm_amount"]) / moneyflow_denominator.replace(
         0, np.nan
     )
     panel["sf_small_net_ratio_5d"] = by_sector["small_net_ratio"].rolling(5, min_periods=3).mean().droplevel(0)
@@ -564,10 +798,16 @@ def build_l1_feature_panel(
     panel["sf_atr14_pctile_250d_neg"] = -_rolling_rank(panel["atr14"], 250, 120)
 
     complete_count = panel["l1_return"].notna().groupby(level="trade_date").transform("sum")
+    if cross_section_min_coverage is None:
+        cross_section_valid = complete_count == expected_sector_count
+        cross_section_contract = "exact_complete"
+    else:
+        if not math.isfinite(cross_section_min_coverage) or not 0 < cross_section_min_coverage <= 1:
+            raise StateModelSetError("cross-section minimum coverage must be in (0,1]")
+        cross_section_valid = complete_count / expected_sector_count >= cross_section_min_coverage
+        cross_section_contract = "coverage_aware_diagnostic"
     range_median = panel["l1_range_ratio"].groupby(level="trade_date").transform("median")
-    range_vs_market = (panel["l1_range_ratio"] / range_median.replace(0, np.nan)).where(
-        complete_count == expected_sector_count
-    )
+    range_vs_market = (panel["l1_range_ratio"] / range_median.replace(0, np.nan)).where(cross_section_valid)
     panel["sf_range_vs_market_10d"] = (
         range_vs_market.groupby(level="l1_code", group_keys=False)
         .rolling(
@@ -579,13 +819,11 @@ def build_l1_feature_panel(
     )
     vol20 = by_sector["l1_return"].rolling(20, min_periods=10).std(ddof=1).droplevel(0)
     vol_median = vol20.groupby(level="trade_date").transform("median")
-    panel["sf_vol_vs_market_20d"] = (vol20 / vol_median.replace(0, np.nan)).where(
-        complete_count == expected_sector_count
-    )
+    panel["sf_vol_vs_market_20d"] = (vol20 / vol_median.replace(0, np.nan)).where(cross_section_valid)
     panel["sf_breadth_1d"] = panel["breadth_1d"]
     panel["sf_breadth_5d"] = panel["breadth_5d"]
     breadth_mean = panel["breadth_5d"].groupby(level="trade_date").transform("mean")
-    panel["sf_excess_breadth_5d"] = (panel["breadth_5d"] - breadth_mean).where(complete_count == expected_sector_count)
+    panel["sf_excess_breadth_5d"] = (panel["breadth_5d"] - breadth_mean).where(cross_section_valid)
     panel["sf_dispersion_5d_neg"] = -panel["dispersion_5d"]
     panel = panel.replace([np.inf, -np.inf], np.nan)
     feature_definition = {
@@ -600,6 +838,27 @@ def build_l1_feature_panel(
         "cross_section_required_l1_count": expected_sector_count if direct_sector_level == "L1" else None,
         "rank_tie_method": "pandas_average_pct",
     }
+    if cross_section_min_coverage is not None or use_moneyflow_amount_denominator:
+        feature_definition.update(
+            {
+                "diagnostic_only": True,
+                "cross_section_contract": cross_section_contract,
+                "cross_section_min_coverage": cross_section_min_coverage,
+                "moneyflow_denominator_by_feature": {
+                    "net_mf_ratio": "moneyflow_contributor_amount",
+                    "elg_net_mf_ratio": "moneyflow_contributor_amount",
+                    "sf_mf_net_ratio_std_5d_neg": "moneyflow_contributor_amount",
+                    "sf_small_net_ratio_5d": "moneyflow_contributor_amount",
+                }
+                if use_moneyflow_amount_denominator
+                else {
+                    "net_mf_ratio": "l1_amount",
+                    "elg_net_mf_ratio": "l1_amount",
+                    "sf_mf_net_ratio_std_5d_neg": "l1_amount",
+                    "sf_small_net_ratio_5d": "l1_amount",
+                },
+            }
+        )
     return panel, feature_definition
 
 

@@ -1,0 +1,338 @@
+{
+  "actual": "C-009 preflight: legacy L1 31/31, legacy L2 130/131 with 801881.SI=96 rows, autocycle L1 0/31, autocycle L2 0/131. One unavailable sector propagates through exact complete_count and rolling features to all sectors.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/stock_fact_observation.py",
+    "backend/services/hmm_risk/state_model_set.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "backend/services/hmm_risk/observation_eligibility.py",
+    "backend/tests/hmm_risk/test_observation_eligibility.py",
+    "tests/aistock_validation/bugs/20260727_BUG-886-hmm-provider-absence-amplifies-into-global-train-coverage-failure.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-886",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-27T06:24:39.511709Z",
+  "description": "C-009 preflight: legacy L1 31/31, legacy L2 130/131 with 801881.SI=96 rows, autocycle L1 0/31, autocycle L2 0/131. One unavailable sector propagates through exact complete_count and rolling features to all sectors.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260727-7bca63191fa7",
+      "timestamp": "2026-07-27T06:24:39.511706Z"
+    },
+    {
+      "action": "approve_c010_diagnostic_implementation",
+      "actor": "user",
+      "note": "Approved train-only feature-domain contributor eligibility and 601-day read-only diagnostic. PIT selection and runtime prediction eligibility remain unchanged; no HMM fit, selection, D6, model/READY, database write, runtime action, or formal policy activation is authorized.",
+      "timestamp": "2026-07-27T06:50:48.7909354Z"
+    },
+    {
+      "action": "complete_c010_readonly_diagnostic",
+      "actor": "codex",
+      "note": "601-day diagnostic completed from clean producer 385e8309. Only 689009.SH moneyflow contribution was excluded; all four family-level candidates were valid without feature removal. Baseline formal coverage remains invalid and formal policy remains inactive.",
+      "timestamp": "2026-07-27T07:17:34.0216437Z"
+    },
+    {
+      "action": "formal_review_reject_and_fix_c010_diagnostic",
+      "actor": "codex",
+      "note": "Formal review rejected the first diagnostic receipt because diagnostic fields changed formal aggregate identity, sf_small_net_ratio used a conflicting denominator, opportunity evidence lacked exact date-set identity/subset validation, and receipt authority was duplicated. Source fixes and direct regression tests are complete; the 601-day diagnostic must be rerun from a new clean producer.",
+      "timestamp": "2026-07-27T09:48:16.1186098Z"
+    },
+    {
+      "action": "complete_c010_review_fix_diagnostic",
+      "actor": "codex",
+      "note": "Clean producer 6f447908 completed the corrected 601-day diagnostic at a new immutable path. Exact opportunity date hashes and receipts read back correctly; only 689009.SH moneyflow contribution was excluded; all four candidates remained valid without feature removal; no fits, selections, artifacts, database writes, runtime actions, or formal policy activation occurred.",
+      "timestamp": "2026-07-27T10:33:01.5177336Z"
+    },
+    {
+      "action": "complete_c010_post_rebase_diagnostic",
+      "actor": "codex",
+      "note": "After rebasing the parent and BUG-886 source branches, clean producer 60d9ce16 regenerated the 601-day diagnostic at a third immutable path. Canonical report 2b1f4acc...7260 preserves all corrected results and binds them to the current source ancestry; no model or production action occurred.",
+      "timestamp": "2026-07-27T11:41:57.7474340Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #2796 C-009 report: alias=591 provider_absence=502 stale_circ_mv=348 failure=hmm_risk_model_train_observation_coverage_insufficient",
+    "C-010-DIAG-01 approved diagnostic contract: train-only 0.90 contributor availability, price/moneyflow domain separation, 0.90 cross-section diagnostic, deterministic feature-mask candidates, no formal policy activation",
+    "C-010-DIAG-01 first report canonical sha256 ded02740714ba55de6aeabf4b71d5f98282dfb4f6fb0dc11fc80e026ccad251f; superseded after formal review and retained only as historical failed-review evidence",
+    "C-010-DIAG-01 corrected pre-rebase report canonical sha256 ac218d78935d2adbf3940c0b97cce2d9db4a3e382e00f6beb86e245c7006b3ae; verified but superseded as final ancestry evidence by the post-rebase report",
+    "C-010-DIAG-01 post-rebase authoritative report canonical sha256 2b1f4accfb4e8a3d85ed4ca8ce2f9bf0547552c48938eb85a6166c8a3f007260; internal receipt ac17beb27ee9688c3b8808b12e0ceae26fe4789020408091d3576c13f6fa12ae; eligibility receipt 9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f; 5/5 exact opportunity hashes complete; excluded moneyflow contributor 689009.SH; four candidates valid; no fits/writes/actions"
+  ],
+  "expected": "Audited provider absence must remain explicit but must not invalidate unrelated price features or every sector cross-section. Stocks remain in PIT selection/trading; only train-frozen feature-domain contribution may be excluded. Any isolated sector candidate must persist an explicit feature mask rather than use neutral, proxy, L1 fallback, or silent fill.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/hmm_risk/observation_eligibility.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+        "backend/services/hmm_risk/observation_eligibility.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/services/hmm_risk/observation_eligibility.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_observation_eligibility.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+        "backend/services/hmm_risk/observation_eligibility.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "backend/services/hmm_risk/observation_eligibility.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py"
+    ]
+  },
+  "first_seen_at": "2026-07-27T06:24:39.511709Z",
+  "fix_branch": "bug/BUG-886-hmm-provider-absence-amplifies-into-global-train-20260727",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2799,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2799",
+  "last_seen_at": "2026-07-27T11:41:57.7474340Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not remove affected securities from the PIT selection universe or runtime prediction eligibility.",
+    "Do not run HMM fits, D5 selection, D6 validation, or write model/READY artifacts in C-010-DIAG-01.",
+    "Do not activate the diagnostic contributor eligibility or feature-mask candidate as formal training policy.",
+    "Do not execute database writes, dependency changes, deployment, or runtime service control."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review PR #2796 C-009 601-day preflight canonical sha256 b45d71d318e6793728dc8d570bd84be7d39f67e9d72937848b346fe4c37077d2",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM provider absence amplifies into global train coverage failure",
+  "trigger_condition": {
+    "fingerprint": "7bca63191fa7ed563d128613",
+    "source_event_id": "FE-20260727-7bca63191fa7"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
