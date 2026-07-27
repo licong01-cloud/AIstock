@@ -31,6 +31,7 @@ REASON_OBSERVATION_EXACT_VERSION_MISMATCH = "ADVISORY_PHASE1_OBSERVATION_EXACT_V
 REASON_OBSERVATION_CAPABILITY_UNAVAILABLE = "ADVISORY_PHASE1_OBSERVATION_CAPABILITY_UNAVAILABLE"
 REASON_OBSERVATION_CAPTURE_RECORD_INVALID = "ADVISORY_PHASE1_OBSERVATION_CAPTURE_RECORD_INVALID"
 REASON_OBSERVATION_MAPPING_CONFLICT = "ADVISORY_PHASE1_OBSERVATION_MAPPING_CONFLICT"
+REASON_OBSERVATION_FORMAL_RANGE_FORBIDDEN = "ADVISORY_PHASE1_FORMAL_RANGE_LINEAGE_FORBIDDEN"
 
 
 class ObservationSelectionPolicy(str, Enum):
@@ -86,6 +87,10 @@ class FixtureObservationVersion(BaseModel):
     stage_content_hashes: tuple[str, ...] = Field(min_length=1)
     stage_evidence_bundle_hash: str = Field(min_length=64, max_length=64)
     observation_payload: dict[str, Any]
+    lineage_source_type: str = Field(
+        default="PHASE0A_AUDIT",
+        pattern="^(PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY|HISTORICAL_RANGE_RESEARCH)$",
+    )
 
     @field_validator(
         "observation_content_hash",
@@ -412,6 +417,13 @@ class FixtureObservationVersionSelector:
         observation_versions: Iterable[FixtureObservationVersion],
     ) -> SelectedObservationMapping:
         versions = tuple(observation_versions)
+        if any(version.lineage_source_type == "HISTORICAL_RANGE_RESEARCH" for version in versions):
+            return self._mapping(
+                request=request,
+                terminal=None,
+                selection_status=ObservationSelectionStatus.CONFLICT,
+                reason_codes=(REASON_OBSERVATION_FORMAL_RANGE_FORBIDDEN,),
+            )
         if not versions:
             return self._mapping(
                 request=request,

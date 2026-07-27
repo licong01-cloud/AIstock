@@ -45,6 +45,9 @@ from backend.services.advisory_phase1.outcome_engine import (
     SourceMemberBinding,
     OUTCOME_CALCULATION_SCHEMA_VERSION,
 )
+from backend.services.advisory_phase1.retrospective_contracts import (
+    HistoricalRangeArtifactReference,
+)
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import MULTI_ALPHA_COMPONENT_EVIDENCE_SCHEMA_VERSION
 
@@ -73,6 +76,11 @@ logger = logging.getLogger(__name__)
 
 class LabelBuilderError(SourceLedgerError):
     """Stable Batch B failure with an explicit reason code."""
+
+
+class LabelPolicyLineageType(str, Enum):
+    PHASE1_LABEL_POLICY = "PHASE1_LABEL_POLICY"
+    HISTORICAL_RANGE_OUTCOME_POLICY = "HISTORICAL_RANGE_OUTCOME_POLICY"
 
 
 def _require_sha256(value: str, *, field_name: str) -> str:
@@ -137,8 +145,22 @@ class LabelAppendRequest(BaseModel):
     expected_predecessor_version_id: str | None = Field(default=None, min_length=1, max_length=160)
     expected_predecessor_version_hash: str | None = Field(default=None, min_length=64, max_length=64)
     expected_predecessor_revision_no: int | None = Field(default=None, ge=1)
-    label_policy_bundle_id: str = Field(min_length=1, max_length=160)
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    policy_lineage_type: LabelPolicyLineageType = (
+        LabelPolicyLineageType.PHASE1_LABEL_POLICY
+    )
+    label_policy_bundle_id: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    label_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    historical_range_policy_bundle_ref: HistoricalRangeArtifactReference | None = None
+    historical_range_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    policy_component_set_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     label_policy_hash: str = Field(min_length=64, max_length=64)
     label_source_revision_set_id: str = Field(min_length=1, max_length=160)
     label_source_revision_set_hash: str = Field(min_length=64, max_length=64)
@@ -158,6 +180,8 @@ class LabelAppendRequest(BaseModel):
         "label_key_hash",
         "expected_predecessor_version_hash",
         "label_policy_bundle_hash",
+        "historical_range_policy_bundle_hash",
+        "policy_component_set_hash",
         "label_policy_hash",
         "label_source_revision_set_hash",
         "projection_payload_hash",
@@ -170,15 +194,25 @@ class LabelAppendRequest(BaseModel):
         return _require_sha256(value, field_name=info.field_name) if value is not None else None
 
     def canonical_payload(self) -> dict[str, Any]:
-        return canonicalize(
-            self.model_dump(
-                mode="python",
-                exclude={
-                    "label_append_request_hash",
-                    "calculation_evidence_uri",
-                },
-            )
+        payload = self.model_dump(
+            mode="python",
+            exclude={
+                "label_append_request_hash",
+                "calculation_evidence_uri",
+            },
         )
+        if self.policy_lineage_type is LabelPolicyLineageType.PHASE1_LABEL_POLICY:
+            for key in (
+                "policy_lineage_type",
+                "historical_range_policy_bundle_ref",
+                "historical_range_policy_bundle_hash",
+                "policy_component_set_hash",
+            ):
+                payload.pop(key, None)
+        else:
+            payload.pop("label_policy_bundle_id", None)
+            payload.pop("label_policy_bundle_hash", None)
+        return canonicalize(payload)
 
     @model_validator(mode="after")
     def _frozen_semantics(self) -> "LabelAppendRequest":
@@ -193,6 +227,32 @@ class LabelAppendRequest(BaseModel):
             raise ValueError("expected predecessor values must be nullable together")
         if self.projection_schema_version != OUTCOME_CALCULATION_SCHEMA_VERSION:
             raise ValueError("unsupported projection schema version")
+        formal_policy = (
+            self.label_policy_bundle_id,
+            self.label_policy_bundle_hash,
+        )
+        range_policy = (
+            self.historical_range_policy_bundle_ref,
+            self.historical_range_policy_bundle_hash,
+            self.policy_component_set_hash,
+        )
+        if self.policy_lineage_type is LabelPolicyLineageType.PHASE1_LABEL_POLICY:
+            if any(value is None for value in formal_policy) or any(
+                value is not None for value in range_policy
+            ):
+                raise ValueError("formal label requires only Phase 1 policy identity")
+        else:
+            if any(value is not None for value in formal_policy) or any(
+                value is None for value in range_policy
+            ):
+                raise ValueError("range label requires only historical-range policy identity")
+            if (
+                self.historical_range_policy_bundle_ref is None
+                or self.historical_range_policy_bundle_ref.artifact_kind != "REQUEST"
+                or self.historical_range_policy_bundle_ref.payload_sha256
+                != self.historical_range_policy_bundle_hash
+            ):
+                raise ValueError("range label policy ref/hash pair does not match")
         if self.owner != self.outcome_result.owner:
             raise ValueError("label append owner does not match outcome result")
         if (
@@ -229,8 +289,22 @@ class OutcomeLabelVersion(BaseModel):
     supersedes_label_version_id: str | None = Field(default=None, min_length=1, max_length=160)
     supersedes_label_version_hash: str | None = Field(default=None, min_length=64, max_length=64)
     label_append_request_hash: str = Field(min_length=64, max_length=64)
-    label_policy_bundle_id: str = Field(min_length=1, max_length=160)
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    policy_lineage_type: LabelPolicyLineageType = (
+        LabelPolicyLineageType.PHASE1_LABEL_POLICY
+    )
+    label_policy_bundle_id: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    label_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    historical_range_policy_bundle_ref: HistoricalRangeArtifactReference | None = None
+    historical_range_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    policy_component_set_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     label_policy_hash: str = Field(min_length=64, max_length=64)
     label_source_revision_set_id: str = Field(min_length=1, max_length=160)
     label_source_revision_set_hash: str = Field(min_length=64, max_length=64)
@@ -253,6 +327,8 @@ class OutcomeLabelVersion(BaseModel):
         "supersedes_label_version_hash",
         "label_append_request_hash",
         "label_policy_bundle_hash",
+        "historical_range_policy_bundle_hash",
+        "policy_component_set_hash",
         "label_policy_hash",
         "label_source_revision_set_hash",
         "calculation_evidence_sha256",
@@ -269,7 +345,21 @@ class OutcomeLabelVersion(BaseModel):
         return _require_aware(value, field_name="computed_at")
 
     def canonical_payload(self) -> dict[str, Any]:
-        return canonicalize(self.model_dump(mode="python", exclude={"label_content_hash", "label_version_id"}))
+        payload = self.model_dump(
+            mode="python", exclude={"label_content_hash", "label_version_id"}
+        )
+        if self.policy_lineage_type is LabelPolicyLineageType.PHASE1_LABEL_POLICY:
+            for key in (
+                "policy_lineage_type",
+                "historical_range_policy_bundle_ref",
+                "historical_range_policy_bundle_hash",
+                "policy_component_set_hash",
+            ):
+                payload.pop(key, None)
+        else:
+            payload.pop("label_policy_bundle_id", None)
+            payload.pop("label_policy_bundle_hash", None)
+        return canonicalize(payload)
 
     @model_validator(mode="after")
     def _derive_identity(self) -> "OutcomeLabelVersion":
@@ -282,6 +372,24 @@ class OutcomeLabelVersion(BaseModel):
             raise ValueError("non-first label revision requires predecessor")
         if self.owner != self.outcome_result.owner:
             raise ValueError("label version owner does not match outcome result")
+        formal_policy = (
+            self.label_policy_bundle_id,
+            self.label_policy_bundle_hash,
+        )
+        range_policy = (
+            self.historical_range_policy_bundle_ref,
+            self.historical_range_policy_bundle_hash,
+            self.policy_component_set_hash,
+        )
+        if self.policy_lineage_type is LabelPolicyLineageType.PHASE1_LABEL_POLICY:
+            if any(value is None for value in formal_policy) or any(
+                value is not None for value in range_policy
+            ):
+                raise ValueError("formal label version has mixed policy identity")
+        elif any(value is not None for value in formal_policy) or any(
+            value is None for value in range_policy
+        ):
+            raise ValueError("range label version has mixed policy identity")
         if (
             self.horizon_trading_days != self.outcome_result.horizon_trading_days
             or self.projection is not self.outcome_result.projection
@@ -314,8 +422,12 @@ class OutcomeLabelVersion(BaseModel):
             supersedes_label_version_id=predecessor.label_version_id if predecessor else None,
             supersedes_label_version_hash=predecessor.label_content_hash if predecessor else None,
             label_append_request_hash=str(request.label_append_request_hash),
+            policy_lineage_type=request.policy_lineage_type,
             label_policy_bundle_id=request.label_policy_bundle_id,
             label_policy_bundle_hash=request.label_policy_bundle_hash,
+            historical_range_policy_bundle_ref=request.historical_range_policy_bundle_ref,
+            historical_range_policy_bundle_hash=request.historical_range_policy_bundle_hash,
+            policy_component_set_hash=request.policy_component_set_hash,
             label_policy_hash=request.label_policy_hash,
             label_source_revision_set_id=request.label_source_revision_set_id,
             label_source_revision_set_hash=request.label_source_revision_set_hash,
@@ -345,8 +457,22 @@ class OutcomeLabelAuthorityHeader(BaseModel):
     supersedes_label_version_id: str | None = Field(default=None, min_length=1, max_length=160)
     supersedes_label_version_hash: str | None = Field(default=None, min_length=64, max_length=64)
     label_append_request_hash: str = Field(min_length=64, max_length=64)
-    label_policy_bundle_id: str = Field(min_length=1, max_length=160)
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    policy_lineage_type: LabelPolicyLineageType = (
+        LabelPolicyLineageType.PHASE1_LABEL_POLICY
+    )
+    label_policy_bundle_id: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    label_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    historical_range_policy_bundle_ref: HistoricalRangeArtifactReference | None = None
+    historical_range_policy_bundle_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    policy_component_set_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     label_policy_hash: str = Field(min_length=64, max_length=64)
     label_source_revision_set_id: str = Field(min_length=1, max_length=160)
     label_source_revision_set_hash: str = Field(min_length=64, max_length=64)
@@ -368,6 +494,8 @@ class OutcomeLabelAuthorityHeader(BaseModel):
         "supersedes_label_version_hash",
         "label_append_request_hash",
         "label_policy_bundle_hash",
+        "historical_range_policy_bundle_hash",
+        "policy_component_set_hash",
         "label_policy_hash",
         "label_source_revision_set_hash",
         "calculation_evidence_sha256",
@@ -392,8 +520,12 @@ class OutcomeLabelAuthorityHeader(BaseModel):
             supersedes_label_version_id=version.supersedes_label_version_id,
             supersedes_label_version_hash=version.supersedes_label_version_hash,
             label_append_request_hash=version.label_append_request_hash,
+            policy_lineage_type=version.policy_lineage_type,
             label_policy_bundle_id=version.label_policy_bundle_id,
             label_policy_bundle_hash=version.label_policy_bundle_hash,
+            historical_range_policy_bundle_ref=version.historical_range_policy_bundle_ref,
+            historical_range_policy_bundle_hash=version.historical_range_policy_bundle_hash,
+            policy_component_set_hash=version.policy_component_set_hash,
             label_policy_hash=version.label_policy_hash,
             label_source_revision_set_id=version.label_source_revision_set_id,
             label_source_revision_set_hash=version.label_source_revision_set_hash,
@@ -858,6 +990,73 @@ class TerminalFirstLabelSelector:
             terminal_reason_codes=terminal.outcome_result.reason_codes if terminal else (),
             selection_status=status,
             reason_codes=reasons,
+        )
+
+
+class RetrospectiveExactLabelSelector:
+    """Select one exact range-owned label without pretending it existed online."""
+
+    def select(
+        self,
+        *,
+        request: LabelSelectionRequest,
+        label_versions: Iterable[OutcomeLabelVersion],
+    ) -> SelectedLabelMapping:
+        _canonical_revalidate(
+            request,
+            reason_code=REASON_LABEL_SELECTOR_TERMINAL_CONFLICT,
+            label="retrospective label selection request",
+        )
+        if (
+            request.selection_policy is not LabelSelectionPolicy.EXACT_REVISION_V1
+            or request.explicit_label_version_id is None
+        ):
+            raise LabelBuilderError(
+                REASON_LABEL_SELECTOR_TERMINAL_CONFLICT,
+                "retrospective label selection requires one exact revision",
+            )
+        versions = tuple(label_versions)
+        InMemoryOutcomeLabelRepository._validate_chain(versions)
+        matching = tuple(
+            item
+            for item in versions
+            if item.label_version_id == request.explicit_label_version_id
+        )
+        if len(matching) != 1:
+            raise LabelBuilderError(
+                REASON_LABEL_SELECTOR_TERMINAL_CONFLICT,
+                "retrospective exact label revision is absent or ambiguous",
+            )
+        selected = matching[0]
+        if (
+            selected.policy_lineage_type
+            is not LabelPolicyLineageType.HISTORICAL_RANGE_OUTCOME_POLICY
+            or selected.label_key_hash != request.label_key_hash
+            or not TerminalFirstLabelSelector._matches_capability(
+                request=request,
+                version=selected,
+            )
+        ):
+            raise LabelBuilderError(
+                REASON_LABEL_SELECTOR_CAPABILITY_UNAVAILABLE,
+                "retrospective exact label does not satisfy the frozen capability",
+            )
+        return SelectedLabelMapping(
+            selector_request_hash=str(request.selector_request_hash),
+            selection_policy=request.selection_policy,
+            selection_policy_hash=str(request.selection_policy_hash),
+            label_key_hash=request.label_key_hash,
+            requested_label_as_of_ts=request.requested_label_as_of_ts,
+            terminal_label_version_id=selected.label_version_id,
+            terminal_label_content_hash=selected.label_content_hash,
+            terminal_label_revision_no=selected.label_revision_no,
+            terminal_maturity_status=selected.outcome_result.maturity_status,
+            terminal_outcome_event_status=(
+                selected.outcome_result.outcome_event_status
+            ),
+            terminal_reason_codes=selected.outcome_result.reason_codes,
+            selection_status=LabelSelectionStatus.SELECTED,
+            reason_codes=(),
         )
 
 
