@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-869",
-  "closed_at": null,
+  "closed_at": "2026-07-27T02:33:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -115,8 +115,8 @@
   },
   "first_seen_at": "2026-07-26T03:48:37.581940Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9",
+  "fixed_at": "2026-07-27T02:57:11.239444Z",
   "github_issue_number": 2747,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2747",
   "last_seen_at": "2026-07-26T03:48:37.581940Z",
@@ -124,6 +124,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2792",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,7 +137,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -145,6 +146,9 @@
     "fingerprint": "4030648fbe606790d1e17c05",
     "source_event_id": "FE-20260726-4030648fbe60"
   },
+  "validation_evidence": [
+    "PR #2792 required CI checks -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

@@ -7,6 +7,7 @@
     "tests/aistock_validation/bugs/20260727_BUG-875-advisory-phase1r-r4-build-request-requested-source-cutoff-diverges-from.json"
   ],
   "bug_id": "BUG-875",
+  "closed_at": "2026-07-27T02:33:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -23,12 +24,18 @@
   ],
   "evidence_uris": [],
   "expected": "The retrospective build request declares the same requested_source_cutoff as the frozen evidence-derived snapshot source revision union header (label_as_of bound), so the verify-time relational closure check passes and exact retry is stable.",
+  "fix_commit": "f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9",
+  "fixed_at": "2026-07-27T02:59:05.162412Z",
   "github_issue_number": 2768,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2768",
   "module": "advisory_historical_range",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2792",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
@@ -37,7 +44,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -45,5 +52,8 @@
   "trigger_condition": {
     "fingerprint": "10af6ff950451ccc4a274e0f",
     "source_event_id": "FE-20260727-10af6ff95045"
-  }
+  },
+  "validation_evidence": [
+    "PR #2792 required CI checks -> passed"
+  ]
 }

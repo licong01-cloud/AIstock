@@ -9,6 +9,7 @@
     "tests/aistock_validation/bugs/20260726_BUG-874-advisory-phase1r-r4-snapshot-source-revision-authority-registry-identity.json"
   ],
   "bug_id": "BUG-874",
+  "closed_at": "2026-07-27T02:33:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -25,12 +26,18 @@
   ],
   "evidence_uris": [],
   "expected": "The retrospective build request declares the same query registry identity as the frozen evidence-derived snapshot source revision union set, so seal-time authority and relational closure checks pass and exact retry is stable.",
+  "fix_commit": "f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9",
+  "fixed_at": "2026-07-27T02:53:52.808686Z",
   "github_issue_number": 2766,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2766",
   "module": "advisory_historical_range",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2792",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
@@ -39,7 +46,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -47,5 +54,11 @@
   "trigger_condition": {
     "fingerprint": "f9c5c9b99ab0feb7e7984a6b",
     "source_event_id": "FE-20260726-f9c5c9b99ab0"
-  }
+  },
+  "validation_evidence": [
+    "PR #2792 required CI checks -> passed",
+    "advisory_historical_range_backend -> 248 passed, 4 explicit skips",
+    "Phase 1 direct dependency matrix -> 219 passed",
+    "production R4 single/native-multi bridge and exact retry -> passed"
+  ]
 }
