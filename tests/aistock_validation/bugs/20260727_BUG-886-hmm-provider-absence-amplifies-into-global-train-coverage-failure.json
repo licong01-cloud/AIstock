@@ -47,12 +47,19 @@
       "actor": "codex",
       "note": "Formal review rejected the first diagnostic receipt because diagnostic fields changed formal aggregate identity, sf_small_net_ratio used a conflicting denominator, opportunity evidence lacked exact date-set identity/subset validation, and receipt authority was duplicated. Source fixes and direct regression tests are complete; the 601-day diagnostic must be rerun from a new clean producer.",
       "timestamp": "2026-07-27T09:48:16.1186098Z"
+    },
+    {
+      "action": "complete_c010_review_fix_diagnostic",
+      "actor": "codex",
+      "note": "Clean producer 6f447908 completed the corrected 601-day diagnostic at a new immutable path. Exact opportunity date hashes and receipts read back correctly; only 689009.SH moneyflow contribution was excluded; all four candidates remained valid without feature removal; no fits, selections, artifacts, database writes, runtime actions, or formal policy activation occurred.",
+      "timestamp": "2026-07-27T10:33:01.5177336Z"
     }
   ],
   "evidence_uris": [
     "PR #2796 C-009 report: alias=591 provider_absence=502 stale_circ_mv=348 failure=hmm_risk_model_train_observation_coverage_insufficient",
     "C-010-DIAG-01 approved diagnostic contract: train-only 0.90 contributor availability, price/moneyflow domain separation, 0.90 cross-section diagnostic, deterministic feature-mask candidates, no formal policy activation",
-    "C-010-DIAG-01 report canonical sha256 ded02740714ba55de6aeabf4b71d5f98282dfb4f6fb0dc11fc80e026ccad251f; internal receipt 959ddd0603549c869ed683b7419fbcf3494580f221a9a02cae0d91ab0d3efb70; excluded moneyflow contributor 689009.SH; four candidates valid; no fits/writes/actions"
+    "C-010-DIAG-01 first report canonical sha256 ded02740714ba55de6aeabf4b71d5f98282dfb4f6fb0dc11fc80e026ccad251f; superseded after formal review and retained only as historical failed-review evidence",
+    "C-010-DIAG-01 corrected report canonical sha256 ac218d78935d2adbf3940c0b97cce2d9db4a3e382e00f6beb86e245c7006b3ae; internal receipt 27f96a86034b1398490079a7813db17ce7ef376f3a1d38fe7e09b06e71c9ec5b; eligibility receipt 9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f; exact opportunity hashes complete; excluded moneyflow contributor 689009.SH; four candidates valid; no fits/writes/actions"
   ],
   "expected": "Audited provider absence must remain explicit but must not invalidate unrelated price features or every sector cross-section. Stocks remain in PIT selection/trading; only train-frozen feature-domain contribution may be excluded. Any isolated sector candidate must persist an explicit feature mask rather than use neutral, proxy, L1 fallback, or silent fill.",
   "file_scope_contract": {
@@ -189,7 +196,7 @@
   "fixed_at": null,
   "github_issue_number": 2799,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2799",
-  "last_seen_at": "2026-07-27T09:48:16.1186098Z",
+  "last_seen_at": "2026-07-27T10:33:01.5177336Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not remove affected securities from the PIT selection universe or runtime prediction eligibility.",
