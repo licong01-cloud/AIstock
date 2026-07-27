@@ -16,12 +16,13 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "7045f3c27dc6c213ca52cf949de8585ccaa90e0a4276f3a4679f6202aaee3746"
+_PUBLIC_SIGNATURE_SHA256 = "ed5af50134537ab366c118461cf8050b27dc71ee2b6e43599c63878040018ecb"
 _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
     "backend.services.miniqmt_execution_runtime.kernel_repository_projection",
     "backend.services.miniqmt_execution_runtime.kernel_repository_schema",
     "backend.services.miniqmt_execution_runtime.kernel_repository_event_delivery",
+    "backend.services.miniqmt_execution_runtime.kernel_repository_k2b",
     "backend.services.miniqmt_execution_runtime.kernel_repository_transition_outbox",
     "backend.services.miniqmt_execution_runtime.kernel_repository_timer_session",
 )
@@ -81,6 +82,7 @@ def test_repository_private_responsibility_modules_have_one_public_facade() -> N
         "PostgresMiniQMTKernelRepository",
         "KernelRepositorySchemaMixin",
         "KernelRepositoryEventDeliveryMixin",
+        "KernelRepositoryK2BMixin",
         "KernelRepositoryTransitionOutboxMixin",
         "KernelRepositoryTimerSessionMixin",
         "KernelRepositoryBase",

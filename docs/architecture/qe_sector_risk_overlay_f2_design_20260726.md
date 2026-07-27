@@ -1,6 +1,6 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_merged_runtime_active_artifact_built_bug878_transport_fix_in_review`
+> 文档状态：`implementation_merged_runtime_active_artifact_built_bug881_retry_selection_fix_in_review`
 > Feature tier：`F2`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
@@ -224,7 +224,7 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = wiring_canary_failed_bug878_transport_fix_in_review
+r13a_experiment = retry_canary_cancelled_bug881_selection_fix_in_review
 non_qe_impact = prohibited
 ```
 
@@ -251,6 +251,8 @@ BUG-871 真实数据补证（2026-07-26）：当前固定 snapshot 映射覆盖�
 BUG-872 child 规划补证（2026-07-26）：现有 scheme 结果身份为 `(run_id, weighting_scheme)`，因此单 run 内复制四个同名 `equal` child 会破坏持久化与 Archive 语义。R13A 改为四个 policy run，每个 run 使用同一 roster、`weighting_schemes=[equal]`、`include_baseline=true`、`include_loo=false`，由持久化 request snapshot、request hash 和 child input manifest 共同冻结选择。该结构无需 DDL，仍得到严格的 `4 × 2 = 8` 个 child；不是裁剪实验臂，也不改变任何 Alpha 结论。
 
 BUG-878 远端运行时制品传输补证（2026-07-27）：BUG-872 两-child wiring canary 已准确规划 baseline 与 equal scheme，随后两个 child 均在 qrun 前因 `qe_sector_risk_overlay.parquet.b64=25,257,152` 超过 `qe_file_sync` 10MB 小文件契约而失败；失败 run/child/attempt 保留，未形成 Alpha 结论，正式 R13A 尚未提交。修复不提高小文件上限、不压缩或裁剪制品，也不手工复制远端文件：所有 Base64 后会超限的 portable runtime Parquet 统一经 `WorkspaceArtifactSyncClient` 内容寻址 CAS 上传，按 filename/SHA256/size/CAS root 冻结远端 binding；qrun 前校验 CAS 文件大小和 SHA256 后建立 workspace 链接。小文件继续走原 `qe_file_sync`，节点绑定的 QE 数据链接继续排除，legacy 与 durable 两条远端执行路径采用同一语义。代码合入和用户重启后只重试两-child wiring canary；canary 成功后再提交四个 policy run 的 8 个正式 child。
+
+BUG-881 retry 选择身份补证（2026-07-27）：BUG-878 合入并重启后，原 canary 的 exact-snapshot retry 正确记录源 run lineage，但 `DurableCombineSubmissionService._replace_run_async` 在强制异步时遗漏 `prediction_task_selection`，导致后继 run 从目标 2 个 child 膨胀为 baseline、equal scheme 和 4 个 LOO，共 6 个 child。该 retry run 已提交 durable cancel 并保留全部 append-only 证据，未用于 Alpha 判断，正式 R13A 仍未提交。修复不再手工逐字段重建 `CombineBacktestRequest`：通用 request replace 与 run-async override 均使用 dataclass `replace`，新增字段自动守恒；回归覆盖 exact snapshot 恢复、异步覆盖、持久化 `_combine_request_v1` 和 deterministic child planning，明确断言后继仅包含 `baseline:leg_a` 与 `scheme:equal` 两个 child。合入和用户重启后再次从原失败 canary 执行 exact-snapshot retry。
 
 BUG-883 运行资产协议加固（2026-07-27）：BUG-878 的真实 Parquet CAS
 路径保持不变，但不再依靠“顶层文件 + parquet 后缀”推断运行资产。每次远端
