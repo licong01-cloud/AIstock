@@ -1013,6 +1013,24 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_long_trend_phase3_platform(session: nox.Session) -> None:
+    """Run F-014 Phase 3 persistence, snapshot, API, MCP, and Phase 2 compatibility contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/mcp/test_qe_archive_module.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
     """Run QE-only sector-risk artifact, strategy, persistence, and evaluation contracts."""
     _run_pytest(

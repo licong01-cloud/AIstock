@@ -1,12 +1,12 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.6
-- 日期：2026-07-15；Phase 2 正式审核修订：2026-07-22
-- 状态：`PHASE1_VERIFIED_SOURCE_DELIVERY_THIS_CHANGESET_PLATFORM_PENDING`
+- 版本：v1.8
+- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28
+- 状态：`PHASE2_RUNTIME_VERIFIED_PHASE3_SOURCE_IMPLEMENTED_LOCAL_VERIFIED_PHASE4_TO_5_PENDING`
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
-- 当前阶段：Phase 1 / 工作流 A 的 QE-only 契约、严格数据读取、纯计算核、entry/exit evidence bridge 和 authoritative portfolio 已实现并通过定向 oracle；Phase 2 从属 F2 设计 `docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md` 已完成正式审核修订，覆盖派发前 `run_evaluation` 控制记录、计算节点、真实 Recorder/snapshot resolver、execution-environment identity、专属 CAS、独立资源阶段与双端恢复，代码尚未开始；metric/artifact 两表、API/MCP/UI、历史补算和真实 E2E 仍按 Phase 3–5 继续。本 changeset 不执行 DDL、不创建评价任务、不重启服务，也不预写 PR/merge 状态
+- 当前阶段：Phase 1 纯计算核与 Phase 2 计算节点、控制记录、真实 Recorder/snapshot resolver、execution-environment identity、QE-only CAS、独立资源阶段和双端恢复均已实现；Phase 2 已完成源码合入、DEV/生产控制表 DDL、8001/9000 运行态加载、R8B 6/6 真实评价与 CAS 发布、后端重启后同 identity 幂等回放。Phase 3 已实现 metric/artifact additive migration、事务型 canonical receipt writer、服务端 allowlisted snapshot resolver、normal/`long_trend_only` 共用生命周期、公共创建/列表/详情 API、Archive analytics API、只读 MCP 和 validation ownership；两轮全量代码审查后补齐事务内 guarded rollback、v2 metric dimension、QE 父身份复核、typed DB/query error、公开 DTO 隔离、有界批量写入、缺失快照 partial 生命周期、注册指标维度契约、CAS family matrix 独立复核、执行状态有效查询、详情读取发布边界一致性、v5 schema version/列类型精确就绪校验、历史配置严格整数校验、CAS JSON 单次读取验真及 durable secret/path 错误隔离，并通过专属 99 项本地测试。Phase 3 DDL 尚未应用、运行时尚未激活，Phase 4 UI/历史批量操作面与 Phase 5 真实 E2E 仍待实施。本轮没有执行 DDL、评价任务、服务启停或生产变更
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
 - 相关蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8
 
@@ -487,7 +487,7 @@ execution evidence 是 signal/episode 的规范化列，sector/family metrics �
 | 字段 | 类型 | 约束/说明 |
 |---|---|---|
 | `evaluation_id` | TEXT | PK，`qelt_` + identity hash |
-| `run_id` | TEXT | FK `qe_archive.run(run_id)`，ON DELETE CASCADE |
+| `run_id` | TEXT | 可空 FK `qe_archive.run(run_id)`，ON DELETE CASCADE；正常 registration 可先于 Archive run 入库，后续只允许绑定为同一 QE run，不得改绑 |
 | `evaluation_type` | TEXT | 首版固定 `long_trend` |
 | `profile_id` | TEXT | `qe_long_trend_v1` |
 | `profile_sha256` | TEXT | 非空 |
@@ -518,7 +518,7 @@ execution evidence 是 signal/episode 的规范化列，sector/family metrics �
 唯一约束：
 
 ```text
-(run_id, evaluation_type, profile_sha256,
+(parent_task_id, parent_loop_index, evaluation_type, profile_sha256,
  input_manifest_sha256, evaluator_source_sha256,
  execution_environment_manifest_sha256)
 ```
@@ -533,13 +533,16 @@ execution evidence 是 signal/episode 的规范化列，sector/family metrics �
 | `period_start/period_end` | DATE | slice 边界，可空 |
 | `horizon` | INTEGER | 20/40/60/120/180，可空 |
 | `sector_code` | TEXT | 申万 L2，可空 |
-| `dimension_key` | TEXT | 非空；由 scope/slice/horizon/sector 规范化编码 |
-| `value_num/value_text/value_json` | DOUBLE PRECISION/TEXT/JSONB | 三者按 metric schema 互斥使用 |
+| `dimension_key` | TEXT | 非空；由 `qelt_metric_dimension_v2` 的 scope/period/slice/horizon/sector/execution 维度规范化编码 |
+| `dimension_json` | JSONB | 非空；`qelt_metric_dimension_v2` canonical 维度对象，保存 `metric_scope/period_start/period_end/slice/barrier/k/entry/exit status` 等可查询维度，不保存指标值 |
+| `value_num/value_text/value_json` | DOUBLE PRECISION/TEXT/JSONB | `value_num` 主标量可与有界诊断 `value_json` 共存；`value_text` 与二者互斥 |
 | `unit/direction` | TEXT | 单位与越大越好/越小越好语义 |
 | `source_payload_path` | TEXT | receipt 中的确定性 JSON path |
 | `quality_flag` | TEXT | ok/computed_with_limitations/insufficient_maturity/not_computable/not_verifiable/censored_only |
 
-唯一键为 `(evaluation_id, metric_key, dimension_key)`，避免 nullable 维度破坏幂等；repository 必须重算并校验 `dimension_key`，不能信任客户端输入。按 `evaluation_id/metric_scope/horizon/sector_code` 建查询索引。逐信号和逐 episode 行不进入 PostgreSQL。
+唯一键为 `(evaluation_id, metric_key, dimension_key)`，避免 nullable 维度破坏幂等；repository 必须按 versioned canonical encoder 从 `metric_scope/period/horizon/sector/entry_execution_status/exit_execution_status/quality slice` 重算 `dimension_key`，不能信任客户端输入。编码必须对空值和分隔符无歧义；超长组合使用 canonical JSON 的 SHA-256，原始维度仍保留在结构化列。按 `evaluation_id/metric_scope/horizon/sector_code` 建查询索引。逐信号和逐 episode 行不进入 PostgreSQL。
+
+`value_num` 表示可直接排序/聚合的主标量，`value_json` 表示同一指标的有界诊断统计，两者可按注册 metric schema 同时存在；`value_text` 只用于枚举/文本指标，并与 `value_num/value_json` 互斥。`ok/computed_with_limitations` 必须满足该 metric schema 的 required-value 规则；`not_computable/not_verifiable/insufficient_maturity/censored_only` 可以三个值字段全空，但必须同时保存非空 `quality_flag`、稳定 reason 和 `source_payload_path`。`value_json` 仅允许有界、已注册 schema 的小型结构，不得承载逐信号、逐 episode、曲线或任意大 payload。
 
 新增 `qe_archive.run_evaluation_artifact`，不复用或改写 `qe_archive.run_artifact`：
 
@@ -554,13 +557,15 @@ execution evidence 是 signal/episode 的规范化列，sector/family metrics �
 | `metadata` | JSONB | 不存秘密，只存可复核元数据 |
 | `created_at` | TIMESTAMPTZ | 创建时间 |
 
-唯一键为 `(evaluation_id, artifact_type, sha256)`。Phase 2 control repository 与 Phase 3 metric/artifact repository 分属明确 ownership，但共享同一 `evaluation_id` 与父 run 校验：创建前验证 `source_system=quantevolver`、允许的 QE `run_type`、task/Loop identity 和 dataset contract。非 QE run 即使存在同名 `run_id` 也必须以 `QELT_NON_QE_SOURCE_REJECTED` 拒绝。
+唯一键为 `(evaluation_id, artifact_type, sha256)`。写入前必须从 Phase 2 published manifest 校验 `artifact_type` allowlist、QE-only long-trend CAS namespace、URI、sha256、schema_sha256、size 和 row_count；未知类型、越界 URI 或 manifest 不一致均显式失败，不发布 DB 明细。Phase 2 control repository 与 Phase 3 metric/artifact repository 分属明确 ownership，但共享同一 `evaluation_id` 与父 run 校验：创建前验证 `source_system=quantevolver`、允许的 QE `run_type`、task/Loop identity 和 dataset contract。非 QE run 即使存在同名 `run_id` 也必须以 `QELT_NON_QE_SOURCE_REJECTED` 拒绝。
+
+Phase 3 receipt writer 先将 terminal/published receipt 解析为 canonical metric set 与 artifact set，再在单一事务内执行：锁定同一 `evaluation_id`、校验 control row 已绑定同一 worker/published receipt hash、插入或逐项核对两张明细表、最后更新 `platform_delivery_status_json.db`。完全相同的重放是 no-op；相同唯一键但值、hash、URI 或 schema 不同必须返回 typed conflict，不得 delete-replace、静默 upsert 或部分覆盖。事务失败时两张明细表和 delivery status 均不留下半成品。
 
 ### 8.6 Identity and idempotency
 
 ```text
 evaluation_id = sha256(
-  run_id + profile_sha256 + evaluator_source_sha256
+  stable_qe_task_loop_parent + profile_sha256 + evaluator_source_sha256
   + execution_environment_manifest_sha256
   + canonical(feature_dataset_manifest_sha256 or "<NULL>")
   + canonical(outcome_dataset_manifest_sha256 or "<NULL>")
@@ -626,7 +631,13 @@ POST body 只允许：
 
 不提供 `force` 覆盖。相同 identity 返回已有任务；profile、outcome snapshot 或 evaluator version 改变会自然生成新 identity。
 
-创建 API 只把 QE task/Loop、`qe_archive.run`、QE dataset contract 与 QE workspace identity 作为硬边界；任何非 QuantEvolver/QE 来源返回 `QELT_NON_QE_SOURCE_REJECTED`。其余输入在创建后按指标族解析，不因 position、order、trade、价格成熟度或板块数据缺失拒绝任务。查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code/family_status/entry_execution_status/exit_execution_status` 过滤和有界 limit；默认 compact，不返回 Parquet 明细。通用 `/prediction-store` API、Paper/Selection/Advisory API 和 route registration 不变。
+创建 API 不接受 `node_id`、workspace path、`feature_data_root_uri`、`outcome_data_root_uri` 或任意文件路径。服务必须从 QE task/Loop、Archive run、workspace catalog、冻结配置和现有 compute-node registry 解析权威 `run_id/node_id/recorder/feature snapshot`；对请求中的 `outcome_dataset_snapshot_id`，新增 QE-only snapshot resolver：仅枚举目标节点配置中已允许的 `factor_data_dir` 与 `QE_DATASET_IDENTITY_ROOTS`，通过既有节点 dataset-identity API 获取 snapshot/manifest，并要求 snapshot ID 与 manifest identity 精确匹配。零匹配返回 typed data action；多匹配但 manifest 不同返回 typed ambiguity；客户端永远不能借 snapshot ID 注入路径或跨节点覆盖。
+
+public/historical DTO 不直接复用当前要求两个 root URI 的 `LongTrendEvaluationOptIn`。resolver 先生成内部 `ResolvedLongTrendEvaluationRequest`：每个数据集引用只能是“已解析的 allowlisted root + snapshot/manifest”或“typed missing reference”。Phase 2 service 增加以该内部 DTO 为输入的公共 prepare core；现有 normal adapter 先解析冻结 root 再调用同一 core。两个引用齐备时才生成 node request；引用缺失时沿用现有 `ready_for_node=false`、partial control receipt 和 data action 语义，不构造哨兵路径、不扫描目录、不静默换用其他 snapshot。
+
+创建 API 只把 QE task/Loop、`qe_archive.run`、QE dataset contract 与 QE workspace identity 作为硬边界；任何非 QuantEvolver/QE 来源返回 `QELT_NON_QE_SOURCE_REJECTED`。其余输入在创建后按指标族解析，不因 position、order、trade、价格成熟度、板块数据或 outcome snapshot 暂不可得而淘汰研究方向：基础数据引用暂不可解析时保留 partial evaluation/control receipt 并记录可重试的 `data_action_plan`；基础引用齐备、worker 已派发后，任何可选制品缺失只影响依赖它的指标族，其余指标族继续计算。历史 `long_trend_only` 使用独立 request DTO/route adapter 表达已完成 Loop 的结果重评，但必须复用 Phase 2 的同一 control lifecycle、resolver、worker、CAS 和 receipt writer，不建立第二套状态机，也不伪造 normal-postprocess 所需路径。
+
+查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code/family_status/entry_execution_status/exit_execution_status` 过滤，默认按 `evaluation_asof DESC, evaluation_id ASC` 稳定排序，采用 keyset cursor，单页 `limit <= 100`；默认 compact，不返回或内联 Parquet 明细。通用 `/prediction-store` API、Paper/Selection/Advisory API 和 route registration 不变。
 
 ### 10.2 QE Archive MCP
 
@@ -712,11 +723,12 @@ Loop 详情增加“长期趋势”页签：
 
 ### Phase 3：数仓、API 与 MCP
 
-1. 添加 metric/artifact migration/rollback/init schema 同步，不重复创建 Phase 2 control table；
-2. 复用 `RunEvaluationRecord`，添加 `RunEvaluationMetricRecord/RunEvaluationArtifactRecord`、专属 repository 和两表事务 writer；
-3. 由长期评价 receipt writer 直接解析并写专属表；通用 PayloadExtractor、run_metric/run_artifact writer 不变；
-4. 实现有界 analytics API 和只读 MCP；
-5. 对旧 Archive payload、旧 prediction manifest、旧 run_metric/run_artifact 和非 QE 路由/schema 做零变化回归。
+1. 添加 metric/artifact forward/preflight/guarded rollback/init schema mirror，不重复创建或重定义 Phase 2 control table；
+2. 复用 `RunEvaluationRecord`，添加 `RunEvaluationMetricRecord/RunEvaluationArtifactRecord`、专属 repository，以及“canonical parse → manifest verify → 两表事务写入 → delivery status CAS”的 receipt writer；
+3. 新增 QE-only snapshot resolver 和 public/historical request DTO；只从权威 task/Loop/Archive/workspace/node config 解析运行身份和数据根，禁止客户端路径、节点覆盖和第二套 historical lifecycle；
+4. 实现用户创建/查询 API、有界 analytics API 和只读 MCP；所有列表采用稳定 keyset pagination、`limit <= 100`，只返回 compact row 与 artifact URI/hash；
+5. 补充 `tests/aistock_validation/catalog/file_ownership.yaml`、module registry、test plan 与 route/schema ownership，使 Phase 3 新文件进入明确 QE-only 验证归属；
+6. 对旧 Archive payload、旧 prediction manifest、旧 run_metric/run_artifact、通用 Prediction Store 和非 QE 路由/schema 做零变化回归。
 
 ### Phase 4：UI 与历史 R6 路径
 
@@ -747,20 +759,41 @@ Phase 1–5 是依赖顺序，不要求所有开发串行。实际实施拆为�
 
 A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 research-ready 或研究许可状态。A 中任一指标族形成可复算 receipt 后即可用于科研分析；B/C 的 CAS、DB、API/MCP/UI 和历史补算状态不改变该结果，只决定持久化、查询和展示能力。调用方不得把 `NOT_COMPUTABLE/NOT_VERIFIABLE` 伪装为已计算，但可以继续运行所有不依赖缺失项的实验与分析。
 
-### 12.2 v1.6 当前实施进度（2026-07-22）
+### 12.2 v1.8 当前实施进度（2026-07-28）
 
 | 子项 | 状态 | 实现 / 证据 | 未完成边界 |
 |---|---|---|---|
-| versioned profile、reason、family status、identity | `CORE_VERIFIED` | `long_trend_evaluation_contract.py`；不可变注册 profile、显式 null 输入、稳定 `qelt_` identity、六族独立状态、完整 overlap receipt 与 feature/outcome 一致性 oracle | repository/task identity 绑定在 Phase 2–3 接入 |
-| QE 严格数据读取与双快照 parity | `CORE_VERIFIED` | `long_trend_data_reader.py`；仅允许 `daily_pv.h5/sector_data.h5`，校验文件内容 hash、QE dataset/workspace samefile 绑定、same/strict-extension full-overlap qfq OHLC 精确一致 | 计算节点 wrapper 与实际 Recorder snapshot resolver 在 Phase 2 接入 |
-| signal path | `CORE_VERIFIED` | `long_trend_evaluation.py`；T+1→T+h+1、feature 截止日隔离、entry-day path 排除、20–180D 宽 schema、maturity/right censor、ordered stage/survival、稳定排名、RankIC、TopK、barrier、time-to-hit、MFE/MAE、AUCPR | 实际 R8 制品只读 smoke 和 CAS Parquet 写出尚未执行 |
-| statistics / slices / sector | `CORE_IMPLEMENTED` | signal-day Newey-West、moving-block bootstrap、BH-FDR；全期/126/252 交易日位置切片；signal-date PIT L2 与逐板块指标 | 大样本资源 receipt、真实板块 Parquet 和 Archive readback 尚未执行 |
-| position episode | `CORE_VERIFIED_NORMALIZED_INPUT` | 0↔持仓转换、re-entry/open/right censor、首段 left censor、position 自身 as-of、outcome extended path、capture/post-exit/false early-exit；不从 TopK 猜仓位 | Qlib Position object resolver 和真实 trade/fee reconciliation 在 Phase 2 继续 |
-| order fill / execution cause | `CORE_VERIFIED_ENTRY_EXIT_BRIDGE` | entry/exit 对称解析 Qlib indicator `amount/deal_amount/ffr`、trade、order intent、position transition；一笔 trade 只归属一个信号；数量/时点/原因矛盾 fail-fast；直接阻断损失可量化，日线只作 diagnostic | 真实 Recorder/Archive/CAS artifact resolver 与 child-order/queue 证据在 Phase 2 继续；无原因证据时只将 cause 标 `NOT_VERIFIABLE` |
-| portfolio result | `CORE_VERIFIED_AUTHORITATIVE_REPORT` | Qlib portfolio report 独立校验并计算累计/年化收益、波动、Sharpe、最大回撤、成本和换手；不以 signal/episode close return 冒充组合成本后收益 | 真实 Recorder report resolver 在 Phase 2 接入 |
-| family-local failure | `CORE_IMPLEMENTED` | prediction/sector/label/position/execution 可选输入独立定级；一个族异常不丢弃其他已计算族 | worker/CAS/DB/API/UI 对同一状态的贯通在 Phase 2–4 继续 |
-| core tests | `VERIFIED` | `test_qe_long_trend_contract_reader.py`、`test_qe_long_trend_evaluation_core.py`：51 passed；三核心模块 line coverage `87.53%`、branch coverage `73.01%`；ruff、py_compile、diff 与 ownership scan 随本 changeset validation receipt 固化 | 真实 Recorder、DEV DB、API/MCP/UI、重启恢复不属于本阶段已完成证据 |
-| platform B/C | `PENDING_BY_DESIGN` | Phase 2 从属设计已完成正式审核修订并保留 acceptance id | control migration、CAS、资源、worker、metric/artifact 两表、API、MCP、UI、历史补算、真实 E2E 未实现；不得宣称 F-014 整体完成 |
+| Phase 1 计算、统计、删失、episode 与 execution bridge | `CORE_IMPLEMENTED_VERIFIED` | `long_trend_evaluation_contract.py`、`long_trend_data_reader.py`、`long_trend_evaluation.py` 及定向 oracle；冻结 profile、双快照、20–180D、HAC/bootstrap、PIT L2、position/report/order/trade 分层均已有实现证据 | 无 Phase 1 语义缺口；平台展示不等同于纯计算核 |
+| Phase 2 编排、资源、恢复与 QE-only CAS | `RUNTIME_CANARY_VERIFIED` | AIstock PR #2630/#2643/#2654/#2668/#2670/#2672/#2674；RD-Agent PR #7/#8；DEV/生产 control DDL 已回读；8001/9000 已加载；R8B 6/6 为唯一 job/attempt、六族计算、partial + CAS published；后端重启后同 identity 幂等 replay | metric/artifact 明细表和公共用户链属于 Phase 3–5 |
+| Phase 2 真实样本 | `R8B_6_OF_6_PARTIAL_CAS_PUBLISHED` | 12,024 项指标、13,241,712 行 signal observations、13,726 行 holding episodes、2,898 个 portfolio trading days；各 Loop coverage/limitations 独立保存 | `partial` 是指标族数据可得性事实，不是科研失败或方向淘汰状态 |
+| Phase 3 数仓/API/MCP | `SOURCE_IMPLEMENTED_LOCAL_VERIFIED` | 已实现 additive migration/preflight/guarded rollback/init mirror、canonical metric/artifact writer 与精确重放冲突检测、服务端 allowlisted feature/outcome snapshot resolver、normal/`long_trend_only` 共用 Phase 2 lifecycle、公共创建/列表/详情 API、Archive analytics API、只读 MCP、ownership/catalog；第二轮审查补充注册指标维度、CAS family matrix/JSON 单次读取验真、执行状态查询、详情读取发布边界、v5 schema version/列类型精确就绪校验、历史配置严格整数校验与 durable secret/path 错误隔离；`nox -s qe_long_trend_phase3_platform` 为 99 passed，`nox -s qe_long_trend_phase2_backend` 为 121 passed；Phase 3 变更行覆盖率已通过 80% 检查 | migration 尚未应用到 DEV/生产；运行时尚未加载；真实 CAS→DEV DB→API/MCP readback 属 Phase 5 |
+| Phase 4 UI/历史操作面 | `DESIGN_AUDITED_DEVELOPMENT_READY` | 单一幂等生成/更新入口、DB 恢复进度、同 vintage 比较、历史输入预览和 family-local 限制已有明确契约 | UI 与批量操作面尚未实现；历史评价执行需单独授权 |
+| Phase 5 E2E/发布准备 | `DESIGN_AUDITED_DEVELOPMENT_READY` | deterministic fixture、真实非生产 Recorder、重启/重复 callback/CAS-DB 中断恢复和非 QE 零影响矩阵已有验证计划 | 尚未执行；不阻断已有 receipt 的科研使用 |
+
+### 12.3 Phase 3–5 开发就绪性审计（2026-07-28）
+
+审计结论为 `READY_FOR_SOURCE_DEVELOPMENT`。这是“现有代码基础上可以开始实现”的工程结论，不是科研审批、方向门禁、生产 DDL 授权、运行时启用授权或历史批量评价授权。
+
+| 审计项 | 当前结论 | 编码时必须保持的契约 |
+|---|---|---|
+| 现有基础可复用性 | `READY` | 复用 Phase 2 control repository、orchestration service、worker、CAS、published receipt 和 reconciler；不得另建影子状态机 |
+| 数据身份与路径安全 | `READY_AFTER_DESIGN_CLARIFICATION` | public API 只收 registered snapshot ID；server 仅从 QE node allowlisted roots 精确解析 manifest；不接受客户端路径或 node override |
+| normal / historical parity | `READY_AFTER_DESIGN_CLARIFICATION` | historical 使用专属 DTO/adapter，但复用同一 lifecycle/resolver/evaluator/writer；不得假装 normal postprocess 或重训模型 |
+| compact DB 模型 | `READY` | 两张 additive 明细表只存 compact metrics/artifact metadata；逐信号/episode 保持 CAS Parquet；通用 Archive 表零修改 |
+| 原子性与幂等 | `READY_AFTER_DESIGN_CLARIFICATION` | canonical set + manifest verify + 单事务 writer；exact replay no-op，内容冲突 typed failure，禁止静默 upsert/delete-replace |
+| API/MCP/UI 可控输出 | `READY` | keyset pagination、limit <= 100、默认 compact、不内联 Parquet；UI 单一幂等操作并从 DB 恢复进度 |
+| QE-only 隔离 | `READY` | route、schema、store、ownership、测试和 UI 均限 QE；Selection/Advisory/Paper/QMT/StrategyPackage 与通用 Prediction Store 零业务变更 |
+| 科研连续性 | `READY` | 数据不全只生成 family status、limitation 和 data action；继续所有可计算研究，不新增人工审批、研究阻断或淘汰门禁 |
+| 验证归属 | `READY_AFTER_DESIGN_CLARIFICATION` | Phase 3 同步扩展 file ownership、module registry、test plan 和 route/schema regression；不得让新增文件游离于验证中心 |
+
+逐文件开发顺序冻结为：
+
+1. additive metric/artifact migration、preflight、guarded rollback、init mirror 与 schema tests；
+2. QE Archive 专属 models/repository/canonical receipt writer 及事务/冲突 tests；
+3. QE-only snapshot resolver、public/historical DTO 与 orchestration adapter tests；
+4. QuantEvolver create/list/detail API、Archive analytics API 与 bounded query tests；
+5. 只读 MCP、Loop/Archive UI 和 Playwright/API contract tests；
+6. validation ownership/catalog、F2 validator、DESIGN-COMPLIANCE-001 与真实非生产 E2E。
 
 ## 13. Verification Plan / 验证方案
 
@@ -861,10 +894,10 @@ completed Recorder
 
 ### 15.1 发布顺序
 
-1. `[PHASE1_VERIFIED_SOURCE_DELIVERY_THIS_CHANGESET]` 交付纯计算引擎和 tests；当前没有 composer/profile runtime 接入，因此天然 default-off；PR/merge 以 GitHub 外部状态为准；
-2. Phase 2 合入 `run_evaluation` control migration、QE-only CAS、独立资源阶段、node worker和双端恢复；
-3. 在现有 DEV DB apply/readback control migration；生产 DDL不要求额外数据库导出或备份；
-4. Phase 3 合入 metric/artifact 两表和 API/MCP，Phase 4 合入 UI，但生产 profile 保持关闭；
+1. `[COMPLETED]` Phase 1 纯计算引擎和 tests 已交付；
+2. `[COMPLETED]` Phase 2 `run_evaluation` control migration、QE-only CAS、独立资源阶段、node worker 和双端恢复已合入并完成运行态验证；
+3. `[COMPLETED]` DEV/生产 control migration 已 apply/readback；执行过程不要求额外数据库导出或备份；
+4. `[NEXT_AFTER_USER_CONFIRMATION]` Phase 3 实现 metric/artifact 两表和 API/MCP，Phase 4 实现 UI；源码开发、生产 DDL 与运行时启用分别记录；
 5. 明确授权后分别应用所需生产 DDL并验证；
 6. 重启后只对单个已完成 canary Loop 执行 `long_trend_only`；
 7. canary 全链通过后再启用 Type B 新任务自动评价；该顺序只描述平台发布，不构成研究方向门禁；
@@ -886,10 +919,11 @@ completed Recorder
 | 项目 | 本设计阶段 | 实施语义 |
 |---|---|---|
 | 唯一硬边界 | `QE_ONLY_ZERO_NON_QE_IMPACT` | 所有任务、数据读取、CAS、表、API/MCP/UI 和写入仅限 QE；非 QE 变更必须为零 |
-| QE core compute | Phase 1 已实现并定向验证 | 纯函数、严格 QE reader 和 unit oracle 已存在；尚未创建真实 evaluation task，不代表平台完整交付 |
-| QE additive schema | 设计完成、实现待办 | migration、apply/readback 和回滚状态进入 `platform_delivery_status`，不控制科研分析 |
+| QE core compute | Phase 1 已实现并定向验证 | 纯函数、严格 QE reader 和 unit oracle 已存在；Phase 2 已用真实 evaluation task 验证，不代表 Phase 3–5 平台用户链完成 |
+| QE control schema/runtime | Phase 2 已应用并验证 | control DDL、worker、CAS、恢复和 R8B 6/6 已有运行态证据 |
+| QE result schema/API/MCP/UI | Phase 3 数仓/API/MCP 源码已实现并本地验证；Phase 4 UI 与 Phase 5 真实 E2E 待实施 | migration 尚未 apply/readback，运行时尚未激活；各子项进入 `platform_delivery_status`，不控制科研分析 |
 | frontend/backend dependency | 当前无新增依赖 | 未来变化按平台状态记录，不形成研究门禁 |
-| runtime restart | 未执行 | 仅是运行时动作状态，不影响已经完成的 QE 训练、回测或科研结论 |
+| runtime restart | Phase 2 已执行并验证幂等回放；Phase 3–5 尚无运行态变更 | 仅是运行时动作状态，不影响已经完成的 QE 训练、回测或科研结论 |
 | experiment/evaluation execution | 独立任务状态 | canary、历史补算和新实验可在 QE 范围内并行，不依赖平台全部完成 |
 | data/metric availability | 按指标族记录 | 缺失、部分、未成熟或不可验证均生成 `data_action_plan`；其他指标族和研究方向继续 |
 
@@ -897,63 +931,66 @@ completed Recorder
 
 ## 17. Design Acceptance Matrix / 设计验收矩阵
 
-本矩阵同时记录设计完整性与分阶段实施证据。`core_implemented_verified` 只表示 Phase 1 / 工作流 A 的纯计算能力完成；Phase 2–5 是已批准 rollout 的后续交付范围，不是 Phase 1 的设计偏差或验收缺口，因此统一在 `test_or_evidence` 中标明而不写入 `gap_or_exception`。不得把核心完成包装成 F-014 平台整体完成。
+本矩阵同时记录设计完整性与分阶段实施证据。`core_implemented_verified` 表示 Phase 1 纯计算能力，`runtime_canary_verified` 表示 Phase 2 已有真实运行证据，`source_implemented_local_verified` 表示 Phase 3 源码和定向测试已完成但未应用 DDL、未运行时激活，`design_audited_development_ready` 表示 Phase 4–5 仅具备开发条件。不得把任一分阶段状态包装成 F-014 平台整体完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | QE task/Loop → QE worker → QE-only store/tables/UI | 第 4、6、9、10 节代码映射 | design_ready | none |
-| F-002 | `long_trend_evaluation_contract.py` profile registry | profile hash、非法 profile、显式 null identity oracle；Phase 2 接入 task/repository binding | core_implemented_verified | none |
-| F-003 | `long_trend_evaluation.py` return oracle | T+1→T+h+1 与 label parity tests；Phase 2 执行真实 R8 artifact smoke | core_implemented_verified | none |
-| F-004 | close/path projection 分层字段 | entry-day high 排除、close/high-low 分栏 tests；Phase 2 执行真实 Parquet schema readback | core_implemented_verified | none |
-| F-005 | maturity/censor state machine | mature/path-gap/right-censor/open/left-censored episode、position-asof/outcome-asof 分离 tests；Phase 2 接入 delist authoritative resolver | core_implemented_verified | none |
-| F-006 | feature/outcome snapshot identity | content hash、workspace samefile、full-overlap receipt、same/strict-extension/missing-lineage/exact mismatch、feature-date isolation oracle；Phase 2 接入 actual snapshot manifest resolver | core_implemented_verified | none |
-| F-007 | QE dataset contract + signal-date l2 | 双文件 allowlist、QE identity、PIT sector 与静态 import tests；Phase 2 接入 compute-node wrapper | core_implemented_verified | none |
-| F-008 | signal metrics engine | horizon/barrier/ordered stage/survival/Top-K/RankIC/AUCPR/MFE/MAE tests；Phase 2 产生真实大样本 receipt | core_implemented_verified | none |
-| F-009 | episode engine | exit/re-entry/open/left-censor/position-asof/false-early-exit normalized-position tests；Phase 2 接入 Qlib Position/trade resolver | core_normalized_input_verified | none |
-| F-010 | slice/sector artifact schema | 126/252 交易日位置、L2 concentration/per-sector metrics tests；Phase 3 完成 CAS Parquet publish/readback | core_implemented_verified | none |
-| F-011 | block bootstrap/HAC/BH-FDR | deterministic、empty/singleton/zero-variance fixtures；Phase 2 记录大样本 resource receipt | core_implemented_verified | none |
-| F-012 | QE-only CAS Parquet + compact DB | namespace/manifest/size/row/hash E2E | design_ready | none |
-| F-013 | 三张 additive `run_evaluation*` 表；Phase 2 先交付 control row，Phase 3 交付 metric/artifact | 分阶段 DEV migration/repository + shared-schema snapshot tests | design_ready | none |
-| F-014 | normal + `long_trend_only` shared engine | path parity tests | design_ready | none |
-| F-015 | resource phase/outbox/fencing | restart/duplicate callback E2E | design_ready | none |
-| F-016 | independent evaluation status/reason | prediction/price/sector/position/portfolio/entry-or-exit evidence 缺失或冲突时保留其他可计算族的 tests；Phase 2–4 贯通 worker/Archive/UI state | core_implemented_verified | none |
-| F-017 | Loop/Archive UI | real API Playwright E2E | design_ready | none |
-| F-018 | bounded read-only MCP | manifest and response-bound tests | design_ready | none |
-| F-019 | default-off compatibility | pure core has no composer/startup registration and no runtime side effect；Phase 2 接入后 normal task composer 仍保持 default-off | core_implemented_verified | none |
-| F-020 | full delivery controls | F2 validator、DEV DB E2E、design compliance matrix | design_ready | none |
-| F-021 | QE-only ownership/import/runtime isolation | 三个 core 文件的非 QE/import allowlist regression；Phase 4 补齐 platform route/schema diff tests | core_implemented_verified | none |
-| F-022 | signal→fill/exit evidence bridge | entry/exit full/partial/delayed/never/not-attempted/not-verifiable、一对一 trade、indicator/trade 数量与时点矛盾、直接阻断损失 tests；Phase 2 接入真实 Recorder/Archive/CAS resolver 与 child-order/queue evidence | core_normalized_entry_exit_bridge_verified | none |
-| F-023 | staged delivery truth | invalid sector/position/execution 不丢弃 signal；receipt 分列 family/platform 状态；Phase 4 保持 API/UI 同语义 | core_implemented_verified | none |
-| F-024 | platform delivery status only | core receipt 显式标注 core 与 Phase 2–5 后续范围，不输出 research-ready；后续完成 CAS/DDL/API/MCP/UI/backfill/E2E | core_implemented_verified | none |
+| F-001 | QE task/Loop → QE worker → QE-only store/tables/API/MCP；UI 属 Phase 4 | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`、`backend/tests/unified_engine/test_qe_long_trend_phase3_api.py`；Phase 3 共用 Phase 2 编排且公开 DTO 不接受路径/node override | source_implemented_local_verified | none |
+| F-002 | `long_trend_evaluation_contract.py` profile registry | `backend/tests/unified_engine/test_qe_long_trend_contract_reader.py`：profile hash、非法 profile、显式 null identity、task/repository binding | core_implemented_verified | none |
+| F-003 | `long_trend_evaluation.py` return oracle | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：T+1→T+h+1 与 label parity；R8B 真实 artifact smoke | core_implemented_verified | none |
+| F-004 | close/path projection 分层字段 | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：entry-day high 排除、close/high-low 分栏、Parquet schema | core_implemented_verified | none |
+| F-005 | maturity/censor state machine | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：mature/path-gap/right-censor/open/left-censored episode 与双 as-of | core_implemented_verified | none |
+| F-006 | feature/outcome snapshot identity | `backend/tests/unified_engine/test_qe_long_trend_contract_reader.py`、`backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py`：content hash、lineage、feature-date isolation | core_implemented_verified | none |
+| F-007 | QE dataset contract + signal-date l2 | `backend/tests/unified_engine/test_qe_long_trend_contract_reader.py`：双文件 allowlist、QE identity、PIT sector 和静态 import | core_implemented_verified | none |
+| F-008 | signal metrics engine | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：horizon/barrier/survival/Top-K/RankIC/AUCPR/MFE/MAE | core_implemented_verified | none |
+| F-009 | episode engine | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：exit/re-entry/open/left-censor/position-asof/false-early-exit | core_normalized_input_verified | none |
+| F-010 | slice/sector artifact schema | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：126/252 交易日位置、L2 concentration/per-sector metrics；Phase 3 readback 待补 | core_implemented_verified | none |
+| F-011 | block bootstrap/HAC/BH-FDR | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：deterministic、empty/singleton/zero-variance fixtures | core_implemented_verified | none |
+| F-012 | QE-only CAS Parquet + compact DB | `backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py`；R8B 6/6 manifest/hash/row readback；`backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py` 验证 compact DB canonical writer、QE 父身份、批量写入与公开 DTO | source_implemented_local_verified | none |
+| F-013 | 三张 additive `run_evaluation*` 表；Phase 2 已交付 control row，Phase 3 交付 metric/artifact | `backend/tests/test_qe_archive_schema.py`、`backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py`：schema mirror、canonical set、单事务写入、exact replay no-op、typed conflict | source_implemented_local_verified | none |
+| F-014 | normal + `long_trend_only` shared engine | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`、`backend/tests/unified_engine/test_qe_long_trend_phase3_api.py`：public/historical adapter 共用 Phase 2 lifecycle，已有 CAS 可直接物化而不重训 | source_implemented_local_verified | none |
+| F-015 | resource phase/outbox/fencing | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`、`backend/tests/unified_engine/test_qe_long_trend_resource_session_repair.py` | runtime_canary_verified | none |
+| F-016 | independent evaluation status/reason | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`、`backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`：family-local state | core_implemented_verified | none |
+| F-017 | Loop/Archive UI | [planned] `frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts`：single action、DB progress recovery、real API Playwright E2E | design_audited_development_ready | none |
+| F-018 | bounded read-only MCP | `backend/tests/mcp/test_qe_archive_module.py`、`backend/tests/unified_engine/test_qe_long_trend_phase3_api.py`：stable keyset、limit 1–100、filter allowlist、不内联 Parquet | source_implemented_local_verified | none |
+| F-019 | default-off compatibility | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`：composer opt-in、startup registration 和 runtime side-effect isolation | core_implemented_verified | none |
+| F-020 | full delivery controls | `nox -s qe_long_trend_phase3_platform`；`scripts/aistock_feature_workflow.py validate --tier F2`；Phase 3 diff line coverage >=80%；未执行平台阶段在 12.2 与第 16 节单独记录 | source_implemented_local_verified | approved_by_user: 本轮仅获授权开发并全量审查 Phase 3 源码；DDL/运行态、Phase 4 UI 与 Phase 5 E2E 继续作为独立后续交付状态，不冒充已完成。 |
+| F-021 | QE-only ownership/import/runtime isolation | `python -m pytest backend/tests/test_validation_catalog_integrity.py backend/tests/test_validation_module_ownership.py -q`；`tests/aistock_validation/catalog/file_ownership.yaml`、`module_registry.yaml`、`test_plans.yaml`；现有 core/Phase 2 隔离回归 | source_implemented_local_verified | none |
+| F-022 | signal→fill/exit evidence bridge | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：entry/exit、trade 唯一归属、数量/时点矛盾与阻断损失 | core_normalized_entry_exit_bridge_verified | none |
+| F-023 | staged delivery truth | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`、`backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`：family/platform 分列 | core_implemented_verified | none |
+| F-024 | platform delivery status only | `backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py`、`backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py`：DB 状态只在同一事务成功后更新，不产生研究许可位 | source_implemented_local_verified | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
-- [x] `no_simplified_delivery / Phase 1`：本 changeset 完整实现批准的 Phase 1 工作流 A，不以缺 entry/exit、删失、survival、portfolio 或 identity 语义的子集冒充核心完成；F-014 平台整体仍明确为 Phase 2–5 pending。
+- [x] `no_simplified_delivery`：Phase 1 完整实现计算核，Phase 2 完整实现并运行验证批准范围；Phase 3 已完成批准范围内的数仓/API/MCP 源码与本地验证，未把未应用 DDL、未激活运行时、Phase 4 UI 或 Phase 5 E2E 冒充完成。
 - [x] `no_silent_error / Phase 1`：非法 profile/receipt、快照/feature 窗口漂移、预测/路径/position/执行/portfolio 冲突均显式 reason、family limitation 或 fail-fast；无 evidence 不伪装成功。
 - [x] `no_business_semantic_drift / Phase 1`：纯核心 default-off，不注册 route/startup/scheduler，不改变训练标签、模型、回测结果、因子，也不触碰 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或通用 Prediction Store。
 - [x] `no_unrequested_gate_or_approval`：除 QE-only 零影响边界外，不增加研究门禁、人工审批或方向淘汰规则；数据缺口只形成指标族状态和 data action。
 - [x] Phase 1 数据集、预测、evaluation context 与 receipt 使用同一 deterministic identity；feature/outcome 关系和输入 null 均进入身份。
-- [ ] Phase 2–5 的 control migration、QE-only CAS、metric/artifact 两表、worker、API/MCP/UI、历史补算和真实 E2E 尚未实现；该事实是 platform delivery 状态，不阻断科研。
+- [x] Phase 2 的 control migration、QE-only CAS、worker、资源恢复和真实 R8B 6/6 canary 已实现并验证。
+- [x] Phase 3 的 metric/artifact migration、公共 API/MCP、snapshot resolver、事务 writer 与 validation ownership 已实现并通过 99 项专属测试；Phase 2 回归 121 项通过。
+- [ ] Phase 3 DDL apply/readback 与运行时激活、Phase 4 UI/历史批量操作面、Phase 5 完整 E2E 尚未完成；这些是 platform delivery 状态，不阻断科研。
 - [x] 理论机会、实际成交和证据不足三层明确分开；买入/退出阻断对称，日线触板不冒充订单真值，正常成交不被错误计入原因缺失分母。
 - [x] 任一可复算指标族立即可用于科研分析；工程里程碑只表示 platform delivery 进度，不控制研究。
-- [x] source merge、生产 DDL、服务重启、canary 和 R8 历史批量评价保持分离；本 changeset 未执行后三项。
+- [x] source merge、DEV/生产 DDL、服务重启、canary 和历史批量评价保持分离；本次 Phase 3 源码开发未执行 DDL、服务启停、评价任务或批量补算。
 
 ## 19. Existing-Code Implementation Anchors / 现有代码实施锚点
 
 允许修改/新增的 QE ownership：
 
+- `backend/migrations/qe_long_trend_evaluation_result_phase3_*.sql`、对应 preflight/guarded rollback 与 init schema mirror
 - `backend/services/quantevolver/qe_dataset_contract.py`
 - `backend/services/quantevolver/config_composer.py`
 - `backend/services/quantevolver/templates/read_exp_res.py`
 - `backend/services/quantevolver/results_only_retry.py`
 - `backend/services/quantevolver/qe_resource_phase_service.py`
-- `backend/services/quantevolver/long_trend_*.py`（新增）
-- `backend/services/qe_archive/long_trend_*.py`（新增专属 model/repository/query）
+- `backend/services/quantevolver/long_trend_*.py`（现有 Phase 1/2 与新增 snapshot resolver、public/historical adapter）
+- `backend/services/qe_archive/long_trend_*.py`（新增专属 model/repository/canonical receipt writer/query）
 - `backend/routers/quantevolver*.py` 与 `backend/routers/qe_archive.py` 的专属 endpoint registration
 - `backend/mcp/modules/qe_archive.py` 的只读长期评价 query
 - `frontend/src/app/quantevolver/**`、`frontend/src/app/qe-archive/**` 及其专属 API client/test
-- versioned `backend/migrations/qe_long_trend_evaluation_f2_*.sql` 和 rollback/init mirror
-- 与上述 ownership 一一对应的定向测试
+- `tests/aistock_validation/catalog/file_ownership.yaml`、module registry、test plan 中仅与 F-014 Phase 3–5 新文件对应的 ownership/validation 映射
+- 与上述 ownership 一一对应的 migration、repository、resolver、API/MCP、UI、recovery、zero-impact 定向测试
 
 只读实现参考/零变化回归锚点，不允许为本能力修改：
 
