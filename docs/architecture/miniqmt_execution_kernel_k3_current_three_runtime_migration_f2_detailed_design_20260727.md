@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K3 Current-Three Runtime Migration F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；设计 PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e` 已合入。K3-A source 已完成本地实现与验证，状态为 `implemented_verified_local_pending_pr`；K3-B 仍为 `not_started`，K3 overall 仍为 `implementation_in_progress`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；设计 PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e` 已合入。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成 `implemented_verified + merged`；K3-B 仍为 `not_started`，K3 overall 仍为 `implementation_in_progress`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3-A 为 `implemented_verified_local_pending_pr`，K3-B/K4 均为 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3-A 为 `implemented_verified + merged`，K3-B/K4 均为 `not_started`，产品 runtime 未切换。
 >
 > K3-A 本地 source 实现保持 shadow-only；未执行生产 DDL/DML，未修改生产配置或 binding，未调用 broker，未启动、停止或重启服务，未激活 runtime。
 
@@ -874,7 +874,7 @@ MINIQMT_K3_ACTIVE_LEGACY_CUTOVER_FORBIDDEN
 
 ### K3-A — Pure plugins, strict event/lifecycle seam and bindings（8–12 人日）
 
-当前状态：`implemented_verified_local_pending_pr`。真实实现已闭合三个 v3 plugin/factory、strict callback/reconcile/outbox outcome authority、mapping/outbox/algo 原子闭包、EOD/restart command lifecycle 和精确 import allowlist；没有接入产品 runtime。定向直接矩阵 `317 passed`，DEV disposable PostgreSQL 完整原子事务/回滚/readback 节点 `1 passed`，MiniQMT L2=`934 passed,27 skipped`，Paper v2=`1050 passed,2 skipped,2 xfailed`；`plugin_base.py` line/branch=`86.51%/70.97%`，`kernel_materializer.py`=`86.26%/70.39%`，classifier 选择 MiniQMT/Paper 且 `unmapped_code_files=[]`。这些证据不覆盖 K3-B committed-fact parity/inventory/shadow source，也不代表 K3 overall 或产品 cutover 完成。
+当前状态：`implemented_verified + merged`，PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`。真实实现已闭合三个 v3 plugin/factory、strict callback/reconcile/outbox outcome authority、mapping/outbox/algo 原子闭包、EOD/restart command lifecycle 和精确 import allowlist；没有接入产品 runtime。定向直接矩阵 `317 passed`，DEV disposable PostgreSQL 完整原子事务/回滚/readback 节点 `1 passed`，MiniQMT L2=`934 passed,27 skipped`，Paper v2=`1050 passed,2 skipped,2 xfailed`；`plugin_base.py` line/branch=`86.51%/70.97%`，`kernel_materializer.py`=`86.26%/70.39%`，classifier 选择 MiniQMT/Paper 且 `unmapped_code_files=[]`。这些证据不覆盖 K3-B committed-fact parity/inventory/shadow source，也不代表 K3 overall 或产品 cutover 完成。
 
 - 三个plugin class、shared pure helpers和factories；
 - manifest 3.0.0/source/descriptor/process binding/catalog closure；
