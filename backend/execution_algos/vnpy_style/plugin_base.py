@@ -368,7 +368,9 @@ class CurrentThreePluginBaseV3:
         elif event.event_type is EventTypeV2.SESSION:
             collector.diagnostic("K3_SESSION_OBSERVED", "session event produced no direct broker effect")
         else:
-            collector.diagnostic("K3_EVENT_NOOP", "subscribed event produced no algorithm effect")
+            raise CurrentThreePluginError(
+                f"{self.ALGO_CODE} transition does not accept {event.event_type.value} events"
+            )
         next_state = AlgoStateSnapshotV2.create(
             plugin_manifest=self.manifest,
             deterministic_context=context,

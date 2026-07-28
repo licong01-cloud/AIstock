@@ -510,6 +510,26 @@ class _OutcomeRepository:
         rejected: bool = False,
     ) -> RuntimeEventEnvelopeV2:
         command = _read_command(self.outbox)
+        if command.command_type is BrokerCommandTypeV2.CANCEL_ORDER:
+            suffix = self.algo.runtime_id.removeprefix("runtime_outcome_")
+            command = BrokerCommandV2.create(
+                command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+                runtime_id=self.algo.runtime_id,
+                algo_instance_id=self.algo.algo_instance_id,
+                parent_intent_id=self.algo.parent_intent_id,
+                transition_id=self.mapping.created_transition_id,
+                ordinal=0,
+                local_vt_orderid=None,
+                symbol=self.mapping.symbol,
+                side=self.mapping.side,
+                order_type=OrderTypeV1.LIMIT,
+                price_decimal=self.mapping.requested_price_decimal,
+                quantity=self.mapping.requested_quantity,
+                owned_broker_order_id=None,
+                reason_code="OUTCOME_accepted",
+                metadata={"suffix": suffix},
+            )
+            assert command.command_id == self.mapping.command_id
         raw_status = 57 if rejected else 56 if terminal else 48
         payload = build_kernel_order_event_payload_v1(
             raw_payload={"order_status": raw_status, "traded_volume": 100 if terminal and not rejected else 0},
@@ -521,7 +541,9 @@ class _OutcomeRepository:
             mapping_id=self.mapping.mapping_id,
             command_id=self.outbox.command_id,
             local_vt_orderid=self.mapping.local_vt_orderid,
-            broker_order_id=self.outbox.broker_order_id or "broker_callback_precedence",
+            broker_order_id=(
+                self.mapping.broker_order_id or self.outbox.broker_order_id or "broker_callback_precedence"
+            ),
             symbol=self.algo.symbol,
             side=self.algo.side,
             requested_quantity=100,
@@ -738,6 +760,7 @@ def test_failed_terminal_outcome_authority_priority_is_reconcile_then_unknown_th
 @pytest.mark.parametrize("outcome", ["accepted", "rejected", "unknown", "pre_call"])
 def test_cancel_outcome_always_preserves_original_broker_order_identity(outcome: str) -> None:
     repository = _OutcomeRepository(*_cancel_chain(outcome))
+    repository.seed_callback_precedence()
     original_broker_order_id = repository.mapping.broker_order_id
 
     receipt = KernelOutboxOutcomeIngressV1(repository=repository, catalog_runtime=_catalog()).ingest_outbox_outcome_v1(
@@ -761,6 +784,21 @@ def test_callback_before_ack_uses_verify_precedence_and_never_overwrites_callbac
     assert receipt.mapping_closure.mode is KernelCommandOutcomeMappingClosureModeV1.VERIFY_CALLBACK_PRECEDENCE
     assert receipt.mapping_closure.preceding_callback_event_id == callback.event_id
     assert repository.mapping == persisted_mapping
+
+
+def test_callback_precedence_missing_durable_event_fails_loud() -> None:
+    repository = _OutcomeRepository(*_chain("accepted"))
+    callback = repository.seed_callback_precedence()
+    del repository.events[callback.event_id]
+
+    with pytest.raises(KernelOutboxOutcomeIngressError, match="absent from durable event authority") as raised:
+        KernelOutboxOutcomeIngressV1(
+            repository=repository,
+            catalog_runtime=_catalog(),
+        ).ingest_outbox_outcome_v1(command_id=repository.outbox.command_id)
+
+    assert raised.value.reason_code == "MINIQMT_COMMAND_OUTCOME_CALLBACK_PRECEDENCE_MISSING"
+    assert raised.value.context["callback_event_id"] == callback.event_id
 
 
 @pytest.mark.parametrize(

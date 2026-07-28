@@ -1,14 +1,14 @@
 # MiniQMT 统一执行内核 K3 Current-Three Runtime Migration F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready_for_implementation`；PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e`；`source_merge=merged_pr_2816`。K3 implementation 仍为 `not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；设计 PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e` 已合入。K3-A source 已完成本地实现与验证，状态为 `implemented_verified_local_pending_pr`；K3-B 仍为 `not_started`，K3 overall 仍为 `implementation_in_progress`。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3/K4 implementation 均为 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3-A 为 `implemented_verified_local_pending_pr`，K3-B/K4 均为 `not_started`，产品 runtime 未切换。
 >
-> 本设计阶段不实施 K3 代码，不执行 DDL/DML，不修改生产配置或 binding，不调用 broker，不启动、停止或重启服务，不激活 runtime。
+> K3-A 本地 source 实现保持 shadow-only；未执行生产 DDL/DML，未修改生产配置或 binding，未调用 broker，未启动、停止或重启服务，未激活 runtime。
 
 ## 0. Implementation Decision / 实施决策
 
@@ -874,6 +874,8 @@ MINIQMT_K3_ACTIVE_LEGACY_CUTOVER_FORBIDDEN
 
 ### K3-A — Pure plugins, strict event/lifecycle seam and bindings（8–12 人日）
 
+当前状态：`implemented_verified_local_pending_pr`。真实实现已闭合三个 v3 plugin/factory、strict callback/reconcile/outbox outcome authority、mapping/outbox/algo 原子闭包、EOD/restart command lifecycle 和精确 import allowlist；没有接入产品 runtime。定向直接矩阵 `317 passed`，DEV disposable PostgreSQL 完整原子事务/回滚/readback 节点 `1 passed`，MiniQMT L2=`934 passed,27 skipped`，Paper v2=`1050 passed,2 skipped,2 xfailed`；`plugin_base.py` line/branch=`86.51%/70.97%`，`kernel_materializer.py`=`86.26%/70.39%`，classifier 选择 MiniQMT/Paper 且 `unmapped_code_files=[]`。这些证据不覆盖 K3-B committed-fact parity/inventory/shadow source，也不代表 K3 overall 或产品 cutover 完成。
+
 - 三个plugin class、shared pure helpers和factories；
 - manifest 3.0.0/source/descriptor/process binding/catalog closure；
 - v3 state/active-order codec、public transition-id helper、strict ORDER/TRADE/COMMAND_OUTCOME payload、mapping/outbox lifecycle projection和materializer closure；
@@ -1035,16 +1037,16 @@ runtime_activation=noop
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-071` | §1–§3.4；`runtime.py::_ensure_vnpy_core/_handle_vnpy_actions/_defer_dependent_buy_action_if_needed/_try_release_deferred_buys_after_sell_trade`定向事实；父蓝图K3/K6 | artifact: `docs/architecture/miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`；target `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` route/import/ledger-cross-parent static tests | design_ready | none |
-| `F-072` | §3–§5.1.3；exact three factory/class/binding table、transition-first construction、v3 pending command state、`KernelCommandLifecycleProjectionV1` | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py`；placeholder/backpatch、state/outbox drift negative matrix | design_ready | none |
-| `F-073` | §5–§6 Sniper exact transition table | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` Sniper positive/negative/restart vectors | design_ready | none |
-| `F-074` | §5、§7；`best_limit_quantity_v1`唯一draw authority | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py` deterministic ordinal/retry/restart/price-change vectors | design_ready | none |
-| `F-075` | §5、§8；plugin raw due + K2 `ExchangeSessionClockV1/effective_timer_due_at_v1`唯一authority | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` 11:29:59→PM、午休零occurrence、PM无burst、duration/EOD/restart及authority drift vectors | design_ready | none |
-| `F-076` | §5.1.1–§5.4、§11；strict callback/reconcile payload、lifecycle projection、outbox-outcome→COMMAND_OUTCOME ingress | target `backend/tests/miniqmt_execution_runtime/test_kernel_callback_events.py`、`test_kernel_outbox_outcome_ingress.py`、`test_current_three_kernel_plugins.py` accepted/rejected/pre-call/unknown/conflict、callback-before-ACK、terminal ORDER before TRADE、OMS closure、fill/EOD/no-duplicate matrix | design_ready | none |
+| `F-071` | §1–§3.4；`runtime.py::_ensure_vnpy_core/_handle_vnpy_actions/_defer_dependent_buy_action_if_needed/_try_release_deferred_buys_after_sell_trade`定向事实；父蓝图K3/K6 | `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py`使用精确 pure-contract allowlist；产品 route 未修改 | implemented_verified_k3a | none |
+| `F-072` | §3–§5.1.3；exact three factory/class/binding table、transition-first construction、v3 pending command state、`KernelCommandLifecycleProjectionV1` | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py`、`test_current_three_plugin_manifests.py`、`test_algo_plugin_contracts.py`、`test_algo_plugin_registry.py`进入MiniQMT L2 | implemented_verified_k3a | none |
+| `F-073` | §5–§6 Sniper exact transition table | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`与`test_current_three_kernel_plugins.py`覆盖BUY/SELL/depth/cancel/fill/EOD/restart | implemented_verified_k3a | none |
+| `F-074` | §5、§7；`best_limit_quantity_v1`唯一draw authority | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`覆盖deterministic ordinal/retry/restart/price-change | implemented_verified_k3a | none |
+| `F-075` | §5、§8；plugin raw due + K2 `ExchangeSessionClockV1/effective_timer_due_at_v1`唯一authority | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py`覆盖11:29:59→PM、午休零occurrence、PM无burst、duration/EOD/restart | implemented_verified_k3a | none |
+| `F-076` | §5.1.1–§5.4、§11；strict callback/reconcile payload、lifecycle projection、outbox-outcome→COMMAND_OUTCOME ingress | `backend/tests/miniqmt_execution_runtime/test_kernel_callback_events.py`、`test_kernel_outbox_outcome_ingress.py`、`test_current_three_kernel_plugins.py`；DEV节点`test_kernel_repository_postgres.py::test_repository_real_postgres_startup_event_readback_conflict_rollback_and_bounds`通过 | implemented_verified_k3a | none |
 | `F-077` | §9–§10 strict policy/state/dependent-BUY inventory与ALGO_LOCAL parity carriers | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_legacy_inventory.py` positive/negative/truncation/readback/scope separation | design_ready | none |
 | `F-078` | §3–§3.4、§10.1.1、§13；committed legacy repository snapshot→strict event adapter→K2 public seams | target `backend/tests/miniqmt_execution_runtime/test_current_three_shadow_source.py` DEV PostgreSQL append/readback/corruption rollback；`backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`证明no-branch/no-broker/no-ledger/no-cross-parent | design_ready | none |
-| `F-079` | §11–§12、§15；typed failure/diagnostics/rollback | target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py` malformed input、plugin-local isolation、DB failure、source rollback cases | design_ready | none |
-| `F-080` | §10.2、§14–§16；visible transport suppression、direct/DEV/integration、ownership/classifier/F2/coverage/gates和K6 prerequisite | target cancel pending/rejected/retry exact parity；`python -m nox -s miniqmt_execution_runtime_l2`、`paper_v2_backend`及真实依赖plans；line>=80/branch>=70，`unmapped_code_files=[]` | design_ready | none |
+| `F-079` | §11–§12、§15；typed failure/diagnostics/rollback | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py`、`test_kernel_callback_events.py`、`test_kernel_outbox_outcome_ingress.py`覆盖malformed input、plugin isolation、outbox/callback/repository conflict和restart failure | implemented_verified_k3a_scope | none |
+| `F-080` | §10.2、§14–§16；visible transport suppression、direct/DEV/integration、ownership/classifier/F2/coverage/gates和K6 prerequisite | `python -m nox -s miniqmt_execution_runtime_l2`=`934/27`；`python -m nox -s paper_v2_backend`=`1050/2/2`；DEV node=`1 passed`；核心coverage过80/70；classifier `unmapped_code_files=[]` | implemented_verified_k3a_scope | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 正式复核
 

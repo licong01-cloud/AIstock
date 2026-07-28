@@ -862,6 +862,33 @@ def test_eod_active_child_returns_residual_only_after_terminal_order_callback() 
     assert closed_state["active_orders"] == []
 
 
+def test_plugin_transition_rejects_unsubscribed_event_instead_of_noop_success() -> None:
+    from backend.execution_algos.vnpy_style.plugin_base import CurrentThreePluginError
+    from backend.services.miniqmt_execution_runtime.plugin_contracts import EventSourceV2, EventTypeV2
+
+    plugin = _plugin("SNIPER_MINIQMT")
+    initialized = plugin.initialize(_start_context("SNIPER_MINIQMT"))
+    account = _event(
+        sequence=2,
+        event_type=EventTypeV2.ACCOUNT,
+        source=EventSourceV2.QMT_OMS_PROJECTION,
+        schema="miniqmt_account_projection_v1",
+        payload={"available_cash": "100000"},
+        source_identity={"projection_version": "1", "projection_sha256": "a" * 64},
+    )
+
+    with pytest.raises(CurrentThreePluginError, match="does not accept ACCOUNT"):
+        plugin.transition(
+            state=initialized.next_state,
+            event=account,
+            services=_services(
+                state=initialized.next_state,
+                event=account,
+                delivery_suffix="unsubscribed_account",
+            ),
+        )
+
+
 def test_twap_eod_cancels_durable_timer_before_residual_terminal() -> None:
     from backend.services.miniqmt_execution_runtime.plugin_contracts import EventSourceV2, EventTypeV2
 

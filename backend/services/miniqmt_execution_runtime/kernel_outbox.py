@@ -1457,8 +1457,17 @@ def _callback_precedence_v1(
         return None
     try:
         transaction = repository.read_event_transaction(event_id)
-    except KeyError:
-        return None
+    except KeyError as exc:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_CALLBACK_PRECEDENCE_MISSING",
+            "mapping references a callback event that is absent from durable event authority",
+            context={
+                "command_id": outbox.command_id,
+                "mapping_id": mapping.mapping_id,
+                "callback_event_id": event_id,
+                "callback_watermark": watermark,
+            },
+        ) from exc
     event = transaction["event"]
     if event.event_type not in {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}:
         return None
