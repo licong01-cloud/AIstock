@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
 from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
+from backend.services.advisory_historical_range.planning_service import (
+    _CatalogLeaseHeartbeatSupervisor,
+)
 from backend.services.advisory_historical_range.models import HistoricalRangeBackgroundDispatchFailureV1
 from backend.services.advisory_historical_range.models import HistoricalRangeContractError
 from backend.services.advisory_historical_range.models import (
@@ -23,6 +27,76 @@ class _Background:
 
     def add_task(self, func, *args, **kwargs):
         self.task = (func, args, kwargs)
+
+
+def test_catalog_heartbeat_renews_same_durable_ownership() -> None:
+    renewed = Event()
+    calls = []
+    operation = {
+        "operation_id": "ahrop_heartbeat",
+        "row_version": 4,
+        "attempt_no": 2,
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "fencing_token": 2,
+        "stable_keyset_cursor_json": {"next_requirement_ordinal": 97},
+    }
+
+    def transition_operation(**kwargs):
+        calls.append(kwargs)
+        renewed.set()
+        return {**operation, "row_version": kwargs["expected_row_version"] + 1}
+
+    heartbeat = _CatalogLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation=operation,
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert renewed.wait(timeout=1)
+    current = heartbeat.stop()
+
+    assert current["row_version"] == 4 + len(calls)
+    assert all(call["target_status"].value == "RUNNING" for call in calls)
+    assert all(call["attempt_no"] == 2 for call in calls)
+    assert all(call["worker_id"] == "worker-1" for call in calls)
+    assert all(call["lease_token"] == "lease-1" for call in calls)
+    assert all(call["fencing_token"] == 2 for call in calls)
+    assert all(
+        call["stable_keyset_cursor_json"] == {"next_requirement_ordinal": 97}
+        for call in calls
+    )
+    assert calls[-1]["lease_expires_at"] > datetime.now(UTC)
+
+
+def test_catalog_heartbeat_surfaces_lost_durable_ownership() -> None:
+    attempted = Event()
+
+    def transition_operation(**_kwargs):
+        attempted.set()
+        raise HistoricalRangeContractError(
+            "ADVISORY_HR_ROW_VERSION_CONFLICT",
+            "catalog heartbeat lost durable ownership",
+        )
+
+    heartbeat = _CatalogLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation={
+            "operation_id": "ahrop_lost",
+            "row_version": 4,
+            "attempt_no": 2,
+            "worker_id": "worker-1",
+            "lease_token": "lease-1",
+            "fencing_token": 2,
+            "stable_keyset_cursor_json": {"next_requirement_ordinal": 97},
+        },
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert attempted.wait(timeout=1)
+
+    with pytest.raises(HistoricalRangeContractError, match="lost durable ownership"):
+        heartbeat.stop()
 
 
 def test_catalog_dispatcher_defers_rollover_deadline_until_after_chunk_execution() -> None:
