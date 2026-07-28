@@ -252,22 +252,25 @@ def _start_context(manifest) -> AlgoStartContextV1:
     )
 
 
-def test_current_pre_k4_binding_fails_loud_without_legacy_fallback() -> None:
+def test_current_three_binding_resolves_exact_frozen_plugin_without_legacy_fallback() -> None:
     runtime = _catalog()
     descriptor = next(
         item for item in runtime.snapshot.registration_descriptors if item.manifest.algo_code == "SNIPER_MINIQMT"
     )
-    with pytest.raises(KernelPluginInvocationError) as raised:
-        resolve_plugin_for_restore_v1(
-            catalog_runtime=runtime,
-            plugin_id=descriptor.manifest.plugin_id,
-            plugin_version=descriptor.manifest.plugin_version,
-            plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
-            canonical_plugin_config={"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
-            plugin_config_sha256=hash_hex_v1("miniqmt_plugin_config_v2", {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}),
-        )
-    assert raised.value.reason_code == "MINIQMT_ALGO_PLUGIN_BINDING_INVALID"
-    assert raised.value.broker_called is False
+    config = {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
+    resolved = resolve_plugin_for_restore_v1(
+        catalog_runtime=runtime,
+        plugin_id=descriptor.manifest.plugin_id,
+        plugin_version=descriptor.manifest.plugin_version,
+        plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
+        canonical_plugin_config=config,
+        plugin_config_sha256=hash_hex_v1("miniqmt_plugin_config_v2", config),
+    )
+
+    assert resolved.descriptor == descriptor
+    assert resolved.plugin.manifest == descriptor.manifest
+    assert callable(resolved.state_codec)
+    assert config == {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
 
 
 def _event_lineage(

@@ -7,7 +7,12 @@ from typing import Any
 
 import psycopg2.extras
 
-from .kernel_delivery import KernelAlgoCreationRequestV1, KernelAlgoStartWriteBundleV1, KernelTransitionWriteBundleV1
+from .kernel_delivery import (
+    KernelAlgoCreationRequestV1,
+    KernelAlgoStartWriteBundleV1,
+    KernelTransitionWriteBundleV1,
+    build_command_lifecycle_projection_v1,
+)
 from .kernel_materializer import _validate_projection_lineage_v1
 from .kernel_repository_common import KernelRepositoryConflict, _json, _model_from_json, _row_json
 from .kernel_repository_projection import (
@@ -31,6 +36,7 @@ from .plugin_contracts import (
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoTimerScheduleV1,
     ExecutionCommandChildMappingV1,
+    KernelCommandLifecycleProjectionV1,
     RuntimeEventEnvelopeV2,
     RuntimeEventIngressReceiptV1,
     TimerMutationTypeV1,
@@ -129,8 +135,16 @@ class KernelRepositoryK2BMixin:
                     transition_identity = receipt.transition_id
                     if bundle.projection_set is None or bundle.after_state is None:
                         raise ValueError("successful ALGO_START requires projection set and state")
+                    lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=bundle.algo_instance.algo_instance_id,
+                        event_id=event.event_id,
+                        delivery_id=initial.delivery_id,
+                        ordered_items=(),
+                    )
                     transition_inputs = (
                         bundle.projection_set.projection_set_sha256,
+                        lifecycle_projection.projection_sha256,
                         bundle.after_state.state_sha256,
                         *(item.payload_sha256 for item in bundle.new_child_mappings),
                         *(item.payload_sha256 for item in bundle.command_outboxes),
@@ -593,6 +607,15 @@ class KernelRepositoryK2BMixin:
                         raise KernelRepositoryConflict(
                             "failure algo active-child closure differs from locked durable authority"
                         )
+                if previous_state is None:
+                    raise KernelRepositoryConflict("claimed active algo has no exact previous state")
+                lifecycle_projection = build_command_lifecycle_projection_v1(
+                    event=event,
+                    delivery=claimed,
+                    previous_state=previous_state,
+                    mappings=active_mappings,
+                    outboxes=locked_command_outboxes,
+                )
                 self._validate_k2b_bundle(
                     bundle,
                     event=event,
@@ -600,6 +623,7 @@ class KernelRepositoryK2BMixin:
                     previous_algo=algo,
                     expected_delivery_row_version=expected_delivery_row_version,
                     expected_algo_row_version=expected_algo_row_version,
+                    command_lifecycle_projection_sha256=lifecycle_projection.projection_sha256,
                 )
                 transition_identity = self._write_k2b_bundle_with_cursor(
                     cur,
@@ -623,6 +647,7 @@ class KernelRepositoryK2BMixin:
         expected_delivery_row_version: int,
         expected_algo_row_version: int,
         expected_transaction_identity: str | None = None,
+        command_lifecycle_projection_sha256: str | None = None,
     ) -> None:
         if bundle.delivery.row_version != expected_delivery_row_version + 1:
             raise KernelRepositoryConflict("delivery bundle row version is not the exact CAS successor")
@@ -769,6 +794,7 @@ class KernelRepositoryK2BMixin:
             assert bundle.projection_set is not None and bundle.after_state is not None
             input_hashes = (
                 bundle.projection_set.projection_set_sha256,
+                *((command_lifecycle_projection_sha256,) if command_lifecycle_projection_sha256 is not None else ()),
                 bundle.after_state.state_sha256,
                 *(item.payload_sha256 for item in bundle.new_child_mappings),
                 *(item.payload_sha256 for item in bundle.command_outboxes),

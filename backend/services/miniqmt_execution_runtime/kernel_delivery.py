@@ -772,7 +772,7 @@ def resolve_plugin_for_restore_v1(
         validated_config = config_validator(descriptor.manifest, canonical_plugin_config)
         if hash_hex_v1("miniqmt_plugin_config_v2", thaw_json_v1(validated_config)) != plugin_config_sha256:
             raise ValueError("config validator output does not preserve frozen config identity")
-        plugin = factory(validated_config)
+        plugin = factory(thaw_json_v1(validated_config))
     except (TypeError, ValueError, AttributeError, KeyError) as exc:
         raise _invocation_error(
             "MINIQMT_ALGO_PLUGIN_BINDING_INVALID",

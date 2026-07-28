@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import threading
 from collections import Counter
 from contextlib import contextmanager
@@ -251,11 +252,14 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         active_only: bool = False,
     ) -> list[MiniQMTChildOrder]: ...
 
+    def read_current_three_shadow_snapshot(self, runtime_id: str, *, include_archived: bool = False) -> Any: ...
+
 
 class InMemoryMiniQMTExecutionRuntimeRepository:
     """Deterministic in-memory repository for unit tests."""
 
     def __init__(self) -> None:
+        self._snapshot_lock = threading.RLock()
         self._runtimes: dict[str, MiniQMTExecutionRuntimeRecord] = {}
         self._events: dict[str, list[MiniQMTExecutionEvent]] = {}
         self._evidence_receipts: dict[str, DurableEvidenceReceipt] = {}
@@ -263,21 +267,22 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         self._child_orders: dict[str, MiniQMTChildOrder] = {}
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
-        existing = self._runtimes.get(runtime.runtime_id)
-        events = self._events.get(runtime.runtime_id) or []
-        last_event_sequence = max(
-            int(runtime.last_event_sequence or 0),
-            int(existing.last_event_sequence or 0) if existing is not None else 0,
-            int(events[-1].sequence) if events else 0,
-        )
-        stored = runtime.model_copy(
-            update={
-                "last_event_sequence": last_event_sequence,
-                "updated_at": datetime.now(UTC),
-            }
-        )
-        self._runtimes[stored.runtime_id] = stored
-        return stored
+        with self._snapshot_lock:
+            existing = self._runtimes.get(runtime.runtime_id)
+            events = self._events.get(runtime.runtime_id) or []
+            last_event_sequence = max(
+                int(runtime.last_event_sequence or 0),
+                int(existing.last_event_sequence or 0) if existing is not None else 0,
+                int(events[-1].sequence) if events else 0,
+            )
+            stored = runtime.model_copy(
+                update={
+                    "last_event_sequence": last_event_sequence,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self._runtimes[stored.runtime_id] = stored
+            return stored
 
     def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None:
         return self._runtimes.get(runtime_id)
@@ -285,9 +290,7 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
     def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
         return sorted(self._runtimes.values(), key=lambda item: item.updated_at, reverse=True)
 
-    def list_runtimes_for_account(
-        self, *, account_group_id: str, limit: int
-    ) -> list[MiniQMTExecutionRuntimeRecord]:
+    def list_runtimes_for_account(self, *, account_group_id: str, limit: int) -> list[MiniQMTExecutionRuntimeRecord]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         exact_account_group_id = str(account_group_id or "").strip()
@@ -307,24 +310,25 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         return rows[:limit]
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
-        existing = self._events.setdefault(event.runtime_id, [])
-        runtime = self._runtimes.get(event.runtime_id)
-        last_sequence = max(
-            int(runtime.last_event_sequence or 0) if runtime is not None else 0,
-            int(existing[-1].sequence) if existing else 0,
-        )
-        expected_sequence = int(last_sequence or 0) + 1
-        if event.sequence != expected_sequence:
-            raise ValueError(
-                f"event sequence must be monotonic for runtime {event.runtime_id}: "
-                f"expected {expected_sequence}, got {event.sequence}"
+        with self._snapshot_lock:
+            existing = self._events.setdefault(event.runtime_id, [])
+            runtime = self._runtimes.get(event.runtime_id)
+            last_sequence = max(
+                int(runtime.last_event_sequence or 0) if runtime is not None else 0,
+                int(existing[-1].sequence) if existing else 0,
             )
-        existing.append(event)
-        if runtime is not None:
-            self._runtimes[event.runtime_id] = runtime.model_copy(
-                update={"last_event_sequence": event.sequence, "updated_at": datetime.now(UTC)}
-            )
-        return event
+            expected_sequence = int(last_sequence or 0) + 1
+            if event.sequence != expected_sequence:
+                raise ValueError(
+                    f"event sequence must be monotonic for runtime {event.runtime_id}: "
+                    f"expected {expected_sequence}, got {event.sequence}"
+                )
+            existing.append(event)
+            if runtime is not None:
+                self._runtimes[event.runtime_id] = runtime.model_copy(
+                    update={"last_event_sequence": event.sequence, "updated_at": datetime.now(UTC)}
+                )
+            return event
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
         existing = self._evidence_receipts.get(candidate.event_id)
@@ -481,9 +485,10 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         )
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
-        stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
-        self._algo_instances[stored.algo_instance_id] = stored
-        return stored
+        with self._snapshot_lock:
+            stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
+            self._algo_instances[stored.algo_instance_id] = stored
+            return stored
 
     def list_algo_instances(
         self,
@@ -497,9 +502,10 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         return sorted(items, key=lambda item: item.created_at)
 
     def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder:
-        stored = order.model_copy(update={"updated_at": datetime.now(UTC)})
-        self._child_orders[stored.child_order_id] = stored
-        return stored
+        with self._snapshot_lock:
+            stored = order.model_copy(update={"updated_at": datetime.now(UTC)})
+            self._child_orders[stored.child_order_id] = stored
+            return stored
 
     def list_child_orders(
         self,
@@ -517,6 +523,52 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
             items = [item for item in items if item.status not in terminal]
         return sorted(items, key=lambda item: item.updated_at)
 
+    def read_current_three_shadow_snapshot(
+        self,
+        runtime_id: str,
+        *,
+        include_archived: bool = False,  # noqa: ARG002 - no archive layer in memory
+    ) -> Any:
+        from .kernel_current_three_shadow_source import build_current_three_shadow_repository_read_v1
+
+        with self._snapshot_lock:
+            runtime = self._runtimes.get(runtime_id)
+            if runtime is None:
+                raise RuntimeConfigInvalidError(
+                    "current-three shadow snapshot runtime does not exist",
+                    context={
+                        "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                        "stage": "K3_SHADOW_SOURCE_READ",
+                        "runtime_id": runtime_id,
+                    },
+                )
+            commit_sha = runtime.metadata.get("repository_commit_sha")
+            if type(commit_sha) is not str or len(commit_sha) != 40:
+                raise RuntimeConfigInvalidError(
+                    "current-three shadow snapshot lacks exact repository commit authority",
+                    context={
+                        "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                        "stage": "K3_SHADOW_SOURCE_READ",
+                        "runtime_id": runtime_id,
+                        "field": "metadata.repository_commit_sha",
+                    },
+                )
+            observed_at = datetime.now(UTC)
+            return build_current_three_shadow_repository_read_v1(
+                repository_commit_sha=commit_sha,
+                runtime=runtime.model_copy(deep=True),
+                events=tuple(item.model_copy(deep=True) for item in self._events.get(runtime_id, ())),
+                algos=tuple(
+                    item.model_copy(deep=True)
+                    for item in self._algo_instances.values()
+                    if item.runtime_id == runtime_id
+                ),
+                children=tuple(
+                    item.model_copy(deep=True) for item in self._child_orders.values() if item.runtime_id == runtime_id
+                ),
+                database_snapshot_at_utc=observed_at,
+            )
+
     def mark_runtime_state(
         self,
         runtime_id: str,
@@ -529,12 +581,15 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
 class PostgresMiniQMTExecutionRuntimeRepository:
     """Production MiniQMT runtime store with incremental per-row DB writes."""
 
-    def __init__(self, conn_factory: Any = get_conn) -> None:
+    def __init__(self, conn_factory: Any = get_conn, *, _shadow_read_schema: str = "qmt_strategy") -> None:
         self._conn_factory = conn_factory
         self._conn_factory_accepts_autocommit = _supports_conn_factory_kw(conn_factory, "autocommit")
         self._conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(conn_factory, "manage_transaction")
         self._prune_write_count_by_runtime: dict[str, int] = {}
         self._prune_lock = threading.Lock()
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,62}", _shadow_read_schema) is None:
+            raise ValueError("shadow read schema must be a strict PostgreSQL identifier")
+        self._shadow_read_schema = _shadow_read_schema
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
         stored = runtime.model_copy(update={"updated_at": datetime.now(UTC)})
@@ -562,9 +617,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             self._list_runtime_rows,
         )
 
-    def list_runtimes_for_account(
-        self, *, account_group_id: str, limit: int
-    ) -> list[MiniQMTExecutionRuntimeRecord]:
+    def list_runtimes_for_account(self, *, account_group_id: str, limit: int) -> list[MiniQMTExecutionRuntimeRecord]:
         exact_account_group_id = str(account_group_id or "").strip()
         if not exact_account_group_id:
             raise ValueError("account_group_id is required")
@@ -854,6 +907,105 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             {"runtime_id": runtime_id, "active_only": active_only},
             lambda: self._list_child_order_rows(runtime_id, active_only=active_only),
         )
+
+    def read_current_three_shadow_snapshot(self, runtime_id: str, *, include_archived: bool = False) -> Any:
+        exact_runtime_id = str(runtime_id or "").strip()
+        if not exact_runtime_id:
+            raise ValueError("runtime_id is required")
+        return self._with_runtime_db_error(
+            "read_current_three_shadow_snapshot",
+            "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+            {"runtime_id": exact_runtime_id, "include_archived": include_archived},
+            lambda: self._read_current_three_shadow_snapshot_rows(
+                runtime_id=exact_runtime_id,
+                include_archived=include_archived,
+            ),
+        )
+
+    def _read_current_three_shadow_snapshot_rows(self, *, runtime_id: str, include_archived: bool) -> Any:
+        from .kernel_current_three_shadow_source import (
+            _validate_capacity,
+            build_current_three_shadow_repository_read_v1,
+        )
+
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        schema = self._shadow_read_schema
+        with self._conn(manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                cur.execute("SELECT transaction_timestamp() AS snapshot_at")
+                stamp_row = cur.fetchone()
+                snapshot_at = stamp_row["snapshot_at"]
+                cur.execute(
+                    f"""
+                    SELECT
+                      (SELECT COUNT(*) FROM {schema}.execution_runtime_event
+                         WHERE runtime_id = %s {archived_clause}) AS event_count,
+                      (SELECT COUNT(*) FROM {schema}.execution_algo_instance
+                         WHERE runtime_id = %s {archived_clause}) AS algo_count,
+                      (SELECT COUNT(*) FROM {schema}.execution_child_order
+                         WHERE runtime_id = %s {archived_clause}) AS child_count
+                    """,
+                    (runtime_id, runtime_id, runtime_id),
+                )
+                count_row = cur.fetchone()
+                _validate_capacity(
+                    event_count=int(count_row["event_count"]),
+                    algo_count=int(count_row["algo_count"]),
+                    child_count=int(count_row["child_count"]),
+                )
+                cur.execute(f"SELECT * FROM {schema}.execution_runtime WHERE runtime_id = %s", (runtime_id,))
+                runtime_row = cur.fetchone()
+                if runtime_row is None:
+                    raise RuntimeConfigInvalidError(
+                        "current-three shadow snapshot runtime does not exist",
+                        context={
+                            "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                            "stage": "K3_SHADOW_SOURCE_READ",
+                            "runtime_id": runtime_id,
+                        },
+                    )
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_runtime_event
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY sequence, event_id""",
+                    (runtime_id,),
+                )
+                events = tuple(_row_to_event(row) for row in cur.fetchall())
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_algo_instance
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY algo_instance_id""",
+                    (runtime_id,),
+                )
+                algos = tuple(_row_to_algo_instance(row) for row in cur.fetchall())
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_child_order
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY child_order_id""",
+                    (runtime_id,),
+                )
+                children = tuple(_row_to_child_order(row) for row in cur.fetchall())
+                runtime = _row_to_runtime(runtime_row)
+                commit_sha = runtime.metadata.get("repository_commit_sha")
+                if type(commit_sha) is not str or len(commit_sha) != 40:
+                    raise RuntimeConfigInvalidError(
+                        "current-three shadow snapshot lacks exact repository commit authority",
+                        context={
+                            "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                            "stage": "K3_SHADOW_SOURCE_READ",
+                            "runtime_id": runtime_id,
+                            "field": "metadata.repository_commit_sha",
+                        },
+                    )
+                return build_current_three_shadow_repository_read_v1(
+                    repository_commit_sha=commit_sha,
+                    runtime=runtime,
+                    events=events,
+                    algos=algos,
+                    children=children,
+                    database_snapshot_at_utc=snapshot_at,
+                )
 
     def mark_runtime_state(
         self,
@@ -1737,8 +1889,12 @@ class PostgresMiniQMTExecutionRuntimeRepository:
         context: dict[str, Any],
         func: Callable[[], Any],
     ) -> Any:
+        from .kernel_current_three_contracts import CurrentThreeContractError
+
         try:
             return func()
+        except CurrentThreeContractError:
+            raise
         except RuntimeConfigInvalidError:
             raise
         except QuoteEvidenceIdempotencyConflict:
