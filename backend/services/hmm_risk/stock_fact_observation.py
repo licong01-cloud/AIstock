@@ -26,6 +26,15 @@ FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v1"
 C010_FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v2_c010"
 C010_POLICY_VERSION = "hmm_risk_c010_feature_domain_policy_v1"
 C010_CROSS_SECTION_RECEIPT_VERSION = "hmm_risk_c010_feature_cross_section_receipt_set_v1"
+C010_AGGREGATE_RECEIPT_VERSION = "hmm_risk_c010_feature_domain_aggregate_evidence_v1"
+C010_ELIGIBILITY_RECEIPT_VERSION = "hmm_risk_c010_train_observation_eligibility_v1"
+C010_EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v1"
+C010_CROSS_SECTION_FEATURES = (
+    "volume_ratio",
+    "sf_range_vs_market_10d",
+    "sf_vol_vs_market_20d",
+    "sf_excess_breadth_5d",
+)
 SOURCE_VERSION = "hmm_risk_l1_stock_fact_source_v1"
 MIN_COVERAGE = 0.90
 MIN_TRAINING_ROWS = 120
@@ -951,6 +960,581 @@ def build_l1_feature_panel(
 
 def _cross_section_mask_hash(codes: Sequence[str], active: set[str]) -> str:
     return canonical_sha256([{"sector_code": code, "active": code in active} for code in codes])
+
+
+def complete_c010_domain_receipts(
+    evidence: Mapping[str, Any],
+    *,
+    trading_dates: Sequence[date],
+    l1_sector_codes: Sequence[str],
+    l2_sector_codes: Sequence[str],
+) -> dict[str, Any]:
+    """Materialize one price-domain receipt for every frozen level/sector/date identity."""
+
+    body = {key: value for key, value in dict(evidence).items() if key != "receipt_sha256"}
+    if body.get("schema_version") != C010_AGGREGATE_RECEIPT_VERSION:
+        raise StateModelSetError("C-010 aggregate evidence schema is invalid")
+    calendar = tuple(trading_dates)
+    if not calendar or tuple(sorted(set(calendar))) != calendar:
+        raise StateModelSetError("C-010 aggregate receipt calendar is invalid")
+    levels = (
+        ("L1", tuple(sorted(str(value) for value in l1_sector_codes)), "l1_domain_receipts", "l1_invalid_price_domain"),
+        ("L2", tuple(sorted(str(value) for value in l2_sector_codes)), "l2_domain_receipts", "l2_invalid_price_domain"),
+    )
+    for level, codes, valid_field, invalid_field in levels:
+        expected_count = 31 if level == "L1" else 131
+        if len(codes) != expected_count or len(set(codes)) != expected_count or any(not value for value in codes):
+            raise StateModelSetError(f"C-010 {level} aggregate receipt sector set is invalid")
+        valid = list(body.get(valid_field) or ())
+        invalid = list(body.get(invalid_field) or ())
+        observed: set[tuple[str, str]] = set()
+        for entry in itertools.chain(valid, invalid):
+            if not isinstance(entry, Mapping):
+                raise StateModelSetError(f"C-010 {level} aggregate receipt entry is invalid")
+            key = (str(entry.get("sector_code") or ""), str(entry.get("trade_date") or ""))
+            if key in observed:
+                raise StateModelSetError(f"C-010 {level} aggregate receipt identity is duplicated: {key}")
+            observed.add(key)
+        for trade_date in calendar:
+            trade_date_text = trade_date.isoformat()
+            for code in codes:
+                key = (code, trade_date_text)
+                if key in observed:
+                    continue
+                missing_body = {
+                    "direct_sector_level": level,
+                    "trade_date": trade_date_text,
+                    "sector_code": code,
+                    "price_domain_status": "invalid",
+                    "price_domain_reason_code": "hmm_risk_c010_expected_opportunity_missing",
+                    "price_expected_symbols": [],
+                    "price_expected_symbol_sha256": canonical_sha256([]),
+                    "price_complete_symbols": [],
+                    "price_complete_symbol_sha256": canonical_sha256([]),
+                    "price_count_coverage": 0.0,
+                    "price_expected_weight": None,
+                    "price_complete_weight": None,
+                    "price_weight_coverage": 0.0,
+                    "missing_evidence": [
+                        {
+                            "sector_code": code,
+                            "trade_date": trade_date_text,
+                            "reason_code": "hmm_risk_c010_expected_opportunity_missing",
+                        }
+                    ],
+                }
+                invalid.append({**missing_body, "entry_sha256": canonical_sha256(missing_body)})
+        valid.sort(key=lambda value: (str(value.get("trade_date") or ""), str(value.get("sector_code") or "")))
+        invalid.sort(key=lambda value: (str(value.get("trade_date") or ""), str(value.get("sector_code") or "")))
+        body[valid_field] = valid
+        body[invalid_field] = invalid
+        body[f"{level.lower()}_domain_expected_count"] = expected_count * len(calendar)
+        body[f"{level.lower()}_domain_receipt_count"] = len(valid) + len(invalid)
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _c010_valid_sha256(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(character in "0123456789abcdef" for character in text.lower())
+
+
+def _c010_require_canonical(value: Any, *, identity_field: str, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise StateModelSetError(f"{label} is missing")
+    identity = str(value.get(identity_field) or "")
+    body = {key: item for key, item in value.items() if key != identity_field}
+    if not _c010_valid_sha256(identity) or canonical_sha256(body) != identity:
+        raise StateModelSetError(f"{label} canonical identity is invalid")
+    return value
+
+
+def _c010_require_ordered_strings(values: Any, *, label: str, allow_empty: bool = False) -> tuple[str, ...]:
+    if not isinstance(values, list) or (not allow_empty and not values):
+        raise StateModelSetError(f"{label} is missing")
+    normalized = tuple(str(value) for value in values)
+    if any(not value for value in normalized) or tuple(sorted(set(normalized))) != normalized:
+        raise StateModelSetError(f"{label} must be ordered, unique, and non-empty")
+    return normalized
+
+
+def _validate_c010_eligibility_receipt(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label="C-010 eligibility receipt")
+    entries = value.get("entries")
+    if (
+        value.get("schema_version") != C010_ELIGIBILITY_RECEIPT_VERSION
+        or value.get("minimum_availability_ratio") != MIN_COVERAGE
+        or value.get("availability_integer_contract") != "10*(expected-missing) >= 9*expected"
+        or value.get("diagnostic_only") is not False
+        or value.get("formal_policy_activated") is not True
+        or not isinstance(entries, list)
+        or value.get("entry_count") != len(entries)
+        or not entries
+    ):
+        raise StateModelSetError("C-010 eligibility receipt contract is invalid")
+    symbols: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    required_entry_fields = {
+        "canonical_ts_code",
+        "expected_opportunity_count",
+        "expected_opportunity_contract",
+        "expected_opportunity_date_sha256",
+        "provider_absence_count",
+        "availability_ratio",
+        "moneyflow_contributor_eligible",
+        "provider_absence_key_sha256",
+        "entry_sha256",
+    }
+    for entry in entries:
+        entry_value = _c010_require_canonical(entry, identity_field="entry_sha256", label="C-010 eligibility entry")
+        if set(entry_value) != required_entry_fields:
+            raise StateModelSetError("C-010 eligibility entry fields are incomplete")
+        symbol = str(entry_value.get("canonical_ts_code") or "")
+        expected = entry_value.get("expected_opportunity_count")
+        missing = entry_value.get("provider_absence_count")
+        eligible = entry_value.get("moneyflow_contributor_eligible")
+        try:
+            ratio = float(entry_value.get("availability_ratio"))
+        except (TypeError, ValueError):
+            ratio = math.nan
+        if (
+            not symbol
+            or symbol in symbols
+            or not isinstance(expected, int)
+            or isinstance(expected, bool)
+            or expected <= 0
+            or not isinstance(missing, int)
+            or isinstance(missing, bool)
+            or not 0 <= missing <= expected
+            or not isinstance(eligible, bool)
+            or entry_value.get("expected_opportunity_contract") != C010_EXPECTED_OPPORTUNITY_CONTRACT
+            or not _c010_valid_sha256(entry_value.get("expected_opportunity_date_sha256"))
+            or not _c010_valid_sha256(entry_value.get("provider_absence_key_sha256"))
+            or not math.isfinite(ratio)
+            or ratio != (expected - missing) / expected
+            or eligible is not ((10 * (expected - missing)) >= (9 * expected))
+        ):
+            raise StateModelSetError("C-010 eligibility entry semantics are invalid")
+        symbols.add(symbol)
+        normalized.append(dict(entry_value))
+        if not eligible:
+            excluded.append(symbol)
+    if [entry["canonical_ts_code"] for entry in normalized] != sorted(symbols):
+        raise StateModelSetError("C-010 eligibility entries are not in canonical symbol order")
+    if value.get("excluded_moneyflow_symbols") != excluded:
+        raise StateModelSetError("C-010 eligibility exclusion identity is invalid")
+    return normalized, excluded
+
+
+def _validate_c010_domain_receipt_set(
+    receipt: Any,
+    *,
+    dates: tuple[str, ...],
+    level_codes: Mapping[str, tuple[str, ...]],
+) -> None:
+    value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label="C-010 aggregate receipt")
+    if (
+        value.get("schema_version") != C010_AGGREGATE_RECEIPT_VERSION
+        or value.get("formal_policy_activated") is not True
+    ):
+        raise StateModelSetError("C-010 aggregate receipt contract is invalid")
+    reason_by_status = {
+        "available": None,
+        "structurally_unavailable": "hmm_risk_c010_moneyflow_domain_structurally_unavailable",
+        "coverage_insufficient": "hmm_risk_c010_moneyflow_domain_coverage_insufficient",
+        "denominator_invalid": "hmm_risk_c010_moneyflow_denominator_invalid",
+    }
+    for level, prefix in (("L1", "l1"), ("L2", "l2")):
+        valid = value.get(f"{prefix}_domain_receipts")
+        invalid = value.get(f"{prefix}_invalid_price_domain")
+        if not isinstance(valid, list) or not isinstance(invalid, list):
+            raise StateModelSetError(f"C-010 {level} aggregate receipt entries are missing")
+        if value.get(f"{prefix}_aggregate_count") != len(valid):
+            raise StateModelSetError(f"C-010 {level} aggregate receipt count is invalid")
+        expected_keys = {(code, trade_date) for trade_date in dates for code in level_codes[level]}
+        observed_keys: set[tuple[str, str]] = set()
+        for entry, is_valid_entry in itertools.chain(
+            ((entry, True) for entry in valid),
+            ((entry, False) for entry in invalid),
+        ):
+            item = _c010_require_canonical(entry, identity_field="entry_sha256", label=f"C-010 {level} domain entry")
+            key = (str(item.get("sector_code") or ""), str(item.get("trade_date") or ""))
+            if item.get("direct_sector_level") != level or key not in expected_keys or key in observed_keys:
+                raise StateModelSetError(f"C-010 {level} aggregate receipt identity is invalid")
+            observed_keys.add(key)
+            expected_symbols = _c010_require_ordered_strings(
+                item.get("price_expected_symbols"), label=f"C-010 {level} price expected symbols", allow_empty=True
+            )
+            complete_symbols = _c010_require_ordered_strings(
+                item.get("price_complete_symbols"), label=f"C-010 {level} price complete symbols", allow_empty=True
+            )
+            if (
+                not set(complete_symbols).issubset(expected_symbols)
+                or item.get("price_expected_symbol_sha256") != canonical_sha256(list(expected_symbols))
+                or item.get("price_complete_symbol_sha256") != canonical_sha256(list(complete_symbols))
+                or not isinstance(item.get("missing_evidence"), list)
+            ):
+                raise StateModelSetError(f"C-010 {level} price-domain contributor receipt is invalid")
+            if is_valid_entry:
+                try:
+                    price_expected_weight = float(item.get("price_expected_weight"))
+                    price_complete_weight = float(item.get("price_complete_weight"))
+                    price_count_coverage = float(item.get("price_count_coverage"))
+                    price_weight_coverage = float(item.get("price_weight_coverage"))
+                except (TypeError, ValueError) as exc:
+                    raise StateModelSetError(f"C-010 {level} price-domain coverage values are invalid") from exc
+                moneyflow_status = str(item.get("moneyflow_domain_status") or "")
+                moneyflow_expected = _c010_require_ordered_strings(
+                    item.get("moneyflow_expected_symbols"),
+                    label=f"C-010 {level} moneyflow expected symbols",
+                    allow_empty=True,
+                )
+                moneyflow_complete = _c010_require_ordered_strings(
+                    item.get("moneyflow_complete_symbols"),
+                    label=f"C-010 {level} moneyflow complete symbols",
+                    allow_empty=True,
+                )
+                if (
+                    item.get("price_domain_status") != "available"
+                    or item.get("price_domain_reason_code") is not None
+                    or not expected_symbols
+                    or not set(moneyflow_complete).issubset(moneyflow_expected)
+                    or item.get("moneyflow_expected_symbol_sha256") != canonical_sha256(list(moneyflow_expected))
+                    or item.get("moneyflow_complete_symbol_sha256") != canonical_sha256(list(moneyflow_complete))
+                    or moneyflow_status not in reason_by_status
+                    or item.get("moneyflow_domain_reason_code") != reason_by_status[moneyflow_status]
+                    or not all(
+                        math.isfinite(value)
+                        for value in (
+                            price_expected_weight,
+                            price_complete_weight,
+                            price_count_coverage,
+                            price_weight_coverage,
+                        )
+                    )
+                    or price_expected_weight <= 0
+                    or not 0 <= price_complete_weight <= price_expected_weight
+                    or price_count_coverage != len(complete_symbols) / len(expected_symbols)
+                    or price_weight_coverage != price_complete_weight / price_expected_weight
+                    or (10 * len(complete_symbols)) < (9 * len(expected_symbols))
+                    or price_weight_coverage < MIN_COVERAGE
+                ):
+                    raise StateModelSetError(f"C-010 {level} available domain receipt semantics are invalid")
+                try:
+                    moneyflow_expected_weight = float(item.get("moneyflow_expected_weight"))
+                    moneyflow_complete_weight = float(item.get("moneyflow_complete_weight"))
+                    moneyflow_count_coverage = float(item.get("moneyflow_count_coverage"))
+                    moneyflow_weight_coverage = float(item.get("moneyflow_weight_coverage"))
+                except (TypeError, ValueError) as exc:
+                    raise StateModelSetError(f"C-010 {level} moneyflow-domain coverage values are invalid") from exc
+                if not all(
+                    math.isfinite(value)
+                    for value in (
+                        moneyflow_expected_weight,
+                        moneyflow_complete_weight,
+                        moneyflow_count_coverage,
+                        moneyflow_weight_coverage,
+                    )
+                ):
+                    raise StateModelSetError(f"C-010 {level} moneyflow-domain coverage values are invalid")
+                if moneyflow_status == "structurally_unavailable":
+                    if moneyflow_expected or any(
+                        value != 0.0
+                        for value in (
+                            moneyflow_expected_weight,
+                            moneyflow_complete_weight,
+                            moneyflow_count_coverage,
+                            moneyflow_weight_coverage,
+                        )
+                    ):
+                        raise StateModelSetError(f"C-010 {level} structurally unavailable domain is invalid")
+                else:
+                    if (
+                        not moneyflow_expected
+                        or moneyflow_expected_weight <= 0
+                        or not 0 <= moneyflow_complete_weight <= moneyflow_expected_weight
+                        or moneyflow_count_coverage != len(moneyflow_complete) / len(moneyflow_expected)
+                        or moneyflow_weight_coverage != moneyflow_complete_weight / moneyflow_expected_weight
+                    ):
+                        raise StateModelSetError(f"C-010 {level} moneyflow-domain contributor receipt is invalid")
+                    coverage_valid = (10 * len(moneyflow_complete)) >= (
+                        9 * len(moneyflow_expected)
+                    ) and moneyflow_weight_coverage >= MIN_COVERAGE
+                    if moneyflow_status == "available" and not coverage_valid:
+                        raise StateModelSetError(f"C-010 {level} moneyflow-domain coverage status is invalid")
+                    if moneyflow_status == "coverage_insufficient" and coverage_valid:
+                        raise StateModelSetError(f"C-010 {level} moneyflow-domain coverage status is invalid")
+                    if moneyflow_status == "denominator_invalid" and not coverage_valid:
+                        raise StateModelSetError(f"C-010 {level} moneyflow denominator status is invalid")
+                amount = item.get("moneyflow_contributor_amount")
+                if moneyflow_status == "available":
+                    try:
+                        amount_value = float(amount)
+                    except (TypeError, ValueError) as exc:
+                        raise StateModelSetError(f"C-010 {level} moneyflow denominator is invalid") from exc
+                    if not math.isfinite(amount_value) or amount_value <= 0:
+                        raise StateModelSetError(f"C-010 {level} moneyflow denominator is invalid")
+                elif amount is not None:
+                    raise StateModelSetError(f"C-010 {level} unavailable moneyflow denominator must remain NA")
+            elif item.get("price_domain_status") != "invalid" or str(
+                item.get("price_domain_reason_code") or ""
+            ) not in {
+                "hmm_risk_c010_expected_opportunity_missing",
+                "hmm_risk_c010_price_domain_weight_denominator_invalid",
+                "hmm_risk_c010_price_domain_coverage_insufficient",
+            }:
+                raise StateModelSetError(f"C-010 {level} invalid price-domain receipt semantics are invalid")
+        if observed_keys != expected_keys:
+            raise StateModelSetError(f"C-010 {level} aggregate receipt set is incomplete")
+        if value.get(f"{prefix}_domain_expected_count") != len(expected_keys) or value.get(
+            f"{prefix}_domain_receipt_count"
+        ) != len(observed_keys):
+            raise StateModelSetError(f"C-010 {level} aggregate receipt cardinality is invalid")
+
+
+def _validate_c010_cross_section_receipt(
+    receipt: Any,
+    *,
+    level: str,
+    dates: tuple[str, ...],
+) -> tuple[str, ...]:
+    value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label=f"C-010 {level} cross-section")
+    expected_count = 31 if level == "L1" else 131
+    codes = _c010_require_ordered_strings(
+        value.get("expected_sector_codes"), label=f"C-010 {level} expected sector codes"
+    )
+    entries = value.get("entries")
+    if (
+        value.get("schema_version") != C010_CROSS_SECTION_RECEIPT_VERSION
+        or value.get("formula_version") != C010_FORMULA_VERSION
+        or value.get("feature_domain_policy_version") != C010_POLICY_VERSION
+        or value.get("direct_sector_level") != level
+        or value.get("expected_sector_count") != expected_count
+        or len(codes) != expected_count
+        or value.get("expected_sector_sha256") != canonical_sha256(list(codes))
+        or value.get("diagnostic_only") is not False
+        or not isinstance(entries, list)
+        or value.get("entry_count") != len(entries)
+    ):
+        raise StateModelSetError(f"C-010 {level} cross-section receipt contract is invalid")
+    expected_keys = {(feature, trade_date) for feature in C010_CROSS_SECTION_FEATURES for trade_date in dates}
+    observed_keys: set[tuple[str, str]] = set()
+    reason_by_status = {
+        "accepted": None,
+        "coverage_insufficient": "hmm_risk_c010_feature_cross_section_coverage_insufficient",
+        "reference_invalid": "hmm_risk_c010_feature_cross_section_reference_invalid",
+        "output_non_finite": "hmm_risk_c010_feature_cross_section_output_non_finite",
+    }
+    for entry in entries:
+        item = _c010_require_canonical(entry, identity_field="entry_sha256", label=f"C-010 {level} cross-section entry")
+        key = (str(item.get("feature_name") or ""), str(item.get("trade_date") or ""))
+        valid_codes = _c010_require_ordered_strings(
+            item.get("valid_sector_codes"), label=f"C-010 {level} valid sector codes", allow_empty=True
+        )
+        missing_codes = _c010_require_ordered_strings(
+            item.get("missing_sector_codes"), label=f"C-010 {level} missing sector codes", allow_empty=True
+        )
+        status = str(item.get("status") or "")
+        coverage = len(valid_codes) / expected_count
+        pre_mask_codes = set(valid_codes) if status in {"accepted", "output_non_finite"} else set()
+        expected_pre_mask_hash = _cross_section_mask_hash(codes, pre_mask_codes)
+        if (
+            key not in expected_keys
+            or key in observed_keys
+            or item.get("direct_sector_level") != level
+            or item.get("source_domain") != "price"
+            or not str(item.get("operator") or "")
+            or item.get("expected_sector_count") != expected_count
+            or item.get("expected_sector_sha256") != canonical_sha256(list(codes))
+            or set(valid_codes).intersection(missing_codes)
+            or set(valid_codes).union(missing_codes) != set(codes)
+            or item.get("valid_sector_count") != len(valid_codes)
+            or item.get("valid_sector_sha256") != canonical_sha256(list(valid_codes))
+            or item.get("missing_sector_sha256") != canonical_sha256(list(missing_codes))
+            or item.get("feature_cross_section_coverage") != coverage
+            or item.get("pre_mask_sha256") != expected_pre_mask_hash
+            or not _c010_valid_sha256(item.get("post_mask_sha256"))
+            or item.get("post_mask_subset_of_pre_mask") is not True
+            or status not in reason_by_status
+            or item.get("reason_code") != reason_by_status[status]
+            or (status == "coverage_insufficient") is not ((10 * len(valid_codes)) < (9 * expected_count))
+            or (status in {"accepted", "reference_invalid", "output_non_finite"} and coverage < MIN_COVERAGE)
+        ):
+            raise StateModelSetError(f"C-010 {level} cross-section entry semantics are invalid")
+        observed_keys.add(key)
+    if observed_keys != expected_keys:
+        raise StateModelSetError(f"C-010 {level} cross-section receipt set is incomplete")
+    return codes
+
+
+def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
+    """Fail closed unless a C-010 policy is complete, self-contained, and semantically readback-safe."""
+
+    value = _c010_require_canonical(manifest, identity_field="receipt_sha256", label="C-010 policy manifest")
+    required_fields = {
+        "schema_version",
+        "formula_version",
+        "producer_commit",
+        "train_start",
+        "train_end",
+        "receipt_trading_dates",
+        "receipt_trading_date_count",
+        "receipt_trading_date_sha256",
+        "contributor_min_availability",
+        "domain_min_count_coverage",
+        "domain_min_weight_coverage",
+        "feature_cross_section_min_coverage",
+        "moneyflow_mandatory_fields",
+        "eligibility_receipt",
+        "eligibility_receipt_sha256",
+        "eligibility_entry_count",
+        "contributor_ledger",
+        "contributor_ledger_sha256",
+        "excluded_moneyflow_symbols",
+        "excluded_moneyflow_symbol_sha256",
+        "aggregate_receipt",
+        "aggregate_receipt_sha256",
+        "l1_cross_section_receipt",
+        "l1_cross_section_receipt_sha256",
+        "l2_cross_section_receipt",
+        "l2_cross_section_receipt_sha256",
+        "l1_feature_definition",
+        "l1_feature_definition_sha256",
+        "l2_feature_definition",
+        "l2_feature_definition_sha256",
+        "feature_order_by_family",
+        "feature_order_sha256",
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "calendar_manifest_hash",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_sha256",
+        "causal_circ_mv_identity",
+        "causal_circ_mv_identity_sha256",
+        "pit_universe_changed",
+        "selection_universe_changed",
+        "runtime_prediction_eligibility_changed",
+        "receipt_sha256",
+    }
+    if set(value) != required_fields:
+        raise StateModelSetError("C-010 policy manifest fields are incomplete or unapproved")
+    dates = _c010_require_ordered_strings(value.get("receipt_trading_dates"), label="C-010 receipt trading dates")
+    try:
+        parsed_dates = tuple(date.fromisoformat(item) for item in dates)
+    except ValueError as exc:
+        raise StateModelSetError("C-010 receipt trading dates are invalid") from exc
+    try:
+        train_start = date.fromisoformat(str(value.get("train_start") or ""))
+        train_end = date.fromisoformat(str(value.get("train_end") or ""))
+    except ValueError as exc:
+        raise StateModelSetError("C-010 policy train window is invalid") from exc
+    producer_commit = str(value.get("producer_commit") or "")
+    source_hash_fields = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "calendar_manifest_hash",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_sha256",
+    )
+    expected_feature_order = {
+        "legacy_covfix": list(BASE_FEATURES),
+        "autocycle_all_core": list(ALL_CORE_FEATURES),
+    }
+    if (
+        value.get("schema_version") != C010_POLICY_VERSION
+        or value.get("formula_version") != C010_FORMULA_VERSION
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit.lower())
+        or value.get("receipt_trading_date_count") != len(dates)
+        or value.get("receipt_trading_date_sha256") != canonical_sha256(list(dates))
+        or value.get("contributor_min_availability") != MIN_COVERAGE
+        or value.get("domain_min_count_coverage") != MIN_COVERAGE
+        or value.get("domain_min_weight_coverage") != MIN_COVERAGE
+        or value.get("feature_cross_section_min_coverage") != MIN_COVERAGE
+        or tuple(value.get("moneyflow_mandatory_fields") or ()) != MONEYFLOW_STOCK_FIELDS
+        or value.get("feature_order_by_family") != expected_feature_order
+        or value.get("feature_order_sha256") != canonical_sha256(expected_feature_order)
+        or any(not _c010_valid_sha256(value.get(field)) for field in source_hash_fields)
+        or value.get("pit_universe_changed") is not False
+        or value.get("selection_universe_changed") is not False
+        or value.get("runtime_prediction_eligibility_changed") is not False
+        or train_start > train_end
+        or not any(train_start <= trade_date <= train_end for trade_date in parsed_dates)
+    ):
+        raise StateModelSetError("C-010 policy manifest fixed contract is invalid")
+    if tuple(sorted(parsed_dates)) != parsed_dates or len(set(parsed_dates)) != len(parsed_dates):
+        raise StateModelSetError("C-010 receipt trading dates are not strictly increasing")
+    ledger, excluded = _validate_c010_eligibility_receipt(value.get("eligibility_receipt"))
+    if (
+        value["eligibility_receipt"].get("train_start") != train_start.isoformat()
+        or value["eligibility_receipt"].get("train_end") != train_end.isoformat()
+        or value["eligibility_receipt"].get("pit_universe_changed") is not False
+        or value["eligibility_receipt"].get("selection_universe_changed") is not False
+        or value["eligibility_receipt"].get("runtime_prediction_eligibility_changed") is not False
+        or value.get("eligibility_receipt_sha256") != value["eligibility_receipt"].get("receipt_sha256")
+        or value.get("eligibility_entry_count") != len(ledger)
+        or value.get("contributor_ledger") != ledger
+        or value.get("contributor_ledger_sha256") != canonical_sha256(ledger)
+        or value.get("excluded_moneyflow_symbols") != excluded
+        or value.get("excluded_moneyflow_symbol_sha256") != canonical_sha256(excluded)
+    ):
+        raise StateModelSetError("C-010 policy contributor ledger identity is invalid")
+    l1_codes = _validate_c010_cross_section_receipt(value.get("l1_cross_section_receipt"), level="L1", dates=dates)
+    l2_codes = _validate_c010_cross_section_receipt(value.get("l2_cross_section_receipt"), level="L2", dates=dates)
+    if value.get("l1_cross_section_receipt_sha256") != value["l1_cross_section_receipt"].get(
+        "receipt_sha256"
+    ) or value.get("l2_cross_section_receipt_sha256") != value["l2_cross_section_receipt"].get("receipt_sha256"):
+        raise StateModelSetError("C-010 policy cross-section receipt identity is invalid")
+    _validate_c010_domain_receipt_set(
+        value.get("aggregate_receipt"), dates=dates, level_codes={"L1": l1_codes, "L2": l2_codes}
+    )
+    if value.get("aggregate_receipt_sha256") != value["aggregate_receipt"].get("receipt_sha256"):
+        raise StateModelSetError("C-010 policy aggregate receipt identity is invalid")
+    for level in ("l1", "l2"):
+        definition = value.get(f"{level}_feature_definition")
+        direct_level = level.upper()
+        expected_count = 31 if direct_level == "L1" else 131
+        if (
+            not isinstance(definition, Mapping)
+            or definition.get("schema_version") != C010_FORMULA_VERSION
+            or definition.get("feature_domain_policy_version") != C010_POLICY_VERSION
+            or definition.get("diagnostic_only") is not False
+            or definition.get("direct_sector_level") != direct_level
+            or definition.get("cross_section_required_sector_count") != expected_count
+            or definition.get("cross_section_min_coverage") != MIN_COVERAGE
+            or definition.get("cross_section_min_valid_sector_count") != (28 if direct_level == "L1" else 118)
+            or tuple(definition.get("base_features") or ()) != BASE_FEATURES
+            or tuple(definition.get("all_core_features") or ()) != ALL_CORE_FEATURES
+            or tuple(definition.get("moneyflow_mandatory_fields") or ()) != MONEYFLOW_STOCK_FIELDS
+            or set(definition.get("cross_section_operator_by_feature") or ()) != set(C010_CROSS_SECTION_FEATURES)
+            or set(definition.get("formula_diff_by_feature") or ())
+            != set(C010_CROSS_SECTION_FEATURES).union(
+                {
+                    "net_mf_ratio",
+                    "elg_net_mf_ratio",
+                    "sf_mf_net_ratio_std_5d_neg",
+                    "sf_small_net_ratio_5d",
+                }
+            )
+            or definition.get("moneyflow_rolling_post_mask_required") is not True
+            or definition.get("range_cross_section_rolling_post_mask_required") is not True
+            or value.get(f"{level}_feature_definition_sha256") != canonical_sha256(dict(definition))
+        ):
+            raise StateModelSetError(f"C-010 {level.upper()} feature definition is invalid")
+    circ_mv = value.get("causal_circ_mv_identity")
+    if (
+        not isinstance(circ_mv, Mapping)
+        or set(circ_mv) != {"L1", "L2"}
+        or any(
+            not isinstance(item, Mapping) or any(not field_value for field_value in item.values())
+            for item in circ_mv.values()
+        )
+        or value.get("causal_circ_mv_identity_sha256") != canonical_sha256(dict(circ_mv))
+    ):
+        raise StateModelSetError("C-010 causal circ-mv identity is invalid")
+    return dict(value)
 
 
 def build_c010_feature_domain_panel(

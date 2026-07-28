@@ -46,6 +46,7 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_sha256,
     causal_forward_posteriors,
 )
+from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -1100,41 +1101,12 @@ def write_b3_ready_model_set(
     _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
     _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
     _require_hex_identity(feature_domain_policy_sha256, length=64, label="feature-domain policy hash")
-    if not isinstance(feature_domain_policy_manifest, Mapping):
-        raise StateModelSetError("B3 READY feature-domain policy manifest is missing")
-    policy_body = {key: value for key, value in feature_domain_policy_manifest.items() if key != "receipt_sha256"}
-    ledger = feature_domain_policy_manifest.get("contributor_ledger")
-    if (
-        feature_domain_policy_manifest.get("receipt_sha256") != feature_domain_policy_sha256
-        or canonical_sha256(policy_body) != feature_domain_policy_sha256
-        or feature_domain_policy_manifest.get("schema_version") != "hmm_risk_c010_feature_domain_policy_v1"
-        or feature_domain_policy_manifest.get("formula_version") != "hmm_risk_l1_sector_factor_formula_v2_c010"
-        or not isinstance(ledger, list)
-        or not ledger
-        or feature_domain_policy_manifest.get("eligibility_entry_count") != len(ledger)
-        or feature_domain_policy_manifest.get("contributor_ledger_sha256") != canonical_sha256(ledger)
-    ):
+    try:
+        validated_policy = validate_c010_policy_manifest(feature_domain_policy_manifest)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
+    if validated_policy.get("receipt_sha256") != feature_domain_policy_sha256:
         raise StateModelSetError("B3 READY feature-domain policy manifest identity is invalid")
-    ledger_symbols: set[str] = set()
-    excluded_symbols: set[str] = set()
-    for entry in ledger:
-        if not isinstance(entry, Mapping):
-            raise StateModelSetError("B3 READY feature-domain contributor ledger entry is invalid")
-        entry_body = {key: value for key, value in entry.items() if key != "entry_sha256"}
-        symbol = str(entry.get("canonical_ts_code") or "")
-        eligible = entry.get("moneyflow_contributor_eligible")
-        if (
-            not symbol
-            or symbol in ledger_symbols
-            or not isinstance(eligible, bool)
-            or entry.get("entry_sha256") != canonical_sha256(entry_body)
-        ):
-            raise StateModelSetError("B3 READY feature-domain contributor ledger entry is invalid")
-        ledger_symbols.add(symbol)
-        if not eligible:
-            excluded_symbols.add(symbol)
-    if sorted(excluded_symbols) != list(feature_domain_policy_manifest.get("excluded_moneyflow_symbols") or ()):
-        raise StateModelSetError("B3 READY feature-domain contributor ledger exclusion identity is invalid")
     _require_hex_identity(producer_commit, length=40, label="producer commit")
     layers: dict[str, Any] = {}
     payloads: dict[str, bytes] = {}
@@ -1178,7 +1150,7 @@ def write_b3_ready_model_set(
         "calendar_manifest_hash": calendar_manifest_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
         "feature_domain_policy_sha256": feature_domain_policy_sha256,
-        "feature_domain_policy_manifest": dict(feature_domain_policy_manifest),
+        "feature_domain_policy_manifest": validated_policy,
         "contracts": {
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,

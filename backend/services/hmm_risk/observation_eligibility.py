@@ -94,6 +94,24 @@ def _invalid_price_domain_receipt(
     expected = tuple(sorted(str(row.get("symbol") or "") for row in rows if not bool(row.get("is_suspended"))))
     missing = {str(value.get("symbol") or "") for value in error.missing_evidence}
     complete = tuple(symbol for symbol in expected if symbol not in missing)
+    row_by_symbol = {str(row.get("symbol") or ""): row for row in rows if not bool(row.get("is_suspended"))}
+    expected_weights: list[float] = []
+    complete_weights: list[float] = []
+    weights_valid = True
+    for symbol in expected:
+        try:
+            weight = float(row_by_symbol[symbol].get("prev_circ_mv_cny"))
+        except (TypeError, ValueError):
+            weights_valid = False
+            break
+        if not math.isfinite(weight) or weight <= 0:
+            weights_valid = False
+            break
+        expected_weights.append(weight)
+        if symbol in complete:
+            complete_weights.append(weight)
+    expected_weight = float(math.fsum(expected_weights)) if weights_valid else None
+    complete_weight = float(math.fsum(complete_weights)) if weights_valid else None
     return {
         "direct_sector_level": direct_sector_level,
         "trade_date": error.trade_date.isoformat(),
@@ -105,6 +123,8 @@ def _invalid_price_domain_receipt(
         "price_complete_symbols": list(complete),
         "price_complete_symbol_sha256": canonical_sha256(list(complete)),
         "price_count_coverage": error.count_coverage,
+        "price_expected_weight": expected_weight,
+        "price_complete_weight": complete_weight,
         "price_weight_coverage": error.weight_coverage,
         "missing_evidence": [dict(value) for value in error.missing_evidence],
     }

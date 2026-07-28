@@ -1006,6 +1006,18 @@ moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政
     HMM fit、D5、D6、model/READY、数据库写入或 runtime action。当前 latest-main rebase 后本模块 required plan=`140 passed`、branch
     coverage=`75.30%`，`l0` blocking=`0`，F2 validator=`PASS`（3 items/8 rows/warnings=0）；下一业务证据只能来自 clean-main 601 日 formal preflight。
 
+13. **PR #2837 正式代码审核补修（2026-07-29）**：policy manifest 不得只保存 receipt 顶层 hash。正式
+    `hmm_risk_c010_feature_domain_policy_v1` 必须内嵌可独立回读的 eligibility receipt、逐 L1/L2 sector/date 的
+    price/moneyflow domain receipt、逐 L1/L2 feature/date 的 cross-section receipt，以及 L1/L2 feature definition；同时保存各自
+    canonical SHA-256。domain receipt identity 必须严格覆盖 frozen calendar 与 canonical L1=`31`、L2=`131` 的完整 Cartesian
+    product，每个 identity 恰好一条 accepted 或 typed-invalid receipt；完全无 source group 的 identity 必须显式写入
+    `hmm_risk_c010_expected_opportunity_missing`，不得从 receipt set 静默消失。cross-section receipt 必须严格覆盖四个批准 feature 与
+    frozen calendar 的完整 Cartesian product，不得接受只有 index/hash 的语义空 entry。preflight、formal request、两个 child、
+    D4/D5/D6 与 READY writer 必须复用同一个严格 validator；validator 同时校验 exact field set、ledger entry 完整字段、日期/sector/
+    feature 唯一性、status/reason、四个 `0.90` authority、formula/feature order、source identities 与所有 nested canonical hash。
+    自洽重算 hash 不能使缺字段、缺 identity、重复 identity、未知状态或部分 receipt set 通过。READY 必须保存完整 validated policy
+    manifest；任一残缺必须在首个 fit 或 artifact write 之前 fail closed。这是批准合同的完整性修复，不增加人工审批或运行时门禁。
+
 ##### BUG-892. PIT entry 与 causal `circ_mv` denominator 的时间域冲突
 
 1. **根因事实**：C-010-DIAG-02 的 fail-closed evidence 包含 1,073 个精确 `symbol/date`、1,072 只证券和 455 个交易日；
@@ -2020,7 +2032,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_observation_eligibility.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; C-010 canonical `2b1f4acc…7260`; BUG-892 receipt `7c36f228…fdd1ca` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_POSTFIX_FORMAL_PREFLIGHT | F-011 与 C-010-A1/A2/A3/A4 已获批准；C-010 formal source 已实现并通过本模块定向验证，但新的 clean-main 601 日 formal receipt 尚未形成，不得执行 fit/selection/D6/READY |
-| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A formulas；BUG-877/C-009/C-010 contracts | `backend/tests/hmm_risk/test_security_identity.py`; `backend/tests/hmm_risk/test_provider_absence.py`; `backend/tests/hmm_risk/test_observation_eligibility.py`; `backend/tests/hmm_risk/test_stock_fact_repository.py`; `backend/tests/hmm_risk/test_stock_fact_observation.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; C-010 canonical `2b1f4acc…7260` | APPROVED_BY_USER_C010_FORMAL_A_SOURCE_IMPLEMENTED_PREFLIGHT_PENDING | F-011-A 与 A1-A4 已批准；full-universe ledger、同源 denominator、逐 feature cross-section、formula v2 与 policy receipt/readback 已实现；证券和 feature set 均保留，真实 formal preflight 未完成前不能激活训练 |
+| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A formulas；BUG-877/C-009/C-010 contracts | `backend/tests/hmm_risk/test_security_identity.py`; `backend/tests/hmm_risk/test_provider_absence.py`; `backend/tests/hmm_risk/test_observation_eligibility.py`; `backend/tests/hmm_risk/test_stock_fact_repository.py`; `backend/tests/hmm_risk/test_stock_fact_observation.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`; C-010 canonical `2b1f4acc…7260`; PR #2837 strict receipt validator negative matrix | APPROVED_BY_USER_C010_FORMAL_A_SOURCE_REVIEW_FIX_IMPLEMENTED_PREFLIGHT_PENDING | F-011-A 与 A1-A4 已批准；full-universe ledger、同源 denominator、逐 feature cross-section、formula v2 与完整 policy receipt/readback 已实现；正式 manifest 内嵌完整 receipt sets，统一 validator 拒绝 self-hashed semantic skeleton、缺失/重复 Cartesian identity 与残缺 READY policy；证券和 feature set 均保留，真实 formal preflight 未完成前不能激活训练 |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,state_model_set,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py`; `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | 旧L2仍不可接受；正式新L2 identity只有执行完整受控重训后才形成，historical DIAG不反写正式 acceptance |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_b3_acceptance.py`; `backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VALIDATED_EXECUTION_PENDING | hard authority与单一validation保持；真实selection/D6尚未执行，B2不采用 |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_CONTROLLED_EXECUTION | READY artifact数为0；新受控L2未训练且没有真实selection/D6/artifact write，两个family完整性未成立 |

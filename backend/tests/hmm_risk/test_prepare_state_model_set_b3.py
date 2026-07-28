@@ -270,6 +270,7 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
     old_producer = request["producer_commit"]
     inputs = _preflight_inputs()
     _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
@@ -296,11 +297,14 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
         "legacy_covfix": list(BASE_FEATURES),
         "autocycle_all_core": list(ALL_CORE_FEATURES),
     }
-    subject._require_c010_policy_identity(candidate)
-    tampered_candidate = json.loads(json.dumps(candidate))
-    tampered_candidate["feature_domain_policy_manifest"]["domain_min_count_coverage"] = 0.80
-    with pytest.raises(StateModelSetError, match="policy identity is invalid"):
-        subject._require_c010_policy_identity(tampered_candidate)
+    assert (
+        candidate["feature_domain_policy_manifest"]["aggregate_receipt"]
+        == inputs["c010_diagnostic"]["aggregate_evidence"]
+    )
+    assert (
+        candidate["feature_domain_policy_manifest"]["l1_cross_section_receipt"]
+        == inputs["c010_diagnostic"]["l1_cross_section_evidence"]
+    )
     assert candidate["parent_frozen_identities"] == subject.B3_APPROVED_FROZEN_IDENTITIES
     assert report["formula_version"] == subject.C010_FORMULA_VERSION
     assert report["train_trading_date_count"] == 601
@@ -333,6 +337,7 @@ def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(
     request = _request()
     inputs = _preflight_inputs()
     _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
@@ -534,6 +539,7 @@ def test_main_preflight_writes_immutable_candidate_and_receipt(monkeypatch, tmp_
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
     _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
@@ -576,6 +582,7 @@ def test_main_blocked_preflight_does_not_overwrite_stale_candidate(monkeypatch, 
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
     _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(

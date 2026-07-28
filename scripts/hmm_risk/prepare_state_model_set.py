@@ -56,6 +56,8 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     build_c010_feature_domain_panel,
     build_l1_feature_panel,
     build_l1_training_series,
+    complete_c010_domain_receipts,
+    validate_c010_policy_manifest,
 )
 from backend.services.hmm_risk.observation_eligibility import (  # noqa: E402
     audit_feature_mask_candidates,
@@ -463,9 +465,15 @@ def _load_l1_source_inputs(
             direct_sector_level="L2",
             diagnostic_only=c010_diagnostic,
         )
+        complete_aggregate_evidence = complete_c010_domain_receipts(
+            c010_payload["aggregate_evidence"],
+            trading_dates=calendar,
+            l1_sector_codes=diagnostic_l1_cross_section["expected_sector_codes"],
+            l2_sector_codes=diagnostic_l2_cross_section["expected_sector_codes"],
+        )
         c010_diagnostic_payload = {
             "eligibility": c010_payload["eligibility"].evidence(formal_policy=c010_formal),
-            "aggregate_evidence": c010_payload["aggregate_evidence"],
+            "aggregate_evidence": complete_aggregate_evidence,
             "l1_panel": diagnostic_l1_panel,
             "l2_panel": diagnostic_l2_panel,
             "l1_feature_definition": diagnostic_l1_definition,
@@ -670,27 +678,37 @@ def _c010_policy_manifest(
         "legacy_covfix": list(BASE_FEATURES),
         "autocycle_all_core": list(ALL_CORE_FEATURES),
     }
+    receipt_trading_dates = [value.isoformat() for value in inputs.get("trading_dates") or ()]
     body = {
         "schema_version": C010_POLICY_VERSION,
         "formula_version": C010_FORMULA_VERSION,
         "producer_commit": producer_commit,
         "train_start": train_start.isoformat(),
         "train_end": train_end.isoformat(),
+        "receipt_trading_dates": receipt_trading_dates,
+        "receipt_trading_date_count": len(receipt_trading_dates),
+        "receipt_trading_date_sha256": canonical_sha256(receipt_trading_dates),
         "contributor_min_availability": MIN_COVERAGE,
         "domain_min_count_coverage": MIN_COVERAGE,
         "domain_min_weight_coverage": MIN_COVERAGE,
         "feature_cross_section_min_coverage": MIN_COVERAGE,
         "moneyflow_mandatory_fields": list(feature_definitions["L1"]["moneyflow_mandatory_fields"]),
+        "eligibility_receipt": eligibility,
         "eligibility_receipt_sha256": eligibility.get("receipt_sha256"),
         "eligibility_entry_count": int(eligibility.get("entry_count") or 0),
         "contributor_ledger": eligibility["entries"],
         "contributor_ledger_sha256": canonical_sha256(eligibility["entries"]),
         "excluded_moneyflow_symbols": list(eligibility.get("excluded_moneyflow_symbols") or ()),
         "excluded_moneyflow_symbol_sha256": canonical_sha256(list(eligibility.get("excluded_moneyflow_symbols") or ())),
+        "aggregate_receipt": aggregate,
         "aggregate_receipt_sha256": aggregate.get("receipt_sha256"),
+        "l1_cross_section_receipt": l1_cross,
         "l1_cross_section_receipt_sha256": l1_cross.get("receipt_sha256"),
+        "l2_cross_section_receipt": l2_cross,
         "l2_cross_section_receipt_sha256": l2_cross.get("receipt_sha256"),
+        "l1_feature_definition": feature_definitions["L1"],
         "l1_feature_definition_sha256": canonical_sha256(feature_definitions["L1"]),
+        "l2_feature_definition": feature_definitions["L2"],
         "l2_feature_definition_sha256": canonical_sha256(feature_definitions["L2"]),
         "feature_order_by_family": feature_order_by_family,
         "feature_order_sha256": canonical_sha256(feature_order_by_family),
@@ -708,7 +726,8 @@ def _c010_policy_manifest(
     }
     if body["eligibility_entry_count"] <= 0:
         raise StateModelSetError("C-010 formal eligibility ledger is empty")
-    return {**body, "receipt_sha256": canonical_sha256(body)}
+    manifest = {**body, "receipt_sha256": canonical_sha256(body)}
+    return validate_c010_policy_manifest(manifest)
 
 
 def _require_c010_policy_identity(request: dict[str, Any]) -> None:
@@ -718,13 +737,11 @@ def _require_c010_policy_identity(request: dict[str, Any]) -> None:
         raise StateModelSetError(
             "hmm_risk_c010_policy_identity_mismatch: formal B3 request C-010 policy manifest is missing"
         )
-    manifest_body = {key: value for key, value in manifest.items() if key != "receipt_sha256"}
-    if (
-        manifest.get("schema_version") != C010_POLICY_VERSION
-        or manifest.get("formula_version") != C010_FORMULA_VERSION
-        or identity != canonical_sha256(manifest_body)
-        or identity != manifest.get("receipt_sha256")
-    ):
+    try:
+        validated = validate_c010_policy_manifest(manifest)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"hmm_risk_c010_policy_identity_mismatch: {exc}") from exc
+    if identity != validated.get("receipt_sha256"):
         raise StateModelSetError(
             "hmm_risk_c010_policy_identity_mismatch: formal B3 request C-010 policy identity is invalid"
         )

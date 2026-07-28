@@ -497,6 +497,40 @@ def test_c010_feature_domain_panel_records_reference_invalid_without_default_val
     }
 
 
+def test_c010_domain_receipts_materialize_every_frozen_level_sector_date_identity() -> None:
+    body = {
+        "schema_version": subject.C010_AGGREGATE_RECEIPT_VERSION,
+        "l1_aggregate_count": 0,
+        "l2_aggregate_count": 0,
+        "l1_domain_receipts": [],
+        "l2_domain_receipts": [],
+        "l1_invalid_price_domain": [],
+        "l2_invalid_price_domain": [],
+        "formal_policy_activated": True,
+    }
+    source = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    trading_dates = (date(2024, 1, 2), date(2024, 1, 3))
+    evidence = subject.complete_c010_domain_receipts(
+        source,
+        trading_dates=trading_dates,
+        l1_sector_codes=[f"L1-{index:02d}" for index in range(31)],
+        l2_sector_codes=[f"L2-{index:03d}" for index in range(131)],
+    )
+
+    assert evidence["l1_domain_expected_count"] == 62
+    assert evidence["l1_domain_receipt_count"] == 62
+    assert evidence["l2_domain_expected_count"] == 262
+    assert evidence["l2_domain_receipt_count"] == 262
+    assert len(evidence["l1_invalid_price_domain"]) == 62
+    assert len(evidence["l2_invalid_price_domain"]) == 262
+    assert {entry["price_domain_reason_code"] for entry in evidence["l2_invalid_price_domain"]} == {
+        "hmm_risk_c010_expected_opportunity_missing"
+    }
+    assert evidence["receipt_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in evidence.items() if key != "receipt_sha256"}
+    )
+
+
 def test_direct_l2_projection_uses_canonical_stock_fact_identity_without_mutating_l1() -> None:
     source = {
         "trade_date": date(2024, 1, 2),

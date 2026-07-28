@@ -30,6 +30,7 @@ from backend.services.hmm_risk.b3_training import (
 from backend.services.hmm_risk import b3_training as training_subject
 from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES
+from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
 
 def _train_manifest(
@@ -55,21 +56,306 @@ def _train_manifest(
 
 
 def _feature_domain_policy_manifest() -> dict:
-    ledger_entry = {"canonical_ts_code": "000001.SZ", "moneyflow_contributor_eligible": True}
+    trade_date = "2022-01-04"
+    l1_codes = [f"L1_{index:03d}" for index in range(31)]
+    l2_codes = [f"L2_{index:03d}" for index in range(131)]
+    ledger_entry = {
+        "canonical_ts_code": "000001.SZ",
+        "expected_opportunity_count": 1,
+        "expected_opportunity_contract": "hmm_risk_c010_expected_opportunity_dates_v1",
+        "expected_opportunity_date_sha256": canonical_sha256(
+            [{"canonical_ts_code": "000001.SZ", "trade_date": trade_date}]
+        ),
+        "provider_absence_count": 0,
+        "availability_ratio": 1.0,
+        "moneyflow_contributor_eligible": True,
+        "provider_absence_key_sha256": canonical_sha256([]),
+    }
     ledger = [{**ledger_entry, "entry_sha256": canonical_sha256(ledger_entry)}]
+    eligibility_body = {
+        "schema_version": "hmm_risk_c010_train_observation_eligibility_v1",
+        "train_start": trade_date,
+        "train_end": trade_date,
+        "minimum_availability_ratio": 0.9,
+        "availability_integer_contract": "10*(expected-missing) >= 9*expected",
+        "entry_count": 1,
+        "entries": ledger,
+        "excluded_moneyflow_symbols": [],
+        "pit_universe_changed": False,
+        "selection_universe_changed": False,
+        "runtime_prediction_eligibility_changed": False,
+        "diagnostic_only": False,
+        "formal_policy_activated": True,
+    }
+    eligibility = {**eligibility_body, "receipt_sha256": canonical_sha256(eligibility_body)}
+
+    def domain_entry(level: str, code: str) -> dict:
+        value = {
+            "direct_sector_level": level,
+            "sector_code": code,
+            "trade_date": trade_date,
+            "price_domain_status": "available",
+            "price_domain_reason_code": None,
+            "price_expected_symbols": ["000001.SZ"],
+            "price_expected_symbol_sha256": canonical_sha256(["000001.SZ"]),
+            "price_complete_symbols": ["000001.SZ"],
+            "price_complete_symbol_sha256": canonical_sha256(["000001.SZ"]),
+            "price_count_coverage": 1.0,
+            "price_expected_weight": 1.0,
+            "price_complete_weight": 1.0,
+            "price_weight_coverage": 1.0,
+            "moneyflow_domain_status": "available",
+            "moneyflow_domain_reason_code": None,
+            "moneyflow_expected_symbols": ["000001.SZ"],
+            "moneyflow_expected_symbol_sha256": canonical_sha256(["000001.SZ"]),
+            "moneyflow_complete_symbols": ["000001.SZ"],
+            "moneyflow_complete_symbol_sha256": canonical_sha256(["000001.SZ"]),
+            "moneyflow_count_coverage": 1.0,
+            "moneyflow_expected_weight": 1.0,
+            "moneyflow_complete_weight": 1.0,
+            "moneyflow_weight_coverage": 1.0,
+            "moneyflow_contributor_amount": 1.0,
+            "moneyflow_excluded_symbols": [],
+            "missing_evidence": [],
+        }
+        return {**value, "entry_sha256": canonical_sha256(value)}
+
+    l1_domain = [domain_entry("L1", code) for code in l1_codes]
+    l2_domain = [domain_entry("L2", code) for code in l2_codes]
+    aggregate_body = {
+        "schema_version": "hmm_risk_c010_feature_domain_aggregate_evidence_v1",
+        "l1_aggregate_count": len(l1_domain),
+        "l2_aggregate_count": len(l2_domain),
+        "l1_domain_receipts": l1_domain,
+        "l2_domain_receipts": l2_domain,
+        "l1_invalid_price_domain": [],
+        "l2_invalid_price_domain": [],
+        "l1_domain_expected_count": len(l1_domain),
+        "l1_domain_receipt_count": len(l1_domain),
+        "l2_domain_expected_count": len(l2_domain),
+        "l2_domain_receipt_count": len(l2_domain),
+        "formal_policy_activated": True,
+    }
+    aggregate = {**aggregate_body, "receipt_sha256": canonical_sha256(aggregate_body)}
+
+    def mask_hash(codes: list[str]) -> str:
+        return canonical_sha256([{"sector_code": code, "active": True} for code in codes])
+
+    def cross_receipt(level: str, codes: list[str]) -> dict:
+        entries = []
+        for feature in (
+            "volume_ratio",
+            "sf_range_vs_market_10d",
+            "sf_vol_vs_market_20d",
+            "sf_excess_breadth_5d",
+        ):
+            entry = {
+                "feature_name": feature,
+                "trade_date": trade_date,
+                "direct_sector_level": level,
+                "operator": f"test:{feature}",
+                "source_domain": "price",
+                "expected_sector_count": len(codes),
+                "expected_sector_sha256": canonical_sha256(codes),
+                "valid_sector_count": len(codes),
+                "valid_sector_codes": codes,
+                "valid_sector_sha256": canonical_sha256(codes),
+                "missing_sector_codes": [],
+                "missing_sector_sha256": canonical_sha256([]),
+                "feature_cross_section_coverage": 1.0,
+                "reference_value": 1.0,
+                "pre_mask_sha256": mask_hash(codes),
+                "post_mask_sha256": mask_hash(codes),
+                "post_mask_subset_of_pre_mask": True,
+                "status": "accepted",
+                "reason_code": None,
+            }
+            entries.append({**entry, "entry_sha256": canonical_sha256(entry)})
+        value = {
+            "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
+            "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+            "feature_domain_policy_version": "hmm_risk_c010_feature_domain_policy_v1",
+            "direct_sector_level": level,
+            "expected_sector_count": len(codes),
+            "expected_sector_codes": codes,
+            "expected_sector_sha256": canonical_sha256(codes),
+            "entry_count": len(entries),
+            "entries": entries,
+            "diagnostic_only": False,
+        }
+        return {**value, "receipt_sha256": canonical_sha256(value)}
+
+    l1_cross = cross_receipt("L1", l1_codes)
+    l2_cross = cross_receipt("L2", l2_codes)
+    cross_features = (
+        "volume_ratio",
+        "sf_range_vs_market_10d",
+        "sf_vol_vs_market_20d",
+        "sf_excess_breadth_5d",
+    )
+    changed_features = (
+        *cross_features,
+        "net_mf_ratio",
+        "elg_net_mf_ratio",
+        "sf_mf_net_ratio_std_5d_neg",
+        "sf_small_net_ratio_5d",
+    )
+
+    def feature_definition(level: str) -> dict:
+        expected_count = 31 if level == "L1" else 131
+        return {
+            "schema_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+            "feature_domain_policy_version": "hmm_risk_c010_feature_domain_policy_v1",
+            "diagnostic_only": False,
+            "direct_sector_level": level,
+            "cross_section_required_sector_count": expected_count,
+            "cross_section_min_coverage": 0.9,
+            "cross_section_min_valid_sector_count": 28 if level == "L1" else 118,
+            "base_features": list(BASE_FEATURES),
+            "all_core_features": list(ALL_CORE_FEATURES),
+            "moneyflow_mandatory_fields": [
+                "buy_sm_amount_cny",
+                "sell_sm_amount_cny",
+                "buy_elg_amount_cny",
+                "sell_elg_amount_cny",
+                "net_mf_amount_cny",
+            ],
+            "cross_section_operator_by_feature": {feature: f"test:{feature}" for feature in cross_features},
+            "formula_diff_by_feature": {feature: {"v1": "old", "v2": "new"} for feature in changed_features},
+            "moneyflow_rolling_post_mask_required": True,
+            "range_cross_section_rolling_post_mask_required": True,
+        }
+
+    l1_definition = feature_definition("L1")
+    l2_definition = feature_definition("L2")
+    feature_order = {
+        "legacy_covfix": list(BASE_FEATURES),
+        "autocycle_all_core": list(ALL_CORE_FEATURES),
+    }
+    circ_mv = {
+        "L1": {
+            "circ_mv_lookback_contract_version": "v1",
+            "circ_mv_history_start": "2020-01-01",
+            "circ_mv_pit_boundary_crossing_key_sha256": "1" * 64,
+        },
+        "L2": {
+            "circ_mv_lookback_contract_version": "v1",
+            "circ_mv_history_start": "2020-01-01",
+            "circ_mv_pit_boundary_crossing_key_sha256": "2" * 64,
+        },
+    }
     body = {
         "schema_version": "hmm_risk_c010_feature_domain_policy_v1",
         "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+        "producer_commit": "c" * 40,
+        "train_start": trade_date,
+        "train_end": trade_date,
+        "receipt_trading_dates": [trade_date],
+        "receipt_trading_date_count": 1,
+        "receipt_trading_date_sha256": canonical_sha256([trade_date]),
+        "contributor_min_availability": 0.9,
+        "domain_min_count_coverage": 0.9,
+        "domain_min_weight_coverage": 0.9,
+        "feature_cross_section_min_coverage": 0.9,
+        "moneyflow_mandatory_fields": [
+            "buy_sm_amount_cny",
+            "sell_sm_amount_cny",
+            "buy_elg_amount_cny",
+            "sell_elg_amount_cny",
+            "net_mf_amount_cny",
+        ],
+        "eligibility_receipt": eligibility,
+        "eligibility_receipt_sha256": eligibility["receipt_sha256"],
         "eligibility_entry_count": len(ledger),
         "contributor_ledger": ledger,
         "contributor_ledger_sha256": canonical_sha256(ledger),
         "excluded_moneyflow_symbols": [],
+        "excluded_moneyflow_symbol_sha256": canonical_sha256([]),
+        "aggregate_receipt": aggregate,
+        "aggregate_receipt_sha256": aggregate["receipt_sha256"],
+        "l1_cross_section_receipt": l1_cross,
+        "l1_cross_section_receipt_sha256": l1_cross["receipt_sha256"],
+        "l2_cross_section_receipt": l2_cross,
+        "l2_cross_section_receipt_sha256": l2_cross["receipt_sha256"],
+        "l1_feature_definition": l1_definition,
+        "l1_feature_definition_sha256": canonical_sha256(l1_definition),
+        "l2_feature_definition": l2_definition,
+        "l2_feature_definition_sha256": canonical_sha256(l2_definition),
+        "feature_order_by_family": feature_order,
+        "feature_order_sha256": canonical_sha256(feature_order),
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "security_identity_manifest_sha256": "e" * 64,
+        "provider_absence_manifest_sha256": "f" * 64,
+        "causal_circ_mv_identity": circ_mv,
+        "causal_circ_mv_identity_sha256": canonical_sha256(circ_mv),
+        "pit_universe_changed": False,
+        "selection_universe_changed": False,
+        "runtime_prediction_eligibility_changed": False,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 TEST_POLICY_MANIFEST = _feature_domain_policy_manifest()
 TEST_POLICY_SHA256 = TEST_POLICY_MANIFEST["receipt_sha256"]
+
+
+def _rehash_policy(manifest: dict) -> dict:
+    body = {key: value for key, value in manifest.items() if key != "receipt_sha256"}
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def test_c010_policy_validator_rejects_minimal_self_hashed_manifest() -> None:
+    entry = {"canonical_ts_code": "000001.SZ", "moneyflow_contributor_eligible": True}
+    ledger = [{**entry, "entry_sha256": canonical_sha256(entry)}]
+    body = {
+        "schema_version": "hmm_risk_c010_feature_domain_policy_v1",
+        "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+        "eligibility_entry_count": 1,
+        "contributor_ledger": ledger,
+        "contributor_ledger_sha256": canonical_sha256(ledger),
+        "excluded_moneyflow_symbols": [],
+    }
+    with pytest.raises(StateModelSetError, match="fields are incomplete"):
+        validate_c010_policy_manifest({**body, "receipt_sha256": canonical_sha256(body)})
+
+
+def test_c010_policy_validator_rejects_rehashed_cross_section_semantic_skeleton() -> None:
+    manifest = json.loads(json.dumps(TEST_POLICY_MANIFEST))
+    skeleton = {"index": 0}
+    manifest["l1_cross_section_receipt"]["entries"][0] = {
+        **skeleton,
+        "entry_sha256": canonical_sha256(skeleton),
+    }
+    cross_body = {key: value for key, value in manifest["l1_cross_section_receipt"].items() if key != "receipt_sha256"}
+    manifest["l1_cross_section_receipt"] = {
+        **cross_body,
+        "receipt_sha256": canonical_sha256(cross_body),
+    }
+    manifest["l1_cross_section_receipt_sha256"] = manifest["l1_cross_section_receipt"]["receipt_sha256"]
+    manifest = _rehash_policy(manifest)
+    with pytest.raises(StateModelSetError, match="valid sector codes is missing"):
+        validate_c010_policy_manifest(manifest)
+
+
+def test_c010_policy_validator_rejects_rehashed_incomplete_domain_cartesian_set() -> None:
+    manifest = json.loads(json.dumps(TEST_POLICY_MANIFEST))
+    aggregate = manifest["aggregate_receipt"]
+    aggregate["l2_domain_receipts"].pop()
+    aggregate["l2_aggregate_count"] -= 1
+    aggregate["l2_domain_expected_count"] -= 1
+    aggregate["l2_domain_receipt_count"] -= 1
+    aggregate_body = {key: value for key, value in aggregate.items() if key != "receipt_sha256"}
+    manifest["aggregate_receipt"] = {
+        **aggregate_body,
+        "receipt_sha256": canonical_sha256(aggregate_body),
+    }
+    manifest["aggregate_receipt_sha256"] = manifest["aggregate_receipt"]["receipt_sha256"]
+    manifest = _rehash_policy(manifest)
+    with pytest.raises(StateModelSetError, match="receipt set is incomplete"):
+        validate_c010_policy_manifest(manifest)
 
 
 def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, code: str = "S001") -> B3FittedModel:
@@ -570,7 +856,7 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
     invalid_policy["contributor_ledger_sha256"] = canonical_sha256(invalid_policy["contributor_ledger"])
     invalid_policy_body = {key: value for key, value in invalid_policy.items() if key != "receipt_sha256"}
     invalid_policy["receipt_sha256"] = canonical_sha256(invalid_policy_body)
-    with pytest.raises(StateModelSetError, match="contributor ledger entry is invalid"):
+    with pytest.raises(StateModelSetError, match="policy contributor ledger identity is invalid"):
         write_b3_ready_model_set(
             tmp_path / "invalid-policy",
             selected_artifacts=artifacts,
