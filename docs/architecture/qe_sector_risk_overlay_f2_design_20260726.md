@@ -224,9 +224,11 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = retry_canary_cancelled_bug881_selection_fix_in_review
+r13a_experiment = canary_backtest_complete_terminal_persistence_and_reconciliation_bug888_bug889_in_fix
 non_qe_impact = prohibited
 ```
+
+BUG-889 reservation 终态协调补证（2026-07-28）：本次两-child canary 的远端长任务期间，全局 capacity reconciler 合法接管并续租了 exact reservation；durable worker 在取得相同 task/loop 的权威终态后，旧逻辑仍要求以 worker owner 重新 claim 未过期 lease，导致 equal child 以 `qe_execution_reservation_owner_mismatch` 停在 reconcile。修复只对映射为 `released/failed/cancelled` 的终态、且调用方同时提供并匹配精确 `expected_reservation_id` 时，使用当前 reservation owner/fencing/row-version 做一次 CAS 终态转换；非终态、缺少精确 reservation 身份、reservation/source 冲突以及并发 owner/row 变化仍显式失败。该语义不抢占在途任务、不放宽节点并发、不伪造远端状态，也不改变 QE 之外的运行时。
 
 ## 11. Design Acceptance Matrix / 设计验收矩阵
 
@@ -269,6 +271,8 @@ identity；真实 Python 源文件变化仍会改变身份。该修复只作用�
 BUG-884 小文本字节保真补证（2026-07-27）：BUG-881/883 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T054318127030Z_55fbc49e` 已准确规划 `baseline:lgbm_g14_fp_h60` 与 `scheme:equal` 两个 child，证明 retry 字段守恒生效；嵌套模块、因子文件和 `qe_sector_risk_overlay.parquet` 也已通过 CAS 绑定、远端 size/SHA 校验，证明运行资产枚举与 CAS 路径生效。但 `small_text` 打包使用 `Path.read_text()`，其 universal-newline 行为把 Windows workspace 中的 CRLF 原始字节转换成 LF，再交给 `qe_file_sync`；manifest 仍冻结转换前的原始 SHA256/size，导致两个 child 均在 qrun 前的严格字节校验处终止。该 run 保留为基础架构失败证据，不作 Alpha 判断。修复必须以 `read_bytes().decode("utf-8")` 保留 JSON 文本通道中的 CRLF 字符，使远端重新编码后的字节与 manifest 完全相同；不关闭校验、不跳过文件、不改变 CAS 分层。所有远端 missing/size/SHA256 不一致必须输出 `QE_RUNTIME_FILE_VERIFY_FAILED` 及 path、expected、observed 后显式终止。合入和用户重启后只重试同一原始 2-child canary，成功后再提交正式 R13A。
 
 BUG-887 CAS 符号链接校验补证（2026-07-27）：BUG-884 合入并重启后的第二次 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00` 再次准确规划两个 child，且 `small_text` 文件 `conf.yaml` 已按 manifest 的 157647 字节进入远端 workspace，证明 CRLF 字节保真修复生效。两个 child 随后均在首个 CAS-backed 文件 `aistock_models/__init__.py` 的 size 校验终止：manifest 期望 578，`stat -c %s` 返回 103。只读远端核验确认 103 是符号链接文本自身长度；`readlink` 指向 SHA 命名的正确 CAS 对象，`stat -Lc %s` 返回目标文件 578 字节，且 `sha256sum` 通过链接得到 manifest SHA。运行时校验必须使用解引用语义读取目标大小，同时继续对目标内容执行 SHA256；不得移除 size/SHA 校验、把 CAS 文件复制回 workspace，或以失败后降级路径继续回测。该 run 仅作为基础架构失败证据，不作 Alpha 判断；修复合入并重启后仍只重试同一原始 2-child canary。
+
+BUG-888 Recorder 固化配置身份补证（2026-07-28）：BUG-887 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T115722735654Z_6584f87f` 已使 baseline 与 equal 两个 child 完成全部 `483/483` 回测日和 `PortAnaRecord`，随后在 Recorder 固化阶段因完整 Qlib 配置同时包含顶层 `port_analysis_config` YAML anchor 定义及 `task.record[].kwargs.config` 执行引用，被旧递归扫描误判为两个可执行 overlay strategy。固化器改为优先解析 Qlib 实际执行的 `task.record` 子树；只有该权威执行路径不存在时才兼容扫描旧式直接策略配置。存在两个真实可执行 portfolio record 时仍显式失败，不按相同 class/kwargs 静默去重。定向回归覆盖真实 anchor/record 双路径和双 record 冲突；修复不改变回测指标、策略参数、风险动作或非 QE 模块。
 
 ## 12. DESIGN-COMPLIANCE-001
 

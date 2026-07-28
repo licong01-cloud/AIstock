@@ -7,21 +7,37 @@ from pathlib import Path
 
 
 def _strategy_kwargs(config):
-    matches = []
+    def collect_matches(value):
+        matches = []
 
-    def visit(value):
-        if isinstance(value, dict):
-            class_name = str(value.get("class") or "")
-            kwargs = value.get("kwargs")
-            if class_name.startswith("QESectorRiskOverlay") and isinstance(kwargs, dict):
-                matches.append(kwargs)
-            for nested in value.values():
-                visit(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                visit(nested)
+        def visit(nested_value):
+            if isinstance(nested_value, dict):
+                class_name = str(nested_value.get("class") or "")
+                kwargs = nested_value.get("kwargs")
+                if class_name.startswith("QESectorRiskOverlay") and isinstance(kwargs, dict):
+                    matches.append(kwargs)
+                for child in nested_value.values():
+                    visit(child)
+            elif isinstance(nested_value, list):
+                for child in nested_value:
+                    visit(child)
 
-    visit(config)
+        visit(value)
+        return matches
+
+    task = config.get("task") if isinstance(config, dict) else None
+    records = task.get("record") if isinstance(task, dict) else None
+    if isinstance(records, dict):
+        records = [records]
+    executable_matches = collect_matches(records) if isinstance(records, list) else []
+
+    # Qlib configs commonly define ``port_analysis_config`` once as a YAML
+    # anchor and reference it from ``task.record[].kwargs.config``.  A global
+    # recursive scan sees both object paths, even though only the record path
+    # is executable.  Prefer that authoritative execution subtree.  The
+    # fallback preserves compatibility with older direct strategy configs.
+    matches = executable_matches or collect_matches(config)
+
     if len(matches) > 1:
         raise RuntimeError(
             f"QE sector-risk config contains multiple executable overlay strategies: {len(matches)}"
